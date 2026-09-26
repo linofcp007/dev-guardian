@@ -41,13 +41,18 @@ export interface InstallCommand {
    * evidence of anything.
    */
   customRegistry?: string;
+  /** EVERY registry / index / source named on the command line, in order. */
+  registries: string[];
   /**
-   * Why this parse is not confident enough to DENY a name the public
-   * registry does not have (controller ruling, (a)-(c) and the workspace
-   * half of (f)): an unknown flag, an inline environment assignment, a
-   * directory change before or in the install, a workspace context. Empty
-   * means confident. Registry configuration, auth tokens and workspace
-   * package names ((d)-(f)) are checked later, against the files.
+   * Why this command may not DENY a name the public registry does not
+   * have. Empty exactly when the whole command has the confident shape
+   * (controller ruling, round 2: ONE plain install statement, bare tool
+   * name, allowlisted flags only — see `confidentShape`); otherwise the
+   * first reason is the shape's, followed by any specific signals found
+   * (an unknown flag, an inline environment assignment, a directory
+   * change, a workspace context) for the warning text. Registry
+   * configuration, auth tokens and workspace package names are checked
+   * later, against the files.
    */
   uncertain: string[];
 }
@@ -291,7 +296,8 @@ const FLAGS: Record<string, FlagTable> = {
       '--no-cache-dir', '--no-cache', '-q', '-v', '--quiet', '--verbose', '--break-system-packages', '--dry-run',
       '--no-build-isolation', '--require-hashes', '--isolated', '--disable-pip-version-check', '--no-input',
       '--compile', '--no-compile', '--prefer-binary', '--no-warn-script-location', '--use-pep517', '--no-clean',
-      '--check-build-dependencies', '--ignore-requires-python', '--system', '--all-extras', '--no-index'),
+      '--check-build-dependencies', '--ignore-requires-python', '--system', '--all-extras', '--no-index',
+      '--compile-bytecode'),
     registry: set('-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--index', '--default-index'),
     registryBool: set('--no-index'),
     reported: new Map([
@@ -308,12 +314,12 @@ const FLAGS: Record<string, FlagTable> = {
       '--package', '--script', '-r', '--requirements', '--constraints', '-c', '--rev', '--tag', '--branch',
       '--python', '-p', '--bounds', '--directory', '--project', '--config-file', '--cache-dir', '--marker', '-m',
       '--find-links', '-f', '--index-strategy', '--keyring-provider', '--resolution', '--prerelease',
-      '--exclude-newer', '--link-mode', '--compile-bytecode', '--no-binary-package', '--no-build-package',
+      '--exclude-newer', '--link-mode', '--no-binary-package', '--no-build-package',
       '--upgrade-package', '-P', '--reinstall-package', '--refresh-package', '--config-setting', '-C'),
     bool: set('--dev', '--editable', '--no-editable', '--raw', '--raw-sources', '--frozen', '--locked', '--no-sync',
       '--workspace', '--no-workspace', '--active', '-U', '--upgrade', '--offline', '--no-cache', '-n', '-q', '-v',
       '--quiet', '--verbose', '--native-tls', '--no-index', '--no-build-isolation', '--refresh', '--reinstall',
-      '--no-build', '--no-binary', '--no-config', '--no-progress'),
+      '--no-build', '--no-binary', '--no-config', '--no-progress', '--compile-bytecode'),
     registry: set('--index', '--index-url', '--default-index', '--extra-index-url', '--find-links', '-f'),
     registryBool: set('--no-index'),
     reported: new Map([
@@ -358,6 +364,7 @@ interface WalkResult {
   positionals: Positional[];
   skipped: SkippedSpec[];
   customRegistry?: string;
+  registries: string[];
   /** Reasons a missing name in this command must not be denied (ruling (a), (c), (f)). */
   uncertain: string[];
 }
@@ -379,9 +386,16 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   const skipped: SkippedSpec[] = [];
   const uncertain: string[] = [];
   let customRegistry: string | undefined;
+  const registries: string[] = [];
   const note = (flag: string, value: string | undefined): void => {
-    if (table.registry.has(flag) && value !== undefined) customRegistry = value;
-    if (table.registryBool?.has(flag)) customRegistry = customRegistry ?? flag;
+    if (table.registry.has(flag) && value !== undefined) {
+      registries.push(value);
+      customRegistry = customRegistry ?? value;
+    }
+    if (table.registryBool?.has(flag)) {
+      registries.push(flag);
+      customRegistry = customRegistry ?? flag;
+    }
     const why = table.reported?.get(flag);
     if (why !== undefined && value !== undefined) skipped.push(skip(value, why));
     if (table.dir?.has(flag)) uncertain.push(`directory changed by ${flag}`);
@@ -433,7 +447,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     uncertain.push(`unknown flag ${v}`);
     if (v.startsWith('--') && !v.startsWith('--no-')) i += 1;
   }
-  const out: WalkResult = { positionals, skipped, uncertain };
+  const out: WalkResult = { positionals, skipped, uncertain, registries };
   if (customRegistry !== undefined) out.customRegistry = customRegistry;
   return out;
 }
@@ -594,7 +608,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const table = FLAGS[d.manager === 'uv-pip' ? 'pip' : d.manager] ?? FLAGS['npm'];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
-  const { positionals, skipped, customRegistry, uncertain } = walk(d.args, flagTable);
+  const { positionals, skipped, customRegistry, uncertain, registries } = walk(d.args, flagTable);
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
@@ -602,8 +616,9 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     packages,
     skipped,
     uncertain: [...new Set([...context, ...d.uncertain, ...preWalk.uncertain, ...uncertain])],
+    registries: [...preWalk.registries, ...registries],
   };
-  const registry = customRegistry ?? preWalk.customRegistry;
+  const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
 
   let lastComposer: PackageSpec | undefined;
@@ -667,13 +682,17 @@ function flagValue(words: readonly ShellWord[], names: readonly string[]): strin
  */
 export function parseInstallCommands(command: string): InstallCommand[] {
   const out: InstallCommand[] = [];
+  const text = stripComments(command);
   let split;
   try {
-    split = splitShell(command);
+    split = splitShell(text);
   } catch {
     return out;
   }
-  const envChange = changesEnvironment(command, split.statements);
+  // Controller ruling, round 2: an ALLOWLIST of confident shapes, not a
+  // denylist of uncertainty signals. `null` = deny-eligible.
+  const notConfident = confidentShape(text);
+  const envChange = changesEnvironment(text, split.statements);
   let dirChanged = false;
   for (const statement of split.statements) {
     for (const words of statement.commands) {
@@ -682,12 +701,268 @@ export function parseInstallCommands(command: string): InstallCommand[] {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
-        out.push(collect(d, context));
+        const c = collect(d, context);
+        c.uncertain = notConfident === null ? [] : [...new Set([notConfident, ...c.uncertain])];
+        out.push(c);
       }
       if (changesDirectory(words)) dirChanged = true;
     }
   }
   return out;
+}
+
+/**
+ * The command without its unquoted comments: `# …` to end of line (a `#`
+ * that STARTS a word — `user/repo#main` is not a comment) and PowerShell
+ * `<# … #>` blocks. Quotes are respected (`'…'`, `"…"` with `\` or `` ` ``
+ * escapes). Without this, `pip install requests  # for http calls` vetted —
+ * and denied — `for`, `http` and `calls`.
+ */
+export function stripComments(command: string): string {
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (quote === "'") {
+      out += ch;
+      if (ch === "'") quote = null;
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      out += ch;
+      if ((ch === '\\' || ch === '`') && i + 1 < command.length) {
+        out += command.charAt(i + 1);
+        i += 2;
+        continue;
+      }
+      if (ch === '"') quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < command.length) {
+      out += ch + command.charAt(i + 1);
+      i += 2;
+      continue;
+    }
+    if (ch === '<' && command.charAt(i + 1) === '#') {
+      const end = command.indexOf('#>', i + 2);
+      i = end < 0 ? command.length : end + 2;
+      out += ' ';
+      continue;
+    }
+    if (ch === '#' && (out === '' || /[\s;&|(]$/.test(out))) {
+      const nl = command.indexOf('\n', i);
+      i = nl < 0 ? command.length : nl;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────── the confident-shape allowlist
+
+interface Allow {
+  bool: ReadonlySet<string>;
+  value: ReadonlySet<string>;
+}
+
+const NPM_ALLOW_BOOL = ['-D', '--save-dev', '-E', '--save-exact', '-O', '--save-optional', '-P', '--save-prod', '-S', '--save'];
+
+/**
+ * Flags that do not change WHERE or HOW a package is looked up: dependency
+ * kind, exactness, global install, verbosity, `--user`, … Anything else —
+ * registry, config file, directory, workspace, tag, requirements file,
+ * any flag not listed — takes the command out of the confident shape.
+ */
+const ALLOW: Record<string, Allow> = {
+  npm: {
+    bool: set(...NPM_ALLOW_BOOL, '-B', '--save-bundle', '-g', '--global', '--save-peer', '--no-save', '--ignore-scripts',
+      '--no-audit', '--no-fund', '--silent', '--verbose', '--legacy-peer-deps'),
+    value: set(),
+  },
+  pnpm: {
+    bool: set(...NPM_ALLOW_BOOL.filter((f) => f !== '-S' && f !== '--save'), '--save-peer', '-g', '--global',
+      '--ignore-scripts', '--silent'),
+    value: set(),
+  },
+  yarn: {
+    bool: set('-D', '--dev', '-P', '--peer', '-O', '--optional', '-E', '--exact', '-T', '--tilde', '--silent',
+      '--ignore-scripts'),
+    value: set(),
+  },
+  bun: {
+    bool: set('-d', '-D', '--dev', '--optional', '--peer', '-E', '--exact', '-g', '--global', '--no-save', '--silent',
+      '--verbose'),
+    value: set(),
+  },
+  pip: {
+    bool: set('-U', '--upgrade', '--user', '--no-deps', '-q', '--quiet', '-v', '--verbose', '--pre', '--force-reinstall',
+      '--no-cache-dir', '--break-system-packages', '--disable-pip-version-check'),
+    value: set(),
+  },
+  uv: { bool: set('--dev', '-q', '--quiet', '-v', '--verbose', '--no-sync'), value: set('--group', '--optional') },
+  'uv-pip': { bool: set('-U', '--upgrade', '-q', '--quiet', '-v', '--verbose', '--no-deps', '--system'), value: set() },
+  poetry: {
+    bool: set('--dev', '-D', '--allow-prereleases', '--dry-run', '--lock', '-q', '--quiet', '-v', '--verbose', '-n',
+      '--no-interaction'),
+    value: set('--group', '-G', '--optional'),
+  },
+  composer: {
+    bool: set('--dev', '-W', '--with-all-dependencies', '-w', '--with-dependencies', '--update-with-dependencies',
+      '--update-with-all-dependencies', '--no-update', '--no-install', '--no-scripts', '--no-progress', '-n',
+      '--no-interaction', '-q', '--quiet', '--sort-packages'),
+    value: set(),
+  },
+  dotnet: { bool: set('--prerelease', '-n', '--no-restore'), value: set('-v', '--version', '-f', '--framework') },
+};
+
+/** Characters that, outside quotes, make a command something other than ONE plain simple statement. */
+const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\]]/;
+
+function notSingle(why: string): string {
+  return `not a single plain install statement (${why})`;
+}
+
+function notPlain(why: string): string {
+  return `not a plain install command (${why})`;
+}
+
+/**
+ * Controller ruling (round 2): a name missing from the public registry may
+ * be DENIED only when the whole command — comments stripped — is exactly
+ * ONE simple install statement: no `&&`/`||`/`;`/`|`/`&`, no second line,
+ * no subshell, `$(…)`, backticks, variables, globs, redirections or
+ * heredocs; the executable a bare package-manager name (never a path like
+ * `.venv/bin/pip`, never behind `sudo`/`env`/`VAR=x`); and every flag on
+ * the tool's {@link ALLOW} list. Returns why the shape is NOT confident, or
+ * `null` when it is. Everything that is not confident only warns.
+ */
+export function confidentShape(text: string): string | null {
+  const t = text.trim();
+  const words: string[] = [];
+  let cur = '';
+  let has = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < t.length; i += 1) {
+    const ch = t.charAt(i);
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === '$' || ch === '`' || ch === '\\') return notSingle(`'${ch}' inside double quotes`);
+      else cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      has = true;
+      continue;
+    }
+    if (ch === ' ' || ch === '\t') {
+      if (has) words.push(cur);
+      cur = '';
+      has = false;
+      continue;
+    }
+    if (NOT_SIMPLE.test(ch)) return notSingle(`'${ch === '\n' || ch === '\r' ? 'newline' : ch}' outside quotes`);
+    cur += ch;
+    has = true;
+  }
+  if (quote !== null) return notSingle('unterminated quote');
+  if (has) words.push(cur);
+
+  const [tool, ...rest] = words;
+  if (tool === undefined) return notSingle('empty');
+  const at = (k: number): string => rest[k] ?? '';
+  let key: string;
+  let args: string[];
+  switch (tool) {
+    case 'npm':
+      if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
+      [key, args] = ['npm', rest.slice(1)];
+      break;
+    case 'pnpm':
+    case 'yarn':
+      if (at(0) !== 'add') return notPlain(`'${tool} ${at(0)}'`);
+      [key, args] = [tool, rest.slice(1)];
+      break;
+    case 'bun':
+      if (!BUN_ADD.has(at(0))) return notPlain(`'bun ${at(0)}'`);
+      [key, args] = ['bun', rest.slice(1)];
+      break;
+    case 'pip':
+    case 'pip3':
+      if (at(0) !== 'install') return notPlain(`'${tool} ${at(0)}'`);
+      [key, args] = ['pip', rest.slice(1)];
+      break;
+    case 'python':
+    case 'python3':
+    case 'py':
+      if (at(0) !== '-m' || (at(1) !== 'pip' && at(1) !== 'pip3') || at(2) !== 'install') return notPlain(`'${tool} ${rest.join(' ')}'`);
+      [key, args] = ['pip', rest.slice(3)];
+      break;
+    case 'uv':
+      if (at(0) === 'add') [key, args] = ['uv', rest.slice(1)];
+      else if (at(0) === 'pip' && at(1) === 'install') [key, args] = ['uv-pip', rest.slice(2)];
+      else return notPlain(`'uv ${at(0)}'`);
+      break;
+    case 'poetry':
+      if (at(0) !== 'add') return notPlain(`'poetry ${at(0)}'`);
+      [key, args] = ['poetry', rest.slice(1)];
+      break;
+    case 'composer':
+      if (at(0) !== 'require') return notPlain(`'composer ${at(0)}'`);
+      [key, args] = ['composer', rest.slice(1)];
+      break;
+    case 'dotnet':
+      if (at(0) !== 'add' || at(1) !== 'package') return notPlain(`'dotnet ${at(0)} ${at(1)}' (dotnet add <project> package …)`);
+      [key, args] = ['dotnet', rest.slice(2)];
+      break;
+    default:
+      return notPlain(`'${tool}' is not a bare package-manager name`);
+  }
+  const allow = ALLOW[key];
+  if (allow === undefined) return notPlain(`no allowlist for ${key}`);
+  let positionals = 0;
+  for (let k = 0; k < args.length; k += 1) {
+    const w = args[k] ?? '';
+    if (!w.startsWith('-') || w === '-') {
+      positionals += 1;
+      continue;
+    }
+    const eqAt = w.indexOf('=');
+    if (eqAt > 0) {
+      const flag = w.slice(0, eqAt);
+      if (!allow.value.has(flag)) return `flag ${flag} is not on the confident-shape allowlist`;
+      continue;
+    }
+    if (allow.bool.has(w)) continue;
+    if (allow.value.has(w)) {
+      if (k + 1 >= args.length) return `flag ${w} has no value`;
+      k += 1;
+      continue;
+    }
+    if (!w.startsWith('--') && SHORT_CLUSTER.test(w)) {
+      const bad = [...w.slice(1)].map((c) => `-${c}`).find((f) => !allow.bool.has(f));
+      if (bad === undefined) continue;
+      return `flag ${bad} is not on the confident-shape allowlist`;
+    }
+    return `flag ${w} is not on the confident-shape allowlist`;
+  }
+  return positionals > 0 ? null : notPlain('no package named');
 }
 
 const DIR_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'push-location', 'pop-location', 'sl', 'cd..']);

@@ -224,7 +224,8 @@ describe('C1 — flag values are never vetted as names', () => {
     (command, expected, reported) => {
       expect(vetted(command)).toEqual(expected);
       expect(parseInstallCommands(command)[0]?.skipped.map((s) => s.raw)).toContain(reported);
-      expect(uncertain(command)).toEqual([]);
+      // Round 2: -r/-c/-e/-i/-f/-t are not on the confident-shape allowlist.
+      expect(uncertain(command)).not.toEqual([]);
     },
   );
 
@@ -257,9 +258,9 @@ describe('C1 — flag values are never vetted as names', () => {
   });
 
   it('an unknown flag makes the parse uncertain (the general net)', () => {
-    expect(uncertain('npm install --some-new-flag value lodash')).toEqual([expect.stringMatching(/--some-new-flag/)]);
-    expect(uncertain('pip install -Z requests')).toEqual([expect.stringMatching(/-Z/)]);
-    expect(uncertain('pip install -qZ requests')).toEqual([expect.stringMatching(/-Z/)]);
+    expect(uncertain('npm install --some-new-flag value lodash').join(' ')).toMatch(/--some-new-flag/);
+    expect(uncertain('pip install -Z requests').join(' ')).toMatch(/-Z/);
+    expect(uncertain('pip install -qZ requests').join(' ')).toMatch(/-Z/);
   });
 
   it('known flags keep the parse confident', () => {
@@ -279,8 +280,9 @@ describe('ruling (b) — an inline environment assignment makes every install un
     expect(uncertain(command).join(' ')).toMatch(/environment/);
   });
 
-  it('`set -e` (a shell option, not an assignment) keeps the parse confident', () => {
-    expect(uncertain('set -e && npm install foo')).toEqual([]);
+  it('`set -e` is a shell option, not an assignment (round 2: still not ONE statement)', () => {
+    expect(uncertain('set -e && npm install foo').join(' ')).not.toMatch(/environment/);
+    expect(uncertain('set -e && npm install foo').join(' ')).toMatch(/single/);
   });
 });
 
@@ -304,8 +306,9 @@ describe('ruling (c) — a directory change before or in the install makes it un
     expect(uncertain(command).join(' ')).toMatch(why);
   });
 
-  it('a cd AFTER the install does not affect it', () => {
-    expect(uncertain('npm install foo && cd dist')).toEqual([]);
+  it('a cd AFTER the install is not a directory change for it (round 2: still not ONE statement)', () => {
+    expect(uncertain('npm install foo && cd dist').join(' ')).not.toMatch(/directory change earlier/);
+    expect(uncertain('npm install foo && cd dist').join(' ')).toMatch(/single/);
   });
 });
 
@@ -317,6 +320,101 @@ describe('ruling (f) / I2 — workspace context makes it uncertain', () => {
     'pnpm --filter web add @acme/ui',
   ])('%s', (command) => {
     expect(uncertain(command).join(' ')).toMatch(/workspace/);
+  });
+});
+
+// ─────────────────────────────── fix round 2 — the confident-shape ALLOWLIST
+
+describe('round 2 — a missing name is deny-eligible only for ONE plain install statement', () => {
+  it.each([
+    'npm i react-super-hallucinated-utils-zz',
+    'npm install -D hallucinated-zz-pkg',
+    'npm i --save-dev --save-exact hallucinated-zz-pkg',
+    'npm i -DE hallucinated-zz-pkg',
+    'pnpm add -E hallucinated-zz-pkg',
+    'yarn add --dev hallucinated-zz-pkg',
+    'bun add -d hallucinated-zz-pkg',
+    'pip install reqeusts',
+    'pip3 install -U --user hallucinated-zz-pkg',
+    'python -m pip install -q hallucinated-zz-pkg',
+    'python3 -m pip install hallucinated-zz-pkg',
+    'uv add --dev hallucinated-zz-pkg',
+    'uv add --group lint hallucinated-zz-pkg',
+    'uv pip install -q hallucinated-zz-pkg',
+    'poetry add --group dev hallucinated-zz-pkg',
+    'poetry add --optional extra1 hallucinated-zz-pkg',
+    'composer require zzvendor/notapkg',
+    'composer require --dev zzvendor/notapkg',
+    'dotnet add package Acme.Totally.Missing.Pkg',
+    'dotnet add package Acme.Totally.Missing.Pkg --version 1.0.0 --prerelease',
+    'pip install requests  # for http calls',
+    'pip install requests <# for http calls #>',
+  ])('confident: %s', (command) => {
+    expect(uncertain(command)).toEqual([]);
+  });
+
+  it.each([
+    ['cd x && npm i foo', /single/],
+    ['npm i foo; npm i bar', /single/],
+    ['npm i foo || true', /single/],
+    ['npm i foo | tee log', /single/],
+    ['npm i foo &', /single/],
+    ['npm i foo\nnpm i bar', /single/],
+    ['(npm i foo)', /single/],
+    ['npm i $(cat pkgs.txt) foo', /single/],
+    ['npm i `cat pkgs.txt` foo', /single/],
+    ['npm i "$PKG" foo', /single/],
+    ['sudo npm i foo', /not a plain/],
+    ['env npm i foo', /not a plain/],
+    ['NPM_CONFIG_REGISTRY=https://npm.corp npm i foo', /not a plain/],
+    ['.venv/bin/pip install foo', /not a plain/],
+    ['C:/tools/npm.cmd i foo', /not a plain/],
+    ['npm --userconfig ./corp.npmrc install foo', /allowlist|not a plain/],
+    ['npm install --globalconfig ./g.npmrc foo', /--globalconfig/],
+    ['npm install --registry https://npm.corp foo', /--registry/],
+    ['uv add --config-file ./uv.toml foo', /--config-file/],
+    ['bun add -c ./bunfig.toml foo', /-c/],
+    ['bun add --config ./bunfig.toml foo', /--config/],
+    ['pip install --extra-index-url https://pypi.corp/simple -i https://pypi.org/simple foo', /--extra-index-url|-i/],
+    ['dotnet add package Corp.Lib -s https://nuget.corp/v3/index.json -s https://api.nuget.org/v3/index.json', /-s/],
+    ['dotnet add src/App.csproj package Foo', /not a plain/],
+    ['pip install -r req.txt foo', /-r/],
+    ['npm i foo > log.txt', /single/],
+  ] as Array<[string, RegExp]>)('not confident: %s', (command, why) => {
+    const reasons = uncertain(command);
+    expect(reasons).not.toEqual([]);
+    expect(reasons.join(' ')).toMatch(why);
+  });
+});
+
+describe('round 2 — unquoted comments are stripped before anything is vetted', () => {
+  it('`# …` to end of line', () => {
+    expect(vetted('pip install requests  # for http calls')).toEqual([['requests', undefined]]);
+    expect(vetted('npm i lodash # comment\nnpm i zod')).toEqual([
+      ['lodash', undefined],
+      ['zod', undefined],
+    ]);
+  });
+
+  it('PowerShell <# … #>', () => {
+    expect(vetted('pip install requests <# for http calls #>')).toEqual([['requests', undefined]]);
+  });
+
+  it('a # inside a word or inside quotes is not a comment', () => {
+    expect(vetted('npm i "foo#bar" lodash')).toEqual([['lodash', undefined]]);
+    expect(vetted('npm i user/repo#main lodash')).toEqual([['lodash', undefined]]);
+  });
+
+  it('uv --compile-bytecode is a boolean flag', () => {
+    expect(vetted('uv add --compile-bytecode httpx')).toEqual([['httpx', undefined]]);
+    expect(vetted('uv pip install --compile-bytecode httpx')).toEqual([['httpx', undefined]]);
+  });
+
+  it('every registry on the command line is kept, not only the last', () => {
+    const c = parseInstallCommands(
+      'dotnet add package Corp.Lib -s https://nuget.corp/v3/index.json -s https://api.nuget.org/v3/index.json',
+    )[0];
+    expect(c?.registries).toEqual(['https://nuget.corp/v3/index.json', 'https://api.nuget.org/v3/index.json']);
   });
 });
 

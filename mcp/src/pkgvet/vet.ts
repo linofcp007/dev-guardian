@@ -95,8 +95,8 @@ export interface VetOptions {
   popularDir?: string;
   /** Where to look for custom-registry configuration. */
   registry?: RegistryContext;
-  /** A registry / index named on the command line (`--registry`, `-i`, `--source`). */
-  commandRegistry?: string | undefined;
+  /** Every registry / index named on the command line (`--registry`, `-i`, `--source`); any non-public one counts. */
+  commandRegistries?: readonly string[] | undefined;
 }
 
 function popularIndexFor(ecosystem: PkgEcosystem, opts: VetOptions): PopularIndex | null {
@@ -117,8 +117,11 @@ function hoursAgo(iso: string, now: number): number | undefined {
   return Number.isFinite(t) ? (now - t) / HOUR : undefined;
 }
 
-function ageText(hours: number): string {
-  return hours < 48 ? `${Math.max(0, Math.round(hours))} h ago` : `${Math.round(hours / 24)} days ago`;
+/** Hours inside the 72 h window, then days to one decimal: ~60 h reads "60 h", never "3 days". */
+export function ageText(hours: number): string {
+  if (hours < FRESH_HOURS) return `${Math.max(0, Math.round(hours))} h ago`;
+  const days = hours / 24;
+  return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
 
 interface Work {
@@ -145,9 +148,8 @@ interface Work {
 }
 
 function customFor(spec: PackageSpec, opts: VetOptions): CustomRegistry | null {
-  if (opts.commandRegistry !== undefined && !isPublicRegistryUrl(spec.ecosystem, opts.commandRegistry)) {
-    return { kind: 'registry', source: 'the command line', url: opts.commandRegistry };
-  }
+  const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
+  if (onCommandLine !== undefined) return { kind: 'registry', source: 'the command line', url: onCommandLine };
   return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
 

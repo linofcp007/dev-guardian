@@ -44,6 +44,15 @@
  *     repository root, or the user-level one, with a package source that is
  *     not nuget.org.
  *
+ * Round 2 additions: npm's DEFAULT global npmrc (`%APPDATA%\npm\etc\npmrc`,
+ * or `<node prefix>/etc/npmrc` from `process.execPath`, or
+ * `npm_config_prefix`); macOS pip (`~/Library/Application Support/pip`);
+ * every `nuget.config` up to the filesystem root, as NuGet itself reads
+ * them; and the hook's environment, matched case-insensitively —
+ * `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`,
+ * `npm_config_*registry*` (incl. `npm_config_@scope:registry`),
+ * `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*`.
+ *
  * A configured value that IS the public registry (`registry.npmjs.org`,
  * `pypi.org/simple`, `api.nuget.org`) is not custom.
  *
@@ -64,6 +73,10 @@ export interface RegistryContext {
   env?: Readonly<Record<string, string | undefined>> | undefined;
   /** System configuration root (`/etc`). Tests point it at a temp directory. */
   etcDir?: string | undefined;
+  /** Defaults to `process.platform` (decides where npm's default global npmrc lives). */
+  platform?: NodeJS.Platform | undefined;
+  /** Defaults to `process.execPath`; on POSIX npm's global npmrc is `<its prefix>/etc/npmrc`. */
+  nodeExecPath?: string | undefined;
 }
 
 /**
@@ -270,15 +283,51 @@ function npmConfigFiles(ctx: RegistryContext): Array<{ path: string; parse: NpmP
   );
   const globalConfig = envValue(env, 'NPM_CONFIG_GLOBALCONFIG');
   if (globalConfig !== undefined) files.push({ path: globalConfig, parse: fromNpmrc });
+  // npm's DEFAULT global npmrc, read even when nothing names it:
+  // `<prefix>/etc/npmrc`, the prefix being `%APPDATA%\npm` on Windows and the
+  // node installation's prefix (`<prefix>/bin/node`) elsewhere — or
+  // `npm_config_prefix` when set.
+  const prefix =
+    envValue(env, 'NPM_CONFIG_PREFIX') ??
+    ((ctx.platform ?? process.platform) === 'win32'
+      ? join(envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming'), 'npm')
+      : dirname(dirname(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join(prefix, 'etc', 'npmrc'), parse: fromNpmrc });
   return files;
+}
+
+/**
+ * Environment variables that point a package manager at a registry, matched
+ * case-insensitively on the name. The first whose value is not the public
+ * registry (or is not a URL at all — `UV_INDEX_STRATEGY`, `NUGET_PACKAGES`)
+ * counts. `*NO_INDEX*` counts only when truthy.
+ */
+const ENV_REGISTRY: Record<PkgEcosystem, RegExp> = {
+  npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
+  pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
+  packagist: /^$/,
+  nuget: /^NUGET_.+$/i,
+};
+
+function envRegistry(ecosystem: PkgEcosystem, ctx: RegistryContext): CustomRegistry | null {
+  for (const [key, raw] of Object.entries(envOf(ctx))) {
+    if (raw === undefined || raw.trim() === '' || !ENV_REGISTRY[ecosystem].test(key)) continue;
+    const value = raw.trim();
+    if (/NO_INDEX/i.test(key)) {
+      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: 'registry', source: key };
+      continue;
+    }
+    if (value.split(/\s+/).some((u) => !isPublic(ecosystem, u.replace(/^[^=]+=(?=https?:)/, '')))) {
+      return { kind: 'registry', source: key, url: value };
+    }
+  }
+  return null;
 }
 
 function npmRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
   const scope = npmScope(name);
-  const envRegistry = envValue(envOf(ctx), 'NPM_CONFIG_REGISTRY');
-  if (envRegistry !== undefined && !isPublic('npm', envRegistry)) {
-    return { kind: 'registry', source: 'NPM_CONFIG_REGISTRY', url: envRegistry };
-  }
+  const fromEnv = envRegistry('npm', ctx);
+  if (fromEnv !== null) return fromEnv;
   let authSource: string | undefined;
   for (const { path, parse } of npmConfigFiles(ctx)) {
     const text = read(path);
@@ -386,8 +435,6 @@ function uvWorkspacePackage(name: string, ctx: RegistryContext): string | undefi
 
 // ────────────────────────────────────────────────────────────── PyPI
 
-const PY_ENV = ['PIP_INDEX_URL', 'PIP_EXTRA_INDEX_URL', 'UV_INDEX_URL', 'UV_EXTRA_INDEX_URL', 'UV_INDEX', 'UV_DEFAULT_INDEX', 'PIP_FIND_LINKS', 'UV_FIND_LINKS'];
-
 /** `index-url`, `extra-index-url`, `find-links` (any spelling) or `no-index` in a pip config file. */
 function fromPipConf(text: string): string | undefined {
   for (const raw of text.split(/\r?\n/)) {
@@ -419,13 +466,8 @@ function fromUvToml(text: string): string | undefined {
 
 function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
   const env = envOf(ctx);
-  for (const envName of PY_ENV) {
-    const v = envValue(env, envName);
-    if (v === undefined) continue;
-    if (v.split(/\s+/).some((u) => !isPublic('pypi', u))) return { kind: 'registry', source: envName, url: v };
-  }
-  const noIndex = envValue(env, 'PIP_NO_INDEX');
-  if (noIndex !== undefined && /^(?:1|true|yes|on)$/i.test(noIndex)) return { kind: 'registry', source: 'PIP_NO_INDEX' };
+  const fromEnv = envRegistry('pypi', ctx);
+  if (fromEnv !== null) return fromEnv;
 
   // pip: explicit file, user (XDG, ~/.pip, %APPDATA%), venv, and global
   // (/etc/pip.conf, /etc/xdg/pip/pip.conf and XDG_CONFIG_DIRS, %ProgramData%).
@@ -435,7 +477,11 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
   const explicit = envValue(env, 'PIP_CONFIG_FILE');
   if (explicit !== undefined) confs.push(explicit);
   const xdg = envValue(env, 'XDG_CONFIG_HOME') ?? join(home, '.config');
-  confs.push(join(xdg, 'pip', 'pip.conf'), join(home, '.pip', 'pip.conf'));
+  confs.push(
+    join(xdg, 'pip', 'pip.conf'),
+    join(home, '.pip', 'pip.conf'),
+    join(home, 'Library', 'Application Support', 'pip', 'pip.conf'),
+  );
   const appdata = envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming');
   confs.push(join(appdata, 'pip', 'pip.ini'), join(home, 'pip', 'pip.ini'));
   const venv = envValue(env, 'VIRTUAL_ENV');
@@ -530,10 +576,20 @@ function customNugetSource(text: string): string | undefined {
 }
 
 function nugetRegistry(ctx: RegistryContext): CustomRegistry | null {
+  const fromEnv = envRegistry('nuget', ctx);
+  if (fromEnv !== null) return fromEnv;
+  // NuGet reads every nuget.config from the project up to the filesystem
+  // root — past `.git` and past the home directory — so this walk does too.
   const files: string[] = [];
-  for (const dir of ancestors(ctx)) {
-    const f = nugetConfigIn(dir);
-    if (f !== undefined) files.push(f);
+  if (ctx.projectDir !== undefined) {
+    let dir = resolve(ctx.projectDir);
+    for (let i = 0; i < 64; i += 1) {
+      const f = nugetConfigIn(dir);
+      if (f !== undefined) files.push(f);
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);

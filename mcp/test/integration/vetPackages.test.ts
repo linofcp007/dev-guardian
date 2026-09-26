@@ -47,8 +47,14 @@ beforeEach(() => {
     'NPM_CONFIG_GLOBALCONFIG',
     'UV_CONFIG_FILE',
     'XDG_CONFIG_DIRS',
+    'npm_config_prefix',
+    'NPM_CONFIG_PREFIX',
   ]) {
     vi.stubEnv(k, '');
+  }
+  // Round 2 reads registry env vars by pattern — blank every one this machine has.
+  for (const k of Object.keys(process.env)) {
+    if (/^(?:YARN_|BUN_|NUGET_|npm_config_.*registry|(?:PIP|UV)_.*INDEX)/i.test(k)) vi.stubEnv(k, '');
   }
 });
 afterEach(() => {

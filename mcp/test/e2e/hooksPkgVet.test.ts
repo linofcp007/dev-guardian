@@ -56,7 +56,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
+const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
 function runHook(command: string, routes: Record<string, Route | Route[]>, opts: { tool?: string; env?: Record<string, string> } = {}): HookOut {
   const base: Record<string, string> = {};
@@ -263,6 +263,41 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       server.close();
     }
   }, 20_000);
+
+  describe('fix round 2 — the reviewer\'s probes through the real hook', () => {
+    it.each([
+      ['a trailing comment', 'pip install requests  # for http calls'],
+      ['a registry set earlier in the command', 'npm config set @org:registry https://npm.corp.local && npm i @org/x'],
+      ['a venv pip by path', '.venv/bin/pip install corp-lib'],
+      ['a config-file flag', 'bun add -c ./bunfig.toml corp-lib'],
+      ['two sources, public last', 'dotnet add package Corp.Lib -s https://nuget.corp.local/v3/index.json -s https://api.nuget.org/v3/index.json'],
+    ])('%s: never a deny', (_label, command) => {
+      const r = runHook(command, {
+        'https://pypi.org/pypi/requests/json': {
+          body: { info: { version: '2.32.0' }, releases: { '2.32.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+        },
+        'https://registry.npmjs.org/@org%2Fx': { status: 404 },
+        'https://registry.npmjs.org/corp-lib': { status: 404 },
+        'https://pypi.org/pypi/corp-lib/json': { status: 404 },
+        'https://api.nuget.org/v3-flatcontainer/corp.lib/index.json': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests.some((u) => /\/pypi\/(?:for|http|calls)\/json$/.test(u))).toBe(false);
+    });
+
+    it('control: one plain statement with an allowlisted flag is still denied, with the escape hatch', () => {
+      const r = runHook('npm i -D react-form-autopilot-helperz', {
+        'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(
+        're-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0',
+      );
+    });
+  });
 
   it('GUARDIAN_OFFLINE=1: no request, a not-verified note', () => {
     const r = runHook('npm install express', {}, { env: { GUARDIAN_OFFLINE: '1' } });

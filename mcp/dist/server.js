@@ -66974,7 +66974,8 @@ var FLAGS = {
       "--ignore-requires-python",
       "--system",
       "--all-extras",
-      "--no-index"
+      "--no-index",
+      "--compile-bytecode"
     ),
     registry: set("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
     registryBool: set("--no-index"),
@@ -67022,7 +67023,6 @@ var FLAGS = {
       "--prerelease",
       "--exclude-newer",
       "--link-mode",
-      "--compile-bytecode",
       "--no-binary-package",
       "--no-build-package",
       "--upgrade-package",
@@ -67061,7 +67061,8 @@ var FLAGS = {
       "--no-build",
       "--no-binary",
       "--no-config",
-      "--no-progress"
+      "--no-progress",
+      "--compile-bytecode"
     ),
     registry: set("--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"),
     registryBool: set("--no-index"),
@@ -67164,6 +67165,130 @@ var FLAGS = {
     bool: set("-n", "--no-restore", "--interactive", "--prerelease"),
     registry: set("-s", "--source")
   }
+};
+var NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
+var ALLOW = {
+  npm: {
+    bool: set(
+      ...NPM_ALLOW_BOOL,
+      "-B",
+      "--save-bundle",
+      "-g",
+      "--global",
+      "--save-peer",
+      "--no-save",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--silent",
+      "--verbose",
+      "--legacy-peer-deps"
+    ),
+    value: set()
+  },
+  pnpm: {
+    bool: set(
+      ...NPM_ALLOW_BOOL.filter((f) => f !== "-S" && f !== "--save"),
+      "--save-peer",
+      "-g",
+      "--global",
+      "--ignore-scripts",
+      "--silent"
+    ),
+    value: set()
+  },
+  yarn: {
+    bool: set(
+      "-D",
+      "--dev",
+      "-P",
+      "--peer",
+      "-O",
+      "--optional",
+      "-E",
+      "--exact",
+      "-T",
+      "--tilde",
+      "--silent",
+      "--ignore-scripts"
+    ),
+    value: set()
+  },
+  bun: {
+    bool: set(
+      "-d",
+      "-D",
+      "--dev",
+      "--optional",
+      "--peer",
+      "-E",
+      "--exact",
+      "-g",
+      "--global",
+      "--no-save",
+      "--silent",
+      "--verbose"
+    ),
+    value: set()
+  },
+  pip: {
+    bool: set(
+      "-U",
+      "--upgrade",
+      "--user",
+      "--no-deps",
+      "-q",
+      "--quiet",
+      "-v",
+      "--verbose",
+      "--pre",
+      "--force-reinstall",
+      "--no-cache-dir",
+      "--break-system-packages",
+      "--disable-pip-version-check"
+    ),
+    value: set()
+  },
+  uv: { bool: set("--dev", "-q", "--quiet", "-v", "--verbose", "--no-sync"), value: set("--group", "--optional") },
+  "uv-pip": { bool: set("-U", "--upgrade", "-q", "--quiet", "-v", "--verbose", "--no-deps", "--system"), value: set() },
+  poetry: {
+    bool: set(
+      "--dev",
+      "-D",
+      "--allow-prereleases",
+      "--dry-run",
+      "--lock",
+      "-q",
+      "--quiet",
+      "-v",
+      "--verbose",
+      "-n",
+      "--no-interaction"
+    ),
+    value: set("--group", "-G", "--optional")
+  },
+  composer: {
+    bool: set(
+      "--dev",
+      "-W",
+      "--with-all-dependencies",
+      "-w",
+      "--with-dependencies",
+      "--update-with-dependencies",
+      "--update-with-all-dependencies",
+      "--no-update",
+      "--no-install",
+      "--no-scripts",
+      "--no-progress",
+      "-n",
+      "--no-interaction",
+      "-q",
+      "--quiet",
+      "--sort-packages"
+    ),
+    value: set()
+  },
+  dotnet: { bool: set("--prerelease", "-n", "--no-restore"), value: set("-v", "--version", "-f", "--framework") }
 };
 
 // src/pkgvet/popular.ts
@@ -67476,14 +67601,34 @@ function npmConfigFiles(ctx) {
   );
   const globalConfig2 = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
+  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join73(envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming"), "npm") : dirname20(dirname20(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join73(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
+}
+var ENV_REGISTRY = {
+  npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
+  pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
+  packagist: /^$/,
+  nuget: /^NUGET_.+$/i
+};
+function envRegistry(ecosystem, ctx) {
+  for (const [key, raw] of Object.entries(envOf(ctx))) {
+    if (raw === void 0 || raw.trim() === "" || !ENV_REGISTRY[ecosystem].test(key)) continue;
+    const value = raw.trim();
+    if (/NO_INDEX/i.test(key)) {
+      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: "registry", source: key };
+      continue;
+    }
+    if (value.split(/\s+/).some((u2) => !isPublic(ecosystem, u2.replace(/^[^=]+=(?=https?:)/, "")))) {
+      return { kind: "registry", source: key, url: value };
+    }
+  }
+  return null;
 }
 function npmRegistry(name, ctx) {
   const scope = npmScope(name);
-  const envRegistry = envValue(envOf(ctx), "NPM_CONFIG_REGISTRY");
-  if (envRegistry !== void 0 && !isPublic("npm", envRegistry)) {
-    return { kind: "registry", source: "NPM_CONFIG_REGISTRY", url: envRegistry };
-  }
+  const fromEnv = envRegistry("npm", ctx);
+  if (fromEnv !== null) return fromEnv;
   let authSource;
   for (const { path: path6, parse: parse6 } of npmConfigFiles(ctx)) {
     const text = read(path6);
@@ -67566,7 +67711,6 @@ function uvWorkspacePackage(name, ctx) {
   }
   return void 0;
 }
-var PY_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_INDEX", "UV_DEFAULT_INDEX", "PIP_FIND_LINKS", "UV_FIND_LINKS"];
 function fromPipConf(text) {
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*(index[-_]url|extra[-_]index[-_]url|find[-_]links)\s*[=:]\s*(\S+)/i.exec(raw);
@@ -67594,20 +67738,19 @@ function fromUvToml(text) {
 }
 function pypiRegistry(name, ctx) {
   const env = envOf(ctx);
-  for (const envName of PY_ENV) {
-    const v = envValue(env, envName);
-    if (v === void 0) continue;
-    if (v.split(/\s+/).some((u2) => !isPublic("pypi", u2))) return { kind: "registry", source: envName, url: v };
-  }
-  const noIndex = envValue(env, "PIP_NO_INDEX");
-  if (noIndex !== void 0 && /^(?:1|true|yes|on)$/i.test(noIndex)) return { kind: "registry", source: "PIP_NO_INDEX" };
+  const fromEnv = envRegistry("pypi", ctx);
+  if (fromEnv !== null) return fromEnv;
   const home = homeOf(ctx);
   const etc = ctx.etcDir ?? "/etc";
   const confs = [];
   const explicit = envValue(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
   const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join73(home, ".config");
-  confs.push(join73(xdg, "pip", "pip.conf"), join73(home, ".pip", "pip.conf"));
+  confs.push(
+    join73(xdg, "pip", "pip.conf"),
+    join73(home, ".pip", "pip.conf"),
+    join73(home, "Library", "Application Support", "pip", "pip.conf")
+  );
   const appdata = envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming");
   confs.push(join73(appdata, "pip", "pip.ini"), join73(home, "pip", "pip.ini"));
   const venv = envValue(env, "VIRTUAL_ENV");
@@ -67688,10 +67831,18 @@ function customNugetSource(text) {
   return void 0;
 }
 function nugetRegistry(ctx) {
+  const fromEnv = envRegistry("nuget", ctx);
+  if (fromEnv !== null) return fromEnv;
   const files = [];
-  for (const dir of ancestors(ctx)) {
-    const f = nugetConfigIn(dir);
-    if (f !== void 0) files.push(f);
+  if (ctx.projectDir !== void 0) {
+    let dir = resolve17(ctx.projectDir);
+    for (let i2 = 0; i2 < 64; i2 += 1) {
+      const f = nugetConfigIn(dir);
+      if (f !== void 0) files.push(f);
+      const parent = dirname20(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
@@ -68225,12 +68376,13 @@ function hoursAgo(iso, now) {
   return Number.isFinite(t) ? (now - t) / HOUR : void 0;
 }
 function ageText(hours) {
-  return hours < 48 ? `${Math.max(0, Math.round(hours))} h ago` : `${Math.round(hours / 24)} days ago`;
+  if (hours < FRESH_HOURS) return `${Math.max(0, Math.round(hours))} h ago`;
+  const days = hours / 24;
+  return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
 function customFor(spec, opts) {
-  if (opts.commandRegistry !== void 0 && !isPublicRegistryUrl(spec.ecosystem, opts.commandRegistry)) {
-    return { kind: "registry", source: "the command line", url: opts.commandRegistry };
-  }
+  const onCommandLine = (opts.commandRegistries ?? []).find((u2) => !isPublicRegistryUrl(spec.ecosystem, u2));
+  if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
   return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
 function resolveFor(w, info) {
@@ -68512,7 +68664,7 @@ var ECOSYSTEM_ALIASES = {
 var tool47 = {
   name: "vet_packages",
   title: "Vet packages before installing",
-  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured (scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only on an unambiguous command line, and warns on known vulnerabilities only for an exact version pin.',
+  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured (scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only when the whole command is one plain install statement with allowlisted flags (otherwise it warns), and warns on known vulnerabilities only for an exact version pin.',
   inputSchema: {
     ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
     packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version" (a range or tag is resolved to the version it installs).'),

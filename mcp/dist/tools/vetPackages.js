@@ -44,7 +44,8 @@ const tool = {
         '(scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also ' +
         'name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks ' +
         'on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only ' +
-        'on an unambiguous command line, and warns on known vulnerabilities only for an exact version pin.',
+        'when the whole command is one plain install statement with allowlisted flags (otherwise it warns), ' +
+        'and warns on known vulnerabilities only for an exact version pin.',
     inputSchema: {
         ecosystem: z
             .enum(Object.keys(ECOSYSTEM_ALIASES))

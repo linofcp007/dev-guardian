@@ -5,13 +5,15 @@
  * itself only calls it and emits the answer.
  *
  *   - **deny** a malicious package, always; and a package the public
- *     registry does not have ONLY under a confident parse (controller
- *     ruling): no unknown flag, no inline environment assignment, no
- *     directory change before or in the install, no workspace context
- *     (`InstallCommand.uncertain`), and no custom registry, npmjs auth token
- *     (scoped names) or local workspace package to explain the 404
- *     (`privateRegistry.ts`). Blocking a missing name buys little — the
- *     install would 404 anyway — and a false deny blocks real work;
+ *     registry does not have ONLY when the whole command, comments
+ *     stripped, is ONE plain install statement with allowlisted flags
+ *     (controller ruling, round 2 — `confidentShape` in `parseCommand.ts`;
+ *     `InstallCommand.uncertain` is empty exactly then) AND no custom
+ *     registry, npmjs auth token (scoped names) or local workspace package
+ *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
+ *     little — the install would 404 anyway — and a false deny blocks real
+ *     work. That deny carries an escape hatch ({@link ESCAPE_HATCH}); a
+ *     malicious one does not;
  *   - **warn** (additionalContext) on a missing name that was not denied
  *     ("not found on the public registry — if it is private or local,
  *     ignore this"), a version < 72 h old, install scripts, typosquat
@@ -50,8 +52,15 @@ export async function decideInstallCommand(command, opts) {
         budgetMs,
         offline,
         now: opts.now ?? Date.now(),
-        registry: { projectDir: opts.cwd, homeDir: opts.homeDir, env },
-        commandRegistry: c.customRegistry,
+        registry: {
+            projectDir: opts.cwd,
+            homeDir: opts.homeDir,
+            env,
+            etcDir: opts.etcDir,
+            platform: opts.platform,
+            nodeExecPath: opts.nodeExecPath,
+        },
+        commandRegistries: c.registries,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
         ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
@@ -59,11 +68,14 @@ export async function decideInstallCommand(command, opts) {
     const denies = [];
     const warnings = [];
     const unverified = [];
+    let malicious = false;
     commands.forEach((cmd, i) => {
         for (const r of batches[i] ?? []) {
             const d = decideOne(r, cmd.uncertain);
             if (d.deny !== undefined)
                 denies.push(d.deny);
+            if (d.malicious === true)
+                malicious = true;
             if (d.warn !== undefined)
                 warnings.push(d.warn);
             if (d.unverified !== undefined)
@@ -74,7 +86,11 @@ export async function decideInstallCommand(command, opts) {
         return {
             deny: `dev-guardian blocked this install: ${denies.join(' ')} ` +
                 'Check the package name against the project documentation or the registry before installing anything. ' +
-                'If this package is genuinely intended, ask the user to install it themselves.',
+                // Controller ruling (round 2): a missing-name deny carries its own
+                // escape hatch — an explicit registry flag takes the command out of
+                // the confident shape, so the agent can always proceed. A MALICIOUS
+                // package gets no such hint.
+                (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : ESCAPE_HATCH),
         };
     }
     const lines = [];
@@ -88,6 +104,7 @@ export async function decideInstallCommand(command, opts) {
     return lines.length > 0 ? { context: lines.join('\n') } : null;
 }
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';
+export const ESCAPE_HATCH = 'If this package is private or local, re-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0.';
 const CHECK_KEYS = [
     'exists',
     'malicious',
@@ -104,9 +121,9 @@ function sentence(text) {
  *
  *   - malicious (OSV `MAL-` on the version, npm takedown placeholder) → deny, always;
  *   - missing from the public registry → deny ONLY when the vetting found
- *     nothing to explain it ((d)-(f): it is `block`, not `unknown`) AND the
- *     command parse was confident ((a)-(c): `uncertain` is empty); otherwise
- *     the ruling's "not found … ignore this" warning, with the reason;
+ *     nothing to explain it (it is `block`, not `unknown`) AND the command
+ *     has the confident shape (`uncertain` is empty); otherwise the ruling's
+ *     "not found … ignore this" warning, with the reason;
  *   - every other `warn` check, except known vulnerabilities on a version
  *     the user did not pin exactly (M4: for a range or a bare name the
  *     installed version is not known here — the tool still reports them);
@@ -118,7 +135,7 @@ function decideOne(r, uncertain) {
             .filter((c) => c.status === 'fail' && c.detail !== undefined)
             .map((c) => c.detail ?? '')
             .join('; ');
-        return { deny: `'${label(r)}': ${sentence(why)}` };
+        return { deny: `'${label(r)}': ${sentence(why)}`, malicious: true };
     }
     if (r.not_on_public_registry === true) {
         if (r.verdict === 'block' && uncertain.length === 0) {

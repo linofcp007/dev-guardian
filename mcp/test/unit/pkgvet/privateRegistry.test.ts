@@ -18,7 +18,14 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const ctx = (env: Record<string, string> = {}) => ({ projectDir: project, homeDir: home, env });
+// Hermetic: /etc and the node prefix point into the temp home, never at this machine's.
+const ctx = (env: Record<string, string> = {}) => ({
+  projectDir: project,
+  homeDir: home,
+  env,
+  etcDir: join(home, 'no-etc'),
+  nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+});
 
 describe('customRegistryFor — npm', () => {
   it('nothing configured: public', () => {
@@ -257,6 +264,74 @@ describe('fix round 1 — ruling (f): a local workspace package is not a missing
   it('composer path repositories (already a custom repository)', () => {
     writeFileSync(join(project, 'composer.json'), JSON.stringify({ repositories: [{ type: 'path', url: 'packages/*' }] }));
     expect(customRegistryFor('packagist', 'acme/local', ctx())).not.toBeNull();
+  });
+});
+
+describe('fix round 2 — registry context the hook could still miss', () => {
+  it('npm default global npmrc on Windows: %APPDATA%\\npm\\etc\\npmrc', () => {
+    const appdata = join(home, 'Roaming');
+    mkdirSync(join(appdata, 'npm', 'etc'), { recursive: true });
+    writeFileSync(join(appdata, 'npm', 'etc', 'npmrc'), 'registry=https://npm.corp.local/\n');
+    const c = { projectDir: project, homeDir: home, env: { APPDATA: appdata }, platform: 'win32' as const };
+    expect(customRegistryFor('npm', 'lodash', c)).toMatchObject({ kind: 'registry' });
+  });
+
+  it('npm default global npmrc on POSIX: <node prefix>/etc/npmrc from the node executable', () => {
+    const prefix = join(home, 'usr-local');
+    mkdirSync(join(prefix, 'etc'), { recursive: true });
+    writeFileSync(join(prefix, 'etc', 'npmrc'), 'registry=https://npm.corp.local/\n');
+    const c = { projectDir: project, homeDir: home, env: {}, platform: 'linux' as const, nodeExecPath: join(prefix, 'bin', 'node') };
+    expect(customRegistryFor('npm', 'lodash', c)).toMatchObject({ kind: 'registry' });
+  });
+
+  it('macOS pip: ~/Library/Application Support/pip/pip.conf', () => {
+    const dir = join(home, 'Library', 'Application Support', 'pip');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    expect(customRegistryFor('pypi', 'requests', ctx())).not.toBeNull();
+  });
+
+  it('NuGet config is read ABOVE the repository root too, as NuGet does', () => {
+    const repo = join(project, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(
+      join(project, 'NuGet.Config'),
+      '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>',
+    );
+    expect(customRegistryFor('nuget', 'Corp.Lib', { projectDir: repo, homeDir: home, env: {} })).not.toBeNull();
+  });
+
+  it.each([
+    ['YARN_NPM_REGISTRY_SERVER', 'https://npm.corp.local'],
+    ['yarn_npm_registry_server', 'https://npm.corp.local'],
+    ['YARN_REGISTRY', 'https://npm.corp.local'],
+    ['BUN_CONFIG_REGISTRY', 'https://npm.corp.local'],
+    ['npm_config_@corp:registry', 'https://npm.corp.local'],
+    ['NPM_CONFIG_REGISTRY', 'https://npm.corp.local'],
+  ])('npm: the hook env var %s counts', (name, value) => {
+    expect(customRegistryFor('npm', '@corp/x', ctx({ [name]: value }))).toMatchObject({ kind: 'registry', source: name });
+  });
+
+  it('npm: an env var pointing at the PUBLIC registry does not (npm test exports npm_config_registry)', () => {
+    expect(customRegistryFor('npm', 'lodash', ctx({ npm_config_registry: 'https://registry.npmjs.org/' }))).toBeNull();
+  });
+
+  it.each([
+    ['pip_index_url', 'https://pypi.corp.local/simple'],
+    ['PIP_EXTRA_INDEX_URL', 'https://pypi.corp.local/simple'],
+    ['UV_INDEX', 'corp=https://pypi.corp.local/simple'],
+    ['UV_INDEX_STRATEGY', 'unsafe-best-match'],
+    ['PIP_NO_INDEX', '1'],
+  ])('pypi: the hook env var %s counts', (name, value) => {
+    expect(customRegistryFor('pypi', 'requests', ctx({ [name]: value }))).toMatchObject({ source: name });
+  });
+
+  it('pypi: PIP_NO_INDEX=0 does not', () => {
+    expect(customRegistryFor('pypi', 'requests', ctx({ PIP_NO_INDEX: '0' }))).toBeNull();
+  });
+
+  it('nuget: any NUGET_* env var counts', () => {
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ NUGET_PACKAGES: '/opt/nuget' }))).toMatchObject({ source: 'NUGET_PACKAGES' });
   });
 });
 

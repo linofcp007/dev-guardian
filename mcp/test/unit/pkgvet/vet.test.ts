@@ -94,7 +94,7 @@ function opts(fake: Fake, extra: Partial<VetOptions> = {}): VetOptions {
     offline: false,
     budgetMs: 2000,
     popular: { npm: ['express', 'lodash', 'react'], pypi: ['requests'], packagist: ['monolog/monolog'], nuget: ['Newtonsoft.Json'] },
-    registry: { projectDir: project, homeDir: home, env: {} },
+    registry: { projectDir: project, homeDir: home, env: {}, etcDir: join(home, 'no-etc'), nodeExecPath: join(home, 'no-node', 'bin', 'node') },
     ...extra,
   };
 }
@@ -169,14 +169,35 @@ describe('vetPackages — npm', () => {
 
   it('a registry named on the command line counts as a custom registry too', async () => {
     const fake = fakeFetch({ 'https://registry.npmjs.org/acme-internal-lib': { status: 404 }, [OSV]: osvRoute() });
-    const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(fake, { commandRegistry: 'https://npm.acme.local' }));
+    const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(fake, { commandRegistries: ['https://npm.acme.local'] }));
     expect(r?.verdict).toBe('unknown');
   });
 
   it('naming the PUBLIC registry on the command line is not a custom registry', async () => {
     const fake = fakeFetch({ 'https://registry.npmjs.org/acme-internal-lib': { status: 404 }, [OSV]: osvRoute() });
-    const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(fake, { commandRegistry: 'https://registry.npmjs.org/' }));
+    const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(fake, { commandRegistries: ['https://registry.npmjs.org/'] }));
     expect(r?.verdict).toBe('block');
+  });
+
+  it('round 2: several registries on the command line — ANY non-public one counts', async () => {
+    const fake = fakeFetch({ 'https://registry.npmjs.org/acme-internal-lib': { status: 404 }, [OSV]: osvRoute() });
+    const [r] = await vetPackages(
+      [spec('npm', 'acme-internal-lib')],
+      opts(fake, { commandRegistries: ['https://npm.acme.local', 'https://registry.npmjs.org/'] }),
+    );
+    expect(r?.verdict).toBe('unknown');
+  });
+
+  it('round 2: publish age is not rounded up — ~60 h is "60 h", 100 h is "4.2 days"', async () => {
+    const fake = fakeFetch({
+      'https://pypi.org/pypi/fresh-lib/json': {
+        body: { info: { version: '2.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: iso(100 * 3600 * 1000) }], '2.0.0': [{ upload_time_iso_8601: iso(60 * 3600 * 1000) }] } },
+      },
+      [OSV]: osvRoute(),
+    });
+    const [fresh, older] = await vetPackages([spec('pypi', 'fresh-lib'), spec('pypi', 'fresh-lib', '==1.0.0')], opts(fake));
+    expect(fresh?.checks.publish_age.detail).toMatch(/published 60 h ago/);
+    expect(older?.checks.publish_age.detail).toBe('published 4.2 days ago');
   });
 
   it('a MAL- advisory on the version that would install is BLOCKED', async () => {
