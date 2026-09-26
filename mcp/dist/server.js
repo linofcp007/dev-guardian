@@ -53820,6 +53820,19 @@ function exploitabilitySignal(cveIds, intel) {
   }
   return { kev, max_epss: maxEpss, cve_ids: contributed };
 }
+function rankByExploitability(items, cveIdsOf, intel) {
+  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
+  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
+    const sa = signals2[a2.index];
+    const sb = signals2[b.index];
+    if (sa === void 0 || sb === void 0) return 0;
+    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
+    const ea = sa.max_epss ?? -1;
+    const eb = sb.max_epss ?? -1;
+    if (ea !== eb) return eb - ea;
+    return a2.index - b.index;
+  }).map((x) => x.item);
+}
 
 // src/tools/riskScore.ts
 var tool17 = {
@@ -64832,9 +64845,22 @@ function buildGroups(input) {
   }
   return groups.sort((a2, b) => a2.key < b.key ? -1 : a2.key > b.key ? 1 : 0);
 }
-function selectGroups(groups, maxPrs) {
-  const ordered = [...groups].sort(
-    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]
+function bySeverityThenExploitability(items, fingerprintsOf, exploitability) {
+  const cveIdsOf = (item) => exploitability === void 0 ? [] : [...new Set(fingerprintsOf(item).flatMap((fp) => exploitability.cveIdsOf(fp)))];
+  const ranked = exploitability === void 0 ? [...items] : rankByExploitability(items, cveIdsOf, exploitability.intel);
+  return ranked.sort((a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]);
+}
+function rankCandidates(group, exploitability) {
+  return {
+    ...group,
+    candidates: bySeverityThenExploitability(group.candidates, (c3) => c3.fingerprints, exploitability)
+  };
+}
+function selectGroups(groups, maxPrs, exploitability) {
+  const ordered = bySeverityThenExploitability(
+    groups,
+    (group) => group.candidates.flatMap((candidate) => candidate.fingerprints),
+    exploitability
   );
   const selected = ordered.slice(0, maxPrs);
   const excluded = ordered.slice(maxPrs);
@@ -65730,7 +65756,7 @@ var tool45 = {
     ),
     sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
     max_prs: external_exports.number().int().min(1).max(10).optional().describe(
-      "Maximum number of groups (pull requests) to act on in one run, highest severity first. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
+      "Maximum number of groups (pull requests) to act on in one run, highest severity first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
     ),
     apply: external_exports.boolean().optional().describe(
       "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials, but never leaves the machine."
@@ -65787,7 +65813,12 @@ async function handler42(input, ctx, callMeta) {
   });
   const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
-  const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
+  const exploitability = await exploitabilityOf(groups, allFindings, ctx, callMeta);
+  const { selected, deferred, deferred_reason } = selectGroups(
+    groups.map((group) => rankCandidates(group, exploitability)),
+    maxPrs,
+    exploitability
+  );
   const results = [];
   let cancelled = false;
   for (const group of selected) {
@@ -65845,6 +65876,19 @@ async function handler42(input, ctx, callMeta) {
     deferred,
     deferred_reason
   };
+}
+async function exploitabilityOf(groups, allFindings, ctx, callMeta) {
+  const targets = new Set(groups.flatMap((g) => g.candidates.flatMap((c3) => c3.fingerprints)));
+  const cveIds = /* @__PURE__ */ new Map();
+  for (const f of allFindings) {
+    if (targets.has(f.fingerprint) && !cveIds.has(f.fingerprint)) cveIds.set(f.fingerprint, findingCveIds(f));
+  }
+  const intel = await enrichCveIntel(
+    ctx.storage,
+    [...cveIds.values()].flat(),
+    callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {}
+  );
+  return { cveIdsOf: (fingerprint) => cveIds.get(fingerprint) ?? [], intel };
 }
 async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
   const depsPlanTool = TOOLS.find((t) => t.name === "deps_update_plan");

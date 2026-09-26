@@ -182,6 +182,14 @@ version bump.
   re-measured only by a pass with the target of a pass that may have
   produced it — the image, or the project's files — in both directions;
   `not_measured` names the pass that was not run again.
+- `create_fix_pr` attempts the most exploitable fixes first. Within a
+  severity band, a group whose CVE is CISA KEV-listed, then one with a
+  higher FIRST EPSS score, is kept by the `max_prs` cap before the others,
+  and a group's fixes are applied in that order too (the first that fails
+  stops the group). Severity stays the primary key; an unmeasured CVE
+  (offline, fetch failure) changes nothing. The composition note in
+  `intel/rank.ts` had it backwards — running `rankByExploitability` after a
+  severity sort would have let an exploited high displace every critical.
 - Secret hygiene in outputs and honest compliance evidence:
   - Raw secrets no longer reach a response, the database, an exported
     report, a GitHub issue body or the dashboard HTML. A new

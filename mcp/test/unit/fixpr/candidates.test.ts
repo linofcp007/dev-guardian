@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildGroups, selectGroups } from '../../../src/fixpr/candidates.js';
+import { buildGroups, rankCandidates, selectGroups, type Exploitability } from '../../../src/fixpr/candidates.js';
 import type { UpgradeStep } from '../../../src/fixpr/types.js';
+import type { CveIntelResult } from '../../../src/intel/types.js';
 import type { Finding } from '../../../src/types.js';
 
 /**
@@ -344,5 +345,87 @@ describe('selectGroups', () => {
     const sel = selectGroups(groups, 5);
     expect(sel.deferred).toEqual([]);
     expect(sel.deferred_reason).toBeNull();
+  });
+});
+
+/**
+ * Task 24, item 5 (carried from Task 19): within a severity band, KEV then
+ * EPSS decide which fixes are attempted first — which group the `max_prs`
+ * cap keeps, and which of a group's candidates `applyGroup` runs first (it
+ * stops at the first that fails). Severity stays the primary key: an
+ * ordinary critical is never displaced by an exploited high.
+ */
+describe('exploitability ordering (KEV, then EPSS)', () => {
+  const fp = (key: string): string => key.padEnd(64, '0');
+  /** One group per ecosystem, each with one finding correlated to `cve`. */
+  function ecosystemGroup(key: 'npm' | 'pip' | 'composer', severity: Finding['severity']) {
+    const file = { npm: 'package-lock.json', pip: 'requirements.txt', composer: 'composer.lock' }[key];
+    const g = buildGroups({
+      findings: [finding({ severity, fingerprint: fp(key), file_path: file })],
+      upgradeSteps: [step({ ecosystem: key })],
+      sources: ['deps'], severityMin: 'info',
+    })[0];
+    if (g === undefined) throw new Error(`fixture: no ${key} group`);
+    return g;
+  }
+  const ok = (cve_id: string, kev: boolean, epss_score?: number): CveIntelResult => ({
+    cve_id, status: 'ok', kev, fetched_at: '2026-09-26T00:00:00.000Z', ...(epss_score !== undefined ? { epss_score } : {}),
+  });
+  function exploitability(cveByFp: Record<string, string>, intel: CveIntelResult[]): Exploitability {
+    return {
+      cveIdsOf: (fingerprint) => {
+        const id = cveByFp[fingerprint];
+        return id === undefined ? [] : [id];
+      },
+      intel: new Map(intel.map((i) => [i.cve_id, i])),
+    };
+  }
+
+  it('the KEV-listed group is attempted first; the cap defers the other', () => {
+    const groups = [ecosystemGroup('npm', 'high'), ecosystemGroup('pip', 'high')];
+    const x = exploitability({ [fp('npm')]: 'CVE-1', [fp('pip')]: 'CVE-2' }, [ok('CVE-1', false, 0.9), ok('CVE-2', true)]);
+    const sel = selectGroups(groups, 1, x);
+    expect(sel.selected.map((g) => g.key)).toEqual(['pip']);
+    expect(sel.deferred.map((g) => g.key)).toEqual(['npm']);
+    // Without the signal the order is the one it always was.
+    expect(selectGroups(groups, 1).selected.map((g) => g.key)).toEqual(['npm']);
+  });
+
+  it('with no KEV either side, the higher EPSS goes first', () => {
+    const groups = [ecosystemGroup('composer', 'high'), ecosystemGroup('npm', 'high'), ecosystemGroup('pip', 'high')];
+    const x = exploitability(
+      { [fp('composer')]: 'CVE-1', [fp('npm')]: 'CVE-2', [fp('pip')]: 'CVE-3' },
+      [ok('CVE-1', false, 0.01), ok('CVE-2', false), ok('CVE-3', false, 0.4)],
+    );
+    expect(selectGroups(groups, 3, x).selected.map((g) => g.key)).toEqual(['pip', 'composer', 'npm']);
+  });
+
+  it('severity stays primary: an exploited high never displaces a critical', () => {
+    const groups = [ecosystemGroup('npm', 'high'), ecosystemGroup('pip', 'critical')];
+    const x = exploitability({ [fp('npm')]: 'CVE-1' }, [ok('CVE-1', true, 0.97)]);
+    expect(selectGroups(groups, 1, x).selected.map((g) => g.key)).toEqual(['pip']);
+  });
+
+  it('an unmeasured CVE (offline, fetch failure) is no signal, never "not exploited" and never a boost', () => {
+    const groups = [ecosystemGroup('npm', 'high'), ecosystemGroup('pip', 'high')];
+    const x = exploitability(
+      { [fp('npm')]: 'CVE-1', [fp('pip')]: 'CVE-2' },
+      [ok('CVE-1', false, 0.2), { cve_id: 'CVE-2', status: 'unavailable', kev: true, reason: 'offline' }],
+    );
+    expect(selectGroups(groups, 2, x).selected.map((g) => g.key)).toEqual(['npm', 'pip']);
+  });
+
+  it("orders a group's candidates the same way, so the exploited package is applied first", () => {
+    const [g] = buildGroups({
+      findings: [dep('left-pad', { fingerprint: fp('a') }), dep('lodash', { fingerprint: fp('b') })],
+      upgradeSteps: [step({ package_name: 'left-pad', upgrade_command: 'npm install left-pad@1.0.1' }), step()],
+      sources: ['deps'], severityMin: 'info',
+    });
+    if (g === undefined) throw new Error('fixture: no npm group');
+    expect(g.candidates.map((c) => c.label.split(' ')[0])).toEqual(['left-pad', 'lodash']);
+    const ranked = rankCandidates(g, exploitability({ [fp('b')]: 'CVE-9' }, [ok('CVE-9', true)]));
+    expect(ranked.candidates.map((c) => c.label.split(' ')[0])).toEqual(['lodash', 'left-pad']);
+    // The branch name is a function of the fingerprint SET: unchanged.
+    expect(ranked.hash).toBe(g.hash);
   });
 });

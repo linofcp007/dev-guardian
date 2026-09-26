@@ -126,7 +126,14 @@ import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { applyGroup, type ApplyResult } from '../fixpr/apply.js';
-import { buildGroups, DEP_SCANNER_TOOLS, findingEcosystem, selectGroups } from '../fixpr/candidates.js';
+import {
+  buildGroups,
+  DEP_SCANNER_TOOLS,
+  findingEcosystem,
+  rankCandidates,
+  selectGroups,
+  type Exploitability,
+} from '../fixpr/candidates.js';
 import { describeExclusions, summariseExclusions } from '../fixpr/exclusions.js';
 import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type PrOutcome } from '../fixpr/pr.js';
 import { disposeSemgrepFixPlan, planSemgrepFix, type SemgrepFixPlan, type SemgrepFixSource } from '../fixpr/semgrepFix.js';
@@ -138,6 +145,8 @@ import type { FixGroup, FixSource, ScanVerdict, TestVerdict, UpgradeStep } from 
 import { judgeScan, judgeTests, mayOpenPr, type BaseTreeProvider } from '../fixpr/verify.js';
 import { createWorktree } from '../fixpr/worktree.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
+import { enrichCveIntel } from '../intel/enrich.js';
+import { findingCveIds } from '../intel/rank.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
@@ -259,7 +268,8 @@ const tool: ToolModule = {
       .optional()
       .describe(
         'Maximum number of groups (pull requests) to act on in one run, highest severity ' +
-          'first. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3.',
+          'first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported ' +
+          'in `deferred`, never dropped silently. Default: 3.',
       ),
     apply: z
       .boolean()
@@ -364,7 +374,17 @@ async function handler(
   // held back. See `fixpr/exclusions.ts` for why silence here was a defect.
   const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
-  const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
+  // Which fixes are attempted first (Task 24, item 5): within a severity
+  // band, a CISA KEV-listed CVE, then a higher FIRST EPSS score — which
+  // groups the `max_prs` cap keeps, and the order a group's fixes are applied
+  // in (`applyGroup` stops at the first that fails). Intel is cached 24h and
+  // offline-safe (`GUARDIAN_OFFLINE=1`); an unmeasured CVE changes nothing.
+  const exploitability = await exploitabilityOf(groups, allFindings, ctx, callMeta);
+  const { selected, deferred, deferred_reason } = selectGroups(
+    groups.map((group) => rankCandidates(group, exploitability)),
+    maxPrs,
+    exploitability,
+  );
 
   const results: GroupResult[] = [];
   let cancelled = false;
@@ -438,6 +458,30 @@ async function handler(
     deferred,
     deferred_reason,
   };
+}
+
+/**
+ * The KEV/EPSS signal of every candidate's findings — `intel/rank.ts
+ * #findingCveIds` per finding, enriched once for the whole run over only the
+ * CVEs a candidate targets (never every open finding's).
+ */
+async function exploitabilityOf(
+  groups: readonly FixGroup[],
+  allFindings: readonly Finding[],
+  ctx: PluginContext,
+  callMeta: ToolCallMeta | undefined,
+): Promise<Exploitability> {
+  const targets = new Set(groups.flatMap((g) => g.candidates.flatMap((c) => c.fingerprints)));
+  const cveIds = new Map<string, string[]>();
+  for (const f of allFindings) {
+    if (targets.has(f.fingerprint) && !cveIds.has(f.fingerprint)) cveIds.set(f.fingerprint, findingCveIds(f));
+  }
+  const intel = await enrichCveIntel(
+    ctx.storage,
+    [...cveIds.values()].flat(),
+    callMeta?.signal !== undefined ? { signal: callMeta.signal } : {},
+  );
+  return { cveIdsOf: (fingerprint) => cveIds.get(fingerprint) ?? [], intel };
 }
 
 /**
