@@ -16,14 +16,14 @@ Each hook has a 15 s timeout in `hooks.json`.
 | `SessionStart` | — | Briefs the agent: plugin version, branch, uncommitted changes, whether the project has a `.guardian/` directory and when the database last changed — and, when the project's hook config asked to loosen a guardrail, that it was ignored. | on |
 | `PostToolUse` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | Scans the inserted text for hard-coded secrets (medium confidence and up) and adds a warning with a **redacted** preview. | warn |
 | `PreToolUse` | `Bash`, `PowerShell` | Assesses the command: **denies** catastrophic ones, warns on risky ones, then vets any package it would install. | deny catastrophic |
-| `PreToolUse` | `Write`, `Edit`, `MultiEdit` | **Denies** any edit of the guard's own configuration (below). | always |
+| `PreToolUse` | `Write`, `Edit`, `MultiEdit` | **Denies** any edit of the guard's own configuration (below). | always — unless every hook is switched off at user level |
 | `PreToolUse` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | Denies writing a high-confidence provider token (AWS, GitHub, Stripe, …). | off — opt in with `"secrets": { "block": true }` |
 
 ## The shell guard
 
 The same detector serves `Bash` and `PowerShell` and the CLI's `check --bash`. It splits a command line into statements and also reads text that is fed to a shell (`bash <<EOF … EOF`, `echo '…' | sh`); a heredoc handed to a non-shell command (`git commit -F - <<EOF`) stays inert.
 
-- **Denied** (unless the block is switched off): recursive force-deletes of the filesystem root, the home directory (`~`, `$HOME`, `${HOME}` and their `/*` forms), Windows and Git Bash / WSL drive roots, `/Users`, `/System`, and `--no-preserve-root`; `curl`/`wget` piped into a shell, `bash <(curl …)`, `sh -c "$(curl …)"`; PowerShell `iwr | iex`, `iex (irm …)`, `Invoke-Expression (Invoke-RestMethod …)`; `Format-Volume`, `Clear-Disk`; `dd`, `mkfs`, `wipefs` or `shred` on a block device; fork bombs; `chmod -R 777 /`; `find / -delete`.
+- **Denied** (unless the block is switched off): recursive force-deletes of the filesystem root, the home directory (`~`, `$HOME`, `${HOME}` and their `/*` forms), Windows and Git Bash / WSL drive roots, `/Users`, `/System`, and `--no-preserve-root`; `curl`/`wget` piped into a shell, `bash <(curl …)`, `sh -c "$(curl …)"`; PowerShell `iwr | iex`, `iex (irm …)`, `Invoke-Expression (Invoke-RestMethod …)`; `Format-Volume`, `Clear-Disk`; `dd`, `mkfs`, `wipefs` or `shred` on a block device; fork bombs; `chmod -R 777 /`; `find / -delete`; `mkfifo`, `mknod`, `ln` or PowerShell `New-Item -ItemType SymbolicLink|HardLink|Junction` onto one of the hook configuration files.
 - **Warned**: force-push, `git reset --hard`, `git clean -fd`, `chmod 777`, clearing shell history, `sudo`, any other recursive force-delete, `find ~ -delete`.
 
 The deny message never says how to switch the guard off. That takes the user-level config or `GUARDIAN_HOOKS_BASH_BLOCK=0`, and an assistant's `Write` / `Edit` of either config file is itself denied.
@@ -67,7 +67,9 @@ The network hosts involved are listed in [SECURITY.md](../SECURITY.md).
 | `GUARDIAN_HOOKS_BASH_BLOCK=0` / `1` | environment | forces the shell block off or on, over both files |
 | `GUARDIAN_PKG_VET=0` | environment | disables package vetting only |
 
-`ignorePaths` defaults to `/test/fixtures/`, `eval-vuln-fixture`, `/.guardian/` and `__fixtures__`, matched against the path relative to the project. The plugin's own directory is always skipped.
+`ignorePaths` defaults to `/test/fixtures/`, `eval-vuln-fixture`, `/.guardian/` and `__fixtures__`, matched against the path relative to the project. The plugin's own directory is always skipped. A project's `ignorePaths` — and its `.guardian/hooks-allowlist.json` — also exempt a path or a match from the opt-in secret block, **including a `secrets.block: true` set in the user-level config**: they are advisory settings a project may change, so a user who relies on the block should review them. (The user-level `ignorePaths`, when set, replaces the project's.)
+
+**How the configuration files are read.** Each one — the project config, the allowlist and the user-level config — is read only if it is a regular file (a link is followed to its target) of at most 64 KiB; a leading UTF-8 byte-order mark is stripped. Anything else — a FIFO, a link to `/dev/zero`, a directory, a larger file — is not opened, counts as absent (the protective defaults), and SessionStart names it; a file that is not valid JSON is named too. A FIFO there used to hang the hook until Claude Code killed it at 15 s, after which the tool call ran unguarded. The install hook reads registry configuration (`.npmrc`, `package.json`, `pip.conf`, …) the same way, capped at 1 MiB.
 
 **What the write guard does not cover.** It sees the `Write`, `Edit` and `MultiEdit` tools only. A shell command (`echo … > .guardian/hooks.config.json`) is not one of them — which is why a project file cannot loosen a protective hook at all: whatever an assistant writes there through the shell can only make the guard stricter or change advisory settings. The user-level file is outside the project but equally reachable by a shell write, and the hooks do not stop that; switching the guardrails off is meant to be the user's decision, made there or in the environment.
 

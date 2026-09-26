@@ -28,8 +28,12 @@ quality, deps, observability, performance and compliance. Two halves:
   false` and `bash.warn: false` are ignored, and SessionStart says so) —
   because a shell command can still write that file. Detection lives in
   `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
-  with the `dev-guardian check` CLI subcommand. User-facing detail:
-  [`docs/hooks.md`](docs/hooks.md).
+  with the `dev-guardian check` CLI subcommand. Every file a hook reads from
+  the project or the user's home goes through `mcp/src/hooks/configFile.ts`:
+  a regular file of at most 64 KiB (1 MiB for registry configuration), never
+  a FIFO or a device — one at `.guardian/hooks.config.json` used to hang the
+  hook into its 15 s timeout, which lets the tool call through. User-facing
+  detail: [`docs/hooks.md`](docs/hooks.md).
 
 ## Where the design docs went
 

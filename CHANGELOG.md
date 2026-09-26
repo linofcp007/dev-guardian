@@ -378,7 +378,9 @@ keeps working (migrations 004–011 are additive).
   `"enabled": false` turns every hook off) or `GUARDIAN_HOOKS=off`,
   `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`. An assistant's `Write`,
   `Edit` or `MultiEdit` of any of the guard's own config files is denied; a
-  shell write of the user-level file is not stopped.
+  shell write of the user-level file is not stopped, and neither is a Claude
+  Code `.claude/settings.json` with `disableAllHooks` or an `env` block
+  setting those variables.
 - **Findings keep a line-independent identity across scans** (migration 007).
   The fingerprint hashes the line numbers, so inserting one line above a
   finding used to make it a different finding everywhere: a suppression
@@ -903,6 +905,19 @@ keeps working (migrations 004–011 are additive).
   `echo … | bash`) is assessed as a command, with each heredoc attached to the
   statement that opened it; `dd of=` blocks only for a real block device. The
   deny message no longer names the file or key that disables the guard.
+- **A hook config file can no longer hang the hooks into their timeout.**
+  They read `.guardian/hooks.config.json`, `.guardian/hooks-allowlist.json`
+  and `~/.config/dev-guardian/hooks.json` with no check on what the path was:
+  a FIFO or a link to `/dev/zero` there blocked the hook until Claude Code
+  killed it at 15 s, and the tool call then ran unguarded (a 300 MB file took
+  23 s on Windows). Each is now read only when it is a regular file of at most
+  64 KiB (a link is followed to its target); anything else counts as absent —
+  the protective defaults — and SessionStart names it. The install hook's
+  registry configuration reads are capped the same way, at 1 MiB. The shell
+  guard denies `mkfifo`, `mknod`, `ln` and PowerShell `New-Item -ItemType
+  SymbolicLink|HardLink|Junction` onto those files, and a leading UTF-8
+  byte-order mark (PowerShell 5 writes one) no longer makes a config file
+  unreadable.
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;
@@ -2563,7 +2578,6 @@ had nine rows and all nine were false positives.
   empty, the tool returns `scanner_failed` instead of invoking the scanner
   with a bad target.
 
-
 ### Changed
 
 - **No non-null assertions anywhere.** 31 `!` assertions across 22 files
@@ -2686,7 +2700,7 @@ Measured against the shipped rules, not inferred:
 - **They do not replace the model-driven `/guardian-fix` path.** Rules catch
   shapes; reading the code catches reasons.
 
-### Added
+### Added — local bug rules
 
 - **`bug_hunt` now runs fourteen local, hand-authored Semgrep rules for JS/TS by default** —
   `configs/semgrep/bugfix-js.yml`, alongside the always-on `p/r2c-bug-scan` +
@@ -2718,7 +2732,7 @@ Measured against the shipped rules, not inferred:
   - **Not a substitute for the model-driven `/guardian-fix` path.** These rules catch shapes;
     reading the code catches reasons.
 
-### Fixed
+### Fixed — local bug rules
 
 - **A malformed `configs/semgrep/bugfix-js.yml` degrades instead of failing the whole
   `bug_hunt` scan.** Two distinct ways a hand-edited local rule file can break, both handled:
