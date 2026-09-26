@@ -980,6 +980,12 @@ keeps working (migrations 004–011 are additive).
   where it overlapped another. Each run of overlapping findings is now
   scrubbed in one pass per match, and overlapping occurrences become one
   `REDACTED`.
+- **`ci-init --write` created the target of a dangling pipeline-file symlink
+  on Windows**, wherever it pointed: a `wx` open there follows a dangling link.
+  Anything at the name is now refused first. `--force` writes a temp file and
+  renames it over the pipeline file, so it never writes through a symlink or
+  a hard link and never leaves the file half-written; `--help` says what it
+  still refuses.
 
 ### Security
 

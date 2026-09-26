@@ -37,7 +37,9 @@
  *                             --project <path>   default: cwd
  *                             --branch <name>     GitHub push trigger branch, default main
  *                             --write             write the file (default: preview to stdout)
- *                             --force             overwrite an existing pipeline file (with --write)
+ *                             --force             overwrite an existing pipeline file (with --write);
+ *                                                 never one that is a symlink out of the project
+ *                                                 or a broken one
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
  *                             Exit codes: 0 done, 1 missing/unknown target or
@@ -276,7 +278,11 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
                         default branch without naming one
   --write               Write the pipeline file (default: preview to stdout)
   --force               With --write, overwrite an existing pipeline file
-                        (without it, an existing file is left untouched)
+                        (without it, an existing file is left untouched).
+                        Still refused (exit 3) when that file is a symlink
+                        that resolves outside the project, or a broken one;
+                        replaced in one step (temp file + rename), never
+                        written through a link
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
@@ -303,7 +309,8 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
   never through a symlink that escapes it either way (read or write).
   Exit codes: 0 preview/write completed, 1 missing/unknown target or an
               existing pipeline file refused without --force, 3 usage or
-              configuration error (same convention as scan/baseline update).
+              configuration error, or a --force refused on a symlink (same
+              convention as scan/baseline update).
 
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
@@ -1298,6 +1305,10 @@ async function cmdBaseline(argv) {
 // GHSA-69fq-xp46-6x23 lesson already lives in this codebase for
 // (`installCatalog.ts`'s `TRIVY_INSTALL_TAG` comment).
 
+// Only `ci-init` renames files; imported here, beside its one user (an
+// import declaration is hoisted wherever it stands).
+import { renameSync } from 'node:fs';
+
 const CONFIGS_CI_DIR = resolve(ROOT, 'configs', 'ci');
 const PINNED_PATH = resolve(CONFIGS_CI_DIR, 'pinned.json');
 const PLUGIN_JSON_PATH = resolve(ROOT, '.claude-plugin', 'plugin.json');
@@ -1659,24 +1670,17 @@ function firstEscapingAncestor(projectPath, outPath) {
 }
 
 /**
- * Guards `--force` specifically: without it, `writeFileSync(…, { flag:
- * 'wx' })` already refuses ANY existing path at `outPath` — symlink or
- * not — with `EEXIST`, never following it. `--force` switches to plain
- * `'w'`, which DOES follow an existing symlink (no `O_NOFOLLOW`), so a
- * `dev-guardian.yml` that is itself a symlink pointing OUTSIDE the project
- * would otherwise have `--force` write the generated pipeline through it
- * to wherever it points — silently, since nothing about a plain `'w'`
- * write says whether the path it opened was a symlink at all.
+ * Guards `--force` specifically: an existing `outPath` that is a symlink
+ * resolving OUTSIDE the project, or a broken one (pointing nowhere this
+ * process can resolve), is refused — never "fixed" by guessing what the
+ * link was for. The write itself (`replaceFile`) replaces a link rather
+ * than following it, so this refusal is about intent, not mechanics: a
+ * pipeline file that is a link out of the project is not this command's
+ * to replace.
  *
- * Returns `{ ok: true }` when `outPath` is not a symlink (nothing to
- * guard against) or is a symlink that resolves INSIDE the project (in
- * which case the link itself is removed here, so the subsequent
- * `writeFileSync` creates a plain file rather than writing through the
- * old link — matching what `--force` means for every other existing
- * path: replaced, not followed). Returns `{ ok: false, reason }` when it
- * is a symlink that resolves outside the project, or is broken (points
- * nowhere this process can resolve) — refused either way, never "fixed"
- * by guessing.
+ * Returns `{ ok: true }` when `outPath` is not a symlink, or is one that
+ * resolves INSIDE the project (replaced by a plain file — what `--force`
+ * means for every other existing path); `{ ok: false, reason }` otherwise.
  */
 function refuseEscapingLeafSymlink(projectPath, outPath) {
   const st = safeLstat(outPath);
@@ -1689,8 +1693,33 @@ function refuseEscapingLeafSymlink(projectPath, outPath) {
       reason: real === null ? 'it is a broken symlink' : 'it is a symlink that resolves outside the project',
     };
   }
-  unlinkSync(outPath);
   return { ok: true };
+}
+
+/**
+ * `--force`'s write: the pipeline goes to a fresh temp file beside `outPath`
+ * (created `wx` under a random name, so never through anything already
+ * there), and `renameSync` moves it over `outPath` in one step. A rename
+ * replaces the directory ENTRY — a symlink or a hard link at `outPath` is
+ * replaced, never written through (a truncating `'w'` write went through the
+ * inode every name of the file shares) — and `outPath` is never absent or
+ * half-written. It replaces unlink-then-write, between whose two steps a
+ * link created at `outPath` would have been followed.
+ */
+function replaceFile(outPath, content) {
+  const { dir, base } = parse(outPath);
+  const tmp = join(dir, `.${base}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`);
+  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  try {
+    renameSync(tmp, outPath);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Already gone: nothing left behind.
+    }
+    throw e;
+  }
 }
 
 function cmdCiInit(argv) {
@@ -1751,6 +1780,14 @@ function cmdCiInit(argv) {
   }
   mkdirSync(dirname(outPath), { recursive: true });
 
+  const refuseExisting = () => {
+    process.stderr.write(
+      `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
+        `Re-run with --force to overwrite it, or remove it first.\n`,
+    );
+    process.exit(1);
+  };
+
   if (args.force) {
     const leaf = refuseEscapingLeafSymlink(projectPath, outPath);
     if (!leaf.ok) {
@@ -1758,26 +1795,20 @@ function cmdCiInit(argv) {
         `ci-init: refusing to overwrite ${outPath} with --force — ${leaf.reason}. Remove it first.`,
       );
     }
-  }
-
-  // `wx`: atomically fail with EEXIST if the path already exists (including
-  // a symlink, dangling or not) — no separate `existsSync` check first,
-  // which would leave a TOCTOU window between the check and the write.
-  // (`--force`'s own symlink hazard is handled just above, before this —
-  // by the time this runs with `--force`, `outPath` is either a plain
-  // file/absent, or was just unlinked because it safely resolved inside
-  // the project.)
-  try {
-    writeFileSync(outPath, rendered, { encoding: 'utf8', flag: args.force ? 'w' : 'wx' });
-  } catch (e) {
-    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') {
-      process.stderr.write(
-        `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
-          `Re-run with --force to overwrite it, or remove it first.\n`,
-      );
-      process.exit(1);
+    replaceFile(outPath, rendered);
+  } else {
+    // Anything at the name — a DANGLING symlink included — is refused before
+    // the write: on Windows a `wx` (CREATE_NEW) open follows a dangling link
+    // and creates its target, wherever that is (measured). `wx` still backs
+    // this up: it fails with EEXIST on anything that appears in between, and
+    // on POSIX never follows a link at all.
+    if (safeLstat(outPath) !== null) refuseExisting();
+    try {
+      writeFileSync(outPath, rendered, { encoding: 'utf8', flag: 'wx' });
+    } catch (e) {
+      if (e instanceof Error && 'code' in e && e.code === 'EEXIST') refuseExisting();
+      throw e;
     }
-    throw e;
   }
   process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
   if (targetArg === 'github') {
