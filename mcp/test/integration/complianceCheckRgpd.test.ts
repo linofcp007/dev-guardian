@@ -13,7 +13,7 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
  */
 
-import { execFileSync } from 'node:child_process';
+import { semgrepAvailable } from '../helpers/semgrep.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -41,10 +41,6 @@ beforeAll(async () => {
 });
 
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 function makePlugin(projectPath: string): PluginContext {
