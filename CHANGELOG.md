@@ -892,6 +892,10 @@ keeps working (migrations 004–011 are additive).
     checkout whose path contains a `.`.
 - The 2.0.0 entry below said `map_attack_surface` reads Postman documents; it
   reads OpenAPI 3.x and Swagger 2.0 only.
+- Contributors: `npm test` no longer hangs on a stuck Semgrep — every Semgrep
+  a test spawns is bounded (120 s, SIGKILL; `GUARDIAN_TEST_SEMGREP_TIMEOUT_MS`)
+  and fails its test at the bound; `ciInitCli` runs its probe with Git Bash
+  and skips visibly when no usable bash exists (the WSL stub is not one).
 
 ### Security
 
