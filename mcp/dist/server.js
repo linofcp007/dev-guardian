@@ -39340,6 +39340,15 @@ var BASELINED_RUN_MEMBERS_SQL = `
     SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
       FROM baselines b
       JOIN scans s ON s.id = b.scan_id
+    UNION
+    SELECT u.value
+      FROM baselines b
+      JOIN scans a ON a.id = b.scan_id,
+           json_each(
+             CASE WHEN a.scan_type = 'audit' AND json_valid(a.meta)
+                       AND json_type(a.meta, '$.sub_scan_ids') = 'object'
+                  THEN json_extract(a.meta, '$.sub_scan_ids') ELSE '{}' END
+           ) AS u
   )
   WHERE typeof(member) = 'text'
 `;

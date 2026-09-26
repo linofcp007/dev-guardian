@@ -29,8 +29,9 @@
  *   - `baselines.scan_id`   → the scan is NEVER deleted (it is the baseline).
  *   - an orchestrated run around a baseline → NEVER deleted either: the
  *     children a baselined `security_full` parent is compared through
- *     (`meta.child_scans`, `meta.parent_scan_id`), and the parent of a
- *     baselined child.
+ *     (`meta.child_scans`, `meta.parent_scan_id`), the parent of a
+ *     baselined child, and the sub-scans a baselined `audit` row links in
+ *     `meta.sub_scan_ids`.
  *   - a `running` scan      → NEVER deleted: its owner is still writing to it.
  *   - `findings.scan_id`, `scan_cves.scan_id`, `tree_cache.scan_id`
  *                           → deleted with the scan.
@@ -51,7 +52,9 @@
  * scan is held back on their account. `scans.cached_from` exists in the schema
  * but nothing writes it (a cache hit returns the original scan's own row). An
  * audit scan's `meta.sub_scan_ids` is read by `history/runCompare.ts`, which
- * falls back to the audit's own per-tool entries when a sub-scan is gone. A
+ * falls back to the audit's own per-tool entries when a sub-scan is gone —
+ * so only a BASELINED audit's sub-scans are held back (above); an ordinary
+ * audit's go with their own partitions. A
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
@@ -92,9 +95,14 @@ const SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
   ELSE 0 END)`;
 // The scans an orchestrated run's baseline stands on besides its own row:
 // the children a baselined parent lists in `meta.child_scans` (what
-// `history/runCompare.ts` reads) and the parent a baselined child names in
-// `meta.parent_scan_id`. NULLs are filtered out: `x NOT IN (… NULL …)` is
-// NULL, which would silently keep every row.
+// `history/runCompare.ts` reads), the parent a baselined child names in
+// `meta.parent_scan_id`, and the sub-scans a baselined `audit` row links in
+// `meta.sub_scan_ids` — an object `{ tool: scan_id | null }` whose sub-scans
+// `runCompare.ts#auditBookkeeping` reads the audit's per-scanner bookkeeping
+// through. Only an OBJECT is followed there: `json_each` over a bare string
+// or an array would yield its elements as if they were ids. NULLs are
+// filtered out: `x NOT IN (… NULL …)` is NULL, which would silently keep
+// every row.
 const BASELINED_RUN_MEMBERS_SQL = `
   SELECT member FROM (
     SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
@@ -105,13 +113,23 @@ const BASELINED_RUN_MEMBERS_SQL = `
     SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
       FROM baselines b
       JOIN scans s ON s.id = b.scan_id
+    UNION
+    SELECT u.value
+      FROM baselines b
+      JOIN scans a ON a.id = b.scan_id,
+           json_each(
+             CASE WHEN a.scan_type = 'audit' AND json_valid(a.meta)
+                       AND json_type(a.meta, '$.sub_scan_ids') = 'object'
+                  THEN json_extract(a.meta, '$.sub_scan_ids') ELSE '{}' END
+           ) AS u
   )
   WHERE typeof(member) = 'text'
 `;
 // A row retention must keep whatever its rank: still being written, a
 // baseline, or part of a baselined orchestrated run — a child of a baselined
-// parent (by its own `meta.parent_scan_id` or by the parent's list), or the
-// parent of a baselined child. Pruning a baselined parent's `sast` child made
+// parent (by its own `meta.parent_scan_id` or by the parent's list), the
+// parent of a baselined child, or a sub-scan a baselined audit links. Pruning
+// a baselined parent's `sast` child made
 // every later SAST finding read "not previously measured": `regression_alert`
 // went quiet and `diff_scans from:'baseline'` reported nothing new.
 const PROTECTED_SQL = `(

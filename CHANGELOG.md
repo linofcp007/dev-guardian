@@ -959,6 +959,9 @@ keeps working (migrations 004–011 are additive).
   unreported number of commits scanned"). On a repository with commits it is
   now `failed` unless the report holds findings — git's own count of a range
   says what there was to read, not what gitleaks read.
+- **Scan retention** also keeps the sub-scans a baselined `audit_executive`
+  row links in `meta.sub_scan_ids`: pruning them made the audit's
+  per-scanner comparison fall back to its one-line-per-tool entries.
 
 ### Security
 
