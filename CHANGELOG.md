@@ -918,6 +918,11 @@ keeps working (migrations 004–011 are additive).
   Kotlin project, which read as a Java bug hunt with 0 findings. It is Kotlin,
   as `detect_stack` says; a language no pack covers (Kotlin, Ruby) is named in
   `languages_not_covered` with a warning.
+- **`dev-guardian scan --help` and the host rules said to add `.guardian/` to
+  `.gitignore`** — a bare directory entry, below which git cannot re-include
+  `baseline.json`, so the baseline CI needs could never be committed. Both now
+  name the two lines the server writes: `.guardian/*` and
+  `!.guardian/baseline.json`.
 
 ### Security
 
