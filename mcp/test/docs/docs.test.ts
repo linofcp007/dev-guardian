@@ -158,6 +158,48 @@ describe('counts the docs state equal the code', () => {
     expect([...new Set(strays)]).toEqual([]);
   });
 
+  const READMES = ['README.md', 'README.pt-PT.md', 'README.es.md'];
+
+  it.each(READMES)('%s states the rule and pack totals the pack files add up to', (rel) => {
+    const t = packTotals(packs);
+    const stated = [
+      ...read(rel).matchAll(/(\d+)\s+(?:Semgrep\s+)?(?:rules|regras|reglas)(?:\s+Semgrep)?\s+(?:in|em|en)\s+(\d+)\s+packs\b/gi),
+    ].map((m) => [Number(m[1]), Number(m[2])]);
+    expect(stated.length).toBeGreaterThan(0);
+    for (const pair of stated) expect(pair).toEqual([t.rules, t.packs]);
+  });
+
+  /** The support matrix's bug-rule column, per row label, against its pack. */
+  const MATRIX_ROWS: readonly [string, string][] = [
+    ['JavaScript / TypeScript', 'bugfix-js.yml'],
+    ['Python', 'bugfix-py.yml'],
+    ['Go', 'bugfix-go.yml'],
+    ['Rust', 'bugfix-rs.yml'],
+    ['Java', 'bugfix-java.yml'],
+    ['C# / .NET', 'bugfix-cs.yml'],
+    ['PHP', 'bugfix-php.yml'],
+  ];
+
+  it.each(READMES)("%s's support matrix states each bug pack's rule count", (rel) => {
+    const rows = new Map(
+      read(rel)
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('| '))
+        .map((l) => l.split('|').map((c) => c.trim()))
+        .map((cells) => [cells[1] ?? '', cells[3] ?? ''] as const),
+    );
+    const problems: string[] = [];
+    for (const [label, file] of MATRIX_ROWS) {
+      const cell = rows.get(label);
+      const pack = packs.find((p) => p.file === file);
+      const m = cell === undefined ? null : /(\d+)\s+(?:rules?|regras?|reglas?)\b/i.exec(cell);
+      if (pack === undefined) problems.push(`${file}: no such pack`);
+      else if (m === null) problems.push(`${label}: no rule count in the matrix`);
+      else if (Number(m[1]) !== pack.rules.length) problems.push(`${label}: says ${m[1]}, ${file} has ${pack.rules.length}`);
+    }
+    expect(problems).toEqual([]);
+  });
+
   it('the READMEs link to each other', () => {
     const missing: string[] = [];
     const all = ['README.md', 'README.pt-PT.md', 'README.es.md'];
