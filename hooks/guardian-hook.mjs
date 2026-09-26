@@ -29,11 +29,18 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
+// The plugin root is derived from this file's own location rather than read
+// from CLAUDE_PLUGIN_ROOT: hooks.json launches this file AS
+// `${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs`, so the two agree whenever
+// the variable is set, and this form also works when it is not (a manual run,
+// `dev-guardian check`, the e2e tests).
 const PLUGIN_ROOT = resolve(HERE, '..'); // <plugin>
 const DIST_HOOKS = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks');
+const DIST_PKGVET = join(PLUGIN_ROOT, 'mcp', 'dist', 'pkgvet');
+const POPULAR_DIR = join(PLUGIN_ROOT, 'configs', 'popular-packages');
 
 const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
 
@@ -52,6 +59,35 @@ function emit(eventName, extra) {
 /** Exit cleanly with no output (no-op / fail-open). */
 function noop() {
   process.exit(0);
+}
+
+/**
+ * `emit()` for any path that may have used the network: write the answer
+ * (if any) and let the process end ON ITS OWN rather than through
+ * `process.exit()`. Measured on Windows (Node 24): calling `process.exit()`
+ * after a `fetch()` to a real registry aborts the process with
+ * `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file
+ * src\win\async.c` and exit code 127, every time — and a hook that exits
+ * non-zero has its JSON ignored, so every package-vetting DENY would have
+ * been silently dropped. Idle fetch sockets are unref'd, so the natural exit
+ * is immediate; the unref'd timer is only a backstop in case something else
+ * still holds the loop open — and even then it waits for the answer to have
+ * been flushed to stdout (the write callback) before it exits, so the
+ * backstop can never cut off the JSON it exists to deliver.
+ */
+function respond(eventName, extra) {
+  process.exitCode = 0;
+  let flushed = !extra;
+  if (extra) {
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }), () => {
+      flushed = true;
+    });
+  }
+  const backstop = () => {
+    if (flushed) process.exit(0);
+    else setTimeout(backstop, 100).unref();
+  };
+  setTimeout(backstop, 5000).unref();
 }
 
 async function readStdin() {
@@ -342,6 +378,31 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
   emit('PostToolUse', { additionalContext: context });
 }
 
+/**
+ * Install-time package vetting for `npm i|install|add`, `pnpm add`, `yarn
+ * add`, `bun add`, `pip install`, `uv add`, `uv pip install`, `poetry add`,
+ * `composer require` and `dotnet add package`. The logic — command parsing,
+ * the registry/OSV lookups under a 3 s total network budget, the verdict and
+ * the wording — lives in `mcp/dist/pkgvet/hookDecision.js`; this only calls
+ * it. Returns `{ deny?, context? }`, or `null` when there is nothing to say
+ * (no install command, every package clean) or anything at all went wrong:
+ * a guardrail that cannot run lets the command through.
+ *
+ * Opt out with `GUARDIAN_PKG_VET=0` — an environment variable only, never a
+ * project file, for the same reason the bash block cannot be downgraded
+ * from one (see `stripProjectBashBlockDowngrade`).
+ */
+async function vetInstallCommand(command, cwd) {
+  if (process.env.GUARDIAN_PKG_VET === '0') return null;
+  try {
+    const mod = await import(pathToFileURL(join(DIST_PKGVET, 'hookDecision.js')).href);
+    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR });
+  } catch (err) {
+    debug(`package vetting skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
   const command = input?.command;
   if (typeof command !== 'string' || !command) noop();
@@ -365,12 +426,21 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
     });
   }
 
+  const notes = [];
   if ((a.level === 'warn' || (a.level === 'block' && !cfg.bash.block)) && cfg.bash.warn) {
-    emit('PreToolUse', {
-      additionalContext: `⚠️ dev-guardian: risky shell command — ${a.reasons.join('; ')}. Proceed only if this is intended.`,
-    });
+    notes.push(`⚠️ dev-guardian: risky shell command — ${a.reasons.join('; ')}. Proceed only if this is intended.`);
   }
-  noop();
+
+  // A command the catastrophic-command guard denied never reaches this
+  // point (emit() exits), so it is never vetted. From here on the network
+  // may have been used, so the answer goes out through respond(), never
+  // emit()/noop() — see respond() for why.
+  const vet = await vetInstallCommand(command, cwd);
+  if (vet?.deny) {
+    return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
+  }
+  if (vet?.context) notes.push(vet.context);
+  return respond('PreToolUse', notes.length > 0 ? { additionalContext: notes.join('\n') } : undefined);
 }
 
 /**
@@ -469,6 +539,7 @@ async function main() {
 
 main().catch((err) => {
   debug(`fail-open: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-  // Never break the host: exit 0 with no output on any error.
-  process.exit(0);
+  // Never break the host: exit 0 with no output on any error — through
+  // respond(), not process.exit(), since the error may follow a fetch().
+  respond('PreToolUse', undefined);
 });

@@ -2,7 +2,7 @@
 
 Stdio MCP server that exposes the dev-guardian plugin's security, quality,
 bugfix, deps, compliance, observability, and performance capabilities as
-**56 MCP tools** and **18 MCP resources**.
+**57 MCP tools** and **18 MCP resources**.
 
 The server is registered in the plugin manifest at
 `.claude-plugin/plugin.json` under `mcpServers.dev-guardian` — Claude Code

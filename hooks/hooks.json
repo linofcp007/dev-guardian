@@ -1,5 +1,5 @@
 {
-  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash and PowerShell, and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json (project files may only make it stricter) or disable with GUARDIAN_HOOKS=off.",
+  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash and PowerShell, install-time package vetting on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands (denies nonexistent or malicious packages, 3 s network budget), and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json (project files may only make it stricter) or disable with GUARDIAN_HOOKS=off (package vetting alone: GUARDIAN_PKG_VET=0).",
   "hooks": {
     "SessionStart": [
       {
