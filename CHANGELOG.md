@@ -10,6 +10,30 @@ version bump.
 
 ### Added
 
+- `scan_secrets` `verify_live` (opt-in, off by default): asks whether each
+  leaked GitHub (classic and fine-grained PAT), GitLab PAT, Slack bot/user,
+  Stripe, OpenAI, Anthropic, npm or SendGrid token still works. Each secret
+  is sent only to its own provider's read-only identity endpoint — a
+  compile-time constant per gitleaks rule, never a host taken from the
+  repository or the finding — with a 5 s timeout, at most 4 requests in
+  flight and at most 50 distinct secrets per scan (the rest are `unknown`,
+  "not verified: per-scan limit"); identical secrets are sent once. A finding
+  becomes `live` only on a response that proves the credential
+  authenticates (raised to `critical`, with where to revoke it), `revoked`
+  only on a SaaS-only provider's documented invalid-credential answer (a
+  401 from github.com/gitlab.com is `unknown`: GitHub Enterprise Server and
+  self-managed GitLab use the same prefixes), and `unknown` with a reason
+  otherwise (429, 5xx, timeout, DNS/offline, `GUARDIAN_OFFLINE=1`); a
+  verdict never lowers a severity and never changes a finding's
+  fingerprint or identity. The result carries a `secret_verification`
+  block (verified/live/revoked/unknown/skipped, the hosts contacted, one
+  record per verified finding), also kept in the scan row so a cache hit
+  answers the same. The raw value never reaches the result, the database,
+  a report or a log: only a verifying run omits `--redact`, and only into a
+  report file in a private temporary directory (0700/0600 on POSIX) that is
+  read once, sanitized and deleted; findings `.guardianignore` or the scope
+  drop are never sent. `security_scan_full` does not verify.
+
 - CI workflow scanning and a CI config generator. `scan_iac` now also runs
   zizmor (GitHub Actions security auditor: template injection, unpinned
   `uses:`, excessive `permissions:`, credential persistence) and actionlint

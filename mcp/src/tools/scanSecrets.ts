@@ -6,9 +6,19 @@
  * commits, one without, and a directory that is not a repository, and for
  * why `gitleaks detect` on its own reported all three clean.
  *
- * Always runs with `--redact` so the actual secret bytes never reach the
- * MCP wire. The parser strips Match/Secret fields too, but `--redact`
- * is a belt-and-braces guarantee.
+ * Runs with `--redact` so the actual secret bytes never reach the MCP wire.
+ * The parser strips Match/Secret fields too, but `--redact` is a
+ * belt-and-braces guarantee.
+ *
+ * `verify_live` (off by default) is the one exception, and the value still
+ * never reaches the wire, the database or a report: gitleaks writes its
+ * unredacted report into a private temporary directory, the values of the
+ * rules `secrets/verify/providers.ts` can check are held in memory, each
+ * DISTINCT value is sent once to its own provider's read-only identity
+ * endpoint (a fixed host per rule — never one taken from the repository),
+ * and every finding comes back `live` (raised to critical, with where to
+ * revoke it), `revoked` or `unknown`. See `secrets/verify/index.ts`.
+ * Findings `.guardianignore` or the scope drop are never sent.
  *
  * `log_opts` narrows the HISTORY pass (`/guardian-incident leak`: "since
  * when?"). It is restricted to `--all`, `<ref>..<ref>` and `--since=<date>`
@@ -24,21 +34,42 @@
  */
 
 import { z } from 'zod';
+import { isProjectPath } from '../platform/guardianIgnore.js';
 import { resolveProjectPath, InvalidProjectPathError } from '../platform/projectPath.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { historyState, repoState } from '../runners/git.js';
 import { LogOptsError, resolveLogOpts, runGitleaksScan, type SecretScanScope } from '../runners/gitleaksScan.js';
 import { Force, ProjectPath } from '../schemas.js';
-import type { ToolResult } from '../types.js';
+import { isVerifiableRule, OFFLINE_REASON, verifyGitleaksFindings } from '../secrets/verify/index.js';
+import type { Finding, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 import { ensureReportDir } from './scanHelpers.js';
 import {
   makeScanTool,
+  type InvokeContext,
   type ScannerInvocation,
   type ScanToolBaseInput,
 } from './scanToolFactory.js';
 
-type ScanSecretsInput = ScanToolBaseInput & { log_opts?: string };
+type ScanSecretsInput = ScanToolBaseInput & { log_opts?: string; verify_live?: boolean };
+
+/** `GUARDIAN_OFFLINE=1`: verify_live sends nothing (and captures nothing). */
+function networkDisabled(): boolean {
+  return process.env['GUARDIAN_OFFLINE'] === '1';
+}
+
+/**
+ * Whether the scan will keep this finding — the factory's own `.guardianignore`
+ * and scope filters, applied here first so a finding they drop is never sent.
+ */
+function keptByScan(ctx: InvokeContext): (f: Finding) => boolean {
+  return (f) => {
+    const p = f.file_path;
+    if (p === undefined || p === '') return true;
+    if (ctx.exclusions !== null && isProjectPath(ctx.projectPath, p) && ctx.exclusions.ignores(p)) return false;
+    return ctx.scope === null || ctx.scope.member(p);
+  };
+}
 
 const scanSecrets = makeScanTool<ScanSecretsInput>({
   name: 'scan_secrets',
@@ -48,13 +79,21 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
     '(modified, staged, untracked-not-ignored), or the whole directory when the project is not a git ' +
     'repository (skipping node_modules, vendor, .git and build output). Each finding says where it was ' +
     'found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits ' +
-    'is reported as failed, never as clean. Always runs with --redact so the raw secret never reaches ' +
-    'MCP output. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are ' +
+    'is reported as failed, never as clean. The raw secret never reaches MCP output, the database or ' +
+    'reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are ' +
     'scanned as files, diff.base and since as exactly those commits. .guardianignore paths are ' +
-    'filtered out.',
+    'filtered out. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, ' +
+    "OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's " +
+    'read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live ' +
+    '(raised to critical, with where to revoke it), revoked or unknown.',
   scan_type: 'secrets',
   // History is read beyond the working tree: HEAD and every ref join the key.
-  cacheState: (_input, { projectPath }) => historyState(projectPath),
+  // A verifying scan run offline (every verdict `unknown`) must not be served
+  // to a verifying call that could reach the providers, nor the reverse.
+  cacheState: async (input, { projectPath }) => ({
+    ...(await historyState(projectPath)),
+    ...(input.verify_live === true ? { verify_network: networkDisabled() ? 'off' : 'on' } : {}),
+  }),
   category: 'security',
   supportsAutoFix: false,
   supportsScope: true,
@@ -71,6 +110,14 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
       ),
     force: Force,
     scope: ScanScopeInput,
+    verify_live: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "Off by default. Sends each supported secret to its own provider's read-only identity API — and " +
+          'nowhere else — to learn whether it is live, revoked or unknown. GUARDIAN_OFFLINE=1 sends nothing.',
+      ),
   },
   invoke: async (input, ctx): Promise<ScannerInvocation> => {
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'secrets');
@@ -87,6 +134,9 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
         h === null ? null : 'base' in h ? h : { logOpts: (await resolveLogOpts(ctx.projectPath, h.logOpts)) ?? h.logOpts };
       scope = { kind: 'scoped', history, files: ctx.scope.contentFiles };
     }
+    const verify = input.verify_live === true;
+    // Offline, nothing is captured: a raw value that cannot be sent is not read.
+    const offline = verify && networkDisabled();
     const scan = await runGitleaksScan({
       projectPath: ctx.projectPath,
       reportDir,
@@ -94,13 +144,35 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
       env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog,
+      ...(verify && !offline ? { captureSecrets: isVerifiableRule } : {}),
     });
-    return {
+    const invocation: ScannerInvocation = {
       outcome: scan.cancelled ? 'cancelled' : 'completed',
       tools_run: scan.tools_run,
       missing_tools: scan.missing_tools,
       parser_inputs: scan.parser_inputs,
       report_paths: [reportDir],
+    };
+    if (!verify) return invocation;
+    if (scan.cancelled) {
+      // A cancelled scan sends nothing.
+      scan.captured?.clear();
+      return invocation;
+    }
+    ctx.onLog?.('verify_live: asking each secret\'s own provider whether it is live');
+    const verified = await verifyGitleaksFindings({
+      parser_inputs: scan.parser_inputs,
+      secrets: scan.captured ?? null,
+      unavailable: offline ? OFFLINE_REASON : (scan.capture_error ?? null),
+      projectPath: ctx.projectPath,
+      keep: keptByScan(ctx),
+      options: { signal: ctx.signal, offline },
+    });
+    return {
+      ...invocation,
+      parser_inputs: verified.parser_inputs,
+      warnings: verified.warnings,
+      extras: { secret_verification: verified.summary },
     };
   },
 });
