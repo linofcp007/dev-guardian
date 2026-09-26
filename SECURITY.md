@@ -59,11 +59,12 @@ their respective projects.
   an assistant's `Write` / `Edit` / `MultiEdit` of any hook configuration file;
   it does **not** see shell writes. That gap is harmless for the project file,
   which cannot loosen anything; it is not closed for the user-level file, which
-  a shell command can still write. Each hook configuration file is read only
-  when it is a regular file of at most 64 KiB, so a FIFO or a link to
-  `/dev/zero` in its place no longer hangs the hook into its 15 s timeout —
-  which used to let the tool call run unguarded — and the shell guard denies
-  creating one there. Neither guard covers **Claude Code's own settings**: a
+  a shell command can still write. Each hook configuration file is opened
+  (non-blocking where the OS allows) and judged by `fstat` on what was opened:
+  only a regular file of at most 64 KiB is read, so a FIFO, a link to
+  `/dev/zero` or a Windows link to a named pipe in its place no longer hangs
+  the hook into its 15 s timeout — which used to let the tool call run
+  unguarded — and the shell guard denies creating one there. Neither guard covers **Claude Code's own settings**: a
   `.claude/settings.json` (or `settings.local.json`) with `disableAllHooks`, or
   an `env` block setting `GUARDIAN_HOOKS`, `GUARDIAN_HOOKS_BASH_BLOCK` or
   `GUARDIAN_PKG_VET`, switches the hooks off, and an assistant can write that

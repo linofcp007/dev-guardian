@@ -30,9 +30,11 @@ quality, deps, observability, performance and compliance. Two halves:
   `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
   with the `dev-guardian check` CLI subcommand. Every file a hook reads from
   the project or the user's home goes through `mcp/src/hooks/configFile.ts`:
-  a regular file of at most 64 KiB (1 MiB for registry configuration), never
-  a FIFO or a device — one at `.guardian/hooks.config.json` used to hang the
-  hook into its 15 s timeout, which lets the tool call through. User-facing
+  open (non-blocking), `fstat` the DESCRIPTOR, read at most cap + 1 bytes —
+  only a regular file of at most 64 KiB (1 MiB for registry configuration).
+  Never judge the path and then read it: a FIFO swapped in between, or a
+  Windows link to a named pipe (which `stat`s as an empty regular file), hangs
+  the read, and a hook that hits its 15 s timeout lets the tool call through. User-facing
   detail: [`docs/hooks.md`](docs/hooks.md).
 
 ## Where the design docs went

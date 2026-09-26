@@ -910,12 +910,18 @@ keeps working (migrations 004–011 are additive).
   and `~/.config/dev-guardian/hooks.json` with no check on what the path was:
   a FIFO or a link to `/dev/zero` there blocked the hook until Claude Code
   killed it at 15 s, and the tool call then ran unguarded (a 300 MB file took
-  23 s on Windows). Each is now read only when it is a regular file of at most
-  64 KiB (a link is followed to its target); anything else counts as absent —
-  the protective defaults — and SessionStart names it. The install hook's
-  registry configuration reads are capped the same way, at 1 MiB. The shell
-  guard denies `mkfifo`, `mknod`, `ln` and PowerShell `New-Item -ItemType
-  SymbolicLink|HardLink|Junction` onto those files, and a leading UTF-8
+  23 s on Windows). Each is now opened first (non-blocking on Linux and
+  macOS, so a FIFO opens at once) and judged by `fstat` on the open
+  descriptor — never by an earlier look at the path, which a Windows link to
+  a named pipe fools (it `stat`s as an empty regular file) and a swap between
+  two checks defeats — and read only when it is a regular file of at most
+  64 KiB, at most 64 KiB + 1 bytes (a file that grows meanwhile is refused).
+  Anything else counts as absent — the protective defaults — and SessionStart
+  names it. The install hook's registry configuration reads work the same
+  way, capped at 1 MiB. The shell guard denies `mkfifo`, `mknod`, `ln`,
+  `mklink` (also through `cmd /c`) and PowerShell `New-Item -ItemType
+  SymbolicLink|HardLink|Junction` when the path they CREATE is one of those
+  files (never when it is only a link's source), and a leading UTF-8
   byte-order mark (PowerShell 5 writes one) no longer makes a config file
   unreadable.
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
