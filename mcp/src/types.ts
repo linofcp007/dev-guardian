@@ -117,6 +117,13 @@ export interface ToolRun {
    * rows written before it was recorded (read as "any image", as before).
    */
   target?: string;
+  /**
+   * A Semgrep run the shared judge (`runners/semgrepReport.ts`) found
+   * `partial`: `ok`, and also listed in `missing_tools`, because these files
+   * were only partly parsed (project-relative). What the CI gate's
+   * `--accept-partial-parse` matches. Absent on every complete run.
+   */
+  partially_parsed?: PartialParse[];
 }
 
 export interface Finding {

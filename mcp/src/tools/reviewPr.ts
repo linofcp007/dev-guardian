@@ -253,8 +253,10 @@ async function runSemgrep(
   });
   for (const raw of run.reports) out.parser_inputs.push({ parser: semgrepParser, input: raw });
   out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
-  // Scanned nothing at all, or not every changed file: a gap, not a clean result.
-  if (run.nothingScanned || gap !== null) out.missing_tools.push('semgrep');
+  // Scanned nothing at all, not every changed file, or some only partly
+  // parsed (`ok` + missing, runners/semgrepReport.ts): a gap, not a clean result.
+  const partial = run.toolRun.status === 'ok' && run.partial.length > 0;
+  if (run.nothingScanned || gap !== null || partial) out.missing_tools.push('semgrep');
   out.cancelled ||= run.cancelled;
 }
 

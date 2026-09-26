@@ -874,7 +874,8 @@ async function invokeBugHuntOnScope(args: {
   if (failures.length === 0) {
     for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
     tools_run.push(first.toolRun);
-    if (first.nothingScanned) missing_tools.push('semgrep');
+    // Scanned nothing, or some files only partly parsed (`ok` + missing).
+    if (first.nothingScanned || (first.toolRun.status === 'ok' && first.partial.length > 0)) missing_tools.push('semgrep');
     return finish(first.cancelled ? 'cancelled' : 'completed');
   }
   const survivors = survivingPacks(packs, failures);

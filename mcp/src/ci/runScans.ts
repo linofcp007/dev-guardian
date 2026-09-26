@@ -23,6 +23,11 @@
  * reads. Stopping at the first gap would report less than continuing and
  * saying what was missed.
  *
+ * The files a step's scanner could read only in part travel with the step
+ * (`ScanStepResult.partial_parses`, see {@link partialParsesOf}), keyed by
+ * the `missing_tools` name they cause, so the gate can match
+ * `--accept-partial-parse` against exactly that gap.
+ *
  * Findings are read back OUT of the ephemeral database after every step has
  * run, never out of a step's own return payload — the tools that produce
  * findings (`security_scan_full`, `scan_dast`) already persist them as a
@@ -172,11 +177,15 @@ async function runStep(
     if (!result.ok) {
       return refusedStep(name, `${result.error.code}: ${result.error.message}`);
     }
+    const tools_run = toToolRunArray(result.tools_run);
+    const missing_tools = toStringArray(result.missing_tools);
+    const partial_parses = partialParsesOf(name, result, tools_run, missing_tools);
     return {
       tool: name,
       ran: true,
-      tools_run: toToolRunArray(result.tools_run),
-      missing_tools: toStringArray(result.missing_tools),
+      tools_run,
+      missing_tools,
+      ...(partial_parses !== null ? { partial_parses } : {}),
     };
   } catch (e) {
     return refusedStep(name, e instanceof Error ? e.message : String(e));
@@ -193,6 +202,63 @@ function toToolRunArray(value: unknown): ToolRun[] {
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? (value as string[]) : [];
+}
+
+/** The `file` of every well-formed entry of a `partially_parsed` list. */
+function partialFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value as unknown[]) {
+    const file = entry !== null && typeof entry === 'object' ? (entry as { file?: unknown }).file : undefined;
+    if (typeof file === 'string' && file.length > 0 && !out.includes(file)) out.push(file);
+  }
+  return out;
+}
+
+/** The DAST partial-surface marker, as scan_dast writes it (`${DAST_ENGINE}:partial-surface`). */
+const DAST_PARTIAL_SURFACE = 'guardian-dast:partial-surface';
+
+/**
+ * Per `missing_tools` name whose whole cause is files only partly parsed —
+ * `ScanStepResult.partial_parses` — or null when there is none:
+ *
+ *   - an `ok` run that carries `partially_parsed` (the shared Semgrep judge's
+ *     `partial` verdict: scan_sast inside security_scan_full, and
+ *     map_attack_surface) and whose name the step lists missing;
+ *   - scan_dast's `guardian-dast:partial-surface`, when the surface it probed
+ *     was partial for no other reason than its partly parsed files: nothing
+ *     but `semgrep` missing from the surface and no failed step of its run
+ *     (a lost route recovery is a gap no file acceptance covers).
+ *
+ * Anything else stays a plain gap: the gate can only accept what is listed.
+ */
+function partialParsesOf(
+  name: string,
+  result: Record<string, unknown>,
+  toolsRun: readonly ToolRun[],
+  missingTools: readonly string[],
+): Record<string, string[]> | null {
+  const out: Record<string, string[]> = {};
+  const add = (key: string, files: readonly string[]): void => {
+    const list = out[key] ?? [];
+    for (const file of files) if (!list.includes(file)) list.push(file);
+    if (list.length > 0) out[key] = list;
+  };
+  for (const run of toolsRun) {
+    if (run.status !== 'ok' || !missingTools.includes(run.name)) continue;
+    add(run.name, partialFiles(run.partially_parsed));
+  }
+  if (name === 'scan_dast' && missingTools.includes(DAST_PARTIAL_SURFACE)) {
+    const summary = result['summary'];
+    const gaps = summary !== null && typeof summary === 'object' ? (summary as Record<string, unknown>)['surface_gaps'] : undefined;
+    if (gaps !== null && typeof gaps === 'object') {
+      const g = gaps as Record<string, unknown>;
+      const failed = Array.isArray(g['failed_steps']) ? g['failed_steps'].length : 0;
+      const onlySemgrep = toStringArray(g['missing_tools']).every((t) => t === 'semgrep');
+      if (failed === 0 && onlySemgrep) add(DAST_PARTIAL_SURFACE, partialFiles(g['partially_parsed']));
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /**

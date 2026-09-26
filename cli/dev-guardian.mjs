@@ -20,6 +20,9 @@
  *                             --base-url <url>         include scan_dast
  *                             --authorized-target      confirm DAST target
  *                             --start-command <cmd> …  CLI ARGV ONLY, see below
+ *                             --accept-partial-parse <path>  repeatable, CLI ARGV
+ *                                                      ONLY: accept that Semgrep
+ *                                                      only partly parsed <path>
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -242,6 +245,17 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          a fork's pull request could otherwise edit
                          .guardian/ci.json and run arbitrary code on the
                          runner the moment this CLI read the key from there.
+  --accept-partial-parse <path>
+                         Repeatable. Semgrep could parse <path> (relative to
+                         --project) only in part — e.g. PHP's legal
+                         \`const NAMESPACE\` — and you accept that: when EVERY
+                         file a Semgrep step only partly parsed is accepted,
+                         its gap prints as "accepted" and does not force exit
+                         2. Coverage still reads partial (JSON, SARIF). Matched
+                         exactly: no globs, no directories. A skipped, failed or
+                         scanned-nothing Semgrep, or any file not named, still
+                         exits 2. CLI ARGV ONLY, like --start-command: a
+                         repository file declaring it is refused.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines
@@ -665,6 +679,59 @@ function startCommandRefusalMessage(configPath) {
   );
 }
 
+/**
+ * `--accept-partial-parse` is argv-only too, by the same rule as
+ * `--start-command`: it widens what the gate lets through, and a repository
+ * file a fork's pull request can edit must never do that. A
+ * `.guardian/ci.json` declaring `accept_partial_parse` is refused outright —
+ * loudly, rather than read or silently ignored. Returns the config path when
+ * it declares the key, else `null`; lenient on everything else, like
+ * `findStartCommandInRepoConfig`.
+ */
+function findAcceptPartialParseInRepoConfig(projectPath) {
+  const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
+  if (!existsSync(configPath)) return null;
+  let data;
+  try {
+    data = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data) && data.accept_partial_parse !== undefined) {
+    return configPath;
+  }
+  return null;
+}
+
+function acceptPartialParseRefusalMessage(configPath) {
+  return (
+    `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "accept_partial_parse" (found at ${configPath}). ` +
+    '--accept-partial-parse may only be supplied on the command line, never from a file inside the ' +
+    'repository — a pull request could otherwise edit this file and turn a scan gap into a pass. ' +
+    `Remove accept_partial_parse from ${CI_CONFIG_RELATIVE_PATH} and pass --accept-partial-parse <path> ` +
+    'in the pipeline definition instead.'
+  );
+}
+
+/**
+ * Why a `--accept-partial-parse` value cannot name a project file, or null.
+ * The gate matches it exactly against project-relative paths, so an absolute
+ * path or one climbing out with `..` could never match anything — refused as
+ * a usage error rather than accepted and silently useless. Backslashes and a
+ * leading `./` are fine (the gate normalises both); globs are not expanded,
+ * so `*.php` is the literal file name `*.php`.
+ */
+function checkAcceptedPartialParse(value) {
+  const posix = value.replace(/\\/g, '/');
+  if (isAbsolute(value) || posix.startsWith('/') || /^[A-Za-z]:/.test(value)) {
+    return `--accept-partial-parse takes a path relative to --project, not an absolute one (got '${value}')`;
+  }
+  if (posix.split('/').includes('..')) {
+    return `--accept-partial-parse takes a path inside --project; '..' cannot name a scanned file (got '${value}')`;
+  }
+  return null;
+}
+
 /** Shared by `parseScanArgs`/`parseBaselineUpdateArgs`: `--start-command`
  *  consumes the REST of argv as the command's own argv (never a shell
  *  string), so it must be the last flag handled and must stop the loop —
@@ -761,6 +828,7 @@ function parseScanArgs(argv) {
     authorizedTarget: false,
     localOnly: false,
     startCommand: undefined,
+    acceptPartialParse: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -770,7 +838,24 @@ function parseScanArgs(argv) {
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--fail-on') {
+    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+      // Repeatable; each value a project-relative file (see
+      // `checkAcceptedPartialParse`). requireNonEmpty: an unset CI variable
+      // must not silently accept nothing and read as if it had.
+      let value;
+      if (a === '--accept-partial-parse') {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        value = r.value;
+        i = r.nextIndex;
+      } else {
+        value = a.slice('--accept-partial-parse='.length);
+        if (isMissingOperand(value, true)) return { error: '--accept-partial-parse requires a value' };
+      }
+      const problem = checkAcceptedPartialParse(value);
+      if (problem) return { error: problem };
+      out.acceptPartialParse.push(value);
+    } else if (a === '--fail-on') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.failOn = r.value;
@@ -1028,6 +1113,10 @@ async function cmdScan(argv) {
 
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
+  // The same argv-only rule for --accept-partial-parse, checked whatever argv
+  // says (see `findAcceptPartialParseInRepoConfig`).
+  const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
+  if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -1089,6 +1178,8 @@ async function cmdScan(argv) {
     failOn: opts.failOn,
     steps: result.steps,
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
+    // argv only — see `findAcceptPartialParseInRepoConfig`.
+    acceptedPartialParses: opts.acceptPartialParse,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human

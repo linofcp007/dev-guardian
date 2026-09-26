@@ -18,11 +18,32 @@
  * `GATE_FAILED` outranks `INCOMPLETE_SCAN` when both apply: a real regression
  * is the actionable failure a pipeline must see, and the coverage gaps are
  * still reported alongside it, not swallowed by it.
+ *
+ * One gap can be ACCEPTED rather than failed on (`--accept-partial-parse`,
+ * argv only): a Semgrep step that ran but could read some files only in part
+ * (the shared judge's `partial` verdict), when the caller named every one of
+ * those files. The gap is then printed as accepted and does not force exit 2
+ * — but `coverage` is computed over every gap, accepted ones included, so it
+ * stays `partial` in the verdict, the JSON and the SARIF. Nothing else is
+ * acceptable: a skipped, failed or scanned-nothing scanner, or a file the
+ * caller did not name, exits 2 as before.
  */
 import { SEVERITY_ORDER } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
 import { CI_EXIT } from './types.js';
+/**
+ * The one spelling `--accept-partial-parse` paths and the scanners' partial
+ * files are compared in: `/`-separated, without a leading `./`. Nothing else
+ * — "matched exactly" means a directory, a glob or another case is another
+ * path.
+ */
+export function normalizeAcceptedPath(path) {
+    let out = path.replace(/\\/g, '/');
+    while (out.startsWith('./'))
+        out = out.slice(2);
+    return out;
+}
 /**
  * Coverage in, exit code out — the half of the gate's exit-code rule that
  * does not depend on findings at all. Exported so a caller that has no
@@ -75,8 +96,32 @@ function describeMissing(name, toolsRun) {
     }
     return `${name} not installed`;
 }
+/**
+ * Whether one `missing_tools` entry of a step is an accepted partial parse:
+ * the step names the files that are its whole cause (`partial_parses`), the
+ * caller accepted every one, and no run of that name in the step was skipped
+ * or failed (that would be a gap of its own, whatever was accepted).
+ */
+function acceptance(name, files, toolsRun, accepted) {
+    if (files.length === 0)
+        return { accepted: false, note: '' };
+    const unaccepted = files.filter((f) => !accepted.has(f));
+    if (unaccepted.length > 0) {
+        return {
+            accepted: false,
+            note: ` — not accepted: ${unaccepted.join(', ')} (--accept-partial-parse <path> accepts one file, matched exactly)`,
+        };
+    }
+    const other = toolsRun.find((run) => run.name === name && run.status !== 'ok');
+    if (other !== undefined) {
+        return { accepted: false, note: ` — its partial parse is accepted, but ${name} also ${other.status} in this step` };
+    }
+    return { accepted: true };
+}
 export function evaluateGate(input) {
     const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
+    const accepted = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
+    const reported = new Set();
     // Coverage comes from a single call to computeCoverage over the union of
     // every step's tool bookkeeping — never a second, hand-rolled notion of
     // "complete". A step that refused to run (`ran: false`) contributes its
@@ -87,19 +132,32 @@ export function evaluateGate(input) {
     // INCOMPLETE_SCAN exit code.
     const allToolsRun = [];
     const allMissingTools = [];
+    // The same, minus the accepted gaps: what the exit code is decided on.
+    const gatingMissingTools = [];
     const coverageGaps = [];
+    const acceptedGaps = [];
     for (const step of steps) {
         allToolsRun.push(...step.tools_run);
         if (!step.ran) {
             allMissingTools.push(step.tool);
+            gatingMissingTools.push(step.tool);
             coverageGaps.push(`${step.tool}: ${step.reason ?? 'did not run'}`);
             continue;
         }
         for (const missing of step.missing_tools) {
             allMissingTools.push(missing);
+            const files = (step.partial_parses?.[missing] ?? []).map(normalizeAcceptedPath);
+            for (const file of files)
+                reported.add(file);
+            const verdict = acceptance(missing, files, step.tools_run, accepted);
+            if (verdict.accepted) {
+                acceptedGaps.push(`${step.tool}: ${missing} only partly parsed ${files.join(', ')} — accepted (--accept-partial-parse)`);
+                continue;
+            }
+            gatingMissingTools.push(missing);
             const gap = describeMissing(missing, step.tools_run);
             if (gap !== null)
-                coverageGaps.push(`${step.tool}: ${gap}`);
+                coverageGaps.push(`${step.tool}: ${gap}${verdict.note}`);
         }
         for (const run of step.tools_run) {
             if (run.status === 'failed') {
@@ -114,6 +172,8 @@ export function evaluateGate(input) {
         const verb = droppedBaselineEntries === 1 ? 'is' : 'are';
         coverageGaps.push(`baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`);
     }
+    // Every gap, accepted ones included: an accepted partial parse is still
+    // partial coverage, and says so in the JSON and the SARIF.
     const coverage = computeCoverage(allToolsRun, allMissingTools);
     // Historical debt must not fail the build: `newFindings` already excludes
     // anything the baseline recognises by fingerprint, however severe.
@@ -123,7 +183,10 @@ export function evaluateGate(input) {
     // a real regression is the actionable failure a pipeline must see, ahead
     // of an incomplete-scan signal that is still reported (via coverageGaps)
     // but does not get to hide a blocking finding behind it.
-    const exitCode = blocking.length > 0 ? CI_EXIT.GATE_FAILED : exitCodeForCoverage(coverage);
+    //
+    // The exit code reads coverage WITHOUT the accepted gaps — the one thing
+    // `--accept-partial-parse` changes.
+    const exitCode = blocking.length > 0 ? CI_EXIT.GATE_FAILED : exitCodeForCoverage(computeCoverage(allToolsRun, gatingMissingTools));
     return {
         exitCode,
         newFindings: newlyFound,
@@ -131,6 +194,8 @@ export function evaluateGate(input) {
         coverage,
         coverageGaps,
         baselineAbsent: baseline === null,
+        acceptedGaps,
+        unusedPartialParseAcceptances: [...accepted].filter((path) => !reported.has(path)),
     };
 }
 //# sourceMappingURL=gate.js.map

@@ -10,23 +10,33 @@
  *
  * A batch whose check fails makes the whole tool `failed` with the batch's
  * reason; the results it did write are still kept, because they are real.
- * Nothing about one batch is ever inferred from another.
+ * Nothing about one batch is ever inferred from another. A batch the check
+ * calls partial (Semgrep: some files only partly parsed —
+ * `semgrepReport.ts`) is not a failure: the run is `ok`, its reason and
+ * `partially_parsed` name those files, and the result carries them in
+ * `partial` for the caller to list the scanner missing as well.
  */
 
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ToolRun } from '../types.js';
+import type { PartialParse, ToolRun } from '../types.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess, type ProcessOutcome } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { checkSemgrepReport, pythonUtf8Env } from './semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from './semgrepReport.js';
+import { toRelativeIfPossible } from './scannerParsers/index.js';
 
 export interface BatchCheck {
   ok: boolean;
   reason?: string;
   /** Files the batch's report says were analysed, when the scanner reports it. */
   scanned?: number;
+  /**
+   * Files this batch could only partly analyse, as the report names them —
+   * the batch is then partial, not failed (`ok` is false only for a failure).
+   */
+  partial?: PartialParse[];
 }
 
 export interface FileBatchScanOptions {
@@ -64,6 +74,12 @@ export interface FileBatchScanResult {
   cancelled: boolean;
   /** `requireScanned`, and no batch scanned a single file (`toolRun` is `skipped`). */
   nothingScanned: boolean;
+  /**
+   * Files some batch could only partly analyse (relative to `cwd`). Non-empty
+   * on an `ok` run means partial coverage: the caller lists the scanner in
+   * `missing_tools` too.
+   */
+  partial: PartialParse[];
 }
 
 export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileBatchScanResult> {
@@ -75,6 +91,7 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
   const reports: string[] = [];
   const reportFiles: string[] = [];
   const failures: string[] = [];
+  const partial: PartialParse[] = [];
   let cancelled = false;
   let scanned = 0;
 
@@ -107,6 +124,7 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       targets: opts.requireScanned === true ? 0 : batch.length,
     });
     scanned += verdict.scanned ?? 0;
+    for (const p of verdict.partial ?? []) partial.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
       failures.push(`${label}${verdict.reason ?? 'failed'}`);
@@ -128,17 +146,25 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       reportFiles,
       cancelled,
       nothingScanned: true,
+      partial,
     };
   }
   const toolRun: ToolRun =
     failures.length === 0 && !cancelled
-      ? { name: opts.name, status: 'ok', reason: `${described} scanned` }
+      ? partial.length > 0
+        ? {
+            name: opts.name,
+            status: 'ok',
+            reason: `${described} scanned; ${describePartialParse(partial, 'findings in the unparsed spans may be missing')}`,
+            partially_parsed: partial,
+          }
+        : { name: opts.name, status: 'ok', reason: `${described} scanned` }
       : {
           name: opts.name,
           status: 'failed',
           reason: cancelled && failures.length === 0 ? 'cancelled' : `${described}: ${failures.join('; ')}`,
         };
-  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false };
+  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial };
 }
 
 /** `scanFileBatches` for Semgrep: `--json --quiet --output <f> -- files`, UTF-8 mode, GC3 check. */
@@ -163,7 +189,14 @@ export function semgrepOnFiles(args: {
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
-    check: checkSemgrepReport,
+    // The shared judge's `partial` verdict is no failure of the batch.
+    check: (args) => {
+      const c = checkSemgrepReport(args);
+      if (c.verdict === 'partial' && c.partial !== undefined) {
+        return { ok: true, scanned: c.scanned, partial: c.partial };
+      }
+      return { ok: c.ok, scanned: c.scanned, ...(c.reason !== undefined ? { reason: c.reason } : {}) };
+    },
     requireScanned: true,
   });
 }

@@ -301,6 +301,64 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('failed');
   });
 
+  // Follow-up X1: the shared judge's `partial` verdict. A warn-level
+  // PartialParsing tied to one scanned file is partial coverage — Semgrep
+  // ran (`ok`) AND is missing, the file named on the run — never `failed`,
+  // which made every WordPress project's SAST a failed scanner.
+  const WARNING = {
+    code: 3,
+    level: 'warn',
+    type: ['PartialParsing', [{ path: 'wp/rest-controller.php', start: { line: 20 }, end: { line: 20 } }]],
+    message: "Syntax error at line wp/rest-controller.php:20:\n `const NAMESPACE = 'guardian/v2';` was unexpected",
+    path: 'wp/rest-controller.php',
+  };
+
+  it('a warn-level PartialParsing on one scanned file is partial: ok, listed missing, the file named', async () => {
+    const project = makeTempDir('sast-partial-');
+    mockSemgrepOnPath(1, { results: [FINDING], errors: [WARNING], paths: { scanned: ['a.py', 'wp/rest-controller.php'] } });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: unknown }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/partial: 1 file\(s\) only partly parsed .*PartialParsing: wp\/rest-controller\.php/);
+    expect(run?.partially_parsed).toEqual([
+      { file: 'wp/rest-controller.php', type: 'PartialParsing', message: 'Syntax error at line wp/rest-controller.php:20:' },
+    ]);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
+    // The findings the run did report are real.
+    expect((r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity['medium']).toBe(1);
+  });
+
+  it('a partial parse beside a rule error is still failed — fatal wins', async () => {
+    const project = makeTempDir('sast-partial-');
+    mockSemgrepOnPath(0, {
+      results: [],
+      errors: [WARNING, { type: 'Rule parse error', level: 'error', message: 'Invalid pattern in rule x' }],
+      paths: { scanned: ['a.py'] },
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; partially_parsed?: unknown } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.partially_parsed).toBeUndefined();
+  });
+
+  it('a scoped run (explicit targets, batched) reads a partial parse the same way', async () => {
+    const project = makeTempDir('sast-partial-scope-');
+    mkdirSync(join(project, 'wp'));
+    writeFileSync(join(project, 'wp', 'rest-controller.php'), '<?php\n', 'utf8');
+    mockSemgrepOnPath(0, { results: [], errors: [WARNING], paths: { scanned: ['wp/rest-controller.php'] } });
+    const r = await runSast(project, makePlugin(project), { scope: { paths: ['wp/rest-controller.php'] } });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/partial: 1 file\(s\) only partly parsed/);
+    expect(run?.partially_parsed?.map((p) => p.file)).toEqual(['wp/rest-controller.php']);
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
   it('exit 0 that scanned nothing is never a clean result — skipped, listed missing, coverage not full', async () => {
     // Measured shapes: `rules: []`, or a tree no loaded rule applies to.
     const project = makeTempDir('sast-rules-');

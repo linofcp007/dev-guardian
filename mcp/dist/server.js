@@ -43462,28 +43462,52 @@ function signalGroup(pid, signal) {
 
 // src/runners/semgrepReport.ts
 var MAX_ERROR_TEXT = 300;
+var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
-  const { raw, exitCode, outcome, targets } = args;
+  const { raw, exitCode, outcome, targets, projectPath } = args;
   if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
-    return { ok: false, scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
   if (raw === null) {
-    return { ok: false, scanned: 0, errors: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
   }
   const root = parseInputAsJson(raw);
   if (root === null || typeof root !== "object" || Array.isArray(root)) {
-    return { ok: false, scanned: 0, errors: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
   }
   const scanned = asArray(getProp(getProp(root, "paths"), "scanned")).length;
-  const errors = describeErrors(asArray(getProp(root, "errors")));
+  const errorEntries = asArray(getProp(root, "errors"));
+  const errors = describeErrors(errorEntries);
+  const exitClean = exitCode === 0 || exitCode === 1;
   const problems = [];
-  if (exitCode !== 0 && exitCode !== 1) problems.push(`exit ${String(exitCode)}`);
+  if (!exitClean) problems.push(`exit ${String(exitCode)}`);
   if (targets > 0 && scanned === 0) problems.push(`scanned 0 of ${targets} target(s)`);
   if (errors.length > 0) {
     problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join("; "))}`);
   }
-  if (problems.length > 0) return { ok: false, scanned, errors: errors.length, reason: problems.join("; ") };
-  return { ok: true, scanned, errors: 0 };
+  if (problems.length === 0) return { ok: true, verdict: "ok", scanned, errors: 0 };
+  const reason = problems.join("; ");
+  if (exitClean && scanned === 0 && errors.length === 0) {
+    return { ok: false, verdict: "scanned_nothing", scanned, errors: 0, reason };
+  }
+  if (exitClean && scanned > 0 && errors.length > 0) {
+    const partial3 = perFileErrors(errorEntries);
+    if (partial3 !== null) {
+      return {
+        ok: false,
+        verdict: "partial",
+        scanned,
+        errors: errors.length,
+        reason,
+        partial: partial3.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }))
+      };
+    }
+  }
+  return { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
+}
+function describePartialParse(partial3, consequence) {
+  const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
+  return `partial: ${partial3.length} file(s) only partly parsed \u2014 ${consequence} (${listed})`;
 }
 function describeErrors(errors) {
   return errors.map((entry) => {
@@ -43492,6 +43516,32 @@ function describeErrors(errors) {
     const message3 = getString(entry, "message") ?? "(no message)";
     return `${type}: ${message3.split(/\r?\n/)[0] ?? message3}`;
   });
+}
+function perFileErrors(errors) {
+  const out = [];
+  for (const entry of errors) {
+    const rawType = getProp(entry, "type");
+    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
+    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+    const file = targetFileOf(entry, rawType);
+    if (file === null || /\.ya?ml$/i.test(file)) return null;
+    const message3 = getString(entry, "message") ?? type;
+    out.push({ file, type, message: message3.split(/\r?\n/)[0] ?? message3 });
+  }
+  return out.length > 0 ? out : null;
+}
+function targetFileOf(entry, rawType) {
+  const path6 = getString(entry, "path");
+  if (path6 !== void 0 && path6.length > 0) return path6;
+  const span = asArray(getProp(entry, "spans"))[0];
+  const spanFile = span === void 0 ? void 0 : getString(span, "file");
+  if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
+  if (Array.isArray(rawType)) {
+    const location = asArray(rawType[1])[0];
+    const locationPath = location === void 0 ? void 0 : getString(location, "path");
+    if (locationPath !== void 0 && locationPath.length > 0) return locationPath;
+  }
+  return null;
 }
 function clip(text) {
   return text.length > MAX_ERROR_TEXT ? `${text.slice(0, MAX_ERROR_TEXT - 1)}\u2026` : text;
@@ -43510,6 +43560,7 @@ async function scanFileBatches(opts) {
   const reports = [];
   const reportFiles = [];
   const failures = [];
+  const partial3 = [];
   let cancelled = false;
   let scanned = 0;
   for (const [i2, batch] of batches.entries()) {
@@ -43541,6 +43592,7 @@ async function scanFileBatches(opts) {
       targets: opts.requireScanned === true ? 0 : batch.length
     });
     scanned += verdict.scanned ?? 0;
+    for (const p of verdict.partial ?? []) partial3.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i2 + 1}/${batches.length}: ` : "";
       failures.push(`${label}${verdict.reason ?? "failed"}`);
@@ -43558,15 +43610,21 @@ async function scanFileBatches(opts) {
       reports,
       reportFiles,
       cancelled,
-      nothingScanned: true
+      nothingScanned: true,
+      partial: partial3
     };
   }
-  const toolRun = failures.length === 0 && !cancelled ? { name: opts.name, status: "ok", reason: `${described} scanned` } : {
+  const toolRun = failures.length === 0 && !cancelled ? partial3.length > 0 ? {
+    name: opts.name,
+    status: "ok",
+    reason: `${described} scanned; ${describePartialParse(partial3, "findings in the unparsed spans may be missing")}`,
+    partially_parsed: partial3
+  } : { name: opts.name, status: "ok", reason: `${described} scanned` } : {
     name: opts.name,
     status: "failed",
     reason: cancelled && failures.length === 0 ? "cancelled" : `${described}: ${failures.join("; ")}`
   };
-  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false };
+  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial: partial3 };
 }
 function semgrepOnFiles(args) {
   return scanFileBatches({
@@ -43581,7 +43639,14 @@ function semgrepOnFiles(args) {
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...args.onLog ? { onLog: args.onLog } : {},
-    check: checkSemgrepReport,
+    // The shared judge's `partial` verdict is no failure of the batch.
+    check: (args2) => {
+      const c3 = checkSemgrepReport(args2);
+      if (c3.verdict === "partial" && c3.partial !== void 0) {
+        return { ok: true, scanned: c3.scanned, partial: c3.partial };
+      }
+      return { ok: c3.ok, scanned: c3.scanned, ...c3.reason !== void 0 ? { reason: c3.reason } : {} };
+    },
     requireScanned: true
   });
 }
@@ -43913,7 +43978,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records as its target) and any rules registered for this project with register_custom_rules. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced), reading their SARIF per target framework \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never reported as ok. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so this is unavoidable in the default mode. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
+    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records as its target) and any rules registered for this project with register_custom_rules. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced), reading their SARIF per target framework \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed is partial coverage, named. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so this is unavoidable in the default mode. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
     scan_type: "sast",
     category: "security",
     supportsScope: true,
@@ -43997,7 +44062,7 @@ async function runSemgrep(args) {
       signal: ctx.signal,
       onLog: ctx.onLog
     });
-    recordSemgrepRun({ result: result2, outFile, notes: plan.notes, via: null, tools_run, missing_tools, parser_inputs });
+    recordSemgrepRun({ ctx, result: result2, outFile, notes: plan.notes, via: null, tools_run, missing_tools, parser_inputs });
     return;
   }
   const dockerBin = await scannerAvailable("docker");
@@ -44036,23 +44101,38 @@ async function runSemgrep(args) {
     signal: ctx.signal,
     onLog: ctx.onLog
   });
-  recordSemgrepRun({ result, outFile, notes: plan.notes, via: `docker (${image})`, tools_run, missing_tools, parser_inputs });
+  recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, tools_run, missing_tools, parser_inputs });
 }
 function recordSemgrepRun(args) {
-  const { result, outFile, notes, via, tools_run, missing_tools, parser_inputs } = args;
+  const { ctx, result, outFile, notes, via, tools_run, missing_tools, parser_inputs } = args;
   const raw = readJsonSafe(outFile);
   if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
-  const check2 = checkSemgrepReport({ raw, exitCode: result.exitCode, outcome: result.outcome, targets: 1 });
+  const check2 = checkSemgrepReport({
+    raw,
+    exitCode: result.exitCode,
+    outcome: result.outcome,
+    targets: 1,
+    // The container fallback reports paths under its mount, not the host's.
+    projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath
+  });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes];
-  if (check2.ok) {
+  if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
     if (reasons.length > 0) run.reason = reasons.join("; ");
     tools_run.push(run);
     return;
   }
-  const exitClean = result.outcome === "completed" || result.exitCode === 1;
-  const nothingScanned = exitClean && raw !== null && check2.scanned === 0 && check2.errors === 0;
-  if (nothingScanned) {
+  if (check2.verdict === "partial" && check2.partial !== void 0) {
+    tools_run.push({
+      name: "semgrep",
+      status: "ok",
+      reason: [...reasons, describePartialParse(check2.partial, "findings in the unparsed spans may be missing")].join("; "),
+      partially_parsed: check2.partial
+    });
+    missing_tools.push("semgrep");
+    return;
+  }
+  if (check2.verdict === "scanned_nothing") {
     tools_run.push({
       name: "semgrep",
       status: "skipped",
@@ -44128,7 +44208,7 @@ async function runSemgrepOnScope(args) {
   const entry = { ...run.toolRun };
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== void 0).join("; ");
   tools_run.push(entry);
-  if (run.nothingScanned) missing_tools.push("semgrep");
+  if (run.nothingScanned || entry.status === "ok" && run.partial.length > 0) missing_tools.push("semgrep");
 }
 async function runBanditOnScope(args) {
   const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
@@ -47057,7 +47137,7 @@ async function invokeBugHuntOnScope(args) {
   if (failures.length === 0) {
     for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
     tools_run.push(first.toolRun);
-    if (first.nothingScanned) missing_tools.push("semgrep");
+    if (first.nothingScanned || first.toolRun.status === "ok" && first.partial.length > 0) missing_tools.push("semgrep");
     return finish(first.cancelled ? "cancelled" : "completed");
   }
   const survivors = survivingPacks(packs, failures);
@@ -48100,7 +48180,8 @@ async function runSemgrep2(ctx, input, out, args) {
   });
   for (const raw of run.reports) out.parser_inputs.push({ parser: semgrepParser, input: raw });
   out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...gap !== null ? [gap] : []]));
-  if (run.nothingScanned || gap !== null) out.missing_tools.push("semgrep");
+  const partial3 = run.toolRun.status === "ok" && run.partial.length > 0;
+  if (run.nothingScanned || gap !== null || partial3) out.missing_tools.push("semgrep");
   out.cancelled ||= run.cancelled;
 }
 async function runBandit2(ctx, out, args) {
@@ -62826,14 +62907,18 @@ function countListedRouteTargets(projectPath, files, ownIgnore) {
   }
   return count2;
 }
-var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function judgeSurfaceReport(args) {
   const { run, raw, via, targets, projectPath } = args;
-  const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets });
-  if (check2.ok) return { verdict: "ok", toolRun: buildToolRun(run, via ?? void 0) };
+  const check2 = checkSemgrepReport({
+    raw,
+    exitCode: run.exitCode,
+    outcome: run.outcome,
+    targets,
+    ...projectPath !== void 0 ? { projectPath } : {}
+  });
+  if (check2.verdict === "ok") return { verdict: "ok", toolRun: buildToolRun(run, via ?? void 0) };
   const prefix = via !== null ? `${via}: ` : "";
-  const exitClean = run.outcome === "completed" || run.exitCode === 1;
-  if (exitClean && check2.scanned === 0 && check2.errors === 0) {
+  if (check2.verdict === "scanned_nothing") {
     return {
       verdict: "scanned_nothing",
       toolRun: {
@@ -62843,51 +62928,22 @@ function judgeSurfaceReport(args) {
       }
     };
   }
-  if (exitClean && check2.scanned > 0 && check2.errors > 0) {
-    const partial3 = perFileErrors(raw)?.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })) ?? null;
-    if (partial3 !== null) {
-      const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
-      return {
-        verdict: "partial",
-        partial: partial3,
-        toolRun: {
-          name: "semgrep",
-          status: "ok",
-          reason: `${via !== null ? `ran via ${via}; ` : ""}partial: ${partial3.length} file(s) only partly parsed \u2014 routes in the unparsed spans may be missing (${listed})`
-        }
-      };
-    }
+  if (check2.verdict === "partial" && check2.partial !== void 0) {
+    const partial3 = check2.partial;
+    return {
+      verdict: "partial",
+      partial: partial3,
+      toolRun: {
+        name: "semgrep",
+        status: "ok",
+        reason: `${via !== null ? `ran via ${via}; ` : ""}` + describePartialParse(partial3, "routes in the unparsed spans may be missing"),
+        partially_parsed: partial3
+      }
+    };
   }
   const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
   const detail = [check2.reason ?? "semgrep failed", ...stderr !== void 0 ? [stderr] : []].join("; ");
   return { verdict: "failed", toolRun: { name: "semgrep", status: "failed", reason: `${prefix}${detail}` } };
-}
-function perFileErrors(raw) {
-  const errors = asArray(getProp(parseInputAsJson(raw), "errors"));
-  const out = [];
-  for (const entry of errors) {
-    const rawType = getProp(entry, "type");
-    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
-    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
-    const file = targetFileOf(entry, rawType);
-    if (file === null || /\.ya?ml$/i.test(file)) return null;
-    const message3 = getString(entry, "message") ?? type;
-    out.push({ file, type, message: message3.split(/\r?\n/)[0] ?? message3 });
-  }
-  return out.length > 0 ? out : null;
-}
-function targetFileOf(entry, rawType) {
-  const path6 = getString(entry, "path");
-  if (path6 !== void 0 && path6.length > 0) return path6;
-  const span = asArray(getProp(entry, "spans"))[0];
-  const spanFile = span === void 0 ? void 0 : getString(span, "file");
-  if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
-  if (Array.isArray(rawType)) {
-    const location = asArray(rawType[1])[0];
-    const locationPath = location === void 0 ? void 0 : getString(location, "path");
-    if (locationPath !== void 0 && locationPath.length > 0) return locationPath;
-  }
-  return null;
 }
 
 // src/surface/specDiscover.ts

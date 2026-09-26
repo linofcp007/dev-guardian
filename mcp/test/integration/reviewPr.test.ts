@@ -251,6 +251,42 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(res.coverage).not.toBe('full');
   });
 
+  // Follow-up X1: the shared judge's `partial` verdict — a changed file
+  // Semgrep only partly parsed is partial coverage, not a failed review.
+  it('a changed file Semgrep only partly parsed: ok, listed missing, the file named', async () => {
+    const dir = await repo('main', { 'app.php': '<?php\n' });
+    write(dir, 'app.php', '<?php\nconst NAMESPACE = 1;\n');
+    await commitAll(dir);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') {
+        const { out, targets } = semgrepTargets(call.args);
+        writeFileSync(
+          out,
+          JSON.stringify({
+            results: [],
+            errors: [{ level: 'warn', type: ['PartialParsing', []], message: 'Syntax error at line app.php:2', path: targets[0] }],
+            paths: { scanned: targets },
+          }),
+        );
+        return ok(0);
+      }
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      return ok();
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
+      | undefined;
+    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.reason).toMatch(/only partly parsed/);
+    expect(semgrep?.partially_parsed?.map((p) => p.file)).toEqual(['app.php']);
+    expect(res.missing_tools).toContain('semgrep');
+    expect(res.coverage).toBe('partial');
+  });
+
   it('one batch of files no rule targets does not fail a run whose other batches scanned', async () => {
     const dir = await repo('main', { 'keep.txt': 'x\n' });
     const long = 'a-rather-long-directory-name-to-push-the-command-line-over-the-limit';

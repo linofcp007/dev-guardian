@@ -8,10 +8,9 @@ import {
 import { git, splitNul } from '../runners/git.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
-import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { checkSemgrepReport, describePartialParse, pythonUtf8Env, type SemgrepVerdict } from '../runners/semgrepReport.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
-import type { ToolRun } from '../types.js';
+import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 
 export interface SemgrepRunOptions {
@@ -216,6 +215,10 @@ function countListedRouteTargets(projectPath: string, files: readonly string[], 
 }
 
 /**
+ * The surface's reading of the one Semgrep judge's verdict
+ * (`runners/semgrepReport.ts#checkSemgrepReport`, where the per-file
+ * classification now lives, shared with scan_sast and the batched runs):
+ *
  * - `ok`: the run scanned files and reported no error — its routes are the
  *   project's surface.
  * - `partial`: a clean exit that scanned files, where EVERY `errors[]` entry
@@ -223,8 +226,10 @@ function countListedRouteTargets(projectPath: string, files: readonly string[], 
  *   `PartialParsing`, a syntax error in one file). Partial coverage, not a
  *   failure: the snapshot persists, Semgrep reads `ok` and is also named in
  *   `missing_tools` (ran, with a narrower gap inside it), and the files are
- *   listed. Refusing a whole WordPress snapshot over one `const NAMESPACE`
- *   warning left scan_dast probing nothing on real PHP projects.
+ *   listed — on the snapshot and on the Semgrep run (`partially_parsed`),
+ *   which is what the CI gate's `--accept-partial-parse` reads. Refusing a
+ *   whole WordPress snapshot over one `const NAMESPACE` warning left
+ *   scan_dast probing nothing on real PHP projects.
  * - `scanned_nothing`: route-language targets exist, yet a clean run with no
  *   error scanned none of them (a `.semgrepignore` over the sources; a rule
  *   file the locale codec could not read loads as nothing, prints no error
@@ -236,20 +241,7 @@ function countListedRouteTargets(projectPath: string, files: readonly string[], 
  *   no target, one naming the rule file itself), or per-file errors on a run
  *   that scanned nothing. Nothing persisted.
  */
-export type SurfaceReportVerdict = 'ok' | 'partial' | 'scanned_nothing' | 'failed';
-
-/** A file Semgrep could only partly read, as its report names it (not yet project-relative). */
-export interface ReportedPartialParse {
-  file: string;
-  type: string;
-  message: string;
-}
-
-/**
- * Error types that describe the rules or the configuration, never one target
- * file — fatal wherever they appear, even when the entry carries a path.
- */
-const CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
+export type SurfaceReportVerdict = SemgrepVerdict;
 
 /**
  * Global Constraint 3 for the surface scan, as the controller ruled it for
@@ -268,14 +260,19 @@ export function judgeSurfaceReport(args: {
   via: string | null;
   targets: number;
   projectPath?: string;
-}): { verdict: SurfaceReportVerdict; toolRun: ToolRun; partial?: ReportedPartialParse[] } {
+}): { verdict: SurfaceReportVerdict; toolRun: ToolRun; partial?: PartialParse[] } {
   const { run, raw, via, targets, projectPath } = args;
-  const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets });
-  if (check.ok) return { verdict: 'ok', toolRun: buildToolRun(run, via ?? undefined) };
+  const check = checkSemgrepReport({
+    raw,
+    exitCode: run.exitCode,
+    outcome: run.outcome,
+    targets,
+    ...(projectPath !== undefined ? { projectPath } : {}),
+  });
+  if (check.verdict === 'ok') return { verdict: 'ok', toolRun: buildToolRun(run, via ?? undefined) };
 
   const prefix = via !== null ? `${via}: ` : '';
-  const exitClean = run.outcome === 'completed' || run.exitCode === 1;
-  if (exitClean && check.scanned === 0 && check.errors === 0) {
+  if (check.verdict === 'scanned_nothing') {
     return {
       verdict: 'scanned_nothing',
       toolRun: {
@@ -287,61 +284,22 @@ export function judgeSurfaceReport(args: {
       },
     };
   }
-  if (exitClean && check.scanned > 0 && check.errors > 0) {
-    const partial = perFileErrors(raw)?.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })) ?? null;
-    if (partial !== null) {
-      const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
-      return {
-        verdict: 'partial',
-        partial,
-        toolRun: {
-          name: 'semgrep',
-          status: 'ok',
-          reason:
-            `${via !== null ? `ran via ${via}; ` : ''}partial: ${partial.length} file(s) only partly parsed — ` +
-            `routes in the unparsed spans may be missing (${listed})`,
-        },
-      };
-    }
+  if (check.verdict === 'partial' && check.partial !== undefined) {
+    const partial = check.partial;
+    return {
+      verdict: 'partial',
+      partial,
+      toolRun: {
+        name: 'semgrep',
+        status: 'ok',
+        reason:
+          `${via !== null ? `ran via ${via}; ` : ''}` +
+          describePartialParse(partial, 'routes in the unparsed spans may be missing'),
+        partially_parsed: partial,
+      },
+    };
   }
   const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
   const detail = [check.reason ?? 'semgrep failed', ...(stderr !== undefined ? [stderr] : [])].join('; ');
   return { verdict: 'failed', toolRun: { name: 'semgrep', status: 'failed', reason: `${prefix}${detail}` } };
-}
-
-/**
- * Every `errors[]` entry as a per-file problem, or null when any one of them
- * is not: a config/rule error type, no target file named, or the file named
- * is a YAML file (the routes pack itself — the pack reads no YAML target).
- * The file comes from the entry's `path`, else its first span, else the
- * location list inside a `["PartialParsing", [...]]` type.
- */
-function perFileErrors(raw: string): ReportedPartialParse[] | null {
-  const errors = asArray(getProp(parseInputAsJson(raw), 'errors'));
-  const out: ReportedPartialParse[] = [];
-  for (const entry of errors) {
-    const rawType = getProp(entry, 'type');
-    const type =
-      typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
-    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
-    const file = targetFileOf(entry, rawType);
-    if (file === null || /\.ya?ml$/i.test(file)) return null;
-    const message = getString(entry, 'message') ?? type;
-    out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
-  }
-  return out.length > 0 ? out : null;
-}
-
-function targetFileOf(entry: unknown, rawType: unknown): string | null {
-  const path = getString(entry, 'path');
-  if (path !== undefined && path.length > 0) return path;
-  const span = asArray(getProp(entry, 'spans'))[0];
-  const spanFile = span === undefined ? undefined : getString(span, 'file');
-  if (spanFile !== undefined && spanFile.length > 0) return spanFile;
-  if (Array.isArray(rawType)) {
-    const location = asArray(rawType[1])[0];
-    const locationPath = location === undefined ? undefined : getString(location, 'path');
-    if (locationPath !== undefined && locationPath.length > 0) return locationPath;
-  }
-  return null;
 }

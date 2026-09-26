@@ -23,11 +23,16 @@
  * An exit code of 0 or 1 is necessary and never sufficient
  * (`runners/semgrepReport.ts`): a config that did not load scans nothing, a
  * file that did not parse is only partly analysed. Every run — native or the
- * Docker fallback — is judged by its report: no report, `paths.scanned`
- * empty, or a non-empty `errors[]` is not `ok`. A run that scanned nothing at
- * all (no file any rule applies to) is `skipped` and listed in
- * `missing_tools`; one with errors is `failed` with the errors as its reason.
- * The findings such a run did report are still recorded — they are real.
+ * Docker fallback — is judged by its report (the shared judge's verdict): no
+ * report, `paths.scanned` empty, or a non-empty `errors[]` is not complete. A
+ * run that scanned nothing at all (no file any rule applies to) is `skipped`
+ * and listed in `missing_tools`. A run whose only errors are per-file ones (a
+ * warn-level `PartialParsing` — PHP's `const NAMESPACE` on 1.176.1 — a syntax
+ * error in one file) is PARTIAL: `ok` and listed missing, the files named in
+ * its reason and `partially_parsed` (what the CI gate's
+ * `--accept-partial-parse` matches). Anything fatal is `failed` with the
+ * errors as its reason. The findings such a run did report are still
+ * recorded — they are real.
  *
  * ---- .NET: the SDK's own security analyzers, read from SARIF -----------
  *
@@ -84,6 +89,7 @@ import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
   buildSemgrepDockerArgs,
+  CONTAINER_PROJECT_ROOT,
   DEFAULT_SEMGREP_IMAGE,
   toContainerPath,
 } from '../runners/dockerScanner.js';
@@ -97,7 +103,7 @@ import {
 import type { ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
@@ -129,7 +135,8 @@ registerToolModule(
       'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
       '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
       "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
-      'nothing or reported errors is never reported as ok. Output JSON is written to ' +
+      'nothing or reported errors is never complete: a file it only partly parsed is partial ' +
+      'coverage, named. Output JSON is written to ' +
       '.guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads ' +
       'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
       'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
@@ -252,7 +259,7 @@ async function runSemgrep(args: Collect & {
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
-    recordSemgrepRun({ result, outFile, notes: plan.notes, via: null, tools_run, missing_tools, parser_inputs });
+    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: null, tools_run, missing_tools, parser_inputs });
     return;
   }
 
@@ -296,7 +303,7 @@ async function runSemgrep(args: Collect & {
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
-  recordSemgrepRun({ result, outFile, notes: plan.notes, via: `docker (${image})`, tools_run, missing_tools, parser_inputs });
+  recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, tools_run, missing_tools, parser_inputs });
 }
 
 /**
@@ -304,28 +311,47 @@ async function runSemgrep(args: Collect & {
  * Constraint 3) — never by the exit code alone. See the module comment.
  */
 function recordSemgrepRun(args: Collect & {
+  ctx: InvokeContext;
   result: ProcessRunResult;
   outFile: string;
   notes: readonly string[];
   /** `docker (<image>)` for the container fallback, else null. */
   via: string | null;
 }): void {
-  const { result, outFile, notes, via, tools_run, missing_tools, parser_inputs } = args;
+  const { ctx, result, outFile, notes, via, tools_run, missing_tools, parser_inputs } = args;
   const raw = readJsonSafe(outFile);
   // Whatever the verdict, the findings the report holds are real.
   if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
-  const check = checkSemgrepReport({ raw, exitCode: result.exitCode, outcome: result.outcome, targets: 1 });
+  const check = checkSemgrepReport({
+    raw,
+    exitCode: result.exitCode,
+    outcome: result.outcome,
+    targets: 1,
+    // The container fallback reports paths under its mount, not the host's.
+    projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
+  });
   const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes];
 
-  if (check.ok) {
+  if (check.verdict === 'ok') {
     const run: ToolRun = { name: 'semgrep', status: 'ok' };
     if (reasons.length > 0) run.reason = reasons.join('; ');
     tools_run.push(run);
     return;
   }
-  const exitClean = result.outcome === 'completed' || result.exitCode === 1;
-  const nothingScanned = exitClean && raw !== null && check.scanned === 0 && check.errors === 0;
-  if (nothingScanned) {
+  if (check.verdict === 'partial' && check.partial !== undefined) {
+    // Partial coverage (the module comment): ran, with a narrower gap inside
+    // it — `ok` AND missing, the files named on the run for the CI gate's
+    // --accept-partial-parse.
+    tools_run.push({
+      name: 'semgrep',
+      status: 'ok',
+      reason: [...reasons, describePartialParse(check.partial, 'findings in the unparsed spans may be missing')].join('; '),
+      partially_parsed: check.partial,
+    });
+    missing_tools.push('semgrep');
+    return;
+  }
+  if (check.verdict === 'scanned_nothing') {
     // No file in the project is one any loaded rule applies to: a gap, not
     // a clean result — and not a broken scanner either.
     tools_run.push({
@@ -432,8 +458,9 @@ async function runSemgrepOnScope(args: Collect & {
   const entry: ToolRun = { ...run.toolRun };
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
   tools_run.push(entry);
-  // No rule applied to any file in scope: a gap, not a clean result.
-  if (run.nothingScanned) missing_tools.push('semgrep');
+  // No rule applied to any file in scope: a gap, not a clean result. Files
+  // only partly parsed: ran, with a narrower gap inside it (`ok` + missing).
+  if (run.nothingScanned || (entry.status === 'ok' && run.partial.length > 0)) missing_tools.push('semgrep');
 }
 
 /** Bandit over a scope's `.py` files; no entry at all when it holds none. */

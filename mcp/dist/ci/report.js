@@ -75,6 +75,17 @@ export function renderHuman(v) {
         for (const gap of v.coverageGaps)
             lines.push(`  - ${gap}`);
     }
+    // `--accept-partial-parse`: gaps the caller accepted, printed as such —
+    // never as coverage gaps, never silently. `coverage:` above still says
+    // `partial` for them.
+    if (v.acceptedGaps.length > 0) {
+        lines.push('accepted (--accept-partial-parse):');
+        for (const gap of v.acceptedGaps)
+            lines.push(`  - ${gap}`);
+    }
+    for (const path of v.unusedPartialParseAcceptances) {
+        lines.push(`note: --accept-partial-parse ${path}: no step reported it partly parsed (unused)`);
+    }
     if (v.blocking.length > 0) {
         lines.push('blocking findings:');
         for (const f of v.blocking)
@@ -103,6 +114,8 @@ export function renderJson(v) {
         new_findings: v.newFindings,
         blocking_findings: v.blocking,
         baseline_absent: v.baselineAbsent,
+        accepted_gaps: v.acceptedGaps,
+        unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
     };
     return JSON.stringify(payload, null, 2);
 }

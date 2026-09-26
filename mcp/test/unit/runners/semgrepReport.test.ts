@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkSemgrepReport } from '../../../src/runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse } from '../../../src/runners/semgrepReport.js';
 
 const report = (over: Record<string, unknown> = {}): string =>
   JSON.stringify({ results: [], errors: [], paths: { scanned: ['a.py'] }, ...over });
@@ -14,6 +14,7 @@ describe('checkSemgrepReport', () => {
   it('accepts exit 0 with files scanned and no errors', () => {
     expect(checkSemgrepReport({ raw: report(), exitCode: 0, outcome: 'completed', targets: 1 })).toEqual({
       ok: true,
+      verdict: 'ok',
       scanned: 1,
       errors: 0,
     });
@@ -65,5 +66,105 @@ describe('checkSemgrepReport', () => {
     const r = checkSemgrepReport({ raw: report(), exitCode: null, outcome: 'timed_out', targets: 1 });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/timed_out/);
+  });
+});
+
+/**
+ * Follow-up X1: the per-file / warn-level classification `map_attack_surface`
+ * had on its own now lives in the one judge, as a `partial` verdict, so
+ * scan_sast, map_attack_surface and the batched runs agree: `paths.scanned > 0`
+ * with only per-file non-fatal errors is partial coverage with the files
+ * named; anything fatal stays `failed`. `ok` stays true only for a complete
+ * run — a caller that reads nothing else keeps failing a partial one.
+ */
+describe('checkSemgrepReport verdicts: ok, partial, scanned_nothing, failed', () => {
+  // Verbatim from Semgrep 1.176.1 over the WordPress fixture (`const NAMESPACE`).
+  const WORDPRESS_WARNING = {
+    code: 3,
+    level: 'warn',
+    type: ['PartialParsing', [{ path: 'rest-controller.php', start: { line: 20, col: 2, offset: 0 }, end: { line: 20, col: 34, offset: 32 } }]],
+    message: "Syntax error at line rest-controller.php:20:\n `const NAMESPACE = 'guardian/v2';` was unexpected",
+    path: 'rest-controller.php',
+    spans: [{ file: 'rest-controller.php', start: { line: 20, col: 2, offset: 0 }, end: { line: 20, col: 34, offset: 32 } }],
+  };
+  const check = (over: Record<string, unknown>, exitCode = 0, targets = 1) =>
+    checkSemgrepReport({ raw: report(over), exitCode, outcome: exitCode === 0 ? 'completed' : 'failed', targets });
+
+  it('partial: a warn-level PartialParsing on a scanned file — not ok, the file named', () => {
+    const r = check({ paths: { scanned: ['rest-controller.php'] }, errors: [WORDPRESS_WARNING] });
+    expect(r.ok).toBe(false);
+    expect(r.verdict).toBe('partial');
+    expect(r.partial).toEqual([
+      { file: 'rest-controller.php', type: 'PartialParsing', message: 'Syntax error at line rest-controller.php:20:' },
+    ]);
+    // The reason still says what happened, for callers that print it.
+    expect(r.reason).toMatch(/1 Semgrep error/);
+  });
+
+  it('partial on exit 1 too (findings beside the warning), and for a per-file error named only by a span', () => {
+    const r = check(
+      { paths: { scanned: ['a.js', 'b.js'] }, errors: [{ level: 'error', type: 'Syntax error', message: 'bad', spans: [{ file: 'b.js' }] }] },
+      1,
+    );
+    expect(r.verdict).toBe('partial');
+    expect(r.partial?.map((p) => p.file)).toEqual(['b.js']);
+  });
+
+  it('partial names the files project-relative when given the project', () => {
+    const r = checkSemgrepReport({
+      raw: report({ paths: { scanned: ['/p/wp.php'] }, errors: [{ ...WORDPRESS_WARNING, path: '/p/wp.php', type: ['PartialParsing', []], spans: [] }] }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      projectPath: '/p',
+    });
+    expect(r.partial?.map((p) => p.file)).toEqual(['wp.php']);
+  });
+
+  it('scanned_nothing: a clean exit, no error, nothing scanned although there were targets', () => {
+    expect(check({ paths: { scanned: [] } }, 0, 2).verdict).toBe('scanned_nothing');
+    // No targets asked for: nothing to scan is no gap.
+    expect(check({ paths: { scanned: [] } }, 0, 0).verdict).toBe('ok');
+  });
+
+  it.each([
+    ['a rule error, even naming a target', { level: 'error', type: 'Rule parse error', message: 'bad pattern', path: 'a.js' }],
+    ['an invalid rule schema', { level: 'error', type: 'InvalidRuleSchemaError', message: '' }],
+    ['a SemgrepError', { level: 'error', type: 'SemgrepError', message: 'invalid configuration file found' }],
+    ['an error tied to no target file', { level: 'warn', type: 'Timeout', message: 'rule timed out' }],
+    ['an error naming a YAML file (it cannot be told from the rule pack)', { level: 'warn', type: 'Other syntax error', message: 'x', path: 'rules.yml' }],
+  ])('failed: %s is fatal, even beside a per-file one', (_label, fatal) => {
+    const r = check({ paths: { scanned: ['rest-controller.php'] }, errors: [WORDPRESS_WARNING, fatal] });
+    expect(r.verdict).toBe('failed');
+    expect(r.partial).toBeUndefined();
+  });
+
+  it('failed: per-file errors on a run that scanned nothing, on an unclean exit, or on a run that did not finish', () => {
+    expect(check({ paths: { scanned: [] }, errors: [WORDPRESS_WARNING] }).verdict).toBe('failed');
+    expect(check({ paths: { scanned: ['rest-controller.php'] }, errors: [WORDPRESS_WARNING] }, 2).verdict).toBe('failed');
+    const timedOut = checkSemgrepReport({
+      raw: report({ paths: { scanned: ['rest-controller.php'] }, errors: [WORDPRESS_WARNING] }),
+      exitCode: null,
+      outcome: 'timed_out',
+      targets: 1,
+    });
+    expect(timedOut.verdict).toBe('failed');
+  });
+});
+
+describe('describePartialParse', () => {
+  it('names every file and its error type, and what may be missing', () => {
+    expect(
+      describePartialParse(
+        [
+          { file: 'rest-controller.php', type: 'PartialParsing', message: 'x' },
+          { file: 'b.js', type: 'Syntax error', message: 'y' },
+        ],
+        'findings in the unparsed spans may be missing',
+      ),
+    ).toBe(
+      'partial: 2 file(s) only partly parsed — findings in the unparsed spans may be missing ' +
+        '(PartialParsing: rest-controller.php; Syntax error: b.js)',
+    );
   });
 });

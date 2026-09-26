@@ -289,6 +289,17 @@ keeps working (migrations 004–011 are additive).
   are written by hand. `mcp/test/docs/docs.test.ts` holds every tool,
   resource, skill and command count the READMEs, CLAUDE.md and
   `mcp/README.md` state to the code.
+- **`dev-guardian scan --accept-partial-parse <path>`** (repeatable, command
+  line only — a `.guardian/ci.json` declaring `accept_partial_parse` is
+  refused, like `start_command`). When every file a Semgrep step could only
+  partly parse is named, that gap prints as "accepted" (JSON `accepted_gaps`)
+  and no longer forces exit 2; coverage still reads `partial` in the report,
+  the JSON and the SARIF. Paths are project-relative and matched exactly. A
+  skipped, failed or scanned-nothing Semgrep, or any file not named, still
+  exits 2; with `--base-url` the DAST step's `partial-surface` gap is accepted
+  with the same files. A WordPress plugin with PHP's legal `const NAMESPACE`
+  (a Semgrep 1.176.1 `PartialParsing` warning) can now pass the gate once the
+  gap has been looked at. See `docs/ci.md`.
 
 ### Changed
 
@@ -981,6 +992,15 @@ keeps working (migrations 004–011 are additive).
   --others --exclude-standard` there (Semgrep's default ignore still applied
   when there is no `.semgrepignore`): such a project is not applicable, never a
   gap. Outside git the walk is unchanged.
+- **`scan_sast` read a file Semgrep only partly parsed as a failed scanner**
+  (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`), while
+  `map_attack_surface` read the same warning as partial coverage. The per-file
+  classification now lives in the shared Semgrep judge
+  (`runners/semgrepReport.ts`, a `partial` verdict), used by `scan_sast`,
+  `map_attack_surface` and the batched scoped runs (`scan_sast`/`bug_hunt`
+  with `scope`, `review_pr`): `paths.scanned > 0` with only per-file errors is
+  partial coverage — Semgrep `ok` and listed missing, the files named in
+  `tools_run[].partially_parsed`; fatal errors stay `failed`.
 
 ### Security
 

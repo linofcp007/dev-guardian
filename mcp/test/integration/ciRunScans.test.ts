@@ -206,6 +206,69 @@ describe('runScans', () => {
     expect(inputs[1]?.['local_only']).toBeUndefined();
   });
 
+  // Follow-up X1: the files a step's scanner only partly parsed travel to the
+  // gate — per missing name, so `--accept-partial-parse` can be matched
+  // against exactly the gap they cause.
+  it('carries each step\'s partly parsed files into partial_parses, per missing name', async () => {
+    const partial = (file: string) => ({ file, type: 'PartialParsing', message: 'Syntax error' });
+    mockTool('security_scan_full', async () =>
+      ok({
+        tools_run: [
+          { name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [partial('wp/a.php'), partial('b.js')] },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      }),
+    );
+    mockTool('map_attack_surface', async () =>
+      ok({
+        tools_run: [{ name: 'semgrep', status: 'ok', partially_parsed: [partial('wp/a.php')] }],
+        missing_tools: ['semgrep'],
+        partially_parsed: [partial('wp/a.php')],
+      }),
+    );
+    mockTool('scan_dast', async () =>
+      ok({
+        tools_run: [{ name: 'guardian-dast', status: 'ok' }],
+        missing_tools: ['guardian-dast:partial-surface'],
+        summary: { surface_gaps: { missing_tools: ['semgrep'], partially_parsed: [partial('wp/a.php')] } },
+      }),
+    );
+    mockTool('license_compatibility', async () =>
+      ok({
+        // Not missing: a partial list on a run whose name is not a gap names no gap.
+        tools_run: [{ name: 'trivy', status: 'ok', partially_parsed: [partial('x')] }],
+        missing_tools: [],
+      }),
+    );
+
+    const { steps } = await runScans({ projectPath: makeProjectDir(), baseUrl: 'https://example.test' });
+    const of = (tool: string) => steps.find((s) => s.tool === tool);
+    expect(of('security_scan_full')?.partial_parses).toEqual({ semgrep: ['wp/a.php', 'b.js'] });
+    expect(of('map_attack_surface')?.partial_parses).toEqual({ semgrep: ['wp/a.php'] });
+    expect(of('scan_dast')?.partial_parses).toEqual({ 'guardian-dast:partial-surface': ['wp/a.php'] });
+    expect(of('license_compatibility')?.partial_parses).toBeUndefined();
+    expect(of('detect_stack')?.partial_parses).toBeUndefined();
+  });
+
+  it('never carries a DAST surface gap that is more than a partial parse', async () => {
+    const partial = { file: 'wp/a.php', type: 'PartialParsing', message: 'x' };
+    for (const surface_gaps of [
+      // Its route recovery failed too: routes were lost to something no one accepted.
+      { missing_tools: ['semgrep'], partially_parsed: [partial], failed_steps: [{ name: 'semgrep-metavar-recovery', status: 'failed' }] },
+      // Another scanner missing from the surface.
+      { missing_tools: ['semgrep', 'other'], partially_parsed: [partial] },
+      // No file at all.
+      { missing_tools: ['semgrep'], partially_parsed: [] },
+    ]) {
+      mockTool('scan_dast', async () =>
+        ok({ tools_run: [{ name: 'guardian-dast', status: 'ok' }], missing_tools: ['guardian-dast:partial-surface'], summary: { surface_gaps } }),
+      );
+      const { steps } = await runScans({ projectPath: makeProjectDir(), baseUrl: 'https://example.test' });
+      expect(steps.find((s) => s.tool === 'scan_dast')?.partial_parses).toBeUndefined();
+    }
+  });
+
   it('does NOT abort when a step refuses — it records and continues', async () => {
     // The wrong implementation stops at the first refusal and reports LESS
     // than one that continues and says what it missed — every step after
