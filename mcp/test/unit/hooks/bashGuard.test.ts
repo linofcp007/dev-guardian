@@ -763,6 +763,17 @@ describe('assessBashCommand — a special file or link onto the hook configurati
     'mknod .guardian/hooks.config.json p',
     'ln -s /dev/zero ~/.config/dev-guardian/hooks.json',
     'New-Item -ItemType SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\big.bin',
+    // fix round 3: unquoted Windows absolute paths (the tokenizer drops `\`),
+    // cmd's mklink, the `-Param:value` spelling, and ln's -t directory form.
+    'New-Item -ItemType SymbolicLink -Path C:\\proj\\.guardian\\hooks.config.json -Target \\\\.\\pipe\\x',
+    'New-Item -ItemType:SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\big.bin',
+    'New-Item -Path:.guardian\\hooks.config.json -ItemType HardLink -Value C:\\big.bin',
+    'cmd /c mklink .guardian\\hooks.config.json \\\\.\\pipe\\x',
+    'cmd /c "mklink .guardian\\hooks.config.json \\\\.\\pipe\\x"',
+    'cmd.exe /c mklink C:\\proj\\.guardian\\hooks-allowlist.json C:\\big.bin',
+    'ln -s /dev/zero C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    'ln -s /tmp/x/hooks.config.json -t .guardian',
+    'mkfifo -m 600 .guardian/hooks.config.json',
   ];
   it.each(blocked)('blocks %s', (command) => {
     const a = assessBashCommand(command);
@@ -777,6 +788,12 @@ describe('assessBashCommand — a special file or link onto the hook configurati
     'cat .guardian/hooks.config.json',
     'New-Item -ItemType File -Path notes.txt',
     'New-Item -ItemType SymbolicLink -Path latest -Target builds\\v2',
+    // fix round 3: the hook config as the link's SOURCE is not a write to it.
+    'ln -s ~/.config/dev-guardian/hooks.json ~/backup/hooks.json',
+    'ln -s .guardian/hooks.config.json backup.json',
+    'cmd /c mklink backup.json .guardian\\hooks.config.json',
+    'New-Item -ItemType SymbolicLink -Path backup.json -Target .guardian\\hooks.config.json',
+    'New-Item -ItemType File -Path .guardian\\hooks.config.json',
   ];
   it.each(allowed)('does not flag %s', (command) => {
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');

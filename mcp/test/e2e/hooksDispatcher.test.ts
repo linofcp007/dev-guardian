@@ -525,7 +525,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
 
     it('a UTF-8 byte-order mark does not make a project config unreadable (PowerShell 5 writes one)', () => {
-      writeFileSync(join(guardianDir(), 'hooks.config.json'), '﻿' + JSON.stringify({ secrets: { block: true } }), 'utf8');
+      writeFileSync(join(guardianDir(), 'hooks.config.json'), '\uFEFF' + JSON.stringify({ secrets: { block: true } }), 'utf8');
       expect(decision(tokenWrite())).toBe('deny');
     });
   });
