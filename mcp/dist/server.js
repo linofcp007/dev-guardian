@@ -58902,11 +58902,19 @@ registerToolModule(tool32);
 async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  const hasProject = inp.project_path !== void 0 && inp.project_path.length > 0;
   const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
-  if (installProblem !== null) return failDomain22("unsupported_target", installProblem);
+  if (installProblem !== null && !hasProject) return failDomain22("unsupported_target", installProblem);
+  const warnings = [];
+  if (installProblem !== null) {
+    warnings.push(
+      `${installProblem} The installed version was not detected (the WP-CLI probe was skipped); the CVE lookup used project_path.`
+    );
+  }
+  const probePath = installProblem === null ? inp.wp_install_path : void 0;
   let projectPath;
   const rawProject = inp.project_path ?? inp.wp_install_path;
-  if (inp.project_path !== void 0 && inp.project_path.length > 0) {
+  if (inp.project_path !== void 0 && hasProject) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
@@ -58919,7 +58927,7 @@ async function handler29(input, ctx) {
   }
   let installedVersion = null;
   let active = null;
-  if (inp.wp_install_path) {
+  if (probePath !== void 0 && probePath.length > 0) {
     const wpBin = await scannerAvailable("wp");
     if (wpBin) {
       const r = await runProcess({
@@ -58927,12 +58935,12 @@ async function handler29(input, ctx) {
         args: [
           "plugin",
           "list",
-          `--path=${inp.wp_install_path}`,
+          `--path=${probePath}`,
           `--name=${inp.slug}`,
           "--fields=name,status,version",
           "--format=json"
         ],
-        cwd: inp.wp_install_path,
+        cwd: probePath,
         timeoutMs: 3e4
       });
       if (r.outcome === "completed") {
@@ -58985,6 +58993,7 @@ async function handler29(input, ctx) {
     active,
     known_cves: knownCves,
     cve_count: knownCves.length,
+    warnings,
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
 }

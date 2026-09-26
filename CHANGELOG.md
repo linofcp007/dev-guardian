@@ -967,6 +967,10 @@ keeps working (migrations 004–011 are additive).
   link out of the project is still refused, mid-path included; one reached
   through an untracked junction now says to add it to `.gitignore` or pass
   `scope.diff.include_untracked: false`.
+- **`wp_plugin_check` refused a call whose `project_path` was valid** because
+  a decorative `wp_install_path` beside it was relative and absent. The lookup
+  is keyed on `project_path`; the WP-CLI version probe is now skipped with a
+  warning instead.
 
 ### Security
 
