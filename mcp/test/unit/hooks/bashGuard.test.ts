@@ -1053,10 +1053,287 @@ describe('assessBashCommand — a shell write onto the hook configuration (M5)',
     'npm test > .guardian/test.log 2>&1',
     'tee /tmp/x < .guardian/hooks.config.json',
     'Get-Content .guardian\\hooks.config.json | Out-File C:\\tmp\\copy.json',
-    'mv .guardian/hooks.config.json /tmp/hooks.config.json.bak',
     'curl -o out.json https://example.test/.guardian/hooks.config.json',
   ];
   it.each(allowed)('does not flag %j', (command) => {
     expect(assessBashCommand(command).rules).not.toContain('guard-config-shell-write');
+  });
+});
+
+// Follow-up Part Y: the "Known limits" docs/hooks.md listed after M5, closed
+// where a reasonable check exists. Every deny below comes with ordinary
+// commands of the same shape that must stay allowed: this guard runs on
+// every Bash and PowerShell call, so a false positive costs as much as a miss.
+describe('assessBashCommand — the hook configuration: the shapes M5 left open (Part Y)', () => {
+  const expectBlocked = (command: string, rule: string): void => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain(rule);
+  };
+  const GUARD_RULES = [
+    'guard-config-shell-write',
+    'guard-config-remove',
+    'guard-config-dir-replace',
+    'guard-config-inline-code',
+    'guard-config-special-file',
+    'claude-settings-loosen',
+  ];
+  const expectNotGuarded = (command: string): void => {
+    const rules = assessBashCommand(command).rules;
+    for (const r of GUARD_RULES) expect(rules).not.toContain(r);
+  };
+
+  describe('a whole directory moved or copied onto a config directory', () => {
+    it.each([
+      'mv /tmp/cfg ~/.config/dev-guardian',
+      'mv /tmp/cfg ~/.config/dev-guardian/',
+      'mv .guardian.bak .guardian',
+      'cp -r /tmp/cfg ~/.config/dev-guardian',
+      'cp -R /tmp/cfg/. .guardian',
+      'cp -a /tmp/cfg .guardian/',
+      'cp -rf /tmp/cfg "$HOME/.config/dev-guardian"',
+      'rsync -a /tmp/cfg/ ~/.config/dev-guardian/',
+      'rsync -av --delete src/ .guardian',
+      'Move-Item C:\\tmp\\cfg -Destination $HOME\\.config\\dev-guardian',
+      'Copy-Item -Recurse C:\\tmp\\cfg -Destination .guardian',
+      'robocopy C:\\tmp\\cfg C:\\Users\\me\\.config\\dev-guardian /E',
+      'xcopy /E /I C:\\tmp\\cfg .guardian',
+      'cd ~/.config && mv /tmp/cfg dev-guardian',
+    ])('blocks %j', (command) => expectBlocked(command, 'guard-config-dir-replace'));
+
+    it.each([
+      // a file copied or moved INTO the directory (a copy of a file cannot replace it)
+      'cp /tmp/cfg/* ~/.config/dev-guardian/',
+      'cp -t .guardian /tmp/cfg/*.json',
+    ])('blocks a glob that can name a config file: %j', (command) => expectBlocked(command, 'guard-config-shell-write'));
+
+    it.each([
+      'cp baseline.json .guardian/',
+      'cp /tmp/x/*.txt .guardian/',
+      'mv report.json reports/',
+      'rsync -a src/ build/',
+      'cp -r src dist',
+      'cp -r .guardian /tmp/guardian-backup',
+      'rsync -a ~/.config/dev-guardian/ /tmp/backup/',
+      'cp -r fixtures/reports .guardian/reports',
+      'Copy-Item -Recurse src -Destination dist',
+      'robocopy C:\\src C:\\dst /E',
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  describe('rsync, perl -pi, sort -o, truncate and friends onto a config file', () => {
+    it.each([
+      'rsync /tmp/hooks.json ~/.config/dev-guardian/hooks.json',
+      'rsync -a /tmp/hooks.config.json .guardian/',
+      'rsync -e ssh host:/cfg/hooks.json ~/.config/dev-guardian/hooks.json',
+      "perl -pi -e 's/true/false/' ~/.config/dev-guardian/hooks.json",
+      "perl -i.bak -pe 's/a/b/' .guardian/hooks.config.json",
+      "perl -0777 -pi -e 's/x/y/g' .guardian/hooks-allowlist.json",
+      "ruby -pi -e 'gsub(/a/, \"b\")' .guardian/hooks.config.json",
+      'sort -o ~/.config/dev-guardian/hooks.json /tmp/x',
+      'sort -u --output=.guardian/hooks-allowlist.json a b',
+      'truncate -s 0 ~/.config/dev-guardian/hooks.json',
+      'echo x | sponge .guardian/hooks.config.json',
+      'Clear-Content .guardian\\hooks.config.json',
+      "New-Item -ItemType File -Force -Path $HOME\\.config\\dev-guardian\\hooks.json -Value '{}'",
+      'ln -s /dev/zero .guardian/hooks.config.json 2>/dev/null',
+    ])('blocks %j', (command) => {
+      const a = assessBashCommand(command);
+      expect(a.level).toBe('block');
+      expect(a.rules.some((r) => r === 'guard-config-shell-write' || r === 'guard-config-special-file')).toBe(true);
+    });
+
+    it.each([
+      'sort -o out.txt in.txt',
+      'sort -u .guardian/hooks-allowlist.json',
+      "perl -pi -e 's/a/b/' src/*.ts",
+      "perl -ne 'print if /hooks/' .guardian/hooks.config.json",
+      "ruby -e 'puts File.read(\".guardian/hooks.config.json\").size' ",
+      'truncate -s 0 build.log',
+      'rsync -a src/ build/',
+      'New-Item -ItemType File -Path notes.txt',
+      'New-Item -ItemType Directory -Path .guardian',
+    ])('does not flag %j', (command) => {
+      const rules = assessBashCommand(command).rules;
+      expect(rules).not.toContain('guard-config-shell-write');
+      expect(rules).not.toContain('guard-config-special-file');
+    });
+  });
+
+  describe('removing or moving away a config file', () => {
+    it.each([
+      'rm ~/.config/dev-guardian/hooks.json',
+      'rm -f .guardian/hooks.config.json',
+      'rm -rf ~/.config/dev-guardian',
+      'rm ~/.config/dev-guardian/*',
+      'unlink .guardian/hooks-allowlist.json',
+      'del .guardian\\hooks.config.json',
+      'Remove-Item -Path $HOME\\.config\\dev-guardian\\hooks.json -Force',
+      'Remove-Item -LiteralPath "C:\\Users\\me\\CLAUDE SKILLS\\p\\.guardian\\hooks.config.json"',
+      'ri .guardian\\hooks-allowlist.json',
+      'cmd /c del .guardian\\hooks.config.json',
+      'cmd /c "del /f /q %USERPROFILE%\\.config\\dev-guardian\\hooks.json"',
+      'shred -u .guardian/hooks.config.json',
+      'mv ~/.config/dev-guardian/hooks.json /tmp/',
+      'mv .guardian/hooks.config.json /tmp/hooks.config.json.bak',
+      'ren .guardian\\hooks.config.json old.json',
+      'Rename-Item -Path .guardian\\hooks.config.json -NewName x.json',
+      '[System.IO.File]::Delete(".guardian\\hooks.config.json")',
+    ])('blocks %j', (command) => expectBlocked(command, 'guard-config-remove'));
+
+    it.each([
+      // The project's whole `.guardian` directory also holds the scan
+      // database: removing it is how a project resets dev-guardian's state,
+      // and the project config it deletes could only make the guard stricter.
+      'rm -rf .guardian',
+      'rm -rf wordpress/plugin/.guardian',
+      'rm .guardian/guardian.db',
+      'rm -rf node_modules',
+      'rm hooks.json',
+      'rm -f /tmp/hooks.config.json',
+      'Remove-Item -Recurse -Force dist',
+      'mv .guardian/baseline.json /tmp/',
+      'git rm -rq --cached .guardian',
+      'rm -rf dist',
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  describe('a cd into the config directory, then a relative write', () => {
+    it.each([
+      [`cd ~/.config/dev-guardian && echo '{"enabled":false}' > hooks.json`, 'guard-config-shell-write'],
+      [`cd .guardian; echo '[]' > hooks-allowlist.json`, 'guard-config-shell-write'],
+      ['pushd ~/.config/dev-guardian && cp /tmp/x.json hooks.json && popd', 'guard-config-shell-write'],
+      [`Set-Location $HOME\\.config\\dev-guardian; Set-Content hooks.json '{}'`, 'guard-config-shell-write'],
+      ['cd ~/.config && echo x > dev-guardian/hooks.json', 'guard-config-shell-write'],
+      ['cd ~ && cd .config/dev-guardian && tee hooks.json < /tmp/x', 'guard-config-shell-write'],
+      ['cd .guardian/sub && echo x > ../hooks.config.json', 'guard-config-shell-write'],
+      ['cd "$HOME/.config/dev-guardian"\nrm hooks.json', 'guard-config-remove'],
+      ['cd .guardian && mkfifo hooks.config.json', 'guard-config-special-file'],
+      ['cmd /c "cd /d %USERPROFILE%\\.config\\dev-guardian && echo {} > hooks.json"', 'guard-config-shell-write'],
+      [`bash -c 'cd .guardian && echo x > hooks.config.json'`, 'guard-config-shell-write'],
+      ['if true; then cd .guardian; fi; echo x > hooks.config.json', 'guard-config-shell-write'],
+    ])('blocks %j', (command, rule) => expectBlocked(command, rule));
+
+    it.each([
+      'cd .guardian && ls',
+      'cd .guardian && cat hooks.config.json > /tmp/x.json',
+      'cd ~/.config/dev-guardian && cp hooks.json /tmp/hooks.json.bak',
+      'cd src && echo x > hooks.json',
+      'cd .guardian && cd .. && echo x > hooks.json',
+      'cd /tmp && echo x > hooks.config.json',
+      'cd .guardian && cp guardian.db /tmp/g.db',
+      'pushd .guardian && ls && popd && echo x > hooks.config.json',
+      'cd packages/web && npm install && npm test > test.log 2>&1',
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  describe('inline interpreter code that names a hook config path', () => {
+    const encoded = Buffer.from('Set-Content .guardian\\hooks.config.json x', 'utf16le').toString('base64');
+    it.each([
+      `node -e "require('fs').writeFileSync(require('os').homedir()+'/.config/dev-guardian/hooks.json','{}')"`,
+      `node -e "fs.writeFileSync(path.join(os.homedir(), '.config', 'dev-guardian', 'hooks.json'), '{}')"`,
+      `node --eval "require('fs').unlinkSync('.guardian/hooks.config.json')"`,
+      `node -p "require('fs').writeFileSync('.guardian/hooks-allowlist.json', '[1]')"`,
+      `nodejs --eval="require('fs').rmSync('.guardian/hooks.config.json')"`,
+      `python -c "open('.guardian/hooks.config.json','w').write('{}')"`,
+      `python3 -c "import pathlib; pathlib.Path.home().joinpath('.config/dev-guardian/hooks.json').write_text('{}')"`,
+      `py -3 -c "open(r'C:\\Users\\me\\.config\\dev-guardian\\hooks.json','w').write('{}')"`,
+      `python3 -c "import os, shutil; shutil.rmtree(os.path.expanduser('~/.config/dev-guardian'))"`,
+      `perl -e 'open(my $f, ">", "$ENV{HOME}/.config/dev-guardian/hooks.json"); print $f "{}"'`,
+      `ruby -e 'File.write(File.expand_path("~/.config/dev-guardian/hooks.json"), "{}")'`,
+      `php -r 'file_put_contents(".guardian/hooks.config.json", "{}");'`,
+      `bun -e "await Bun.write('.guardian/hooks.config.json', '{}')"`,
+      `deno eval "Deno.writeTextFileSync('.guardian/hooks.config.json', '{}')"`,
+      `uv run python -c "open('.guardian/hooks.config.json','w').write('{}')"`,
+      `sudo python3 -c "open('/home/me/.config/dev-guardian/hooks.json','w').write('{}')"`,
+      `python - <<'EOF'\nopen('.guardian/hooks.config.json', 'w').write('{}')\nEOF`,
+      `node <<'EOF'\nrequire('fs').writeFileSync('.guardian/hooks-allowlist.json', '[]')\nEOF`,
+      `echo "open('.guardian/hooks.config.json','w').write('{}')" | python3`,
+      `pwsh -c "[IO.File]::WriteAllText('.guardian\\hooks.config.json', '{}')"`,
+      `powershell -NoProfile -Command "Set-Content -Path (Join-Path $HOME '.config\\dev-guardian\\hooks.json') -Value '{}'"`,
+      `pwsh -NoProfile -EncodedCommand ${encoded}`,
+    ])('blocks %j', (command) => {
+      const a = assessBashCommand(command);
+      expect(a.level).toBe('block');
+      expect(a.rules.some((r) => r === 'guard-config-inline-code' || r === 'guard-config-shell-write')).toBe(true);
+    });
+
+    it.each([
+      `[IO.File]::WriteAllText("$HOME\\.config\\dev-guardian\\hooks.json", '{"enabled":false}')`,
+      `[System.IO.File]::AppendAllText('.guardian\\hooks-allowlist.json', 'x')`,
+      `[IO.File]::Copy('C:\\tmp\\x.json', '.guardian\\hooks.config.json', $true)`,
+      `powershell -NoProfile -Command Set-Content .guardian\\hooks.config.json '{}'`,
+      `cmd /c "echo {} > .guardian\\hooks.config.json"`,
+      `cmd /c "echo {\\"enabled\\":false}>%USERPROFILE%\\.config\\dev-guardian\\hooks.json"`,
+      `cmd /c "type nul > .guardian\\hooks-allowlist.json"`,
+      `cmd /c "cd /d C:\\p && copy /Y C:\\tmp\\x.json .guardian\\hooks.config.json"`,
+    ])('blocks a PowerShell or cmd write %j', (command) => expectBlocked(command, 'guard-config-shell-write'));
+
+    it.each([
+      `node -e "console.log(require('./package.json').version)"`,
+      `python -c "import json; print(json.load(open('x.json')))"`,
+      `node -e "console.log(process.env.HOME)"`,
+      `python -c "print('.guardian/hooks.config.json is the project config file, see the docs')"`,
+      `python -c "import sqlite3; sqlite3.connect('.guardian/guardian.db')"`,
+      `node -e "const p = require('path').join('.guardian', 'guardian.db'); console.log(p)"`,
+      `node -e "console.log(require('path').join(__dirname, 'hooks', 'hooks.json'))"`,
+      `perl -ne 'print if /hooks/' README.md`,
+      `powershell -Command "Get-ChildItem .guardian"`,
+      `[IO.File]::ReadAllText('.guardian\\hooks.config.json')`,
+      `[IO.File]::WriteAllText('out.txt', 'x')`,
+      `echo "[IO.File]::WriteAllText('.guardian\\hooks.config.json', 'x')"`,
+      `cmd /c "echo hi > out.txt"`,
+      `cmd /c "npm run build > build.log 2>&1"`,
+      `python - <<'EOF'\nimport json\nprint(json.load(open('package.json'))['name'])\nEOF`,
+      `git commit -m "node -e writes .guardian/hooks.config.json no more"`,
+      `python3 - <<'EOF'\ns = open('docs/hooks.md').read()\ns = s.replace("| \`.guardian/hooks.config.json\` (project) | old |", "| \`.guardian/hooks.config.json\` (project) | new |")\nopen('docs/hooks.md', 'w').write(s)\nEOF`,
+      // Python has no backtick strings, and a ''' string may hold apostrophes.
+      `python3 - <<'EOF'\nnew = '''/**\n * The project's file (\`.guardian/hooks.config.json\`) may only tighten it.\n */'''\nprint(new)\nEOF`,
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  describe("a shell write of Claude Code's settings with a key that switches the hooks off", () => {
+    it.each([
+      `jq '.disableAllHooks = true' .claude/settings.json > tmp && mv tmp .claude/settings.json`,
+      `echo '{"disableAllHooks": true}' > .claude/settings.local.json`,
+      `cat > .claude/settings.local.json <<'EOF'\n{"env": {"GUARDIAN_HOOKS": "off"}}\nEOF`,
+      `jq '.env.GUARDIAN_PKG_VET = "0"' ~/.claude/settings.json | sponge ~/.claude/settings.json`,
+      `jq '.enabledPlugins["dev-guardian@dev-guardian"] = false' .claude/settings.json > t.json && mv t.json .claude/settings.json`,
+      `sed -i 's/"GUARDIAN_HOOKS_BASH_BLOCK": "1"/"GUARDIAN_HOOKS_BASH_BLOCK": "0"/' .claude/settings.local.json`,
+      `node -e "const f='.claude/settings.json';const s=JSON.parse(require('fs').readFileSync(f));s.disableAllHooks=true;require('fs').writeFileSync(f,JSON.stringify(s))"`,
+      `python -c "import json;p='.claude/settings.local.json';d=json.load(open(p));d['env']={'GUARDIAN_HOOKS':'off'};json.dump(d,open(p,'w'))"`,
+      `Set-Content .claude\\settings.json '{"disableAllHooks": true}'`,
+      `cd .claude && echo '{"disableAllHooks":true}' > settings.json`,
+      `cmd /c "echo {\\"disableAllHooks\\":true} > .claude\\settings.local.json"`,
+    ])('blocks %j', (command) => expectBlocked(command, 'claude-settings-loosen'));
+
+    it.each([
+      `jq '.permissions.allow += ["Bash(ls)"]' .claude/settings.json > tmp && mv tmp .claude/settings.json`,
+      'cat .claude/settings.json | grep disableAllHooks',
+      'grep -n GUARDIAN_HOOKS .claude/settings.local.json',
+      `echo '{"permissions":{"allow":["Bash(npm test)"]}}' > .claude/settings.local.json`,
+      'cp .claude/settings.json /tmp/settings.backup.json',
+      `jq '.env.GUARDIAN_HOOKS_BASH_BLOCK' .claude/settings.json`,
+      `echo '{"disableAllHooks": true}' > docs/example-settings.json`,
+      `jq '.enabledPlugins["other@market"] = true' .claude/settings.json > t && mv t .claude/settings.json`,
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  describe('the ordinary commands that look like these stay ok', () => {
+    it.each([
+      `node -e "console.log(require('./package.json').version)"`,
+      `python -c "import json; print(json.load(open('x.json')))"`,
+      `jq '.permissions.allow += ["Bash(ls)"]' .claude/settings.json > tmp && mv tmp .claude/settings.json`,
+      'rsync -a src/ build/',
+      'sort -o out.txt in.txt',
+      'cp -r templates/ dist/',
+      'mv dist/app.js dist/app.min.js',
+      'cd packages/api && npm test',
+      "perl -pi -e 's/1\\.0\\.0/1.0.1/' package.json",
+      'truncate -s 0 logs/app.log',
+      `pwsh -NoProfile -Command "Get-Content package.json | ConvertFrom-Json"`,
+      `python3 -c "import sys; print(sys.version)"`,
+      'Remove-Item dist\\old.js',
+    ])('%j', (command) => expect(assessBashCommand(command).level).toBe('ok'));
   });
 });

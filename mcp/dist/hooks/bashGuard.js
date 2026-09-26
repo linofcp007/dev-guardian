@@ -57,15 +57,32 @@
  *     signature is made of the very separators everything else splits on.
  *
  * Because quoting stops being matchable, `sh -c '…'`, `bash -c '…'` (including
- * behind `docker exec … bash -c`), `su … -c '…'` and `eval …` are re-entered
- * and assessed as commands in their own right, to depth 3. That is strictly
- * more coverage than the old text matching had, not less: `bash -c 'rm -rf /'`
- * was never blocked before, and is now.
+ * behind `docker exec … bash -c`), `su … -c '…'`, `eval …` and PowerShell's
+ * `-Command …` / `-EncodedCommand …` are re-entered and assessed as commands
+ * in their own right, to depth 3. That is strictly more coverage than the old
+ * text matching had, not less: `bash -c 'rm -rf /'` was never blocked before,
+ * and is now.
  *
- * What this is NOT: a shell parser. Command substitution inside double quotes
- * (`echo "$(rm -rf /)"`) stays invisible, exactly as it was before this file
- * grew a scanner. Fail-open is the design; a missed warning is the failure
- * mode we accept, and no block rule was narrowed to get here.
+ * ## The guard's own configuration
+ *
+ * The hook configuration files and Claude Code's settings are protected by
+ * what a command DOES to them, modelled per command (`effectsOf`): the files
+ * it writes (redirections, `tee`, `sed -i`, `perl -pi`, `sort -o`, `rsync`,
+ * `cp`, PowerShell `Set-Content`, cmd `copy`, `[IO.File]::WriteAllText`, …),
+ * the paths it removes or moves away, the directories it copies a whole tree
+ * onto, and the links, FIFOs and device nodes it creates. Relative paths are
+ * resolved against the `cd`s earlier in the same command (`resolveFrom`), and
+ * each command of a quoted `cmd /c "…"` line is modelled too. Program text on
+ * a command line (`node -e`, `python -c`, a heredoc fed to `python -`) cannot
+ * be modelled that way, so it is refused when one of its string literals
+ * names a hook configuration path at all (`judgeCode`).
+ *
+ * What this is NOT: a shell parser, nor an interpreter. Command substitution
+ * inside double quotes (`echo "$(rm -rf /)"`) stays invisible, exactly as it
+ * was before this file grew a scanner, and so does anything decided at run
+ * time — a path in a variable, a script run from a file. Fail-open is the
+ * design; a missed warning is the failure mode we accept, and no block rule
+ * was narrowed to get here.
  *
  * ## ReDoS
  *
@@ -864,8 +881,120 @@ const HOOK_CONFIG_DIR = /(?:\.guardian|\.config\/?dev-guardian)\/?$/i;
 function isHookConfigDir(arg) {
     return HOOK_CONFIG_DIR.test(arg.replace(/\\/g, '/'));
 }
-/** Commands that create a link (never a FIFO or a device node). */
-const LINK_CREATORS = new Set(['ln', 'mklink', 'cmd', 'new-item', 'ni']);
+/**
+ * The user-level configuration directory alone. Removing IT is refused;
+ * removing a project's whole `.guardian` is not — that directory also holds the
+ * scan database, deleting it is how a project resets dev-guardian's state, and
+ * the project configuration it takes along could only have made the guard
+ * stricter.
+ */
+const USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
+/** Claude Code's own settings, project or user level; separators optional as in `HOOK_CONFIG_PATH`. */
+const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
+/**
+ * A key of Claude Code's settings that switches dev-guardian's hooks off:
+ * `disableAllHooks`, the dispatcher's own environment switches, and
+ * `enabledPlugins` when the same text names dev-guardian. The Write/Edit guard
+ * (`settingsGuard.ts`) judges an edit of the settings by the value it sets; the
+ * content a shell command writes cannot be read reliably, so here the key alone
+ * decides, anywhere in the command's text.
+ */
+function namesLooseningKey(text) {
+    return (/disableAllHooks|GUARDIAN_HOOKS|GUARDIAN_PKG_VET/i.test(text) ||
+        (/enabledPlugins/i.test(text) && /dev-guardian/i.test(text)));
+}
+/** A command word's name: its last path segment, lower-cased, without `.exe`. */
+function commandName(word) {
+    return basename(word).toLowerCase().replace(/\.exe$/, '');
+}
+// ── paths, as the command moves between directories
+/** A path that does not depend on the current directory: `/…`, `~…`, `$VAR…`, `%VAR%…`, `\\…`, `C:…`. */
+function isAbsolutePath(path) {
+    return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path);
+}
+/**
+ * `target` as the command sees it after the `cd`s before it (`cwd`; `''` while
+ * there was none): joined onto `cwd` unless absolute, every `\` read as `/`,
+ * and `.` and `..` segments folded. So `cd ~/.config/dev-guardian && echo … >
+ * hooks.json` names the file it writes, and so does `echo … >
+ * .guardian/x/../hooks.config.json`.
+ */
+function resolveFrom(cwd, target) {
+    const joined = cwd === '' || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, '')}/${target}`;
+    const parts = joined.replace(/\\/g, '/').split('/');
+    const out = [];
+    parts.forEach((part, i) => {
+        if (part === '.' || (part === '' && i > 0 && i < parts.length - 1))
+            return;
+        const prev = out[out.length - 1];
+        if (part === '..' && prev !== undefined && prev !== '..' && prev !== '') {
+            out.pop();
+            return;
+        }
+        out.push(part);
+    });
+    return out.join('/');
+}
+/** `a/b/c` → `a/b`; `''` when there is no directory part. */
+function dirOf(path) {
+    const cut = path.lastIndexOf('/');
+    return cut < 0 ? '' : path.slice(0, cut);
+}
+const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
+const CD_RETURNS = new Set(['popd', 'pop-location']);
+/**
+ * The directory a `cd`, `pushd` or `Set-Location` moves to from `cwd`, or
+ * `undefined` when `name` is none of them. A bare `cd` goes home; `cd -`,
+ * `popd` and `Pop-Location` go back somewhere this does not track, which reads
+ * as where the command started (`''`).
+ */
+function cwdAfter(name, args, cwd) {
+    if (CD_RETURNS.has(name))
+        return '';
+    if (!CD_COMMANDS.has(name))
+        return undefined;
+    const dir = psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
+    if (dir === undefined)
+        return '~';
+    if (dir === '-')
+        return '';
+    return resolveFrom(cwd, dir);
+}
+const GLOB = /[*?[]/;
+/** The configuration files a directory holds, by the directory's kind. */
+function configNamesIn(dir) {
+    if (USER_CONFIG_DIR.test(dir))
+        return ['hooks.json'];
+    if (/\.guardian\/?$/i.test(dir))
+        return ['hooks.config.json', 'hooks-allowlist.json'];
+    return [];
+}
+/** True when a glob in `path`'s last segment can match a configuration file of the config directory it sits in. */
+function globNamesConfig(path) {
+    const last = path.slice(path.lastIndexOf('/') + 1);
+    if (!GLOB.test(last))
+        return false;
+    const names = configNamesIn(dirOf(path));
+    if (names.length === 0)
+        return false;
+    try {
+        const re = new RegExp(`^${last.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
+        return names.some((n) => re.test(n));
+    }
+    catch {
+        return false;
+    }
+}
+function noEffects() {
+    return { writes: [], removes: [], dirs: [], special: [], links: [] };
+}
+function mergeEffects(into, from) {
+    into.writes.push(...from.writes);
+    into.removes.push(...from.removes);
+    into.dirs.push(...from.dirs);
+    into.special.push(...from.special);
+    into.links.push(...from.links);
+}
 /** `a/b/c` → `c`, for either separator. */
 function lastSegment(path) {
     return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
@@ -914,8 +1043,8 @@ function lnDestinations(args) {
         return [targets[targets.length - 1] ?? ''];
     return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
-/** `New-Item`'s link path (`-Path`, `-LiteralPath`, `-Name`, or the first positional) — only for a link item type. */
-function newItemLinkDestinations(args) {
+/** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
+function newItemArgs(args) {
     let itemType = '';
     const paths = [];
     const positional = [];
@@ -937,11 +1066,9 @@ function newItemLinkDestinations(args) {
         else if (name === 'path' || name === 'literalpath' || name === 'name')
             paths.push(value);
     }
-    if (!/^(?:symboliclink|hardlink|junction)$/i.test(itemType))
-        return [];
     if (paths.length === 0 && positional.length > 0)
         paths.push(positional[0] ?? '');
-    return paths;
+    return { itemType, paths };
 }
 /** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
 function mklinkDestinations(args) {
@@ -952,25 +1079,36 @@ function mklinkDestinations(args) {
  * Splits a cmd.exe command line into its commands — on `&`, `&&`, `||` and `|`
  * outside double quotes — and each command into words, on whitespace outside
  * double quotes. Quotes are removed, backslashes are literal, and `^` escapes
- * the next character (`^&` is a literal `&`), as in cmd.
+ * the next character (`^&` is a literal `&`), as in cmd. A `>` or `>>` (after an
+ * optional descriptor digit) makes the next word a file the command writes;
+ * `>&1` duplicates a descriptor and names none; `<` reads a file.
  */
 function splitCmdLine(line) {
     const commands = [];
     let words = [];
+    let redirects = [];
     let cur = '';
     let inQuote = false;
     let has = false;
+    let role = 'arg';
     const endWord = () => {
-        if (has)
-            words.push(cur);
+        if (has) {
+            if (role === 'write')
+                redirects.push(cur);
+            else if (role === 'arg')
+                words.push(cur);
+            role = 'arg';
+        }
         cur = '';
         has = false;
     };
     const endCommand = () => {
         endWord();
-        if (words.length > 0)
-            commands.push(words);
+        role = 'arg';
+        if (words.length > 0 || redirects.length > 0)
+            commands.push({ words, redirects });
         words = [];
+        redirects = [];
     };
     for (let i = 0; i < line.length; i += 1) {
         const ch = line.charAt(i);
@@ -988,8 +1126,26 @@ function splitCmdLine(line) {
             if (line.charAt(i + 1) === ch)
                 i += 1;
         }
+        else if (!inQuote && (ch === '>' || ch === '<')) {
+            if (has && /^\d$/.test(cur)) {
+                cur = '';
+                has = false;
+            }
+            else
+                endWord();
+            if (ch === '>' && line.charAt(i + 1) === '>')
+                i += 1;
+            if (line.charAt(i + 1) === '&') {
+                i += 1;
+                while (/\d/.test(line.charAt(i + 1)))
+                    i += 1;
+                continue;
+            }
+            role = ch === '>' ? 'write' : 'read';
+        }
         else if (!inQuote && /\s/.test(ch)) {
-            endWord();
+            if (has)
+                endWord();
         }
         else {
             cur += ch;
@@ -1014,95 +1170,42 @@ function cmdCommandWords(words) {
     return out;
 }
 /**
- * `cmd /c mklink LINK TARGET` (or `/k`): every link a `mklink` in the command
- * line creates. The command line is what follows the `/c`/`/k` switch. When
- * its first word is itself a whole command line — `cmd /c "mklink a b"` hands
- * cmd ONE quoted word — it is split the way cmd splits it: into commands on
- * `&`, `&&`, `||` and `|`, each into words, and EVERY command is checked,
- * past a leading `@` or `call` (`cmd /c "cd /d C:\p && mklink …"`), a nested
- * `cmd /c` included. Any other word is kept whole, so a quoted link path with
- * a space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the one path it
- * is — splitting every word on whitespace, as this once did, cut such a path
- * in two and never recognised it (final review I11); checking only the first
- * command of a split line, as the I11 fix first did, let a mklink after `&&`
- * through (re-review).
+ * `cmd /c LINE` (or `/k`): what every command of the line does. The line is
+ * what follows the `/c`/`/k` switch. When its first word is itself a whole
+ * command line — `cmd /c "mklink a b"` hands cmd ONE quoted word — it is split
+ * the way cmd splits it (`splitCmdLine`), and EVERY command is assessed past a
+ * leading `@` or `call`: a `mklink`, a `copy` / `move` / `del` / `ren`, a
+ * nested `cmd /c`, a `>` redirection, and a `cd /d` that later relative paths
+ * are resolved from. Any other word is kept whole, so a quoted path with a
+ * space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the one path it
+ * is — splitting every word on whitespace, as this once did, cut such a path in
+ * two and never recognised it (final review I11); checking only the first
+ * command of a split line let a mklink after `&&` through (re-review); a
+ * redirection inside the quoted line was not seen at all (Part Y).
  */
-function cmdMklinkDestinations(args) {
+function cmdEffects(args, cwd) {
+    const e = noEffects();
     const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
     if (at < 0)
-        return [];
+        return e;
     const first = args[at + 1];
     if (first === undefined)
-        return [];
+        return e;
     const head = first.trim();
-    const commands = /[\s&|^]/.test(head) ? splitCmdLine(head) : [[head]];
+    const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
     // The shell words after the first one continue the line's LAST command.
     const last = commands[commands.length - 1];
     if (last !== undefined)
-        last.push(...args.slice(at + 2));
-    const out = [];
+        last.words.push(...args.slice(at + 2));
+    let dir = cwd;
     for (const command of commands) {
-        const [name, ...rest] = cmdCommandWords(command);
-        const base = (name ?? '').toLowerCase().replace(/\.exe$/, '');
-        if (base === 'mklink')
-            out.push(...mklinkDestinations(rest));
-        else if (base === 'cmd')
-            out.push(...cmdMklinkDestinations(rest));
+        const [raw, ...rest] = cmdCommandWords(command.words);
+        const name = (raw ?? '').toLowerCase().replace(/\.exe$/, '');
+        e.writes.push(...command.redirects.map((r) => resolveFrom(dir, r)));
+        mergeEffects(e, effectsOf(name, rest, dir));
+        dir = cwdAfter(name, rest, dir) ?? dir;
     }
-    return out;
-}
-/**
- * The paths a FIFO-, device- or link-creating command writes: `mkfifo NAME…`,
- * `mknod NAME TYPE …`, `ln`'s link names, `mklink`'s link (directly or through
- * `cmd /c`), and `New-Item -ItemType SymbolicLink|HardLink|Junction`'s path.
- * Never a link's SOURCE: `ln -s ~/.config/dev-guardian/hooks.json backup.json`
- * reads the config, it does not replace it.
- */
-function specialFileDestinations(name, args) {
-    switch (name) {
-        case 'mkfifo':
-            return operands(args, new Set(['-m', '--mode']));
-        case 'mknod':
-            return operands(args, new Set(['-m', '--mode'])).slice(0, 1);
-        case 'ln':
-            return lnDestinations(args);
-        case 'mklink':
-            return mklinkDestinations(args);
-        case 'new-item':
-        case 'ni':
-            return newItemLinkDestinations(args);
-        case 'cmd':
-            return cmdMklinkDestinations(args);
-        default:
-            return [];
-    }
-}
-/**
- * A FIFO, a device node or a link created AT one of the hook configuration
- * files, or a link created at the directory holding them (`.guardian`,
- * `~/.config/dev-guardian` — final review I12). A FIFO or a link to
- * `/dev/zero` there used to hang the hook until its 15 s timeout, after which
- * the tool call ran unguarded (Task 23 fix round 2, N1). The hook's reader
- * now refuses such a file (it judges the descriptor it opened, and refuses a
- * link to a network path before opening), so this is defence in depth:
- * refusing to create one there, as the Write/Edit guard refuses an
- * assistant's edit of the same files.
- */
-function assessGuardConfigSpecialFile(words, start) {
-    const head = words[start];
-    if (head === undefined)
-        return null;
-    const name = basename(head.value).toLowerCase().replace(/\.exe$/, '');
-    const args = words.slice(start + 1).map((w) => w.value);
-    const makesLink = LINK_CREATORS.has(name);
-    const hits = specialFileDestinations(name, args).some((p) => isHookConfigPath(p) || (makesLink && isHookConfigDir(p)));
-    if (!hits)
-        return null;
-    return {
-        id: 'guard-config-special-file',
-        level: 'block',
-        reason: "Replaces the guardrail hooks' own configuration with a FIFO, a device node or a link",
-    };
+    return e;
 }
 /** The first unquoted redirection in `word`, if it has one. */
 function parseRedirect(word) {
@@ -1165,34 +1268,6 @@ function withoutRedirections(words) {
 function intoDir(dir, src) {
     return `${dir.replace(/[\\/]+$/, '')}/${lastSegment(src)}`;
 }
-/**
- * `cp`/`mv`/`install`: the destination, and — since it may be a directory —
- * every source's name inside it. `-t DIR` / `--target-directory=DIR` names the
- * directory outright.
- */
-function copyDestinations(args, valued) {
-    let dir;
-    const rest = [];
-    for (let i = 0; i < args.length; i += 1) {
-        const a = args[i] ?? '';
-        const long = /^--target-directory=(.+)$/.exec(a);
-        if (long !== null)
-            dir = long[1];
-        else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a))
-            dir = args[++i];
-        else if (/^-t./.test(a))
-            dir = a.slice(2);
-        else
-            rest.push(a);
-    }
-    const paths = operands(rest, valued);
-    if (dir !== undefined)
-        return paths.map((p) => intoDir(dir, p));
-    if (paths.length < 2)
-        return [];
-    const dest = paths[paths.length - 1] ?? '';
-    return [dest, ...paths.slice(0, -1).map((p) => intoDir(dest, p))];
-}
 /** A PowerShell `-Name value` / `-Name:value` parameter's value, by any of `names`. */
 function psParam(args, names) {
     for (let i = 0; i < args.length; i += 1) {
@@ -1220,51 +1295,190 @@ function optionValues(args, short, long) {
     }
     return out;
 }
+/** `cp`/`mv`/`install` options that take a value, none of them the destination. */
+const COPY_VALUED = new Set(['-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group']);
+/** PowerShell `Copy-Item`/`Move-Item` parameters, by full lower-case name: those naming paths… */
+const PS_PATH_PARAMS = ['path', 'literalpath', 'destination'];
+/** …the others that take a value, and the switches. */
+const PS_VALUE_PARAMS = ['filter', 'include', 'exclude', 'credential', 'fromsession', 'tosession'];
+const PS_SWITCHES = ['recurse', 'force', 'container', 'passthru', 'whatif', 'confirm'];
+/** A full PowerShell parameter name `spelled` names: itself, or a prefix of 3+ letters (`-Dest`, `-Rec`). */
+function psName(spelled) {
+    const lower = spelled.toLowerCase();
+    const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
+    if (all.includes(lower))
+        return lower;
+    return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : undefined;
+}
+/**
+ * The sources and destination of a copy or a move: POSIX `cp`/`mv`/`install`
+ * (the last operand, or `-t DIR`), PowerShell `Copy-Item`/`Move-Item`
+ * (`-Path`, `-Destination`, or the first two positionals), and cmd `copy` /
+ * `move`, whose `/Y`-style switches are not paths (`slashSwitches`).
+ */
+function parseTransfer(args, slashSwitches) {
+    const named = [];
+    const positional = [];
+    let dest;
+    let into = false;
+    let recursive = false;
+    let optionsDone = false;
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (slashSwitches && /^\/[A-Za-z]/.test(a))
+            continue;
+        if (optionsDone || a === '-' || !a.startsWith('-')) {
+            positional.push(a);
+            continue;
+        }
+        if (a === '--') {
+            optionsDone = true;
+            continue;
+        }
+        const target = /^--target-directory(?:=(.*))?$/.exec(a);
+        if (target !== null) {
+            dest = target[1] ?? args[++i];
+            into = true;
+            continue;
+        }
+        if (a === '--recursive' || a === '--archive') {
+            recursive = true;
+            continue;
+        }
+        const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+        const param = ps === null ? undefined : psName(ps[1] ?? '');
+        if (ps !== null && param !== undefined) {
+            const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? (ps[2] ?? args[++i]) : undefined;
+            if (param === 'recurse')
+                recursive = true;
+            else if (param === 'destination')
+                dest = value;
+            else if ((param === 'path' || param === 'literalpath') && value !== undefined)
+                named.push(value);
+            continue;
+        }
+        if (COPY_VALUED.has(a)) {
+            i += 1;
+            continue;
+        }
+        if (/^-[a-zA-Z]*t$/.test(a)) {
+            dest = args[++i];
+            into = true;
+        }
+        else if (/^-t./.test(a)) {
+            dest = a.slice(2);
+            into = true;
+        }
+        if (!a.startsWith('--') && /[rRa]/.test(a.slice(1)))
+            recursive = true;
+    }
+    const sources = [...named, ...positional];
+    if (dest === undefined && sources.length >= 2)
+        dest = sources.pop();
+    return dest === undefined ? { sources, into, recursive } : { sources, dest, into, recursive };
+}
+/** `rsync` options that take a value — never the destination. */
+const RSYNC_VALUED = new Set([
+    '-e', '--rsh', '-f', '--filter', '--exclude', '--include', '--exclude-from', '--include-from', '--files-from',
+    '-T', '--temp-dir', '-B', '--block-size', '--chmod', '--chown', '--log-file', '--password-file', '--partial-dir',
+    '--backup-dir', '--suffix', '--compare-dest', '--copy-dest', '--link-dest', '--rsync-path', '-M',
+    '--remote-option', '--port', '--timeout', '--contimeout', '--bwlimit', '--max-size', '--min-size', '--out-format',
+    '--info', '--debug', '--iconv', '--usermap', '--groupmap', '--address', '--sockopts', '--max-delete',
+]);
+/**
+ * `perl`/`ruby` switches: the `-e` program texts, whether `-i` edits the file
+ * operands in place, and those operands. A short cluster is read letter by
+ * letter (`-pi`, `-lne`, `-0777`): a code letter takes the rest of the cluster
+ * or the next word, `i` takes the rest as its backup extension (`-i.bak`, and
+ * `-pie` is `-p -i` with extension `e`), a value letter (`-I dir`, `-M mod`)
+ * takes the rest or the next word. Without a program text, the first operand
+ * is the script file.
+ */
+function perlLike(args, codeLetters, valueLetters) {
+    const code = [];
+    const operandsSeen = [];
+    let inPlace = false;
+    let optionsDone = false;
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (!optionsDone && a === '--') {
+            optionsDone = true;
+            continue;
+        }
+        if (optionsDone || !a.startsWith('-') || a.length === 1 || a.startsWith('--')) {
+            if (optionsDone || !a.startsWith('--'))
+                operandsSeen.push(a);
+            continue;
+        }
+        for (let k = 1; k < a.length; k += 1) {
+            const c = a.charAt(k);
+            if (codeLetters.includes(c)) {
+                const rest = a.slice(k + 1);
+                code.push(rest !== '' ? rest : (args[++i] ?? ''));
+                break;
+            }
+            if (c === 'i') {
+                inPlace = true;
+                break;
+            }
+            if (valueLetters.includes(c)) {
+                if (k === a.length - 1)
+                    i += 1;
+                break;
+            }
+            if (c === '0')
+                while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1)))
+                    k += 1;
+            if (c === 'l')
+                while (/[0-9]/.test(a.charAt(k + 1)))
+                    k += 1;
+        }
+    }
+    const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
+    return { code, inPlace, files };
+}
 const SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
 /**
- * The files a command itself writes — `tee`, `sed -i`, `cp`/`mv`/`install`
- * onto, `dd of=`, `curl -o`, `wget -O`, PowerShell `Set-Content`/`Add-Content`/
- * `Out-File`/`Tee-Object`/`Copy-Item`/`Move-Item`, cmd `copy`/`move`. Never a
- * file it only reads.
+ * The files a command itself writes — `tee`, `sed -i`, `dd of=`, `curl -o`,
+ * `wget -O`, `sort -o`, `truncate`, `sponge`, `shred`, `perl -i` / `ruby -i`,
+ * and PowerShell `Set-Content`/`Add-Content`/`Clear-Content`/`Out-File`/
+ * `Tee-Object`. Never a file it only reads. Copies, moves, renames and
+ * `New-Item` are in {@link effectsOf}.
  */
 function commandWriteDestinations(name, args) {
     switch (name) {
         case 'tee':
+        case 'sponge':
             return operands(args, new Set());
         case 'sed':
             return args.some((a) => SED_IN_PLACE.test(a))
                 ? operands(args, new Set(['-e', '-f', '--expression', '--file', '-l', '--line-length']))
                 : [];
-        case 'cp':
-        case 'mv':
-        case 'install': {
-            // PowerShell's `cp`/`mv` aliases take -Destination; POSIX's take operands.
-            const dest = psParam(args, ['destination']);
-            if (dest !== undefined)
-                return [dest];
-            return copyDestinations(args, new Set(['-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group']));
-        }
-        case 'copy-item':
-        case 'cpi':
-        case 'move-item':
-        case 'mi':
-        case 'copy':
-        case 'move': {
-            const dest = psParam(args, ['destination']);
-            if (dest !== undefined)
-                return [dest];
-            // cmd's `/Y`-style switches are not paths.
-            return copyDestinations(args.filter((a) => !/^\/-?[A-Za-z]$/.test(a)), new Set());
-        }
         case 'dd':
             return args.filter((a) => a.startsWith('of=')).map((a) => a.slice(3));
         case 'curl':
             return optionValues(args, '-o', '--output');
         case 'wget':
             return optionValues(args, '-O', '--output-document');
+        case 'sort':
+            return optionValues(args, '-o', '--output');
+        case 'truncate':
+            return operands(args, new Set(['-s', '--size', '-r', '--reference']));
+        case 'shred':
+            return operands(args, new Set(['-n', '--iterations', '-s', '--size', '--random-source']));
+        case 'perl': {
+            const p = perlLike(args, 'eE', 'IMm');
+            return p.inPlace ? p.files : [];
+        }
+        case 'ruby': {
+            const p = perlLike(args, 'e', 'IrCEFx');
+            return p.inPlace ? p.files : [];
+        }
         case 'set-content':
         case 'add-content':
         case 'ac':
+        case 'clear-content':
+        case 'clc':
         case 'out-file':
         case 'tee-object':
             // Any argument: the path is positional or a -Path/-LiteralPath/-FilePath
@@ -1274,28 +1488,554 @@ function commandWriteDestinations(name, args) {
             return [];
     }
 }
+/** Commands that delete what they are given. */
+const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', 'rd', 'rmdir']);
 /**
- * A shell write onto one of the hook configuration files — a redirection,
- * `tee`, `sed -i`, `cp`/`mv` onto it, and their PowerShell spellings (final
- * review M5). The Write/Edit guard refuses an assistant's edit of the same
- * files; this is the same refusal for the shell. A project file cannot loosen
- * the protective hooks anyway, but the user-level one can switch every hook
- * off. Not a shell parser: a write made inside a program (`python -c`,
- * `node -e`, `[IO.File]::WriteAllText`) or inside a quoted `cmd /c "… > f"` is
- * not seen.
+ * What `name args` does to the filesystem, from `cwd` — every path resolved
+ * ({@link resolveFrom}). A copy writes its destination (and each source's name
+ * inside it) and, recursive, may replace that directory wholesale; a move also
+ * removes its sources; a rename removes its source and writes its new name; a
+ * delete removes; `ln`, `mklink` and `New-Item -ItemType SymbolicLink` create
+ * links, `mkfifo` and `mknod` special files; `cmd /c` is assessed command by
+ * command ({@link cmdEffects}). Never a link's SOURCE: `ln -s
+ * ~/.config/dev-guardian/hooks.json backup.json` reads the config.
  */
-function assessGuardConfigShellWrite(words, start) {
+function effectsOf(name, args, cwd) {
+    if (name === 'cmd')
+        return cmdEffects(args, cwd);
+    const at = (p) => resolveFrom(cwd, p);
+    const e = noEffects();
+    switch (name) {
+        case 'mkfifo':
+            e.special.push(...operands(args, new Set(['-m', '--mode'])).map(at));
+            return e;
+        case 'mknod':
+            e.special.push(...operands(args, new Set(['-m', '--mode'])).slice(0, 1).map(at));
+            return e;
+        case 'ln':
+            e.links.push(...lnDestinations(args).map(at));
+            return e;
+        case 'mklink':
+            e.links.push(...mklinkDestinations(args).map(at));
+            return e;
+        case 'new-item':
+        case 'ni': {
+            const item = newItemArgs(args);
+            if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType))
+                e.links.push(...item.paths.map(at));
+            else if (item.itemType === '' || /^file$/i.test(item.itemType))
+                e.writes.push(...item.paths.map(at));
+            return e;
+        }
+        case 'cp':
+        case 'install':
+        case 'copy-item':
+        case 'cpi':
+        case 'copy':
+        case 'mv':
+        case 'move-item':
+        case 'mi':
+        case 'move': {
+            const t = parseTransfer(args, name === 'copy' || name === 'move');
+            const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
+            if (moves)
+                e.removes.push(...t.sources.map(at));
+            if (t.dest === undefined)
+                return e;
+            const dest = t.dest;
+            e.writes.push(...(t.into ? [] : [at(dest)]), ...t.sources.map((s) => at(intoDir(dest, s))));
+            if (!t.into && (moves || t.recursive))
+                e.dirs.push(at(dest));
+            return e;
+        }
+        case 'xcopy':
+        case 'robocopy': {
+            const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
+            if (dest !== undefined) {
+                e.dirs.push(at(dest));
+                e.writes.push(at(dest), ...files.map((f) => at(intoDir(dest, f))));
+            }
+            return e;
+        }
+        case 'rsync': {
+            const paths = operands(args, RSYNC_VALUED);
+            const dest = paths.pop();
+            if (dest === undefined || paths.length === 0)
+                return e;
+            e.writes.push(at(dest), ...paths.map((s) => at(intoDir(dest, s))));
+            if (args.some((a) => a === '--recursive' || a === '--archive' || /^-[a-zA-Z]*[ra]/.test(a)))
+                e.dirs.push(at(dest));
+            return e;
+        }
+        case 'ren':
+        case 'rename':
+        case 'rename-item':
+        case 'rni': {
+            const positional = args.filter((a) => !a.startsWith('-') && !/^\/[A-Za-z]$/.test(a));
+            const src = psParam(args, ['path', 'literalpath']) ?? positional.shift();
+            const newName = psParam(args, ['newname']) ?? positional.shift();
+            if (src === undefined)
+                return e;
+            e.removes.push(at(src));
+            if (newName !== undefined) {
+                const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, '/')) || '.'}/${newName}`;
+                e.writes.push(at(dest));
+                e.dirs.push(at(dest));
+            }
+            return e;
+        }
+        default:
+            break;
+    }
+    if (REMOVERS.has(name))
+        e.removes.push(...operands(args, new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
+    const written = commandWriteDestinations(name, args).map(at);
+    e.writes.push(...written);
+    if (name === 'shred' && args.some((a) => a === '--remove' || a.startsWith('--remove=') || /^-[a-zA-Z]*u/.test(a))) {
+        e.removes.push(...written);
+    }
+    return e;
+}
+// ── program text on the command line
+const PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
+const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
+/** `X run … python -c …`: tools that run an interpreter in a managed environment. */
+const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba']);
+function isInterpreter(name) {
+    return PYTHON.test(name) || INTERPRETERS.has(name);
+}
+/** Index of the interpreter a command runs, at `start` or behind `uv run`-style wrappers; -1 for none. */
+function interpreterIndex(words, start) {
+    const name = commandName(words[start]?.value ?? '');
+    if (isInterpreter(name))
+        return start;
+    if (RUN_WRAPPERS.has(name) && words[start + 1]?.value === 'run') {
+        for (let i = start + 2; i < Math.min(words.length, start + 10); i += 1) {
+            if (isInterpreter(commandName(words[i]?.value ?? '')))
+                return i;
+        }
+    }
+    return -1;
+}
+/** Node / Bun options that take a value (none of them program text). */
+const NODE_VALUED = new Set([
+    '-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--input-type',
+    '--env-file', '--title', '--cwd', '--config', '--preload',
+]);
+/** `node -e CODE`, `--eval`, `-p`, `--print`, `-pe`, `--eval=CODE`; nothing once a script file is named. */
+function nodeCode(args) {
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        const eq = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
+        if (eq !== null)
+            return [eq[1] ?? ''];
+        if (/^-(?:e|p|pe|ep)$/.test(a) || a === '--eval' || a === '--print')
+            return [args[i + 1] ?? ''];
+        if (NODE_VALUED.has(a)) {
+            i += 1;
+            continue;
+        }
+        if (!a.startsWith('-'))
+            return [];
+    }
+    return [];
+}
+/** `python -c CODE` (also clustered: `-Bc CODE`, `-cCODE`); nothing for `-m`, a script file or `-` (stdin). */
+function pythonCode(args) {
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (a === '-' || !a.startsWith('-'))
+            return [];
+        if (a.startsWith('--'))
+            continue;
+        for (let k = 1; k < a.length; k += 1) {
+            const c = a.charAt(k);
+            if (c === 'c') {
+                const rest = a.slice(k + 1);
+                return [rest !== '' ? rest : (args[i + 1] ?? '')];
+            }
+            if (c === 'm')
+                return [];
+            if (c === 'W' || c === 'X') {
+                if (k === a.length - 1)
+                    i += 1;
+                break;
+            }
+        }
+    }
+    return [];
+}
+/** `php -r CODE` (and `-B`/`-R`/`-E` per-line code); nothing once a script file is named. */
+function phpCode(args) {
+    const code = [];
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (/^-[rBRE]$/.test(a)) {
+            code.push(args[i + 1] ?? '');
+            i += 1;
+        }
+        else if (/^-r./.test(a))
+            code.push(a.slice(2));
+        else if (a === '-f' || a === '-F' || !a.startsWith('-'))
+            return code;
+        else if (/^-[dcz]$/.test(a))
+            i += 1;
+    }
+    return code;
+}
+/** PowerShell's `-EncodedCommand` payload: base64 of UTF-16LE text. */
+function decodeUtf16Base64(text) {
+    if (!/^[A-Za-z0-9+/=]+$/.test(text))
+        return '';
+    return Buffer.from(text, 'base64').toString('utf16le');
+}
+/** `pwsh`/`powershell` parameters that take a value (none of them program text). */
+const PS_HOST_VALUED = new Set([
+    'ex', 'ep', 'executionpolicy', 'w', 'windowstyle', 'wd', 'workingdirectory', 'configurationname', 'o', 'of',
+    'outputformat', 'if', 'inputformat', 'v', 'version', 'psconsolefile', 'settings', 'settingsfile',
+    'custompipename', 'configurationfile',
+]);
+/**
+ * The program text `pwsh` / `powershell` runs: everything after `-Command`
+ * (`-c`, or a 3+ letter prefix of it), as PowerShell itself joins it, or the
+ * decoded `-EncodedCommand` (`-e`, `-ec`, `-enc`, …). Windows PowerShell 5 also
+ * runs a first positional argument as a command; pwsh 7 runs it as a file.
+ */
+function powershellCommand(args, name) {
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        const m = /^[-/]([A-Za-z]+)$/.exec(a);
+        if (m === null)
+            return name === 'powershell' ? [args.slice(i).join(' ')] : [];
+        const p = (m[1] ?? '').toLowerCase();
+        if (p === 'c' || (p.length >= 3 && 'command'.startsWith(p))) {
+            const rest = args.slice(i + 1);
+            return rest.length === 0 || rest[0] === '-' ? [] : [rest.join(' ')];
+        }
+        if (p === 'e' || (p.length >= 2 && 'encodedcommand'.startsWith(p)))
+            return [decodeUtf16Base64(args[i + 1] ?? '')];
+        if (p === 'f' || p === 'file')
+            return [];
+        if (PS_HOST_VALUED.has(p))
+            i += 1;
+    }
+    return [];
+}
+/**
+ * Program text a command hands an interpreter on its own command line —
+ * `node -e`, `python -c`, `perl -e`, `ruby -e`, `php -r`, `deno eval`,
+ * `pwsh -Command` / `-EncodedCommand`, also behind `uv run` and the like. A
+ * script FILE is never read: its code is on disk, and cannot be judged here.
+ */
+function inlineCode(words, start) {
+    const at = interpreterIndex(words, start);
+    if (at < 0)
+        return [];
+    const name = commandName(words[at]?.value ?? '');
+    const args = words.slice(at + 1).map((w) => w.value);
+    if (PYTHON.test(name))
+        return pythonCode(args);
+    switch (name) {
+        case 'node':
+        case 'nodejs':
+        case 'bun':
+            return nodeCode(args);
+        case 'deno':
+            return args[0] === 'eval' ? args.slice(1).filter((a) => !a.startsWith('-')).slice(0, 1) : [];
+        case 'perl':
+            return perlLike(args, 'eE', 'IMm').code;
+        case 'ruby':
+            return perlLike(args, 'e', 'IrCEFx').code;
+        case 'php':
+            return phpCode(args);
+        case 'pwsh':
+        case 'powershell':
+            return powershellCommand(args, name);
+        default:
+            return [];
+    }
+}
+/**
+ * True when `words` runs an interpreter that reads its program from stdin —
+ * the interpreter and, at most, flags (or `-`); no `-c`/`-e` text, no module,
+ * no script file. What `python - <<EOF … EOF` and `echo '…' | node` hand it is
+ * its program.
+ */
+function isBareInterpreterStdin(words) {
+    const name = commandName(words[0]?.value ?? '');
+    if (!isInterpreter(name) || name === 'pwsh' || name === 'powershell' || name === 'deno')
+        return false;
+    if (!words.slice(1).every((w) => w.value.startsWith('-')))
+        return false;
+    return inlineCode(words, 0).length === 0 && !words.some((w) => /^-[A-Za-z]*m$/.test(w.value));
+}
+function codeLang(interpreter) {
+    if (PYTHON.test(interpreter))
+        return 'python';
+    return ['node', 'nodejs', 'bun', 'deno'].includes(interpreter) ? 'js' : 'other';
+}
+/**
+ * The string literals of a piece of program text: `'…'` and `"…"`, plus
+ * `` `…` `` in JavaScript and `'''…'''` / `"""…"""` in Python. A backslash
+ * escapes the next character only when that is a backslash or the closing
+ * quote, so a Windows path or a raw string keeps its backslashes. A comment
+ * outside a literal — `#` (Python and the rest), `// ` (JavaScript and the
+ * rest) — is skipped, so an apostrophe in it does not pair with the next
+ * quote. Not a parser for any one language: it finds the literals a path would
+ * be written in.
+ */
+function codeLiterals(code, lang) {
+    const quotes = lang === 'js' ? ['"', "'", '`'] : ['"', "'"];
+    const out = [];
+    let i = 0;
+    while (i < code.length) {
+        const ch = code.charAt(i);
+        const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
+        const comment = atWordStart && ((ch === '#' && lang !== 'js') || (lang !== 'python' && code.startsWith('// ', i)));
+        if (comment) {
+            const nl = code.indexOf('\n', i);
+            i = nl < 0 ? code.length : nl + 1;
+            continue;
+        }
+        if (!quotes.includes(ch)) {
+            i += 1;
+            continue;
+        }
+        const close = lang === 'python' && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
+        let lit = '';
+        let j = i + close.length;
+        while (j < code.length) {
+            const c = code.charAt(j);
+            const next = code.charAt(j + 1);
+            if (c === '\\' && (next === '\\' || next === ch)) {
+                lit += next;
+                j += 2;
+                continue;
+            }
+            if (code.startsWith(close, j))
+                break;
+            lit += c;
+            j += 1;
+        }
+        out.push(lit);
+        i = j + close.length;
+    }
+    return out;
+}
+/** Literals as paths: trimmed, every run of backslashes read as `/`. */
+function literalPaths(literals) {
+    return literals.map((l) => l.trim().replace(/\\+/g, '/'));
+}
+/**
+ * True when program text names a hook configuration path: a string literal
+ * that ENDS in one (`'.guardian/hooks.config.json'`, `r'C:\…\.config\
+ * dev-guardian\hooks.json'`, `">…/hooks.json"`) or in the user-level directory,
+ * or one assembled from parts (`join(home, '.config', 'dev-guardian',
+ * 'hooks.json')`). A sentence that merely mentions a path does not end in it.
+ */
+function literalsNameHookConfig(literals) {
+    const paths = literalPaths(literals);
+    if (paths.some((p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p)))
+        return true;
+    const has = (re) => paths.some((p) => re.test(p));
+    if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i))
+        return true;
+    return has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i);
+}
+/** The same for Claude Code's settings files. */
+function literalsNameClaudeSettings(literals) {
+    const paths = literalPaths(literals);
+    if (paths.some((p) => CLAUDE_SETTINGS_PATH.test(p)))
+        return true;
+    const has = (re) => paths.some((p) => re.test(p));
+    return has(/(?:^|\/)\.claude\/?$/i) && has(/^settings(?:\.local)?\.json$/i);
+}
+// ── .NET file calls in PowerShell
+/** Whether `index` in `text` lies outside every quoted span (POSIX quoting). */
+function unquotedAt(text, index) {
+    let quote = '';
+    for (let i = 0; i < index; i += 1) {
+        const ch = text.charAt(i);
+        if (quote === '') {
+            if (ch === '\\')
+                i += 1;
+            else if (ch === "'" || ch === '"')
+                quote = ch;
+        }
+        else if (quote === '"' && ch === '\\')
+            i += 1;
+        else if (ch === quote)
+            quote = '';
+    }
+    return quote === '';
+}
+/** The argument texts of a call whose `(` ends just before `from`: split on depth-0 commas, up to the matching `)`. */
+function callArgs(text, from) {
+    const args = [];
+    let depth = 0;
+    let cur = '';
+    let quote = '';
+    for (let i = from; i < text.length; i += 1) {
+        const ch = text.charAt(i);
+        if (quote !== '') {
+            cur += ch;
+            if (ch === quote)
+                quote = '';
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            quote = ch;
+            cur += ch;
+            continue;
+        }
+        if (ch === ')' && depth === 0)
+            break;
+        if (ch === '(')
+            depth += 1;
+        if (ch === ')')
+            depth -= 1;
+        if (ch === ',' && depth === 0) {
+            args.push(cur.trim());
+            cur = '';
+            continue;
+        }
+        cur += ch;
+    }
+    args.push(cur.trim());
+    return args;
+}
+/** A call argument as a path: a quoted string's content, or the last string literal inside an expression. */
+function argPath(arg) {
+    const q = /^(['"])([\s\S]*)\1$/.exec(arg);
+    if (q !== null)
+        return (q[2] ?? '').replace(q[1] === "'" ? /''/g : /`"/g, q[1] ?? '');
+    const literals = codeLiterals(arg, 'other');
+    return literals[literals.length - 1] ?? arg;
+}
+const DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*::\s*([A-Za-z]+)\s*\(/gi;
+/**
+ * What PowerShell's `[IO.File]::…` / `[IO.Directory]::…` calls in `text` do —
+ * `WriteAllText`, `AppendAllText`, `Create`, `Open…` write their first
+ * argument, `Copy` its second, `Move` / `Replace` move the first onto the
+ * second, `Delete` removes, `CreateSymbolicLink` links. A call inside a quoted
+ * span is data, not code; the arguments are resolved from `cwd`.
+ */
+function dotNetEffects(text, cwd) {
+    const e = noEffects();
+    if (!text.includes('::'))
+        return e;
+    for (const m of text.matchAll(DOTNET_CALL)) {
+        if (!unquotedAt(text, m.index))
+            continue;
+        const kind = (m[1] ?? '').toLowerCase();
+        const method = (m[2] ?? '').toLowerCase();
+        const paths = callArgs(text, m.index + m[0].length).map((a) => resolveFrom(cwd, argPath(a)));
+        const [first, second] = paths;
+        if (first === undefined)
+            continue;
+        if (method === 'delete')
+            e.removes.push(first);
+        else if (method === 'createsymboliclink')
+            e.links.push(first);
+        else if (method === 'move' || method === 'replace') {
+            e.removes.push(first);
+            if (second !== undefined)
+                (kind === 'directory' ? e.dirs : e.writes).push(second);
+        }
+        else if (kind === 'file' && method === 'copy') {
+            if (second !== undefined)
+                e.writes.push(second);
+        }
+        else if (kind === 'file' && /^(?:write|append|create|open)/.test(method) && !/^open(?:read|text)$/.test(method)) {
+            e.writes.push(first);
+        }
+    }
+    return e;
+}
+// ── the rules
+const RULE_SPECIAL = {
+    id: 'guard-config-special-file',
+    level: 'block',
+    reason: "Replaces the guardrail hooks' own configuration with a FIFO, a device node or a link",
+};
+const RULE_WRITE = {
+    id: 'guard-config-shell-write',
+    level: 'block',
+    reason: "Writes the guardrail hooks' own configuration from the shell",
+};
+const RULE_REMOVE = {
+    id: 'guard-config-remove',
+    level: 'block',
+    reason: "Removes or moves away the guardrail hooks' own configuration",
+};
+const RULE_DIR = {
+    id: 'guard-config-dir-replace',
+    level: 'block',
+    reason: "Moves or copies a directory onto the guardrail hooks' configuration directory",
+};
+const RULE_INLINE = {
+    id: 'guard-config-inline-code',
+    level: 'block',
+    reason: "Runs program code that names the guardrail hooks' own configuration",
+};
+const RULE_SETTINGS = {
+    id: 'claude-settings-loosen',
+    level: 'block',
+    reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off",
+};
+/**
+ * The rules a command's filesystem effects break. The guard's own
+ * configuration: a FIFO, device node or link created at a config file (a link
+ * also at a config directory — final review I12 and fix round 2, N1); a write
+ * onto a config file (M5); its removal, or the user-level directory's; a
+ * directory moved or copied onto a config directory. Claude Code's settings: a
+ * write of `.claude/settings*.json` whose command names a loosening key
+ * anywhere (`raw`).
+ */
+function judgeEffects(e, raw) {
+    const out = [];
+    if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
+        out.push({ ...RULE_SPECIAL });
+    }
+    if (e.writes.some((p) => isHookConfigPath(p) || globNamesConfig(p)))
+        out.push({ ...RULE_WRITE });
+    const removesConfig = (p) => isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
+    if (e.removes.some(removesConfig))
+        out.push({ ...RULE_REMOVE });
+    if (e.dirs.some(isHookConfigDir))
+        out.push({ ...RULE_DIR });
+    if (e.writes.some((p) => CLAUDE_SETTINGS_PATH.test(p)) && namesLooseningKey(raw))
+        out.push({ ...RULE_SETTINGS });
+    return out;
+}
+/** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
+function judgeCode(code, lang, raw) {
+    const literals = codeLiterals(code, lang);
+    const out = [];
+    if (literalsNameHookConfig(literals))
+        out.push({ ...RULE_INLINE });
+    if (literalsNameClaudeSettings(literals) && namesLooseningKey(raw))
+        out.push({ ...RULE_SETTINGS });
+    return out;
+}
+/**
+ * One simple command against the guard's own configuration and Claude Code's
+ * settings: what it writes, removes, replaces or links ({@link effectsOf},
+ * redirections included), and any program text it hands an interpreter on its
+ * command line ({@link inlineCode}) — which is refused when it names a hook
+ * configuration path at all, reading or writing: reading one needs no program.
+ */
+function assessGuardConfig(words, start, scope) {
     const head = words[start];
-    const name = head === undefined ? '' : basename(head.value).toLowerCase().replace(/\.exe$/, '');
-    const args = withoutRedirections(words.slice(start + 1));
-    const targets = [...redirectTargets(words), ...commandWriteDestinations(name, args)];
-    if (!targets.some(isHookConfigPath))
-        return null;
-    return {
-        id: 'guard-config-shell-write',
-        level: 'block',
-        reason: "Writes the guardrail hooks' own configuration from the shell",
-    };
+    if (head === undefined)
+        return [];
+    const e = effectsOf(commandName(head.value), withoutRedirections(words.slice(start + 1)), scope.cwd);
+    e.writes.push(...redirectTargets(words).map((t) => resolveFrom(scope.cwd, t)));
+    const out = judgeEffects(e, scope.raw);
+    const lang = codeLang(commandName(words[interpreterIndex(words, start)]?.value ?? ''));
+    for (const code of inlineCode(words, start))
+        out.push(...judgeCode(code, lang, scope.raw));
+    return out;
 }
 /**
  * True when `script` (already dequoted) IS a remote download, rather than
@@ -1321,7 +2061,8 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'su',
 const DASH_C = /^-[A-Za-z]*c$/;
 /**
  * Scripts this command hands to a shell — `sh -c '…'`, `bash -lc '…'`,
- * `docker exec box bash -c '…'`, `su -s /bin/sh www-data -c '…'`, `eval …`.
+ * `docker exec box bash -c '…'`, `su -s /bin/sh www-data -c '…'`, `eval …`,
+ * and PowerShell's `-Command …` / `-EncodedCommand …` (`pwsh`, `powershell`).
  * Masking quoted spans would otherwise make those bodies unmatchable, which
  * *is* the right call for `echo 'git push --force'` and the wrong one here.
  */
@@ -1337,7 +2078,13 @@ function nestedScripts(words, start) {
     }
     for (let i = start; i < words.length; i += 1) {
         const word = words[i];
-        if (word === undefined || word.quoted || !DASH_C.test(word.value))
+        if (word === undefined)
+            continue;
+        const name = commandName(word.value);
+        if (!word.quoted && (name === 'pwsh' || name === 'powershell')) {
+            return powershellCommand(words.slice(i + 1).map((w) => w.value), name).filter((s) => s.trim().length > 0);
+        }
+        if (word.quoted || !DASH_C.test(word.value))
             continue;
         const namesShell = words.slice(start, i).some((w) => SHELLS.has(basename(w.value)));
         if (!namesShell)
@@ -1361,33 +2108,33 @@ function isBareShellStdin(words) {
     return words.slice(1).every((w) => w.value.startsWith('-'));
 }
 /**
- * Text a statement hands to a shell to execute, other than through `-c` —
- * finding 4: text is data only until something feeds it to a shell as its
+ * Text a statement hands a program to run, other than on its command line —
+ * finding 4: text is data only until something feeds it to a program as its
  * *script*, and the existing heredoc-is-data behaviour (`git commit -F -
- * <<'EOF'`) must not change for any command that is not itself a shell.
- * Two shapes:
+ * <<'EOF'`) must not change for any command that is not itself such a reader
+ * (`reads`: a bare shell, or a bare interpreter). Two shapes:
  *
  *   - `bash <<EOF … EOF` — the heredoc IS the script. `splitShell` captures
  *     the body on the statement (`heredocBodies`) precisely so this can
  *     recognise it; every other command's heredoc stays inert, as before.
- *   - `echo '…' | bash` / `printf '…' | sh` — the shell is the LAST member
+ *   - `echo '…' | bash` / `printf '…' | sh` — the reader is the LAST member
  *     of the pipeline and reads the PREVIOUS member's output as its script.
  *     `printf`'s own format-vs-arguments split is not modelled; the last
  *     argument is used, which is exactly right for the common single- or
  *     two-argument form (`printf '%s' 'rm -rf ~'`) and merely imprecise,
  *     not wrong, for anything fancier.
  */
-function fedShellScripts(statement) {
+function fedScripts(statement, reads) {
     const scripts = [];
     if (statement.commands.length === 1 && statement.heredocBodies) {
         const only = statement.commands[0];
-        if (only !== undefined && isBareShellStdin(only))
-            scripts.push(...statement.heredocBodies);
+        if (only !== undefined && reads(only))
+            scripts.push(...statement.heredocBodies.map((text) => ({ text, reader: only })));
     }
     if (statement.commands.length >= 2) {
         const last = statement.commands[statement.commands.length - 1];
         const prev = statement.commands[statement.commands.length - 2];
-        if (last !== undefined && prev !== undefined && isBareShellStdin(last)) {
+        if (last !== undefined && prev !== undefined && reads(last)) {
             const prevHead = prev[0];
             const prevName = prevHead === undefined ? '' : basename(prevHead.value);
             const args = prev.slice(1);
@@ -1397,14 +2144,21 @@ function fedShellScripts(statement) {
             else if (prevName === 'printf')
                 fed = (args[args.length - 1]?.value ?? '').trim();
             if (fed.length > 0)
-                scripts.push(fed);
+                scripts.push({ text: fed, reader: last });
         }
     }
     return scripts;
 }
 // ──────────────────────────────────────────────────────────── assessment
 const MAX_NESTING = 3;
-function collect(command, depth, out) {
+/**
+ * Every rule `command` breaks, into `out`. `scope` carries the whole command
+ * as given (a loosening key for Claude Code's settings is looked for there)
+ * and the directory the statements have `cd`'d into so far, which each
+ * statement updates in order; a nested script starts from the directory its
+ * parent was in and cannot move the parent.
+ */
+function collect(command, depth, out, scope) {
     const cmd = command.trim();
     if (cmd.length === 0)
         return;
@@ -1414,6 +2168,9 @@ function collect(command, depth, out) {
             out.push({ id: rule.id, level: rule.level, reason: rule.reason });
         }
     }
+    // `[IO.File]::WriteAllText(…)`: the `(` that opens its arguments is a
+    // statement boundary to `splitShell`, so it is judged on the command text.
+    out.push(...judgeEffects(dotNetEffects(cmd, scope.cwd), scope.raw));
     for (const statement of statements) {
         for (const rule of BASH_RULES) {
             if (rule.scope !== 'command' && rule.pattern.test(statement.masked)) {
@@ -1430,12 +2187,7 @@ function collect(command, depth, out) {
             const find = assessFind(words, resolved.index);
             if (find !== null)
                 out.push(find);
-            const special = assessGuardConfigSpecialFile(words, resolved.index);
-            if (special !== null)
-                out.push(special);
-            const shellWrite = assessGuardConfigShellWrite(words, resolved.index);
-            if (shellWrite !== null)
-                out.push(shellWrite);
+            out.push(...assessGuardConfig(words, resolved.index, scope));
             if (depth < MAX_NESTING) {
                 for (const script of nestedScripts(words, resolved.index)) {
                     // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
@@ -1451,8 +2203,13 @@ function collect(command, depth, out) {
                             reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
                         });
                     }
-                    collect(script, depth + 1, out);
+                    collect(script, depth + 1, out, { ...scope });
                 }
+            }
+            const head = words[resolved.index];
+            if (head !== undefined) {
+                const args = withoutRedirections(words.slice(resolved.index + 1));
+                scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd) ?? scope.cwd;
             }
         }
         // Finding 4: text a shell actually reads as its script — `bash <<EOF …
@@ -1461,10 +2218,15 @@ function collect(command, depth, out) {
         // to the STATEMENT rather than any one command in its pipeline, since
         // both shapes this covers depend on more than one command
         // (`isBareShellStdin` on the shell, plus either a heredoc on the same
-        // statement or the *preceding* pipeline member).
+        // statement or the *preceding* pipeline member). A program an
+        // interpreter reads the same way (`python - <<EOF`) is judged as program
+        // text, like `python -c`.
         if (depth < MAX_NESTING) {
-            for (const script of fedShellScripts(statement))
-                collect(script, depth + 1, out);
+            for (const { text } of fedScripts(statement, isBareShellStdin))
+                collect(text, depth + 1, out, { ...scope });
+        }
+        for (const { text, reader } of fedScripts(statement, isBareInterpreterStdin)) {
+            out.push(...judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope.raw));
         }
     }
 }
@@ -1486,7 +2248,7 @@ export function assessBashCommand(command) {
     if (!cmd)
         return { level: 'ok', reasons: [], rules: [] };
     const matched = [];
-    collect(cmd, 0, matched);
+    collect(cmd, 0, matched, { raw: cmd, cwd: '' });
     if (matched.length === 0)
         return { level: 'ok', reasons: [], rules: [] };
     // De-dupe by id, then most severe first.
