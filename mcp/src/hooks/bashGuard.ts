@@ -674,6 +674,17 @@ export function splitShell(command: string): ShellSplit {
       continue;
     }
 
+    // A bare CR — not the first half of CRLF — ends a line in PowerShell, so
+    // a `cd` and the write after it are two statements (fix round 1, M5). A
+    // POSIX shell reads it as part of a word; ending the statement there only
+    // ever assesses more. Pending heredocs keep waiting for the real newline.
+    if (ch === '\r' && command.charAt(i + 1) !== '\n') {
+      endStatement();
+      maskedCommand += '\n';
+      i += 1;
+      continue;
+    }
+
     // Subshells, groups and command substitution: whatever is inside runs as
     // its own command, so the boundary is a statement boundary.
     if (ch === '(' || ch === ')' || ch === '`') {
@@ -1358,18 +1369,41 @@ function cmdCommandWords(words: readonly string[]): string[] {
 /** `cmd /c cmd /c …` nesting judged; deeper is not (a chain thousands deep once overflowed the stack). */
 const MAX_CMD_NESTING = 8;
 
-function cmdEffects(args: readonly string[], cwd: string, depth = 0): Effects {
-  const e = noEffects();
-  if (depth > MAX_CMD_NESTING) return e;
+/** The commands `cmd /c LINE` (or `/k`) runs — see {@link cmdEffects} for how the line is read. */
+function cmdLine(args: readonly string[]): CmdCommand[] {
   const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return e;
+  if (at < 0) return [];
   const first = args[at + 1];
-  if (first === undefined) return e;
+  if (first === undefined) return [];
   const head = first.trim();
   const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
   // The shell words after the first one continue the line's LAST command.
   const last = commands[commands.length - 1];
   if (last !== undefined) last.words.push(...args.slice(at + 2));
+  return commands;
+}
+
+/**
+ * Every command a `cmd /c` line runs, nested `cmd /c` lines flattened, as
+ * shell words — for the checks that read a command rather than its file
+ * effects: the plugin command and program text (fix round 1, M1).
+ */
+function cmdInnerCommands(args: readonly string[], depth = 0): ShellWord[][] {
+  if (depth > MAX_CMD_NESTING) return [];
+  const out: ShellWord[][] = [];
+  for (const command of cmdLine(args)) {
+    const words = cmdCommandWords(command.words);
+    const name = (words[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+    if (name === 'cmd') out.push(...cmdInnerCommands(words.slice(1), depth + 1));
+    else out.push(words.map((value) => ({ value, quoted: false })));
+  }
+  return out;
+}
+
+function cmdEffects(args: readonly string[], cwd: string, depth = 0): Effects {
+  const e = noEffects();
+  if (depth > MAX_CMD_NESTING) return e;
+  const commands = cmdLine(args);
   let dir = cwd;
   for (const command of commands) {
     const [raw, ...rest] = cmdCommandWords(command.words);
@@ -1783,13 +1817,39 @@ function isInterpreter(name: string): boolean {
   return PYTHON.test(name) || INTERPRETERS.has(name);
 }
 
-/** Index of the interpreter a command runs, at `start` or behind `uv run`-style wrappers; -1 for none. */
+/** Commands that launch the program named after their own flags: `npx node …`, cmd's `start /b node …`. */
+const LAUNCHERS = new Set(['npx', 'bunx', 'pnpx', 'start']);
+/** Launcher options whose next word is their value, not the program (`npx -p pkg`). */
+const LAUNCHER_VALUED = new Set(['-p', '--package', '-c', '--call', '/d']);
+
+/** An interpreter's name as written — `node@20` (through `npx`) is `node`. */
+function interpreterName(word: string): string {
+  return commandName(word).replace(/@[\w.^~<>=-]*$/, '');
+}
+
+/**
+ * Index of the interpreter a command runs: at `start`, behind `uv run`-style
+ * wrappers, or behind a launcher (`npx --yes node@20`, `start "" /b node`);
+ * -1 for none.
+ */
 function interpreterIndex(words: readonly ShellWord[], start: number): number {
-  const name = commandName(words[start]?.value ?? '');
-  if (isInterpreter(name)) return start;
-  if (RUN_WRAPPERS.has(name) && words[start + 1]?.value === 'run') {
-    for (let i = start + 2; i < Math.min(words.length, start + 10); i += 1) {
-      if (isInterpreter(commandName(words[i]?.value ?? ''))) return i;
+  let i = start;
+  for (let hops = 0; hops < 4 && i < words.length; hops += 1) {
+    const name = interpreterName(words[i]?.value ?? '');
+    if (isInterpreter(name)) return i;
+    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === 'run') {
+      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
+        if (isInterpreter(interpreterName(words[k]?.value ?? ''))) return k;
+      }
+      return -1;
+    }
+    if (!LAUNCHERS.has(name)) return -1;
+    i += 1;
+    // Past the launcher's own options (and `start`'s empty "" title).
+    while (i < words.length) {
+      const w = words[i]?.value ?? '';
+      if (w !== '' && !/^(?:-|\/[A-Za-z])/.test(w)) break;
+      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
     }
   }
   return -1;
@@ -1899,7 +1959,7 @@ function powershellCommand(args: readonly string[], name: string): string[] {
 function inlineCode(words: readonly ShellWord[], start: number): string[] {
   const at = interpreterIndex(words, start);
   if (at < 0) return [];
-  const name = commandName(words[at]?.value ?? '');
+  const name = interpreterName(words[at]?.value ?? '');
   const args = words.slice(at + 1).map((w) => w.value);
   if (PYTHON.test(name)) return pythonCode(args);
   switch (name) {
@@ -2259,9 +2319,13 @@ function assessGuardConfig(words: ShellWord[], start: number, scope: Scope): Mat
   const e = effectsOf(commandName(head.value), withoutRedirections(words.slice(start + 1)), scope.cwd);
   e.writes.push(...redirectTargets(words).map((t) => resolveFrom(scope.cwd, t)));
   const out = judgeEffects(e, scope.raw);
-  if (turnsPluginOff(words, start)) out.push({ ...RULE_PLUGIN_OFF });
-  const lang = codeLang(commandName(words[interpreterIndex(words, start)]?.value ?? ''));
-  for (const code of inlineCode(words, start)) out.push(...judgeCode(code, lang, scope.raw));
+  // Each command of a `cmd /c` line, as if it stood alone (M1).
+  const commands = commandName(head.value) === 'cmd' ? cmdInnerCommands(words.slice(start + 1).map((w) => w.value)) : [];
+  for (const [cmdWords, at] of [[words, start] as const, ...commands.map((c) => [c, 0] as const)]) {
+    if (turnsPluginOff(cmdWords, at)) out.push({ ...RULE_PLUGIN_OFF });
+    const lang = codeLang(interpreterName(cmdWords[interpreterIndex(cmdWords, at)]?.value ?? ''));
+    for (const code of inlineCode(cmdWords, at)) out.push(...judgeCode(code, lang, scope.raw));
+  }
   return out;
 }
 

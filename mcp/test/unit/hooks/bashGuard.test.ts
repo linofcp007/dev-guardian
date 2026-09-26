@@ -1380,6 +1380,63 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     ])('does not flag %j', expectNotGuarded);
   });
 
+  // Fix round 1 (M1): inside `cmd /c`, the inner commands only had their file
+  // effects judged — not the plugin command, not program text.
+  describe('every command of a cmd /c line is judged like a top-level one (M1)', () => {
+    it.each([
+      ['cmd /c "claude plugin disable dev-guardian"', 'claude-plugin-disable'],
+      ['cmd /c claude plugin uninstall dev-guardian@dev-guardian', 'claude-plugin-disable'],
+      ['cmd /c "cd /d C:\\p && claude plugin disable dev-guardian@corp"', 'claude-plugin-disable'],
+      [`cmd /c node -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+      [`cmd /c "node -e \\"require('fs').unlinkSync('.guardian/hooks.config.json')\\""`, 'guard-config-inline-code'],
+      [`cmd /c "echo hi & python -c \\"open('.guardian/hooks-allowlist.json','w').write('[]')\\""`, 'guard-config-inline-code'],
+      [`cmd /c cmd /c node -e "require('fs').rmSync('.guardian/hooks.config.json')"`, 'guard-config-inline-code'],
+      [`start /b node -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+      [`cmd /c start "" /b node -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+      [`npx node -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+      [`npx --yes node@20 -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+      [`bunx node -e "require('fs').writeFileSync('.guardian/hooks.config.json', '{}')"`, 'guard-config-inline-code'],
+    ])('blocks %j', (command, rule) => expectBlocked(command, rule));
+
+    it.each([
+      'cmd /c "claude plugin list"',
+      'cmd /c node -e "console.log(1)"',
+      `cmd /c "node -e \\"console.log(require('./package.json').version)\\""`,
+      'start /b node server.js',
+      'start "" notepad.exe notes.txt',
+      'npx node --version',
+      `npx node -e "console.log(process.version)"`,
+      'npx prettier --write .',
+      'cmd /c "npm run build && npm test"',
+    ])('does not flag %j', expectNotGuarded);
+  });
+
+  // Fix round 1 (M5): PowerShell ends a line at a bare CR; the tokenizer read
+  // it as a blank, so `cd` and the relative write became one statement and
+  // the write was resolved from where the command started.
+  describe('a bare CR ends a statement, as PowerShell reads it (M5)', () => {
+    it.each([
+      ['cd .guardian\recho x > hooks.config.json', 'guard-config-shell-write'],
+      ["Set-Location $HOME\\.config\\dev-guardian\rSet-Content hooks.json '{}'", 'guard-config-shell-write'],
+      ['cd ~/.config/dev-guardian\rRemove-Item hooks.json', 'guard-config-remove'],
+      ['echo hi\rrm -rf /', 'rm-rf-root'],
+    ])('blocks %j', (command, rule) => expectBlocked(command, rule));
+
+    it.each([
+      'cd .guardian\r\nls',
+      'npm run build\r\nnpm test\r\n',
+      'echo "a\rb" > notes.txt',
+      'cd src\recho x > hooks.json',
+    ])('does not flag %j', (command) => expect(assessBashCommand(command).level).toBe('ok'));
+
+    it('CRLF still splits exactly as before', () => {
+      expect(splitShell('a b\r\nc d').statements.map((st) => st.commands.map((c) => c.map((w) => w.value)))).toEqual([
+        [['a', 'b']],
+        [['c', 'd']],
+      ]);
+    });
+  });
+
   it('a cmd /c chain nested thousands deep is bounded, and a shallow one still judged', () => {
     const t0 = Date.now();
     expect(assessBashCommand(`${'cmd /c '.repeat(2000)}echo hi`).level).toBe('ok');
