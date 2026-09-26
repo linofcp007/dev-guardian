@@ -40709,6 +40709,23 @@ function hasFileWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) 
   }
   return false;
 }
+function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) {
+  let count2 = 0;
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === void 0) break;
+    for (const entry of readDir(dir)) {
+      if (entry.isDirectory()) {
+        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join12(dir, entry.name));
+      } else if (entry.isFile()) {
+        const lower = entry.name.toLowerCase();
+        if (extensions.some((ext) => lower.endsWith(ext))) count2 += 1;
+      }
+    }
+  }
+  return count2;
+}
 function listProjectFiles(root, exclude = PROJECT_WALK_EXCLUDE) {
   const out = [];
   const stack = [{ abs: root, rel: "" }];
@@ -61677,6 +61694,7 @@ var EXTENSION_LANGUAGES = {
   java: "java",
   cs: "csharp"
 };
+var ROUTE_PACK_EXTENSIONS = Object.keys(EXTENSION_LANGUAGES).map((ext) => `.${ext}`);
 function languageFromPath(file) {
   const ext = file.split(".").pop()?.toLowerCase();
   if (ext === void 0) return "unknown";
@@ -62646,9 +62664,10 @@ function buildToolRun(run, via) {
   const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
+var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function judgeSurfaceReport(args) {
-  const { run, raw, via } = args;
-  const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1 });
+  const { run, raw, via, targets, projectPath } = args;
+  const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets });
   if (check2.ok) return { verdict: "ok", toolRun: buildToolRun(run, via ?? void 0) };
   const prefix = via !== null ? `${via}: ` : "";
   const exitClean = run.outcome === "completed" || run.exitCode === 1;
@@ -62658,13 +62677,55 @@ function judgeSurfaceReport(args) {
       toolRun: {
         name: "semgrep",
         status: "skipped",
-        reason: `${prefix}semgrep scanned 0 files \u2014 no file here is in a language the routes rules cover, or every source file is excluded (.semgrepignore)`
+        reason: `${prefix}semgrep scanned 0 of ${targets} file(s) in a routes-pack language \u2014 every one is excluded (.semgrepignore, .gitignore) or the rule file loaded nothing`
       }
     };
+  }
+  if (exitClean && check2.scanned > 0 && check2.errors > 0) {
+    const partial3 = perFileErrors(raw)?.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })) ?? null;
+    if (partial3 !== null) {
+      const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
+      return {
+        verdict: "partial",
+        partial: partial3,
+        toolRun: {
+          name: "semgrep",
+          status: "ok",
+          reason: `${via !== null ? `ran via ${via}; ` : ""}partial: ${partial3.length} file(s) only partly parsed \u2014 routes in the unparsed spans may be missing (${listed})`
+        }
+      };
+    }
   }
   const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
   const detail = [check2.reason ?? "semgrep failed", ...stderr !== void 0 ? [stderr] : []].join("; ");
   return { verdict: "failed", toolRun: { name: "semgrep", status: "failed", reason: `${prefix}${detail}` } };
+}
+function perFileErrors(raw) {
+  const errors = asArray(getProp(parseInputAsJson(raw), "errors"));
+  const out = [];
+  for (const entry of errors) {
+    const rawType = getProp(entry, "type");
+    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
+    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+    const file = targetFileOf(entry, rawType);
+    if (file === null || /\.ya?ml$/i.test(file)) return null;
+    const message3 = getString(entry, "message") ?? type;
+    out.push({ file, type, message: message3.split(/\r?\n/)[0] ?? message3 });
+  }
+  return out.length > 0 ? out : null;
+}
+function targetFileOf(entry, rawType) {
+  const path6 = getString(entry, "path");
+  if (path6 !== void 0 && path6.length > 0) return path6;
+  const span = asArray(getProp(entry, "spans"))[0];
+  const spanFile = span === void 0 ? void 0 : getString(span, "file");
+  if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
+  if (Array.isArray(rawType)) {
+    const location = asArray(rawType[1])[0];
+    const locationPath = location === void 0 ? void 0 : getString(location, "path");
+    if (locationPath !== void 0 && locationPath.length > 0) return locationPath;
+  }
+  return null;
 }
 
 // src/surface/specDiscover.ts
@@ -63152,6 +63213,22 @@ async function handler39(input, ctx) {
       return summarize4(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx, projectPath);
     }
   }
+  const persistAndSummarize = (snapshot2, toolsRun2) => {
+    if (inp.spec_paths !== void 0) return summarize4(snapshot2, null, toolsRun2, ctx, projectPath);
+    const persisted = ctx.storage.surface.insert({
+      project_path: projectPath,
+      tree_hash: treeHash,
+      snapshot: snapshot2,
+      cache_key: cacheKey
+    });
+    return summarize4(snapshot2, persisted.id, toolsRun2, ctx, projectPath);
+  };
+  const targets = countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
+  if (targets === 0) {
+    const toolsRun2 = [{ name: "semgrep", status: "skipped", reason: NOT_APPLICABLE_REASON }];
+    const snapshot2 = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun2, includeEnvVars, [], inp.spec_paths);
+    return persistAndSummarize(snapshot2, toolsRun2);
+  }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
   const outFile = join63(reportDir, "surface.json");
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
@@ -63212,12 +63289,12 @@ async function handler39(input, ctx) {
       projectPath
     );
   }
-  const judged = judgeSurfaceReport({ run, raw, via });
+  const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
   if (judged.verdict === "scanned_nothing") {
     return degradedResult(
       [judged.toolRun],
       ["semgrep"],
-      "Semgrep scanned no file in this project, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore and that the sources are in a language the routes rules cover.",
+      `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore / .gitignore.`,
       ctx,
       projectPath
     );
@@ -63248,17 +63325,22 @@ async function handler39(input, ctx) {
       `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? "failed"}). The routes above are what it did read, and they may be incomplete; nothing was persisted, so scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.`
     );
   }
-  if (inp.spec_paths !== void 0) {
-    return summarize4(snapshot, null, toolsRun, ctx, projectPath);
+  if (judged.verdict === "partial") {
+    const partiallyParsed = judged.partial ?? [];
+    const partialSnapshot = {
+      ...snapshot,
+      missing_tools: ["semgrep"],
+      partially_parsed: partiallyParsed
+    };
+    return withNote(
+      persistAndSummarize(partialSnapshot, toolsRun),
+      `Semgrep only partly parsed ${partiallyParsed.map((p) => p.file).join(", ")} (see partially_parsed): routes in the unparsed spans may be missing from this surface, so coverage is partial. Everything else was mapped and persisted.`
+    );
   }
-  const persisted = ctx.storage.surface.insert({
-    project_path: projectPath,
-    tree_hash: treeHash,
-    snapshot,
-    cache_key: cacheKey
-  });
-  return summarize4(snapshot, persisted.id, toolsRun, ctx, projectPath);
+  return persistAndSummarize(snapshot, toolsRun);
 }
+var NOT_APPLICABLE_REASON = "not applicable: no file in a language the routes rules cover (JS/TS, Python, PHP, Go, Rust, Ruby, Java, C#) \u2014 nothing to map";
+var EMPTY_SEMGREP_REPORT = { results: [], errors: [], paths: { scanned: [] } };
 var RECOVERY_STEP = "semgrep-metavar-recovery";
 function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
@@ -63549,6 +63631,8 @@ function summarize4(snapshot, snapshotId, toolsRun, ctx, projectPath) {
     spec_sample: specSample,
     spec_diff_summary: specDiffSummary(snapshot.spec_diff),
     shadow_sample: shadowSample(snapshot.spec_diff),
+    // Partial coverage names its files on every read, a cache hit included.
+    ...snapshot.partially_parsed !== void 0 ? { partially_parsed: snapshot.partially_parsed } : {},
     ...stackDetected ? {} : { note: NO_STACK_NOTE }
   };
 }

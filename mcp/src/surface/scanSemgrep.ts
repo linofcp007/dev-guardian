@@ -7,6 +7,7 @@ import {
 } from '../runners/dockerScanner.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { ToolRun } from '../types.js';
 
@@ -114,32 +115,59 @@ export function buildToolRun(run: ProcessRunResult, via?: string): ToolRun {
 /**
  * - `ok`: the run scanned files and reported no error — its routes are the
  *   project's surface.
- * - `scanned_nothing`: a clean exit, no error, and not one file scanned (a
- *   `.semgrepignore` over the source tree; a rule file the locale codec
- *   could not read loads as nothing, prints no error and exits 0). A gap,
- *   not an empty surface: `skipped`, and Semgrep is named missing.
- * - `failed`: anything else — an unclean exit, or a non-empty `errors[]` (a
- *   `PartialParsing` route file drops that file's routes).
- *
- * Only `ok` may be persisted: a snapshot is served for 24 h, and `scan_dast`
- * reads its route list as the whole surface.
+ * - `partial`: a clean exit that scanned files, where EVERY `errors[]` entry
+ *   is a problem confined to one target file (a warn-level
+ *   `PartialParsing`, a syntax error in one file). Partial coverage, not a
+ *   failure: the snapshot persists, Semgrep reads `ok` and is also named in
+ *   `missing_tools` (ran, with a narrower gap inside it), and the files are
+ *   listed. Refusing a whole WordPress snapshot over one `const NAMESPACE`
+ *   warning left scan_dast probing nothing on real PHP projects.
+ * - `scanned_nothing`: route-language targets exist, yet a clean run with no
+ *   error scanned none of them (a `.semgrepignore` over the sources; a rule
+ *   file the locale codec could not read loads as nothing, prints no error
+ *   and exits 0). A gap: `skipped`, Semgrep named missing, nothing persisted.
+ *   (A project with NO route-language file never gets here — the caller
+ *   reports that as not applicable without running Semgrep.)
+ * - `failed`: everything fatal — an unclean exit, an error that is not tied
+ *   to one target file (a rule or config error, a `level: error` entry with
+ *   no target, one naming the rule file itself), or per-file errors on a run
+ *   that scanned nothing. Nothing persisted.
  */
-export type SurfaceReportVerdict = 'ok' | 'scanned_nothing' | 'failed';
+export type SurfaceReportVerdict = 'ok' | 'partial' | 'scanned_nothing' | 'failed';
+
+/** A file Semgrep could only partly read, as its report names it (not yet project-relative). */
+export interface ReportedPartialParse {
+  file: string;
+  type: string;
+  message: string;
+}
 
 /**
- * Global Constraint 3 for the surface scan: the report is judged by the one
- * Semgrep judge every other call site uses (`runners/semgrepReport.ts` —
- * exit code, `paths.scanned`, `errors[]`), never by the exit code alone.
- * `raw` is the report text; the caller has already refused a missing or
- * unparseable one.
+ * Error types that describe the rules or the configuration, never one target
+ * file — fatal wherever they appear, even when the entry carries a path.
+ */
+const CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
+
+/**
+ * Global Constraint 3 for the surface scan, as the controller ruled it for
+ * I3: the report is judged by the one Semgrep judge every other call site
+ * uses (`runners/semgrepReport.ts` — exit code, `paths.scanned`, `errors[]`),
+ * never by the exit code alone, and a per-file parse problem is partial
+ * coverage rather than a failure. `raw` is the report text (the caller has
+ * already refused a missing or unparseable one); `targets` is how many files
+ * in a routes-pack language the project holds, so "scanned 0" is judged
+ * against what there was to scan. With `projectPath`, the partly parsed files
+ * are named relative to it.
  */
 export function judgeSurfaceReport(args: {
   run: ProcessRunResult;
   raw: string;
   via: string | null;
-}): { verdict: SurfaceReportVerdict; toolRun: ToolRun } {
-  const { run, raw, via } = args;
-  const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1 });
+  targets: number;
+  projectPath?: string;
+}): { verdict: SurfaceReportVerdict; toolRun: ToolRun; partial?: ReportedPartialParse[] } {
+  const { run, raw, via, targets, projectPath } = args;
+  const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets });
   if (check.ok) return { verdict: 'ok', toolRun: buildToolRun(run, via ?? undefined) };
 
   const prefix = via !== null ? `${via}: ` : '';
@@ -151,12 +179,66 @@ export function judgeSurfaceReport(args: {
         name: 'semgrep',
         status: 'skipped',
         reason:
-          `${prefix}semgrep scanned 0 files — no file here is in a language the routes rules ` +
-          'cover, or every source file is excluded (.semgrepignore)',
+          `${prefix}semgrep scanned 0 of ${targets} file(s) in a routes-pack language — every one is ` +
+          'excluded (.semgrepignore, .gitignore) or the rule file loaded nothing',
       },
     };
+  }
+  if (exitClean && check.scanned > 0 && check.errors > 0) {
+    const partial = perFileErrors(raw)?.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })) ?? null;
+    if (partial !== null) {
+      const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
+      return {
+        verdict: 'partial',
+        partial,
+        toolRun: {
+          name: 'semgrep',
+          status: 'ok',
+          reason:
+            `${via !== null ? `ran via ${via}; ` : ''}partial: ${partial.length} file(s) only partly parsed — ` +
+            `routes in the unparsed spans may be missing (${listed})`,
+        },
+      };
+    }
   }
   const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
   const detail = [check.reason ?? 'semgrep failed', ...(stderr !== undefined ? [stderr] : [])].join('; ');
   return { verdict: 'failed', toolRun: { name: 'semgrep', status: 'failed', reason: `${prefix}${detail}` } };
+}
+
+/**
+ * Every `errors[]` entry as a per-file problem, or null when any one of them
+ * is not: a config/rule error type, no target file named, or the file named
+ * is a YAML file (the routes pack itself — the pack reads no YAML target).
+ * The file comes from the entry's `path`, else its first span, else the
+ * location list inside a `["PartialParsing", [...]]` type.
+ */
+function perFileErrors(raw: string): ReportedPartialParse[] | null {
+  const errors = asArray(getProp(parseInputAsJson(raw), 'errors'));
+  const out: ReportedPartialParse[] = [];
+  for (const entry of errors) {
+    const rawType = getProp(entry, 'type');
+    const type =
+      typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
+    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+    const file = targetFileOf(entry, rawType);
+    if (file === null || /\.ya?ml$/i.test(file)) return null;
+    const message = getString(entry, 'message') ?? type;
+    out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
+  }
+  return out.length > 0 ? out : null;
+}
+
+function targetFileOf(entry: unknown, rawType: unknown): string | null {
+  const path = getString(entry, 'path');
+  if (path !== undefined && path.length > 0) return path;
+  const span = asArray(getProp(entry, 'spans'))[0];
+  const spanFile = span === undefined ? undefined : getString(span, 'file');
+  if (spanFile !== undefined && spanFile.length > 0) return spanFile;
+  if (Array.isArray(rawType)) {
+    const location = asArray(rawType[1])[0];
+    const locationPath = location === undefined ? undefined : getString(location, 'path');
+    if (locationPath !== undefined && locationPath.length > 0) return locationPath;
+  }
+  return null;
 }

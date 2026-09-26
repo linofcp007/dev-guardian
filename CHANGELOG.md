@@ -902,10 +902,14 @@ keeps working (migrations 004–011 are additive).
 - **`map_attack_surface` judged Semgrep by its exit code alone**, so a run that
   scanned no file (a `.semgrepignore` over the sources, the locale-codec
   hazard) was `ok` and persisted an empty surface for 24 h. It now uses the
-  shared Semgrep judge: nothing scanned is `skipped` with Semgrep named
-  missing, an unclean exit or any `errors[]` entry (a `PartialParsing` route
-  file) is `failed`, and neither is persisted; a failed run's routes are still
-  shown, marked unpersisted. Semgrep now runs in UTF-8 mode here too.
+  shared Semgrep judge against the project's route-language files: none at
+  all is `skipped`, not applicable, never a gap (Semgrep is not run and the
+  snapshot persists); files present but none scanned is a gap, nothing
+  persisted; a file only partly parsed (a warn-level `PartialParsing`, e.g.
+  PHP's `const NAMESPACE`) persists as partial coverage, the files listed in
+  `partially_parsed`; a fatal run (unclean exit, rule/config error) is
+  `failed`, its routes shown but not persisted. Semgrep now runs in UTF-8 mode
+  here too.
 - **A Gradle build without `gradle.lockfile`, or a Python project Trivy
   cannot read** (a PEP 621 `pyproject.toml`, a `Pipfile` without
   `Pipfile.lock`, an unpinned `requirements.txt`, a `requirements-dev.txt`),

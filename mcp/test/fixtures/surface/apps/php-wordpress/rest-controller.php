@@ -10,15 +10,14 @@ namespace Guardian\Fixture;
 
 class Rest_Controller {
 
-	// Not `const NAMESPACE`, the spelling many real plugins use: it is legal
-	// PHP 7+ (semi-reserved words are allowed as class-constant names), but
-	// Semgrep's PHP parser cannot read it — 1.164.0 and 1.176.1 emit a
-	// `PartialParsing` warning naming these lines (1.86.0 parsed it cleanly).
-	// map_attack_surface treats any Semgrep `errors[]` entry as a failed run
-	// and persists nothing (Global Constraint 3), so that spelling here would
-	// make every real-Semgrep test of this fixture a test of the failure path.
-	// A project that uses it gets `semgrep: failed` naming the file.
-	const REST_NAMESPACE = 'guardian/v2';
+	// `const NAMESPACE` is legal PHP 7+ (semi-reserved words are allowed as
+	// class-constant names) and common in real plugins, but current Semgrep's
+	// PHP parser cannot read it: 1.164.0 emits a `PartialParsing` *warning*
+	// naming these lines. 1.86.0 parses the same file with no error at all, so
+	// this is a regression in Semgrep, not a property of the fixture. Either
+	// way both register_rest_route() calls below still match, which is the
+	// point worth pinning. Renaming the constant makes the warning disappear.
+	const NAMESPACE = 'guardian/v2';
 
 	public function register(): void {
 		// Literal namespace: resolvable to /wp-json/guardian/v1/items.
@@ -34,9 +33,9 @@ class Rest_Controller {
 
 		// Computed namespace — the dominant idiom in real plugins. There is no
 		// honest way to name the served URL, so the route must be reported as
-		// partial rather than as /wp-json/self::REST_NAMESPACE/items.
+		// partial rather than as /wp-json/self::NAMESPACE/items.
 		register_rest_route(
-			self::REST_NAMESPACE,
+			self::NAMESPACE,
 			'/items/(?P<id>\d+)',
 			array(
 				'methods'  => 'DELETE',

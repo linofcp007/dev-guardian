@@ -51,40 +51,69 @@ describe('buildToolRun', () => {
   });
 });
 
-describe('judgeSurfaceReport (Global Constraint 3)', () => {
+describe('judgeSurfaceReport (Global Constraint 3, and the I3 ruling)', () => {
   const report = (o: Record<string, unknown>): string => JSON.stringify({ results: [], errors: [], ...o });
-  const SCANNED = { paths: { scanned: ['/p/app.ts'] } };
+  const SCANNED = { paths: { scanned: ['/p/app.ts', '/p/wp.php'] } };
+  const judge = (r: ProcessRunResult, raw: string, via: string | null = null, targets = 2) =>
+    judgeSurfaceReport({ run: r, raw, via, targets });
 
   it('ok: a clean exit that scanned files and reported no error', () => {
-    expect(judgeSurfaceReport({ run: run('completed', 0), raw: report(SCANNED), via: null })).toEqual({
+    expect(judge(run('completed', 0), report(SCANNED))).toEqual({
       verdict: 'ok',
       toolRun: { name: 'semgrep', status: 'ok' },
     });
-    expect(judgeSurfaceReport({ run: run('failed', 1), raw: report(SCANNED), via: null }).verdict).toBe('ok');
+    expect(judge(run('failed', 1), report(SCANNED)).verdict).toBe('ok');
   });
 
-  it('scanned_nothing: exit 0, no error, paths.scanned empty or absent — skipped, never ok', () => {
+  it('scanned_nothing: route-language targets exist, exit 0, no error, nothing scanned — skipped, never ok', () => {
     for (const raw of [report({ paths: { scanned: [] } }), JSON.stringify({ results: [] })]) {
-      const j = judgeSurfaceReport({ run: run('completed', 0), raw, via: null });
+      const j = judge(run('completed', 0), raw);
       expect(j.verdict).toBe('scanned_nothing');
       expect(j.toolRun.status).toBe('skipped');
-      expect(j.toolRun.reason).toMatch(/scanned 0 files/);
+      expect(j.toolRun.reason).toMatch(/scanned 0 of 2 file/);
     }
   });
 
-  it('failed: errors[] on a clean exit, naming the error', () => {
-    const raw = report({ ...SCANNED, errors: [{ type: 'PartialParsing', message: 'Syntax error\nat line 3' }] });
-    const j = judgeSurfaceReport({ run: run('completed', 0), raw, via: null });
-    expect(j.verdict).toBe('failed');
-    expect(j.toolRun.reason).toBe('1 Semgrep error(s): PartialParsing: Syntax error');
+  it('partial: every error is a per-file problem (warn PartialParsing; a syntax error in one file) — ok, files named', () => {
+    const raw = report({
+      ...SCANNED,
+      errors: [
+        {
+          level: 'warn',
+          type: ['PartialParsing', [{ path: '/p/wp.php' }]],
+          message: 'Syntax error at line /p/wp.php:20:\n `const NAMESPACE` was unexpected',
+          path: '/p/wp.php',
+        },
+        { level: 'error', type: 'Syntax error', message: 'bad', spans: [{ file: '/p/app.ts' }] },
+      ],
+    });
+    const j = judge(run('completed', 0), raw);
+    expect(j.verdict).toBe('partial');
+    expect(j.toolRun.status).toBe('ok');
+    expect(j.toolRun.reason).toMatch(/^partial: 2 file\(s\) only partly parsed/);
+    expect(j.partial).toEqual([
+      { file: '/p/wp.php', type: 'PartialParsing', message: 'Syntax error at line /p/wp.php:20:' },
+      { file: '/p/app.ts', type: 'Syntax error', message: 'bad' },
+    ]);
+  });
+
+  it.each([
+    ['an error tied to no target file', { level: 'warn', type: 'Timeout', message: 'rule timed out' }],
+    ['a rule error', { level: 'error', type: 'Rule parse error', message: 'bad pattern', path: '/p/app.ts' }],
+    ['an error naming the rule file', { level: 'warn', type: 'Syntax error', message: 'x', path: '/r/routes.yml' }],
+  ])('failed: %s is fatal, even beside per-file ones', (_label, fatal) => {
+    const raw = report({ ...SCANNED, errors: [{ level: 'warn', type: 'PartialParsing', message: 'x', path: '/p/wp.php' }, fatal] });
+    expect(judge(run('completed', 0), raw).verdict).toBe('failed');
+  });
+
+  it('failed: per-file errors on a run that scanned nothing, or exited unclean', () => {
+    const perFile = [{ level: 'warn', type: 'PartialParsing', message: 'x', path: '/p/wp.php' }];
+    expect(judge(run('completed', 0), report({ paths: { scanned: [] }, errors: perFile })).verdict).toBe('failed');
+    expect(judge(run('failed', 2), report({ ...SCANNED, errors: perFile })).verdict).toBe('failed');
   });
 
   it('failed: an unclean exit, even with a report that scanned nothing (exit 7: a config that did not load)', () => {
-    const j = judgeSurfaceReport({
-      run: run('failed', 7, 'invalid config\n'),
-      raw: report({ paths: { scanned: [] } }),
-      via: 'docker (img)',
-    });
+    const j = judge(run('failed', 7, 'invalid config\n'), report({ paths: { scanned: [] } }), 'docker (img)', 1);
     expect(j.verdict).toBe('failed');
     expect(j.toolRun.reason).toBe('docker (img): exit 7; scanned 0 of 1 target(s); invalid config');
   });

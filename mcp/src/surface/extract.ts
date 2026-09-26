@@ -29,6 +29,14 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   cs: 'csharp',
 };
 
+/**
+ * The file extensions (with the dot) of every language the routes pack has
+ * rules for — what `map_attack_surface` counts as Semgrep's targets. A
+ * project with none has nothing for the pack to read: not applicable, never
+ * a gap.
+ */
+export const ROUTE_PACK_EXTENSIONS: readonly string[] = Object.keys(EXTENSION_LANGUAGES).map((ext) => `.${ext}`);
+
 export function languageFromPath(file: string): string {
   const ext = file.split('.').pop()?.toLowerCase();
   if (ext === undefined) return 'unknown';

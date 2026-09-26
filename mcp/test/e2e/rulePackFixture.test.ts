@@ -590,11 +590,10 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
 
       // The bar from item 1's five-NestJS-rules incident: a rule that fails
       // to parse matches nothing on every run while the suite stays green.
-      // `level: 'warn'` is tolerated here — a target that does not parse
-      // (PartialParsing) says nothing about the import rules; the fixture no
-      // longer carries one (see php-wordpress/rest-controller.php), because
-      // map_attack_surface fails a run on any `errors[]` entry. `level:
-      // 'error'` — a genuine rule parse error, like the
+      // `level: 'warn'` is tolerated — the one pre-existing entry here is a
+      // PartialParsing note on php-wordpress/rest-controller.php's
+      // `const NAMESPACE` (see that file's own comment), unrelated to any
+      // import rule. `level: 'error'` — a genuine rule parse error, like the
       // one Rust's `use $MODULE::{ ..., $SYMBOL, ... };` produced during this
       // rule's own development — is not.
       const hardErrors = parsed.errors.filter((e) => e.level === 'error');
@@ -606,6 +605,46 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
           .map((r) => languageFromPath(r.path)),
       );
       expect([...languages].sort()).toEqual(EXPECTED_IMPORT_LANGUAGES);
+    },
+    6 * 60_000,
+  );
+
+  // Controller ruling on I3: php-wordpress/rest-controller.php's
+  // `const NAMESPACE` is legal PHP that current Semgrep only partly parses
+  // (a warn-level PartialParsing entry). That is partial coverage, not a
+  // failed scan: the snapshot persists, Semgrep reads ok with a named gap,
+  // and the warned file is listed. Refusing the whole snapshot left
+  // scan_dast probing nothing on real WordPress projects.
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'a warn-level PartialParsing file: the snapshot persists as partial and names the file',
+    async () => {
+      const work = makeTempDir('guardian-rulepack-wp-');
+      cpSync(join(FIXTURE, 'php-wordpress'), work, { recursive: true });
+      const ctx = makeContext();
+      const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
+      if (!tool) throw new Error('map_attack_surface is not registered');
+
+      const result = okResult<
+        SurfaceResult & {
+          missing_tools: string[];
+          partially_parsed?: Array<{ file: string; type: string; message: string }>;
+        }
+      >(await tool.handler({ project_path: work, force: true }, ctx));
+
+      const semgrep = result.tools_run.find((t) => t.name === 'semgrep');
+      expect(semgrep?.status, semgrep?.reason).toBe('ok');
+      expect(semgrep?.reason).toMatch(/^partial: 1 file\(s\) only partly parsed/);
+      expect(result.missing_tools).toEqual(['semgrep']);
+      expect(result.partially_parsed).toEqual([
+        expect.objectContaining({ file: 'rest-controller.php', type: 'PartialParsing' }),
+      ]);
+      expect(result.snapshot_id).not.toBeNull();
+      const snapshotId = result.snapshot_id;
+      if (snapshotId === null) return;
+      const snapshot = ctx.storage.surface.getById(snapshotId)?.snapshot;
+      expect(snapshot?.partially_parsed?.map((p) => p.file)).toEqual(['rest-controller.php']);
+      // Both register_rest_route() calls still match — the literal one resolved.
+      expect(snapshot?.routes.map((r) => r.path_resolved)).toContain('/wp-json/guardian/v1/items');
     },
     6 * 60_000,
   );
