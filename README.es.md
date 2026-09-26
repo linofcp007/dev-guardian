@@ -50,11 +50,11 @@ Desde un clon local: `claude --plugin-dir /ruta/a/dev-guardian` para una sesión
 | `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Informes a partir del historial de escaneos |
 | `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Respuesta a incidentes |
 | `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go |
-| `/guardian-status` | — | Último escaneo, deltas, baseline, supresiones a punto de caducar |
+| `/guardian-status` | enfoque opcional (p. ej. "solo seguridad") | Último escaneo, deltas, baseline, supresiones a punto de caducar |
 | `/guardian-infra` | `docker`, `iac` | Dockerfile, imagen, compose, Terraform, Kubernetes, CloudFormation, Helm |
 | `/guardian-wp` | ruta de la instalación o URL del sitio | Auditoría de WordPress |
 | `/guardian-dotnet` | ruta del proyecto o de la solución | Auditoría de C# / .NET |
-| `/g` | — | Atajo de la skill `guardian` (el router) |
+| `/g` | lo que quieres revisar | Atajo de la skill `guardian` (el router) |
 
 La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo, cuál lo sustituye.
 
@@ -100,7 +100,7 @@ Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian:/
 | Python | sí | 10 reglas | Flask, FastAPI, Django | Trivy, `pip-audit` | alcanzable / inalcanzable |
 | Go | sí | 9 reglas | net/http, gin, chi | Trivy | alcanzable / inalcanzable |
 | Rust | sí | 1 regla (sleep bloqueante dentro de una `async fn`) | actix-web | Trivy | alcanzable / inalcanzable |
-| Java | sí | 7 reglas | Spring | Trivy | solo alcanzable / desconocido |
+| Java | sí | 7 reglas | Spring | Trivy (Maven; Gradle solo con `gradle.lockfile`) | solo alcanzable / desconocido |
 | C# / .NET | sí | 11 reglas | ASP.NET Core | Trivy, `dotnet list package --vulnerable` | solo alcanzable / desconocido |
 | PHP | sí, también sin `composer.json` | 6 reglas | Laravel | Trivy (`composer.lock`) | solo alcanzable / desconocido |
 | WordPress | sí, con WooCommerce y Kadence | las reglas PHP, más `p/wordpress` en `scan_wordpress` | rutas REST | WPScan (URL en vivo), feed de Wordfence (desde el código) | como PHP |
@@ -108,6 +108,8 @@ Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian:/
 | Kotlin | **solo detección** | — | — | — | — |
 
 Más allá de la tabla, `scan_sast` ejecuta el ruleset del registry de Semgrep (`--config=auto`), que elige reglas para los lenguajes que encuentre — Kotlin incluido — y gitleaks busca secretos en cualquier proyecto. Contenedores e IaC (Dockerfile, imágenes, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows de GitHub Actions) quedan cubiertos por `scan_containers` y `scan_iac`. "Solo alcanzable / desconocido" significa que la herramienta nunca afirma que un código es inalcanzable en un lenguaje que resuelve el código en tiempo de ejecución (autoload, anotaciones, contenedores de DI). .NET tiene además cuatro herramientas propias y WordPress diez. Trivy lee un lock file de Gradle en cualquier proyecto, Kotlin incluido, pero no hay reglas, extracción de rutas ni control de huecos para Kotlin.
+
+**Limitación actual:** un proyecto Java o Kotlin con Gradle pero sin `gradle.lockfile` no recibe findings de dependencias, y ningún hueco de cobertura lo indica.
 
 ## Hooks de protección
 
@@ -118,6 +120,8 @@ Se cargan automáticamente con el plugin, sin dependencias y en fail-open:
 - **PreToolUse** en Bash y PowerShell — bloquea comandos catastróficos (`rm -rf /`, `curl … | sh`, `iwr … | iex`, escrituras directas en disco, fork bombs), avisa en los arriesgados y revisa los paquetes antes de que `npm`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `poetry`, `composer` o `dotnet add package` los instalen: un paquete malicioso se bloquea; uno inexistente solo se bloquea en un comando de instalación simple y único.
 - **PreToolUse** en escrituras — impide que un asistente edite la propia configuración de los hooks; opcionalmente bloquea la escritura de un token de un proveedor.
 
+El `.guardian/hooks.config.json` de un proyecto solo puede hacerlos más estrictos; desactivar uno exige la configuración del usuario o una variable de entorno.
+
 Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.md). Los mismos detectores se ejecutan desde la terminal con `node cli/dev-guardian.mjs check --file <ruta>` o `--bash "<comando>"`.
 
 ## Otros hosts de IA
@@ -125,26 +129,27 @@ Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.m
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline y Claude Desktop reciben el servidor MCP y un archivo de reglas (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
 
 ```text
-git clone --depth 1 --branch v2.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
+Fija una versión con `--branch vX.Y.Z`: la última etiqueta posterior a 2.0.0, o la rama por defecto, como arriba, hasta que exista una. `--update-mcp`, `--global` y `ci-init` necesitan una versión posterior a 2.0.0 — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
 ```text
-node cli/dev-guardian.mjs ci-init github --write        # también gitlab, bitbucket
-node cli/dev-guardian.mjs baseline update --project .   # haz commit de .guardian/baseline.json
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # una vez: paquetes de runtime de scan
+node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # también gitlab, bitbucket
+node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # haz commit de .guardian/baseline.json
+node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. Ver [docs/ci.md](docs/ci.md). Para una vista local: `node cli/dev-guardian.mjs status` y `dashboard` (una página HTML autónoma, sin red).
+`ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. Ver [docs/ci.md](docs/ci.md). Ejecútalos desde tu proyecto, con la ruta de tu clon (la copia del propio plugin también sirve). Para una vista local: `status` y `dashboard` (una página HTML autónoma, sin red).
 
 ## Privacidad y red
 
-dev-guardian no envía telemetría propia. Algunas herramientas sí acceden a la red — el modo registry de Semgrep (que envía métricas de uso a Semgrep Inc.; `local_only: true` lo evita), la base de datos de Trivy, OSV, los registros de paquetes, CISA KEV / FIRST EPSS, Wordfence y la verificación de secretos en vivo, que es opcional. La lista completa, por herramienta, está en [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desactiva las consultas que dev-guardian hace por su cuenta (inteligencia de amenazas, revisión de paquetes, verificación de secretos en vivo, el feed de Wordfence); todas las variables de entorno están en [docs/env.md](docs/env.md).
+dev-guardian no envía telemetría propia. Algunas herramientas sí acceden a la red — el modo registry de Semgrep (que envía métricas de uso a Semgrep Inc.; `local_only: true` lo evita) y su comprobación de versión, la base de datos de Trivy, los feeds NuGet de un proyecto .NET (`scan_sast` lo restaura y lo compila, con o sin `local_only`), OSV, los registros de paquetes, CISA KEV / FIRST EPSS, Wordfence y la verificación de secretos en vivo, que es opcional. La lista completa, por herramienta, está en [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desactiva las consultas que dev-guardian hace por su cuenta (inteligencia de amenazas, revisión de paquetes, verificación de secretos en vivo, el feed de Wordfence); todas las variables de entorno están en [docs/env.md](docs/env.md).
 
 ## Solución de problemas
 

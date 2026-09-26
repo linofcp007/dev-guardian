@@ -4,19 +4,22 @@ The CLI runs the same tool handlers an MCP session does — no Claude Code, no M
 
 ## The short version
 
+Run the CLI from the project you want to scan, by the absolute path of a dev-guardian clone (see [hosts.md](hosts.md#1-clone-once) — `ci-init` needs a release after 2.0.0) or of the installed plugin:
+
 ```text
-node cli/dev-guardian.mjs ci-init github --write      # or gitlab, bitbucket
-node cli/dev-guardian.mjs baseline update --project .  # once, locally
+npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                  # once: the runtime packages scan needs
+node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write      # or gitlab, bitbucket
+node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .  # once, locally
 git add .github/workflows/dev-guardian.yml .guardian/baseline.json
 ```
 
-`ci-init` writes a pipeline for the project you are in (never for dev-guardian's own repository); `baseline update` records today's findings so the gate only fails on new ones.
+`ci-init` writes a pipeline for the project you are in (never for dev-guardian's own repository); `baseline update` records today's findings so the gate only fails on new ones. The examples below write `dev-guardian.mjs` for that same path.
 
 ## `scan` and `baseline update`
 
 ```text
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
-node cli/dev-guardian.mjs baseline update --project .
+node dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+node dev-guardian.mjs baseline update --project .
 ```
 
 `scan` runs, in this order: `detect_stack`, `security_scan_full` (which runs `scan_sast`, `scan_secrets`, `scan_deps` and `scan_iac`), `license_compatibility`, `map_attack_surface`, then `scan_dast` (only with `--base-url`) and `validate_finding`. A step that fails is recorded as a coverage gap and the rest still run. `quality_check` and `.guardian/budgets.yml` are not part of the CI gate.
@@ -27,7 +30,7 @@ node cli/dev-guardian.mjs baseline update --project .
 | `--fail-on <severity>` | `info`, `low`, `medium`, `high` (default) or `critical`: a finding new to the baseline at or above it fails the gate |
 | `--format human\|json` | report on stdout |
 | `--sarif <path>` | also write SARIF 2.1.0 |
-| `--local-only` | Semgrep runs only the rules on disk, with `--metrics=off`: no registry download, no telemetry, fewer rules |
+| `--local-only` | Semgrep runs only the rules on disk, with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. A .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress) |
 | `--base-url <url>` + `--authorized-target` | include `scan_dast` against a running app you are authorized to test |
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
 
@@ -56,7 +59,7 @@ node cli/dev-guardian.mjs baseline update --project .
 ## `ci-init`
 
 ```text
-node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force]
+node dev-guardian.mjs ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force]
 ```
 
 | Target | File written |
@@ -79,4 +82,4 @@ Resolving the tag needs `git`: from the local checkout's tags when they are ther
 
 ## Scanning workflows
 
-`scan_iac` also audits `.github/workflows/*.yml` when they exist: **zizmor** (template injection, unpinned `uses:`, excessive `permissions:`, persisted credentials) and **actionlint** (schema and expression errors, and shellcheck on `run:` blocks when shellcheck is installed). Either one missing is a named gap in `missing_tools`, never silence.
+`scan_iac` also audits `.github/workflows/*.yml` when they exist: **zizmor** (template injection, unpinned `uses:`, excessive `permissions:`, persisted credentials) and **actionlint** (schema and expression errors). dev-guardian runs actionlint with `-shellcheck= -pyflakes=`, so its shellcheck and pyflakes checks of `run:` blocks are off. Either tool missing is a named gap in `missing_tools`, never silence.

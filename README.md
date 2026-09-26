@@ -50,11 +50,11 @@ From a local clone instead: `claude --plugin-dir /path/to/dev-guardian` for one 
 | `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Reports from the scan history |
 | `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Incident response |
 | `/guardian-release` | `predeploy`, `prerelease` | Go / no-go gates |
-| `/guardian-status` | — | Latest scan, deltas, baseline, expiring suppressions |
+| `/guardian-status` | optional focus (e.g. "only security") | Latest scan, deltas, baseline, expiring suppressions |
 | `/guardian-infra` | `docker`, `iac` | Dockerfile, image, compose, Terraform, Kubernetes, CloudFormation, Helm |
 | `/guardian-wp` | install path or site URL | WordPress audit |
 | `/guardian-dotnet` | project or solution path | C# / .NET audit |
-| `/g` | — | Alias of the `guardian` router skill |
+| `/g` | what you want checked | Alias of the `guardian` router skill |
 
 Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacement.
 
@@ -100,7 +100,7 @@ Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cv
 | Python | yes | 10 rules | Flask, FastAPI, Django | Trivy, `pip-audit` | reachable / unreachable |
 | Go | yes | 9 rules | net/http, gin, chi | Trivy | reachable / unreachable |
 | Rust | yes | 1 rule (blocking sleep in `async fn`) | actix-web | Trivy | reachable / unreachable |
-| Java | yes | 7 rules | Spring | Trivy | reachable / unknown only |
+| Java | yes | 7 rules | Spring | Trivy (Maven; Gradle only with a `gradle.lockfile`) | reachable / unknown only |
 | C# / .NET | yes | 11 rules | ASP.NET Core | Trivy, `dotnet list package --vulnerable` | reachable / unknown only |
 | PHP | yes, also without `composer.json` | 6 rules | Laravel | Trivy (`composer.lock`) | reachable / unknown only |
 | WordPress | yes, with WooCommerce and Kadence | the PHP rules, plus `p/wordpress` in `scan_wordpress` | REST routes | WPScan (live URL), Wordfence feed (from source) | as PHP |
@@ -108,6 +108,8 @@ Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cv
 | Kotlin | **detection only** | — | — | — | — |
 
 Beyond the table, `scan_sast` runs Semgrep's registry ruleset (`--config=auto`), which picks rules for whatever languages it finds — Kotlin included — and gitleaks scans every project for secrets. Containers and IaC (Dockerfile, images, compose, Terraform, Kubernetes, CloudFormation, Helm, GitHub Actions workflows) are covered by `scan_containers` and `scan_iac`. "Reachable / unknown only" means the tool never claims code is unreachable in a language that resolves code at runtime (autoload, annotations, DI containers). `.NET` also has four dedicated tools; WordPress has ten. Trivy reads a Gradle lock file for any project, Kotlin included, but no rule, route extractor or gap check exists for Kotlin.
+
+**Current limitation:** a Java or Kotlin project built with Gradle but without a `gradle.lockfile` gets no dependency findings, and no coverage gap says so.
 
 ## Guardrail hooks
 
@@ -118,6 +120,8 @@ Loaded automatically with the plugin, dependency-free and fail-open:
 - **PreToolUse** on Bash and PowerShell — denies catastrophic commands (`rm -rf /`, `curl … | sh`, `iwr … | iex`, raw-disk writes, fork bombs), warns on risky ones, and vets packages before `npm`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `poetry`, `composer` or `dotnet add package` installs them: a malicious package is denied, a nonexistent one is denied only in a plain, single install command.
 - **PreToolUse** on writes — denies an assistant's edit of the hook configuration itself; optionally blocks writing a provider token.
 
+A project's `.guardian/hooks.config.json` can only make these stricter; switching one off takes the user-level config or an environment variable.
+
 Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). The same detectors run from a terminal with `node cli/dev-guardian.mjs check --file <path>` or `--bash "<command>"`.
 
 ## Other AI hosts
@@ -125,26 +129,27 @@ Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). T
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline and Claude Desktop get the MCP server and a rules file (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-git clone --depth 1 --branch v2.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-It fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
+Pin a release with `--branch vX.Y.Z`: the latest tag after 2.0.0, or the default branch as above until one is published. `--update-mcp`, `--global` and `ci-init` need a release after 2.0.0 — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
 ```text
-node cli/dev-guardian.mjs ci-init github --write        # also gitlab, bitbucket
-node cli/dev-guardian.mjs baseline update --project .   # commit .guardian/baseline.json
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # once: runtime packages for scan
+node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # also gitlab, bitbucket
+node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # commit .guardian/baseline.json
+node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. See [docs/ci.md](docs/ci.md). For a local view: `node cli/dev-guardian.mjs status` and `dashboard` (a self-contained HTML page, no network).
+`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
 
 ## Privacy and network
 
-dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it), Trivy's database, OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
+dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it) and its version check, Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
 
 ## Troubleshooting
 

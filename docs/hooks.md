@@ -5,7 +5,7 @@ With the plugin enabled, Claude Code loads [`hooks/hooks.json`](../hooks/hooks.j
 Two rules hold for all of them:
 
 - **Fail open.** Any error inside a hook exits 0 with no output. A guardrail that breaks must not break your session. `GUARDIAN_HOOKS_DEBUG=1` prints what went wrong on stderr.
-- **Only what just happened.** A hook looks at the text just written or the command about to run, never at the repository. The authoritative scans stay in the MCP tools (`scan_secrets`, `vet_packages`, …).
+- **Only what just happened.** A hook assesses the text just written or the command about to run — it never scans the repository. It does read a little around it: SessionStart runs `git status` and checks `.guardian/`, and the install hook reads registry configuration (`.npmrc`, `pip.conf`, `package.json` workspaces, … — listed below). The authoritative scans stay in the MCP tools (`scan_secrets`, `vet_packages`, …).
 
 Each hook has a 15 s timeout in `hooks.json`.
 
@@ -13,7 +13,7 @@ Each hook has a 15 s timeout in `hooks.json`.
 
 | Event | Matcher | What it does | Default |
 | --- | --- | --- | --- |
-| `SessionStart` | — | Briefs the agent: plugin version, branch, uncommitted changes, whether the project has a `.guardian/` directory and when the database last changed. | on |
+| `SessionStart` | — | Briefs the agent: plugin version, branch, uncommitted changes, whether the project has a `.guardian/` directory and when the database last changed — and, when the project's hook config asked to loosen a guardrail, that it was ignored. | on |
 | `PostToolUse` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | Scans the inserted text for hard-coded secrets (medium confidence and up) and adds a warning with a **redacted** preview. | warn |
 | `PreToolUse` | `Bash`, `PowerShell` | Assesses the command: **denies** catastrophic ones, warns on risky ones, then vets any package it would install. | deny catastrophic |
 | `PreToolUse` | `Write`, `Edit`, `MultiEdit` | **Denies** any edit of the guard's own configuration (below). | always |
@@ -60,14 +60,16 @@ The network hosts involved are listed in [SECURITY.md](../SECURITY.md).
 
 | Where | Who may write it | What it can do |
 | --- | --- | --- |
-| `.guardian/hooks.config.json` (project) | the user — an assistant's edit is denied | `enabled`, `sessionStart`, `secrets.warn`, `secrets.block`, `bash.warn`, `bash.block: true`, `ignorePaths`. `"bash": { "block": false }` here is **ignored**: a project file may only make the guard stricter. |
-| `~/.config/dev-guardian/hooks.json` (user) | the user — an assistant's edit is denied | the same keys, and it wins over the project file, including `"bash": { "block": false }` |
-| `.guardian/hooks-allowlist.json` (project) | the user — an assistant's edit is denied | substrings that silence a secret warning: a JSON array, or `{ "secrets": [...] }` |
+| `.guardian/hooks.config.json` (project) | the user — an assistant's `Write` / `Edit` / `MultiEdit` is denied, but a shell command can still write it | only what makes the guard stricter or is advisory: `enabled: true`, `bash.block: true`, `bash.warn: true`, `secrets.block`, `secrets.warn`, `sessionStart`, `ignorePaths`. `"enabled": false`, `"bash": { "block": false }` and `"bash": { "warn": false }` here are **ignored**, and SessionStart says so; there is no project-level switch for package vetting. |
+| `~/.config/dev-guardian/hooks.json` (user) | the user — an assistant's `Write` / `Edit` / `MultiEdit` is denied | every key, winning over the project file: `"enabled": false` turns every hook off, `"bash": { "block": false }` turns the shell block into a warning |
+| `.guardian/hooks-allowlist.json` (project) | the user — an assistant's `Write` / `Edit` / `MultiEdit` is denied, but a shell command can still write it | substrings that silence a secret warning (and exempt a match from the opt-in secret block): a JSON array, or `{ "secrets": [...] }`. Advisory, like `secrets.warn`. |
 | `GUARDIAN_HOOKS=off` | environment | disables every hook |
 | `GUARDIAN_HOOKS_BASH_BLOCK=0` / `1` | environment | forces the shell block off or on, over both files |
 | `GUARDIAN_PKG_VET=0` | environment | disables package vetting only |
 
 `ignorePaths` defaults to `/test/fixtures/`, `eval-vuln-fixture`, `/.guardian/` and `__fixtures__`, matched against the path relative to the project. The plugin's own directory is always skipped.
+
+**What the write guard does not cover.** It sees the `Write`, `Edit` and `MultiEdit` tools only. A shell command (`echo … > .guardian/hooks.config.json`) is not one of them — which is why a project file cannot loosen a protective hook at all: whatever an assistant writes there through the shell can only make the guard stricter or change advisory settings. The user-level file is outside the project but equally reachable by a shell write, and the hooks do not stop that; switching the guardrails off is meant to be the user's decision, made there or in the environment.
 
 ## The same detectors from a terminal
 

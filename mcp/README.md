@@ -42,7 +42,8 @@ mcp/
 │   ├── unit/, integration/, e2e/   vitest (e2e needing a real scanner skip without it)
 │   ├── ablate/          the rule-pack ablation harness (npm run ablate)
 │   └── docs/            generator and tests for docs/tools.md and docs/rule-packs.md
-├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs
+├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs;
+│                        generatePopularPackages.mjs (refreshes configs/popular-packages/)
 └── dist/                compiled output, committed
 ```
 

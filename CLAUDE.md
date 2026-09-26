@@ -21,8 +21,12 @@ quality, deps, observability, performance and compliance. Two halves:
   PreToolUse on `Bash|PowerShell` — the catastrophic-command block, then
   install-time package vetting (`mcp/src/pkgvet/hookDecision.ts`, 3 s network
   budget, `GUARDIAN_PKG_VET=0` opts out); PreToolUse on writes — an assistant's
-  edit of the hook configuration is always denied, and writing a provider token
-  is denied when `secrets.block` is on. Detection lives in
+  `Write`/`Edit`/`MultiEdit` of the hook configuration is always denied, and
+  writing a provider token is denied when `secrets.block` is on. A project's
+  `.guardian/hooks.config.json` may only make the protective hooks stricter
+  (`projectOverrides` in the dispatcher: its `enabled: false`, `bash.block:
+  false` and `bash.warn: false` are ignored, and SessionStart says so) —
+  because a shell command can still write that file. Detection lives in
   `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
   with the `dev-guardian check` CLI subcommand. User-facing detail:
   [`docs/hooks.md`](docs/hooks.md).
@@ -530,7 +534,9 @@ Enforced by the compiler where possible, by review where not:
   mangling its spelling. Enforced for every pack by
   `mcp/test/integration/semgrepPacks.test.ts`, which also runs
   `semgrep --validate` over each one and carries a positive control.
-- **Releases** bump the version in
+- **Releases** update the clone instructions — `git clone … --branch vX.Y.Z` in
+  the three READMEs and `docs/hosts.md` — to the new tag (they clone the default
+  branch until the first release after 2.0.0), and bump the version in
   [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
   [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
   [`mcp/package.json`](mcp/package.json) (keep all three in lock-step — the MCP

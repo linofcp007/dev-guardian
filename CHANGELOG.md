@@ -18,8 +18,8 @@ history reader answers for one project**.
 to 10; Node.js ≥ 22.13 without `--experimental-sqlite`; `deps_audit` writes its
 own scan type; `triage_findings` returns `keep` instead of `keep_sample`;
 `generate_sbom` inlines less and only in the text content; the findings
-resources page 50 at a time; a project's hook config can no longer switch the
-shell guard off. Not breaking, despite the new line-independent identities:
+resources page 50 at a time; a project's hook config can no longer switch any
+protective hook off. Not breaking, despite the new line-independent identities:
 `.guardian/baseline.json` stays `version: 1`, and a database written by 2.0.0
 keeps working (migrations 004–011 are additive).
 
@@ -364,10 +364,21 @@ keeps working (migrations 004–011 are additive).
   1000 — and `?page=2` used to answer "Resource not found"), with messages cut
   to 500 characters, `sources`, `coverage` and `skipped`.
 - **BREAKING — a project's `.guardian/hooks.config.json` can no longer switch
-  the shell guard off.** `"bash": { "block": false }` there is ignored (a
-  project file is something the assistant can write); use the user-level
-  `~/.config/dev-guardian/hooks.json` or `GUARDIAN_HOOKS_BASH_BLOCK=0`. An
-  assistant's Write/Edit of any of the guard's own config files is denied.
+  any protective hook off.** A project file is something the assistant can
+  write — through the shell, too, which the write guard does not see — and
+  `{"enabled": false}` there used to switch off the shell guard, install
+  vetting and the config write guard at once, even over
+  `GUARDIAN_HOOKS_BASH_BLOCK=1`. Now `"enabled": false`,
+  `"bash": { "block": false }` and `"bash": { "warn": false }` in a project
+  file are ignored, and the SessionStart briefing says, once, which ones; a
+  project file may still make the guard stricter (`secrets.block: true`) and
+  still set the advisory `secrets.warn`, `sessionStart` and `ignorePaths`.
+  There is no project-level switch for install vetting. To switch a protective
+  hook off, use the user-level `~/.config/dev-guardian/hooks.json` (whose
+  `"enabled": false` turns every hook off) or `GUARDIAN_HOOKS=off`,
+  `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`. An assistant's `Write`,
+  `Edit` or `MultiEdit` of any of the guard's own config files is denied; a
+  shell write of the user-level file is not stopped.
 - **Findings keep a line-independent identity across scans** (migration 007).
   The fingerprint hashes the line numbers, so inserting one line above a
   finding used to make it a different finding everywhere: a suppression
@@ -400,9 +411,15 @@ keeps working (migrations 004–011 are additive).
   - `health_status`, `dotnet_describe_setup`, `wp_describe_setup`,
     `wp_recommend_hardening`, `wp_plugin_check` and `compliance_evidence` take
     an optional `project_path` (default: the server's working directory),
-    report only that project and name it; the WordPress tools also take
-    `target_url` for rows filed under the site URL and still find rows earlier
-    builds filed under other spellings of the same install or site;
+    report only that project — `health_status`'s `last_scan` and
+    `total_scans` included — and name it. `compliance_evidence` documents the
+    project's own compliance, dependency and SBOM scans, its own baseline and
+    only the suppressions that apply to it. The WordPress tools file some rows
+    under the site URL: `wp_describe_setup` and `wp_plugin_check` take an
+    optional `target_url` to include those (`wp_rest_audit` shows up in
+    `wp_describe_setup` only with it, as does a URL-only `wp_vuln_check`), and
+    still find rows earlier builds filed under other spellings of the same
+    install or site;
   - `audit_executive`, `bug_hunt`, `map_attack_surface`, `init_project` and
     `observability_setup` read the project's own stack snapshot
     (`audit_executive` ran `scan_wordpress` on a Node project because a
