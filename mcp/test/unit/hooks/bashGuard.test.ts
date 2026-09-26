@@ -1316,7 +1316,16 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
       `jq '.env.GUARDIAN_HOOKS_BASH_BLOCK' .claude/settings.json`,
       `echo '{"disableAllHooks": true}' > docs/example-settings.json`,
       `jq '.enabledPlugins["other@market"] = true' .claude/settings.json > t && mv t .claude/settings.json`,
+      // A debug switch that only shares a prefix with GUARDIAN_HOOKS.
+      `jq '.env.GUARDIAN_HOOKS_DEBUG = "1"' .claude/settings.local.json > t && mv t .claude/settings.local.json`,
     ])('does not flag %j', expectNotGuarded);
+  });
+
+  it('a cmd /c chain nested thousands deep is bounded, and a shallow one still judged', () => {
+    const t0 = Date.now();
+    expect(assessBashCommand(`${'cmd /c '.repeat(2000)}echo hi`).level).toBe('ok');
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expectBlocked('cmd /c cmd /c cmd /c "mklink .guardian\\hooks.config.json x"', 'guard-config-special-file');
   });
 
   // `claude plugin disable` writes the very `enabledPlugins` entry the

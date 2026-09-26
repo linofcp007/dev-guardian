@@ -900,7 +900,7 @@ const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
  * decides, anywhere in the command's text.
  */
 function namesLooseningKey(text) {
-    return (/disableAllHooks|GUARDIAN_HOOKS|GUARDIAN_PKG_VET/i.test(text) ||
+    return (/\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text) ||
         (/enabledPlugins/i.test(text) && /dev-guardian/i.test(text)));
 }
 /** A command word's name: its last path segment, lower-cased, without `.exe`. */
@@ -940,6 +940,8 @@ function dirOf(path) {
     const cut = path.lastIndexOf('/');
     return cut < 0 ? '' : path.slice(0, cut);
 }
+/** The longest current directory tracked. */
+const MAX_CWD = 320;
 const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
 const CD_RETURNS = new Set(['popd', 'pop-location']);
 /**
@@ -958,7 +960,12 @@ function cwdAfter(name, args, cwd) {
         return '~';
     if (dir === '-')
         return '';
-    return resolveFrom(cwd, dir);
+    const next = resolveFrom(cwd, dir);
+    // Only a directory a later relative path could need is tracked: one that
+    // names a configuration directory or a parent of one. Any other
+    // relative target still names its own config path in full. And never one
+    // longer than a real directory: a chain of `cd`s built to be slow.
+    return next.length > MAX_CWD || !/\.guardian|dev-guardian|\.config|\.claude/i.test(next) ? '' : next;
 }
 const GLOB = /[*?[]/;
 /** The configuration files a directory holds, by the directory's kind. */
@@ -1183,8 +1190,12 @@ function cmdCommandWords(words) {
  * command of a split line let a mklink after `&&` through (re-review); a
  * redirection inside the quoted line was not seen at all (Part Y).
  */
-function cmdEffects(args, cwd) {
+/** `cmd /c cmd /c …` nesting judged; deeper is not (a chain thousands deep once overflowed the stack). */
+const MAX_CMD_NESTING = 8;
+function cmdEffects(args, cwd, depth = 0) {
     const e = noEffects();
+    if (depth > MAX_CMD_NESTING)
+        return e;
     const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
     if (at < 0)
         return e;
@@ -1202,7 +1213,7 @@ function cmdEffects(args, cwd) {
         const [raw, ...rest] = cmdCommandWords(command.words);
         const name = (raw ?? '').toLowerCase().replace(/\.exe$/, '');
         e.writes.push(...command.redirects.map((r) => resolveFrom(dir, r)));
-        mergeEffects(e, effectsOf(name, rest, dir));
+        mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
         dir = cwdAfter(name, rest, dir) ?? dir;
     }
     return e;
@@ -1500,9 +1511,9 @@ const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', '
  * command ({@link cmdEffects}). Never a link's SOURCE: `ln -s
  * ~/.config/dev-guardian/hooks.json backup.json` reads the config.
  */
-function effectsOf(name, args, cwd) {
+function effectsOf(name, args, cwd, depth = 0) {
     if (name === 'cmd')
-        return cmdEffects(args, cwd);
+        return cmdEffects(args, cwd, depth);
     const at = (p) => resolveFrom(cwd, p);
     const e = noEffects();
     switch (name) {
@@ -1851,31 +1862,47 @@ function literalsNameClaudeSettings(literals) {
     return has(/(?:^|\/)\.claude\/?$/i) && has(/^settings(?:\.local)?\.json$/i);
 }
 // ── .NET file calls in PowerShell
-/** Whether `index` in `text` lies outside every quoted span (POSIX quoting). */
-function unquotedAt(text, index) {
+/**
+ * Whether an index of `text` lies outside every quoted span (POSIX quoting),
+ * for indices asked in increasing order: the scan resumes where the last one
+ * stopped, so a text with many calls is still read once.
+ */
+function quoteTracker(text) {
     let quote = '';
-    for (let i = 0; i < index; i += 1) {
-        const ch = text.charAt(i);
-        if (quote === '') {
-            if (ch === '\\')
+    let i = 0;
+    return (index) => {
+        for (; i < index; i += 1) {
+            const ch = text.charAt(i);
+            if (quote === '') {
+                if (ch === '\\')
+                    i += 1;
+                else if (ch === "'" || ch === '"')
+                    quote = ch;
+            }
+            else if (quote === '"' && ch === '\\')
                 i += 1;
-            else if (ch === "'" || ch === '"')
-                quote = ch;
+            else if (ch === quote)
+                quote = '';
         }
-        else if (quote === '"' && ch === '\\')
-            i += 1;
-        else if (ch === quote)
-            quote = '';
-    }
-    return quote === '';
+        return quote === '';
+    };
 }
-/** The argument texts of a call whose `(` ends just before `from`: split on depth-0 commas, up to the matching `)`. */
+/** How far past its `(` a call's arguments are read — a path, not a file's content. */
+const MAX_CALL_ARGS = 512;
+/** Calls judged per text: a command with more is built to be slow, not to write a file. */
+const MAX_DOTNET_CALLS = 256;
+/**
+ * The first two argument texts of a call whose `(` ends just before `from`:
+ * split on depth-0 commas, up to the matching `)` — the most any call judged
+ * here needs — and never more than {@link MAX_CALL_ARGS} characters on.
+ */
 function callArgs(text, from) {
     const args = [];
     let depth = 0;
     let cur = '';
     let quote = '';
-    for (let i = from; i < text.length; i += 1) {
+    const end = Math.min(text.length, from + MAX_CALL_ARGS);
+    for (let i = from; i < end; i += 1) {
         const ch = text.charAt(i);
         if (quote !== '') {
             cur += ch;
@@ -1897,6 +1924,8 @@ function callArgs(text, from) {
         if (ch === ',' && depth === 0) {
             args.push(cur.trim());
             cur = '';
+            if (args.length === 2)
+                return args;
             continue;
         }
         cur += ch;
@@ -1924,8 +1953,12 @@ function dotNetEffects(text, cwd) {
     const e = noEffects();
     if (!text.includes('::'))
         return e;
+    const unquotedAt = quoteTracker(text);
+    let calls = 0;
     for (const m of text.matchAll(DOTNET_CALL)) {
-        if (!unquotedAt(text, m.index))
+        if ((calls += 1) > MAX_DOTNET_CALLS)
+            break;
+        if (!unquotedAt(m.index))
             continue;
         const kind = (m[1] ?? '').toLowerCase();
         const method = (m[2] ?? '').toLowerCase();
