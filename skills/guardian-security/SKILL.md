@@ -170,6 +170,7 @@ Depois voltamos a configurar tudo.
 Se o utilizador pedir explicitamente "paranoid" ou "full deep":
 
 - Secrets no histórico de **todas** as refs, não só da branch atual: `scan_secrets { project_path: "<project>", log_opts: "--all" }`
+- Um secret encontrado ainda funciona? `scan_secrets { project_path: "<project>", verify_live: true }` envia cada secret GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm ou SendGrid à API de leitura do **próprio** fornecedor (e a mais nenhum sítio) e marca o finding `live` (sobe a critical), `revoked` ou `unknown`. **Desligado por omissão**: o secret sai da máquina, por isso pede confirmação ao utilizador antes. `security_scan_full` nunca verifica; `unknown` nunca quer dizer revogado.
 - Packs de segurança Semgrep por linguagem além do default: `bug_hunt { project_path: "<project>", include_language_packs: true }` (`p/typescript` ou `p/javascript`, `p/python`, `p/java`, `p/golang`)
 - Nenhum `severity_min` na resposta — mostra também os médios e baixos
 - Configs mais estritas no projeto: `init_project { project_path: "<project>", profile: "paranoid", apply: false }` mostra o que mudaria (gitleaks sem allowlists de conteúdo; Renovate sem automerge e com 7 dias de idade mínima)

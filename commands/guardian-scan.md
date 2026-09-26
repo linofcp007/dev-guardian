@@ -52,7 +52,11 @@ Per mode, on top of the scans:
 - `--incoming`: list the new commits per author, call out anything under security-sensitive paths (auth, payments, crypto, env handling, migrations), and mark bot authors (`dependabot[bot]`, `renovate[bot]`) — code nobody reviewed deserves a closer read. Offer `create_github_issues { project_path: "<project>", dry_run: true }` for the 🔴 / 🟡 findings.
 - More than ~50 changed files: suggest a full review with the `guardian-review` skill instead.
 
-## 4. Report
+## 4. Is a found secret still live?
+
+Only when the user asks, or a secret was found and they want to know how urgent it is: `scan_secrets { project_path: "<project>", verify_live: true }` (add the same `scope` for a scoped run). It sends each GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm or SendGrid secret to that provider's own read-only API — and nowhere else — and marks the finding `live` (raised to critical, with where to revoke it), `revoked` or `unknown`. It is **off by default** because the secret leaves the machine: say so before turning it on. `security_scan_full` never verifies, `GUARDIAN_OFFLINE=1` sends nothing, and `unknown` is never "revoked".
+
+## 5. Report
 
 Triage with the `guardian-security` skill's rules (real severity, false-positive demotion, correlation across scanners), then show:
 
