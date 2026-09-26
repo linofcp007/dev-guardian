@@ -164,6 +164,36 @@ describe('ensureGuardianIgnored', () => {
       expect(content).toBe('# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n');
       expect(content).not.toMatch(/(?<!\r)\n/);
     });
+
+    // Follow-up (Task 12 minor): a MIXED-ending file came back with every
+    // line in one ending — a diff of lines nobody edited. Each line keeps its
+    // own; the lines this adds take the file's dominant ending.
+    it('keeps each line of a mixed-ending file in its own ending; added lines take the dominant one (CRLF)', () => {
+      const dir = fixture('git-no-gitignore');
+      writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/\r\nd/\r\n');
+      expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
+      expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
+        'a/\r\nb/\nc/\r\nd/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+      );
+    });
+
+    it('… and LF when LF dominates, upgrading a legacy pair without touching its neighbours', () => {
+      const dir = fixture('git-no-gitignore');
+      writeFileSync(join(dir, '.gitignore'), 'a/\nb/\r\n# dev-guardian outputs\r\n.guardian/\nc/\nd/\n');
+      expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
+      expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
+        'a/\nb/\r\nc/\nd/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+      );
+    });
+
+    it('a tie goes to the first ending; a last line without one gets the dominant ending', () => {
+      const dir = fixture('git-no-gitignore');
+      writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/');
+      expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
+      expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
+        'a/\r\nb/\nc/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+      );
+    });
   });
 
   it('leaves .guardian/baseline.json re-includable by git (a same-behaviour check-ignore proxy)', () => {

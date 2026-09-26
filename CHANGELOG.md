@@ -971,6 +971,9 @@ keeps working (migrations 004–011 are additive).
   a decorative `wp_install_path` beside it was relative and absent. The lookup
   is keyed on `project_path`; the WP-CLI version probe is now skipped with a
   warning instead.
+- **The `.gitignore` guard rewrote a mixed-ending file in one ending**, a diff
+  of every line of the other. Each line now keeps its own ending; the lines it
+  adds take the file's dominant one.
 
 ### Security
 

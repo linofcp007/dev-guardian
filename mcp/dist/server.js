@@ -19899,7 +19899,7 @@ var require_resolve_block_scalar = __commonJS({
       if (!header)
         return { value: "", type: null, comment: "", range: [start, start, start] };
       const type = header.mode === ">" ? Scalar.Scalar.BLOCK_FOLDED : Scalar.Scalar.BLOCK_LITERAL;
-      const lines = scalar.source ? splitLines(scalar.source) : [];
+      const lines = scalar.source ? splitLines2(scalar.source) : [];
       let chompStart = lines.length;
       for (let i2 = lines.length - 1; i2 >= 0; --i2) {
         const content = lines[i2][1];
@@ -20057,7 +20057,7 @@ var require_resolve_block_scalar = __commonJS({
       }
       return { mode, indent, chomp, comment, length };
     }
-    function splitLines(source) {
+    function splitLines2(source) {
       const split = source.split(/\n( *)/);
       const first = split[0];
       const m = first.match(/^( *)/);
@@ -37322,8 +37322,9 @@ ${BASELINE_NEGATION}
       return { updated: true, reason: "created" };
     }
     const original = readFileSync(gitignorePath, "utf8");
-    const eol = existingEol(original);
-    const lines = original.split(/\r?\n/);
+    const eol = dominantEol(original);
+    const withEndings = splitLines(original);
+    const lines = withEndings.map((l) => l.text);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
     const toDrop = /* @__PURE__ */ new Set();
     lines.forEach((line, i2) => {
@@ -37341,16 +37342,37 @@ ${BASELINE_NEGATION}
     const missing = [];
     if (!hasEntry) missing.push(ENTRY);
     if (!hasNegation) missing.push(BASELINE_NEGATION);
-    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, "");
-    const next = (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : "") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
+    const body = withEndings.filter((_, i2) => !toDrop.has(i2));
+    for (let last = body.pop(); last !== void 0; last = body.pop()) {
+      const text = last.text.replace(/\r+$/, "");
+      if (text === "") continue;
+      body.push({ text, eol: last.eol === "" ? eol : last.eol });
+      break;
+    }
+    const next = body.map((l) => l.text + l.eol).join("") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
     writeFileSync(gitignorePath, next, "utf8");
     return { updated: true, reason: hasOldPattern ? "upgraded" : "added" };
   } catch {
     return { updated: false, reason: "unwritable" };
   }
 }
-function existingEol(content) {
-  return content.includes("\r\n") ? "\r\n" : "\n";
+function splitLines(content) {
+  const out = [];
+  const re = /\r?\n/g;
+  let start = 0;
+  for (let m = re.exec(content); m !== null; m = re.exec(content)) {
+    out.push({ text: content.slice(start, m.index), eol: m[0] });
+    start = m.index + m[0].length;
+  }
+  out.push({ text: content.slice(start), eol: "" });
+  return out;
+}
+function dominantEol(content) {
+  const crlf = content.split("\r\n").length - 1;
+  const lf = content.split("\n").length - 1 - crlf;
+  if (crlf !== lf) return crlf > lf ? "\r\n" : "\n";
+  const first = content.indexOf("\n");
+  return first > 0 && content[first - 1] === "\r" ? "\r\n" : "\n";
 }
 
 // src/platform/scriptsDir.ts
