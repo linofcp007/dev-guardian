@@ -826,6 +826,35 @@ describe('assessBashCommand — a special file or link onto the hook configurati
   it.each(cmdAllowed)('does not flag %s', (command) => {
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
   });
+
+  // Re-review follow-up to I11: only the FIRST command of a quoted cmd line was
+  // checked, so a mklink after `&&`, `&` or `call` passed where 21b0c20 blocked
+  // it. Every command of the line is checked now.
+  const cmdChains = [
+    'cmd /c "cd /d C:\\p && mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "echo hi & mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "call mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "@mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "dir || mklink /D .guardian \\\\h\\s"',
+    'cmd /c "type nul | mklink .guardian\\hooks-allowlist.json C:\\big.bin"',
+    'cmd /c \'cd /d "C:\\Users\\me\\CLAUDE SKILLS\\p" && mklink "C:\\Users\\me\\CLAUDE SKILLS\\p\\.guardian\\hooks.config.json" x\'',
+    'cmd /c "cmd /c mklink .guardian\\hooks.config.json x"',
+  ];
+  it.each(cmdChains)('blocks a mklink later in a cmd line: %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const cmdChainsAllowed = [
+    'cmd /c "cd /d C:\\p && mklink backup.json .guardian\\hooks.config.json"',
+    'cmd /c "echo mklink .guardian\\hooks.config.json & dir"',
+    'cmd /c "echo a ^& mklink .guardian\\hooks.config.json x"',
+    'cmd /c "npm run build && npm test"',
+  ];
+  it.each(cmdChainsAllowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
 });
 
 // Final review I13: the statements inside `do … done`, `then … fi`, `else`,
@@ -894,6 +923,31 @@ describe('assessBashCommand — compound-command bodies are assessed like top-le
     'if (Test-Path dist) { Write-Host "built" }',
   ];
   it.each(ok)('stays ok for %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+
+  // Re-review follow-up to I13: a `{` after `function NAME` or after the
+  // `time` runner opens a body too, and went unassessed.
+  const bodies: string[] = [
+    'function f { rm -rf /; }; f',
+    'function f {\n  rm -rf /\n}',
+    'function cleanup() { rm -rf ~; }',
+    'time { rm -rf /; }',
+    'time -p { rm -rf /; }',
+  ];
+  it.each(bodies)('blocks a function or `time` body: %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('block');
+  });
+
+  const bodiesOk: string[] = [
+    'function f { echo hi; }',
+    'function f { echo hi; }; f',
+    'time npm test',
+    'time { npm test; }',
+    'time -p npm run build',
+    'echo function f { rm',
+  ];
+  it.each(bodiesOk)('stays ok for %j', (command) => {
     expect(assessBashCommand(command).level).toBe('ok');
   });
 

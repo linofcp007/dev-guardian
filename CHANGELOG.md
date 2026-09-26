@@ -909,15 +909,17 @@ keeps working (migrations 004–011 are additive).
   `echo … | bash`) is assessed as a command, with each heredoc attached to the
   statement that opened it; `dd of=` blocks only for a real block device. The
   deny message no longer names the file or key that disables the guard.
-- **The shell guard reads loop, `if` and brace-group bodies.** A command
-  inside `do … done`, `then … fi`, `else`, `elif`, `{ … }` or after `!` was
-  never assessed (`while :; do rm -rf /; done` read as a command called
-  `do`); it is now judged like a top-level statement.
+- **The shell guard reads loop, `if`, brace-group and function bodies.** A
+  command inside `do … done`, `then … fi`, `else`, `elif`, `{ … }`,
+  `function f { … }`, `time { … }` or after `!` was never assessed
+  (`while :; do rm -rf /; done` read as a command called `do`); it is now
+  judged like a top-level statement.
 - **`cmd /c mklink` onto a hook config path with a space in it is denied.**
   The guard split every word on whitespace, so a quoted
   `"C:\Users\me\CLAUDE SKILLS\…\.guardian\hooks.config.json"` was cut in two
-  and let through; only a word that is itself a whole `mklink …` line is
-  split now, the way cmd splits it.
+  and let through; only a word that is itself a whole cmd line is split now,
+  the way cmd splits it — into commands on `&`, `&&`, `||`, `|`, each
+  checked past a leading `@` or `call` (`cmd /c "cd /d C:\p && mklink …"`).
 - **A project's `ignorePaths` no longer switches off a user-enabled secret
   block.** It narrows the advisory warning only; a `secrets.block: true` set
   in the user-level config honours the user's own `ignorePaths` or the

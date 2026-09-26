@@ -519,7 +519,24 @@ export function splitShell(command: string): ShellSplit {
     // it. Kept, it read as a command called `do`, and every loop, `if` and
     // brace-group body went unassessed (final review I13).
     const reserved = hasWord && !bufQuoted && words.length === 0 && COMPOUND_RESERVED.has(buf);
-    if (hasWord && !reserved) {
+    // A `{` also opens a body after a function header (`function f { … }`) and
+    // after the `time` runner (`time { … }`, `time -p { … }`). The header is not
+    // a command, so it goes with the brace; `time` stays, a runner the command
+    // after the brace is resolved through (re-review follow-up to I13).
+    const opensBody = hasWord && !bufQuoted && buf === '{';
+    const first = words[0];
+    const unquotedHead = first !== undefined && !first.quoted ? first.value : '';
+    if (opensBody && unquotedHead === 'function' && words.length === 2) {
+      words = [];
+      buf = '';
+      bufQuoted = false;
+      bufRedirects = [];
+      hasWord = false;
+      return;
+    }
+    const afterTime =
+      opensBody && unquotedHead === 'time' && words.slice(1).every((w) => !w.quoted && w.value.startsWith('-'));
+    if (hasWord && !reserved && !afterTime) {
       words.push(
         bufRedirects.length > 0
           ? { value: buf, quoted: bufQuoted, redirectAt: bufRedirects }
@@ -1021,39 +1038,75 @@ function mklinkDestinations(args: readonly string[]): string[] {
 }
 
 /**
- * Splits a cmd.exe command line the way cmd does for `mklink`: on whitespace
- * outside double quotes, with the quotes removed and backslashes literal.
+ * Splits a cmd.exe command line into its commands — on `&`, `&&`, `||` and `|`
+ * outside double quotes — and each command into words, on whitespace outside
+ * double quotes. Quotes are removed, backslashes are literal, and `^` escapes
+ * the next character (`^&` is a literal `&`), as in cmd.
  */
-function splitCmdLine(line: string): string[] {
-  const out: string[] = [];
+function splitCmdLine(line: string): string[][] {
+  const commands: string[][] = [];
+  let words: string[] = [];
   let cur = '';
   let inQuote = false;
   let has = false;
-  for (const ch of line) {
+  const endWord = (): void => {
+    if (has) words.push(cur);
+    cur = '';
+    has = false;
+  };
+  const endCommand = (): void => {
+    endWord();
+    if (words.length > 0) commands.push(words);
+    words = [];
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
     if (ch === '"') {
       inQuote = !inQuote;
       has = true;
+    } else if (!inQuote && ch === '^' && i + 1 < line.length) {
+      i += 1;
+      cur += line.charAt(i);
+      has = true;
+    } else if (!inQuote && (ch === '&' || ch === '|')) {
+      endCommand();
+      if (line.charAt(i + 1) === ch) i += 1;
     } else if (!inQuote && /\s/.test(ch)) {
-      if (has) out.push(cur);
-      cur = '';
-      has = false;
+      endWord();
     } else {
       cur += ch;
       has = true;
     }
   }
-  if (has) out.push(cur);
+  endCommand();
+  return commands;
+}
+
+/** A cmd.exe command's own name and arguments, past a leading `@` and any `call`. */
+function cmdCommandWords(words: readonly string[]): string[] {
+  const out = [...words];
+  const first = out[0];
+  if (first !== undefined && first.startsWith('@')) {
+    if (first.length > 1) out[0] = first.slice(1);
+    else out.shift();
+  }
+  while (out.length > 0 && (out[0] ?? '').toLowerCase() === 'call') out.shift();
   return out;
 }
 
 /**
- * `cmd /c mklink LINK TARGET` (or `/k`): the link `mklink` creates. The command
- * cmd runs is the word after the `/c`/`/k` switch. When that word is itself a
- * whole command line — `cmd /c "mklink a b"` hands cmd ONE quoted word — it is
- * split the way cmd splits it; any other word is kept whole, so a quoted link
- * path with a space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the
- * one path it is. Splitting every word on whitespace, as this used to, cut
- * such a path in two and never recognised it (final review I11).
+ * `cmd /c mklink LINK TARGET` (or `/k`): every link a `mklink` in the command
+ * line creates. The command line is what follows the `/c`/`/k` switch. When
+ * its first word is itself a whole command line — `cmd /c "mklink a b"` hands
+ * cmd ONE quoted word — it is split the way cmd splits it: into commands on
+ * `&`, `&&`, `||` and `|`, each into words, and EVERY command is checked,
+ * past a leading `@` or `call` (`cmd /c "cd /d C:\p && mklink …"`), a nested
+ * `cmd /c` included. Any other word is kept whole, so a quoted link path with
+ * a space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the one path it
+ * is — splitting every word on whitespace, as this once did, cut such a path
+ * in two and never recognised it (final review I11); checking only the first
+ * command of a split line, as the I11 fix first did, let a mklink after `&&`
+ * through (re-review).
  */
 function cmdMklinkDestinations(args: readonly string[]): string[] {
   const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
@@ -1061,10 +1114,18 @@ function cmdMklinkDestinations(args: readonly string[]): string[] {
   const first = args[at + 1];
   if (first === undefined) return [];
   const head = first.trim();
-  const line = /\s/.test(head) ? splitCmdLine(head) : [head];
-  const rest = [...line.slice(1), ...args.slice(at + 2)];
-  const command = (line[0] ?? '').toLowerCase().replace(/\.exe$/, '');
-  return command === 'mklink' ? mklinkDestinations(rest) : [];
+  const commands = /[\s&|^]/.test(head) ? splitCmdLine(head) : [[head]];
+  // The shell words after the first one continue the line's LAST command.
+  const last = commands[commands.length - 1];
+  if (last !== undefined) last.push(...args.slice(at + 2));
+  const out: string[] = [];
+  for (const command of commands) {
+    const [name, ...rest] = cmdCommandWords(command);
+    const base = (name ?? '').toLowerCase().replace(/\.exe$/, '');
+    if (base === 'mklink') out.push(...mklinkDestinations(rest));
+    else if (base === 'cmd') out.push(...cmdMklinkDestinations(rest));
+  }
+  return out;
 }
 
 /**
