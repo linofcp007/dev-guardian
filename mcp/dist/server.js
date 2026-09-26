@@ -43876,18 +43876,21 @@ function projectReferencesScs(projectPath) {
 }
 
 // src/runners/gitleaksScan.ts
-import { copyFileSync, existsSync as existsSync16, lstatSync as lstatSync2, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { copyFileSync, existsSync as existsSync16, lstatSync as lstatSync3, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { basename as basename4, dirname as dirname12, join as join23, relative as relative9, resolve as resolve10 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
-import { chmodSync, closeSync, mkdtempSync as mkdtempSync3, openSync, rmSync as rmSync5 } from "node:fs";
+import { chmodSync, closeSync, lstatSync as lstatSync2, mkdtempSync as mkdtempSync3, openSync, readdirSync as readdirSync10, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { join as join22 } from "node:path";
 var REDACTED = "REDACTED";
+var STALE_AFTER_MS = 6 * 60 * 60 * 1e3;
+var PREFIX2 = "guardian-verify-";
 var POSIX = process.platform !== "win32";
 function openPrivateReportDir() {
-  const dir = mkdtempSync3(join22(tmpdir4(), "guardian-verify-"));
+  sweepStaleReportDirs();
+  const dir = mkdtempSync3(join22(tmpdir4(), PREFIX2));
   if (POSIX) chmodSync(dir, 448);
   return {
     dir,
@@ -43908,6 +43911,30 @@ function openPrivateReportDir() {
     }
   };
 }
+function sweepStaleReportDirs(root = tmpdir4(), now = Date.now()) {
+  let names;
+  try {
+    names = readdirSync10(root);
+  } catch {
+    return 0;
+  }
+  const uid = POSIX && typeof process.getuid === "function" ? process.getuid() : null;
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith(PREFIX2)) continue;
+    try {
+      const path6 = join22(root, name);
+      const st = lstatSync2(path6);
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+      if (uid !== null && st.uid !== uid) continue;
+      if (now - st.mtimeMs < STALE_AFTER_MS) continue;
+      rmSync5(path6, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+    }
+  }
+  return removed;
+}
 function sanitizeGitleaksReport(text, keep) {
   let root;
   try {
@@ -43916,32 +43943,102 @@ function sanitizeGitleaksReport(text, keep) {
     return null;
   }
   if (!Array.isArray(root)) return null;
-  const values = /* @__PURE__ */ new Set();
-  const secrets = root.map((item) => {
-    const secret = stringField(item, "Secret");
-    if (secret === null || secret.length === 0) return null;
-    values.add(secret);
-    const rule = stringField(item, "RuleID");
-    return rule !== null && keep(rule) ? secret : null;
+  const items = root;
+  const own = items.map((item) => {
+    const s = stringField(item, "Secret");
+    return s !== null && s.length > 0 ? s : null;
   });
-  const needles = [...values].sort((a2, b) => b.length - a2.length);
-  const scrub = (v) => {
-    if (typeof v === "string") return needles.reduce((acc, n2) => acc.split(n2).join(REDACTED), v);
-    if (Array.isArray(v)) return v.map(scrub);
-    if (isRecord2(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]));
-    return v;
-  };
-  const clean = root.map((item) => {
-    const c3 = scrub(item);
-    if (!isRecord2(c3)) return c3;
-    const hadValue = stringField(item, "Secret");
-    if (hadValue === null || hadValue.length === 0) {
-      if ("Match" in c3) c3["Match"] = REDACTED;
+  const secrets = items.map((item, n2) => {
+    const rule = stringField(item, "RuleID");
+    return rule !== null && keep(rule) ? own[n2] ?? null : null;
+  });
+  const others = items.map(() => /* @__PURE__ */ new Set());
+  const groups = /* @__PURE__ */ new Map();
+  const unplaceable = /* @__PURE__ */ new Set();
+  items.forEach((item, n2) => {
+    const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
+    if (spanOf(item) === null) {
+      unplaceable.add(key);
+      return;
     }
+    const list2 = groups.get(key);
+    if (list2 === void 0) groups.set(key, [n2]);
+    else list2.push(n2);
+  });
+  for (const members of groups.values()) {
+    const placed = members.flatMap((n2) => {
+      const span = spanOf(items[n2]);
+      return span === null ? [] : [{ n: n2, span }];
+    });
+    placed.sort((a2, b) => a2.span.startLine - b.span.startLine || a2.span.startCol - b.span.startCol);
+    let active = [];
+    for (const current of placed) {
+      active = active.filter((a2) => !endsBefore(a2.span, current.span));
+      const mine = own[current.n];
+      for (const a2 of active) {
+        const theirs = own[a2.n];
+        if (theirs != null) others[current.n]?.add(theirs);
+        if (mine != null) others[a2.n]?.add(mine);
+      }
+      active.push(current);
+    }
+  }
+  const byCommit = /* @__PURE__ */ new Map();
+  items.forEach((item, n2) => {
+    const value = own[n2];
+    if (value == null) return;
+    const commit = stringField(item, "Commit") ?? "";
+    const set = byCommit.get(commit);
+    if (set === void 0) byCommit.set(commit, /* @__PURE__ */ new Set([value]));
+    else set.add(value);
+  });
+  const messageCache = /* @__PURE__ */ new Map();
+  const cleanMessage = (commit, message3) => {
+    const cacheKey = `${commit}\0${message3}`;
+    const cached2 = messageCache.get(cacheKey);
+    if (cached2 !== void 0) return cached2;
+    const found = [...byCommit.get(commit) ?? []].filter((v) => message3.includes(v));
+    const clean2 = replaceAll(message3, found);
+    messageCache.set(cacheKey, clean2);
+    return clean2;
+  };
+  const clean = items.map((item, n2) => {
+    if (!isRecord2(item)) return item;
+    const c3 = { ...item };
+    const value = own[n2] ?? null;
+    const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
     if ("Secret" in c3) c3["Secret"] = REDACTED;
+    if (typeof c3["Match"] === "string") {
+      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null ? REDACTED : replaceAll(c3["Match"], [value, ...others[n2] ?? []]);
+    }
+    if (typeof c3["Message"] === "string" && c3["Message"].length > 0) {
+      c3["Message"] = cleanMessage(stringField(item, "Commit") ?? "", c3["Message"]);
+    }
+    if (Array.isArray(c3["Tags"]) && value !== null) {
+      c3["Tags"] = c3["Tags"].map((t) => typeof t === "string" ? replaceAll(t, [value]) : t);
+    }
+    if ("Line" in c3) c3["Line"] = REDACTED;
+    if ("Fragment" in c3) c3["Fragment"] = REDACTED;
     return c3;
   });
   return { text: JSON.stringify(clean), secrets };
+}
+function replaceAll(text, needles) {
+  const sorted = [...new Set(needles)].filter((n2) => n2.length > 0).sort((a2, b) => b.length - a2.length);
+  let out = text;
+  for (const n2 of sorted) if (out.includes(n2)) out = out.split(n2).join(REDACTED);
+  return out;
+}
+function spanOf(item) {
+  const startLine = numberField(item, "StartLine");
+  const endLine = numberField(item, "EndLine");
+  const startCol = numberField(item, "StartColumn");
+  const endCol = numberField(item, "EndColumn");
+  if (startLine === null || endLine === null || startCol === null || endCol === null) return null;
+  return { startLine, startCol: startCol - 1, endLine, endCol: endCol + 1 };
+}
+function endsBefore(a2, b) {
+  return a2.endLine < b.startLine || a2.endLine === b.startLine && a2.endCol < b.startCol;
 }
 function isRecord2(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -43950,6 +44047,11 @@ function stringField(v, key) {
   if (!isRecord2(v)) return null;
   const x = v[key];
   return typeof x === "string" ? x : null;
+}
+function numberField(v, key) {
+  if (!isRecord2(v)) return null;
+  const x = v[key];
+  return typeof x === "number" && Number.isFinite(x) ? x : null;
 }
 
 // src/runners/scannerParsers/gitleaks.ts
@@ -44197,7 +44299,7 @@ async function filesPass(opts, result, files, labels = {
       const from = join23(opts.projectPath, rel2);
       let size;
       try {
-        const st = lstatSync2(from);
+        const st = lstatSync3(from);
         if (!st.isFile()) continue;
         size = st.size;
       } catch {
@@ -44345,7 +44447,7 @@ function takeReport(opts, written, outFile) {
     rmSync6(written, { force: true });
   } catch {
   }
-  if (rawText === null) return { text: null, secrets: null };
+  if (rawText === null || rawText.trim() === "") return { text: null, secrets: null };
   const clean = sanitizeGitleaksReport(rawText, opts.captureSecrets ?? (() => false));
   if (clean === null) return { text: WITHHELD_REPORT, secrets: null };
   try {
@@ -44593,7 +44695,7 @@ var gitlab = {
 };
 var SLACK_ENDPOINT = "https://slack.com/api/auth.test";
 var SLACK_HOST = hostOf(SLACK_ENDPOINT);
-var SLACK_DEAD = ["invalid_auth", "token_revoked", "account_inactive", "token_expired"];
+var SLACK_DEAD = ["token_revoked", "account_inactive", "token_expired"];
 var slack = {
   name: "Slack",
   rules: ["slack-bot-token", "slack-user-token"],
@@ -44609,6 +44711,9 @@ var slack = {
     const dead = SLACK_DEAD.find((e) => e === error2);
     if (dead !== void 0) {
       return { verdict: "revoked", reason: `${SLACK_HOST} rejected it (${dead}): it no longer authenticates` };
+    }
+    if (error2 === "invalid_auth") {
+      return { verdict: "unknown", reason: "not valid on slack.com (a GovSlack token reads the same)" };
     }
     return { verdict: "unknown", reason: `${SLACK_HOST} answered ok: false with an error that does not establish validity` };
   },
@@ -44706,37 +44811,37 @@ var npm = {
   headers: bearer,
   classify({ status }) {
     if (status === 200) return live(NPM_HOST, status);
-    if (status === 401) return { verdict: "revoked", reason: `${NPM_HOST} rejected it (HTTP 401): invalid, expired or revoked` };
+    if (status === 401) {
+      return {
+        verdict: "unknown",
+        reason: `${NPM_HOST} answered HTTP 401: invalid, expired or revoked \u2014 or a granular token restricted to other IP ranges; npm documents no response that tells these apart`
+      };
+    }
     return otherStatus(NPM_HOST, status);
   },
   rotate: "revoke it with `npm token revoke <id>` or at https://www.npmjs.com/ (Access Tokens)"
 };
 var SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/scopes";
 var SENDGRID_HOST = hostOf(SENDGRID_ENDPOINT);
-var SENDGRID_DEAD = [
-  "authorization required",
-  "the provided authorization grant is invalid, expired, or revoked"
-];
 var sendgrid = {
   name: "SendGrid",
   rules: ["sendgrid-api-token"],
   endpoint: SENDGRID_ENDPOINT,
   method: "GET",
   headers: bearer,
-  classify({ status, body }) {
+  // SendGrid documents 401 only as "requires authentication" and this
+  // endpoint's 403 as "Scopes forbidden response": neither says which keys
+  // get them, so only a 200 is a verdict.
+  classify({ status }) {
     if (status === 200) return live(SENDGRID_HOST, status);
-    if (status === 403) return live(SENDGRID_HOST, status, ": a valid key without permission to list scopes");
     if (status === 401) {
-      const errors = field(body, "errors");
-      const dead = Array.isArray(errors) && errors.some((e) => {
-        const m = field(e, "message");
-        return typeof m === "string" && SENDGRID_DEAD.includes(m.toLowerCase());
-      });
-      if (dead) return { verdict: "revoked", reason: `${SENDGRID_HOST} rejected it as invalid, expired or revoked (HTTP 401)` };
       return {
         verdict: "unknown",
-        reason: `${SENDGRID_HOST} answered HTTP 401 without its invalid-credential message \u2014 may be the key of an EU-regional subuser, valid only on api.eu.sendgrid.com (not contacted)`
+        reason: `${SENDGRID_HOST} answered HTTP 401 \u2014 invalid, expired or revoked, or the key of an EU-regional subuser (valid only on api.eu.sendgrid.com, not contacted); SendGrid documents nothing that tells these apart`
       };
+    }
+    if (status === 403) {
+      return { verdict: "unknown", reason: `${SENDGRID_HOST} answered HTTP 403, which SendGrid does not document as a valid key` };
     }
     return otherStatus(SENDGRID_HOST, status);
   },
@@ -44789,7 +44894,10 @@ async function verifySecrets(candidates2, opts = {}) {
   const answers = distinct.map((d, j) => {
     if (offline) return notSent(d.provider, OFFLINE_REASON);
     if (j >= maxSecrets) {
-      return notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`);
+      return {
+        ...notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`),
+        overLimit: true
+      };
     }
     return notSent(d.provider, "not verified");
   });
@@ -44950,11 +45058,13 @@ async function verifyGitleaksFindings(input) {
   } finally {
     for (const c3 of candidates2) c3.secret = "";
     candidates2.length = 0;
-    if (input.secrets !== null) {
-      for (const values of input.secrets.values()) values.fill(null);
-      input.secrets.clear();
-    }
+    discardCaptured(input.secrets);
   }
+}
+function discardCaptured(captured) {
+  if (captured === null || captured === void 0) return;
+  for (const values of captured.values()) values.fill(null);
+  captured.clear();
 }
 function summarize(checked) {
   const count2 = (v) => checked.filter((c3) => c3.check.verdict === v).length;
@@ -44982,6 +45092,7 @@ function summarize(checked) {
     skipped: count2("skipped"),
     // One check object answers every finding that holds the same value.
     distinct_secrets_sent: new Set(sent.map((c3) => c3.check)).size,
+    distinct_secrets_over_limit: new Set(checked.filter((c3) => c3.check.overLimit === true).map((c3) => c3.check)).size,
     limit: DEFAULT_MAX_SECRETS,
     hosts_contacted: [...new Set(sent.flatMap((c3) => c3.check.host === null ? [] : [c3.check.host]))].sort(),
     verifiable_rules: PROVIDERS.flatMap((p) => p.rules),
@@ -44999,6 +45110,11 @@ function warningsFor(s, unavailable) {
   }
   if (unavailable !== null) {
     out.push(`verify_live: nothing was verified \u2014 ${unavailable}.`);
+  }
+  if (s.distinct_secrets_over_limit > 0) {
+    out.push(
+      `verify_live: the per-scan limit of ${s.limit} distinct secrets was reached \u2014 ${s.distinct_secrets_over_limit} more were not sent and their findings are unknown. Narrow the scan with scope to verify the rest.`
+    );
   }
   out.push(
     `verify_live: ${s.distinct_secrets_sent} distinct secret(s) sent, each only to its own provider's API${s.hosts_contacted.length > 0 ? ` (${s.hosts_contacted.join(", ")})` : ""}. Findings: ${s.live} live, ${s.revoked} revoked, ${s.unknown} unknown, ${s.skipped} skipped (no verifier for the rule).`
@@ -45073,7 +45189,7 @@ var scanSecrets = makeScanTool({
     };
     if (!verify) return invocation;
     if (scan2.cancelled) {
-      scan2.captured?.clear();
+      discardCaptured(scan2.captured);
       return invocation;
     }
     ctx.onLog?.("verify_live: asking each secret's own provider whether it is live");
@@ -45147,7 +45263,7 @@ registerToolModule(tool);
 import { join as join25 } from "node:path";
 
 // src/runners/scannerParsers/trivy.ts
-import { existsSync as existsSync17, readdirSync as readdirSync10, readFileSync as readFileSync16 } from "node:fs";
+import { existsSync as existsSync17, readdirSync as readdirSync11, readFileSync as readFileSync16 } from "node:fs";
 import { dirname as dirname13, join as join24 } from "node:path";
 var TRIVY_TOOL_NAME = "trivy";
 var trivyParser = {
@@ -45366,7 +45482,7 @@ function npmManifestDeclaresNothing(path6) {
 function assessManifestCoverage(projectPath, rawTrivyOutput) {
   let entries2;
   try {
-    entries2 = readdirSync10(projectPath);
+    entries2 = readdirSync11(projectPath);
   } catch {
     return { gaps: [], sawAnyResults: false };
   }
@@ -45514,7 +45630,7 @@ function packagesView(packages, findings, scanId) {
 }
 
 // src/tools/scanIac.ts
-import { readdirSync as readdirSync11, realpathSync as realpathSync4, statSync as statSync8, writeFileSync as writeFileSync7 } from "node:fs";
+import { readdirSync as readdirSync12, realpathSync as realpathSync4, statSync as statSync8, writeFileSync as writeFileSync7 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join26, relative as relative10, sep as sep8 } from "node:path";
 
 // src/runners/scannerParsers/actionlint.ts
@@ -45631,7 +45747,7 @@ function listWorkflowFiles(projectPath, exclusions) {
   if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
   try {
-    entries2 = readdirSync11(dir, { withFileTypes: true });
+    entries2 = readdirSync12(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -47590,7 +47706,7 @@ function qualityCategoriesView(categories, findings, scanId) {
 }
 
 // src/tools/reviewPr.ts
-import { lstatSync as lstatSync3 } from "node:fs";
+import { lstatSync as lstatSync4 } from "node:fs";
 import { basename as basename5, join as join31 } from "node:path";
 var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
 var reviewPr = makeScanTool({
@@ -47772,7 +47888,7 @@ async function runTrivy(ctx, out, args) {
 }
 function isFileOnDisk(path6) {
   try {
-    return lstatSync3(path6).isFile();
+    return lstatSync4(path6).isFile();
   } catch {
     return false;
   }
@@ -47838,7 +47954,7 @@ var tool3 = {
 registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
-import { existsSync as existsSync22, readdirSync as readdirSync12, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync22, readdirSync as readdirSync13, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join32, relative as relative13 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
@@ -48308,7 +48424,7 @@ function findRequirementsFiles(projectPath) {
   const out = [];
   let entries2 = [];
   try {
-    entries2 = readdirSync12(projectPath);
+    entries2 = readdirSync13(projectPath);
   } catch {
     return out;
   }
@@ -48318,7 +48434,7 @@ function findRequirementsFiles(projectPath) {
   const reqDir = join32(projectPath, "requirements");
   if (existsSync22(reqDir)) {
     try {
-      for (const name of readdirSync12(reqDir)) {
+      for (const name of readdirSync13(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) out.push(join32(reqDir, name));
       }
     } catch {
@@ -48469,7 +48585,7 @@ async function runDotnetSca(opts) {
 // src/tools/depsUpdatePlan.ts
 init_execa();
 var import_yaml5 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync23, readFileSync as readFileSync20, readdirSync as readdirSync13, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync23, readFileSync as readFileSync20, readdirSync as readdirSync14, statSync as statSync9 } from "node:fs";
 import { dirname as dirname15, join as join33, relative as relative14, sep as sep10 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
@@ -49118,7 +49234,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   const collect = (dir, topLevel) => {
     let entries2;
     try {
-      entries2 = readdirSync13(dir);
+      entries2 = readdirSync14(dir);
     } catch {
       return;
     }
@@ -49128,7 +49244,7 @@ function listNodeModulesPackages(nodeModulesDir) {
       if (name.startsWith("@")) {
         let scoped = [];
         try {
-          scoped = readdirSync13(join33(dir, name));
+          scoped = readdirSync14(join33(dir, name));
         } catch {
           continue;
         }
@@ -49140,7 +49256,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   };
   collect(nodeModulesDir, true);
   try {
-    for (const storeEntry of readdirSync13(join33(nodeModulesDir, ".pnpm"))) {
+    for (const storeEntry of readdirSync14(join33(nodeModulesDir, ".pnpm"))) {
       collect(join33(nodeModulesDir, ".pnpm", storeEntry, "node_modules"), false);
     }
   } catch {
@@ -49256,7 +49372,7 @@ function findPipRequirementsFiles(projectPath) {
   };
   let rootEntries = [];
   try {
-    rootEntries = readdirSync13(projectPath);
+    rootEntries = readdirSync14(projectPath);
   } catch {
     return out;
   }
@@ -49266,7 +49382,7 @@ function findPipRequirementsFiles(projectPath) {
   const reqDir = join33(projectPath, "requirements");
   if (existsSync23(reqDir)) {
     try {
-      for (const name of readdirSync13(reqDir)) {
+      for (const name of readdirSync14(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) tryRead(join33("requirements", name));
       }
     } catch {
@@ -49712,7 +49828,7 @@ function failDomain2(code, message3) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync14, statSync as statSync10 } from "node:fs";
+import { readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
 import { join as join34 } from "node:path";
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -49761,7 +49877,7 @@ function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries2;
   try {
-    entries2 = readdirSync14(dir);
+    entries2 = readdirSync15(dir);
   } catch {
     return;
   }
@@ -50071,11 +50187,11 @@ function failDomain3(code, message3) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync26, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync17 } from "node:fs";
 import { join as join37 } from "node:path";
 
 // src/runners/stackDetect.ts
-import { existsSync as existsSync25, readFileSync as readFileSync22, readdirSync as readdirSync15 } from "node:fs";
+import { existsSync as existsSync25, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
 import { join as join36 } from "node:path";
 var MAX_MANIFEST_DEPTH = 3;
 var MAX_DIRS_VISITED = 2e4;
@@ -50210,7 +50326,7 @@ function walkManifestDirs(root) {
 }
 function readDirSafe(dir) {
   try {
-    return readdirSync15(dir, { withFileTypes: true });
+    return readdirSync16(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -50424,7 +50540,7 @@ function enrichDotnet(snap, projectPath) {
     try {
       const target = rel2 === "" ? projectPath : join37(projectPath, rel2);
       if (!existsSync26(target)) return false;
-      return readdirSync16(target).some((name) => name.endsWith(suffix));
+      return readdirSync17(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
     }
@@ -50465,7 +50581,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     if (depth > maxDepth) return false;
     let entries2;
     try {
-      entries2 = readdirSync16(dir);
+      entries2 = readdirSync17(dir);
     } catch {
       return false;
     }
@@ -50474,7 +50590,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join37(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync16(abs).length >= 0 && walk4(abs, depth + 1)) return true;
+        if (readdirSync17(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
@@ -50946,7 +51062,7 @@ function failDomain5(code, message3) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync29, mkdirSync as mkdirSync7, readdirSync as readdirSync17, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync29, mkdirSync as mkdirSync7, readdirSync as readdirSync18, writeFileSync as writeFileSync10 } from "node:fs";
 import { dirname as dirname17, join as join40 } from "node:path";
 var tool8 = {
   name: "observability_setup",
@@ -51029,7 +51145,7 @@ function inferStack(projectPath, ctx) {
     return "java";
   if (existsSync29(join40(projectPath, "Gemfile"))) return "ruby";
   try {
-    const entries2 = readdirSync17(projectPath);
+    const entries2 = readdirSync18(projectPath);
     if (entries2.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
       return "dotnet";
   } catch {
@@ -53765,7 +53881,7 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync31, readFileSync as readFileSync25, readdirSync as readdirSync18 } from "node:fs";
+import { existsSync as existsSync31, readFileSync as readFileSync25, readdirSync as readdirSync19 } from "node:fs";
 import { join as join43 } from "node:path";
 var tool16 = {
   name: "license_compatibility",
@@ -54115,7 +54231,7 @@ function normaliseLicense(s) {
 }
 function findFirstCsproj(projectPath) {
   try {
-    const name = readdirSync18(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
+    const name = readdirSync19(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
     return name ? join43(projectPath, name) : null;
   } catch {
     return null;
@@ -58607,7 +58723,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync42, readFileSync as readFileSync29, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync42, readFileSync as readFileSync29, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
 import { join as join55, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -58781,7 +58897,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync19(dir);
+      entries2 = readdirSync20(dir);
     } catch {
       return;
     }
@@ -58807,7 +58923,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { readFileSync as readFileSync30, readdirSync as readdirSync20, statSync as statSync15 } from "node:fs";
+import { readFileSync as readFileSync30, readdirSync as readdirSync21, statSync as statSync15 } from "node:fs";
 import { join as join56, relative as relative17 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -58924,7 +59040,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync20(dir);
+      entries2 = readdirSync21(dir);
     } catch {
       return;
     }
@@ -58948,7 +59064,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync43, readFileSync as readFileSync31, readdirSync as readdirSync21, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync43, readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
 import { join as join57, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -59007,7 +59123,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync21(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync22(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -59084,7 +59200,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries2;
     try {
-      entries2 = readdirSync21(dir);
+      entries2 = readdirSync22(dir);
     } catch {
       return;
     }
@@ -60413,10 +60529,10 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 init_execa();
 import {
   existsSync as existsSync44,
-  lstatSync as lstatSync4,
+  lstatSync as lstatSync5,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync32,
-  readdirSync as readdirSync22,
+  readdirSync as readdirSync23,
   readlinkSync,
   realpathSync as realpathSync6,
   rmSync as rmSync7,
@@ -60711,7 +60827,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries2;
     try {
-      entries2 = readdirSync22(dir);
+      entries2 = readdirSync23(dir);
     } catch {
       continue;
     }
@@ -60723,7 +60839,7 @@ function collectDir(root) {
       const abs = join58(dir, entry);
       let s;
       try {
-        s = lstatSync4(abs);
+        s = lstatSync5(abs);
       } catch {
         continue;
       }
@@ -62110,7 +62226,7 @@ function buildToolRun(run, via) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync34, readdirSync as readdirSync23, statSync as statSync18 } from "node:fs";
+import { readFileSync as readFileSync34, readdirSync as readdirSync24, statSync as statSync18 } from "node:fs";
 import { join as join62, relative as relative20, resolve as resolve13, sep as sep11 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -62162,7 +62278,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries2;
   try {
-    entries2 = readdirSync23(dir, { withFileTypes: true });
+    entries2 = readdirSync24(dir, { withFileTypes: true });
   } catch {
     return [];
   }

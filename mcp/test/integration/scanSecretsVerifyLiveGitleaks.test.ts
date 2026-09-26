@@ -12,9 +12,53 @@
 import { execa } from 'execa';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Every scanner stderr line reaches the factory's `onLog`, which hands it to
+ * `progress.note`; every boundary message goes through `progress.emit`. Both
+ * are recorded here, so what onLog saw is asserted, not just what a
+ * heartbeat happened to send.
+ */
+const progressLog = vi.hoisted(() => ({ lines: [] as string[] }));
+vi.mock('../../src/progress/progressEmitter.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/progress/progressEmitter.js')>();
+  return {
+    ...actual,
+    makeProgressEmitter: (opts: Parameters<typeof actual.makeProgressEmitter>[0]) => {
+      const inner = actual.makeProgressEmitter(opts);
+      return {
+        emit: (input: Parameters<typeof inner.emit>[0]) => {
+          progressLog.lines.push(`emit:${input.message ?? ''}`);
+          inner.emit(input);
+        },
+        note: (message: string) => {
+          progressLog.lines.push(`note:${message}`);
+          inner.note(message);
+        },
+        dispose: () => inner.dispose(),
+      };
+    },
+  };
+});
+
+/**
+ * The private directories the scan itself opens — checked by name afterwards
+ * (a listing of the temp dir would also see other test files' scans).
+ */
+const opened = vi.hoisted(() => ({ dirs: [] as string[] }));
+vi.mock('../../src/secrets/verify/rawReport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/secrets/verify/rawReport.js')>();
+  return {
+    ...actual,
+    openPrivateReportDir: () => {
+      const dir = actual.openPrivateReportDir();
+      opened.dirs.push(dir.dir);
+      return dir;
+    },
+  };
+});
 
 import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -102,10 +146,35 @@ describe.skipIf(!GITLEAKS)('scan_secrets verify_live with real gitleaks', () => 
     await git(dir, 'commit', '-q', '-m', 'add token');
     writeFileSync(join(dir, 'new.env'), `GH=${uncommitted}\n`);
 
-    const before = new Set(readdirSync(tmpdir()).filter((n) => n.startsWith('guardian-verify-')));
+    opened.dirs = [];
     const { plugin: p, db } = plugin(dir);
-    const r = await tool().handler({ project_path: dir, force: true, verify_live: true }, p);
+    progressLog.lines = [];
+    const captured: string[] = [];
+    const grab =
+      (stream: string) =>
+      (chunk: unknown): boolean => {
+        captured.push(`${stream}:${String(chunk)}`);
+        return true;
+      };
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(grab('stdout') as typeof process.stdout.write);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(grab('stderr') as typeof process.stderr.write);
+    const consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...a: unknown[]) => {
+        captured.push(`console.${m}:${a.map(String).join(' ')}`);
+      }),
+    );
+    let r: Awaited<ReturnType<ReturnType<typeof tool>['handler']>>;
+    try {
+      r = await tool().handler({ project_path: dir, force: true, verify_live: true }, p, { progressToken: 'real' });
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+      for (const s of consoleSpies) s.mockRestore();
+    }
     expect(r.ok).toBe(true);
+    // gitleaks' own stderr went through onLog, and so did the verify step's note.
+    expect(progressLog.lines.some((l) => /commits? scanned|scanned ~/.test(l))).toBe(true);
+    expect(progressLog.lines.some((l) => l.includes('verify_live'))).toBe(true);
     const res = r as unknown as { scan_id: string; coverage: string; secret_verification: { live: number } };
     expect(res.coverage).toBe('full');
 
@@ -121,15 +190,20 @@ describe.skipIf(!GITLEAKS)('scan_secrets verify_live with real gitleaks', () => 
     ]);
     expect(res.secret_verification.live).toBe(2);
 
-    const after = readdirSync(tmpdir()).filter((n) => n.startsWith('guardian-verify-') && !before.has(n));
-    expect(after).toEqual([]);
+    expect(opened.dirs).toHaveLength(1);
+    for (const d of opened.dirs) expect(existsSync(d), d).toBe(false);
     for (const [where, text] of Object.entries({
       result: JSON.stringify(r),
       database: dumpDb(db),
       reports: dumpFiles(join(dir, '.guardian')),
+      'progress/onLog': progressLog.lines.join('\n'),
+      'stdout/stderr/console': captured.join('\n'),
     })) {
-      expect(text.includes(committed), `${where} holds the committed token`).toBe(false);
-      expect(text.includes(uncommitted), `${where} holds the uncommitted token`).toBe(false);
+      for (const token of [committed, uncommitted]) {
+        expect(text.includes(token), `${where} holds a token`).toBe(false);
+        // Not even a clipped part of one (onLog lines are cut at 200 chars).
+        expect(text.includes(token.slice(8, 28)), `${where} holds part of a token`).toBe(false);
+      }
     }
   });
 

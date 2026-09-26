@@ -88,15 +88,19 @@ describe('verifySecrets — verdicts per provider', () => {
     expect(gone.check.reason).toMatch(/not valid on gitlab\.com — may belong to a self-hosted instance/);
   });
 
-  it('Slack: ok:true is live; invalid_auth / token_revoked / account_inactive / token_expired are revoked; other errors unknown', async () => {
+  it('Slack: ok:true is live; token_revoked / account_inactive / token_expired are revoked; other errors unknown', async () => {
     const live = await one('slack-bot-token', tok.slack, () => json(200, { ok: true, team: 't' }));
     expect(live.check.verdict).toBe('live');
     expect(live.calls[0]?.url).toBe('https://slack.com/api/auth.test');
     expect(live.calls[0]?.method).toBe('POST');
-    for (const error of ['invalid_auth', 'token_revoked', 'account_inactive', 'token_expired']) {
+    for (const error of ['token_revoked', 'account_inactive', 'token_expired']) {
       const { check } = await one('slack-bot-token', tok.slack, () => json(200, { ok: false, error }));
       expect(check.verdict, error).toBe('revoked');
     }
+    // A GovSlack (slack-gov.com) token has the same prefixes and reads invalid_auth on slack.com.
+    const gov = await one('slack-bot-token', tok.slack, () => json(200, { ok: false, error: 'invalid_auth' }));
+    expect(gov.check.verdict).toBe('unknown');
+    expect(gov.check.reason).toMatch(/not valid on slack\.com \(a GovSlack token reads the same\)/);
     const other = await one('slack-bot-token', tok.slack, () => json(200, { ok: false, error: 'ekm_access_denied' }));
     expect(other.check.verdict).toBe('unknown');
     const limited = await one('slack-bot-token', tok.slack, () => json(429, { ok: false, error: 'ratelimited' }));
@@ -149,27 +153,26 @@ describe('verifySecrets — verdicts per provider', () => {
     expect(overloaded.check.verdict).toBe('unknown');
   });
 
-  it('npm: 200 from registry.npmjs.org/-/whoami is live, 401 is revoked', async () => {
+  it('npm: 200 from registry.npmjs.org/-/whoami is live; 401 is UNKNOWN — npm documents no invalid-credential response', async () => {
     const live = await one('npm-access-token', tok.npm, () => json(200, { username: 'u' }));
     expect(live.check.verdict).toBe('live');
     expect(live.calls[0]?.url).toBe('https://registry.npmjs.org/-/whoami');
-    expect((await one('npm-access-token', tok.npm, () => json(401, {}))).check.verdict).toBe('revoked');
+    const gone = await one('npm-access-token', tok.npm, () => json(401, {}));
+    expect(gone.check.verdict).toBe('unknown');
+    expect(gone.check.reason).toMatch(/invalid, expired or revoked — or a granular token restricted to other IP ranges/);
     expect((await one('npm-access-token', tok.npm, () => json(403, {}))).check.verdict).toBe('unknown');
   });
 
-  it('SendGrid: 200/403 live; 401 revoked only with the documented invalid-credential message', async () => {
-    expect((await one('sendgrid-api-token', tok.sendgrid, () => json(200, { scopes: [] }))).check.verdict).toBe('live');
-    expect((await one('sendgrid-api-token', tok.sendgrid, () => json(403, { errors: [] }))).check.verdict).toBe('live');
+  it('SendGrid: 200 is live; 401 and 403 are unknown — SendGrid documents neither as an invalid or a valid key', async () => {
+    const live = await one('sendgrid-api-token', tok.sendgrid, () => json(200, { scopes: [] }));
+    expect(live.check.verdict).toBe('live');
+    expect(live.calls[0]?.url).toBe('https://api.sendgrid.com/v3/scopes');
     const bad = await one('sendgrid-api-token', tok.sendgrid, () =>
       json(401, { errors: [{ field: null, message: 'authorization required' }] }),
     );
-    expect(bad.check.verdict).toBe('revoked');
-    expect(bad.calls[0]?.url).toBe('https://api.sendgrid.com/v3/scopes');
-    // An EU-regional key rejected by the global host says something else: unknown.
-    const eu = await one('sendgrid-api-token', tok.sendgrid, () =>
-      json(401, { errors: [{ message: 'User is not authorized based on their regional attribute' }] }),
-    );
-    expect(eu.check.verdict).toBe('unknown');
+    expect(bad.check.verdict).toBe('unknown');
+    const forbidden = await one('sendgrid-api-token', tok.sendgrid, () => json(403, { errors: [{ message: 'access forbidden' }] }));
+    expect(forbidden.check.verdict).toBe('unknown');
   });
 
   it('a redirect is unknown and is not followed', async () => {
@@ -295,8 +298,10 @@ describe('verifySecrets — bounds', () => {
     for (const c of rest) {
       expect(c.verdict).toBe('unknown');
       expect(c.sent).toBe(false);
+      expect(c.overLimit).toBe(true);
       expect(c.reason).toMatch(/not verified: per-scan limit/);
     }
+    expect(checks.slice(0, 50).some((c) => c.overLimit === true)).toBe(false);
     const sentSecrets = m.calls.map((c) => c.headers['authorization']);
     expect(sentSecrets).not.toContain(`Bearer ${tok.npm}55`);
   });

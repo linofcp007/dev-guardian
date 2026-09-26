@@ -599,7 +599,9 @@ function takeReport(opts: ScanRun, written: string, outFile: string): TakenRepor
   } catch {
     // Removed with its directory at the end of the scan (or reported there).
   }
-  if (rawText === null) return { text: null, secrets: null };
+  // The report file was pre-created empty (0600): still empty means gitleaks
+  // wrote nothing — the same "wrote no report" a redacting run gets.
+  if (rawText === null || rawText.trim() === '') return { text: null, secrets: null };
   const clean = sanitizeGitleaksReport(rawText, opts.captureSecrets ?? (() => false));
   if (clean === null) return { text: WITHHELD_REPORT, secrets: null };
   try {

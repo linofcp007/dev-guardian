@@ -85,12 +85,21 @@ export async function verifyGitleaksFindings(input) {
         for (const c of candidates)
             c.secret = '';
         candidates.length = 0;
-        if (input.secrets !== null) {
-            for (const values of input.secrets.values())
-                values.fill(null);
-            input.secrets.clear();
-        }
+        discardCaptured(input.secrets);
     }
+}
+/**
+ * Let go of what gitleaks captured: every array nulled in place (a caller
+ * may still hold a reference to one) and the map emptied. The one way the raw
+ * values are dropped — after verification, and on a cancelled scan that never
+ * got there.
+ */
+export function discardCaptured(captured) {
+    if (captured === null || captured === undefined)
+        return;
+    for (const values of captured.values())
+        values.fill(null);
+    captured.clear();
 }
 function summarize(checked) {
     const count = (v) => checked.filter((c) => c.check.verdict === v).length;
@@ -121,6 +130,7 @@ function summarize(checked) {
         skipped: count('skipped'),
         // One check object answers every finding that holds the same value.
         distinct_secrets_sent: new Set(sent.map((c) => c.check)).size,
+        distinct_secrets_over_limit: new Set(checked.filter((c) => c.check.overLimit === true).map((c) => c.check)).size,
         limit: DEFAULT_MAX_SECRETS,
         hosts_contacted: [...new Set(sent.flatMap((c) => (c.check.host === null ? [] : [c.check.host])))].sort(),
         verifiable_rules: PROVIDERS.flatMap((p) => p.rules),
@@ -138,6 +148,10 @@ function warningsFor(s, unavailable) {
     }
     if (unavailable !== null) {
         out.push(`verify_live: nothing was verified — ${unavailable}.`);
+    }
+    if (s.distinct_secrets_over_limit > 0) {
+        out.push(`verify_live: the per-scan limit of ${s.limit} distinct secrets was reached — ${s.distinct_secrets_over_limit} ` +
+            'more were not sent and their findings are unknown. Narrow the scan with scope to verify the rest.');
     }
     out.push(`verify_live: ${s.distinct_secrets_sent} distinct secret(s) sent, each only to its own provider's API` +
         `${s.hosts_contacted.length > 0 ? ` (${s.hosts_contacted.join(', ')})` : ''}. Findings: ${s.live} live, ` +

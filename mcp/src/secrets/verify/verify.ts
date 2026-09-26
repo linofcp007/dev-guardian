@@ -49,6 +49,8 @@ export interface SecretCheck {
   sent: boolean;
   /** Where to revoke it, for `live` guidance. */
   rotate: string | null;
+  /** Not sent because the per-scan limit of distinct secrets was reached. */
+  overLimit?: true;
 }
 
 export interface VerifyOptions {
@@ -100,7 +102,10 @@ export async function verifySecrets(
   const answers: SecretCheck[] = distinct.map((d, j) => {
     if (offline) return notSent(d.provider, OFFLINE_REASON);
     if (j >= maxSecrets) {
-      return notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`);
+      return {
+        ...notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`),
+        overLimit: true,
+      };
     }
     return notSent(d.provider, 'not verified');
   });

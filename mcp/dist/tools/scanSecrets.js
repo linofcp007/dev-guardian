@@ -39,7 +39,7 @@ import { ScanScopeInput } from '../platform/scope.js';
 import { historyState, repoState } from '../runners/git.js';
 import { LogOptsError, resolveLogOpts, runGitleaksScan } from '../runners/gitleaksScan.js';
 import { Force, ProjectPath } from '../schemas.js';
-import { isVerifiableRule, OFFLINE_REASON, verifyGitleaksFindings } from '../secrets/verify/index.js';
+import { discardCaptured, isVerifiableRule, OFFLINE_REASON, verifyGitleaksFindings } from '../secrets/verify/index.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
@@ -139,8 +139,8 @@ const scanSecrets = makeScanTool({
         if (!verify)
             return invocation;
         if (scan.cancelled) {
-            // A cancelled scan sends nothing.
-            scan.captured?.clear();
+            // A cancelled scan sends nothing, and lets go of what it captured.
+            discardCaptured(scan.captured);
             return invocation;
         }
         ctx.onLog?.('verify_live: asking each secret\'s own provider whether it is live');

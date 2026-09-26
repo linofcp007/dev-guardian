@@ -57,7 +57,10 @@ export async function verifySecrets(candidates, opts = {}) {
         if (offline)
             return notSent(d.provider, OFFLINE_REASON);
         if (j >= maxSecrets) {
-            return notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`);
+            return {
+                ...notSent(d.provider, `not verified: per-scan limit of ${maxSecrets} distinct secrets reached`),
+                overLimit: true,
+            };
         }
         return notSent(d.provider, 'not verified');
     });

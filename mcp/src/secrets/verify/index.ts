@@ -74,6 +74,8 @@ export interface SecretVerificationSummary {
   /** Findings of a rule (or token type) with no verifier: nothing sent. */
   skipped: number;
   distinct_secrets_sent: number;
+  /** Distinct secrets NOT sent because the per-scan limit was reached (their findings are `unknown`). */
+  distinct_secrets_over_limit: number;
   /** Distinct secrets verified per scan at most. */
   limit: number;
   /** The hosts that were sent a secret — each a provider's own, fixed API host. */
@@ -163,11 +165,20 @@ export async function verifyGitleaksFindings(input: GitleaksVerificationInput): 
     // The raw values live exactly as long as this call.
     for (const c of candidates) c.secret = '';
     candidates.length = 0;
-    if (input.secrets !== null) {
-      for (const values of input.secrets.values()) values.fill(null);
-      input.secrets.clear();
-    }
+    discardCaptured(input.secrets);
   }
+}
+
+/**
+ * Let go of what gitleaks captured: every array nulled in place (a caller
+ * may still hold a reference to one) and the map emptied. The one way the raw
+ * values are dropped — after verification, and on a cancelled scan that never
+ * got there.
+ */
+export function discardCaptured(captured: Map<object, Array<string | null>> | null | undefined): void {
+  if (captured === null || captured === undefined) return;
+  for (const values of captured.values()) values.fill(null);
+  captured.clear();
 }
 
 function summarize(checked: ReadonlyArray<{ finding: Finding; check: SecretCheck }>): SecretVerificationSummary {
@@ -196,6 +207,7 @@ function summarize(checked: ReadonlyArray<{ finding: Finding; check: SecretCheck
     skipped: count('skipped'),
     // One check object answers every finding that holds the same value.
     distinct_secrets_sent: new Set(sent.map((c) => c.check)).size,
+    distinct_secrets_over_limit: new Set(checked.filter((c) => c.check.overLimit === true).map((c) => c.check)).size,
     limit: DEFAULT_MAX_SECRETS,
     hosts_contacted: [...new Set(sent.flatMap((c) => (c.check.host === null ? [] : [c.check.host])))].sort(),
     verifiable_rules: PROVIDERS.flatMap((p) => p.rules),
@@ -215,6 +227,12 @@ function warningsFor(s: SecretVerificationSummary, unavailable: string | null): 
   }
   if (unavailable !== null) {
     out.push(`verify_live: nothing was verified — ${unavailable}.`);
+  }
+  if (s.distinct_secrets_over_limit > 0) {
+    out.push(
+      `verify_live: the per-scan limit of ${s.limit} distinct secrets was reached — ${s.distinct_secrets_over_limit} ` +
+        'more were not sent and their findings are unknown. Narrow the scan with scope to verify the rest.',
+    );
   }
   out.push(
     `verify_live: ${s.distinct_secrets_sent} distinct secret(s) sent, each only to its own provider's API` +

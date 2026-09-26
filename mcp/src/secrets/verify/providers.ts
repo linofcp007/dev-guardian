@@ -17,17 +17,22 @@
  *
  *   - `live` only on a response that proves the credential authenticates: a
  *     success, or a 403 the provider documents as "valid, but not allowed to
- *     do this" (Stripe, SendGrid, Anthropic's `permission_error`).
- *   - `revoked` only for a SaaS-only provider, on its documented
+ *     do this" (Stripe, Anthropic's `permission_error`).
+ *   - `revoked` only for a SaaS-only provider, on its DOCUMENTED
  *     invalid-credential response — and where the provider documents OTHER
  *     causes for the same status (OpenAI and Stripe answer 401 for an IP
- *     allowlist too; SendGrid for an EU-regional key on the global host), only
- *     with the body field that names the invalid credential. That field is
- *     compared against constants here and never copied anywhere: some of
- *     these bodies echo the token back.
- *   - GitHub and GitLab are never `revoked`: GitHub Enterprise Server and
- *     self-managed GitLab issue tokens with the same prefixes, so a 401 from
- *     github.com / gitlab.com only says the token is not valid THERE.
+ *     allowlist too), only with the body field that names the invalid
+ *     credential. That field is compared against constants here and never
+ *     copied anywhere: some of these bodies echo the token back. npm and
+ *     SendGrid document no response that tells an invalid key apart (a
+ *     granular npm token restricted to other IP ranges; SendGrid's 401 is
+ *     just "requires authentication"), so neither is ever `revoked`.
+ *   - GitHub, GitLab and Slack's `invalid_auth` are never `revoked`: GitHub
+ *     Enterprise Server, self-managed GitLab and GovSlack (slack-gov.com)
+ *     issue tokens with the same prefixes, so "invalid" from github.com /
+ *     gitlab.com / slack.com only says the token is not valid THERE. Slack's
+ *     `token_revoked`, `token_expired` and `account_inactive` are specific
+ *     enough to stay `revoked`.
  *   - Everything else — 429, 5xx, a redirect, an undocumented status — is
  *     `unknown` with a reason.
  *
@@ -175,8 +180,11 @@ const gitlab: SecretProvider = {
 
 const SLACK_ENDPOINT = 'https://slack.com/api/auth.test';
 const SLACK_HOST = hostOf(SLACK_ENDPOINT);
-/** auth.test's documented errors that mean "this token does not authenticate". */
-const SLACK_DEAD: readonly string[] = ['invalid_auth', 'token_revoked', 'account_inactive', 'token_expired'];
+/**
+ * auth.test's documented errors that say THIS token is dead. `invalid_auth`
+ * is not one: a GovSlack token (slack-gov.com, same prefixes) reads the same.
+ */
+const SLACK_DEAD: readonly string[] = ['token_revoked', 'account_inactive', 'token_expired'];
 
 const slack: SecretProvider = {
   name: 'Slack',
@@ -193,6 +201,9 @@ const slack: SecretProvider = {
     const dead = SLACK_DEAD.find((e) => e === error);
     if (dead !== undefined) {
       return { verdict: 'revoked', reason: `${SLACK_HOST} rejected it (${dead}): it no longer authenticates` };
+    }
+    if (error === 'invalid_auth') {
+      return { verdict: 'unknown', reason: 'not valid on slack.com (a GovSlack token reads the same)' };
     }
     return { verdict: 'unknown', reason: `${SLACK_HOST} answered ok: false with an error that does not establish validity` };
   },
@@ -309,7 +320,15 @@ const npm: SecretProvider = {
   headers: bearer,
   classify({ status }) {
     if (status === 200) return live(NPM_HOST, status);
-    if (status === 401) return { verdict: 'revoked', reason: `${NPM_HOST} rejected it (HTTP 401): invalid, expired or revoked` };
+    // npm documents no invalid-credential response: never `revoked`.
+    if (status === 401) {
+      return {
+        verdict: 'unknown',
+        reason:
+          `${NPM_HOST} answered HTTP 401: invalid, expired or revoked — or a granular token restricted to ` +
+          'other IP ranges; npm documents no response that tells these apart',
+      };
+    }
     return otherStatus(NPM_HOST, status);
   },
   rotate: 'revoke it with `npm token revoke <id>` or at https://www.npmjs.com/ (Access Tokens)',
@@ -319,11 +338,6 @@ const npm: SecretProvider = {
 
 const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/scopes';
 const SENDGRID_HOST = hostOf(SENDGRID_ENDPOINT);
-/** The invalid-credential messages a 401 carries (compared lower-cased, never copied). */
-const SENDGRID_DEAD: readonly string[] = [
-  'authorization required',
-  'the provided authorization grant is invalid, expired, or revoked',
-];
 
 const sendgrid: SecretProvider = {
   name: 'SendGrid',
@@ -331,25 +345,21 @@ const sendgrid: SecretProvider = {
   endpoint: SENDGRID_ENDPOINT,
   method: 'GET',
   headers: bearer,
-  classify({ status, body }) {
+  // SendGrid documents 401 only as "requires authentication" and this
+  // endpoint's 403 as "Scopes forbidden response": neither says which keys
+  // get them, so only a 200 is a verdict.
+  classify({ status }) {
     if (status === 200) return live(SENDGRID_HOST, status);
-    // Documented: "access forbidden" — a valid key without the permission.
-    if (status === 403) return live(SENDGRID_HOST, status, ': a valid key without permission to list scopes');
     if (status === 401) {
-      const errors = field(body, 'errors');
-      const dead =
-        Array.isArray(errors) &&
-        errors.some((e) => {
-          const m = field(e, 'message');
-          return typeof m === 'string' && SENDGRID_DEAD.includes(m.toLowerCase());
-        });
-      if (dead) return { verdict: 'revoked', reason: `${SENDGRID_HOST} rejected it as invalid, expired or revoked (HTTP 401)` };
       return {
         verdict: 'unknown',
         reason:
-          `${SENDGRID_HOST} answered HTTP 401 without its invalid-credential message — may be the key of an ` +
-          'EU-regional subuser, valid only on api.eu.sendgrid.com (not contacted)',
+          `${SENDGRID_HOST} answered HTTP 401 — invalid, expired or revoked, or the key of an EU-regional ` +
+          'subuser (valid only on api.eu.sendgrid.com, not contacted); SendGrid documents nothing that tells these apart',
       };
+    }
+    if (status === 403) {
+      return { verdict: 'unknown', reason: `${SENDGRID_HOST} answered HTTP 403, which SendGrid does not document as a valid key` };
     }
     return otherStatus(SENDGRID_HOST, status);
   },

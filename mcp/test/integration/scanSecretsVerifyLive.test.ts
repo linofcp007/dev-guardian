@@ -15,13 +15,29 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.setConfig({ testTimeout: 60_000 });
 
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
+/**
+ * The private directories the scan itself opens — checked by name afterwards.
+ * (A before/after listing of the temp dir would also see the directories of
+ * other test files' scans running concurrently.)
+ */
+const opened = vi.hoisted(() => ({ dirs: [] as string[] }));
+vi.mock('../../src/secrets/verify/rawReport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/secrets/verify/rawReport.js')>();
+  return {
+    ...actual,
+    openPrivateReportDir: () => {
+      const dir = actual.openPrivateReportDir();
+      opened.dirs.push(dir.dir);
+      return dir;
+    },
+  };
+});
 vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/tools/scanHelpers.js')>();
   return { ...actual, scannerAvailable: vi.fn() };
@@ -64,6 +80,10 @@ interface ReportItem {
 }
 
 let reportItems: ReportItem[] = [];
+/** false: the fake gitleaks exits 0 and writes no report at all. */
+let writeReport = true;
+/** The outcome the fake gitleaks reports. */
+let outcome: ProcessRunResult['outcome'] = 'completed';
 interface GitleaksCall {
   args: string[];
   reportPath: string | undefined;
@@ -79,7 +99,7 @@ async function fakeGitleaks(opts: ProcessRunOptions): Promise<ProcessRunResult> 
   const reportPath = args.find((a) => a.startsWith('--report-path='))?.slice('--report-path='.length);
   const redacted = args.includes('--redact');
   const call: GitleaksCall = { args, reportPath, redacted, dirMode: null, fileMode: null };
-  if (reportPath !== undefined) {
+  if (reportPath !== undefined && writeReport) {
     if (existsSync(reportPath)) call.fileMode = statSync(reportPath).mode & 0o777;
     call.dirMode = statSync(dirname(reportPath)).mode & 0o777;
     const items = reportItems.map((i, n) => ({
@@ -98,7 +118,13 @@ async function fakeGitleaks(opts: ProcessRunOptions): Promise<ProcessRunResult> 
     writeFileSync(reportPath, JSON.stringify(items));
   }
   gitleaksCalls.push(call);
-  return { outcome: 'completed', exitCode: reportItems.length > 0 ? 1 : 0, stdout: '', stderr: 'INF scanned ~120 bytes', truncated: false };
+  return {
+    outcome,
+    exitCode: reportItems.length > 0 && writeReport ? 1 : 0,
+    stdout: '',
+    stderr: 'INF scanned ~120 bytes',
+    truncated: false,
+  };
 }
 
 interface FetchCall {
@@ -133,7 +159,7 @@ async function fakeFetch(input: string | URL | Request, init?: RequestInit): Pro
   if (sent.includes(S.echoed)) {
     return reply(401, { type: 'error', error: { type: 'authentication_error', message: `invalid x-api-key ${S.echoed}` } });
   }
-  if (sent.includes(S.slackEcho)) return reply(200, { ok: false, error: 'invalid_auth', token: S.slackEcho });
+  if (sent.includes(S.slackEcho)) return reply(200, { ok: false, error: 'token_revoked', token: S.slackEcho });
   return reply(418, {});
 }
 
@@ -178,12 +204,11 @@ function dumpFiles(dir: string): string {
   return out.join('\n');
 }
 
-function verifyDirs(): Set<string> {
-  return new Set(readdirSync(tmpdir()).filter((n) => n.startsWith('guardian-verify-')));
-}
-
 beforeEach(() => {
+  opened.dirs = [];
   reportItems = [];
+  writeReport = true;
+  outcome = 'completed';
   gitleaksCalls = [];
   fetchCalls = [];
   vi.mocked(scannerAvailable).mockReset();
@@ -206,6 +231,7 @@ interface Summary {
   skipped: number;
   verified: number;
   distinct_secrets_sent: number;
+  distinct_secrets_over_limit: number;
   hosts_contacted: string[];
   findings: Array<{ rule_id: string; verified: string; reason: string; fingerprint: string }>;
 }
@@ -233,7 +259,6 @@ describe('scan_secrets verify_live', () => {
       { rule: 'aws-access-token', secret: S.unsupported, file: 'aws.env' },
     ];
     const { plugin: p } = plugin(dir);
-    const before = verifyDirs();
     const r = await tool().handler({ project_path: dir, force: true, verify_live: true }, p);
     expect(r.ok).toBe(true);
     const res = r as unknown as { scan_id: string; secret_verification: Summary; warnings: string[] };
@@ -250,7 +275,8 @@ describe('scan_secrets verify_live', () => {
       }
       expect(c.reportPath !== undefined && existsSync(dirname(c.reportPath))).toBe(false);
     }
-    expect([...verifyDirs()].filter((d) => !before.has(d))).toEqual([]);
+    expect(opened.dirs).toHaveLength(1);
+    for (const d of opened.dirs) expect(existsSync(d), d).toBe(false);
 
     // Exactly one request, to api.github.com, carrying the GitHub token.
     expect(fetchCalls.map((c) => c.url)).toEqual(['https://api.github.com/user']);
@@ -337,13 +363,13 @@ describe('scan_secrets verify_live', () => {
     const verdicts = Object.fromEntries(res.secret_verification.findings.map((f) => [f.rule_id, f.verified]));
     expect(verdicts).toEqual({
       'github-pat': 'live',
-      'npm-access-token': 'revoked',
+      'npm-access-token': 'unknown',
       'stripe-access-token': 'unknown',
       'openai-api-key': 'unknown',
       'anthropic-api-key': 'revoked',
       'slack-bot-token': 'revoked',
     });
-    expect(res.secret_verification).toMatchObject({ live: 2, revoked: 3, unknown: 2, skipped: 1, distinct_secrets_sent: 6 });
+    expect(res.secret_verification).toMatchObject({ live: 2, revoked: 2, unknown: 3, skipped: 1, distinct_secrets_sent: 6 });
 
     // Each value went to its own provider and nowhere else; the unsupported one to nobody.
     const expectedHost: Record<string, string> = {
@@ -391,10 +417,78 @@ describe('scan_secrets verify_live', () => {
     const { plugin: p } = plugin(dir);
     const r = (await tool().handler({ project_path: dir, force: true, verify_live: true }, p)) as unknown as {
       secret_verification: Summary;
+      warnings: string[];
     };
     expect(fetchCalls).toHaveLength(50);
-    expect(r.secret_verification).toMatchObject({ revoked: 50, unknown: 5 });
+    expect(r.secret_verification).toMatchObject({ unknown: 55, distinct_secrets_sent: 50, distinct_secrets_over_limit: 5 });
     expect(r.secret_verification.findings.filter((f) => /per-scan limit/.test(f.reason))).toHaveLength(5);
+    expect(r.warnings.some((w) => /per-scan limit of 50/.test(w) && /5 more/.test(w))).toBe(true);
+  });
+
+  it('a short value elsewhere in the report never moves a finding: identities equal with and without verify_live', async () => {
+    // A custom rule reporting `Secret: "test"` used to turn every other
+    // item's `test/fixtures/…` path into `REDACTED/fixtures/…`.
+    const dir = makeTempDir('verify-shortsecret-');
+    reportItems = [
+      { rule: 'custom-password', secret: 'test', file: 'test/fixtures/fake.env' },
+      { rule: 'github-pat', secret: S.live, file: 'test/fixtures/other.env' },
+    ];
+    const plain = plugin(dir);
+    const a = (await tool().handler({ project_path: dir, force: true }, plain.plugin)) as unknown as { scan_id: string };
+    const verified = plugin(dir);
+    const b = (await tool().handler({ project_path: dir, force: true, verify_live: true }, verified.plugin)) as unknown as {
+      scan_id: string;
+    };
+    // listByScan orders by severity, and verify_live raised one: compare as sets.
+    const key = (f: Finding): string => JSON.stringify([f.file_path, f.fingerprint, f.identity, f.content_key]);
+    const fa = plain.plugin.storage.findings.listByScan(a.scan_id).map(key).sort();
+    const fb = verified.plugin.storage.findings.listByScan(b.scan_id).map(key).sort();
+    expect(fb).toEqual(fa);
+    expect(fb.map((k) => (JSON.parse(k) as string[])[0]).sort()).toEqual(['test/fixtures/fake.env', 'test/fixtures/other.env']);
+  });
+
+  it('a .guardianignore-d secret is never sent — even when another value is a word in its path', async () => {
+    const dir = makeTempDir('verify-ignore-short-');
+    writeFileSync(join(dir, '.guardianignore'), 'test/\n');
+    mkdirSync(join(dir, 'test', 'fixtures'), { recursive: true });
+    writeFileSync(join(dir, 'test', 'fixtures', 'fake.env'), 'x');
+    writeFileSync(join(dir, 'app.env'), 'x');
+    reportItems = [
+      { rule: 'custom-password', secret: 'test', file: 'app.env' },
+      { rule: 'github-pat', secret: S.live, file: 'test/fixtures/fake.env' },
+    ];
+    const { plugin: p } = plugin(dir);
+    await tool().handler({ project_path: dir, force: true, verify_live: true }, p);
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('a pass that wrote no report says so the same way with and without verify_live', async () => {
+    writeReport = false;
+    reportItems = [{ rule: 'github-pat', secret: S.live, file: 'app.env' }];
+    const reasons: string[] = [];
+    for (const verify of [false, true]) {
+      const dir = makeTempDir('verify-noreport-');
+      const { plugin: p } = plugin(dir);
+      const r = (await tool().handler({ project_path: dir, force: true, verify_live: verify }, p)) as unknown as {
+        tools_run: Array<{ name: string; status: string; reason?: string }>;
+      };
+      const run = r.tools_run.find((t) => t.name === 'gitleaks');
+      expect(run?.status).toBe('failed');
+      reasons.push(run?.reason ?? '');
+    }
+    expect(reasons[0]).toMatch(/gitleaks wrote no report/);
+    expect(reasons[1]).toBe(reasons[0]);
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  it('a cancelled scan sends nothing', async () => {
+    outcome = 'cancelled';
+    const dir = makeTempDir('verify-cancelled-');
+    reportItems = [{ rule: 'github-pat', secret: S.live, file: 'app.env' }];
+    const { plugin: p } = plugin(dir);
+    const r = await tool().handler({ project_path: dir, force: true, verify_live: true }, p);
+    expect(r.ok).toBe(false);
+    expect(fetchCalls).toHaveLength(0);
   });
 
   it('GUARDIAN_OFFLINE=1: gitleaks keeps --redact, nothing is sent, supported findings are unknown', async () => {
