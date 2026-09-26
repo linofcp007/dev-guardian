@@ -20,14 +20,16 @@ import { runProcess } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { wpSiteKey } from '../wordpress/siteKeys.js';
+import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
   wp_install_path: z
     .string()
     .optional()
-    .describe('Local path to a WP install (must contain wp-config.php).'),
+    .describe(
+      'Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine.',
+    ),
   target_url: z
     .string()
     .url()
@@ -68,6 +70,15 @@ async function handler(
       'Provide either target_url or wp_install_path.',
     );
   }
+  // The row is filed under the install path (below): it must name ONE
+  // install — absolute, or existing here (Task 24 fix round 2). A relative
+  // path that does not exist would be resolved against the server's cwd and
+  // share one record with every other install passed the same way.
+  const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain('unsupported_target', installProblem);
+  // Only an install that is on this machine is a place to run in and to
+  // write the report under; an absolute path of a remote install is a key.
+  const localInstall = inp.wp_install_path && existsSync(inp.wp_install_path) ? inp.wp_install_path : undefined;
 
   const wpscanBin = await scannerAvailable('wpscan');
   if (!wpscanBin) {
@@ -91,7 +102,7 @@ async function handler(
     const r = await runProcess({
       command: 'wp',
       args: ['option', 'get', 'home', `--path=${inp.wp_install_path}`],
-      cwd: inp.wp_install_path,
+      cwd: localInstall ?? process.cwd(),
       timeoutMs: 30_000,
     });
     if (r.outcome === 'completed') {
@@ -116,7 +127,7 @@ async function handler(
   // Persist scan row first so we can attach findings/CVEs to it.
   const scanId = randomUUID();
   const reportDir = join(
-    inp.wp_install_path ?? process.cwd(),
+    localInstall ?? process.cwd(),
     '.guardian',
     'reports',
     `wpvuln-${scanId.slice(0, 8)}`,
@@ -152,7 +163,7 @@ async function handler(
   const r = await runProcess({
     command: 'wpscan',
     args,
-    cwd: inp.wp_install_path ?? process.cwd(),
+    cwd: localInstall ?? process.cwd(),
     timeoutMs: 5 * 60_000,
   });
 

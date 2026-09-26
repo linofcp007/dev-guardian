@@ -19,10 +19,12 @@
  *
  * **It never refuses for want of a local project** (fix round 1, M4): the
  * lookup reads the database, so with no `project_path` it answers for
- * `wp_install_path` even when that install is not on this machine (its
- * canonical spelling), else for the server's working directory — even a
- * home directory, as `health_status` does. Only an explicit `project_path`
- * that does not resolve is refused.
+ * `wp_install_path` even when that install is not on this machine (an
+ * absolute path is its own exact key), else for the server's working
+ * directory — even a home directory, as `health_status` does. Refused: an
+ * explicit `project_path` that does not resolve, and a RELATIVE
+ * `wp_install_path` that does not exist here (fix round 2) — it names no
+ * single install (`wordpress/siteKeys.ts#wpInstallPathProblem`).
  *
  * **The lookup row is scoped.** It is filed as a `wp_vuln_check` of the
  * project with `meta.scope` = `{ kind: 'plugin', slug }`: one plugin's
@@ -40,7 +42,7 @@ import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult } from '../types.js';
-import { latestUnderKeys, wpInstallKeys, wpSiteKeys } from '../wordpress/siteKeys.js';
+import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
@@ -48,7 +50,9 @@ const inputSchema = {
   wp_install_path: z
     .string()
     .optional()
-    .describe('Optional path to a local WP install for version detection.'),
+    .describe(
+      'Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine.',
+    ),
   target_url: z
     .string()
     .url()
@@ -78,7 +82,15 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { slug: string; wp_install_path?: string; target_url?: string; project_path?: string };
   if (!inp.slug) return failDomain('unknown_scan_id', 'slug is required.');
-  // See the module comment: only an explicit project_path is validated.
+  // See the module comment: an explicit project_path must exist, and a
+  // wp_install_path must be absolute or exist here (fix round 2) — a relative
+  // one that does not would be resolved against the server's cwd and share
+  // one record with every other install passed the same way.
+  const installProblem =
+    inp.wp_install_path !== undefined && inp.wp_install_path.length > 0
+      ? wpInstallPathProblem(inp.wp_install_path)
+      : null;
+  if (installProblem !== null) return failDomain('unsupported_target', installProblem);
   let projectPath: string;
   const rawProject = inp.project_path ?? inp.wp_install_path;
   if (inp.project_path !== undefined && inp.project_path.length > 0) {

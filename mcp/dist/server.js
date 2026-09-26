@@ -56289,7 +56289,7 @@ function failDomain19(code, message3) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync39, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync40, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
 import { randomUUID as randomUUID8 } from "node:crypto";
 import { join as join49 } from "node:path";
 
@@ -56385,14 +56385,22 @@ function severityFromVuln(raw) {
 }
 
 // src/wordpress/siteKeys.ts
-import { resolve as resolve13 } from "node:path";
+import { existsSync as existsSync39 } from "node:fs";
+import { isAbsolute as isAbsolute8, resolve as resolve13 } from "node:path";
 function wpSiteKey(url) {
   return url.replace(/\/$/, "");
 }
+function wpInstallPathProblem(raw) {
+  if (namesOneInstall(raw)) return null;
+  return `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no single install (resolved against the server's working directory, every remote install passed the same way would share one record). Pass the absolute path of the install, or target_url for a remote site.`;
+}
 function wpInstallKeys(canonical, raw) {
   const keys = [canonical];
-  if (raw !== void 0 && raw.length > 0) keys.push(raw, resolve13(raw));
+  if (raw !== void 0 && raw.length > 0 && namesOneInstall(raw)) keys.push(raw, resolve13(raw));
   return unique2(keys);
+}
+function namesOneInstall(raw) {
+  return isAbsolute8(raw) || existsSync39(raw);
 }
 function wpSiteKeys(url) {
   const key = wpSiteKey(url);
@@ -56415,7 +56423,9 @@ function unique2(keys) {
 
 // src/tools/wpVulnCheck.ts
 var inputSchema16 = {
-  wp_install_path: external_exports.string().optional().describe("Local path to a WP install (must contain wp-config.php)."),
+  wp_install_path: external_exports.string().optional().describe(
+    "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
+  ),
   target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
   api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
 };
@@ -56435,6 +56445,9 @@ async function handler26(input, ctx) {
       "Provide either target_url or wp_install_path."
     );
   }
+  const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
+  const localInstall = inp.wp_install_path && existsSync40(inp.wp_install_path) ? inp.wp_install_path : void 0;
   const wpscanBin = await scannerAvailable("wpscan");
   if (!wpscanBin) {
     return failDomain20(
@@ -56455,7 +56468,7 @@ async function handler26(input, ctx) {
     const r2 = await runProcess({
       command: "wp",
       args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
-      cwd: inp.wp_install_path,
+      cwd: localInstall ?? process.cwd(),
       timeoutMs: 3e4
     });
     if (r2.outcome === "completed") {
@@ -56474,7 +56487,7 @@ async function handler26(input, ctx) {
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
   const scanId = randomUUID8();
   const reportDir = join49(
-    inp.wp_install_path ?? process.cwd(),
+    localInstall ?? process.cwd(),
     ".guardian",
     "reports",
     `wpvuln-${scanId.slice(0, 8)}`
@@ -56507,7 +56520,7 @@ async function handler26(input, ctx) {
   const r = await runProcess({
     command: "wpscan",
     args,
-    cwd: inp.wp_install_path ?? process.cwd(),
+    cwd: localInstall ?? process.cwd(),
     timeoutMs: 5 * 6e4
   });
   const rateLimited = r.exitCode === 50 || /rate limit|throttled/i.test(r.stderr) || /rate limit|throttled/i.test(r.stdout);
@@ -56515,7 +56528,7 @@ async function handler26(input, ctx) {
     warnings.push("WPScan rate-limited \u2014 results are partial. Try again later or set WPSCAN_API_TOKEN.");
   }
   let raw = null;
-  if (existsSync39(outFile)) {
+  if (existsSync40(outFile)) {
     try {
       raw = readFileSync28(outFile, "utf8");
     } catch {
@@ -56571,7 +56584,7 @@ function failDomain20(code, message3) {
 }
 
 // src/tools/wpVulnCheckSource.ts
-import { existsSync as existsSync40 } from "node:fs";
+import { existsSync as existsSync41 } from "node:fs";
 import { join as join52 } from "node:path";
 
 // src/wordpress/sourceInventory.ts
@@ -57174,7 +57187,7 @@ registerToolModule(
       const warnings = [];
       const findings = [];
       const cves = [];
-      const looksLikeWpRoot = existsSync40(join52(ctx.projectPath, "wp-includes")) || existsSync40(join52(ctx.projectPath, "wp-content"));
+      const looksLikeWpRoot = existsSync41(join52(ctx.projectPath, "wp-includes")) || existsSync41(join52(ctx.projectPath, "wp-content"));
       if (!looksLikeWpRoot) {
         warnings.push(
           "not_a_wordpress_install_root: no wp-includes/ or wp-content/ at project_path \u2014 this tool expects the WordPress install root, not a single plugin/theme directory."
@@ -57347,7 +57360,7 @@ registerToolModule(
 );
 
 // src/tools/wpCronAudit.ts
-import { existsSync as existsSync41 } from "node:fs";
+import { existsSync as existsSync42 } from "node:fs";
 import { randomUUID as randomUUID10 } from "node:crypto";
 import { join as join53 } from "node:path";
 var inputSchema17 = {
@@ -57390,7 +57403,7 @@ async function handler27(input, ctx) {
   } catch (e) {
     return failDomain21("not_a_wordpress_install", e.message);
   }
-  if (!existsSync41(join53(installPath, "wp-config.php"))) {
+  if (!existsSync42(join53(installPath, "wp-config.php"))) {
     return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
@@ -57670,7 +57683,9 @@ function findLatestWpAudit(ctx, projectPath) {
 import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
-  wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
+  wp_install_path: external_exports.string().optional().describe(
+    "Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine."
+  ),
   target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token)."),
   project_path: ProjectPath.describe(
     "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
@@ -57687,6 +57702,8 @@ registerToolModule(tool32);
 async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain22("unsupported_target", installProblem);
   let projectPath;
   const rawProject = inp.project_path ?? inp.wp_install_path;
   if (inp.project_path !== void 0 && inp.project_path.length > 0) {
@@ -58053,7 +58070,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync42, readFileSync as readFileSync29, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync43, readFileSync as readFileSync29, readdirSync as readdirSync19, statSync as statSync14 } from "node:fs";
 import { join as join54, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -58242,7 +58259,7 @@ function collectConfigFiles(root, maxDepth) {
       }
       if (stat2.isDirectory()) {
         walk4(abs, depth + 1);
-      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync42(abs)) {
+      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync43(abs)) {
         out.push(abs);
       }
     }
@@ -58394,7 +58411,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync43, readFileSync as readFileSync31, readdirSync as readdirSync21, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync44, readFileSync as readFileSync31, readdirSync as readdirSync21, statSync as statSync16 } from "node:fs";
 import { join as join56, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -58544,7 +58561,7 @@ function findMigrationsDirs(root) {
         continue;
       }
       if (!s.isDirectory()) continue;
-      if (name === "Migrations" && existsSync43(abs)) {
+      if (name === "Migrations" && existsSync44(abs)) {
         out.push(abs);
       } else {
         walk4(abs, depth + 1);
@@ -59864,7 +59881,7 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 // src/skillaudit/ingest.ts
 init_execa();
 import {
-  existsSync as existsSync44,
+  existsSync as existsSync45,
   lstatSync as lstatSync4,
   mkdtempSync as mkdtempSync4,
   readFileSync as readFileSync32,
@@ -59876,7 +59893,7 @@ import {
   writeFileSync as writeFileSync15
 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename5, isAbsolute as isAbsolute8, join as join57, relative as relative19 } from "node:path";
+import { basename as basename5, isAbsolute as isAbsolute9, join as join57, relative as relative19 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES2 = 2 * 1024 * 1024;
@@ -59994,7 +60011,7 @@ async function ingestTarget(targetRaw) {
     if (looksLikeGitHost(target)) return ingestGit(target);
     return ingestUrl(target);
   }
-  if (!existsSync44(target)) {
+  if (!existsSync45(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
   const st = statSync17(target);
@@ -60142,7 +60159,7 @@ async function tryExtract(zipPath, destDir) {
 }
 function isPathWithinRoot(candidate, root) {
   const rel2 = relative19(root, candidate);
-  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute8(rel2);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute9(rel2);
 }
 function collectDir(root) {
   const files = [];
@@ -60463,7 +60480,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync35 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join62, resolve as resolve15 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join62, resolve as resolve15 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -60499,7 +60516,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync45, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
 import { basename as basename6, join as join59 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -60554,7 +60571,7 @@ function collectPorts(projectPath) {
   return out;
 }
 function readLines(path6) {
-  if (!existsSync45(path6)) return [];
+  if (!existsSync46(path6)) return [];
   try {
     return readFileSync33(path6, "utf8").split(/\r?\n/);
   } catch {
@@ -62133,7 +62150,7 @@ function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync35(isAbsolute9(path6) ? path6 : join62(projectPath, path6));
+      const buffer = readFileSync35(isAbsolute10(path6) ? path6 : join62(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -62275,7 +62292,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve15(isAbsolute9(path6) ? path6 : join62(projectPath, path6));
+  return resolve15(isAbsolute10(path6) ? path6 : join62(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -64675,12 +64692,12 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync49, readFileSync as readFileSync38 } from "node:fs";
-import { isAbsolute as isAbsolute11, join as join70, relative as relative22 } from "node:path";
+import { existsSync as existsSync50, readFileSync as readFileSync38 } from "node:fs";
+import { isAbsolute as isAbsolute12, join as join70, relative as relative22 } from "node:path";
 
 // src/fixpr/apply.ts
-import { existsSync as existsSync46, readFileSync as readFileSync36, rmSync as rmSync7, writeFileSync as writeFileSync18 } from "node:fs";
-import { isAbsolute as isAbsolute10, join as join66, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
+import { existsSync as existsSync47, readFileSync as readFileSync36, rmSync as rmSync7, writeFileSync as writeFileSync18 } from "node:fs";
+import { isAbsolute as isAbsolute11, join as join66, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -64697,7 +64714,7 @@ async function applyGroup(opts) {
 }
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
-  const missing = plan.files.filter((f) => !existsSync46(join66(worktreePath, f)));
+  const missing = plan.files.filter((f) => !existsSync47(join66(worktreePath, f)));
   if (missing.length > 0) {
     return {
       applied: false,
@@ -64813,7 +64830,7 @@ function editPipPin(worktreePath, step) {
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
   const target = resolve16(worktreePath, file);
   const rel2 = relative21(worktreePath, target);
-  if (isAbsolute10(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute10(rel2)) {
+  if (isAbsolute11(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute11(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
   let text;
@@ -65399,13 +65416,13 @@ function fromPyprojectToml(content) {
 }
 
 // src/fixpr/testEnv.ts
-import { existsSync as existsSync47 } from "node:fs";
+import { existsSync as existsSync48 } from "node:fs";
 import { join as join68 } from "node:path";
 var INSTALL_TIMEOUT_MS = 15 * 6e4;
 async function prepareTestEnvironment(opts) {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== "npm") return { ok: true, command: null };
-  const hasLock = existsSync47(join68(treePath, "package-lock.json")) || existsSync47(join68(treePath, "npm-shrinkwrap.json"));
+  const hasLock = existsSync48(join68(treePath, "package-lock.json")) || existsSync48(join68(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
   const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
@@ -65608,7 +65625,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync48, mkdtempSync as mkdtempSync6, realpathSync as realpathSync8, rmSync as rmSync9 } from "node:fs";
+import { existsSync as existsSync49, mkdtempSync as mkdtempSync6, realpathSync as realpathSync8, rmSync as rmSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join69, resolve as resolve17 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -65665,7 +65682,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync48(path6)) {
+  if (!existsSync49(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure3(removeResult, "git worktree remove")}` : "";
@@ -65962,7 +65979,7 @@ function inWorktree(root, prefix) {
   return join70(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute11(filePath) ? relative22(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute12(filePath) ? relative22(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -66167,7 +66184,7 @@ function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
     const path6 = join70(worktreePath, name);
-    if (!existsSync49(path6)) continue;
+    if (!existsSync50(path6)) continue;
     try {
       files[name] = readFileSync38(path6, "utf8");
     } catch {
@@ -66992,7 +67009,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync50, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
+import { existsSync as existsSync51, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join71 } from "node:path";
 
@@ -67140,7 +67157,7 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync50(absolutePath)) return { ...base, exists: false };
+  if (!existsSync51(absolutePath)) return { ...base, exists: false };
   let size;
   try {
     size = statSync20(absolutePath).size;

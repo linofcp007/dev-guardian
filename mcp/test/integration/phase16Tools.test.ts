@@ -9,7 +9,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -181,6 +181,43 @@ describe('wp_plugin_check never refuses for want of a local project', () => {
     expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe(canonicalPath(remote));
   });
 
+  /**
+   * Fix round 2 (controller ruling): a relative `wp_install_path` that does
+   * not exist here names no install — resolved against the server's cwd, two
+   * remote installs both passed as the same relative name shared one key, and
+   * one's CVEs were reported as the other's. It is rejected, never merged.
+   */
+  it('rejects a relative wp_install_path that does not exist, rather than merging it with another install', async () => {
+    const plugin = makePlugin();
+    const rel = 'guardian-remote-wp-install';
+    // What another remote install "wp" filed under the old cwd-resolved key.
+    plugin.storage.scans.insert({ scan_id: 'other', scan_type: 'wp_vuln_check', project_path: canonicalPath(rel), tree_hash: '' });
+    plugin.storage.cves.upsert({ cve_id: 'CVE-OTHER-INSTALL', package_name: 'akismet', severity: 'critical', scan_id: 'other' });
+    plugin.storage.scans.finalize({ scan_id: 'other', status: 'completed', tools_run: [{ name: 'wpscan', status: 'ok' }], missing_tools: [] });
+
+    const r = await getTool('wp_plugin_check').handler({ slug: 'akismet', wp_install_path: rel }, plugin);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('unsupported_target');
+    expect(r.error.message).toMatch(/absolute path/);
+    expect(r.error.message).toMatch(/target_url/);
+  });
+
+  it('an existing relative wp_install_path resolves to its install', async () => {
+    const plugin = makePlugin();
+    const P = projectPath();
+    plugin.storage.scans.insert({ scan_id: 'v', scan_type: 'wp_vuln_check', project_path: P, tree_hash: '' });
+    plugin.storage.cves.upsert({ cve_id: 'CVE-HERE', package_name: 'akismet', severity: 'high', scan_id: 'v' });
+    plugin.storage.scans.finalize({ scan_id: 'v', status: 'completed', tools_run: [{ name: 'wpscan', status: 'ok' }], missing_tools: [] });
+
+    const r = (await getTool('wp_plugin_check').handler(
+      { slug: 'akismet', wp_install_path: relative(process.cwd(), P) },
+      plugin,
+    )) as { ok: true; project_path: string; known_cves: Array<{ cve_id: string }> };
+    expect(r.project_path).toBe(P);
+    expect(r.known_cves.map((c) => c.cve_id)).toEqual(['CVE-HERE']);
+  });
+
   it('still refuses an explicit project_path that does not exist', async () => {
     const plugin = makePlugin();
     const r = await getTool('wp_plugin_check').handler(
@@ -240,6 +277,47 @@ describe('wp_vuln_check files its row where the project-scoped readers look', ()
 
       const p = (await getTool('wp_plugin_check').handler(
         { slug: 'contact-form-7', project_path: P, target_url: 'https://site.example' },
+        plugin,
+      )) as { ok: true; known_cves: Array<{ cve_id: string }> };
+      expect(p.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2099-4242']);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('rejects a relative wp_install_path that does not exist before running anything (fix round 2)', async () => {
+    mockScanners();
+    const plugin = makePlugin();
+    const r = await getTool('wp_vuln_check').handler(
+      { wp_install_path: 'guardian-remote-wp-install', target_url: 'https://site.example' },
+      plugin,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('unsupported_target');
+    expect(r.error.message).toMatch(/target_url/);
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+  });
+
+  it('an absolute install path that is not on this machine is filed under its exact key, and writes nothing there', async () => {
+    mockScanners();
+    const plugin = makePlugin();
+    const P = projectPath();
+    const remote = join(P, 'remote', 'var', 'www', 'html');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(P);
+    try {
+      const r = await getTool('wp_vuln_check').handler(
+        { wp_install_path: remote, target_url: 'https://site.example' },
+        plugin,
+      );
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+      expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe(canonicalPath(remote));
+      // Its report went under the working directory: no directory was
+      // created at the remote install's path on this machine.
+      expect(existsSync(join(P, 'remote'))).toBe(false);
+
+      const p = (await getTool('wp_plugin_check').handler(
+        { slug: 'contact-form-7', wp_install_path: remote },
         plugin,
       )) as { ok: true; known_cves: Array<{ cve_id: string }> };
       expect(p.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2099-4242']);

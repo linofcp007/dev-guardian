@@ -179,11 +179,22 @@ version bump.
     `wp_vuln_check` rows earlier builds filed under the raw
     `wp_install_path` or URL (a trailing slash, `./wp`, `C:/sites/wp`):
     they look the install root and the site up under each spelling it may
-    have been stored with. `wp_describe_setup` passes over a
-    `wp_vuln_check`, `wp_vuln_check_source` or `scan_wordpress` run that
-    measured nothing, as `wp_plugin_check` does; `wp_plugin_check` never
-    refuses for want of a local project (a home directory, or a
-    `wp_install_path` that is not on this machine).
+    have been stored with — for every source they read, the dependency CVE
+    source (`deps_audit` / `deps` / `security_full`) included. A row filed
+    under a RELATIVE raw path is reachable only while that path exists on
+    this machine. `wp_describe_setup` passes over a `wp_vuln_check`,
+    `wp_vuln_check_source` or `scan_wordpress` run that measured nothing,
+    as `wp_plugin_check` does; `wp_plugin_check` never refuses for want of
+    a local project (a home directory, or an absolute `wp_install_path` of
+    an install that is not on this machine — its exact key).
+  - `wp_plugin_check` and `wp_vuln_check` refuse a relative
+    `wp_install_path` that does not exist here (`unsupported_target`: pass
+    the absolute path of the install, or `target_url` for a remote site).
+    Resolved against the server's working directory, two remote installs
+    both passed as `wp` shared one record, and one's CVEs were reported as
+    the other's; `wp_vuln_check` also created the report directory there.
+    It now writes its report under the install only when the install is on
+    this machine.
   - The shipped commands and skills (`/guardian-wp`, `/guardian-dotnet`,
     `/guardian-report soc2`, `/guardian-release`, `/guardian-status`,
     `guardian-compliance`) pass `project_path` (and `target_url`) to the
