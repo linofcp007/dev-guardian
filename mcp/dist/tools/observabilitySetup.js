@@ -85,8 +85,9 @@ async function handler(input, ctx) {
     };
 }
 function inferStack(projectPath, ctx) {
-    // Prefer the latest stack snapshot when available — it understands frameworks too.
-    const snap = ctx.storage.stack.getLatest()?.snapshot;
+    // Prefer this project's latest stack snapshot when available — it
+    // understands frameworks too. Never another project's (Task 24).
+    const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
     if (snap) {
         if (snap.languages?.includes('javascript') || snap.languages?.includes('typescript'))
             return 'node';

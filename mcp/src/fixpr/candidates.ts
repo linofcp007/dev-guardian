@@ -23,6 +23,8 @@
 
 import { createHash } from 'node:crypto';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { rankByExploitability } from '../intel/rank.js';
+import type { CveIntelResult } from '../intel/types.js';
 import { passes } from '../severity/filter.js';
 import { SEVERITY_ORDER, type Finding, type Severity } from '../types.js';
 import type { FixCandidate, FixGroup, FixSource, GroupSelection, UpgradeStep } from './types.js';
@@ -64,9 +66,64 @@ export function buildGroups(input: {
   return groups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
-export function selectGroups(groups: readonly FixGroup[], maxPrs: number): GroupSelection {
-  const ordered = [...groups].sort(
-    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity],
+/**
+ * The exploitability signal `create_fix_pr` orders fixes by (Task 24, item
+ * 5): the CVE ids each finding is correlated with (`intel/rank.ts
+ * #findingCveIds`) and their CISA KEV / FIRST EPSS intel
+ * (`intel/enrich.ts#enrichCveIntel`). An id with no measured intel is no
+ * signal — never "not exploited", never a boost.
+ */
+export interface Exploitability {
+  cveIdsOf: (fingerprint: string) => readonly string[];
+  intel: ReadonlyMap<string, CveIntelResult>;
+}
+
+/**
+ * Severity first; within a severity band, KEV-listed first, then higher EPSS
+ * (`rankByExploitability`), then the order `items` came in. The composition
+ * order matters: `rankByExploitability` is a stable sort by exploitability
+ * ALONE, so it runs first and the stable severity sort after it keeps
+ * severity the primary key — the other way round, an exploited high would
+ * displace every ordinary critical.
+ */
+function bySeverityThenExploitability<T extends { severity: Severity }>(
+  items: readonly T[],
+  fingerprintsOf: (item: T) => readonly string[],
+  exploitability: Exploitability | undefined,
+): T[] {
+  const cveIdsOf = (item: T): string[] =>
+    exploitability === undefined
+      ? []
+      : [...new Set(fingerprintsOf(item).flatMap((fp) => exploitability.cveIdsOf(fp)))];
+  const ranked =
+    exploitability === undefined ? [...items] : rankByExploitability(items, cveIdsOf, exploitability.intel);
+  return ranked.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+}
+
+/**
+ * `group` with its candidates in the order they are applied: severity, then
+ * KEV, then EPSS. `applyGroup` applies them in order and stops at the first
+ * that fails, so this decides which fixes are attempted first. The hash (a
+ * function of the fingerprint SET) and so the branch name do not change.
+ */
+export function rankCandidates(group: FixGroup, exploitability: Exploitability): FixGroup {
+  return {
+    ...group,
+    candidates: bySeverityThenExploitability(group.candidates, (c) => c.fingerprints, exploitability),
+  };
+}
+
+export function selectGroups(
+  groups: readonly FixGroup[],
+  maxPrs: number,
+  exploitability?: Exploitability,
+): GroupSelection {
+  // Severity first, then — given the signal — KEV and EPSS decide which of
+  // equally severe groups the cap keeps.
+  const ordered = bySeverityThenExploitability(
+    groups,
+    (group) => group.candidates.flatMap((candidate) => candidate.fingerprints),
+    exploitability,
   );
   const selected = ordered.slice(0, maxPrs);
   const excluded = ordered.slice(maxPrs);

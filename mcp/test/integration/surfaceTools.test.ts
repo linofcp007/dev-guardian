@@ -20,6 +20,8 @@ import { readJsonSafe, scannerAvailable } from '../../src/tools/scanHelpers.js';
 import { runProcess, type ProcessRunResult } from '../../src/runners/processRunner.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
+import type { StackSnapshot } from '../../src/types.js';
 import '../../src/tools/mapAttackSurface.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import '../../src/resources/surface.js';
@@ -329,6 +331,16 @@ function tool() {
   return found;
 }
 
+/** A `detect_stack` snapshot that detected exactly `languages`. */
+function stackSnapshot(languages: string[]): StackSnapshot {
+  return {
+    os: 'linux', arch: 'x64', languages, package_managers: [],
+    frameworks: [], existing_tools: [], has_docker: false, has_compose: false,
+    has_terraform: false, has_kubernetes: false, has_ansible: false,
+    has_github_actions: false, has_gitlab_ci: false, has_iac: false, projects: [],
+  };
+}
+
 /** ProcessRunResult has five required fields — a partial mock will not type-check. */
 function okRun(outcome: ProcessRunResult['outcome'] = 'completed'): ProcessRunResult {
   return { outcome, exitCode: outcome === 'completed' ? 0 : 1, stdout: '', stderr: '', truncated: false };
@@ -411,17 +423,11 @@ describe('map_attack_surface', () => {
     vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
 
     const ctx = makeCtx();
-    ctx.storage.stack.insert({
-      project_path: '/p',
-      snapshot: {
-        os: 'linux', arch: 'x64', languages: ['elixir'], package_managers: [],
-        frameworks: [], existing_tools: [], has_docker: false, has_compose: false,
-        has_terraform: false, has_kubernetes: false, has_ansible: false,
-        has_github_actions: false, has_gitlab_ci: false, has_iac: false, projects: [],
-      },
-    });
+    const projectPath = resolveProjectPath(makeTempDir('guardian-surface-')).path;
+    // The snapshot is THIS project's: it was seeded under '/p' until Task 24,
+    // and only passed because the read was "the newest snapshot of any project".
+    ctx.storage.stack.insert({ project_path: projectPath, snapshot: stackSnapshot(['elixir']) });
 
-    const projectPath = makeTempDir('guardian-surface-');
     const result = okResult<{
       coverage: { language: string; status: string }[];
       stack_detected: boolean;
@@ -445,6 +451,38 @@ describe('map_attack_surface', () => {
 
     expect(result.stack_detected).toBe(false);
     expect(result.note).toMatch(/detect_stack/);
+  });
+
+  it("never reads ANOTHER project's stack snapshot: its languages and stack_detected are this project's (Task 24)", async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [] }));
+
+    const ctx = makeCtx();
+    const other = resolveProjectPath(makeTempDir('guardian-surface-other-')).path;
+    ctx.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['elixir']) });
+
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{
+      coverage: { language: string; status: string }[];
+      stack_detected: boolean;
+      note?: string;
+    }>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(result.coverage.find((c) => c.language === 'elixir')).toBeUndefined();
+    expect(result.stack_detected).toBe(false);
+    expect(result.note).toMatch(/detect_stack/);
+  });
+
+  it("stack_detected is this project's on the degraded path too (semgrep unavailable)", async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const ctx = makeCtx();
+    const other = resolveProjectPath(makeTempDir('guardian-surface-other-')).path;
+    ctx.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['elixir']) });
+
+    const projectPath = makeTempDir('guardian-surface-');
+    const result = okResult<{ stack_detected: boolean }>(await tool().handler({ project_path: projectPath }, ctx));
+    expect(result.stack_detected).toBe(false);
   });
 
   it('returns the cached snapshot when the tree hash is unchanged', async () => {

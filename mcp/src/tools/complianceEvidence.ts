@@ -6,14 +6,26 @@
  * attach to a deliverable, or hand to a client/auditor. The framework
  * tag (gdpr / soc2 / iso27001) just shapes the section labels — the data
  * sources are the same DB rows.
+ *
+ * **The evidence is ONE project's** (`project_path`, default: the server's
+ * working directory — Task 24): its newest usable compliance, dependency
+ * and SBOM scans, its own active baseline, and the suppressions that apply
+ * to it (its own and the legacy ones scoped to no project). It used to take
+ * each from the 50 newest scans of the whole database, the newest baseline
+ * of any project and every active suppression — an evidence pack handed to
+ * an auditor that could describe a different project than the one it named.
  */
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import type { ToolResult } from '../types.js';
+import { findLatestUsable } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
+import { CVE_SOURCE_SCAN_TYPES, type ScanRecord, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
+  project_path: ProjectPath,
   framework: z
     .enum(['gdpr', 'soc2', 'iso27001', 'generic'])
     .optional()
@@ -24,9 +36,10 @@ const tool: ToolModule = {
   name: 'compliance_evidence',
   title: 'Compliance evidence pack (Markdown)',
   description:
-    'Generate a Markdown evidence document from accumulated state: latest compliance scan, ' +
-    'license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a ' +
-    'framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.',
+    "Generate a Markdown evidence document from one project's accumulated state (project_path, " +
+    "default: the server's working directory): latest compliance scan, license summary, CVE " +
+    'counts, baseline status, suppressions, policy docs found. Tag with a framework ' +
+    '(gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -37,19 +50,35 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { framework?: 'gdpr' | 'soc2' | 'iso27001' | 'generic' };
+  const inp = input as { project_path?: string; framework?: 'gdpr' | 'soc2' | 'iso27001' | 'generic' };
   const framework = inp.framework ?? 'generic';
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
 
-  const compliance = findLatest(ctx, 'compliance');
-  const deps =
-    findLatest(ctx, 'deps_audit') ?? findLatest(ctx, 'deps') ?? findLatest(ctx, 'security_full');
-  const sbom = findLatest(ctx, 'sbom');
-  const baseline = ctx.storage.baselines.getActive();
-  const suppressions = ctx.storage.suppressions.listActive();
+  const storage = ctx.storage;
+  // Policy documents and licenses are read from files, not scanner output,
+  // so a compliance run's scanner coverage does not disqualify it (risk_score
+  // reads it the same way).
+  const compliance = findLatestUsable(storage, projectPath, ['compliance'], { skipCoverageNone: false }).scan;
+  // The newest scan that actually measured dependencies — a security_full
+  // row judged on its Trivy half — the same CVE source risk_score uses.
+  const deps = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
+  const sbom = findLatestUsable(storage, projectPath, ['sbom']).scan;
+  const baseline = storage.baselines.getActiveForProject(projectPath);
+  // Every suppression that hides a finding of THIS project: its own, and
+  // the ones scoped to no project (NULL — rows written before migration
+  // 011), exactly the rule `history/openSet.ts#suppressionMatcher` applies.
+  const suppressions = storage.suppressions
+    .listActive()
+    .filter((s) => s.project_path === undefined || s.project_path === projectPath);
 
   const md = build({
     framework,
-    project_path: deps?.project_path ?? compliance?.project_path ?? '(unknown)',
+    project_path: projectPath,
     generated_at: new Date().toISOString(),
     compliance,
     deps,
@@ -61,6 +90,7 @@ async function handler(
 
   return {
     ok: true,
+    project_path: projectPath,
     framework,
     markdown: md,
     size_bytes: Buffer.byteLength(md, 'utf8'),
@@ -74,10 +104,10 @@ interface BuildArgs {
   framework: 'gdpr' | 'soc2' | 'iso27001' | 'generic';
   project_path: string;
   generated_at: string;
-  compliance: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  deps: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  sbom: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  baseline: ReturnType<NonNullable<PluginContext['storage']['baselines']['getActive']>>;
+  compliance: ScanRecord | null;
+  deps: ScanRecord | null;
+  sbom: ScanRecord | null;
+  baseline: ReturnType<NonNullable<PluginContext['storage']['baselines']['getActiveForProject']>>;
   suppressionsCount: number;
   ctx: PluginContext;
 }
@@ -320,14 +350,5 @@ function build(args: BuildArgs): string {
       "Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it._",
   );
   return out.join('\n');
-}
-
-function findLatest(
-  ctx: PluginContext,
-  type: string,
-): ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>> {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 

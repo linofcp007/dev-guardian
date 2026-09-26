@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve20.call(this, root, ref);
+      let _sch = resolve21.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve20(root, ref) {
+    function resolve21(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve20(baseURI, relativeURI, options) {
+    function resolve21(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve20,
+      resolve: resolve21,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve20, reject) {
+        return new Promise(function(resolve21, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve20(is);
+              resolve21(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve20, reject) => {
+      const step = (i2) => new Promise((resolve21, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve20(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve21(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve20(subStep(p, i2, 0));
+        resolve21(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve20, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve21, reject) => {
         if (ii === pathExt.length)
-          return resolve20(step(i2 + 1));
+          return resolve21(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve20(p + ext);
+              return resolve21(p + ext);
           }
-          return resolve20(subStep(p, i2, ii + 1));
+          return resolve21(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve20, reject) => {
-        Object.assign(methods, { resolve: resolve20, reject });
+      const promise = new Promise((resolve21, reject) => {
+        Object.assign(methods, { resolve: resolve21, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve20 = promise.resolve.bind(promise);
-      return { resolve: resolve20, promises };
+      const resolve21 = promise.resolve.bind(promise);
+      return { resolve: resolve21, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve20, promises }, subprocess) => {
-      resolve20();
+    waitForConcurrentStreams = async ({ resolve: resolve21, promises }, subprocess) => {
+      resolve21();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve20) => setTimeout(resolve20, pollInterval));
+        await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve20, reject) => {
+    return new Promise((resolve21, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve20(parseResult.data);
+            resolve21(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve20, reject) => {
+    return new Promise((resolve21, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve20, interval);
+      const timeoutId = setTimeout(resolve21, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36594,7 +36594,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve20) => setTimeout(resolve20, pollInterval));
+      await new Promise((resolve21) => setTimeout(resolve21, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve20) => {
+    return new Promise((resolve21) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve20();
+        resolve21();
       } else {
-        this._stdout.once("drain", resolve20);
+        this._stdout.once("drain", resolve21);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve19 } from "node:path";
+import { resolve as resolve20 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -38863,6 +38863,12 @@ var StackRepo = class {
       snapshot: input.snapshot
     };
   }
+  /**
+   * The newest snapshot of ANY project. No production caller since Task 24:
+   * `bug_hunt`, `audit_executive`, `init_project`, `map_attack_surface` and
+   * `observability_setup` each took ANOTHER project's languages from it
+   * whenever that project was detected last. Use `getLatestForProject`.
+   */
   getLatest() {
     const row = this.getLatestStmt.get();
     return row ? rowToSnapshot(row) : null;
@@ -39067,11 +39073,9 @@ var SurfaceRepo = class {
     };
   }
   /**
-   * The newest snapshot in the database, from ANY project.
-   *
-   * Correct for exactly one caller: the `guardian://surface/latest` resource,
-   * whose contract really is "whatever this server last mapped" and which
-   * claims nothing about a project.
+   * The newest snapshot in the database, from ANY project. No production
+   * caller: the `guardian://surface/latest` resource answers for the
+   * server's own project (`getLatestForProject(serverProjectPath())`).
    *
    * Any consumer that relativizes paths against a specific project root,
    * keys anything by one, or TELLS THE CALLER it answered about their
@@ -41519,7 +41523,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve20) => this.waiting.push(resolve20));
+    await new Promise((resolve21) => this.waiting.push(resolve21));
     this.active += 1;
   }
   release() {
@@ -45788,6 +45792,9 @@ function realWithinProject(root, candidate, requireFile) {
   const rel2 = relative10(realRoot, real);
   return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep8}`) && !isAbsolute5(rel2);
 }
+function finished7(outcome) {
+  return outcome === "completed" || outcome === "failed";
+}
 async function runWorkflowScanner(spec, ctx, reportDir) {
   const bin = await scannerAvailable(spec.binary);
   if (!bin) {
@@ -45812,7 +45819,9 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
       toolRun: { name: spec.name, status: "ok" },
       missing: false,
       parserInput: { parser: spec.parser, input: result.stdout },
-      processOutcome: result.outcome
+      // A run its spec accepts is a completed one, whatever the runner
+      // called its exit code (actionlint's exit 1 arrives as `failed`).
+      processOutcome: "completed"
     };
   }
   const toolRun = result.outcome === "completed" ? { name: spec.name, status: "failed" } : { name: spec.name, status: "failed", reason: result.outcome };
@@ -45896,9 +45905,14 @@ registerToolModule(
               args: ["-pyflakes=", "-shellcheck=", "-format", "{{json .}}", ...workflowFiles],
               parser: actionlintParser,
               // exit 0 (no problems) or 1 (problems found) are both a
-              // completed run — same convention as hadolint/jscpd/ruff/
-              // bandit elsewhere.
-              isOk: (r) => r.outcome === "completed" && (r.exitCode === 0 || r.exitCode === 1)
+              // finished run — same convention as hadolint/jscpd/ruff/
+              // bandit elsewhere. The runner reports EVERY non-zero exit as
+              // `outcome: 'failed'` (processRunner.ts), so exit 1 arrives as
+              // `failed` + 1: requiring `completed` here made actionlint with
+              // findings always a failed pass, its findings unparsed and the
+              // whole iac row failed (Task 24 fix round 1, M7). Only a run
+              // that did not finish is refused on its outcome.
+              isOk: (r) => finished7(r.outcome) && (r.exitCode === 0 || r.exitCode === 1)
             },
             ctx,
             reportDir
@@ -46320,8 +46334,8 @@ var scanContainers = makeScanTool({
           signal: ctx.signal,
           onLog: ctx.onLog
         });
-        const finished7 = result.outcome !== "cancelled" && result.outcome !== "timed_out" && result.outcome !== "output_too_large";
-        if (finished7 && (result.exitCode === 0 || result.exitCode === 1)) {
+        const finished8 = result.outcome !== "cancelled" && result.outcome !== "timed_out" && result.outcome !== "output_too_large";
+        if (finished8 && (result.exitCode === 0 || result.exitCode === 1)) {
           parser_inputs.push({ parser: hadolintParser, input: result.stdout });
           tools_run.push({ name: "hadolint", status: "ok" });
         } else {
@@ -46499,7 +46513,7 @@ function fallbackLanguages(projectPath) {
   return languages;
 }
 function detectLanguages(plugin, projectPath) {
-  const snapshotLanguages = plugin.storage.stack.getLatest()?.snapshot.languages;
+  const snapshotLanguages = plugin.storage.stack.getLatestForProject(projectPath)?.snapshot.languages;
   return snapshotLanguages ?? fallbackLanguages(projectPath);
 }
 function configuredPacksFor(input, plugin, projectPath) {
@@ -47489,8 +47503,8 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
   });
   const entries2 = run.stdout.split(/\r?\n/).filter((l) => l.trim().startsWith("{")).length;
   const errors = staticcheckErrors(run.stdout);
-  const finished7 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
-  if (finished7 && run.exitCode !== 0 && entries2 === 0) {
+  const finished8 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
+  if (finished8 && run.exitCode !== 0 && entries2 === 0) {
     const detail = firstLine3(run.stderr);
     out.tools_run.push({
       name: "staticcheck",
@@ -47499,7 +47513,7 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
     });
     return;
   }
-  if (finished7 && entries2 > 0 && errors.length === entries2) {
+  if (finished8 && entries2 > 0 && errors.length === entries2) {
     out.tools_run.push({
       name: "staticcheck",
       status: "failed",
@@ -48741,7 +48755,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve20 = (name, ecosystem, file, version2) => {
+  const resolve21 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -48808,7 +48822,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve20(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve21(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -48818,7 +48832,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve20(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve21(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -48826,10 +48840,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve20(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve21(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve20(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve21(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -48845,7 +48859,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve20(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve21(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -49706,13 +49720,13 @@ async function runDotnetOutdated(projectPath, cves) {
     steps.push(...parseDotnetText(text, cves));
   }
   const seen = /* @__PURE__ */ new Set();
-  const unique2 = steps.filter((s) => {
+  const unique3 = steps.filter((s) => {
     const key = `${s.package_name.toLowerCase()}@${s.installed_version}->${s.latest_version}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  return { steps: unique2, unplanned: [], failures };
+  return { steps: unique3, unplanned: [], failures };
 }
 function parseDotnetJson(raw, cves) {
   let parsed;
@@ -50990,7 +51004,7 @@ async function handler4(input, ctx) {
   }
   if (apply && manifestTouched) writeManifest(projectPath, manifest);
   const adopted = apply && !refresh && skipped2.length > 0 ? adoptIdenticalConfigs({ projectPath, configsDir, currentVersion: version2, files: proposals }) : [];
-  const stackSnapshot = readLatestStackSnapshot(ctx);
+  const stackSnapshot = readLatestStackSnapshot(ctx, projectPath);
   let initialStateLines = [];
   if (apply && ctx.shell) {
     const scriptPath = join39(ctx.scriptsDir, "scan", "initial-scan.sh");
@@ -51026,8 +51040,8 @@ async function handler4(input, ctx) {
     initial_state: initialStateLines
   };
 }
-function readLatestStackSnapshot(ctx) {
-  const latest = ctx.storage.stack.getLatest();
+function readLatestStackSnapshot(ctx, projectPath) {
+  const latest = ctx.storage.stack.getLatestForProject(projectPath);
   return latest?.snapshot ?? null;
 }
 async function computeSecretsStatusLine(projectPath) {
@@ -51124,7 +51138,7 @@ async function handler5(input, ctx) {
   };
 }
 function inferStack(projectPath, ctx) {
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   if (snap) {
     if (snap.languages?.includes("javascript") || snap.languages?.includes("typescript")) return "node";
     if (snap.languages?.includes("python")) return "python";
@@ -52196,13 +52210,18 @@ function booksOf(storage, scan2) {
     return child !== void 0 && usableChild(child) ? child.row : null;
   };
 }
-function ownTargetNotRun(holder, asked, f) {
+var PROJECT_FILES = "project files";
+function targetOf(name) {
+  return runNameEntry(name)?.ownTarget === true ? name : PROJECT_FILES;
+}
+function targetNotRun(holder, asked, f) {
   if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
   const key = findingKey(f);
+  const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
   for (const run of holder.tools_run) {
-    if (run.status !== "ok" || runNameEntry(run.name)?.ownTarget !== true) continue;
-    if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
-    if (!asked.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
+    if (!measuresKeyOk(run)) continue;
+    const target = targetOf(run.name);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r) && targetOf(r.name) === target)) return run.name;
   }
   return null;
 }
@@ -52210,7 +52229,7 @@ function answerFor(holder, asked, f) {
   if (asked === null) return { verdict: "unmeasured", notRun: null };
   const verdict = bookkeepingVerdict(asked, f);
   if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
-  const pass2 = ownTargetNotRun(holder, asked, f);
+  const pass2 = targetNotRun(holder, asked, f);
   return pass2 === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass2 };
 }
 function notMeasured(storage, scan2, scope = "any") {
@@ -52663,7 +52682,7 @@ async function handler10(input, ctx, callMeta) {
   const aggregateFindings = [];
   const subInput = { project_path: projectPath };
   if (inp.severity_min) subInput["severity_min"] = inp.severity_min;
-  const subTools = buildSubToolsForStack(ctx);
+  const subTools = buildSubToolsForStack(ctx, projectPath);
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
       const subTool = TOOLS.find((t) => t.name === toolName);
@@ -52724,7 +52743,7 @@ async function handler10(input, ctx, callMeta) {
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
   const aggregate_counts = countBySeverity2(filteredAggregate);
   const top_findings = topFindings2(filteredAggregate, 10);
-  const previousAudit = findPreviousAudit(ctx, auditScanId);
+  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
   let deltas;
   if (previousAudit) {
     const prevFindings = ctx.storage.findings.listByScan(previousAudit);
@@ -52810,8 +52829,8 @@ function worstCoverage(list2) {
   const rank = { none: 0, partial: 1, full: 2 };
   return list2.reduce((worst, c3) => rank[c3] < rank[worst] ? c3 : worst, "full");
 }
-function buildSubToolsForStack(ctx) {
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+function buildSubToolsForStack(ctx, projectPath) {
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   const languages = snap?.languages ?? [];
   const frameworks = snap?.frameworks ?? [];
   const out = [...BASE_SUB_TOOLS];
@@ -52823,11 +52842,11 @@ function buildSubToolsForStack(ctx) {
   }
   return out;
 }
-function findPreviousAudit(ctx, excludeScanId) {
-  const history = ctx.storage.scans.listHistory(200);
-  const prev = history.find(
-    (s) => s.scan_type === "audit" && s.status === "completed" && s.scan_id !== excludeScanId
-  );
+function findPreviousAudit(ctx, projectPath, thisAuditId) {
+  const [prev] = ctx.storage.scans.listCompletedOfTypes(projectPath, ["audit"], {
+    limit: 1,
+    beforeScanId: thisAuditId
+  });
   return prev?.scan_id ?? null;
 }
 function countBySeverity2(findings) {
@@ -54620,6 +54639,19 @@ function exploitabilitySignal(cveIds, intel) {
   }
   return { kev, max_epss: maxEpss, cve_ids: contributed };
 }
+function rankByExploitability(items, cveIdsOf, intel) {
+  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
+  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
+    const sa = signals2[a2.index];
+    const sb = signals2[b.index];
+    if (sa === void 0 || sb === void 0) return 0;
+    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
+    const ea = sa.max_epss ?? -1;
+    const eb = sb.max_epss ?? -1;
+    if (ea !== eb) return eb - ea;
+    return a2.index - b.index;
+  }).map((x) => x.item);
+}
 
 // src/tools/riskScore.ts
 var tool17 = {
@@ -55420,13 +55452,24 @@ var SERVER_VERSION = resolveVersion();
 var tool24 = {
   name: "health_status",
   title: "Server health",
-  description: "Return server uptime, DB info, last scan, shell choice, in-flight scan count, and tool/resource counts. Read-only.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler21(ctx)
+  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler21(input, ctx)
 };
 registerToolModule(tool24);
-async function handler21(ctx) {
-  const latest = ctx.storage.scans.getLatest();
+async function handler21(input, ctx) {
+  const inp = input;
+  let projectPath;
+  if (inp.project_path === void 0 || inp.project_path.length === 0) {
+    projectPath = serverProjectPath();
+  } else {
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    }
+  }
+  const latest = ctx.storage.scans.getLatestForProject(projectPath);
   const limiter2 = getScanLimiter();
   const dbPath = ctx.storage.rawHandle().name;
   let dbSizeBytes = null;
@@ -55445,10 +55488,12 @@ async function handler21(ctx) {
       node_version: process.version,
       platform: process.platform
     },
+    project_path: projectPath,
     storage: {
       db_path: dbPath,
       db_size_bytes: dbSizeBytes,
-      total_scans: ctx.storage.scans.listHistory(1e3).length,
+      // This project's scans, any status and type — never another project's.
+      total_scans: ctx.storage.scans.countForProject(projectPath),
       ...ctx.storage.runtimeMeta.get("shell_choice") !== null ? { shell_label: ctx.shell?.label ?? "unknown" } : {}
     },
     last_scan: latest ? {
@@ -56058,12 +56103,13 @@ function failDomain17(code, message3) {
 
 // src/tools/complianceEvidence.ts
 var inputSchema13 = {
+  project_path: ProjectPath,
   framework: external_exports.enum(["gdpr", "soc2", "iso27001", "generic"]).optional().describe("Which framework to label the evidence under. Default: generic.")
 };
 var tool26 = {
   name: "compliance_evidence",
   title: "Compliance evidence pack (Markdown)",
-  description: "Generate a Markdown evidence document from accumulated state: latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
+  description: "Generate a Markdown evidence document from one project's accumulated state (project_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
   inputSchema: inputSchema13,
   handler: async (input, ctx) => handler23(input, ctx)
 };
@@ -56071,14 +56117,21 @@ registerToolModule(tool26);
 async function handler23(input, ctx) {
   const inp = input;
   const framework = inp.framework ?? "generic";
-  const compliance = findLatest(ctx, "compliance");
-  const deps = findLatest(ctx, "deps_audit") ?? findLatest(ctx, "deps") ?? findLatest(ctx, "security_full");
-  const sbom = findLatest(ctx, "sbom");
-  const baseline = ctx.storage.baselines.getActive();
-  const suppressions = ctx.storage.suppressions.listActive();
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const storage = ctx.storage;
+  const compliance = findLatestUsable(storage, projectPath, ["compliance"], { skipCoverageNone: false }).scan;
+  const deps = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }).scan;
+  const sbom = findLatestUsable(storage, projectPath, ["sbom"]).scan;
+  const baseline = storage.baselines.getActiveForProject(projectPath);
+  const suppressions = storage.suppressions.listActive().filter((s) => s.project_path === void 0 || s.project_path === projectPath);
   const md = build({
     framework,
-    project_path: deps?.project_path ?? compliance?.project_path ?? "(unknown)",
+    project_path: projectPath,
     generated_at: (/* @__PURE__ */ new Date()).toISOString(),
     compliance,
     deps,
@@ -56089,6 +56142,7 @@ async function handler23(input, ctx) {
   });
   return {
     ok: true,
+    project_path: projectPath,
     framework,
     markdown: md,
     size_bytes: Buffer.byteLength(md, "utf8"),
@@ -56268,11 +56322,6 @@ function build(args) {
     "_Generated by dev-guardian. dev-guardian sends no telemetry of its own; Semgrep's registry mode sends metrics \u2014 pass `local_only: true` to avoid it._"
   );
   return out.join("\n");
-}
-function findLatest(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
 // src/tools/createGithubIssues.ts
@@ -57049,7 +57098,7 @@ function failDomain19(code, message3) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync39, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync40, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
 import { randomUUID as randomUUID8 } from "node:crypto";
 import { join as join50 } from "node:path";
 
@@ -57144,9 +57193,48 @@ function severityFromVuln(raw) {
   return "medium";
 }
 
+// src/wordpress/siteKeys.ts
+import { existsSync as existsSync39 } from "node:fs";
+import { isAbsolute as isAbsolute8, resolve as resolve13 } from "node:path";
+function wpSiteKey(url) {
+  return url.replace(/\/$/, "");
+}
+function wpInstallPathProblem(raw) {
+  if (namesOneInstall(raw)) return null;
+  return `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no single install (resolved against the server's working directory, every remote install passed the same way would share one record). Pass the absolute path of the install, or target_url for a remote site.`;
+}
+function wpInstallKeys(canonical, raw) {
+  const keys = [canonical];
+  if (raw !== void 0 && raw.length > 0 && namesOneInstall(raw)) keys.push(raw, resolve13(raw));
+  return unique2(keys);
+}
+function namesOneInstall(raw) {
+  return isAbsolute8(raw) || existsSync39(raw);
+}
+function wpSiteKeys(url) {
+  const key = wpSiteKey(url);
+  return unique2([key, `${key}/`, url]);
+}
+function latestUnderKeys(storage, keys, types, opts = {}) {
+  let newest = null;
+  for (const key of unique2(keys)) {
+    const found = findLatestUsable(storage, key, types, opts).scan;
+    if (found === null) continue;
+    if (newest === null || storage.scans.sortNewestFirst([newest.scan_id, found.scan_id])[0] === found.scan_id) {
+      newest = found;
+    }
+  }
+  return newest;
+}
+function unique2(keys) {
+  return [...new Set(keys)];
+}
+
 // src/tools/wpVulnCheck.ts
 var inputSchema16 = {
-  wp_install_path: external_exports.string().optional().describe("Local path to a WP install (must contain wp-config.php)."),
+  wp_install_path: external_exports.string().optional().describe(
+    "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
+  ),
   target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
   api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
 };
@@ -57166,6 +57254,9 @@ async function handler26(input, ctx) {
       "Provide either target_url or wp_install_path."
     );
   }
+  const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
+  const localInstall = inp.wp_install_path && existsSync40(inp.wp_install_path) ? inp.wp_install_path : void 0;
   const wpscanBin = await scannerAvailable("wpscan");
   if (!wpscanBin) {
     return failDomain20(
@@ -57186,7 +57277,7 @@ async function handler26(input, ctx) {
     const r2 = await runProcess({
       command: "wp",
       args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
-      cwd: inp.wp_install_path,
+      cwd: localInstall ?? process.cwd(),
       timeoutMs: 3e4
     });
     if (r2.outcome === "completed") {
@@ -57205,7 +57296,7 @@ async function handler26(input, ctx) {
   if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
   const scanId = randomUUID8();
   const reportDir = join50(
-    inp.wp_install_path ?? process.cwd(),
+    localInstall ?? process.cwd(),
     ".guardian",
     "reports",
     `wpvuln-${scanId.slice(0, 8)}`
@@ -57215,7 +57306,10 @@ async function handler26(input, ctx) {
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
-    project_path: inp.wp_install_path ?? url,
+    // Filed under the key the project-scoped readers look it up by
+    // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
+    // canonical spelling, or the site URL the way wp_rest_audit files it.
+    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url),
     tree_hash: "",
     report_dir: reportDir
   });
@@ -57235,7 +57329,7 @@ async function handler26(input, ctx) {
   const r = await runProcess({
     command: "wpscan",
     args,
-    cwd: inp.wp_install_path ?? process.cwd(),
+    cwd: localInstall ?? process.cwd(),
     timeoutMs: 5 * 6e4
   });
   const rateLimited = r.exitCode === 50 || /rate limit|throttled/i.test(r.stderr) || /rate limit|throttled/i.test(r.stdout);
@@ -57243,7 +57337,7 @@ async function handler26(input, ctx) {
     warnings.push("WPScan rate-limited \u2014 results are partial. Try again later or set WPSCAN_API_TOKEN.");
   }
   let raw = null;
-  if (existsSync39(outFile)) {
+  if (existsSync40(outFile)) {
     try {
       raw = readFileSync28(outFile, "utf8");
     } catch {
@@ -57299,7 +57393,7 @@ function failDomain20(code, message3) {
 }
 
 // src/tools/wpVulnCheckSource.ts
-import { existsSync as existsSync40 } from "node:fs";
+import { existsSync as existsSync41 } from "node:fs";
 import { join as join53 } from "node:path";
 
 // src/wordpress/sourceInventory.ts
@@ -57902,7 +57996,7 @@ registerToolModule(
       const warnings = [];
       const findings = [];
       const cves = [];
-      const looksLikeWpRoot = existsSync40(join53(ctx.projectPath, "wp-includes")) || existsSync40(join53(ctx.projectPath, "wp-content"));
+      const looksLikeWpRoot = existsSync41(join53(ctx.projectPath, "wp-includes")) || existsSync41(join53(ctx.projectPath, "wp-content"));
       if (!looksLikeWpRoot) {
         warnings.push(
           "not_a_wordpress_install_root: no wp-includes/ or wp-content/ at project_path \u2014 this tool expects the WordPress install root, not a single plugin/theme directory."
@@ -58075,7 +58169,7 @@ registerToolModule(
 );
 
 // src/tools/wpCronAudit.ts
-import { existsSync as existsSync41 } from "node:fs";
+import { existsSync as existsSync42 } from "node:fs";
 import { randomUUID as randomUUID10 } from "node:crypto";
 import { join as join54 } from "node:path";
 var inputSchema17 = {
@@ -58118,7 +58212,7 @@ async function handler27(input, ctx) {
   } catch (e) {
     return failDomain21("not_a_wordpress_install", e.message);
   }
-  if (!existsSync41(join54(installPath, "wp-config.php"))) {
+  if (!existsSync42(join54(installPath, "wp-config.php"))) {
     return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
@@ -58233,16 +58327,24 @@ function failDomain21(code, message3) {
 var tool31 = {
   name: "wp_recommend_hardening",
   title: "WordPress hardening checklist",
-  description: "Generate a prioritised hardening checklist (Markdown) from the latest wp_audit. Pure read \u2014 inspects scans.meta of the most recent wp_audit, applies heuristics, returns recommendations.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler28(ctx)
+  description: "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit (project_path = the install root, default: the server's working directory). Pure read \u2014 inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler28(input, ctx)
 };
 registerToolModule(tool31);
-async function handler28(ctx) {
-  const audit = findLatestWpAudit(ctx);
+async function handler28(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
     return {
       ok: true,
+      project_path: projectPath,
       audit_found: false,
       message: "No wp_audit on file. Run `wp_audit` first.",
       markdown: "## No data\n\nRun `wp_audit` against a WordPress install first."
@@ -58345,6 +58447,7 @@ async function handler28(ctx) {
   items.sort((a2, b) => order[a2.priority] - order[b.priority]);
   return {
     ok: true,
+    project_path: projectPath,
     audit_found: true,
     audit_scan_id: audit.scan_id,
     items,
@@ -58381,18 +58484,21 @@ function toMarkdown(items, scanId) {
   }
   return out.join("\n");
 }
-function findLatestWpAudit(ctx) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === "wp_audit" && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatestWpAudit(ctx, projectPath) {
+  return findLatestUsable(ctx.storage, projectPath, ["wp_audit"], { skipCoverageNone: false }).scan;
 }
 
 // src/tools/wpPluginCheck.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
-  wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
-  target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token).")
+  wp_install_path: external_exports.string().optional().describe(
+    "Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine."
+  ),
+  target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token)."),
+  project_path: ProjectPath.describe(
+    "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
+  )
 };
 var tool32 = {
   name: "wp_plugin_check",
@@ -58405,6 +58511,21 @@ registerToolModule(tool32);
 async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain22("unsupported_target", installProblem);
+  let projectPath;
+  const rawProject = inp.project_path ?? inp.wp_install_path;
+  if (inp.project_path !== void 0 && inp.project_path.length > 0) {
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return failDomain22("not_a_git_repo", e.message);
+    }
+  } else if (inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0) {
+    projectPath = canonicalPath(inp.wp_install_path);
+  } else {
+    projectPath = serverProjectPath();
+  }
   let installedVersion = null;
   let active = null;
   if (inp.wp_install_path) {
@@ -58437,11 +58558,7 @@ async function handler29(input, ctx) {
     }
   }
   const slugLower = inp.slug.toLowerCase();
-  const allActive = ctx.storage.scans.listHistory(50).filter(
-    (s) => s.scan_type === "wp_vuln_check" || // wp_vuln_check_source (Task 18): source-based match against the
-    // Wordfence feed, no live URL — same `cves` shape, same slug key.
-    s.scan_type === "wp_vuln_check_source" || s.scan_type === "deps" || s.scan_type === "deps_audit"
-  ).map((s) => ctx.storage.cves.listActive(s.scan_id)).flat().filter((c3) => c3.package_name.toLowerCase() === slugLower);
+  const allActive = cveSources(ctx, wpInstallKeys(projectPath, rawProject), inp.target_url).flatMap((s) => ctx.storage.cves.listActive(s.scan_id)).filter((c3) => c3.package_name.toLowerCase() === slugLower);
   const cveMap = /* @__PURE__ */ new Map();
   for (const c3 of allActive) {
     if (!cveMap.has(c3.cve_id)) cveMap.set(c3.cve_id, c3);
@@ -58451,8 +58568,9 @@ async function handler29(input, ctx) {
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
-    project_path: inp.wp_install_path ?? inp.target_url ?? "(no-path)",
-    tree_hash: ""
+    project_path: projectPath,
+    tree_hash: "",
+    meta: { scope: { kind: "plugin", slug: inp.slug } }
   });
   ctx.storage.scans.finalize({
     scan_id: scanId,
@@ -58460,6 +58578,7 @@ async function handler29(input, ctx) {
     tools_run: [{ name: "wp_plugin_check", status: "ok" }],
     missing_tools: [],
     meta: {
+      scope: { kind: "plugin", slug: inp.slug },
       slug: inp.slug,
       installed_version: installedVersion,
       active,
@@ -58468,6 +58587,7 @@ async function handler29(input, ctx) {
   });
   return {
     ok: true,
+    project_path: projectPath,
     scan_id: scanId,
     slug: inp.slug,
     installed_version: installedVersion,
@@ -58476,6 +58596,18 @@ async function handler29(input, ctx) {
     cve_count: knownCves.length,
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
+}
+function cveSources(ctx, installKeys, targetUrl) {
+  const siteKeys = targetUrl !== void 0 ? wpSiteKeys(targetUrl) : [];
+  const found = [
+    latestUnderKeys(ctx.storage, installKeys, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }),
+    // Filed under the install root, or — URL-only — under the site.
+    latestUnderKeys(ctx.storage, [...installKeys, ...siteKeys], ["wp_vuln_check"]),
+    // wp_vuln_check_source (Task 18): source-based match against the
+    // Wordfence feed, no live URL — same `cves` shape, same slug key.
+    latestUnderKeys(ctx.storage, installKeys, ["wp_vuln_check_source"])
+  ];
+  return found.filter((s) => s !== null);
 }
 function failDomain22(code, message3) {
   return { ok: false, error: { code, message: message3 } };
@@ -58652,19 +58784,33 @@ function summarise(path6, result) {
 var tool35 = {
   name: "wp_describe_setup",
   title: "WordPress posture summary",
-  description: "Aggregate read of accumulated WP state: latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit, open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler32(ctx)
+  description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
+  inputSchema: {
+    project_path: ProjectPath,
+    target_url: external_exports.string().url().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
+  },
+  handler: async (input, ctx) => handler32(input, ctx)
 };
 registerToolModule(tool35);
-async function handler32(ctx) {
-  const wpAudit = findLatest2(ctx, "wp_audit");
-  const wpCron = findLatest2(ctx, "wp_cron_audit");
-  const wpRest = findLatest2(ctx, "wp_rest_audit");
-  const wpVuln = findLatest2(ctx, "wp_vuln_check");
-  const wpVulnSource = findLatest2(ctx, "wp_vuln_check_source");
-  const wpCodeScan = findLatest2(ctx, "wordpress");
-  const open = ctx.storage.findings.listOpen().filter(
+async function handler32(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
+  const installKeys = wpInstallKeys(projectPath, inp.project_path);
+  const siteKeys = inp.target_url !== void 0 ? wpSiteKeys(inp.target_url) : [];
+  const keys = [...installKeys, ...siteKeys];
+  const wpAudit = findLatest(ctx, installKeys, "wp_audit", META_REPORT);
+  const wpCron = findLatest(ctx, installKeys, "wp_cron_audit", META_REPORT);
+  const wpRest = siteKeys.length > 0 ? findLatest(ctx, siteKeys, "wp_rest_audit", META_REPORT) : null;
+  const wpVuln = findLatest(ctx, keys, "wp_vuln_check", FINDING_SCAN);
+  const wpVulnSource = findLatest(ctx, installKeys, "wp_vuln_check_source", FINDING_SCAN);
+  const wpCodeScan = findLatest(ctx, installKeys, "wordpress", FINDING_SCAN);
+  const open = openFindings(ctx, keys).filter(
     (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
   );
   const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
@@ -58674,6 +58820,8 @@ async function handler32(ctx) {
   const cves = [...cveById.values()];
   return {
     ok: true,
+    project_path: projectPath,
+    ...siteKey !== null ? { target_url: siteKey } : {},
     audits: {
       wp_audit: wpAudit ? {
         scan_id: wpAudit.scan_id,
@@ -58711,10 +58859,18 @@ async function handler32(ctx) {
     recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
   };
 }
-function findLatest2(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+var META_REPORT = { skipCoverageNone: false };
+var FINDING_SCAN = {};
+function findLatest(ctx, keys, type, opts) {
+  return latestUnderKeys(ctx.storage, keys, [type], opts);
+}
+function openFindings(ctx, keys) {
+  const out = [];
+  for (const key of new Set(keys)) {
+    const seen = indexFindings(out);
+    for (const f of openSetForProject(ctx.storage, key).findings) if (!seen.has(f)) out.push(f);
+  }
+  return out;
 }
 function countChecksumIssues(meta) {
   const cm = meta?.checksum_mismatches ?? {};
@@ -58723,7 +58879,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync42, readFileSync as readFileSync29, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync43, readFileSync as readFileSync29, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
 import { join as join55, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -58912,7 +59068,7 @@ function collectConfigFiles(root, maxDepth) {
       }
       if (stat2.isDirectory()) {
         walk4(abs, depth + 1);
-      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync42(abs)) {
+      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync43(abs)) {
         out.push(abs);
       }
     }
@@ -59064,7 +59220,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync43, readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync44, readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
 import { join as join57, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -59214,7 +59370,7 @@ function findMigrationsDirs(root) {
         continue;
       }
       if (!s.isDirectory()) continue;
-      if (name === "Migrations" && existsSync43(abs)) {
+      if (name === "Migrations" && existsSync44(abs)) {
         out.push(abs);
       } else {
         walk4(abs, depth + 1);
@@ -59229,22 +59385,30 @@ function findMigrationsDirs(root) {
 var tool39 = {
   name: "dotnet_describe_setup",
   title: ".NET posture summary",
-  description: "Aggregate read of accumulated .NET state: latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler36(ctx)
+  description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's working directory): latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler36(input, ctx)
 };
 registerToolModule(tool39);
-async function handler36(ctx) {
-  const tfm = findLatest3(ctx, "dotnet_target_framework");
-  const secrets = findLatest3(ctx, "dotnet_secrets");
-  const efcore = findLatest3(ctx, "dotnet_efcore_audit");
-  const sastScan = findLatest3(ctx, "sast");
-  const open = ctx.storage.findings.listOpen();
+async function handler36(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const tfm = findLatest2(ctx, projectPath, "dotnet_target_framework", false);
+  const secrets = findLatest2(ctx, projectPath, "dotnet_secrets", true);
+  const efcore = findLatest2(ctx, projectPath, "dotnet_efcore_audit", true);
+  const sastScan = findLatest2(ctx, projectPath, "sast", true);
+  const open = openSetForProject(ctx.storage, projectPath).findings;
   const dotnetFindings = open.filter(
     (f) => f.tool === "security-code-scan" || f.tool === "scan_dotnet_secrets" || f.tool === "dotnet_efcore_audit" || f.rule_id?.startsWith("SCS")
   );
   return {
     ok: true,
+    project_path: projectPath,
     audits: {
       target_framework_check: tfm ? {
         scan_id: tfm.scan_id,
@@ -59272,10 +59436,8 @@ async function handler36(ctx) {
     recommended_next: !tfm ? "Run `dotnet_target_framework_check` to find EOL frameworks." : !secrets ? "Run `scan_dotnet_secrets` to find MS-specific secrets in configs." : !efcore ? "If you use EF Core, run `dotnet_efcore_audit` for risky migration patterns." : dotnetFindings.length > 0 ? "Open .NET findings exist. Try `triage_findings` + `suggest_fix`." : "Posture looks clean. Consider running `scan_sast` again if code changed."
   };
 }
-function findLatest3(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatest2(ctx, projectPath, type, skipCoverageNone) {
+  return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }
 
 // src/tools/prioritizeFindings.ts
@@ -60529,7 +60691,7 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 // src/skillaudit/ingest.ts
 init_execa();
 import {
-  existsSync as existsSync44,
+  existsSync as existsSync45,
   lstatSync as lstatSync5,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync32,
@@ -60541,7 +60703,7 @@ import {
   writeFileSync as writeFileSync15
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename6, isAbsolute as isAbsolute8, join as join58, relative as relative19 } from "node:path";
+import { basename as basename6, isAbsolute as isAbsolute9, join as join58, relative as relative19 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES2 = 2 * 1024 * 1024;
@@ -60659,7 +60821,7 @@ async function ingestTarget(targetRaw) {
     if (looksLikeGitHost(target)) return ingestGit(target);
     return ingestUrl(target);
   }
-  if (!existsSync44(target)) {
+  if (!existsSync45(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
   const st = statSync17(target);
@@ -60807,7 +60969,7 @@ async function tryExtract(zipPath, destDir) {
 }
 function isPathWithinRoot(candidate, root) {
   const rel2 = relative19(root, candidate);
-  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute8(rel2);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute9(rel2);
 }
 function collectDir(root) {
   const files = [];
@@ -61128,7 +61290,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync35 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join63, resolve as resolve14 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join63, resolve as resolve15 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -61164,7 +61326,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync45, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
 import { basename as basename7, join as join60 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -61219,7 +61381,7 @@ function collectPorts(projectPath) {
   return out;
 }
 function readLines(path6) {
-  if (!existsSync45(path6)) return [];
+  if (!existsSync46(path6)) return [];
   try {
     return readFileSync33(path6, "utf8").split(/\r?\n/);
   } catch {
@@ -62228,13 +62390,13 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync34, readdirSync as readdirSync24, statSync as statSync18 } from "node:fs";
-import { join as join62, relative as relative20, resolve as resolve13, sep as sep11 } from "node:path";
+import { join as join62, relative as relative20, resolve as resolve14, sep as sep11 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve13(projectPath);
+  const root = resolve14(projectPath);
   const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
@@ -62246,7 +62408,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path6 of paths) {
-    const resolved = resolve13(path6);
+    const resolved = resolve14(path6);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -62708,7 +62870,7 @@ async function handler39(input, ctx) {
       freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString()
     });
     if (cached2) {
-      return summarize4(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx);
+      return summarize4(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx, projectPath);
     }
   }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
@@ -62725,7 +62887,8 @@ async function handler39(input, ctx) {
       ],
       ["semgrep"],
       "Semgrep is not installed and no Docker fallback is available, so no surface was mapped and nothing was persisted. Run install_toolchain, then retry.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   const { toolRun } = invocation;
@@ -62740,7 +62903,8 @@ async function handler39(input, ctx) {
       [failedToolRun],
       [],
       "Semgrep produced no readable output file; nothing was persisted.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   let parsed;
@@ -62756,7 +62920,8 @@ async function handler39(input, ctx) {
       [failedToolRun],
       [],
       "Semgrep output was not valid JSON; nothing was persisted.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
@@ -62765,7 +62930,8 @@ async function handler39(input, ctx) {
       [toolRun, unreadableMatchesToolRun(recovery)],
       [],
       unreadableMatchesNote(recovery),
-      ctx
+      ctx,
+      projectPath
     );
   }
   const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
@@ -62779,7 +62945,7 @@ async function handler39(input, ctx) {
     inp.spec_paths
   );
   if (inp.spec_paths !== void 0) {
-    return summarize4(snapshot, null, toolsRun, ctx);
+    return summarize4(snapshot, null, toolsRun, ctx, projectPath);
   }
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
@@ -62787,14 +62953,14 @@ async function handler39(input, ctx) {
     snapshot,
     cache_key: cacheKey
   });
-  return summarize4(snapshot, persisted.id, toolsRun, ctx);
+  return summarize4(snapshot, persisted.id, toolsRun, ctx, projectPath);
 }
 var RECOVERY_STEP = "semgrep-metavar-recovery";
 function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path6 of collectAllFiles(parsed)) {
     try {
-      const buffer = readFileSync35(isAbsolute9(path6) ? path6 : join63(projectPath, path6));
+      const buffer = readFileSync35(isAbsolute10(path6) ? path6 : join63(projectPath, path6));
       const text = buffer.toString("utf8");
       if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
       sources.set(path6, text);
@@ -62863,7 +63029,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
+    coverage: buildCoverage(resolved, ctx, projectPath, unreadableRouteFiles, unresolvedEdges),
     tools_run: toolsRun,
     missing_tools: [],
     spec_files: specFiles,
@@ -62936,7 +63102,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve14(isAbsolute9(path6) ? path6 : join63(projectPath, path6));
+  return resolve15(isAbsolute10(path6) ? path6 : join63(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -63005,9 +63171,9 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   }
   return joined;
 }
-function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
+function buildCoverage(routes, ctx, projectPath, unreadableRouteFiles, unresolvedEdges) {
   const codeRoutes = routes.filter((r) => r.provenance === "code");
-  const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+  const detected = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot.languages ?? [];
   const unreadableByLanguage = /* @__PURE__ */ new Map();
   for (const file of unreadableRouteFiles) {
     const language = languageFromPath(file);
@@ -63046,7 +63212,7 @@ function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
   return entries2;
 }
 var NO_STACK_NOTE = "No stack snapshot found for this project \u2014 run detect_stack first for fuller coverage context.";
-function summarize4(snapshot, snapshotId, toolsRun, ctx) {
+function summarize4(snapshot, snapshotId, toolsRun, ctx, projectPath) {
   const codeRoutes = snapshot.routes.filter((r) => r.provenance === "code");
   const byLanguage = /* @__PURE__ */ new Map();
   for (const route of codeRoutes) {
@@ -63057,7 +63223,7 @@ function summarize4(snapshot, snapshotId, toolsRun, ctx) {
   ).slice(0, SAMPLE_SIZE);
   const specRoutesList = snapshot.routes.filter((r) => r.provenance === "spec");
   const specSample = [...specRoutesList].sort((a2, b) => a2.path_resolved.localeCompare(b.path_resolved)).slice(0, SAMPLE_SIZE);
-  const stackDetected = ctx.storage.stack.getLatest() !== null;
+  const stackDetected = ctx.storage.stack.getLatestForProject(projectPath) !== null;
   return {
     ok: true,
     // Code routes only — a consumer reading `routes_total` today must get the
@@ -63097,7 +63263,7 @@ function shadowSample(diff) {
   if (diff === null) return [];
   return [...diff.code_only].sort((a2, b) => a2.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
-function degradedResult(toolsRun, missingTools, note, ctx) {
+function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
   return {
     ok: true,
     routes_total: 0,
@@ -63110,7 +63276,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
     webhooks_total: 0,
     tools_run: toolsRun,
     missing_tools: missingTools,
-    stack_detected: ctx.storage.stack.getLatest() !== null,
+    stack_detected: ctx.storage.stack.getLatestForProject(projectPath) !== null,
     spec_routes_total: 0,
     spec_files: [],
     spec_sample: [],
@@ -65336,12 +65502,12 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync49, readFileSync as readFileSync38 } from "node:fs";
-import { isAbsolute as isAbsolute11, join as join71, relative as relative22 } from "node:path";
+import { existsSync as existsSync50, readFileSync as readFileSync38 } from "node:fs";
+import { isAbsolute as isAbsolute12, join as join71, relative as relative22 } from "node:path";
 
 // src/fixpr/apply.ts
-import { existsSync as existsSync46, readFileSync as readFileSync36, rmSync as rmSync8, writeFileSync as writeFileSync18 } from "node:fs";
-import { isAbsolute as isAbsolute10, join as join67, relative as relative21, resolve as resolve15, sep as sep12 } from "node:path";
+import { existsSync as existsSync47, readFileSync as readFileSync36, rmSync as rmSync8, writeFileSync as writeFileSync18 } from "node:fs";
+import { isAbsolute as isAbsolute11, join as join67, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -65358,7 +65524,7 @@ async function applyGroup(opts) {
 }
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
-  const missing = plan.files.filter((f) => !existsSync46(join67(worktreePath, f)));
+  const missing = plan.files.filter((f) => !existsSync47(join67(worktreePath, f)));
   if (missing.length > 0) {
     return {
       applied: false,
@@ -65472,9 +65638,9 @@ function editPipPin(worktreePath, step) {
   const file = step.file ?? "";
   const label = `edit ${file || "(no file)"}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
-  const target = resolve15(worktreePath, file);
+  const target = resolve16(worktreePath, file);
   const rel2 = relative21(worktreePath, target);
-  if (isAbsolute10(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute10(rel2)) {
+  if (isAbsolute11(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute11(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
   let text;
@@ -65542,9 +65708,22 @@ function buildGroups(input) {
   }
   return groups.sort((a2, b) => a2.key < b.key ? -1 : a2.key > b.key ? 1 : 0);
 }
-function selectGroups(groups, maxPrs) {
-  const ordered = [...groups].sort(
-    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]
+function bySeverityThenExploitability(items, fingerprintsOf, exploitability) {
+  const cveIdsOf = (item) => exploitability === void 0 ? [] : [...new Set(fingerprintsOf(item).flatMap((fp) => exploitability.cveIdsOf(fp)))];
+  const ranked = exploitability === void 0 ? [...items] : rankByExploitability(items, cveIdsOf, exploitability.intel);
+  return ranked.sort((a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity]);
+}
+function rankCandidates(group, exploitability) {
+  return {
+    ...group,
+    candidates: bySeverityThenExploitability(group.candidates, (c3) => c3.fingerprints, exploitability)
+  };
+}
+function selectGroups(groups, maxPrs, exploitability) {
+  const ordered = bySeverityThenExploitability(
+    groups,
+    (group) => group.candidates.flatMap((candidate) => candidate.fingerprints),
+    exploitability
   );
   const selected = ordered.slice(0, maxPrs);
   const excluded = ordered.slice(maxPrs);
@@ -66047,13 +66226,13 @@ function fromPyprojectToml(content) {
 }
 
 // src/fixpr/testEnv.ts
-import { existsSync as existsSync47 } from "node:fs";
+import { existsSync as existsSync48 } from "node:fs";
 import { join as join69 } from "node:path";
 var INSTALL_TIMEOUT_MS = 15 * 6e4;
 async function prepareTestEnvironment(opts) {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== "npm") return { ok: true, command: null };
-  const hasLock = existsSync47(join69(treePath, "package-lock.json")) || existsSync47(join69(treePath, "npm-shrinkwrap.json"));
+  const hasLock = existsSync48(join69(treePath, "package-lock.json")) || existsSync48(join69(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
   const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
@@ -66256,9 +66435,9 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync48, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
+import { existsSync as existsSync49, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { join as join70, resolve as resolve16 } from "node:path";
+import { join as join70, resolve as resolve17 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
@@ -66313,7 +66492,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync48(path6)) {
+  if (!existsSync49(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure4(removeResult, "git worktree remove")}` : "";
@@ -66348,7 +66527,7 @@ function samePathKey(path6) {
   try {
     real = realpathSync8.native(path6);
   } catch {
-    real = resolve16(path6);
+    real = resolve17(path6);
   }
   const posix = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix.toLowerCase() : posix;
@@ -66440,7 +66619,7 @@ var tool45 = {
     ),
     sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
     max_prs: external_exports.number().int().min(1).max(10).optional().describe(
-      "Maximum number of groups (pull requests) to act on in one run, highest severity first. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
+      "Maximum number of groups (pull requests) to act on in one run, highest severity first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
     ),
     apply: external_exports.boolean().optional().describe(
       "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials, but never leaves the machine."
@@ -66497,7 +66676,12 @@ async function handler42(input, ctx, callMeta) {
   });
   const filtered = summariseExclusions({ findings: allFindings, groups, severityMin, uncommitted, planFailed });
   const filtered_reason = describeExclusions(filtered, severityMin, sources);
-  const { selected, deferred, deferred_reason } = selectGroups(groups, maxPrs);
+  const exploitability = await exploitabilityOf(groups, allFindings, ctx, callMeta);
+  const { selected, deferred, deferred_reason } = selectGroups(
+    groups.map((group) => rankCandidates(group, exploitability)),
+    maxPrs,
+    exploitability
+  );
   const results = [];
   let cancelled = false;
   for (const group of selected) {
@@ -66556,6 +66740,19 @@ async function handler42(input, ctx, callMeta) {
     deferred_reason
   };
 }
+async function exploitabilityOf(groups, allFindings, ctx, callMeta) {
+  const targets = new Set(groups.flatMap((g) => g.candidates.flatMap((c3) => c3.fingerprints)));
+  const cveIds = /* @__PURE__ */ new Map();
+  for (const f of allFindings) {
+    if (targets.has(f.fingerprint) && !cveIds.has(f.fingerprint)) cveIds.set(f.fingerprint, findingCveIds(f));
+  }
+  const intel = await enrichCveIntel(
+    ctx.storage,
+    [...cveIds.values()].flat(),
+    callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {}
+  );
+  return { cveIdsOf: (fingerprint) => cveIds.get(fingerprint) ?? [], intel };
+}
 async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
   const depsPlanTool = TOOLS.find((t) => t.name === "deps_update_plan");
   if (depsPlanTool === void 0) {
@@ -66592,7 +66789,7 @@ function inWorktree(root, prefix) {
   return join71(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute11(filePath) ? relative22(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute12(filePath) ? relative22(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -66797,7 +66994,7 @@ function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
     const path6 = join71(worktreePath, name);
-    if (!existsSync49(path6)) continue;
+    if (!existsSync50(path6)) continue;
     try {
       files[name] = readFileSync38(path6, "utf8");
     } catch {
@@ -67622,7 +67819,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync50, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
+import { existsSync as existsSync51, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join72 } from "node:path";
 
@@ -67770,7 +67967,7 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync50(absolutePath)) return { ...base, exists: false };
+  if (!existsSync51(absolutePath)) return { ...base, exists: false };
   let size;
   try {
     size = statSync20(absolutePath).size;
@@ -67878,8 +68075,8 @@ function countBySeverity5(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync52, statSync as statSync21 } from "node:fs";
-import { resolve as resolve18 } from "node:path";
+import { existsSync as existsSync53, statSync as statSync21 } from "node:fs";
+import { resolve as resolve19 } from "node:path";
 
 // src/hooks/bashGuard.ts
 var MAX_LINE_LENGTH2 = 16 * 1024;
@@ -68734,9 +68931,9 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync51, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
+import { existsSync as existsSync52, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname20, join as join74, resolve as resolve17 } from "node:path";
+import { dirname as dirname20, join as join74, resolve as resolve18 } from "node:path";
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -68751,24 +68948,24 @@ function isPublicRegistryUrl(ecosystem, url) {
 }
 function read(path6) {
   try {
-    return existsSync51(path6) ? readFileSync41(path6, "utf8") : void 0;
+    return existsSync52(path6) ? readFileSync41(path6, "utf8") : void 0;
   } catch {
     return void 0;
   }
 }
 function samePath(a2, b) {
-  const norm = (p) => resolve17(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve18(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
   const stops = [ctx.homeDir, homedir4()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve17(ctx.projectDir);
+  let dir = resolve18(ctx.projectDir);
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath(s, dir))) break;
     out.push(dir);
-    if (existsSync51(join74(dir, ".git"))) break;
+    if (existsSync52(join74(dir, ".git"))) break;
     const parent = dirname20(dir);
     if (parent === dir) break;
     dir = parent;
@@ -68964,7 +69161,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join74(dir, "package.json"))) || existsSync51(join74(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join74(dir, "package.json"))) || existsSync52(join74(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -69122,7 +69319,7 @@ function nugetRegistry(ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve17(ctx.projectDir);
+    let dir = resolve18(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir);
       if (f !== void 0) files.push(f);
@@ -69970,8 +70167,8 @@ async function handler44(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve18(inp.project_path);
-    if (!existsSync52(projectDir) || !statSync21(projectDir).isDirectory()) {
+    projectDir = resolve19(inp.project_path);
+    if (!existsSync53(projectDir) || !statSync21(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }
@@ -70439,7 +70636,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve19(process.cwd());
+  const projectPath = resolve20(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

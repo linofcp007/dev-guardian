@@ -170,7 +170,7 @@ async function handler(input, ctx) {
             freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
         });
         if (cached) {
-            return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
+            return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx, projectPath);
         }
     }
     const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
@@ -184,7 +184,7 @@ async function handler(input, ctx) {
                 reason: 'not_installed (no docker fallback available)',
             },
         ], ['semgrep'], 'Semgrep is not installed and no Docker fallback is available, so no surface was ' +
-            'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx);
+            'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx, projectPath);
     }
     const { toolRun } = invocation;
     // `readJsonSafe` returns null only for a missing/unreadable file (see
@@ -199,7 +199,7 @@ async function handler(input, ctx) {
             status: 'failed',
             reason: toolRun.reason ?? 'no_output',
         };
-        return degradedResult([failedToolRun], [], 'Semgrep produced no readable output file; nothing was persisted.', ctx);
+        return degradedResult([failedToolRun], [], 'Semgrep produced no readable output file; nothing was persisted.', ctx, projectPath);
     }
     let parsed;
     try {
@@ -216,14 +216,14 @@ async function handler(input, ctx) {
             status: 'failed',
             reason: `unparseable output: ${e.message}`,
         };
-        return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx);
+        return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx, projectPath);
     }
     // Rebuild the captures modern Semgrep redacts, before anything downstream
     // looks for them. Reading the files is the impure half and belongs here;
     // `recoverMetavars` itself is pure and takes the text.
     const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
     if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
-        return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx);
+        return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
     }
     const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
     const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
@@ -238,7 +238,7 @@ async function handler(input, ctx) {
     // triggered from the write side instead of the read side. Skipping the
     // insert closes it at the source: nothing is ever there to be inherited.
     if (inp.spec_paths !== undefined) {
-        return summarize(snapshot, null, toolsRun, ctx);
+        return summarize(snapshot, null, toolsRun, ctx, projectPath);
     }
     const persisted = ctx.storage.surface.insert({
         project_path: projectPath,
@@ -246,7 +246,7 @@ async function handler(input, ctx) {
         snapshot,
         cache_key: cacheKey,
     });
-    return summarize(snapshot, persisted.id, toolsRun, ctx);
+    return summarize(snapshot, persisted.id, toolsRun, ctx, projectPath);
 }
 /** Name used for the recovery step in `tools_run`; it is not a real binary. */
 const RECOVERY_STEP = 'semgrep-metavar-recovery';
@@ -407,7 +407,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-        coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
+        coverage: buildCoverage(resolved, ctx, projectPath, unreadableRouteFiles, unresolvedEdges),
         tools_run: toolsRun,
         missing_tools: [],
         spec_files: specFiles,
@@ -692,13 +692,16 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * is not valid UTF-8, or offsets that land past end-of-file. Rare, and still
  * not something to round down to zero.
  */
-function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
+function buildCoverage(routes, ctx, projectPath, unreadableRouteFiles, unresolvedEdges) {
     // `coverage[]` is a per-language report about source code. Spec routes carry
     // `language: 'spec'`, which is not a language the rule pack could ever cover —
     // including them would create a phantom entry reading `status: 'no_rules'`,
     // literally true and completely meaningless.
     const codeRoutes = routes.filter((r) => r.provenance === 'code');
-    const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+    // THIS project's detected languages — `stack.getLatest()` was the newest
+    // detection of any project, so another project's languages were reported
+    // as this one's `no_rules` gaps (Task 24).
+    const detected = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot.languages ?? [];
     // One entry per lost route, so the count is routes-not-shown, not files.
     const unreadableByLanguage = new Map();
     for (const file of unreadableRouteFiles) {
@@ -746,7 +749,7 @@ function summarize(snapshot,
 // `null` for an explicit-`spec_paths` run that was deliberately not
 // persisted (see the call site in `handler`) — there is no row to point
 // to, the same reason `degradedResult` uses `null` for "nothing written".
-snapshotId, toolsRun, ctx) {
+snapshotId, toolsRun, ctx, projectPath) {
     // `by_language` is a report about source code, same reasoning as
     // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
     // `language: 'spec'`, which is not a language the rule pack could ever
@@ -773,7 +776,8 @@ snapshotId, toolsRun, ctx) {
     const specSample = [...specRoutesList]
         .sort((a, b) => a.path_resolved.localeCompare(b.path_resolved))
         .slice(0, SAMPLE_SIZE);
-    const stackDetected = ctx.storage.stack.getLatest() !== null;
+    // "For this project", as NO_STACK_NOTE says — never another project's.
+    const stackDetected = ctx.storage.stack.getLatestForProject(projectPath) !== null;
     return {
         ok: true,
         // Code routes only — a consumer reading `routes_total` today must get the
@@ -828,7 +832,7 @@ function shadowSample(diff) {
  * as `summarize` so a consumer never sees `undefined` on the fields it reads
  * hardest (e.g. `webhooks_total`) just because this run happened to degrade.
  */
-function degradedResult(toolsRun, missingTools, note, ctx) {
+function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
     return {
         ok: true,
         routes_total: 0,
@@ -841,7 +845,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
         webhooks_total: 0,
         tools_run: toolsRun,
         missing_tools: missingTools,
-        stack_detected: ctx.storage.stack.getLatest() !== null,
+        stack_detected: ctx.storage.stack.getLatestForProject(projectPath) !== null,
         spec_routes_total: 0,
         spec_files: [],
         spec_sample: [],

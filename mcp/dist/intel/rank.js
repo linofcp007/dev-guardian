@@ -1,30 +1,22 @@
 /**
  * Pure exploitability ranking — no storage, no network, no I/O. Used
  * directly by `tools/prioritizeFindings.ts` and `dashboard/risk.ts` (via
- * `tools/riskScore.ts`). `rankByExploitability` is also exported for
- * `create_fix_pr` (Task 11 owns `tools/createFixPr.ts` and `fixpr/*.ts`
- * while this task is in flight — see this module's own header note below
- * for where it should be called once that lands).
+ * `tools/riskScore.ts`), and by `create_fix_pr`.
  *
- * ---- Where `create_fix_pr` should call this ----------------------------
+ * ---- Where `create_fix_pr` calls this (Task 24, item 5) ---------------
  *
- * `fixpr/candidates.ts#selectGroups` orders `FixGroup[]` by severity alone
- * before slicing to `max_prs`:
+ * `fixpr/candidates.ts#selectGroups` (which groups the `max_prs` cap keeps)
+ * and `#rankCandidates` (the order a group's fixes are applied in) order by
+ * severity, then KEV, then EPSS. `cveIdsOf` is the union of `findingCveIds`
+ * over the findings a group or candidate targets; `intel` is
+ * `intel/enrich.ts#enrichCveIntel`, called once per run over those ids.
  *
- *   const ordered = [...groups].sort(
- *     (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity],
- *   );
- *
- * The integrator should call `rankByExploitability(ordered, cveIdsOf, intel)`
- * right after that sort (KEV/EPSS as a tie-break WITHIN each severity band,
- * exactly like `prioritizeFindings.ts` uses it below) — `rankByExploitability`
- * is a stable sort over whatever order it is given, so composing it after the
- * severity sort keeps severity as the primary key and only re-orders equal-
- * severity groups. `cveIdsOf` for a `FixGroup` is the union of `findingCveIds`
- * over the `Finding[]` its candidates target (`createFixPr.ts`'s own
- * `findingsForGroup(allFindings, group)` already computes that finding list).
- * `intel` is this task's `intel/enrich.ts#enrichCveIntel`, called once over
- * every open finding's correlated CVE ids before `selectGroups` runs.
+ * The composition order matters, and the note this replaces had it
+ * backwards: `rankByExploitability` is a stable sort by exploitability
+ * ALONE, so calling it AFTER a severity sort makes exploitability the
+ * primary key (an exploited high jumps every ordinary critical). To keep
+ * KEV/EPSS a tie-break within each severity band, it runs FIRST and the
+ * stable severity sort after it (`candidates.ts#bySeverityThenExploitability`).
  */
 const CVE_ID_RE = /CVE-\d{4}-\d+/gi;
 const CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
@@ -112,9 +104,10 @@ export function exploitabilitySignal(cveIds, intel) {
 /**
  * A stable re-sort of `items` by exploitability alone: KEV-backed items
  * first, then descending EPSS, ties (including "no signal at all") keeping
- * their relative order from `items` — so composing this after an existing
- * severity sort refines each severity band without disturbing it. Never
- * mutates `items`.
+ * their relative order from `items`. To refine each severity band without
+ * disturbing it, run this FIRST and a stable severity sort after it — run
+ * after a severity sort, it re-orders across bands (see the module
+ * comment). Never mutates `items`.
  */
 export function rankByExploitability(items, cveIdsOf, intel) {
     const signals = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));

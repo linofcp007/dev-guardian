@@ -22,6 +22,7 @@
  */
 import { createHash } from 'node:crypto';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { rankByExploitability } from '../intel/rank.js';
 import { passes } from '../severity/filter.js';
 import { SEVERITY_ORDER } from '../types.js';
 /** Findings from these tools carry dependency-upgrade fixes. */
@@ -45,8 +46,37 @@ export function buildGroups(input) {
     // and an arbitrary Map-iteration order is one less thing to rely on.
     return groups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
-export function selectGroups(groups, maxPrs) {
-    const ordered = [...groups].sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+/**
+ * Severity first; within a severity band, KEV-listed first, then higher EPSS
+ * (`rankByExploitability`), then the order `items` came in. The composition
+ * order matters: `rankByExploitability` is a stable sort by exploitability
+ * ALONE, so it runs first and the stable severity sort after it keeps
+ * severity the primary key — the other way round, an exploited high would
+ * displace every ordinary critical.
+ */
+function bySeverityThenExploitability(items, fingerprintsOf, exploitability) {
+    const cveIdsOf = (item) => exploitability === undefined
+        ? []
+        : [...new Set(fingerprintsOf(item).flatMap((fp) => exploitability.cveIdsOf(fp)))];
+    const ranked = exploitability === undefined ? [...items] : rankByExploitability(items, cveIdsOf, exploitability.intel);
+    return ranked.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+}
+/**
+ * `group` with its candidates in the order they are applied: severity, then
+ * KEV, then EPSS. `applyGroup` applies them in order and stops at the first
+ * that fails, so this decides which fixes are attempted first. The hash (a
+ * function of the fingerprint SET) and so the branch name do not change.
+ */
+export function rankCandidates(group, exploitability) {
+    return {
+        ...group,
+        candidates: bySeverityThenExploitability(group.candidates, (c) => c.fingerprints, exploitability),
+    };
+}
+export function selectGroups(groups, maxPrs, exploitability) {
+    // Severity first, then — given the signal — KEV and EPSS decide which of
+    // equally severe groups the cap keeps.
+    const ordered = bySeverityThenExploitability(groups, (group) => group.candidates.flatMap((candidate) => candidate.fingerprints), exploitability);
     const selected = ordered.slice(0, maxPrs);
     const excluded = ordered.slice(maxPrs);
     const deferred = excluded.map((group) => ({

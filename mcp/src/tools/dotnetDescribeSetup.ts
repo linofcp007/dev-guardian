@@ -1,34 +1,61 @@
 /**
  * `dotnet_describe_setup` — analog of wp_describe_setup, for .NET.
  *
- * Aggregates: latest dotnet_target_framework_check, scan_dotnet_secrets,
- * dotnet_efcore_audit, plus open .NET-relevant findings. Pure read.
+ * Aggregates, for ONE project (`project_path`, default: the server's working
+ * directory): the latest dotnet_target_framework_check, scan_dotnet_secrets,
+ * dotnet_efcore_audit and SAST scan, plus the project's open .NET-relevant
+ * findings. Pure read.
+ *
+ * Every read is project-scoped (Task 24). It used to take "the latest scan
+ * of type X" from the 50 newest rows of the whole database, and its findings
+ * from `findings.listOpen()` — the single newest completed scan of ANY
+ * project and ANY type — so another project's EOL frameworks and SCS
+ * findings answered for this one, and an SBOM run afterwards read as "no
+ * open findings".
  */
 
 import type { PluginContext } from '../context.js';
-import type { ToolResult } from '../types.js';
+import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
+import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const tool: ToolModule = {
   name: 'dotnet_describe_setup',
   title: '.NET posture summary',
   description:
-    'Aggregate read of accumulated .NET state: latest dotnet_target_framework_check (EOL frameworks), ' +
+    "Aggregate read of one project's accumulated .NET state (project_path, default: the server's " +
+    'working directory): latest dotnet_target_framework_check (EOL frameworks), ' +
     'scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open ' +
     '.NET-relevant findings. No scanner spawn.',
-  inputSchema: {},
-  handler: async (_input, ctx) => handler(ctx),
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler(input, ctx),
 };
 
 registerToolModule(tool);
 
-async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, unknown>>> {
-  const tfm = findLatest(ctx, 'dotnet_target_framework');
-  const secrets = findLatest(ctx, 'dotnet_secrets');
-  const efcore = findLatest(ctx, 'dotnet_efcore_audit');
-  const sastScan = findLatest(ctx, 'sast');
+async function handler(
+  input: Record<string, unknown>,
+  ctx: PluginContext,
+): Promise<ToolResult<Record<string, unknown>>> {
+  const inp = input as { project_path?: string };
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
 
-  const open = ctx.storage.findings.listOpen();
+  // The target-framework check reports through `meta`, so its scanner
+  // coverage does not disqualify it; the others are finding scans, and one
+  // that measured nothing is passed over (its zero is not a result).
+  const tfm = findLatest(ctx, projectPath, 'dotnet_target_framework', false);
+  const secrets = findLatest(ctx, projectPath, 'dotnet_secrets', true);
+  const efcore = findLatest(ctx, projectPath, 'dotnet_efcore_audit', true);
+  const sastScan = findLatest(ctx, projectPath, 'sast', true);
+
+  const open = openSetForProject(ctx.storage, projectPath).findings;
   const dotnetFindings = open.filter(
     (f) =>
       f.tool === 'security-code-scan' ||
@@ -39,6 +66,7 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
 
   return {
     ok: true,
+    project_path: projectPath,
     audits: {
       target_framework_check: tfm
         ? {
@@ -85,11 +113,12 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
   };
 }
 
+/** The project's newest unscoped completed scan of `type` — one project-scoped query. */
 function findLatest(
   ctx: PluginContext,
-  type: string,
-): ReturnType<typeof ctx.storage.scans.getById> {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+  projectPath: string,
+  type: ScanType,
+  skipCoverageNone: boolean,
+): ScanRecord | null {
+  return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }

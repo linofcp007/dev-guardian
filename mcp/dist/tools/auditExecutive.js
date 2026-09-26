@@ -67,8 +67,8 @@ async function handler(input, ctx, callMeta) {
     if (inp.severity_min)
         subInput['severity_min'] = inp.severity_min;
     // Stack-aware: extend the base set with WP / .NET tools when the latest
-    // stack snapshot indicates those languages.
-    const subTools = buildSubToolsForStack(ctx);
+    // stack snapshot OF THIS PROJECT indicates those languages.
+    const subTools = buildSubToolsForStack(ctx, projectPath);
     const subResultsArr = await Promise.all(subTools.map(async (toolName) => {
         const subTool = TOOLS.find((t) => t.name === toolName);
         if (!subTool) {
@@ -147,7 +147,7 @@ async function handler(input, ctx, callMeta) {
     // BOTH sides: the previous audit row holds whatever its own call found,
     // and measuring a filtered present against an unfiltered past reports
     // every below-floor finding as `resolved`.
-    const previousAudit = findPreviousAudit(ctx, auditScanId);
+    const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
     let deltas;
     if (previousAudit) {
         const prevFindings = ctx.storage.findings.listByScan(previousAudit);
@@ -248,8 +248,14 @@ function worstCoverage(list) {
     const rank = { none: 0, partial: 1, full: 2 };
     return list.reduce((worst, c) => (rank[c] < rank[worst] ? c : worst), 'full');
 }
-function buildSubToolsForStack(ctx) {
-    const snap = ctx.storage.stack.getLatest()?.snapshot;
+/**
+ * The sub-tools for THIS project's stack. The snapshot used to be
+ * `stack.getLatest()` — the newest detection of ANY project — so an audit of
+ * a Node project ran scan_wordpress because a WordPress site was detected
+ * last, and skipped the .NET checks of a .NET one (Task 24).
+ */
+function buildSubToolsForStack(ctx, projectPath) {
+    const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
     const languages = snap?.languages ?? [];
     const frameworks = snap?.frameworks ?? [];
     const out = [...BASE_SUB_TOOLS];
@@ -261,11 +267,18 @@ function buildSubToolsForStack(ctx) {
     }
     return out;
 }
-function findPreviousAudit(ctx, excludeScanId) {
-    const history = ctx.storage.scans.listHistory(200);
-    const prev = history.find((s) => s.scan_type === 'audit' &&
-        s.status === 'completed' &&
-        s.scan_id !== excludeScanId);
+/**
+ * This project's newest completed audit that started before `thisAuditId` —
+ * one project- and type-scoped query. It was the newest completed audit
+ * among the 200 newest scans of the whole database: another project's, when
+ * that project was audited more recently, so the delta compared two
+ * different code bases (Task 24).
+ */
+function findPreviousAudit(ctx, projectPath, thisAuditId) {
+    const [prev] = ctx.storage.scans.listCompletedOfTypes(projectPath, ['audit'], {
+        limit: 1,
+        beforeScanId: thisAuditId,
+    });
     return prev?.scan_id ?? null;
 }
 function countBySeverity(findings) {

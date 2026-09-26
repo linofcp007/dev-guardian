@@ -32,6 +32,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isScopedScan } from '../history/scanRoles.js';
+import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
 import { probeShell } from '../platform/shellProbe.js';
@@ -62,11 +64,6 @@ export const SCAN_SEQUENCE = [
     'scan_dast',
     'validate_finding',
 ];
-/** Far more than the scan rows this pipeline can create in one run —
- *  security_scan_full's own and one per child it runs (four), scan_dast's —
- *  generous on purpose so a future step that persists additional scan rows
- *  doesn't silently truncate. */
-const SCAN_HISTORY_LIMIT = 50;
 const TEMP_DIR_PREFIX = 'dev-guardian-ci-';
 export async function runScans(opts) {
     const tmpDir = await mkdtemp(join(tmpdir(), TEMP_DIR_PREFIX));
@@ -88,7 +85,7 @@ export async function runScans(opts) {
             for (const name of buildSequence(opts)) {
                 steps.push(await runStep(name, buildInput(name, opts), ctx));
             }
-            return { findings: collectFindings(storage), steps };
+            return { findings: collectFindings(storage, opts.projectPath), steps };
         }
         finally {
             try {
@@ -167,24 +164,51 @@ function toStringArray(value) {
     return Array.isArray(value) ? value : [];
 }
 /**
- * Findings this run actually persisted, read back out of the ephemeral
- * database rather than out of any step's return payload (see the module doc
- * comment). The database was created moments ago in a fresh `mkdtemp`
- * directory, so every scan row it holds belongs to this one run — no
- * project-path or "latest scan" filtering is needed to keep another run's
- * data out, unlike the equivalent reads inside an interactive MCP session.
+ * Every finding this run persisted for the scanned project, read back out of
+ * the ephemeral database rather than out of any step's return payload (see
+ * the module doc comment): each UNSCOPED row of THIS project, whatever its
+ * status.
  *
- * Deduplicated across scan rows (`security_scan_full`, each of its child
- * scans, and `scan_dast` all create their own, and the parent row repeats its
- * children's findings): the same issue reported by two rows must not be
- * double-counted by the gate. `runners/findingMerge.ts` decides what "the
- * same" means.
+ * - Project-scoped (Task 24): it used to be every row of `listHistory(50)`,
+ *   whatever project each belonged to. The database being fresh narrows what
+ *   can be in it, not what a step may write there — a row filed under
+ *   another path is not this project's measurement. Resolved the way every
+ *   step resolved the `project_path` it was given, so both sides compare the
+ *   same spelling.
+ * - Never a scoped row (`meta.scope`): part of the project, whose silence
+ *   about the rest is not evidence — and whose findings the whole-project
+ *   rows already hold.
+ * - Status-agnostic, deliberately NOT the interactive open set (fix round 1,
+ *   I1): the open set reads completed rows only and falls back to an older
+ *   one, which a throwaway database never has. A `failed` row often carries
+ *   real findings — scan_iac fails the whole row when one pass exits
+ *   non-zero, yet keeps Trivy's results — and `gate.ts`'s rule is that a
+ *   real regression (GATE_FAILED) outranks a coverage gap (INCOMPLETE_SCAN),
+ *   never hides behind it. The gap itself still reaches the gate through
+ *   each step's `tools_run` / `missing_tools`.
+ *
+ * Deduplicated across rows by `runners/findingMerge.ts` (an orchestrated
+ * `security_full` parent repeats its children's findings; two scanners can
+ * report one issue): the same issue must not be counted twice by the gate.
  */
-function collectFindings(storage) {
+function collectFindings(storage, projectPath) {
+    const project = scannedProject(projectPath);
+    const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
     const all = [];
-    for (const scan of storage.scans.listHistory(SCAN_HISTORY_LIMIT)) {
+    for (const scan of rows) {
+        if (isScopedScan(scan))
+            continue;
         all.push(...storage.findings.listByScan(scan.scan_id));
     }
     return dedupeFindings(all);
+}
+/** `resolveProjectPath`'s spelling of `projectPath`, or its canonical form when it no longer resolves. */
+function scannedProject(projectPath) {
+    try {
+        return resolveProjectPath(projectPath).path;
+    }
+    catch {
+        return canonicalPath(projectPath);
+    }
 }
 //# sourceMappingURL=runScans.js.map

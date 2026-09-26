@@ -225,7 +225,7 @@ async function handler(input, ctx) {
         : [];
     // Read the latest stack snapshot (if any) so the response carries
     // stack context without forcing detect_stack on the model.
-    const stackSnapshot = readLatestStackSnapshot(ctx);
+    const stackSnapshot = readLatestStackSnapshot(ctx, projectPath);
     // initial-scan.sh is a status reporter; we capture stdout and return it
     // as a free-form `initial_state` string.
     let initialStateLines = [];
@@ -279,8 +279,9 @@ async function handler(input, ctx) {
         initial_state: initialStateLines,
     };
 }
-function readLatestStackSnapshot(ctx) {
-    const latest = ctx.storage.stack.getLatest();
+/** THIS project's newest stack snapshot — never the newest of any project (Task 24). */
+function readLatestStackSnapshot(ctx, projectPath) {
+    const latest = ctx.storage.stack.getLatestForProject(projectPath);
     return latest?.snapshot ?? null;
 }
 /**

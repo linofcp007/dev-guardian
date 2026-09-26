@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runScans, SCAN_SEQUENCE } from '../../src/ci/runScans.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
@@ -386,5 +387,56 @@ describe('runScans', () => {
     const result = await runScans({ projectPath, baseUrl: 'https://example.test' });
 
     expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-dast-1', 'fp-sast-1']);
+  });
+
+  it("gates on every unscoped row of the scanned project, whatever its status — never another path's, never a scoped one", async () => {
+    // Task 24: the findings used to be every scan row in the database, up to
+    // 50, whatever project each belonged to and scoped or not. They are this
+    // project's unscoped rows now — and ANY status (fix round 1, I1): a
+    // `failed` row often carries real findings (scan_iac fails the whole row
+    // when one pass exits non-zero, yet keeps Trivy's results), and the gate's
+    // rule is that a real regression outranks a coverage gap, never hides
+    // behind it. The throwaway database has no older row to fall back on.
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const elsewhere = resolveProjectPath(makeProjectDir()).path;
+    const finding = (fingerprint: string, severity: Finding['severity'] = 'high'): Finding => ({
+      fingerprint, tool: 'semgrep', severity, category: 'security', title: fingerprint, fix_available: false,
+    });
+
+    mockTool('security_scan_full', async (_input, ctx) => {
+      const persist = (
+        scanId: string,
+        project: string,
+        fp: Finding,
+        extra: { type?: 'sast' | 'iac'; meta?: Record<string, unknown>; failed?: boolean } = {},
+      ): void => {
+        ctx.storage.scans.insert({
+          scan_id: scanId, scan_type: extra.type ?? 'sast', project_path: project, tree_hash: 't',
+          ...(extra.meta !== undefined ? { meta: extra.meta } : {}),
+        });
+        ctx.storage.findings.bulkInsert([{ ...fp, scan_id: scanId }]);
+        ctx.storage.scans.finalize({
+          scan_id: scanId,
+          status: extra.failed === true ? 'failed' : 'completed',
+          tools_run: extra.failed === true
+            ? [{ name: 'trivy-config', status: 'ok' }, { name: 'actionlint', status: 'failed' }]
+            : [{ name: 'semgrep', status: 'ok' }],
+          missing_tools: [],
+        });
+      };
+      persist('other-project', elsewhere, finding('fp-elsewhere'));
+      // scan_iac's shape: Trivy found a critical misconfiguration, actionlint
+      // failed, so the row is `failed` — and the misconfiguration is real.
+      persist('failed-iac', projectPath, { ...finding('fp-failed', 'critical'), tool: 'trivy' }, { type: 'iac', failed: true });
+      persist('whole', projectPath, finding('fp-project'));
+      // Last, so it is the NEWEST row: what keeps it out is that it is
+      // scoped, not that something newer superseded it.
+      persist('scoped', projectPath, finding('fp-scoped'), { meta: { scope: { kind: 'paths', paths: ['src'] } } });
+      return ok();
+    });
+
+    const result = await runScans({ projectPath });
+
+    expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-failed', 'fp-project']);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

@@ -274,9 +274,13 @@ function fallbackLanguages(projectPath: string): string[] {
  * `typescript`), not pack names — `buildPackList` does that mapping itself,
  * via `languagePacksFor`, so the mapping step stays testable in isolation
  * from storage/filesystem access.
+ *
+ * The snapshot is THIS project's: `stack.getLatest()` was the newest one of
+ * any project, so a TypeScript project got Python's packs (and none of its
+ * own) whenever a Python project was detected last (Task 24).
  */
 function detectLanguages(plugin: PluginContext, projectPath: string): string[] {
-  const snapshotLanguages = plugin.storage.stack.getLatest()?.snapshot.languages;
+  const snapshotLanguages = plugin.storage.stack.getLatestForProject(projectPath)?.snapshot.languages;
   return snapshotLanguages ?? fallbackLanguages(projectPath);
 }
 

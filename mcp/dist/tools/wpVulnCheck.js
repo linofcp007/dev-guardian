@@ -13,15 +13,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { canonicalPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { scannerAvailable } from './scanHelpers.js';
+import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     wp_install_path: z
         .string()
         .optional()
-        .describe('Local path to a WP install (must contain wp-config.php).'),
+        .describe('Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine.'),
     target_url: z
         .string()
         .url()
@@ -47,6 +49,16 @@ async function handler(input, ctx) {
     if (!inp.target_url && !inp.wp_install_path) {
         return failDomain('unknown_scan_id', 'Provide either target_url or wp_install_path.');
     }
+    // The row is filed under the install path (below): it must name ONE
+    // install — absolute, or existing here (Task 24 fix round 2). A relative
+    // path that does not exist would be resolved against the server's cwd and
+    // share one record with every other install passed the same way.
+    const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
+    if (installProblem !== null)
+        return failDomain('unsupported_target', installProblem);
+    // Only an install that is on this machine is a place to run in and to
+    // write the report under; an absolute path of a remote install is a key.
+    const localInstall = inp.wp_install_path && existsSync(inp.wp_install_path) ? inp.wp_install_path : undefined;
     const wpscanBin = await scannerAvailable('wpscan');
     if (!wpscanBin) {
         return failDomain('missing_scanner', 'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].');
@@ -62,7 +74,7 @@ async function handler(input, ctx) {
         const r = await runProcess({
             command: 'wp',
             args: ['option', 'get', 'home', `--path=${inp.wp_install_path}`],
-            cwd: inp.wp_install_path,
+            cwd: localInstall ?? process.cwd(),
             timeoutMs: 30_000,
         });
         if (r.outcome === 'completed') {
@@ -82,13 +94,16 @@ async function handler(input, ctx) {
         warnings.push('No WPSCAN_API_TOKEN — public-no-token rate limit applies.');
     // Persist scan row first so we can attach findings/CVEs to it.
     const scanId = randomUUID();
-    const reportDir = join(inp.wp_install_path ?? process.cwd(), '.guardian', 'reports', `wpvuln-${scanId.slice(0, 8)}`);
+    const reportDir = join(localInstall ?? process.cwd(), '.guardian', 'reports', `wpvuln-${scanId.slice(0, 8)}`);
     mkdirSync(reportDir, { recursive: true });
     const outFile = join(reportDir, 'wpscan.json');
     ctx.storage.scans.insert({
         scan_id: scanId,
         scan_type: 'wp_vuln_check',
-        project_path: inp.wp_install_path ?? url,
+        // Filed under the key the project-scoped readers look it up by
+        // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
+        // canonical spelling, or the site URL the way wp_rest_audit files it.
+        project_path: inp.wp_install_path !== undefined ? canonicalPath(inp.wp_install_path) : wpSiteKey(url),
         tree_hash: '',
         report_dir: reportDir,
     });
@@ -109,7 +124,7 @@ async function handler(input, ctx) {
     const r = await runProcess({
         command: 'wpscan',
         args,
-        cwd: inp.wp_install_path ?? process.cwd(),
+        cwd: localInstall ?? process.cwd(),
         timeoutMs: 5 * 60_000,
     });
     // Rate-limit signature

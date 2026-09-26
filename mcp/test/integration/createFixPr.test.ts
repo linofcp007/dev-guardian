@@ -954,6 +954,61 @@ describe('create_fix_pr', () => {
     }
   });
 
+  it('Task 24 item 5: KEV, then EPSS, decide which group the cap keeps and which fix of a group is applied first', async () => {
+    // Two ecosystems, every finding `high`: severity alone ties, and the old
+    // order (the groups' keys) attempted composer and deferred npm. npm's
+    // lodash CVE is CISA KEV-listed, so npm's group goes first; inside it,
+    // lodash's upgrade is applied before left-pad's. The upgrade commands name
+    // a binary that does not exist, so each attempt stops at its first
+    // command — which is exactly what `commands` then shows.
+    const c = ctx();
+    const scanId = randomUUID();
+    c.storage.scans.insert({ scan_id: scanId, scan_type: 'deps_audit', project_path: repo, tree_hash: 'h' });
+    const dep = (fingerprint: string, cve: string, pkg: string, file: string) => ({
+      scan_id: scanId, fingerprint, tool: 'trivy', rule_id: cve, severity: 'high' as const,
+      category: 'security' as const, subcategory: 'cve', title: `${pkg} vulnerable`, fix_available: true,
+      file_path: file, snippet: `${pkg}@1.0.0->1.1.0`,
+    });
+    c.storage.findings.bulkInsert([
+      dep('a'.repeat(64), 'CVE-2099-11', 'psr/log', 'composer.lock'),
+      dep('b'.repeat(64), 'CVE-2099-21', 'left-pad', 'package-lock.json'),
+      dep('c'.repeat(64), 'CVE-2099-22', 'lodash', 'package-lock.json'),
+    ]);
+    c.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [{ name: 'trivy', status: 'ok' }], missing_tools: [] });
+    // Fresh cached intel: served without a network call (the suite runs with GUARDIAN_OFFLINE=1).
+    const now = new Date().toISOString();
+    c.storage.cveIntel.upsertMany([
+      { cve_id: 'CVE-2099-11', kev: false, epss_score: 0.3, fetched_at: now },
+      { cve_id: 'CVE-2099-21', kev: false, epss_score: 0.1, fetched_at: now },
+      { cve_id: 'CVE-2099-22', kev: true, epss_score: 0.2, fetched_at: now },
+    ]);
+    const missing = 'guardian-no-such-package-manager';
+    const planStep = (ecosystem: string, pkg: string) => ({
+      package_name: pkg, installed_version: '1.0.0', latest_version: '1.1.0', classification: 'security',
+      ecosystem, upgrade_command: `${missing} upgrade ${pkg}`,
+    });
+    const planTool = TOOLS.find((t) => t.name === 'deps_update_plan');
+    if (planTool === undefined) throw new Error('deps_update_plan not registered');
+    const original = planTool.handler;
+    planTool.handler = async () => ({
+      ok: true,
+      plan: [planStep('composer', 'psr/log'), planStep('npm', 'left-pad'), planStep('npm', 'lodash')],
+      runner_failures: [],
+    });
+    try {
+      const res = await TOOLS.find((t) => t.name === 'create_fix_pr')?.handler(
+        { project_path: repo, sources: ['deps'], max_prs: 1 }, c as never,
+      ) as { ok: true; groups: Array<{ key: string; outcome: string; commands: string[] }>; deferred: Array<{ key: string }> };
+      expect(res.groups.map((g) => g.key)).toEqual(['npm']);
+      expect(res.deferred.map((g) => g.key)).toEqual(['composer']);
+      expect(res.groups[0]?.outcome).toBe('apply_failed');
+      expect(res.groups[0]?.commands).toEqual([`${missing} upgrade lodash`]);
+      expect(worktreeCount()).toBe(1);
+    } finally {
+      planTool.handler = original;
+    }
+  }, REGISTRY_BACKED_TIMEOUT_MS);
+
   it.skipIf(!DOTNET_INSTALLED)(
     'Task 11 fix round 1 (item 1): a dry run never runs deps_update_plan\'s dotnet restore in the user\'s project',
     async () => {

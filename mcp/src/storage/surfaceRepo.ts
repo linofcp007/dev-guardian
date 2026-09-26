@@ -112,11 +112,9 @@ export class SurfaceRepo {
   }
 
   /**
-   * The newest snapshot in the database, from ANY project.
-   *
-   * Correct for exactly one caller: the `guardian://surface/latest` resource,
-   * whose contract really is "whatever this server last mapped" and which
-   * claims nothing about a project.
+   * The newest snapshot in the database, from ANY project. No production
+   * caller: the `guardian://surface/latest` resource answers for the
+   * server's own project (`getLatestForProject(serverProjectPath())`).
    *
    * Any consumer that relativizes paths against a specific project root,
    * keys anything by one, or TELLS THE CALLER it answered about their

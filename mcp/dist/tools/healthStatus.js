@@ -4,16 +4,25 @@
  *
  * Reports:
  *   - uptime (process)
- *   - last scan + how long ago
+ *   - ONE project's last scan + how long ago, and how many scans it has
+ *     (`project_path`, default: the server's working directory)
  *   - DB file path + size
  *   - chosen shell label
  *   - concurrency limiter state
  *   - count of registered tools / resources
+ *
+ * The scan fields used to be `scans.getLatest()` and `listHistory(1000)`:
+ * the newest scan of whichever project scanned last, and a count of every
+ * project's scans capped at 1000. One database holds every project, so
+ * "last scan: 2 minutes ago" was routinely another project's (Task 24).
  */
 import { existsSync, statSync } from 'node:fs';
+import { resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
+import { serverProjectPath } from '../resources/paging.js';
+import { ProjectPath } from '../schemas.js';
 import { registerToolModule, TOOLS } from './index.js';
 const startedAt = Date.now();
 // Same shared resolver server.ts and report/sarif.ts already use — was a
@@ -24,14 +33,30 @@ const SERVER_VERSION = resolveVersion();
 const tool = {
     name: 'health_status',
     title: 'Server health',
-    description: 'Return server uptime, DB info, last scan, shell choice, in-flight scan count, and tool/resource ' +
-        'counts. Read-only.',
-    inputSchema: {},
-    handler: async (_input, ctx) => handler(ctx),
+    description: 'Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and ' +
+        "one project's last scan and scan count (project_path, default: the server's working " +
+        'directory). Read-only.',
+    inputSchema: { project_path: ProjectPath },
+    handler: async (input, ctx) => handler(input, ctx),
 };
 registerToolModule(tool);
-async function handler(ctx) {
-    const latest = ctx.storage.scans.getLatest();
+async function handler(input, ctx) {
+    const inp = input;
+    // A diagnostic must answer even when the server runs somewhere no scan
+    // would (a home directory): only an EXPLICIT path is validated.
+    let projectPath;
+    if (inp.project_path === undefined || inp.project_path.length === 0) {
+        projectPath = serverProjectPath();
+    }
+    else {
+        try {
+            projectPath = resolveProjectPath(inp.project_path).path;
+        }
+        catch (e) {
+            return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        }
+    }
+    const latest = ctx.storage.scans.getLatestForProject(projectPath);
     const limiter = getScanLimiter();
     const dbPath = ctx.storage
         .rawHandle()
@@ -54,10 +79,12 @@ async function handler(ctx) {
             node_version: process.version,
             platform: process.platform,
         },
+        project_path: projectPath,
         storage: {
             db_path: dbPath,
             db_size_bytes: dbSizeBytes,
-            total_scans: ctx.storage.scans.listHistory(1000).length,
+            // This project's scans, any status and type — never another project's.
+            total_scans: ctx.storage.scans.countForProject(projectPath),
             ...(ctx.storage.runtimeMeta.get('shell_choice') !== null
                 ? { shell_label: ctx.shell?.label ?? 'unknown' }
                 : {}),

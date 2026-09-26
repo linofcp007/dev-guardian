@@ -64,6 +64,12 @@ export class StackRepo {
     };
   }
 
+  /**
+   * The newest snapshot of ANY project. No production caller since Task 24:
+   * `bug_hunt`, `audit_executive`, `init_project`, `map_attack_surface` and
+   * `observability_setup` each took ANOTHER project's languages from it
+   * whenever that project was detected last. Use `getLatestForProject`.
+   */
   getLatest(): PersistedStackSnapshot | null {
     const row = this.getLatestStmt.get();
     return row ? rowToSnapshot(row) : null;

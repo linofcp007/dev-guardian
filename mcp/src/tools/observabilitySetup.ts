@@ -107,8 +107,9 @@ async function handler(
 type Stack = 'node' | 'python' | 'php' | 'go' | 'rust' | 'java' | 'ruby' | 'dotnet' | 'generic';
 
 function inferStack(projectPath: string, ctx: PluginContext): Stack {
-  // Prefer the latest stack snapshot when available — it understands frameworks too.
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+  // Prefer this project's latest stack snapshot when available — it
+  // understands frameworks too. Never another project's (Task 24).
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   if (snap) {
     if (snap.languages?.includes('javascript') || snap.languages?.includes('typescript')) return 'node';
     if (snap.languages?.includes('python')) return 'python';

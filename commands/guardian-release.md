@@ -13,7 +13,7 @@ Arguments: $ARGUMENTS
 
 1. `audit_executive { project_path: "<project>" }` — security (`security_scan_full`), quality, dependencies (`deps_audit`) and compliance in one run, with the delta against the previous audit. Coverage `partial` is a caveat to list, never a pass.
 2. **Environment hygiene**: `git ls-files` must list no `.env*` file other than examples; no production credentials in the tree (the secrets pass of step 1 covers history and uncommitted files); no `localhost` / `127.0.0.1` in production configuration.
-3. **Personal data**: when the app handles it, `compliance_evidence { framework: "gdpr" }` and the `guardian-compliance` skill's checklist (privacy policy, cookie consent, retention).
+3. **Personal data**: when the app handles it, `compliance_evidence { project_path: "<project>", framework: "gdpr" }` and the `guardian-compliance` skill's checklist (privacy policy, cookie consent, retention).
 4. **SBOM** for the artefact being deployed: `generate_sbom { project_path: "<project>", format: "cyclonedx-json" }`.
 5. **CI** of the current branch is green: `gh run list --branch <branch> --limit 5` or `gh pr checks` when the GitHub CLI is available; otherwise ask.
 

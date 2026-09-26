@@ -35,8 +35,13 @@
  * `prioritize_findings` and `validate_finding` moved to the project- AND
  * type-scoped `listCompletedOfTypes` (through `history/openSet.ts`): "the
  * latest scan of type X" is one SQL query per project, never a search of the
- * 50 (or 200) newest rows of the whole database. `getLatest` / `listHistory`
- * remain for the callers outside that set.
+ * 50 (or 200) newest rows of the whole database. Task 24 moved the rest —
+ * `health_status`, `audit_executive`, `compliance_evidence`, the WordPress
+ * and .NET describe/check tools, and the CI pipeline — so `getLatest` /
+ * `listHistory` have NO production caller left. They stay for the storage
+ * tests and for `create_fix_pr`'s own regression test, which proves a dry
+ * run's verification re-scan never repoints this unscoped view (I3). A new
+ * caller that has a project in scope must not use them.
  */
 
 import { hostname } from 'node:os';

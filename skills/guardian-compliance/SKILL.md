@@ -99,7 +99,7 @@ Se não existe (o `compliance_check` diz em `policy_documents_found`), parte do 
 
 ## Evidência para auditoria (SOC 2 / ISO 27001 / RGPD)
 
-`compliance_evidence { framework: "gdpr" }` — ou `framework: "soc2"` / `framework: "iso27001"` — gera um documento Markdown a partir do estado acumulado: último scan de compliance, resumo de licenças, contagens de CVEs, baseline e supressões. Para o pacote completo de controlos, `/guardian-report soc2`.
+`compliance_evidence { project_path: "<project>", framework: "gdpr" }` — ou `framework: "soc2"` / `framework: "iso27001"` — gera um documento Markdown a partir do estado acumulado deste projeto: último scan de compliance, resumo de licenças, contagens de CVEs, baseline e supressões. Para o pacote completo de controlos, `/guardian-report soc2`.
 
 Preparação básica que nenhuma tool verifica (checklist):
 

@@ -907,6 +907,27 @@ describe('bug_hunt', () => {
     expect(getArgs()).not.toContain('--config=p/typescript');
   });
 
+  it("never takes its languages from ANOTHER project's stack snapshot (Task 24)", async () => {
+    // One database holds every project's detections. `stack.getLatest()`
+    // was the newest one of any project: bug_hunt on this TypeScript
+    // project ran Python's packs because another project was detected last.
+    const project = tempProject();
+    const other = tempProject();
+    const plugin = makePlugin(project);
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    writeFileSync(join(project, 'tsconfig.json'), '{}', 'utf8');
+    plugin.storage.stack.insert({ project_path: other, snapshot: fakeStackSnapshot(['python']) });
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    await getTool('bug_hunt').handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    );
+    expect(getArgs()).toContain('--config=p/typescript');
+    expect(getArgs()).not.toContain('--config=p/python');
+  });
+
   // --- fix round 2: categories filtering -----------------------------------
 
   /** Real rule ids and shapes, spanning two canonical subcategories plus one

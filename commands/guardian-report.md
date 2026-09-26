@@ -63,7 +63,7 @@ Checklist — no automation: git does the work, no MCP tool is involved.
 ## `soc2` — audit evidence pack
 
 1. When the latest compliance scan is stale: `compliance_check { project_path: "<project>" }`.
-2. `compliance_evidence { framework: "soc2" }` — or `framework: "iso27001"` / `framework: "gdpr"` when the hint names one. It assembles the latest compliance scan, licence summary, CVE counts, baseline status and suppressions.
+2. `compliance_evidence { project_path: "<project>", framework: "soc2" }` — or `framework: "iso27001"` / `framework: "gdpr"` when the hint names one. It assembles this project's latest compliance scan, licence summary, CVE counts, baseline status and suppressions.
 3. Extend it with evidence from the project: CC6.1 logical access (auth code paths, missing-auth findings), CC6.6 vulnerability management (`guardian://scans/history` dates, `risk_score`), CC7.1 detection (logging, metrics, error tracking — the `guardian-observability` skill), CC7.2 incident response (post-mortems in the repo), CC8.1 change management (reviews, branch protection, pre-commit hooks); for ISO 27001, map findings to Annex A controls.
 4. End with the caveat: this is supporting evidence, not a control list — the audit firm decides what is sufficient.
 

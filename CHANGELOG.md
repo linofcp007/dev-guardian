@@ -227,6 +227,99 @@ version bump.
 
 ### Fixed
 
+- The last history readers that answered for "whichever project scanned
+  last" now answer for one project. One database holds every project's
+  scans; these still read `scans.getLatest()`, the 50 (or 200, or 1000)
+  newest rows of the whole database, `findings.listOpen()`,
+  `baselines.getActive()`, every active suppression, or the newest stack
+  snapshot of any project:
+  - `health_status`, `dotnet_describe_setup`, `wp_describe_setup`,
+    `wp_recommend_hardening`, `wp_plugin_check` and `compliance_evidence`
+    take an optional `project_path` (default: the server's working
+    directory) and report only that project — `health_status`'s
+    `last_scan` and `total_scans` included. Each response now names its
+    `project_path`. `compliance_evidence` documents the project's own
+    compliance/dependency/SBOM scans, its own baseline, and only the
+    suppressions that apply to it; it used to hand an auditor a document
+    that could describe a different project than the one it named.
+  - The WordPress tools file some rows under the site URL:
+    `wp_describe_setup` and `wp_plugin_check` take an optional `target_url`
+    to include those (`wp_rest_audit`, a URL-only `wp_vuln_check`), and
+    `wp_vuln_check` now files a path-given run under the install root's
+    canonical spelling so the project-scoped read finds it.
+  - `wp_plugin_check`'s single-plugin lookup row sets
+    `meta.scope = { kind: 'plugin', slug }` (and is filed under the
+    project, not `'(no-path)'`), so it can never become "the latest
+    wp_vuln_check" of a project; its CVEs come from the project's own
+    newest dependency, `wp_vuln_check` and `wp_vuln_check_source` scans
+    instead of every such scan among the newest 50 of any project.
+  - `audit_executive` picks its WordPress/.NET sub-tools from the audited
+    project's stack snapshot and compares against that project's previous
+    audit — it ran `scan_wordpress` on a Node project because a WordPress
+    site was detected last, and diffed against another project's audit.
+  - `bug_hunt`, `map_attack_surface`, `init_project` and
+    `observability_setup` read the project's own stack snapshot: a
+    TypeScript project got Python's language packs, and
+    `map_attack_surface` reported another project's languages as its
+    `no_rules` gaps and `stack_detected: true` for a project never detected.
+  - The headless CI pipeline (`ci/runScans.ts`) gates on the scanned
+    project's own unscoped scan rows instead of every scan row in its
+    database — a row filed under another path, or a scoped row, no longer
+    counts. Rows of every status still count: a `failed` row keeps its
+    real findings (scan_iac fails the row when one pass exits non-zero), so
+    a regression still exits GATE_FAILED rather than hiding behind the
+    coverage gap.
+  - `wp_describe_setup` and `wp_plugin_check` still find the
+    `wp_vuln_check` rows earlier builds filed under the raw
+    `wp_install_path` or URL (a trailing slash, `./wp`, `C:/sites/wp`):
+    they look the install root and the site up under each spelling it may
+    have been stored with — for every source they read, the dependency CVE
+    source (`deps_audit` / `deps` / `security_full`) included. A row filed
+    under a RELATIVE raw path is reachable only while that path exists on
+    this machine. `wp_describe_setup` passes over a `wp_vuln_check`,
+    `wp_vuln_check_source` or `scan_wordpress` run that measured nothing,
+    as `wp_plugin_check` does; `wp_plugin_check` never refuses for want of
+    a local project (a home directory, or an absolute `wp_install_path` of
+    an install that is not on this machine — its exact key).
+  - `wp_plugin_check` and `wp_vuln_check` refuse a relative
+    `wp_install_path` that does not exist here (`unsupported_target`: pass
+    the absolute path of the install, or `target_url` for a remote site).
+    Resolved against the server's working directory, two remote installs
+    both passed as `wp` shared one record, and one's CVEs were reported as
+    the other's; `wp_vuln_check` also created the report directory there.
+    It now writes its report under the install only when the install is on
+    this machine.
+  - The shipped commands and skills (`/guardian-wp`, `/guardian-dotnet`,
+    `/guardian-report soc2`, `/guardian-release`, `/guardian-status`,
+    `guardian-compliance`) pass `project_path` (and `target_url`) to the
+    tools that now answer for one project.
+  No production code calls the unscoped `getLatest` / `listHistory` /
+  `listOpen` any more; they remain for the storage tests.
+- `scan_iac` no longer throws away every actionlint finding. actionlint
+  exits 1 when it finds problems, the process runner reports every non-zero
+  exit as `failed`, and the check accepted exit 1 only from a `completed`
+  run — so actionlint with findings was always a failed pass, its findings
+  were never parsed, and the whole iac row was marked failed. Exit 0/1 is a
+  finished run unless the process timed out or was cancelled; the tests'
+  mocks now return what the real runner returns, and a contract test pins
+  it.
+- An image-only `scan_containers` no longer RESOLVES the Dockerfile's
+  misconfigurations. An image's misconfiguration and a Dockerfile's share
+  the key `trivy:config`, `trivy-image` measures it, and the own-target
+  guard only covered the other direction: `diff_scans` read the Dockerfile
+  finding as resolved, and `regression_alert`'s new image CVE was cancelled
+  by that false resolution (score 0, `regressed: false`). A finding is now
+  re-measured only by a pass with the target of a pass that may have
+  produced it — the image, or the project's files — in both directions;
+  `not_measured` names the pass that was not run again.
+- `create_fix_pr` attempts the most exploitable fixes first. Within a
+  severity band, a group whose CVE is CISA KEV-listed, then one with a
+  higher FIRST EPSS score, is kept by the `max_prs` cap before the others,
+  and a group's fixes are applied in that order too (the first that fails
+  stops the group). Severity stays the primary key; an unmeasured CVE
+  (offline, fetch failure) changes nothing. The composition note in
+  `intel/rank.ts` had it backwards — running `rankByExploitability` after a
+  severity sort would have let an exploited high displace every critical.
 - Secret hygiene in outputs and honest compliance evidence:
   - Raw secrets no longer reach a response, the database, an exported
     report, a GitHub issue body or the dashboard HTML. A new

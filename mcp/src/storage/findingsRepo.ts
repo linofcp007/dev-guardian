@@ -18,9 +18,11 @@
  * every state-describing scan type of that type's newest usable scan — see
  * `history/openSet.ts#openSetForProject`, which every resource and history
  * reader uses. `listOpen`, `listOpenForProject` and `listBySeverity` below
- * read ONE scan (the latest completed row, of any type) and are kept only for
- * callers that have not moved yet: after an SBOM, a stack detection or a scan
- * of another type, they answer from that scan.
+ * read ONE scan (the latest completed row, of any type): after an SBOM, a
+ * stack detection or a scan of another type, they answer from that scan.
+ * Since Task 24 none of them has a production caller (the last two,
+ * `dotnet_describe_setup` and `wp_describe_setup`, read the open set now);
+ * they stay for the storage tests and `create_fix_pr`'s I3 regression test.
  *
  * **The UNSCOPED "latest scan" queries (`listOpen`, `listBySeverity`)
  * exclude `create_fix_pr`'s own verification re-scans (task-7-review.md

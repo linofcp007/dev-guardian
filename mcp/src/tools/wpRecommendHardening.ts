@@ -4,10 +4,19 @@
  *
  * Pure read — no scanners. The calling model uses the checklist to drive
  * follow-up actions (suggesting plugin installs, config changes, etc).
+ *
+ * The audit is ONE install's (`project_path`, the install root `wp_audit`
+ * files its row under; default: the server's working directory). It used to
+ * be the newest wp_audit among the 50 newest scans of the whole database —
+ * another install's admins and config flags, whenever it was audited last
+ * (Task 24).
  */
 
 import type { PluginContext } from '../context.js';
-import type { ToolResult } from '../types.js';
+import { findLatestUsable } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
+import type { ScanRecord, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 interface ChecklistItem {
@@ -21,19 +30,31 @@ const tool: ToolModule = {
   name: 'wp_recommend_hardening',
   title: 'WordPress hardening checklist',
   description:
-    'Generate a prioritised hardening checklist (Markdown) from the latest wp_audit. Pure read — ' +
-    'inspects scans.meta of the most recent wp_audit, applies heuristics, returns recommendations.',
-  inputSchema: {},
-  handler: async (_input, ctx) => handler(ctx),
+    "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit " +
+    "(project_path = the install root, default: the server's working directory). Pure read — " +
+    'inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.',
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler(input, ctx),
 };
 
 registerToolModule(tool);
 
-async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, unknown>>> {
-  const audit = findLatestWpAudit(ctx);
+async function handler(
+  input: Record<string, unknown>,
+  ctx: PluginContext,
+): Promise<ToolResult<Record<string, unknown>>> {
+  const inp = input as { project_path?: string };
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
+  const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
     return {
       ok: true,
+      project_path: projectPath,
       audit_found: false,
       message: 'No wp_audit on file. Run `wp_audit` first.',
       markdown: '## No data\n\nRun `wp_audit` against a WordPress install first.',
@@ -175,6 +196,7 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
 
   return {
     ok: true,
+    project_path: projectPath,
     audit_found: true,
     audit_scan_id: audit.scan_id,
     items,
@@ -213,8 +235,11 @@ function toMarkdown(items: ChecklistItem[], scanId: string): string {
   return out.join('\n');
 }
 
-function findLatestWpAudit(ctx: PluginContext): ReturnType<typeof ctx.storage.scans.getById> {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === 'wp_audit' && s.status === 'completed');
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+/**
+ * The install's newest completed wp_audit — a project-scoped query. The
+ * audit reports through `meta`, so its scanner coverage does not disqualify
+ * it (`resources/wp.ts` reads it the same way).
+ */
+function findLatestWpAudit(ctx: PluginContext, projectPath: string): ScanRecord | null {
+  return findLatestUsable(ctx.storage, projectPath, ['wp_audit'], { skipCoverageNone: false }).scan;
 }
