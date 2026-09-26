@@ -57,10 +57,15 @@ their respective projects.
   `~/.config/dev-guardian/hooks.json` or the environment (`GUARDIAN_HOOKS=off`,
   `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`). The write guard denies
   an assistant's `Write` / `Edit` / `MultiEdit` of any hook configuration file,
-  and the shell guard denies the shell writes it can see onto one (`>`, `tee`,
-  `sed -i`, `cp` / `mv` onto it, PowerShell `Set-Content` / `Out-File`, …); a
-  write made inside another program (`python -c`, `node -e`) is not seen, which
-  matters only for the user-level file. A project's `ignorePaths` narrows the
+  and the shell guard denies what it can see a command do to one: write it
+  (`>`, `tee`, `sed -i`, `perl -pi`, `rsync`, `cp` / `mv` onto it, PowerShell
+  `Set-Content` / `[IO.File]::WriteAllText`, cmd `>` inside `cmd /c "…"`, …),
+  remove or move it away, copy a directory onto `.guardian` or
+  `~/.config/dev-guardian`, or name it in program text on the command line
+  (`node -e`, `python -c`, a heredoc fed to `python`), relative paths resolved
+  after a `cd`. A program run from a file is not seen, which matters only for
+  the user-level file ([docs/hooks.md](docs/hooks.md) lists what else is not).
+  A project's `ignorePaths` and `.guardian/hooks-allowlist.json` narrow the
   secret warning only, never a secret block the user enabled. Each hook
   configuration file is first checked, component by component with `lstat` +
   `readlink`, for a link to a network or device path (`\\host\share`), which
@@ -69,12 +74,16 @@ their respective projects.
   is read, so a FIFO, a link to `/dev/zero`, a Windows link to a named pipe or
   to an unreachable share in its place no longer hangs the hook into its 15 s
   timeout — which used to let the tool call run unguarded — and the shell
-  guard denies creating one there. **Claude Code's own settings**: an
-  assistant's `Write` / `Edit` / `MultiEdit` of `.claude/settings.json` or
-  `settings.local.json` is denied when it would newly set `disableAllHooks`,
-  or an `env` entry setting `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`
-  or `GUARDIAN_PKG_VET=0`; every other edit of those files is allowed, and a
-  shell write of them is not judged.
+  guard denies creating one there. The install hook reads its registry
+  configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
+  link walk. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
+  `MultiEdit` of `.claude/settings.json` or `settings.local.json` is denied
+  when it would newly set `disableAllHooks`, an `env` entry setting
+  `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or `GUARDIAN_PKG_VET=0`,
+  or an `enabledPlugins` entry turning dev-guardian off; every other edit of
+  those files is allowed. A shell write of them is denied when the command
+  names one of those keys, and so is `claude plugin disable|uninstall` of
+  dev-guardian.
   See [docs/hooks.md](docs/hooks.md).
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache

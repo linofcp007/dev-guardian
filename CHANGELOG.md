@@ -42,12 +42,14 @@ keeps working (migrations 004–011 are additive).
     error or a rate limit is `unknown`, never `ok`. A name missing from the
     public registry is `unknown`, not `block`, when something explains the 404:
     a custom registry (project, user and global `.npmrc`, npm's default global
-    npmrc, pnpm's rc, yarn/bun config incl. `~/.yarnrc.yml`, user, global and
-    macOS `pip.conf`/`pip.ini`, user/system `uv.toml`, pyproject/uv indexes,
+    npmrc, pnpm's rc, yarn/bun config incl. `~/.yarnrc.yml` and a
+    `.yarnrc.yml` in any parent up to the root, user, global, conda and macOS
+    `pip.conf`/`pip.ini`, user/system `uv.toml`, pyproject/uv indexes,
     composer `repositories`, a non-nuget.org `nuget.config` anywhere up to the
-    filesystem root, registry environment variables — `npm_config_*registry*`,
+    filesystem root or among NuGet's extra user and machine-wide `*.config`,
+    registry environment variables — `npm_config_*registry*`,
     `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`,
-    `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*` — or a non-public `--registry` / `-i`
+    `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*SOURCE*|*FEED*|*CONFIG*` — or a non-public `--registry` / `-i`
     / `--source` / `--index` on the command line), an npmjs auth token for a
     scoped name (private scoped packages 404 anonymously), or a local
     workspace package (`package.json` `workspaces`, `pnpm-workspace.yaml`, uv
@@ -60,12 +62,16 @@ keeps working (migrations 004–011 are additive).
     only when the whole command, comments stripped, is ONE plain install
     statement — a bare tool name (no `.venv/bin/pip`, no `sudo`/`env`/`VAR=x`),
     no `&&`/`||`/`;`/`|`/`&`, second line, subshell, `$(…)`, backticks,
-    variables or redirections, and only flags from a small per-tool allowlist
-    that cannot change where a package resolves from. Otherwise it WARNS "not
-    found on the public registry — if it is private or local, ignore this".
-    The missing-name deny names its own escape hatch (an explicit `--registry` /
-    `--index-url` / `--source`, or `GUARDIAN_PKG_VET=0`); a malicious one does
-    not. It warns on the other checks (known vulnerabilities only for an exact
+    variables, redirections, unquoted commas or `'…''…'`, and only flags from a
+    small per-tool allowlist that cannot change where a package resolves from
+    (not `composer --no-update` or `dotnet --no-restore`). Otherwise it WARNS
+    "not found on the public registry — if it is private or local, ignore
+    this". The missing-name deny names its own escape hatch, per tool (the
+    tool's registry flag, or a `GUARDIAN_PKG_VET=0` prefix — composer and Yarn
+    Berry have no registry flag; `$env:` from the PowerShell tool); a
+    malicious one does not. From the PowerShell tool a command is also read as
+    PowerShell reads it (comma lists, backtick continuations): a package only
+    that reading finds can be denied as malicious, never as missing. It warns on the other checks (known vulnerabilities only for an exact
     pin), adds a one-line "not verified" note when it could not vet, and stays
     silent when clean. Paths, tarballs, URLs, git specs (`git@host:repo`
     included), `file:`/`workspace:` protocols, requirement files and flag
@@ -992,8 +998,7 @@ keeps working (migrations 004–011 are additive).
   `Write`/`Edit`: a redirection (`>`, `>>`, `>|`, `N>`, `&>`), `tee`,
   `sed -i`, `cp`/`mv`/`install` onto it, `dd of=`, `curl -o`, `wget -O`,
   PowerShell `Set-Content`/`Add-Content`/`Out-File`/`Tee-Object`/
-  `Copy-Item`/`Move-Item` and cmd `copy`/`move`. A write made inside another
-  program (`python -c`, `node -e`) is not seen.
+  `Copy-Item`/`Move-Item` and cmd `copy`/`move`.
 - **An edit of Claude Code's settings that would switch the hooks off is
   denied.** A `Write`/`Edit`/`MultiEdit` of `.claude/settings.json` or
   `settings.local.json` (project or user level) whose result newly sets
@@ -1020,13 +1025,39 @@ keeps working (migrations 004–011 are additive).
   Anything else counts as absent — the protective defaults — and SessionStart
   names it. Not covered: the project and home directories themselves, and a
   path the OS redirects without a link (a mapped drive, a DFS or NFS mount).
-  The install hook's registry configuration reads get the descriptor checks
-  (capped at 1 MiB) but not the link walk. The shell guard denies `mkfifo`,
+  The install hook's registry configuration reads get both checks (capped at
+  1 MiB). The shell guard denies `mkfifo`,
   `mknod`, `ln`, `mklink` (also through `cmd /c`) and PowerShell `New-Item
   -ItemType SymbolicLink|HardLink|Junction` when the path they CREATE is one
   of those files, or a link at `.guardian` or `~/.config/dev-guardian` (never
   when it is only a link's source), and a leading UTF-8 byte-order mark
   (PowerShell 5 writes one) no longer makes a config file unreadable.
+- **The shell guard sees more of what a command does to the hook
+  configuration.** Besides writing a config file, it now denies removing one
+  (`rm`, `del`, `Remove-Item`, a `mv` that moves it away) or
+  `~/.config/dev-guardian` itself; moving or copying a directory onto
+  `.guardian` or `~/.config/dev-guardian` (`mv`, `cp -r`, `rsync -a`,
+  `robocopy`); `rsync`, `perl -pi`, `sort -o`, `truncate`, `sponge`,
+  `Clear-Content` onto one; a relative write after a `cd` into the directory;
+  a redirection inside a quoted `cmd /c "… > file"`; `[IO.File]::` writes;
+  and program text on the command line (`node -e`, `python -c`, `perl -e`,
+  `pwsh -Command` / `-EncodedCommand`, a heredoc fed to `python`) whose
+  string literals name a config path. A shell write of
+  `.claude/settings*.json` is denied when the command names a key that
+  switches the hooks off, and `claude plugin disable|uninstall` of
+  dev-guardian is denied. A program run from a file is still not seen.
+- **`enabledPlugins` turning dev-guardian off is denied** in a
+  `Write`/`Edit`/`MultiEdit` of Claude Code's settings, like
+  `disableAllHooks`.
+- **A project's `.guardian/hooks-allowlist.json` no longer exempts a match
+  from a secret block the user enabled** — it narrows the warning, as a
+  project `ignorePaths` does.
+- **The install hook's registry configuration reads are link-walked**: a
+  `.npmrc` (or `pip.conf`, `nuget.config`, …) linked to an unreachable
+  `\\host\share` held the hook into its 15 s timeout, and the install then
+  ran unvetted; such a file is now refused unopened and is not evidence.
+  `NUGET_PACKAGES` / `NUGET_XMLDOC_MODE` no longer disable the missing-name
+  deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` count).
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;
