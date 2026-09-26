@@ -225,6 +225,32 @@ describe('scan_deps', () => {
     expect(r.coverage).not.toBe('full');
   });
 
+  // Follow-up 2, item 3: the warning said "NO scanner ran … Install trivy"
+  // for a Trivy that was installed and ran. It names the manifest and the fix.
+  it('the warning for a bare build.gradle names the manifest and the Gradle fix, never "Install trivy" — forced or not (a gap is never a cache hit)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'build.gradle'), "plugins { id 'java' }\n", 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    for (const force of [true, false]) {
+      const r = (await getTool('scan_deps').handler({ project_path: project, force }, plugin)) as {
+        ok: true;
+        warnings: string[];
+      };
+      const text = r.warnings.join('\n');
+      expect(text).not.toMatch(/Install trivy/);
+      expect(text).toMatch(/trivy is installed and ran/);
+      expect(text).toContain('gradle (build.gradle)');
+      expect(text).toContain('dependencyLocking { lockAllConfigurations() }');
+    }
+  });
+
   it('a Gradle build beside a covered npm project: trivy ok, `trivy:gradle` missing, coverage partial', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');

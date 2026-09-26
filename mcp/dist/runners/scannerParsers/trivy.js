@@ -185,32 +185,65 @@ const ECOSYSTEM_MANIFESTS = [
         trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
         lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
         declaresNothing: npmManifestDeclaresNothing,
+        fix: 'commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)',
     },
-    { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
+    {
+        ecosystem: 'composer',
+        matches: (n) => n === 'composer.json',
+        trivyTypes: ['composer'],
+        lockfiles: ['composer.lock'],
+        fix: 'commit composer.lock (composer update writes it)',
+    },
     {
         ecosystem: 'dotnet',
         matches: (n) => /\.(csproj|sln)$/i.test(n),
         trivyTypes: ['nuget'],
         lockfiles: ['packages.lock.json', 'packages.config'],
+        fix: 'set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json',
     },
-    { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
-    { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
+    {
+        ecosystem: 'rubygems',
+        matches: (n) => n === 'Gemfile',
+        trivyTypes: ['bundler'],
+        lockfiles: ['Gemfile.lock'],
+        fix: 'commit Gemfile.lock (bundle lock writes it)',
+    },
+    {
+        ecosystem: 'cargo',
+        matches: (n) => n === 'Cargo.toml',
+        trivyTypes: ['cargo'],
+        lockfiles: ['Cargo.lock'],
+        fix: 'commit Cargo.lock (cargo generate-lockfile writes it)',
+    },
     {
         ecosystem: 'gradle',
         matches: (n) => n === 'build.gradle' || n === 'build.gradle.kts',
         trivyTypes: ['gradle'],
         lockfiles: ['gradle.lockfile'],
+        // `--write-locks` writes nothing until locking is switched on in the build.
+        fix: 'enable dependencyLocking { lockAllConfigurations() } in the build, then run ' +
+            'gradle dependencies --write-locks and commit gradle.lockfile',
     },
     {
         ecosystem: 'python',
-        matches: (n) => n === 'pyproject.toml' || n === 'Pipfile' || /^requirements.*\.txt$/i.test(n),
+        matches: (n) => n === 'pyproject.toml' ||
+            n === 'Pipfile' ||
+            n === 'setup.py' ||
+            n === 'setup.cfg' ||
+            /^requirements.*\.txt$/i.test(n),
         trivyTypes: ['pip', 'pipenv', 'poetry', 'uv'],
         lockfiles: ['requirements.txt', 'Pipfile.lock', 'poetry.lock', 'uv.lock'],
         declaresNothing: pythonManifestDeclaresNothing,
+        fix: 'commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), ' +
+            'or pin every dependency (==) in requirements.txt',
     },
 ];
 /** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
 export const MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+/** How to give Trivy a file it reads for `ecosystem`, or null for one this table does not know. */
+export function lockFileAdvice(ecosystem) {
+    return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
+}
 /** Each ecosystem with the lock file names Trivy reports its Results under. */
 export const MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 /**
@@ -317,8 +350,9 @@ const PY_DEPENDENCY_KEYS = new Set(['dependencies', 'optional-dependencies', 'de
 const PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
 /**
  * Python's "declares nothing" — nothing Trivy could have missed, so no gap:
- * a `requirements*.txt` with no line but blanks and comments; a `Pipfile`
- * with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
+ * a `requirements*.txt` with no line but blanks and comments; a `setup.py`
+ * / `setup.cfg` that never mentions `install_requires` / `extras_require`;
+ * a `Pipfile` with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
  * that declares no dependency — the common tool-config-only file (`[tool.ruff]`,
  * `[build-system]`), or a `[project]` without `dependencies`. Read line by
  * line, conservatively: a dependency key whose value is not literally `[]` /
@@ -341,6 +375,14 @@ function pythonManifestDeclaresNothing(path) {
         .filter((l) => l !== '' && !l.startsWith('#'));
     if (/\.txt$/i.test(path))
         return lines.length === 0;
+    // setuptools: Trivy reads neither file. `install_requires` / `extras_require`
+    // anywhere (a keyword argument in setup.py, a key or an
+    // `[options.extras_require]` section in setup.cfg) may declare something.
+    if (/(^|[\\/])setup\.py$/i.test(path))
+        return !/\b(install_requires|extras_require)\b/.test(text);
+    if (/(^|[\\/])setup\.cfg$/i.test(path)) {
+        return !/^\s*(install_requires|extras_require)\s*=/m.test(text) && !/^\s*\[options\.extras_require\]/m.test(text);
+    }
     let table = '';
     for (const line of lines) {
         if (line.startsWith('[')) {

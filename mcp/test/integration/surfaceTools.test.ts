@@ -822,6 +822,46 @@ describe('map_attack_surface', () => {
   // Ruling item 3: not applicable is never a gap. A project with no file in
   // any routes-pack language has nothing for Semgrep to read — the snapshot
   // (ports, env, specs) is still worth persisting, and Semgrep is not needed.
+  // Follow-up 2, item 1: with no .semgrepignore, Semgrep applies its own
+  // default ignore list (test/, tests/, *_test.go, build/, dist/, vendor/,
+  // *.min.js … — measured on 1.176.1). A Terraform module whose only Go is
+  // Terratest under test/ scanned "0 of 1" and read as a gap on every run.
+  it("Semgrep's default ignore: Terratest under test/ is not a target — not applicable, no gap", async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const projectPath = makeTempDir('guardian-surface-terratest-');
+    writeFileSync(join(projectPath, 'main.tf'), 'resource "null_resource" "x" {}\n', 'utf8');
+    mkdirSync(join(projectPath, 'test'));
+    writeFileSync(join(projectPath, 'test', 'x_test.go'), 'package test\n', 'utf8');
+    writeFileSync(join(projectPath, 'lib.min.js'), 'var a=1\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'skipped' });
+    expect(result.tools_run[0]?.reason).toMatch(/^not applicable/);
+    expect(result.missing_tools).toEqual([]);
+    expect(result.snapshot_id).not.toBeNull();
+  });
+
+  it('with a .semgrepignore of its own, Semgrep ignores nothing by default — the test/ file IS a target', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+    const projectPath = makeTempDir('guardian-surface-own-ignore-');
+    writeFileSync(join(projectPath, '.semgrepignore'), 'test/\n', 'utf8');
+    mkdirSync(join(projectPath, 'test'));
+    writeFileSync(join(projectPath, 'test', 'x_test.go'), 'package test\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    // The user's own ignore excluding every route file is a real gap.
+    expect(vi.mocked(runProcess)).toHaveBeenCalled();
+    expect(result.tools_run[0]?.reason).toMatch(/scanned 0 of 1 file/);
+    expect(result.missing_tools).toEqual(['semgrep']);
+  });
+
   it('no file in any routes-pack language: Semgrep skipped as not applicable, never missing, snapshot persisted', async () => {
     vi.mocked(scannerAvailable).mockResolvedValue(null); // not even installed
     const projectPath = makeTempDir('guardian-surface-tf-');

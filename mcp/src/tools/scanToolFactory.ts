@@ -946,7 +946,9 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // "0 findings" result is only trustworthy at coverage 'full'. When a primary
   // scanner was missing/failed we push a loud warning so the count is never
   // mistaken for a clean bill of health.
-  const assessed = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools);
+  const assessed = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools, {
+    manifestGaps: invocation.extras?.['manifest_coverage_gaps'],
+  });
   // See `nothingInScope` above: the bookkeeping says `full`, the scan measured nothing.
   const coverage: ScanCoverage = nothingInScope ? 'none' : assessed.coverage;
   const coverageWarning = nothingInScope
@@ -1157,6 +1159,7 @@ function cachedResult<TInput extends ScanToolBaseInput>(
     record.scan_type,
     record.tools_run,
     record.missing_tools,
+    { manifestGaps: record.meta?.['manifest_coverage_gaps'] },
   );
   const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
   const { meta, ...row } = record;

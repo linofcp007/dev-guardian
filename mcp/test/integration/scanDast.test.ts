@@ -592,6 +592,45 @@ describe('scan_dast envelope reporting', () => {
     expect(entry?.reason).not.toMatch(/not installed/);
   });
 
+  // Follow-up 2, item 5: map_attack_surface persists a surface Semgrep only
+  // partly parsed (partially_parsed, semgrep missing). The routes in the
+  // unparsed spans were never in the inventory, so never probed: a DAST run
+  // over that surface is partial coverage, never a complete one.
+  it('a partial surface (a file Semgrep only partly parsed) makes the DAST run partial, and says which file', async () => {
+    const snapshot: AttackSurfaceSnapshot = {
+      routes: [route('/users')],
+      env_vars: [],
+      ports: [],
+      webhooks: [],
+      coverage: [],
+      tools_run: [{ name: 'semgrep', status: 'ok', reason: 'partial: 1 file(s) only partly parsed' }],
+      missing_tools: ['semgrep'],
+      spec_files: [],
+      spec_diff: null,
+      imports: [],
+      partially_parsed: [{ file: 'rest-controller.php', type: 'PartialParsing', message: 'Syntax error at line 20' }],
+    };
+    ctx.storage.surface.insert({ project_path: projectPath, tree_hash: 'seeded', snapshot });
+
+    const r = expectOk(await run({ base_url: origin }));
+
+    expect(r.summary.requests_completed).toBeGreaterThan(0);
+    expect(r.coverage).toBe('partial');
+    expect(r.missing_tools).toContain('guardian-dast:partial-surface');
+    expect(r.warnings.join('\n')).toMatch(/partial.*rest-controller\.php/s);
+    expect((r.summary as unknown as { surface_gaps?: unknown }).surface_gaps).toEqual({
+      missing_tools: ['semgrep'],
+      partially_parsed: snapshot.partially_parsed,
+    });
+  });
+
+  it('a complete surface leaves the DAST coverage alone', async () => {
+    seedSnapshot([route('/users')]);
+    const r = expectOk(await run({ base_url: origin }));
+    expect(r.missing_tools).not.toContain('guardian-dast:partial-surface');
+    expect((r.summary as unknown as { surface_gaps?: unknown }).surface_gaps).toBeUndefined();
+  });
+
   it('keeps a zero-route snapshot distinguishable from a clean scan', async () => {
     seedSnapshot([]);
 

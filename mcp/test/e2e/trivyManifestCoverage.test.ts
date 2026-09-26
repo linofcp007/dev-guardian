@@ -170,6 +170,23 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
+    'a setuptools project (setup.py install_requires + a build-system-only pyproject.toml): no Results, a python gap on setup.py',
+    () => {
+      const dir = textProject({
+        'setup.py': 'from setuptools import setup\nsetup(name="x", install_requires=["django==3.2.0"])\n',
+        'pyproject.toml': '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n',
+      });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw) ?? []).toEqual([]);
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'python', files: ['setup.py'] }],
+        sawAnyResults: false,
+      });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
+  it.skipIf(!TRIVY_INSTALLED)(
     'a pinned requirements.txt beside the pyproject.toml: a pip Result, python covered',
     () => {
       const dir = textProject({ 'pyproject.toml': PEP621, 'requirements.txt': 'django==3.2.0\n' });

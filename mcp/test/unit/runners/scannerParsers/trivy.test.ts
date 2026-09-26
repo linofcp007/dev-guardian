@@ -262,6 +262,30 @@ describe('assessManifestCoverage', () => {
     ]);
   });
 
+  // Follow-up 2, item 2: a setuptools project. Trivy reads neither setup.py
+  // nor setup.cfg (measured on 0.69.3: a setup.py with
+  // install_requires=["django==3.2.0"] beside a build-system-only
+  // pyproject.toml read full, 0 findings).
+  it.each([
+    ['setup.py', 'from setuptools import setup\nsetup(name="x", install_requires=["django==3.2.0"])\n'],
+    ['setup.cfg', '[metadata]\nname = x\n\n[options]\ninstall_requires =\n    django==3.2.0\n'],
+    ['setup.cfg', '[options.extras_require]\ndev = pytest\n'],
+  ])('flags a %s that declares dependencies as a python gap (%#)', (file, body) => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, file), body, 'utf8');
+    writeFileSync(join(project, 'pyproject.toml'), '[build-system]\nrequires = ["setuptools"]\n', 'utf8');
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([{ ecosystem: 'python', files: [file] }]);
+  });
+
+  it.each([
+    ['setup.py', 'from setuptools import setup\nsetup(name="x", version="1.0")\n'],
+    ['setup.cfg', '[metadata]\nname = x\nversion = 1.0\n'],
+  ])('does not flag a %s that declares no dependency', (file, body) => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, file), body, 'utf8');
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([]);
+  });
+
   it('maps each new lock file Target to its ecosystem, at any depth', () => {
     expect(manifestEcosystemOfTarget('gradle.lockfile')).toBe('gradle');
     expect(manifestEcosystemOfTarget('app/gradle.lockfile')).toBe('gradle');

@@ -142,6 +142,9 @@ export const RUN_NAMES = {
     'guardian-dast': scanner('dast'),
     'guardian-dast:unanswered': scanner('dast'),
     'guardian-dast:wall-clock': scanner('dast'),
+    // The surface it probed was partial (a file Semgrep only partly parsed):
+    // routes the map could not read were never probed.
+    'guardian-dast:partial-surface': scanner('dast'),
     nuclei: scanner('nuclei'),
     // WordPress.
     wpscan: scanner('wpscan'),

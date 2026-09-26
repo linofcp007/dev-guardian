@@ -53,9 +53,10 @@ export function hasFileWithExtension(root, extensions, exclude = PROJECT_WALK_EX
 /**
  * How many regular files under `root` end with one of `extensions` — the
  * same walk as {@link hasFileWithExtension} (skipping `exclude` and hidden
- * directories), counted to the end.
+ * directories), counted to the end. `skipFile` (given the lower-cased file
+ * name) leaves a matching file out of the count.
  */
-export function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) {
+export function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE, skipFile = () => false) {
     let count = 0;
     const stack = [root];
     while (stack.length > 0) {
@@ -69,7 +70,7 @@ export function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK
             }
             else if (entry.isFile()) {
                 const lower = entry.name.toLowerCase();
-                if (extensions.some((ext) => lower.endsWith(ext)))
+                if (extensions.some((ext) => lower.endsWith(ext)) && !skipFile(lower))
                     count += 1;
             }
         }

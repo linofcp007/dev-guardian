@@ -57,6 +57,7 @@ import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   SEVERITY_ORDER,
   type AttackSurfaceSnapshot,
+  type PartialParse,
   type Finding,
   type Severity,
   type ToolResult,
@@ -478,6 +479,24 @@ async function handler(
   }
   const missingTools: string[] = [];
 
+  // A surface map_attack_surface persisted as PARTIAL — a file Semgrep only
+  // partly parsed (`partially_parsed`), or any other gap its own run
+  // recorded. Routes in the unparsed spans were never in the inventory, so
+  // never probed: this run is partial coverage too, never a complete one.
+  const surfaceGaps = surfaceGapsOf(snapshot);
+  if (surfaceGaps !== null) {
+    missingTools.push(`${DAST_ENGINE}:partial-surface`);
+    const files = surfaceGaps.partially_parsed.map((p) => p.file);
+    warnings.push(
+      'The attack-surface snapshot is partial' +
+        (files.length > 0
+          ? ` — Semgrep only partly parsed ${files.join(', ')}`
+          : ` — its own scan recorded gaps (${surfaceGaps.missing_tools.join(', ')})`) +
+        ': routes the map could not read were never probed. Fix the gap and re-run ' +
+        'map_attack_surface for a complete inventory.',
+    );
+  }
+
   // ---- 8. Optional rate-limit burst ------------------------------------
   const burst = await runRateLimitBurst({
     requested: inp.probe_rate_limit === true,
@@ -691,10 +710,25 @@ async function handler(
       skipped: plan.skipped,
       checks,
       rate_limit: burst.summary,
+      // Present only when the surface probed was itself partial.
+      ...(surfaceGaps !== null ? { surface_gaps: surfaceGaps } : {}),
     },
   };
   // The final choke point: every string on the way out, whatever produced it.
   return { ok: true, ...redactObject(payload, redact) };
+}
+
+/**
+ * The gaps a persisted surface snapshot carries, or null for a complete
+ * one: its own `missing_tools` (map_attack_surface lists `semgrep` for a
+ * partial parse) and the files Semgrep only partly parsed.
+ */
+function surfaceGapsOf(
+  snapshot: AttackSurfaceSnapshot,
+): { missing_tools: string[]; partially_parsed: PartialParse[] } | null {
+  const partiallyParsed = snapshot.partially_parsed ?? [];
+  if (snapshot.missing_tools.length === 0 && partiallyParsed.length === 0) return null;
+  return { missing_tools: [...snapshot.missing_tools], partially_parsed: partiallyParsed };
 }
 
 /* -------------------------------------------------------------------- */

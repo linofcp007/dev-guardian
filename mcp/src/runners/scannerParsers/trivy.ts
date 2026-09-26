@@ -207,7 +207,10 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
 // `gradle.lockfile`, a PEP 621 `pyproject.toml` without `poetry.lock` /
 // `uv.lock`, a `Pipfile` without `Pipfile.lock`, a `requirements-dev.txt`
 // (Trivy reads `requirements.txt` only) and an UNPINNED `requirements.txt`
-// (`django`, no `==`). A pinned `requirements.txt` is read on its own (Type
+// (`django`, no `==`) — and a setuptools project: Trivy reads neither
+// `setup.py` nor `setup.cfg` (a `setup.py` with `install_requires` beside a
+// `[build-system]`-only `pyproject.toml` read full, 0 findings). A pinned
+// `requirements.txt` is read on its own (Type
 // `pip`, Target `requirements.txt`), so it covers Python like a lock file.
 // `go.mod` is scanned from the bare manifest — no gap, not in this table.
 //
@@ -253,6 +256,8 @@ interface EcosystemManifest {
   /** True when the manifest at this path declares nothing Trivy could
    *  report on, so its missing Result is not a gap. Absent: always a gap. */
   declaresNothing?: (path: string) => boolean;
+  /** How to give Trivy something to read: the lock file to generate, and how. */
+  fix: string;
 }
 
 const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
@@ -262,33 +267,70 @@ const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
     trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
     lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
     declaresNothing: npmManifestDeclaresNothing,
+    fix: 'commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)',
   },
-  { ecosystem: 'composer', matches: (n) => n === 'composer.json', trivyTypes: ['composer'], lockfiles: ['composer.lock'] },
+  {
+    ecosystem: 'composer',
+    matches: (n) => n === 'composer.json',
+    trivyTypes: ['composer'],
+    lockfiles: ['composer.lock'],
+    fix: 'commit composer.lock (composer update writes it)',
+  },
   {
     ecosystem: 'dotnet',
     matches: (n) => /\.(csproj|sln)$/i.test(n),
     trivyTypes: ['nuget'],
     lockfiles: ['packages.lock.json', 'packages.config'],
+    fix: 'set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json',
   },
-  { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
-  { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
+  {
+    ecosystem: 'rubygems',
+    matches: (n) => n === 'Gemfile',
+    trivyTypes: ['bundler'],
+    lockfiles: ['Gemfile.lock'],
+    fix: 'commit Gemfile.lock (bundle lock writes it)',
+  },
+  {
+    ecosystem: 'cargo',
+    matches: (n) => n === 'Cargo.toml',
+    trivyTypes: ['cargo'],
+    lockfiles: ['Cargo.lock'],
+    fix: 'commit Cargo.lock (cargo generate-lockfile writes it)',
+  },
   {
     ecosystem: 'gradle',
     matches: (n) => n === 'build.gradle' || n === 'build.gradle.kts',
     trivyTypes: ['gradle'],
     lockfiles: ['gradle.lockfile'],
+    // `--write-locks` writes nothing until locking is switched on in the build.
+    fix:
+      'enable dependencyLocking { lockAllConfigurations() } in the build, then run ' +
+      'gradle dependencies --write-locks and commit gradle.lockfile',
   },
   {
     ecosystem: 'python',
-    matches: (n) => n === 'pyproject.toml' || n === 'Pipfile' || /^requirements.*\.txt$/i.test(n),
+    matches: (n) =>
+      n === 'pyproject.toml' ||
+      n === 'Pipfile' ||
+      n === 'setup.py' ||
+      n === 'setup.cfg' ||
+      /^requirements.*\.txt$/i.test(n),
     trivyTypes: ['pip', 'pipenv', 'poetry', 'uv'],
     lockfiles: ['requirements.txt', 'Pipfile.lock', 'poetry.lock', 'uv.lock'],
     declaresNothing: pythonManifestDeclaresNothing,
+    fix:
+      'commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), ' +
+      'or pin every dependency (==) in requirements.txt',
   },
 ];
 
 /** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
 export const MANIFEST_ECOSYSTEMS: readonly string[] = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+
+/** How to give Trivy a file it reads for `ecosystem`, or null for one this table does not know. */
+export function lockFileAdvice(ecosystem: string): string | null {
+  return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
+}
 
 /** Each ecosystem with the lock file names Trivy reports its Results under. */
 export const MANIFEST_ECOSYSTEM_LOCKFILES: ReadonlyArray<{ ecosystem: string; lockfiles: readonly string[] }> =
@@ -394,8 +436,9 @@ const PY_DEPENDENCY_TABLES =
 
 /**
  * Python's "declares nothing" — nothing Trivy could have missed, so no gap:
- * a `requirements*.txt` with no line but blanks and comments; a `Pipfile`
- * with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
+ * a `requirements*.txt` with no line but blanks and comments; a `setup.py`
+ * / `setup.cfg` that never mentions `install_requires` / `extras_require`;
+ * a `Pipfile` with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
  * that declares no dependency — the common tool-config-only file (`[tool.ruff]`,
  * `[build-system]`), or a `[project]` without `dependencies`. Read line by
  * line, conservatively: a dependency key whose value is not literally `[]` /
@@ -416,6 +459,13 @@ function pythonManifestDeclaresNothing(path: string): boolean {
     .map((l) => l.trim())
     .filter((l) => l !== '' && !l.startsWith('#'));
   if (/\.txt$/i.test(path)) return lines.length === 0;
+  // setuptools: Trivy reads neither file. `install_requires` / `extras_require`
+  // anywhere (a keyword argument in setup.py, a key or an
+  // `[options.extras_require]` section in setup.cfg) may declare something.
+  if (/(^|[\\/])setup\.py$/i.test(path)) return !/\b(install_requires|extras_require)\b/.test(text);
+  if (/(^|[\\/])setup\.cfg$/i.test(path)) {
+    return !/^\s*(install_requires|extras_require)\s*=/m.test(text) && !/^\s*\[options\.extras_require\]/m.test(text);
+  }
 
   let table = '';
   for (const line of lines) {

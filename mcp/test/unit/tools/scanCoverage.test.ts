@@ -73,6 +73,65 @@ describe('assessCoverage', () => {
     expect(warning).toMatch(/reduced coverage/);
   });
 
+  // Follow-up 2, item 3: Trivy installed, the only manifest one it cannot
+  // read without a lock file. The warning said "NO scanner ran … Install
+  // trivy" — advice that sends the user to reinstall a working scanner.
+  describe('a manifest Trivy ran on but could not read (no_supported_manifest)', () => {
+    const noManifest = skipped('trivy', 'no_supported_manifest');
+
+    it('coverage none: says Trivy ran, names the manifest, and gives the Gradle fix — never "Install trivy"', () => {
+      const { coverage, warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+        manifestGaps: [{ ecosystem: 'gradle', files: ['build.gradle'] }],
+      });
+      expect(coverage).toBe('none');
+      expect(warning).not.toMatch(/Install trivy/);
+      expect(warning).not.toMatch(/NO scanner ran/);
+      expect(warning).toMatch(/trivy is installed and ran/);
+      expect(warning).toContain('gradle (build.gradle)');
+      expect(warning).toMatch(/dependencyLocking \{ lockAllConfigurations\(\) \}/);
+      expect(warning).toContain('gradle dependencies --write-locks');
+      expect(warning).toMatch(/not a clean bill of health/i);
+      expect(warning).toMatch(/0 findings/);
+    });
+
+    it('names the Python fix: a lock file Trivy reads, or pinned requirements', () => {
+      const { warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+        manifestGaps: [{ ecosystem: 'python', files: ['pyproject.toml'] }],
+      });
+      expect(warning).toContain('python (pyproject.toml)');
+      expect(warning).toMatch(/poetry\.lock.*uv\.lock.*Pipfile\.lock/);
+      expect(warning).toMatch(/requirements\.txt/);
+    });
+
+    it('beside an auditor that is genuinely not installed: install that one, not Trivy', () => {
+      const { warning } = assessCoverage('deps_audit', [noManifest, skipped('pip-audit')], ['trivy', 'pip-audit'], {
+        manifestGaps: [{ ecosystem: 'python', files: ['pyproject.toml'] }],
+      });
+      expect(warning).toMatch(/Install pip-audit/);
+      expect(warning).not.toMatch(/Install trivy/);
+      expect(warning).not.toMatch(/Install[^.]*trivy/);
+    });
+
+    it('without the gap list: still no "Install trivy", and the generic fix', () => {
+      const { warning } = assessCoverage('deps', [noManifest], ['trivy']);
+      expect(warning).not.toMatch(/Install trivy/);
+      expect(warning).toMatch(/lock file/);
+    });
+
+    it('coverage partial (npm covered, gradle not): trivy ran, gradle not covered, with the fix', () => {
+      const { coverage, warning } = assessCoverage(
+        'deps',
+        [{ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }],
+        ['trivy:gradle'],
+        { manifestGaps: [{ ecosystem: 'gradle', files: ['build.gradle.kts'] }] },
+      );
+      expect(coverage).toBe('partial');
+      expect(warning).not.toMatch(/trivy:gradle did not run/);
+      expect(warning).toMatch(/trivy ran, but gradle \(build\.gradle\.kts\) was not covered/);
+      expect(warning).toContain('gradle dependencies --write-locks');
+    });
+  });
+
   it('splits the warning when some gap tools ran ok and others genuinely did not run', () => {
     const { warning } = assessCoverage(
       'bugs',

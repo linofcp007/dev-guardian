@@ -902,22 +902,28 @@ keeps working (migrations 004–011 are additive).
 - **`map_attack_surface` judged Semgrep by its exit code alone**, so a run that
   scanned no file (a `.semgrepignore` over the sources, the locale-codec
   hazard) was `ok` and persisted an empty surface for 24 h. It now uses the
-  shared Semgrep judge against the project's route-language files: none at
-  all is `skipped`, not applicable, never a gap (Semgrep is not run and the
-  snapshot persists); files present but none scanned is a gap, nothing
-  persisted; a file only partly parsed (a warn-level `PartialParsing`, e.g.
-  PHP's `const NAMESPACE`) persists as partial coverage, the files listed in
-  `partially_parsed`; a fatal run (unclean exit, rule/config error) is
-  `failed`, its routes shown but not persisted. Semgrep now runs in UTF-8 mode
-  here too.
+  shared Semgrep judge against the project's route-language files — counted
+  as Semgrep would see them, its default ignore (`test/`, `tests/`,
+  `*_test.go`, …) applied when there is no `.semgrepignore`: none at all is
+  `skipped`, not applicable, never a gap (Semgrep is not run and the snapshot
+  persists), so a Terraform module with Terratest under `test/` stays exit 0;
+  files present but none scanned is a gap, nothing persisted; a file only
+  partly parsed (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`)
+  persists as partial coverage, the files listed in `partially_parsed`, and a
+  `scan_dast` over that surface reads partial (`guardian-dast:partial-surface`);
+  a fatal run (unclean exit, rule/config error) is `failed`, its routes shown
+  but not persisted. Semgrep now runs in UTF-8 mode here too.
 - **A Gradle build without `gradle.lockfile`, or a Python project Trivy
-  cannot read** (a PEP 621 `pyproject.toml`, a `Pipfile` without
-  `Pipfile.lock`, an unpinned `requirements.txt`, a `requirements-dev.txt`),
-  made `scan_deps`, `deps_audit`, `security_scan_full` and the CI gate report
-  `trivy ok`, coverage `full`, 0 findings — Trivy 0.69.3 returns no Results
-  for any of them. They are now `trivy:gradle` / `trivy:python` coverage
-  gaps; a `pyproject.toml` or `requirements*.txt` that declares nothing is
-  not.
+  cannot read** (a PEP 621 `pyproject.toml`, a setuptools `setup.py` /
+  `setup.cfg`, a `Pipfile` without `Pipfile.lock`, an unpinned
+  `requirements.txt`, a `requirements-dev.txt`), made `scan_deps`,
+  `deps_audit`, `security_scan_full` and the CI gate report `trivy ok`,
+  coverage `full`, 0 findings — Trivy 0.69.3 returns no Results for any of
+  them. They are now `trivy:gradle` / `trivy:python` coverage gaps; a Python
+  manifest that declares nothing is not. The coverage warning no longer says
+  "NO scanner ran … Install trivy" for a Trivy that ran: it names the manifest
+  and the lock file that closes the gap (for Gradle, `dependencyLocking {
+  lockAllConfigurations() }` before `gradle dependencies --write-locks`).
 - **`bug_hunt` read a `build.gradle.kts` as Java** and ran `p/java` against a
   Kotlin project, which read as a Java bug hunt with 0 findings. It is Kotlin,
   as `detect_stack` says; a language no pack covers (Kotlin, Ruby) is named in

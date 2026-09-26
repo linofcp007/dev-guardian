@@ -72,6 +72,30 @@ describe('CI gate × map_attack_surface: not applicable is never a gap', () => {
     expect(verdict.exitCode).toBe(CI_EXIT.PASS);
   });
 
+  // Follow-up 2: Semgrep's built-in default ignore (no .semgrepignore) skips
+  // test/, tests/ and *_test.go. A Terraform module whose only Go code is its
+  // Terratest suite has nothing Semgrep would scan — not applicable. At the
+  // follow-up-1 head it counted 1 target, scanned 0, and exited 2 every run.
+  it('a Terraform module with Terratest under test/: not applicable, no surface gap, exit 0', async () => {
+    const project = makeTempDir('ci-surface-terratest-');
+    writeFileSync(join(project, 'main.tf'), 'resource "null_resource" "x" {}\n', 'utf8');
+    mkdirSync(join(project, 'test'));
+    writeFileSync(
+      join(project, 'test', 'module_test.go'),
+      'package test\n\nimport "testing"\n\nfunc TestModule(t *testing.T) {}\n',
+      'utf8',
+    );
+
+    const { steps, verdict } = await gate(project);
+
+    const surface = steps.find((s) => s.tool === 'map_attack_surface');
+    expect(surface?.missing_tools).toEqual([]);
+    expect(surface?.tools_run[0]?.reason).toMatch(/^not applicable/);
+    expect(steps.find((s) => s.tool === 'validate_finding')?.ran).toBe(true);
+    expect(verdict.coverageGaps).toEqual([]);
+    expect(verdict.exitCode).toBe(CI_EXIT.PASS);
+  });
+
   it.skipIf(!SEMGREP_INSTALLED)(
     'a project with PHP files Semgrep scanned none of (.semgrepignore): a surface gap, exit 2',
     async () => {

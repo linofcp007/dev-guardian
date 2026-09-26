@@ -1,10 +1,12 @@
-import { copyFileSync } from 'node:fs';
+import { copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
 import { runProcess } from '../runners/processRunner.js';
+import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
 import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
+import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 /**
  * Run Semgrep against the routes rule pack, natively if it's on PATH,
  * otherwise via Docker. Returns null only when neither is available — the
@@ -86,6 +88,45 @@ export function buildToolRun(run, via) {
     const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
     const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
     return { name: 'semgrep', status: 'failed', reason };
+}
+/**
+ * Semgrep's built-in default ignore, applied when the scan root has NO
+ * `.semgrepignore` of its own. Source: Semgrep's documentation, "Ignore
+ * files, folders, and code" → "Define ignored files and folders in
+ * .semgrepignore" (https://semgrep.dev/docs/ignoring-files-folders-code): the
+ * default file lists `node_modules/`, `build/`, `dist/`, `vendor/`, `.env/`,
+ * `.venv/`, `.tox/`, `*.min.js`, `.npm/`, `.yarn/`, `test/`, `tests/`,
+ * `*_test.go`, `.semgrep` and `.semgrep_logs/` (plus `:include .gitignore`,
+ * not mirrored here — a file ignored only by `.gitignore` still counts, the
+ * conservative direction). Measured on 1.176.1 with the routes pack: without
+ * a `.semgrepignore` it skipped test/, tests/ and deep/test/ at any depth,
+ * foo_test.go, build/, dist/, vendor/ and *.min.js, and scanned testdata/,
+ * spec/ and __tests__/; with an empty `.semgrepignore` it skipped none of
+ * them. Hidden directories (`.env/`, `.venv/`, …) are skipped by the walk
+ * already.
+ */
+const SEMGREP_DEFAULT_IGNORED_DIRS = [
+    'node_modules', 'build', 'dist', 'vendor', 'test', 'tests',
+];
+const SEMGREP_DEFAULT_IGNORED_SUFFIXES = ['.min.js', '_test.go'];
+/**
+ * How many files in a routes-pack language Semgrep would actually be handed
+ * in `projectPath` — the `targets` {@link judgeSurfaceReport} judges
+ * "scanned 0" against, and 0 means not applicable.
+ *
+ * With no `.semgrepignore`, Semgrep's own default ignore applies, so its
+ * paths are not targets: a Terraform module whose only Go code is its
+ * Terratest suite under `test/` has nothing Semgrep would scan, and counting
+ * it read as "scanned 0 of 1" — a gap and an exit 2 on every CI run. With a
+ * `.semgrepignore`, Semgrep ignores nothing by default, and the user's own
+ * ignore excluding every route file IS a real gap, so those files count.
+ * Both walks keep {@link PROJECT_WALK_EXCLUDE} (dependencies, build output).
+ */
+export function countRouteTargets(projectPath) {
+    if (existsSync(join(projectPath, '.semgrepignore'))) {
+        return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
+    }
+    return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS, new Set([...PROJECT_WALK_EXCLUDE, ...SEMGREP_DEFAULT_IGNORED_DIRS]), (name) => SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix)));
 }
 /**
  * Error types that describe the rules or the configuration, never one target

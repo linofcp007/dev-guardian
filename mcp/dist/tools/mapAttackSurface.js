@@ -53,17 +53,16 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
-import { extractSurface, languageFromPath, ROUTE_PACK_EXTENSIONS } from '../surface/extract.js';
+import { extractSurface, languageFromPath } from '../surface/extract.js';
 import { extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.js';
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
-import { invokeSemgrep, judgeSurfaceReport } from '../surface/scanSemgrep.js';
+import { countRouteTargets, invokeSemgrep, judgeSurfaceReport } from '../surface/scanSemgrep.js';
 import { dedupeResolved, discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
 import { resolveVersion } from '../platform/version.js';
-import { countFilesWithExtension } from '../runners/projectFiles.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -219,7 +218,7 @@ async function handler(input, ctx) {
     // not run (nor needed), and the snapshot (ports, specs) is persisted with
     // Semgrep `skipped`. A Terraform-only project must not read as an
     // incomplete scan because of the surface.
-    const targets = countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
+    const targets = countRouteTargets(projectPath);
     if (targets === 0) {
         const toolsRun = [{ name: 'semgrep', status: 'skipped', reason: NOT_APPLICABLE_REASON }];
         const snapshot = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun, includeEnvVars, [], inp.spec_paths);

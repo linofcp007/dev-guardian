@@ -16,9 +16,17 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, copyFileSync: vi.fn() };
 });
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../../src/tools/scanHelpers.js';
-import { buildToolRun, invokeSemgrep, judgeSurfaceReport } from '../../../src/surface/scanSemgrep.js';
+import {
+  buildToolRun,
+  countRouteTargets,
+  invokeSemgrep,
+  judgeSurfaceReport,
+} from '../../../src/surface/scanSemgrep.js';
 
 function run(outcome: ProcessRunResult['outcome'], exitCode: number, stderr = ''): ProcessRunResult {
   return { outcome, exitCode, stdout: '', stderr, truncated: false };
@@ -116,6 +124,47 @@ describe('judgeSurfaceReport (Global Constraint 3, and the I3 ruling)', () => {
     const j = judge(run('failed', 7, 'invalid config\n'), report({ paths: { scanned: [] } }), 'docker (img)', 1);
     expect(j.verdict).toBe('failed');
     expect(j.toolRun.reason).toBe('docker (img): exit 7; scanned 0 of 1 target(s); invalid config');
+  });
+});
+
+describe('countRouteTargets — the files Semgrep would scan, per its default ignore', () => {
+  // Measured on Semgrep 1.176.1 with the routes pack over exactly this tree:
+  // WITHOUT a .semgrepignore it scanned src/ok.go, testdata/t.go, lib/app.js,
+  // spec/s.rb and __tests__/t.js — and none of test/, tests/, deep/test/,
+  // deep/tests/, foo_test.go, build/, dist/, vendor/, lib/app.min.js.
+  const TREE = [
+    'main.tf', 'test/x_test.go', 'test/helper.go', 'tests/app.py', 'deep/test/y.go', 'deep/tests/z.go',
+    'foo_test.go', 'src/ok.go', 'build/b.go', 'dist/d.go', 'vendor/v.go', 'lib/app.min.js', 'lib/app.js',
+    'spec/s.rb', '__tests__/t.js', 'testdata/t.go',
+  ];
+
+  function tree(withIgnore: boolean): string {
+    const root = mkdtempSync(join(tmpdir(), 'route-targets-'));
+    for (const file of TREE) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), 'x\n');
+    }
+    if (withIgnore) writeFileSync(join(root, '.semgrepignore'), '# own\n');
+    return root;
+  }
+
+  it('with no .semgrepignore: exactly the five files Semgrep scanned', () => {
+    const root = tree(false);
+    try {
+      expect(countRouteTargets(root)).toBe(5);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('with a .semgrepignore of its own: test/, tests/ and *_test.go count again (the build-output walk excludes stay)', () => {
+    const root = tree(true);
+    try {
+      // 15 route-language files, minus build/, dist/, vendor/ (always excluded from the walk).
+      expect(countRouteTargets(root)).toBe(12);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

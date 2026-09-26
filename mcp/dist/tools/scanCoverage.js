@@ -9,6 +9,7 @@
  * that into a `coverage` value the factory and roll-ups can surface so a
  * silent "0 findings" never reads as "all clear".
  */
+import { lockFileAdvice } from '../runners/scannerParsers/trivy.js';
 /**
  * Derive coverage from the per-scanner outcomes.
  *
@@ -32,6 +33,38 @@ export function computeCoverage(toolsRun, missingTools) {
         return 'full';
     return ranOk ? 'partial' : 'none';
 }
+/** The `tools_run` reason scan_deps / deps_audit give Trivy when it read no manifest. */
+const NO_SUPPORTED_MANIFEST = 'no_supported_manifest';
+function parseManifestGaps(value) {
+    if (!Array.isArray(value))
+        return [];
+    const out = [];
+    for (const entry of value) {
+        if (entry === null || typeof entry !== 'object')
+            continue;
+        const { ecosystem, files } = entry;
+        if (typeof ecosystem !== 'string')
+            continue;
+        out.push({
+            ecosystem,
+            files: Array.isArray(files) ? files.filter((f) => typeof f === 'string') : [],
+        });
+    }
+    return out;
+}
+/** `gradle (build.gradle)`, or the bare ecosystem when no file is known. */
+function nameOf(gap) {
+    return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(', ')})` : gap.ecosystem;
+}
+/** Each gap's manifest and the lock file that closes it (`trivy.ts#lockFileAdvice`). */
+function manifestAdvice(gaps) {
+    if (gaps.length === 0) {
+        return 'generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run';
+    }
+    return gaps
+        .map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? 'generate the lock file Trivy reads for it'}`)
+        .join('; ');
+}
 /**
  * Compute coverage and, when it is not 'full', a loud warning naming the
  * scanner(s) responsible for the gap. The warning for 'none' explicitly
@@ -41,23 +74,43 @@ export function computeCoverage(toolsRun, missingTools) {
  * genuinely did not run from one that ran (its own `tools_run` entry says
  * 'ok') but is still a named gap — the latter must not be worded as "did
  * not run", which would contradict its own status in the same response.
+ *
+ * Nor is "install it" the advice for a scanner that ran and had nothing it
+ * could read: Trivy on a `build.gradle` with no `gradle.lockfile` is skipped
+ * `no_supported_manifest` (or `ok` with a `trivy:<ecosystem>` gap beside a
+ * covered ecosystem). The warning says Trivy ran, names the manifest from
+ * `context.manifestGaps`, and names the lock file that closes the gap.
  */
-export function assessCoverage(scanType, toolsRun, missingTools) {
+export function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     const coverage = computeCoverage(toolsRun, missingTools);
     if (coverage === 'full')
         return { coverage, warning: null };
     const failedTools = toolsRun.filter((t) => t.status === 'failed').map((t) => t.name);
     const gaps = [...new Set([...missingTools, ...failedTools])];
     const list = gaps.length > 0 ? gaps.join(', ') : 'one or more scanners';
+    const manifestGaps = parseManifestGaps(context.manifestGaps);
+    // A scanner that ran and read no manifest it supports — installed, working.
+    const unreadable = gaps.filter((name) => toolsRun.some((t) => t.name === name && t.status === 'skipped' && t.reason === NO_SUPPORTED_MANIFEST));
     if (coverage === 'none') {
+        if (unreadable.length === 0) {
+            return {
+                coverage,
+                warning: `⚠️ ${scanType}: NO scanner ran (unavailable/failed: ${list}). ` +
+                    `A "0 findings" result is NOT a clean bill of health — nothing was actually scanned. ` +
+                    `Install ${list} (or use the Docker fallback) and re-run before trusting this scan.`,
+            };
+        }
+        const others = gaps.filter((name) => !unreadable.includes(name));
         return {
             coverage,
-            warning: `⚠️ ${scanType}: NO scanner ran (unavailable/failed: ${list}). ` +
-                `A "0 findings" result is NOT a clean bill of health — nothing was actually scanned. ` +
-                `Install ${list} (or use the Docker fallback) and re-run before trusting this scan.`,
+            warning: `⚠️ ${scanType}: NOTHING was scanned — ${unreadable.join(', ')} is installed and ran, but no ` +
+                `dependency manifest here has a lock file it can read: ${manifestAdvice(manifestGaps)}. ` +
+                `A "0 findings" result is NOT a clean bill of health.` +
+                (others.length > 0 ? ` Install ${others.join(', ')} (or use the Docker fallback).` : '') +
+                ' Then re-run before trusting this scan.',
         };
     }
-    // coverage === 'partial'. A name in `gaps` can mean two different things:
+    // coverage === 'partial'. A name in `gaps` can mean different things:
     // it genuinely never ran (skipped/failed — "did not run" is accurate), or
     // it DID run (its own `tools_run` entry says 'ok') but coverage is still
     // short — e.g. bug_hunt retrying with surviving Semgrep packs after one
@@ -67,12 +120,39 @@ export function assessCoverage(scanType, toolsRun, missingTools) {
     // in that case contradicts the structured tools_run entry sitting right
     // next to this warning in the same response — same family of bug as the
     // misleading "install semgrep" text fixed elsewhere (bugfix-rules-jsts).
+    // A `<scanner>:<part>` name with no run of its own is one part of a
+    // scanner that ran (scan_deps: `trivy:gradle`).
     const ranOkNames = new Set(toolsRun.filter((t) => t.status === 'ok').map((t) => t.name));
-    const notRun = gaps.filter((name) => !ranOkNames.has(name));
+    const hasOwnRun = (name) => toolsRun.some((t) => t.name === name);
+    const partsOf = new Map();
+    for (const name of gaps) {
+        const colon = name.indexOf(':');
+        if (colon <= 0 || hasOwnRun(name) || !ranOkNames.has(name.slice(0, colon)))
+            continue;
+        const base = name.slice(0, colon);
+        partsOf.set(base, [...(partsOf.get(base) ?? []), name.slice(colon + 1)]);
+    }
+    const isPart = (name) => {
+        const colon = name.indexOf(':');
+        return colon > 0 && (partsOf.get(name.slice(0, colon))?.includes(name.slice(colon + 1)) ?? false);
+    };
+    const notRun = gaps.filter((name) => !ranOkNames.has(name) && !isPart(name) && !unreadable.includes(name));
     const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
     const clauses = [];
     if (notRun.length > 0)
         clauses.push(`${notRun.join(', ')} did not run`);
+    if (unreadable.length > 0) {
+        clauses.push(`${unreadable.join(', ')} ran but read no dependency manifest — ${manifestAdvice(manifestGaps)}`);
+    }
+    for (const [base, parts] of partsOf) {
+        const named = parts.map((part) => {
+            const gap = manifestGaps.find((g) => g.ecosystem === part);
+            return gap === undefined ? part : nameOf(gap);
+        });
+        const covered = manifestGaps.filter((g) => parts.includes(g.ecosystem));
+        clauses.push(`${base} ran, but ${named.join(', ')} was not covered` +
+            (covered.length > 0 ? ` — ${manifestAdvice(covered)}` : ''));
+    }
     if (ranWithGaps.length > 0) {
         clauses.push(`${ranWithGaps.join(', ')} ran with reduced coverage (see its tools_run reason)`);
     }
