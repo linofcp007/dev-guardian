@@ -49365,14 +49365,38 @@ function booksOf(storage, scan2) {
 var PROJECT_FILES = "project files";
 function targetOf(run) {
   if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
-  return run.target !== void 0 && run.target !== "" ? { pass: run.name, ref: run.target } : { pass: run.name };
+  return run.target !== void 0 && run.target !== "" ? { pass: run.name, ref: normalizeImageRef(run.target) } : { pass: run.name };
+}
+function normalizeImageRef(ref) {
+  let name = ref.trim();
+  let digest = "";
+  const at = name.indexOf("@");
+  if (at >= 0) {
+    digest = name.slice(at);
+    name = name.slice(0, at);
+  }
+  let tag = "";
+  const colon = name.lastIndexOf(":");
+  if (colon > name.lastIndexOf("/")) {
+    tag = name.slice(colon);
+    name = name.slice(0, colon);
+  }
+  const slash = name.indexOf("/");
+  const first = slash >= 0 ? name.slice(0, slash) : "";
+  const hasRegistry = slash >= 0 && (first.includes(".") || first.includes(":") || first === "localhost");
+  let registry2 = hasRegistry ? first : "docker.io";
+  let path6 = hasRegistry ? name.slice(slash + 1) : name;
+  if (registry2 === "index.docker.io" || registry2 === "registry-1.docker.io") registry2 = "docker.io";
+  if (registry2 === "docker.io" && !path6.includes("/")) path6 = `library/${path6}`;
+  if (tag === "" && digest === "") tag = ":latest";
+  return `${registry2}/${path6}${tag}${digest}`;
 }
 function sameTarget(a2, b) {
   if (a2.pass !== b.pass) return false;
   return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
 }
 function passLabel(run, target) {
-  return target.ref === void 0 ? run.name : `${run.name} (${target.ref})`;
+  return target.ref === void 0 ? run.name : `${run.name} (${run.target ?? target.ref})`;
 }
 function targetNotRun(holder, asked, f) {
   if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;

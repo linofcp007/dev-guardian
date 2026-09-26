@@ -873,6 +873,28 @@ describe("Task 15's scanners in the comparison", () => {
       }
     });
 
+    // Fix round 1: one image, several spellings — Docker's defaults applied.
+    it('one image under several spellings is one target: nginx, nginx:latest, docker.io/library/nginx:latest', async () => {
+      for (const [first, second] of [
+        ['nginx', 'docker.io/library/nginx:latest'],
+        ['nginx:latest', 'index.docker.io/library/nginx'],
+        ['library/nginx:1.25', 'nginx:1.25'],
+        ['ghcr.io/org/app', 'ghcr.io/org/app:latest'],
+      ] as const) {
+        const { s, p } = pair([image(first)], [image(second)], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary, `${first} vs ${second}`).toMatchObject({ resolved: 1, not_remeasured: 0 });
+      }
+      for (const [first, second] of [
+        ['nginx', 'nginx:1.25'],
+        ['nginx:1.25', 'nginx@sha256:' + 'a'.repeat(64)],
+        ['org/app', 'ghcr.io/org/app'],
+        ['localhost:5000/app', 'app'],
+      ] as const) {
+        const { s, p } = pair([image(first)], [image(second)], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary, `${first} vs ${second}`).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      }
+    });
+
     it('a Dockerfile pass still never re-measures an image, whatever image it names', async () => {
       const { s, p } = pair([image('registry/app:1')], [{ name: 'trivy-dockerfile', status: 'ok' }], imageMisconfig);
       const d = await diff(s, p, 'containers');

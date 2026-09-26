@@ -354,7 +354,44 @@ const PROJECT_FILES = 'project files';
 function targetOf(run) {
     if (runNameEntry(run.name)?.ownTarget !== true)
         return { pass: PROJECT_FILES };
-    return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: run.target } : { pass: run.name };
+    return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: normalizeImageRef(run.target) } : { pass: run.name };
+}
+/**
+ * One image reference in the one spelling Docker resolves it to, so that
+ * `nginx`, `nginx:latest` and `docker.io/library/nginx:latest` are one
+ * target (fix round 1): the registry defaults to `docker.io`
+ * (`index.docker.io` is the same registry), an official image on it gets
+ * `library/`, and a reference with neither tag nor digest gets `:latest`.
+ * The first path component is a registry only when it looks like a host
+ * (a `.` or a `:` in it, or `localhost`) — Docker's own rule. Nothing else
+ * is changed: `nginx:1.25` and `nginx@sha256:…` stay distinct targets.
+ */
+export function normalizeImageRef(ref) {
+    let name = ref.trim();
+    let digest = '';
+    const at = name.indexOf('@');
+    if (at >= 0) {
+        digest = name.slice(at);
+        name = name.slice(0, at);
+    }
+    let tag = '';
+    const colon = name.lastIndexOf(':');
+    if (colon > name.lastIndexOf('/')) {
+        tag = name.slice(colon);
+        name = name.slice(0, colon);
+    }
+    const slash = name.indexOf('/');
+    const first = slash >= 0 ? name.slice(0, slash) : '';
+    const hasRegistry = slash >= 0 && (first.includes('.') || first.includes(':') || first === 'localhost');
+    let registry = hasRegistry ? first : 'docker.io';
+    let path = hasRegistry ? name.slice(slash + 1) : name;
+    if (registry === 'index.docker.io' || registry === 'registry-1.docker.io')
+        registry = 'docker.io';
+    if (registry === 'docker.io' && !path.includes('/'))
+        path = `library/${path}`;
+    if (tag === '' && digest === '')
+        tag = ':latest';
+    return `${registry}/${path}${tag}${digest}`;
 }
 /**
  * The same target: the same pass, and — when BOTH runs recorded which image
@@ -367,9 +404,9 @@ function sameTarget(a, b) {
         return false;
     return a.ref === undefined || b.ref === undefined || a.ref === b.ref;
 }
-/** The name a pass that did not run again is reported under: `trivy-image (registry/app:1)`. */
+/** The name a pass that did not run again is reported under: `trivy-image (registry/app:1)`, as the run recorded it. */
 function passLabel(run, target) {
-    return target.ref === undefined ? run.name : `${run.name} (${target.ref})`;
+    return target.ref === undefined ? run.name : `${run.name} (${run.target ?? target.ref})`;
 }
 /**
  * A pass `holder` ran ok that may have produced `f` (it measures `f`'s key)
