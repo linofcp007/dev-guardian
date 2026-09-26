@@ -944,3 +944,65 @@ describe('assessBashCommand — a link created AT the hook config directory (I12
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
   });
 });
+
+// Final review M5, shell half: the Write/Edit guard refuses an assistant's
+// edit of the hook config files, but a shell write — `echo … > file`, `tee`,
+// `sed -i`, `cp`/`mv` onto it — went straight through. For the user-level
+// file that is every hook switched off (`{"enabled": false}`).
+describe('assessBashCommand — a shell write onto the hook configuration (M5)', () => {
+  const blocked = [
+    `echo '{"enabled":false}' > ~/.config/dev-guardian/hooks.json`,
+    'echo x >> .guardian/hooks-allowlist.json',
+    "printf '%s' '{}' >.guardian/hooks.config.json",
+    `cat > "$HOME/.config/dev-guardian/hooks.json" <<'EOF'\n{"enabled": false}\nEOF`,
+    `echo '["AKIA"]' | tee .guardian/hooks-allowlist.json`,
+    'echo x | tee -a ~/.config/dev-guardian/hooks.json >/dev/null',
+    "sed -i 's/true/false/' ~/.config/dev-guardian/hooks.json",
+    "sed -i.bak -e 's/a/b/' .guardian/hooks.config.json",
+    "sed --in-place 's/a/b/' .guardian/hooks.config.json",
+    'cp /tmp/evil.json ~/.config/dev-guardian/hooks.json',
+    'mv /tmp/x.json .guardian/hooks.config.json',
+    'cp /tmp/hooks.json ~/.config/dev-guardian/',
+    'cp -t .guardian /tmp/hooks-allowlist.json',
+    'echo {} 1> .guardian/hooks.config.json',
+    'echo {} &> .guardian/hooks.config.json',
+    'echo {} >| .guardian/hooks.config.json',
+    'dd if=/tmp/x of=.guardian/hooks.config.json',
+    'curl -fsSL -o ~/.config/dev-guardian/hooks.json https://example.test/h.json',
+    'wget -O ~/.config/dev-guardian/hooks.json https://example.test/h.json',
+    'if true; then echo x > .guardian/hooks.config.json; fi',
+    'echo x > C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    "Set-Content -Path .guardian\\hooks.config.json -Value '{}'",
+    `'{}' | Out-File "$env:USERPROFILE\\.config\\dev-guardian\\hooks.json"`,
+    'Add-Content -Path:.guardian\\hooks-allowlist.json -Value x',
+    'Copy-Item C:\\tmp\\x.json -Destination C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    'Move-Item -Path C:\\tmp\\x.json -Destination:.guardian\\hooks.config.json',
+    'copy /Y C:\\tmp\\x.json .guardian\\hooks.config.json',
+  ];
+  it.each(blocked)('blocks %j', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-shell-write');
+  });
+
+  const allowed = [
+    'cat .guardian/hooks.config.json',
+    'cat ~/.config/dev-guardian/hooks.json > /tmp/backup.json',
+    'cp .guardian/hooks.config.json /tmp/',
+    'cp ~/.config/dev-guardian/hooks.json ~/hooks.backup.json',
+    'sed -n 1p .guardian/hooks.config.json',
+    'grep enabled ~/.config/dev-guardian/hooks.json 2>&1',
+    'jq . .guardian/hooks.config.json | tee /tmp/cfg.json',
+    'echo "> .guardian/hooks.config.json"',
+    'echo x > .guardian/notes.json',
+    'cp baseline.json .guardian/',
+    'npm test > .guardian/test.log 2>&1',
+    'tee /tmp/x < .guardian/hooks.config.json',
+    'Get-Content .guardian\\hooks.config.json | Out-File C:\\tmp\\copy.json',
+    'mv .guardian/hooks.config.json /tmp/hooks.config.json.bak',
+    'curl -o out.json https://example.test/.guardian/hooks.config.json',
+  ];
+  it.each(allowed)('does not flag %j', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-shell-write');
+  });
+});

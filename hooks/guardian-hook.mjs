@@ -31,7 +31,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
@@ -125,12 +125,15 @@ async function readStdin() {
 let readSmallJsonFile = () => ({ status: 'absent' });
 /** `walkLinksUnder` from the same module — see `handleSessionStart`. */
 let walkLinksUnder = () => ({ ok: true });
+/** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
+let readSmallTextFile = () => undefined;
 
 async function loadConfigReader() {
   try {
     const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
     if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
+    if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -187,10 +190,10 @@ function userConfigPath() {
 /**
  * Project config (`.guardian/hooks.config.json`) may only make the protective
  * hooks STRICTER, never weaker. A project file is something the assistant
- * itself can write — the Write/Edit guard below refuses it, but a shell
- * command (`echo … > .guardian/hooks.config.json`) is not a Write — so every
- * setting that could switch a protective hook off is ignored when it comes
- * from there. The earlier version stripped only `"bash":{"block":false}`, and
+ * itself can write — the Write/Edit guard below refuses it, and the shell
+ * guard refuses the shell writes it can see, but a write made inside another
+ * program (`node -e`, `python -c`) is seen by neither — so every setting that
+ * could switch a protective hook off is ignored when it comes from there. The earlier version stripped only `"bash":{"block":false}`, and
  * `{"enabled": false}` in the same file still switched off the shell guard,
  * install vetting and the config write guard, even over
  * `GUARDIAN_HOOKS_BASH_BLOCK=1` (Task 23 fix round 1, C1).
@@ -600,9 +603,10 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
  * prevent — and by nothing a project file can set; only the user-level
  * switches that turn EVERY hook off (`"enabled": false` in the user config,
  * `GUARDIAN_HOOKS=off`) skip it, like everything else in `main()`. It sees
- * the Write/Edit/MultiEdit tools only, never a shell write. Emits and exits (via `emit`) when it applies;
- * returns normally (so the caller proceeds to the ordinary write handling)
- * when it does not.
+ * the Write/Edit/MultiEdit tools only; a shell write onto the same files is
+ * the shell guard's (`guard-config-shell-write` in `bashGuard.ts`). Emits and
+ * exits (via `emit`) when it applies; returns normally (so the caller
+ * proceeds to the ordinary write handling) when it does not.
  */
 function guardianConfigWriteGuard(toolName, input, cwd) {
   const rawPath = extractFilePath(toolName, input);
@@ -612,6 +616,73 @@ function guardianConfigWriteGuard(toolName, input, cwd) {
     permissionDecisionReason:
       'dev-guardian: this file controls the guardrail hooks themselves. Ask the user to change it ' +
       'directly — an assistant is not allowed to edit its own guard configuration.',
+  });
+}
+
+/** The largest Claude Code settings file read to judge an edit of it. */
+const SETTINGS_MAX_BYTES = 1024 * 1024;
+
+/** The directory whose components are walked before reading `abs` (see `readSmallJsonFile`). */
+function walkRootFor(abs, cwd) {
+  for (const root of [cwd, homedir()]) {
+    const rel = relative(root, abs);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return root;
+  }
+  return undefined;
+}
+
+/**
+ * Refuses a Write/Edit/MultiEdit of Claude Code's own settings
+ * (`.claude/settings.json` / `settings.local.json`, project or user level)
+ * whose RESULT switches dev-guardian's hooks off — `"disableAllHooks": true`,
+ * or an `env` entry `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`
+ * or `GUARDIAN_PKG_VET=0` — that the file did not already set (final review
+ * M5). Every other edit of those files (permissions, other env vars, other
+ * hooks) passes: agents make them legitimately. The new content is the Write's
+ * `content`, or the Edit/MultiEdit applied to the file on disk; when that
+ * cannot be reproduced, the edit's own strings are compared instead. Emits and
+ * exits when it applies; any failure lets the call through (fail-open).
+ */
+async function claudeSettingsWriteGuard(toolName, input, cwd) {
+  const rawPath = extractFilePath(toolName, input);
+  // Cheap pre-check, so an ordinary edit never pays for the module import.
+  if (!rawPath || !/settings(?:\.local)?\.json$/i.test(rawPath)) return;
+  let added = [];
+  try {
+    const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
+    const abs = resolve(cwd, rawPath);
+    if (!guard.isClaudeSettingsPath(abs)) return;
+    const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd));
+    if (toolName === 'Write') {
+      if (typeof input.content !== 'string') return;
+      added = guard.newlyLoosened(before, input.content);
+    } else {
+      const edits = (toolName === 'Edit' ? [input] : Array.isArray(input.edits) ? input.edits : []).filter(
+        (e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string',
+      );
+      let after = before;
+      for (const e of edits) {
+        if (after === undefined) break;
+        after = guard.applyEdit(after, e.old_string, e.new_string, e.replace_all === true);
+      }
+      added =
+        after !== undefined
+          ? guard.newlyLoosened(before, after)
+          : guard.newlyLoosened(
+              edits.map((e) => e.old_string).join('\n'),
+              edits.map((e) => e.new_string).join('\n'),
+            );
+    }
+  } catch (err) {
+    debug(`settings guard skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  if (added.length === 0) return;
+  emit('PreToolUse', {
+    permissionDecision: 'deny',
+    permissionDecisionReason:
+      `dev-guardian: this change to Claude Code's settings would switch the guardrail hooks off (${added.join(', ')}). ` +
+      'Ask the user to make it themselves — an assistant is not allowed to turn its own guardrails off.',
   });
 }
 
@@ -683,6 +754,7 @@ async function main() {
       }
       if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
         guardianConfigWriteGuard(toolName, input, cwd); // exits via emit() if it applies
+        await claudeSettingsWriteGuard(toolName, input, cwd); // likewise
       }
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
         return handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist);

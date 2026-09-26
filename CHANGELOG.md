@@ -377,10 +377,10 @@ keeps working (migrations 004–011 are additive).
   hook off, use the user-level `~/.config/dev-guardian/hooks.json` (whose
   `"enabled": false` turns every hook off) or `GUARDIAN_HOOKS=off`,
   `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`. An assistant's `Write`,
-  `Edit` or `MultiEdit` of any of the guard's own config files is denied; a
-  shell write of the user-level file is not stopped, and neither is a Claude
-  Code `.claude/settings.json` with `disableAllHooks` or an `env` block
-  setting those variables.
+  `Edit` or `MultiEdit` of any of the guard's own config files is denied, and
+  so is a shell write onto one that the shell guard can see (see Security); a
+  Claude Code `.claude/settings.json` edit that would set `disableAllHooks` or
+  one of those variables is denied too.
 - **Findings keep a line-independent identity across scans** (migration 007).
   The fingerprint hashes the line numbers, so inserting one line above a
   finding used to make it a different finding everywhere: a suppression
@@ -919,6 +919,18 @@ keeps working (migrations 004–011 are additive).
   in the user-level config honours the user's own `ignorePaths` or the
   defaults (`"ignorePaths": ["/"]` in a project file used to exempt every
   path).
+- **A shell write onto a hook config file is denied**, not only a
+  `Write`/`Edit`: a redirection (`>`, `>>`, `>|`, `N>`, `&>`), `tee`,
+  `sed -i`, `cp`/`mv`/`install` onto it, `dd of=`, `curl -o`, `wget -O`,
+  PowerShell `Set-Content`/`Add-Content`/`Out-File`/`Tee-Object`/
+  `Copy-Item`/`Move-Item` and cmd `copy`/`move`. A write made inside another
+  program (`python -c`, `node -e`) is not seen.
+- **An edit of Claude Code's settings that would switch the hooks off is
+  denied.** A `Write`/`Edit`/`MultiEdit` of `.claude/settings.json` or
+  `settings.local.json` (project or user level) whose result newly sets
+  `"disableAllHooks": true` or an `env` entry `GUARDIAN_HOOKS=off`,
+  `GUARDIAN_HOOKS_BASH_BLOCK=0|false` or `GUARDIAN_PKG_VET=0`; every other
+  edit of those files — permissions, other variables, other hooks — passes.
 - **A hook config file that is a FIFO, a device, a link to a network share
   or too large is not read.** The hooks read `.guardian/hooks.config.json`,
   `.guardian/hooks-allowlist.json` and `~/.config/dev-guardian/hooks.json`

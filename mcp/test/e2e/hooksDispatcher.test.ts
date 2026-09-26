@@ -629,6 +629,102 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     );
   });
 
+  // Final review M5, settings half: Claude Code's own `.claude/settings.json`
+  // (or `settings.local.json`, project or user level) with `disableAllHooks`
+  // or an `env` block setting GUARDIAN_HOOKS=off / GUARDIAN_HOOKS_BASH_BLOCK=0 /
+  // GUARDIAN_PKG_VET=0 switches the hooks off, and an assistant could write it.
+  // Only an edit that INTRODUCES one of those is denied: agents edit these
+  // files legitimately (permissions, other env vars, other hooks).
+  describe('Claude Code settings: an edit that switches the hooks off is denied, any other is not', () => {
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const reason = (r: HookResult): string =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecisionReason?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecisionReason ?? '';
+    const settingsPath = (name = 'settings.json'): string => join(projectDir, '.claude', name);
+    const existing = (content: unknown, name = 'settings.json'): string => {
+      mkdirSync(join(projectDir, '.claude'), { recursive: true });
+      writeFileSync(settingsPath(name), JSON.stringify(content, null, 2));
+      return settingsPath(name);
+    };
+    const hook = (tool: string, input: Record<string, unknown>): HookResult =>
+      runHook(preToolUse(tool, input, projectDir), { cwd: projectDir, homeDir });
+
+    it('Write of a new .claude/settings.json with "disableAllHooks": true is denied — ask the user', () => {
+      const r = hook('Write', { file_path: settingsPath(), content: JSON.stringify({ disableAllHooks: true }) });
+      expect(decision(r)).toBe('deny');
+      expect(reason(r)).toMatch(/disableAllHooks/);
+      expect(reason(r).toLowerCase()).toMatch(/ask the user/);
+    });
+
+    it('Write of settings.local.json with env GUARDIAN_HOOKS=off is denied', () => {
+      const r = hook('Write', {
+        file_path: settingsPath('settings.local.json'),
+        content: JSON.stringify({ env: { GUARDIAN_HOOKS: 'off' } }),
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an Edit that adds env GUARDIAN_PKG_VET=0 to an existing file is denied', () => {
+      const file = existing({ permissions: { allow: [] }, env: { FOO: '1' } });
+      const r = hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1",\n    "GUARDIAN_PKG_VET": "0"' });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('a MultiEdit that adds GUARDIAN_HOOKS_BASH_BLOCK=false is denied', () => {
+      const file = existing({ env: { FOO: '1' } });
+      const r = hook('MultiEdit', {
+        file_path: file,
+        edits: [
+          { old_string: '"FOO": "1"', new_string: '"FOO": "2"' },
+          { old_string: '"FOO": "2"', new_string: '"FOO": "2", "GUARDIAN_HOOKS_BASH_BLOCK": "false"' },
+        ],
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('the user-level ~/.claude/settings.json is covered too', () => {
+      const r = runHook(
+        preToolUse('Write', { file_path: join(homeDir, '.claude', 'settings.json'), content: '{"disableAllHooks": true}' }, projectDir),
+        { cwd: projectDir, homeDir },
+      );
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an edit of permissions only is allowed', () => {
+      const file = existing({ permissions: { allow: ['Bash(npm test)'] } });
+      const r = hook('Edit', { file_path: file, old_string: '"Bash(npm test)"', new_string: '"Bash(npm test)", "Bash(npm run lint)"' });
+      expect(r.stdout).toBeUndefined();
+      const w = hook('Write', { file_path: settingsPath('settings.local.json'), content: '{"permissions":{"deny":["Bash(rm:*)"]}}' });
+      expect(w.stdout).toBeUndefined();
+    });
+
+    it('an edit of a file the USER already loosened is allowed — the edit adds nothing', () => {
+      const file = existing({ env: { GUARDIAN_PKG_VET: '0' }, permissions: { allow: [] } });
+      const r = hook('Edit', { file_path: file, old_string: '"allow": []', new_string: '"allow": ["Bash(ls)"]' });
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('other env vars, other hooks and "disableAllHooks": false are allowed', () => {
+      const file = existing({ env: { FOO: '1' } });
+      expect(hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1", "NODE_OPTIONS": "--max-old-space-size=4096"' }).stdout).toBeUndefined();
+      expect(
+        hook('Write', {
+          file_path: settingsPath(),
+          content: JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'prettier -w' }] }] } }),
+        }).stdout,
+      ).toBeUndefined();
+      expect(hook('Write', { file_path: settingsPath(), content: '{"disableAllHooks": false}' }).stdout).toBeUndefined();
+      expect(hook('Write', { file_path: settingsPath(), content: '{"env": {"GUARDIAN_HOOKS": "on"}}' }).stdout).toBeUndefined();
+    });
+
+    it('a file merely NAMED like settings elsewhere is not judged', () => {
+      const r = hook('Write', { file_path: join(projectDir, 'docs', 'settings.json'), content: '{"disableAllHooks": true}' });
+      expect(r.stdout).toBeUndefined();
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

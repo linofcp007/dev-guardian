@@ -209,8 +209,12 @@ export function readSmallJsonFile(
   }
 }
 
-/** A small text file's content, or `undefined` for anything else. */
-export function readSmallTextFile(path: string, maxBytes: number): string | undefined {
+/**
+ * A small text file's content, or `undefined` for anything else. `under`
+ * works as in {@link readSmallJsonFile}.
+ */
+export function readSmallTextFile(path: string, maxBytes: number, under?: string): string | undefined {
+  if (under !== undefined && !walkLinksUnder(under, path).ok) return undefined;
   const r = readText(path, maxBytes);
   return r.status === 'ok' ? r.text : undefined;
 }

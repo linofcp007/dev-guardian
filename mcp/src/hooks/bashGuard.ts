@@ -298,6 +298,12 @@ export interface ShellWord {
   value: string;
   /** True when any character of the word came from inside quotes. */
   quoted: boolean;
+  /**
+   * Offsets in `value` of each `<` or `>` that was UNQUOTED code — a
+   * redirection operator, not data (`echo "a > b"` has none). Absent when
+   * there is none.
+   */
+  redirectAt?: number[];
 }
 
 export interface ShellStatement {
@@ -489,6 +495,7 @@ export function splitShell(command: string): ShellSplit {
   let words: ShellWord[] = [];
   let buf = '';
   let bufQuoted = false;
+  let bufRedirects: number[] = [];
   let hasWord = false;
   /** Last code character emitted, to tell a background `&` from `2>&1`. */
   let lastCode = '';
@@ -512,9 +519,16 @@ export function splitShell(command: string): ShellSplit {
     // it. Kept, it read as a command called `do`, and every loop, `if` and
     // brace-group body went unassessed (final review I13).
     const reserved = hasWord && !bufQuoted && words.length === 0 && COMPOUND_RESERVED.has(buf);
-    if (hasWord && !reserved) words.push({ value: buf, quoted: bufQuoted });
+    if (hasWord && !reserved) {
+      words.push(
+        bufRedirects.length > 0
+          ? { value: buf, quoted: bufQuoted, redirectAt: bufRedirects }
+          : { value: buf, quoted: bufQuoted },
+      );
+    }
     buf = '';
     bufQuoted = false;
+    bufRedirects = [];
     hasWord = false;
   };
   const endCommand = (): void => {
@@ -536,6 +550,7 @@ export function splitShell(command: string): ShellSplit {
     currentStatement = { masked: '', commands: [] };
   };
   const emitCode = (ch: string): void => {
+    if (ch === '>' || ch === '<') bufRedirects.push(buf.length);
     buf += ch;
     hasWord = true;
     masked += ch;
@@ -631,6 +646,12 @@ export function splitShell(command: string): ShellSplit {
     }
 
     if (ch === '|') {
+      // `>|` is a redirection (write, overriding noclobber), not a pipe.
+      if (lastCode === '>') {
+        emitCode('|');
+        i += 1;
+        continue;
+      }
       const next = command.charAt(i + 1);
       if (next === '|') {
         endStatement();
@@ -1101,6 +1122,200 @@ function assessGuardConfigSpecialFile(words: ShellWord[], start: number): Matche
   };
 }
 
+interface Redirect {
+  /** What precedes the operator in the same word: `''`, an fd number, `&`, or an ordinary word (`x>f`). */
+  prefix: string;
+  /** `>`, `>>`, `>|`, `>&`, `<`, `<>`, `<<<`, `<&`, … */
+  op: string;
+  /** The operand written in the same word (`>f`), or `''` when it is the next word. */
+  inline: string;
+}
+
+/** The first unquoted redirection in `word`, if it has one. */
+function parseRedirect(word: ShellWord): Redirect | null {
+  const at = word.redirectAt?.[0];
+  if (at === undefined) return null;
+  const tail = word.value.slice(at);
+  const op = /^[<>]+[|&]?/.exec(tail)?.[0] ?? tail.charAt(0);
+  return { prefix: word.value.slice(0, at), op, inline: tail.slice(op.length) };
+}
+
+/**
+ * The files a simple command's redirections write: `> f`, `>> f`, `>| f`,
+ * `N> f`, `&> f`, `>f`. Only an UNQUOTED operator counts
+ * ({@link ShellWord.redirectAt}); `>&2` / `>&-` duplicate or close a
+ * descriptor and name no file, and `<…` only reads.
+ */
+function redirectTargets(words: readonly ShellWord[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const r = word === undefined ? null : parseRedirect(word);
+    if (r === null || !r.op.startsWith('>')) continue;
+    const next = words[i + 1]?.value;
+    if (r.op.endsWith('&')) {
+      const fd = r.inline !== '' ? r.inline : (next ?? '');
+      if (/^\d*-?$/.test(fd)) continue;
+    }
+    const target = r.inline !== '' ? r.inline : next;
+    if (target !== undefined) out.push(target);
+  }
+  return out;
+}
+
+/**
+ * The argument values with every redirection (operator and operand) removed,
+ * so `tee /tmp/x < .guardian/hooks.config.json` reads as `tee /tmp/x`: a file
+ * a command reads through `<` is never one it writes.
+ */
+function withoutRedirections(words: readonly ShellWord[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === undefined) continue;
+    const r = parseRedirect(word);
+    if (r === null) {
+      out.push(word.value);
+      continue;
+    }
+    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (r.inline === '') i += 1;
+  }
+  return out;
+}
+
+/** `DIR/<last segment of src>`, for a copy or move into a directory. */
+function intoDir(dir: string, src: string): string {
+  return `${dir.replace(/[\\/]+$/, '')}/${lastSegment(src)}`;
+}
+
+/**
+ * `cp`/`mv`/`install`: the destination, and — since it may be a directory —
+ * every source's name inside it. `-t DIR` / `--target-directory=DIR` names the
+ * directory outright.
+ */
+function copyDestinations(args: readonly string[], valued: ReadonlySet<string>): string[] {
+  let dir: string | undefined;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    const long = /^--target-directory=(.+)$/.exec(a);
+    if (long !== null) dir = long[1];
+    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
+    else if (/^-t./.test(a)) dir = a.slice(2);
+    else rest.push(a);
+  }
+  const paths = operands(rest, valued);
+  if (dir !== undefined) return paths.map((p) => intoDir(dir, p));
+  if (paths.length < 2) return [];
+  const dest = paths[paths.length - 1] ?? '';
+  return [dest, ...paths.slice(0, -1).map((p) => intoDir(dest, p))];
+}
+
+/** A PowerShell `-Name value` / `-Name:value` parameter's value, by any of `names`. */
+function psParam(args: readonly string[], names: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? '');
+    if (m === null || !names.includes((m[1] ?? '').toLowerCase())) continue;
+    return m[2] !== undefined ? m[2] : args[i + 1];
+  }
+  return undefined;
+}
+
+/** Values of `name`'s option, spelled `-o F`, `-oF`, `--output F` or `--output=F`. */
+function optionValues(args: readonly string[], short: string, long: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a === short || a === long) {
+      const v = args[i + 1];
+      if (v !== undefined) out.push(v);
+    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
+    else if (a.startsWith(short) && a.length > short.length && !a.startsWith('--')) out.push(a.slice(short.length));
+  }
+  return out;
+}
+
+const SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
+
+/**
+ * The files a command itself writes — `tee`, `sed -i`, `cp`/`mv`/`install`
+ * onto, `dd of=`, `curl -o`, `wget -O`, PowerShell `Set-Content`/`Add-Content`/
+ * `Out-File`/`Tee-Object`/`Copy-Item`/`Move-Item`, cmd `copy`/`move`. Never a
+ * file it only reads.
+ */
+function commandWriteDestinations(name: string, args: readonly string[]): string[] {
+  switch (name) {
+    case 'tee':
+      return operands(args, new Set());
+    case 'sed':
+      return args.some((a) => SED_IN_PLACE.test(a))
+        ? operands(args, new Set(['-e', '-f', '--expression', '--file', '-l', '--line-length']))
+        : [];
+    case 'cp':
+    case 'mv':
+    case 'install': {
+      // PowerShell's `cp`/`mv` aliases take -Destination; POSIX's take operands.
+      const dest = psParam(args, ['destination']);
+      if (dest !== undefined) return [dest];
+      return copyDestinations(args, new Set(['-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group']));
+    }
+    case 'copy-item':
+    case 'cpi':
+    case 'move-item':
+    case 'mi':
+    case 'copy':
+    case 'move': {
+      const dest = psParam(args, ['destination']);
+      if (dest !== undefined) return [dest];
+      // cmd's `/Y`-style switches are not paths.
+      return copyDestinations(
+        args.filter((a) => !/^\/-?[A-Za-z]$/.test(a)),
+        new Set(),
+      );
+    }
+    case 'dd':
+      return args.filter((a) => a.startsWith('of=')).map((a) => a.slice(3));
+    case 'curl':
+      return optionValues(args, '-o', '--output');
+    case 'wget':
+      return optionValues(args, '-O', '--output-document');
+    case 'set-content':
+    case 'add-content':
+    case 'ac':
+    case 'out-file':
+    case 'tee-object':
+      // Any argument: the path is positional or a -Path/-LiteralPath/-FilePath
+      // value, and nothing else these take looks like a hook config path.
+      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ''));
+    default:
+      return [];
+  }
+}
+
+/**
+ * A shell write onto one of the hook configuration files — a redirection,
+ * `tee`, `sed -i`, `cp`/`mv` onto it, and their PowerShell spellings (final
+ * review M5). The Write/Edit guard refuses an assistant's edit of the same
+ * files; this is the same refusal for the shell. A project file cannot loosen
+ * the protective hooks anyway, but the user-level one can switch every hook
+ * off. Not a shell parser: a write made inside a program (`python -c`,
+ * `node -e`, `[IO.File]::WriteAllText`) or inside a quoted `cmd /c "… > f"` is
+ * not seen.
+ */
+function assessGuardConfigShellWrite(words: ShellWord[], start: number): MatchedRule | null {
+  const head = words[start];
+  const name = head === undefined ? '' : basename(head.value).toLowerCase().replace(/\.exe$/, '');
+  const args = withoutRedirections(words.slice(start + 1));
+  const targets = [...redirectTargets(words), ...commandWriteDestinations(name, args)];
+  if (!targets.some(isHookConfigPath)) return null;
+  return {
+    id: 'guard-config-shell-write',
+    level: 'block',
+    reason: "Writes the guardrail hooks' own configuration from the shell",
+  };
+}
+
 /**
  * True when `script` (already dequoted) IS a remote download, rather than
  * merely containing one — the entire text is a bare `curl`/`wget` invocation,
@@ -1239,6 +1454,8 @@ function collect(command: string, depth: number, out: MatchedRule[]): void {
       if (find !== null) out.push(find);
       const special = assessGuardConfigSpecialFile(words, resolved.index);
       if (special !== null) out.push(special);
+      const shellWrite = assessGuardConfigShellWrite(words, resolved.index);
+      if (shellWrite !== null) out.push(shellWrite);
       if (depth < MAX_NESTING) {
         for (const script of nestedScripts(words, resolved.index)) {
           // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c

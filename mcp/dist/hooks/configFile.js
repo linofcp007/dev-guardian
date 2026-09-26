@@ -198,8 +198,13 @@ export function readSmallJsonFile(path, maxBytes = MAX_HOOK_CONFIG_BYTES, under)
         return { status: 'invalid' };
     }
 }
-/** A small text file's content, or `undefined` for anything else. */
-export function readSmallTextFile(path, maxBytes) {
+/**
+ * A small text file's content, or `undefined` for anything else. `under`
+ * works as in {@link readSmallJsonFile}.
+ */
+export function readSmallTextFile(path, maxBytes, under) {
+    if (under !== undefined && !walkLinksUnder(under, path).ok)
+        return undefined;
     const r = readText(path, maxBytes);
     return r.status === 'ok' ? r.text : undefined;
 }
