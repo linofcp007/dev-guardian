@@ -66,11 +66,7 @@ const EXPECTED_COMMANDS = [
  * that creates it. Everything else a doc names under `${CLAUDE_PLUGIN_ROOT}`
  * must be on disk.
  */
-const NOT_YET_SHIPPED = new Set([
-  'configs/compliance/cookie-banner/', // full-review Task 20
-  'configs/compliance/cookie-banner/banner.html', // full-review Task 20
-  'configs/compliance/privacy-policy-template.md', // full-review Task 20
-]);
+const NOT_YET_SHIPPED = new Set<string>([]);
 
 /**
  * Backticked identifiers that look like a tool (they start with a tool's first

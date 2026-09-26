@@ -1,0 +1,192 @@
+/*
+ * dev-guardian cookie banner — styles. Plain CSS, no framework.
+ *
+ * Accept and reject share one class (.dgcb-btn-choice): same size, same
+ * colour, same weight. A banner that makes "reject" smaller or paler than
+ * "accept" steers the choice, and consent obtained that way is not freely
+ * given. Change the palette, keep the parity.
+ *
+ * Override the custom properties on :root to match the site.
+ */
+:root {
+  --dgcb-bg: #ffffff;
+  --dgcb-fg: #1a1a1a;
+  --dgcb-muted: #4a4a4a;
+  --dgcb-accent: #0b57d0;
+  --dgcb-accent-fg: #ffffff;
+  --dgcb-border: #c4c4c4;
+  --dgcb-focus: #b3261e;
+  --dgcb-radius: 8px;
+  --dgcb-shadow: 0 -2px 16px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dgcb-bg: #1f1f1f;
+    --dgcb-fg: #f2f2f2;
+    --dgcb-muted: #c8c8c8;
+    --dgcb-accent: #a8c7fa;
+    --dgcb-accent-fg: #062e6f;
+    --dgcb-border: #5c5c5c;
+    --dgcb-focus: #f2b8b5;
+  }
+}
+
+.dgcb,
+.dgcb-panel {
+  box-sizing: border-box;
+  color: var(--dgcb-fg);
+  background: var(--dgcb-bg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.dgcb {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 2147483000;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 1.25rem 1.5rem;
+  border-top: 1px solid var(--dgcb-border);
+  box-shadow: var(--dgcb-shadow);
+}
+
+.dgcb-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.dgcb-title:focus {
+  outline: none;
+}
+
+.dgcb-text {
+  margin: 0 0 1rem;
+  max-width: 70ch;
+  color: var(--dgcb-muted);
+}
+
+.dgcb-link {
+  color: var(--dgcb-accent);
+  text-decoration: underline;
+}
+
+.dgcb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.dgcb-btn {
+  min-height: 44px;
+  padding: 0.5rem 1.25rem;
+  border: 2px solid var(--dgcb-accent);
+  border-radius: var(--dgcb-radius);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dgcb-btn-choice {
+  color: var(--dgcb-accent-fg);
+  background: var(--dgcb-accent);
+}
+
+.dgcb-btn-secondary {
+  color: var(--dgcb-accent);
+  background: transparent;
+}
+
+.dgcb-btn:focus-visible,
+.dgcb-link:focus-visible,
+.dgcb-category input:focus-visible {
+  outline: 3px solid var(--dgcb-focus);
+  outline-offset: 2px;
+}
+
+.dgcb-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.dgcb-panel {
+  width: 100%;
+  max-width: 36rem;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 1.5rem;
+  border-radius: var(--dgcb-radius);
+}
+
+.dgcb-category {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.75rem;
+  align-items: start;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--dgcb-border);
+}
+
+.dgcb-category input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.2rem;
+}
+
+.dgcb-category label {
+  font-weight: 600;
+}
+
+.dgcb-category .dgcb-text {
+  grid-column: 2;
+  margin: 0.25rem 0 0;
+}
+
+.dgcb-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px dashed var(--dgcb-border);
+  border-radius: var(--dgcb-radius);
+  color: var(--dgcb-fg);
+  background: var(--dgcb-bg);
+}
+
+.dgcb-placeholder p {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dgcb {
+    animation: dgcb-in 160ms ease-out;
+  }
+
+  @keyframes dgcb-in {
+    from {
+      transform: translateY(100%);
+    }
+
+    to {
+      transform: none;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .dgcb {
+    padding: 1rem;
+  }
+
+  .dgcb-actions .dgcb-btn {
+    flex: 1 1 100%;
+  }
+}
