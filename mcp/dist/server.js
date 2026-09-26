@@ -62723,7 +62723,7 @@ function resolveWordpressRoutes(routes) {
 }
 
 // src/surface/scanSemgrep.ts
-import { copyFileSync as copyFileSync3, existsSync as existsSync48 } from "node:fs";
+import { copyFileSync as copyFileSync3, existsSync as existsSync48, lstatSync as lstatSync6 } from "node:fs";
 import { join as join61 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
@@ -62790,8 +62790,11 @@ var SEMGREP_DEFAULT_IGNORED_DIRS = [
   "tests"
 ];
 var SEMGREP_DEFAULT_IGNORED_SUFFIXES = [".min.js", "_test.go"];
-function countRouteTargets(projectPath) {
-  if (existsSync48(join61(projectPath, ".semgrepignore"))) {
+async function countRouteTargets(projectPath) {
+  const ownIgnore = existsSync48(join61(projectPath, ".semgrepignore"));
+  const listed = await gitListedFiles(projectPath);
+  if (listed !== null) return countListedRouteTargets(projectPath, listed, ownIgnore);
+  if (ownIgnore) {
     return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
   }
   return countFilesWithExtension(
@@ -62800,6 +62803,28 @@ function countRouteTargets(projectPath) {
     /* @__PURE__ */ new Set([...PROJECT_WALK_EXCLUDE, ...SEMGREP_DEFAULT_IGNORED_DIRS]),
     (name) => SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix))
   );
+}
+async function gitListedFiles(projectPath) {
+  const r = await git(projectPath, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  return r.exitCode === 0 ? splitNul(r.stdout) : null;
+}
+function countListedRouteTargets(projectPath, files, ownIgnore) {
+  const skipDirs = ownIgnore ? PROJECT_WALK_EXCLUDE : /* @__PURE__ */ new Set([...PROJECT_WALK_EXCLUDE, ...SEMGREP_DEFAULT_IGNORED_DIRS]);
+  let count2 = 0;
+  for (const file of new Set(files)) {
+    const segments = file.split("/");
+    const name = (segments.pop() ?? "").toLowerCase();
+    if (!ROUTE_PACK_EXTENSIONS.some((ext) => name.endsWith(ext))) continue;
+    if (segments.some((dir) => skipDirs.has(dir) || dir.startsWith("."))) continue;
+    if (!ownIgnore && SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
+    try {
+      if (!lstatSync6(join61(projectPath, file)).isFile()) continue;
+    } catch {
+      continue;
+    }
+    count2 += 1;
+  }
+  return count2;
 }
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function judgeSurfaceReport(args) {
@@ -62814,7 +62839,7 @@ function judgeSurfaceReport(args) {
       toolRun: {
         name: "semgrep",
         status: "skipped",
-        reason: `${prefix}semgrep scanned 0 of ${targets} file(s) in a routes-pack language \u2014 every one is excluded (.semgrepignore, .gitignore) or the rule file loaded nothing`
+        reason: `${prefix}semgrep scanned 0 of ${targets} file(s) in a routes-pack language \u2014 every one is excluded (.semgrepignore) or the rule file loaded nothing`
       }
     };
   }
@@ -63360,7 +63385,7 @@ async function handler39(input, ctx) {
     });
     return summarize4(snapshot2, persisted.id, toolsRun2, ctx, projectPath);
   };
-  const targets = countRouteTargets(projectPath);
+  const targets = await countRouteTargets(projectPath);
   if (targets === 0) {
     const toolsRun2 = [{ name: "semgrep", status: "skipped", reason: NOT_APPLICABLE_REASON }];
     const snapshot2 = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun2, includeEnvVars, [], inp.spec_paths);
@@ -63431,7 +63456,7 @@ async function handler39(input, ctx) {
     return degradedResult(
       [judged.toolRun],
       ["semgrep"],
-      `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore / .gitignore.`,
+      `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore.`,
       ctx,
       projectPath
     );
@@ -69491,7 +69516,7 @@ import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, join as join75, resolve as resolve19 } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync6, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
+import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync7, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join74, parse as parse5, relative as relative23, resolve as resolve18 } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
@@ -69514,7 +69539,7 @@ function walkLinksUnder(under, path6) {
     const next = join74(current, part);
     let isLink;
     try {
-      isLink = lstatSync6(next).isSymbolicLink();
+      isLink = lstatSync7(next).isSymbolicLink();
     } catch {
       return { ok: true };
     }

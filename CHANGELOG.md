@@ -974,6 +974,13 @@ keeps working (migrations 004–011 are additive).
   `missing_tools`. Any failed step of the surface's run now makes the DAST run
   partial (`guardian-dast:partial-surface`), names the step in the warning and
   lists it under `summary.surface_gaps.failed_steps`.
+- **`map_attack_surface` counted gitignored route files** as Semgrep targets.
+  Inside a git work tree Semgrep lists its targets through git (measured on
+  1.176.1), so a project whose only route files are gitignored read "scanned 0
+  of N" — a gap, and exit 2 in CI. The count now reads `git ls-files --cached
+  --others --exclude-standard` there (Semgrep's default ignore still applied
+  when there is no `.semgrepignore`): such a project is not applicable, never a
+  gap. Outside git the walk is unchanged.
 
 ### Security
 

@@ -268,7 +268,7 @@ async function handler(
   // not run (nor needed), and the snapshot (ports, specs) is persisted with
   // Semgrep `skipped`. A Terraform-only project must not read as an
   // incomplete scan because of the surface.
-  const targets = countRouteTargets(projectPath);
+  const targets = await countRouteTargets(projectPath);
   if (targets === 0) {
     const toolsRun: ToolRun[] = [{ name: 'semgrep', status: 'skipped', reason: NOT_APPLICABLE_REASON }];
     const snapshot = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun, includeEnvVars, [], inp.spec_paths);
@@ -362,7 +362,7 @@ async function handler(
       ['semgrep'],
       `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
         'surface was mapped and nothing was persisted — an empty result here is a gap, not an ' +
-        'application that exposes nothing. Check .semgrepignore / .gitignore.',
+        'application that exposes nothing. Check .semgrepignore.',
       ctx,
       projectPath,
     );
