@@ -52631,7 +52631,19 @@ function keyVerdict(book, key) {
 }
 function bookkeepingVerdict(book, f) {
   if (book.tools_run.length === 0 && book.missing_tools.length === 0) return "measured";
-  return keyVerdict(book, findingKey(f));
+  const verdict = keyVerdict(book, findingKey(f));
+  return verdict === "measured" && inPartlyParsedFile(book, f) ? "unmeasured" : verdict;
+}
+function inPartlyParsedFile(book, f) {
+  if (f.file_path === void 0) return false;
+  const file = f.file_path.replace(/\\/g, "/");
+  const key = findingKey(f);
+  return book.tools_run.some(
+    (run) => run.status === "ok" && (run.partially_parsed ?? []).some((p) => p.file === file) && (keysOfRun(run.name, true)?.includes(key) ?? false)
+  );
+}
+function partlyParsedNames(book) {
+  return book.tools_run.filter((run) => run.status === "ok" && (run.partially_parsed ?? []).length > 0).map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(", ")})`);
 }
 function typeResolver(storage, scan2) {
   if (isOrchestratedFullScan(scan2)) {
@@ -52708,6 +52720,7 @@ function notMeasured(storage, scan2, scope = "any") {
       const keys = keysOfRun(name, false);
       if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
     }
+    for (const name of partlyParsedNames(book)) add(name);
   };
   if (!isOrchestratedFullScan(scan2)) {
     gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);

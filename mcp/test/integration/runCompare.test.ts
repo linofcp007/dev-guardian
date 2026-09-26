@@ -1162,3 +1162,53 @@ describe('a scanner the reference did not run at all: what it finds now is new',
     });
   });
 });
+
+/**
+ * Follow-up X1: a Semgrep run the shared judge found `partial` is `ok` AND
+ * missing, the files named in `partially_parsed`. That shape reads as the
+ * retry shape ("ran, with a narrower gap"), so without more it would have
+ * MEASURED every Semgrep finding — including one inside the unparsed span of
+ * a named file, which would then read resolved (or new). Before, the run was
+ * `failed` and nothing of Semgrep's was measured. A finding in a file the run
+ * only partly parsed is unmeasured; every other Semgrep finding is measured.
+ */
+describe('a Semgrep run that only partly parsed some files', () => {
+  const partialRun = (...files: string[]): ToolRun => ({
+    name: 'semgrep',
+    status: 'ok',
+    reason: 'partial',
+    partially_parsed: files.map((file) => ({ file, type: 'PartialParsing', message: 'Syntax error' })),
+  });
+
+  function pair(findingFile: string, newer: ToolRun): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-partial-parse-');
+    seedScan(s, { id: 'a', type: 'sast', project: p, findings: [{ fp: S, tool: 'semgrep', file: findingFile }] });
+    seedScan(s, { id: 'b', type: 'sast', project: p, tools_run: [newer], missing_tools: ['semgrep'] });
+    return { s, p };
+  }
+  const diff = async (s: Seeded, p: string): Promise<DiffOut> =>
+    okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'sast' }, s.plugin));
+
+  it('does not resolve a finding in a file it only partly parsed, and names the file', async () => {
+    const { s, p } = pair('wp/rest-controller.php', partialRun('wp/rest-controller.php'));
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(d.not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+  });
+
+  it('control: resolves a finding in any other file — the rest of the run measured', async () => {
+    const { s, p } = pair('src/app.js', partialRun('wp/rest-controller.php'));
+    expect((await diff(s, p)).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it('a reference that only partly parsed a file holds a finding there now "not previously measured", never new', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-partial-parse-ref-');
+    seedScan(s, { id: 'a', type: 'sast', project: p, tools_run: [partialRun('wp/rest-controller.php')], missing_tools: ['semgrep'] });
+    seedScan(s, { id: 'b', type: 'sast', project: p, findings: [{ fp: D, tool: 'semgrep', file: 'wp/rest-controller.php' }] });
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
+    expect(d.reference_not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+  });
+});

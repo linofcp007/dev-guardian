@@ -42,7 +42,9 @@
  *     vetoes the whole scanner: its findings cannot be told apart by pass),
  *     and no `missing_tools` entry names it — unless that same name also ran
  *     ok, which is a run with a narrower gap inside it (bug_hunt's pack
- *     retry, gitleaks' size limits);
+ *     retry, gitleaks' size limits, a Semgrep partial parse) — and the
+ *     finding is not in a file that run names as only partly parsed
+ *     (`ToolRun.partially_parsed`: that file's findings are unmeasured);
  *   - UNMEASURED — a gap — when it is named, but a naming entry failed, or a
  *     `missing_tools` entry names it (outside the retry shape above), or no
  *     entry naming it ran ok;
@@ -209,7 +211,35 @@ function keyVerdict(book: Bookkeeping, key: string): Verdict {
 
 function bookkeepingVerdict(book: Bookkeeping, f: Finding): Verdict {
   if (book.tools_run.length === 0 && book.missing_tools.length === 0) return 'measured';
-  return keyVerdict(book, findingKey(f));
+  const verdict = keyVerdict(book, findingKey(f));
+  return verdict === 'measured' && inPartlyParsedFile(book, f) ? 'unmeasured' : verdict;
+}
+
+/**
+ * Whether `f` sits in a file a run measuring its key could only partly parse
+ * (`ToolRun.partially_parsed`: the shared Semgrep judge's `partial` verdict,
+ * `ok` AND missing). The rest of that run measured — the retry shape above —
+ * but a finding inside the unparsed span of a named file was not looked for:
+ * it is unmeasured, never resolved and never new. (Before that verdict the
+ * whole run was `failed`, and none of its findings measured.)
+ */
+function inPartlyParsedFile(book: Bookkeeping, f: Finding): boolean {
+  if (f.file_path === undefined) return false;
+  const file = f.file_path.replace(/\\/g, '/');
+  const key = findingKey(f);
+  return book.tools_run.some(
+    (run) =>
+      run.status === 'ok' &&
+      (run.partially_parsed ?? []).some((p) => p.file === file) &&
+      (keysOfRun(run.name, true)?.includes(key) ?? false),
+  );
+}
+
+/** `semgrep (partly parsed: a.php, b.js)` for each run that only partly parsed some files. */
+function partlyParsedNames(book: Bookkeeping): string[] {
+  return book.tools_run
+    .filter((run) => run.status === 'ok' && (run.partially_parsed ?? []).length > 0)
+    .map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(', ')})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +419,8 @@ export function notMeasured(storage: Storage, scan: ScanRecord, scope: NotMeasur
       const keys = keysOfRun(name, false);
       if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== 'measured')) add(name);
     }
+    // Files a run only partly parsed are a gap on both sides (inPartlyParsedFile).
+    for (const name of partlyParsedNames(book)) add(name);
   };
   if (!isOrchestratedFullScan(scan)) {
     gapsOf(bookkeepingOf(storage, scan), scan.scan_type);

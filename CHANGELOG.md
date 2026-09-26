@@ -1000,7 +1000,10 @@ keeps working (migrations 004–011 are additive).
   `map_attack_surface` and the batched scoped runs (`scan_sast`/`bug_hunt`
   with `scope`, `review_pr`): `paths.scanned > 0` with only per-file errors is
   partial coverage — Semgrep `ok` and listed missing, the files named in
-  `tools_run[].partially_parsed`; fatal errors stay `failed`.
+  `tools_run[].partially_parsed`; fatal errors stay `failed`. A comparison
+  (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
+  Semgrep finding in a partly parsed file as not measured by that run —
+  never resolved, never new — and names it `semgrep (partly parsed: …)`.
 
 ### Security
 
