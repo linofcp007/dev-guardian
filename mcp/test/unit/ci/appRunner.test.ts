@@ -340,7 +340,17 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<void> {
+/**
+ * How long a killed process may take to disappear, and a pidfile to appear.
+ * Measured: Windows `taskkill /T` took up to ~60 s under parallel-agent load,
+ * so the old 5 s bound failed a correct kill. Polling every 25 ms keeps the
+ * common case as fast as before; only a slow machine waits longer.
+ */
+const PROCESS_POLL_BOUND_MS = 60_000;
+/** Per-test budget for a test that waits on two such polls (parent + grandchild). */
+const KILL_TEST_TIMEOUT_MS = 3 * PROCESS_POLL_BOUND_MS;
+
+async function waitUntilDead(pid: number, timeoutMs = PROCESS_POLL_BOUND_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (isAlive(pid)) {
     if (Date.now() >= deadline) {
@@ -364,7 +374,7 @@ function isPidPair(x: unknown): x is PidPair {
 /** Polls for the fixture's pidfile rather than assuming a fixed delay —
  *  spawning the grandchild is a single OS call, not the thing under test,
  *  so it is always ready long before any of this suite's timeouts. */
-async function waitForPidfile(path: string, timeoutMs = 5_000): Promise<PidPair> {
+async function waitForPidfile(path: string, timeoutMs = PROCESS_POLL_BOUND_MS): Promise<PidPair> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (existsSync(path)) {
@@ -521,7 +531,7 @@ describe('startApp', () => {
     // proves nothing about either process.
     await waitUntilDead(pids.parent);
     await waitUntilDead(pids.grandchild);
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('rejects immediately — not after the full timeout — when the process exits before ever answering', async () => {
     // Guards a DIFFERENT wrong implementation than the timeout test above:
@@ -669,7 +679,7 @@ describe('startApp', () => {
     // have run once on a timeout path. Must not throw, hang, or attempt to
     // re-signal an already-dead pid in a way that surfaces as a rejection.
     await expect(app.stop()).resolves.toBeUndefined();
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('a concurrent second stop() does not resolve before the tree is actually gone', async () => {
     // Guards the wrong implementation this module shipped with initially: a
@@ -702,7 +712,7 @@ describe('startApp', () => {
     // Let the real teardown finish before this test (and its `afterEach`)
     // ends, rather than leaving a dangling handle.
     await first;
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('an aborted signal cancels an in-progress health-check wait and kills whatever was already spawned', async () => {
     // The CLI's SIGINT/SIGTERM handling (coordinator review, Finding 3)
@@ -746,7 +756,7 @@ describe('startApp', () => {
     // was already spawned, including the grandchild, not merely reject.
     await waitUntilDead(pids.parent);
     await waitUntilDead(pids.grandchild);
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('never uses a shell — a metacharacter in an argument is passed literally', async () => {
     // Guards the wrong implementation that joins argv into a string (and,

@@ -30,6 +30,20 @@ const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
  *  fast, dependency-free regex pass with no real scanner involved. */
 const TIMEOUT_MS = 15_000;
 
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'guardian-hook-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
 interface HookResult {
   status: number | null;
   stdout: unknown;
@@ -442,6 +456,56 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       projectConfig({ secrets: { warn: false, block: true }, ignorePaths: ['/vendor/'] });
       expect(context(sessionStart())).not.toMatch(/ignored/i);
     });
+
+    // Final review M4: `ignorePaths` is advisory, but it also exempted a path
+    // from the opt-in secret BLOCK — so a project file with
+    // `"ignorePaths": ["/"]` switched off a block the USER had enabled. It now
+    // narrows the warning only; a user-enabled block honours the user's own
+    // ignore list (or the defaults), never the project's.
+    const tokenWriteTo = (rel: string): HookResult =>
+      runHook(preToolUse('Write', { file_path: join(projectDir, rel), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+
+    it('a project "ignorePaths" cannot exempt a path from a user-enabled secret block', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
+
+    it('…while the same project "ignorePaths" still silences the advisory warning', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('the user-level "ignorePaths" still exempts a path from the user-enabled block', () => {
+      userConfig({ secrets: { block: true }, ignorePaths: ['/generated/'] });
+      expect(decision(tokenWriteTo('generated/k.ts'))).toBeUndefined();
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
+
+    it('a user-enabled block keeps the default ignore list when neither file narrows it', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      expect(decision(tokenWriteTo('test/fixtures/k.ts'))).toBeUndefined();
+    });
+
+    it('a block the PROJECT enabled may still be narrowed by the project\'s own ignorePaths', () => {
+      projectConfig({ secrets: { block: true }, ignorePaths: ['/vendor/'] });
+      expect(decision(tokenWriteTo('vendor/k.ts'))).toBeUndefined();
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
   });
 
   // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync
@@ -527,6 +591,137 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it('a UTF-8 byte-order mark does not make a project config unreadable (PowerShell 5 writes one)', () => {
       writeFileSync(join(guardianDir(), 'hooks.config.json'), '\uFEFF' + JSON.stringify({ secrets: { block: true } }), 'utf8');
       expect(decision(tokenWrite())).toBe('deny');
+    });
+
+    // Final review I12: a link to an unreachable `\\host\share` made the
+    // config read (and SessionStart's look at `.guardian`) wait ~136 s on
+    // Windows \u2014 past the hook's 15 s, after which the call ran unguarded.
+    // 192.0.2.1 is TEST-NET-1: never routed, and never contacted when the
+    // walk works.
+    const UNC = POSIX ? '//192.0.2.1/share' : '\\\\192.0.2.1\\share';
+    it.skipIf(!CAN_SYMLINK)(
+      '.guardian linked to a UNC share: rm -rf / is still denied at once, and SessionStart names the file (needs symlink rights; skipped without them)',
+      () => {
+        symlinkSync(UNC, join(projectDir, '.guardian'), 'dir');
+        const { r, ms } = timedRmRf();
+        expect(decision(r)).toBe('deny');
+        expect(ms).toBeLessThan(5000);
+        const t0 = Date.now();
+        const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
+        expect(Date.now() - t0).toBeLessThan(5000);
+        expect(ctx).toMatch(
+          /\.guardian\/hooks\.config\.json was not read \(reached through a link to a network or device path\)/,
+        );
+      },
+      30_000,
+    );
+
+    it.skipIf(!CAN_SYMLINK)(
+      'a user-level config dir linked to a UNC share: rm -rf / is still denied at once (needs symlink rights; skipped without them)',
+      () => {
+        mkdirSync(join(homeDir, '.config'), { recursive: true });
+        symlinkSync(UNC, join(homeDir, '.config', 'dev-guardian'), 'dir');
+        const { r, ms } = timedRmRf();
+        expect(decision(r)).toBe('deny');
+        expect(ms).toBeLessThan(5000);
+      },
+      30_000,
+    );
+  });
+
+  // Final review M5, settings half: Claude Code's own `.claude/settings.json`
+  // (or `settings.local.json`, project or user level) with `disableAllHooks`
+  // or an `env` block setting GUARDIAN_HOOKS=off / GUARDIAN_HOOKS_BASH_BLOCK=0 /
+  // GUARDIAN_PKG_VET=0 switches the hooks off, and an assistant could write it.
+  // Only an edit that INTRODUCES one of those is denied: agents edit these
+  // files legitimately (permissions, other env vars, other hooks).
+  describe('Claude Code settings: an edit that switches the hooks off is denied, any other is not', () => {
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const reason = (r: HookResult): string =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecisionReason?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecisionReason ?? '';
+    const settingsPath = (name = 'settings.json'): string => join(projectDir, '.claude', name);
+    const existing = (content: unknown, name = 'settings.json'): string => {
+      mkdirSync(join(projectDir, '.claude'), { recursive: true });
+      writeFileSync(settingsPath(name), JSON.stringify(content, null, 2));
+      return settingsPath(name);
+    };
+    const hook = (tool: string, input: Record<string, unknown>): HookResult =>
+      runHook(preToolUse(tool, input, projectDir), { cwd: projectDir, homeDir });
+
+    it('Write of a new .claude/settings.json with "disableAllHooks": true is denied — ask the user', () => {
+      const r = hook('Write', { file_path: settingsPath(), content: JSON.stringify({ disableAllHooks: true }) });
+      expect(decision(r)).toBe('deny');
+      expect(reason(r)).toMatch(/disableAllHooks/);
+      expect(reason(r).toLowerCase()).toMatch(/ask the user/);
+    });
+
+    it('Write of settings.local.json with env GUARDIAN_HOOKS=off is denied', () => {
+      const r = hook('Write', {
+        file_path: settingsPath('settings.local.json'),
+        content: JSON.stringify({ env: { GUARDIAN_HOOKS: 'off' } }),
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an Edit that adds env GUARDIAN_PKG_VET=0 to an existing file is denied', () => {
+      const file = existing({ permissions: { allow: [] }, env: { FOO: '1' } });
+      const r = hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1",\n    "GUARDIAN_PKG_VET": "0"' });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('a MultiEdit that adds GUARDIAN_HOOKS_BASH_BLOCK=false is denied', () => {
+      const file = existing({ env: { FOO: '1' } });
+      const r = hook('MultiEdit', {
+        file_path: file,
+        edits: [
+          { old_string: '"FOO": "1"', new_string: '"FOO": "2"' },
+          { old_string: '"FOO": "2"', new_string: '"FOO": "2", "GUARDIAN_HOOKS_BASH_BLOCK": "false"' },
+        ],
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('the user-level ~/.claude/settings.json is covered too', () => {
+      const r = runHook(
+        preToolUse('Write', { file_path: join(homeDir, '.claude', 'settings.json'), content: '{"disableAllHooks": true}' }, projectDir),
+        { cwd: projectDir, homeDir },
+      );
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an edit of permissions only is allowed', () => {
+      const file = existing({ permissions: { allow: ['Bash(npm test)'] } });
+      const r = hook('Edit', { file_path: file, old_string: '"Bash(npm test)"', new_string: '"Bash(npm test)", "Bash(npm run lint)"' });
+      expect(r.stdout).toBeUndefined();
+      const w = hook('Write', { file_path: settingsPath('settings.local.json'), content: '{"permissions":{"deny":["Bash(rm:*)"]}}' });
+      expect(w.stdout).toBeUndefined();
+    });
+
+    it('an edit of a file the USER already loosened is allowed — the edit adds nothing', () => {
+      const file = existing({ env: { GUARDIAN_PKG_VET: '0' }, permissions: { allow: [] } });
+      const r = hook('Edit', { file_path: file, old_string: '"allow": []', new_string: '"allow": ["Bash(ls)"]' });
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('other env vars, other hooks and "disableAllHooks": false are allowed', () => {
+      const file = existing({ env: { FOO: '1' } });
+      expect(hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1", "NODE_OPTIONS": "--max-old-space-size=4096"' }).stdout).toBeUndefined();
+      expect(
+        hook('Write', {
+          file_path: settingsPath(),
+          content: JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'prettier -w' }] }] } }),
+        }).stdout,
+      ).toBeUndefined();
+      expect(hook('Write', { file_path: settingsPath(), content: '{"disableAllHooks": false}' }).stdout).toBeUndefined();
+      expect(hook('Write', { file_path: settingsPath(), content: '{"env": {"GUARDIAN_HOOKS": "on"}}' }).stdout).toBeUndefined();
+    });
+
+    it('a file merely NAMED like settings elsewhere is not judged', () => {
+      const r = hook('Write', { file_path: join(projectDir, 'docs', 'settings.json'), content: '{"disableAllHooks": true}' });
+      expect(r.stdout).toBeUndefined();
     });
   });
 

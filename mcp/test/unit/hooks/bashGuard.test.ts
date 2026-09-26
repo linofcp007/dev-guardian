@@ -798,4 +798,265 @@ describe('assessBashCommand — a special file or link onto the hook configurati
   it.each(allowed)('does not flag %s', (command) => {
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
   });
+
+  // Final review I11: the `cmd` case split EVERY word on whitespace, so a
+  // quoted link path with a space in it — this repo's own path has one — was
+  // cut in two and never recognised. Only a word that is itself a whole
+  // `mklink …` command line is split now, the way cmd splits it.
+  const withSpaces = [
+    'cmd /c mklink "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json" \\\\.\\pipe\\x',
+    'cmd.exe /k mklink "C:\\My Projects\\app\\.guardian\\hooks-allowlist.json" C:\\big.bin',
+    'cmd /c \'mklink "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json" \\\\.\\pipe\\x\'',
+    'cmd /q /c mklink /H "C:\\Users\\me\\CLAUDE SKILLS\\.config\\dev-guardian\\hooks.json" C:\\big.bin',
+  ];
+  it.each(withSpaces)('blocks a quoted link path with a space: %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const cmdAllowed = [
+    // The hook config is only the SOURCE of the link.
+    'cmd /c mklink "C:\\Users\\me\\CLAUDE SKILLS\\backup.json" "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json"',
+    // cmd runs `echo`, not mklink.
+    'cmd /c echo mklink .guardian\\hooks.config.json x',
+    // No /c or /k: cmd runs nothing.
+    'cmd mklink .guardian\\hooks.config.json x',
+  ];
+  it.each(cmdAllowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+
+  // Re-review follow-up to I11: only the FIRST command of a quoted cmd line was
+  // checked, so a mklink after `&&`, `&` or `call` passed where 21b0c20 blocked
+  // it. Every command of the line is checked now.
+  const cmdChains = [
+    'cmd /c "cd /d C:\\p && mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "echo hi & mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "call mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "@mklink .guardian\\hooks.config.json \\\\h\\s"',
+    'cmd /c "dir || mklink /D .guardian \\\\h\\s"',
+    'cmd /c "type nul | mklink .guardian\\hooks-allowlist.json C:\\big.bin"',
+    'cmd /c \'cd /d "C:\\Users\\me\\CLAUDE SKILLS\\p" && mklink "C:\\Users\\me\\CLAUDE SKILLS\\p\\.guardian\\hooks.config.json" x\'',
+    'cmd /c "cmd /c mklink .guardian\\hooks.config.json x"',
+  ];
+  it.each(cmdChains)('blocks a mklink later in a cmd line: %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const cmdChainsAllowed = [
+    'cmd /c "cd /d C:\\p && mklink backup.json .guardian\\hooks.config.json"',
+    'cmd /c "echo mklink .guardian\\hooks.config.json & dir"',
+    'cmd /c "echo a ^& mklink .guardian\\hooks.config.json x"',
+    'cmd /c "npm run build && npm test"',
+  ];
+  it.each(cmdChainsAllowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+});
+
+// Final review I13: the statements inside `do … done`, `then … fi`, `else`,
+// `elif … then` and `{ … }` were never assessed, because the reserved word
+// that opens each body sat where the command name belongs — `do rm -rf /`
+// read as a command called `do`. `( … )` and `a && b` already blocked. The
+// tokeniser now drops a reserved word at a command position, so a body
+// statement is judged exactly like a top-level one.
+describe('assessBashCommand — compound-command bodies are assessed like top-level statements (I13)', () => {
+  const blocked: string[] = [
+    'while :; do rm -rf /; done',
+    'for d in x; do rm -rf /; done',
+    'if true; then rm -rf /; fi',
+    'if x; then :; else rm -rf /; fi',
+    '{ rm -rf /; }',
+    'until false; do rm -rf ~; done',
+    'if a; then :; elif b; then rm -rf /; fi',
+    'if rm -rf /; then echo gone; fi',
+    'while rm -rf ~; do :; done',
+    'for d in a b\ndo\n  rm -rf /\ndone',
+    'if [ -n "$X" ]\nthen\n  rm -rf "$HOME"\nfi',
+    'true && { rm -rf /; }',
+    'echo x | while read -r l; do rm -rf /; done',
+    '! rm -rf /',
+    'if true; then sudo rm -rf /; fi',
+    'f() { rm -rf /; }',
+    'if true; then bash <<EOF\nrm -rf /\nEOF\nfi',
+    "for x in 1; do echo 'rm -rf ~' | bash; done",
+    'if true; then find / -delete; fi',
+  ];
+  it.each(blocked)('blocks %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('block');
+  });
+
+  const warned: string[] = [
+    'if [ -d node_modules ]; then rm -rf node_modules; fi',
+    'for d in dist build; do rm -rf "$d"; done',
+    'if true; then sudo systemctl restart nginx; fi',
+    'for x in 1; do sudo -u www-data ls; done',
+  ];
+  it.each(warned)('warns on %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('warn');
+  });
+
+  // What agents actually write: none of these may start warning or blocking.
+  const ok: string[] = [
+    'for f in *.ts; do echo "$f"; done',
+    'for f in $(ls); do wc -l "$f"; done',
+    'while read -r line; do echo "$line"; done < files.txt',
+    'if [ -f package.json ]; then npm test; fi',
+    'if git diff --quiet; then echo clean; else echo dirty; fi',
+    '{ echo a; echo b; } > out.txt',
+    'for i in 1 2 3; do sleep 1; done',
+    'while true; do git status; sleep 5; done',
+    'for pkg in a b; do npm view "$pkg" version; done',
+    'until curl -sf http://localhost:3000/health; do sleep 1; done',
+    'if ! command -v semgrep >/dev/null 2>&1; then echo "semgrep missing"; fi',
+    "git log --format='%s' | while read -r s; do echo \"$s\"; done",
+    'for d in */; do (cd "$d" && git pull --ff-only); done',
+    '[ -f .env ] || { echo "no .env"; exit 1; }',
+    'echo done; echo fi; echo then',
+    'if true\nthen\n  npm run build\nelse\n  npm ci\nfi',
+    'case "$1" in build) npm run build ;; test) npm test ;; esac',
+    'for f in src/*.ts; do grep -n "rm -rf /" "$f"; done',
+    'Get-ChildItem *.log | ForEach-Object { Remove-Item $_ }',
+    'if (Test-Path dist) { Write-Host "built" }',
+  ];
+  it.each(ok)('stays ok for %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+
+  // Re-review follow-up to I13: a `{` after `function NAME` or after the
+  // `time` runner opens a body too, and went unassessed.
+  const bodies: string[] = [
+    'function f { rm -rf /; }; f',
+    'function f {\n  rm -rf /\n}',
+    'function cleanup() { rm -rf ~; }',
+    'time { rm -rf /; }',
+    'time -p { rm -rf /; }',
+  ];
+  it.each(bodies)('blocks a function or `time` body: %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('block');
+  });
+
+  const bodiesOk: string[] = [
+    'function f { echo hi; }',
+    'function f { echo hi; }; f',
+    'time npm test',
+    'time { npm test; }',
+    'time -p npm run build',
+    'echo function f { rm',
+  ];
+  it.each(bodiesOk)('stays ok for %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+
+  it('drops only an UNQUOTED reserved word at a command position', () => {
+    const { statements } = splitShell('while :; do rm -rf /; done');
+    // `done` stays a statement (its masked text is unchanged) with no command.
+    expect(statements.map((s) => s.commands.map((c) => c.map((w) => w.value)))).toEqual([
+      [[':']],
+      [['rm', '-rf', '/']],
+      [],
+    ]);
+    // Quoted, it is a command name like any other; as an argument, data.
+    expect(splitShell('"do" x').statements[0]?.commands[0]?.map((w) => w.value)).toEqual(['do', 'x']);
+    expect(splitShell('echo do done').statements[0]?.commands[0]?.map((w) => w.value)).toEqual(['echo', 'do', 'done']);
+  });
+});
+
+// Final review I12, shell half: `.guardian` itself (or the user-level config
+// directory) made a link — to `\\host\share` above all — redirects every hook
+// config file below it at once. The reader refuses a network link now; the
+// guard also refuses to create one there, as it refuses a link AT the files.
+describe('assessBashCommand — a link created AT the hook config directory (I12)', () => {
+  const blocked = [
+    'cmd /c mklink /D .guardian \\\\h\\s',
+    'mklink /J .guardian C:\\elsewhere',
+    'cmd /c mklink /D "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian" \\\\h\\s',
+    'New-Item -ItemType SymbolicLink -Path .guardian -Target \\\\h\\s',
+    'New-Item -ItemType Junction -Path C:\\proj\\.guardian -Value D:\\x',
+    'ln -sfn //h/s .guardian',
+    'ln -s /mnt/share/cfg ~/.config/dev-guardian',
+    'New-Item -ItemType SymbolicLink -Path "$HOME\\.config\\dev-guardian" -Target \\\\h\\s',
+  ];
+  it.each(blocked)('blocks %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const allowed = [
+    'mkdir .guardian',
+    'New-Item -ItemType Directory -Path .guardian',
+    'mklink /D backup .guardian',
+    'ln -s .guardian/baseline.json baseline.json',
+    'ln -s ../shared/notes .guardian/notes',
+    'mkfifo .guardian.fifo',
+  ];
+  it.each(allowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+});
+
+// Final review M5, shell half: the Write/Edit guard refuses an assistant's
+// edit of the hook config files, but a shell write — `echo … > file`, `tee`,
+// `sed -i`, `cp`/`mv` onto it — went straight through. For the user-level
+// file that is every hook switched off (`{"enabled": false}`).
+describe('assessBashCommand — a shell write onto the hook configuration (M5)', () => {
+  const blocked = [
+    `echo '{"enabled":false}' > ~/.config/dev-guardian/hooks.json`,
+    'echo x >> .guardian/hooks-allowlist.json',
+    "printf '%s' '{}' >.guardian/hooks.config.json",
+    `cat > "$HOME/.config/dev-guardian/hooks.json" <<'EOF'\n{"enabled": false}\nEOF`,
+    `echo '["AKIA"]' | tee .guardian/hooks-allowlist.json`,
+    'echo x | tee -a ~/.config/dev-guardian/hooks.json >/dev/null',
+    "sed -i 's/true/false/' ~/.config/dev-guardian/hooks.json",
+    "sed -i.bak -e 's/a/b/' .guardian/hooks.config.json",
+    "sed --in-place 's/a/b/' .guardian/hooks.config.json",
+    'cp /tmp/evil.json ~/.config/dev-guardian/hooks.json',
+    'mv /tmp/x.json .guardian/hooks.config.json',
+    'cp /tmp/hooks.json ~/.config/dev-guardian/',
+    'cp -t .guardian /tmp/hooks-allowlist.json',
+    'echo {} 1> .guardian/hooks.config.json',
+    'echo {} &> .guardian/hooks.config.json',
+    'echo {} >| .guardian/hooks.config.json',
+    'dd if=/tmp/x of=.guardian/hooks.config.json',
+    'curl -fsSL -o ~/.config/dev-guardian/hooks.json https://example.test/h.json',
+    'wget -O ~/.config/dev-guardian/hooks.json https://example.test/h.json',
+    'if true; then echo x > .guardian/hooks.config.json; fi',
+    'echo x > C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    "Set-Content -Path .guardian\\hooks.config.json -Value '{}'",
+    `'{}' | Out-File "$env:USERPROFILE\\.config\\dev-guardian\\hooks.json"`,
+    'Add-Content -Path:.guardian\\hooks-allowlist.json -Value x',
+    'Copy-Item C:\\tmp\\x.json -Destination C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    'Move-Item -Path C:\\tmp\\x.json -Destination:.guardian\\hooks.config.json',
+    'copy /Y C:\\tmp\\x.json .guardian\\hooks.config.json',
+  ];
+  it.each(blocked)('blocks %j', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-shell-write');
+  });
+
+  const allowed = [
+    'cat .guardian/hooks.config.json',
+    'cat ~/.config/dev-guardian/hooks.json > /tmp/backup.json',
+    'cp .guardian/hooks.config.json /tmp/',
+    'cp ~/.config/dev-guardian/hooks.json ~/hooks.backup.json',
+    'sed -n 1p .guardian/hooks.config.json',
+    'grep enabled ~/.config/dev-guardian/hooks.json 2>&1',
+    'jq . .guardian/hooks.config.json | tee /tmp/cfg.json',
+    'echo "> .guardian/hooks.config.json"',
+    'echo x > .guardian/notes.json',
+    'cp baseline.json .guardian/',
+    'npm test > .guardian/test.log 2>&1',
+    'tee /tmp/x < .guardian/hooks.config.json',
+    'Get-Content .guardian\\hooks.config.json | Out-File C:\\tmp\\copy.json',
+    'mv .guardian/hooks.config.json /tmp/hooks.config.json.bak',
+    'curl -o out.json https://example.test/.guardian/hooks.config.json',
+  ];
+  it.each(allowed)('does not flag %j', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-shell-write');
+  });
 });

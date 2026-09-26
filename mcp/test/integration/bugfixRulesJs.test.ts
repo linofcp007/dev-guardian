@@ -89,7 +89,7 @@ import { describe, expect, it, vi } from 'vitest';
 // calls in this file's own `run()` are never bounded by vitest's default
 // testTimeout, so this file opts into a longer one explicitly.
 vi.setConfig({ testTimeout: 180_000 });
-import { execFileSync } from 'node:child_process';
+import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -102,10 +102,6 @@ const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-js.yml');
 const FIXTURES = resolve(REPO_ROOT, 'mcp', 'test', 'fixtures', 'bugfix-js');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult {
@@ -138,7 +134,7 @@ function run(dir: string): SemgrepRun {
     return scan(RULES, dir, work);
   } finally {
     // Removed in `finally`, so it goes even when Semgrep throws — a dead
-    // registry pack exits non-zero and `execFileSync` raises. Every call
+    // registry pack exits non-zero and `semgrepStdout` raises. Every call
     // used to leak its directory: 402 of them had accumulated under the OS
     // temp dir by the time this was noticed. `rmDir` rather than a bare
     // `rmSync` because Semgrep can still hold the copy open on Windows —
@@ -149,11 +145,7 @@ function run(dir: string): SemgrepRun {
 
 function scan(config: string, dir: string, work: string): SemgrepRun {
   cpSync(dir, work, { recursive: true });
-  const out = execFileSync(
-    'semgrep',
-    ['--config', config, '--json', '--quiet', '--no-git-ignore', work],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  );
+  const out = semgrepStdout(['--config', config, '--json', '--quiet', '--no-git-ignore', work]);
   const parsed: unknown = JSON.parse(out);
   const results = (parsed as { results?: unknown[] }).results ?? [];
   const scanned = (parsed as { paths?: { scanned?: unknown[] } }).paths?.scanned ?? [];

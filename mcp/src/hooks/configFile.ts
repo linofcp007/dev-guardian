@@ -35,30 +35,117 @@
  * leading UTF-8 byte-order mark (PowerShell 5 writes one) is stripped before
  * parsing.
  *
+ * ## A link to the network, refused before anything is opened
+ *
+ * Judging the descriptor cannot help when the OPEN is what hangs. A Windows
+ * link — the file itself, or `.guardian` as a directory link — to
+ * `\\<unreachable host>\share\…` blocks `openSync` for minutes (~136 s was
+ * measured), far past the 15 s the hook has. So when the caller names the
+ * directory the file lives under (`under`: the project for `.guardian/…`, the
+ * home directory for `~/.config/dev-guardian/hooks.json`), every path
+ * component below it is walked first with `lstat` and `readlink` only —
+ * neither follows a link, so no link target is ever touched — resolving each
+ * local link hop by hop, and the file is refused (`remote-link`) when any link
+ * on the way points at a UNC or device-namespace path (`\\…`, `//…`, `\\?\…`,
+ * `\\.\…`). Covered: the file, `.guardian`, `.config`, `dev-guardian`, and a
+ * chain of local links ending in such a target. Not covered: the directory
+ * named by `under` itself and its ancestors (the user's own layout), and a
+ * local path the OS itself redirects (a mapped drive letter, a DFS mount).
+ *
  * Pure `node:` built-ins, no other import: the hook dispatcher loads the
  * compiled copy from `mcp/dist/hooks/` in an install with no `node_modules`.
  */
 
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
+import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 /** The largest hook configuration file the hooks will read. */
 export const MAX_HOOK_CONFIG_BYTES = 64 * 1024;
+
+/** Why an existing path was not read. */
+export type RefusalReason = 'not-a-regular-file' | 'too-large' | 'unreadable' | 'remote-link';
 
 export type SmallFileRead =
   | { status: 'absent' }
   | { status: 'ok'; value: unknown }
   /** A small regular file whose content is not JSON. */
   | { status: 'invalid' }
-  /** A path that exists but was not read: not a regular file, or too large. */
-  | { status: 'refused'; reason: 'not-a-regular-file' | 'too-large' | 'unreadable' };
+  /** A path that exists but was not read: not a regular file, too large, or reached through a network link. */
+  | { status: 'refused'; reason: RefusalReason };
 
 type TextRead =
   | { status: 'absent' }
   | { status: 'ok'; text: string }
-  | { status: 'refused'; reason: 'not-a-regular-file' | 'too-large' | 'unreadable' };
+  | { status: 'refused'; reason: RefusalReason };
 
 /** `O_NONBLOCK` where the platform has it; 0 on Windows, where it is undefined. */
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+
+/** Link hops followed before a path is refused as a loop (Linux's own limit is 40). */
+const MAX_LINK_HOPS = 32;
+
+/**
+ * A link target that leaves the local filesystem: a UNC path (`\\host\share`,
+ * `//host/share`) or the Win32 device namespace (`\\?\…`, `\\.\…`), and the NT
+ * object-manager spelling (`\??\…`). Opening any of them may wait on the
+ * network, or on a device, for longer than the hook may take.
+ */
+export function isRemoteOrDeviceTarget(target: string): boolean {
+  return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
+}
+
+export type LinkWalk = { ok: true } | { ok: false; reason: 'remote-link' | 'unreadable'; at: string };
+
+/**
+ * Walks `path`'s components below `under` with `lstat` and `readlink` only —
+ * never opening, stat-ing or otherwise following a link — and says whether any
+ * link on the way (a local link's own target included, hop by hop) points off
+ * the local filesystem. `path` outside `under` is not walked (`ok`). A
+ * component that does not exist ends the walk (`ok`): the open that follows
+ * will report it. More than {@link MAX_LINK_HOPS} links is a loop
+ * (`unreadable`). See the module doc for what this does and does not cover.
+ */
+export function walkLinksUnder(under: string, path: string): LinkWalk {
+  const rel = relative(resolve(under), resolve(path));
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return { ok: true };
+  let current = resolve(under);
+  const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
+  let hops = 0;
+  for (let part = queue.shift(); part !== undefined; part = queue.shift()) {
+    if (part === '.') continue;
+    if (part === '..') {
+      current = resolve(current, '..');
+      continue;
+    }
+    const next = join(current, part);
+    let isLink: boolean;
+    try {
+      isLink = lstatSync(next).isSymbolicLink();
+    } catch {
+      return { ok: true };
+    }
+    if (!isLink) {
+      current = next;
+      continue;
+    }
+    hops += 1;
+    if (hops > MAX_LINK_HOPS) return { ok: false, reason: 'unreadable', at: next };
+    let target: string;
+    try {
+      target = readlinkSync(next);
+    } catch {
+      return { ok: false, reason: 'unreadable', at: next };
+    }
+    if (isRemoteOrDeviceTarget(target)) return { ok: false, reason: 'remote-link', at: next };
+    // Continue from the link's target, itself walked component by component
+    // from its root: an intermediate component of it may be a link too.
+    const resolved = resolve(current, target);
+    const root = parse(resolved).root;
+    queue.unshift(...resolved.slice(root.length).split(/[\\/]+/).filter((p) => p.length > 0));
+    current = root;
+  }
+  return { ok: true };
+}
 
 function readText(path: string, maxBytes: number): TextRead {
   let fd: number;
@@ -99,8 +186,20 @@ function readText(path: string, maxBytes: number): TextRead {
   }
 }
 
-/** A small JSON file, parsed — or why it was not. See the module doc. */
-export function readSmallJsonFile(path: string, maxBytes: number = MAX_HOOK_CONFIG_BYTES): SmallFileRead {
+/**
+ * A small JSON file, parsed — or why it was not. With `under`, the path's
+ * components below that directory are walked for a network link first
+ * ({@link walkLinksUnder}); see the module doc.
+ */
+export function readSmallJsonFile(
+  path: string,
+  maxBytes: number = MAX_HOOK_CONFIG_BYTES,
+  under?: string,
+): SmallFileRead {
+  if (under !== undefined) {
+    const walk = walkLinksUnder(under, path);
+    if (!walk.ok) return { status: 'refused', reason: walk.reason };
+  }
   const r = readText(path, maxBytes);
   if (r.status !== 'ok') return r;
   try {
@@ -110,8 +209,12 @@ export function readSmallJsonFile(path: string, maxBytes: number = MAX_HOOK_CONF
   }
 }
 
-/** A small text file's content, or `undefined` for anything else. */
-export function readSmallTextFile(path: string, maxBytes: number): string | undefined {
+/**
+ * A small text file's content, or `undefined` for anything else. `under`
+ * works as in {@link readSmallJsonFile}.
+ */
+export function readSmallTextFile(path: string, maxBytes: number, under?: string): string | undefined {
+  if (under !== undefined && !walkLinksUnder(under, path).ok) return undefined;
   const r = readText(path, maxBytes);
   return r.status === 'ok' ? r.text : undefined;
 }

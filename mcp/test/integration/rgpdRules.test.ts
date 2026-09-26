@@ -27,7 +27,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // Real, synchronous `semgrep` calls are not bounded by vitest's default
 // testTimeout; see baseRules.test.ts.
 vi.setConfig({ testTimeout: 180_000 });
-import { execFileSync } from 'node:child_process';
+import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,10 +42,6 @@ const FIXTURES = resolve(REPO_ROOT, 'mcp', 'test', 'fixtures', 'rgpd');
 const TEMPLATES = resolve(REPO_ROOT, 'configs', 'compliance', 'cookie-banner');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult {
@@ -64,11 +60,7 @@ interface SemgrepRun {
 function run(config: string, dir: string): SemgrepRun {
   const work = makeTempDir('guardian-rgpd-');
   cpSync(dir, work, { recursive: true });
-  const out = execFileSync(
-    'semgrep',
-    ['--config', config, '--json', '--quiet', '--no-git-ignore', '--metrics=off', work],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  );
+  const out = semgrepStdout(['--config', config, '--json', '--quiet', '--no-git-ignore', '--metrics=off', work]);
   const parsed = JSON.parse(out) as { results?: unknown[]; errors?: unknown[]; paths?: { scanned?: unknown[] } };
   return {
     rows: (parsed.results ?? []) as SemgrepResult[],

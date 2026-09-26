@@ -31,7 +31,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
@@ -108,21 +108,32 @@ async function readStdin() {
 /**
  * How a hook configuration file is read: `readSmallJsonFile` from
  * `mcp/dist/hooks/configFile.js`, loaded in `main()` by `loadConfigReader`.
- * It stats the path first (following a link to its target) and reads only a
- * regular file of at most 64 KiB, with a leading byte-order mark stripped.
- * The `existsSync` + `readFileSync` it replaced read whatever was there: a
- * FIFO or a link to `/dev/zero` at `.guardian/hooks.config.json` blocked the
- * hook until Claude Code killed it at 15 s — and the tool call then ran
- * unguarded (Task 23 fix round 2, N1). Until it is loaded, and if it cannot
- * be (no built `mcp/dist`), every file reads as absent: the protective
- * defaults.
+ * Given the directory the file lives under (the project, or the home
+ * directory for the user-level file), it first walks the path's components
+ * below it with `lstat` + `readlink` — never touching a link's target — and
+ * refuses a file reached through a link to a UNC or device path, whose open
+ * can wait minutes on the network. It then opens the path (a link is
+ * followed; non-blocking on POSIX, so a FIFO opens at once), judges what it
+ * OPENED with `fstat`, and reads only a regular file of at most 64 KiB, with
+ * a leading byte-order mark stripped. The `existsSync` + `readFileSync` it
+ * replaced read whatever was there: a FIFO or a link to `/dev/zero` at
+ * `.guardian/hooks.config.json` blocked the hook until Claude Code killed it
+ * at 15 s — and the tool call then ran unguarded (Task 23 fix round 2, N1).
+ * Until it is loaded, and if it cannot be (no built `mcp/dist`), every file
+ * reads as absent: the protective defaults.
  */
 let readSmallJsonFile = () => ({ status: 'absent' });
+/** `walkLinksUnder` from the same module — see `handleSessionStart`. */
+let walkLinksUnder = () => ({ ok: true });
+/** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
+let readSmallTextFile = () => undefined;
 
 async function loadConfigReader() {
   try {
     const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
+    if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
+    if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -132,6 +143,7 @@ const UNREAD_REASON = {
   'not-a-regular-file': 'not a regular file',
   'too-large': 'larger than 64 KiB',
   unreadable: 'unreadable',
+  'remote-link': 'reached through a link to a network or device path',
 };
 
 function isPlainObject(value) {
@@ -141,10 +153,11 @@ function isPlainObject(value) {
 /**
  * The parsed JSON at `path`, or `undefined`. When `label` is given, a file
  * that exists but was refused or is not JSON is recorded in `unread`, which
- * SessionStart reports.
+ * SessionStart reports. `under` is the directory whose components below it
+ * are checked for a network link first (see `readSmallJsonFile` above).
  */
-function readJsonFile(path, label, unread) {
-  const r = readSmallJsonFile(path);
+function readJsonFile(path, label, unread, under) {
+  const r = readSmallJsonFile(path, undefined, under);
   if (r.status === 'ok') return r.value;
   if (label !== undefined && unread !== undefined) {
     if (r.status === 'refused') unread.push(`${label} was not read (${UNREAD_REASON[r.reason] ?? r.reason})`);
@@ -177,10 +190,10 @@ function userConfigPath() {
 /**
  * Project config (`.guardian/hooks.config.json`) may only make the protective
  * hooks STRICTER, never weaker. A project file is something the assistant
- * itself can write — the Write/Edit guard below refuses it, but a shell
- * command (`echo … > .guardian/hooks.config.json`) is not a Write — so every
- * setting that could switch a protective hook off is ignored when it comes
- * from there. The earlier version stripped only `"bash":{"block":false}`, and
+ * itself can write — the Write/Edit guard below refuses it, and the shell
+ * guard refuses the shell writes it can see, but a write made inside another
+ * program (`node -e`, `python -c`) is seen by neither — so every setting that
+ * could switch a protective hook off is ignored when it comes from there. The earlier version stripped only `"bash":{"block":false}`, and
  * `{"enabled": false}` in the same file still switched off the shell guard,
  * install vetting and the config write guard, even over
  * `GUARDIAN_HOOKS_BASH_BLOCK=1` (Task 23 fix round 1, C1).
@@ -232,9 +245,19 @@ function projectOverrides(projectFile) {
   return { overrides: out, ignored };
 }
 
+/** Whether the user-level config itself switches the secret block on. */
+function userEnablesSecretBlock(userFile) {
+  return isPlainObject(userFile.secrets) && userFile.secrets.block === true;
+}
+
 function loadConfig(cwd, unread) {
-  const projectRaw = readJsonFile(join(cwd, '.guardian', 'hooks.config.json'), '.guardian/hooks.config.json', unread);
-  const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread);
+  const projectRaw = readJsonFile(
+    join(cwd, '.guardian', 'hooks.config.json'),
+    '.guardian/hooks.config.json',
+    unread,
+    cwd,
+  );
+  const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread, homedir());
   const projectFile = isPlainObject(projectRaw) ? projectRaw : {};
   const userFile = isPlainObject(userRaw) ? userRaw : {};
   const { overrides: project, ignored } = projectOverrides(projectFile);
@@ -247,6 +270,15 @@ function loadConfig(cwd, unread) {
     secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...(userFile.secrets ?? {}) },
     bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...(userFile.bash ?? {}) },
     ignorePaths: userFile.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    // The paths the opt-in secret BLOCK skips. A project's `ignorePaths` is
+    // advisory — it narrows the warning — and once also exempted paths from a
+    // block the USER had enabled: `"ignorePaths": ["/"]` in a project file
+    // switched that block off (final review M4). A user-enabled block now
+    // honours only the user's own list, or the defaults; a block the project
+    // itself enabled may still be narrowed by the same project's list.
+    blockIgnorePaths:
+      userFile.ignorePaths ??
+      (userEnablesSecretBlock(userFile) ? DEFAULT_CONFIG.ignorePaths : (project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths)),
     ignoredProjectSettings: ignored,
   };
 
@@ -259,7 +291,12 @@ function loadConfig(cwd, unread) {
 }
 
 function loadAllowlist(cwd, unread) {
-  const data = readJsonFile(join(cwd, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread);
+  const data = readJsonFile(
+    join(cwd, '.guardian', 'hooks-allowlist.json'),
+    '.guardian/hooks-allowlist.json',
+    unread,
+    cwd,
+  );
   if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
   if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
   return [];
@@ -431,7 +468,12 @@ function handleSessionStart(cwd, cfg) {
   }
   const lines = [];
   const guardianDir = join(cwd, '.guardian');
-  const initialized = existsSync(guardianDir);
+  const dbPath = join(guardianDir, 'guardian.db');
+  // `existsSync`/`statSync` FOLLOW a link: `.guardian` linked to an
+  // unreachable `\\host\share` would hold SessionStart past its timeout the
+  // way it once held the config read. Walked first, with lstat + readlink only.
+  const reachable = walkLinksUnder(cwd, dbPath).ok;
+  const initialized = reachable ? existsSync(guardianDir) : true;
   const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const status = git(cwd, ['status', '--porcelain']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
@@ -443,8 +485,7 @@ function handleSessionStart(cwd, cfg) {
   if (initialized) {
     let scanNote = '';
     try {
-      const dbPath = join(guardianDir, 'guardian.db');
-      if (existsSync(dbPath)) {
+      if (reachable && existsSync(dbPath)) {
         const ageMs = Date.now() - statSync(dbPath).mtimeMs;
         scanNote = ` Last scan activity: ${relativeTime(ageMs)}.`;
       }
@@ -562,9 +603,10 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
  * prevent — and by nothing a project file can set; only the user-level
  * switches that turn EVERY hook off (`"enabled": false` in the user config,
  * `GUARDIAN_HOOKS=off`) skip it, like everything else in `main()`. It sees
- * the Write/Edit/MultiEdit tools only, never a shell write. Emits and exits (via `emit`) when it applies;
- * returns normally (so the caller proceeds to the ordinary write handling)
- * when it does not.
+ * the Write/Edit/MultiEdit tools only; a shell write onto the same files is
+ * the shell guard's (`guard-config-shell-write` in `bashGuard.ts`). Emits and
+ * exits (via `emit`) when it applies; returns normally (so the caller
+ * proceeds to the ordinary write handling) when it does not.
  */
 function guardianConfigWriteGuard(toolName, input, cwd) {
   const rawPath = extractFilePath(toolName, input);
@@ -577,6 +619,73 @@ function guardianConfigWriteGuard(toolName, input, cwd) {
   });
 }
 
+/** The largest Claude Code settings file read to judge an edit of it. */
+const SETTINGS_MAX_BYTES = 1024 * 1024;
+
+/** The directory whose components are walked before reading `abs` (see `readSmallJsonFile`). */
+function walkRootFor(abs, cwd) {
+  for (const root of [cwd, homedir()]) {
+    const rel = relative(root, abs);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return root;
+  }
+  return undefined;
+}
+
+/**
+ * Refuses a Write/Edit/MultiEdit of Claude Code's own settings
+ * (`.claude/settings.json` / `settings.local.json`, project or user level)
+ * whose RESULT switches dev-guardian's hooks off — `"disableAllHooks": true`,
+ * or an `env` entry `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`
+ * or `GUARDIAN_PKG_VET=0` — that the file did not already set (final review
+ * M5). Every other edit of those files (permissions, other env vars, other
+ * hooks) passes: agents make them legitimately. The new content is the Write's
+ * `content`, or the Edit/MultiEdit applied to the file on disk; when that
+ * cannot be reproduced, the edit's own strings are compared instead. Emits and
+ * exits when it applies; any failure lets the call through (fail-open).
+ */
+async function claudeSettingsWriteGuard(toolName, input, cwd) {
+  const rawPath = extractFilePath(toolName, input);
+  // Cheap pre-check, so an ordinary edit never pays for the module import.
+  if (!rawPath || !/settings(?:\.local)?\.json$/i.test(rawPath)) return;
+  let added = [];
+  try {
+    const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
+    const abs = resolve(cwd, rawPath);
+    if (!guard.isClaudeSettingsPath(abs)) return;
+    const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd));
+    if (toolName === 'Write') {
+      if (typeof input.content !== 'string') return;
+      added = guard.newlyLoosened(before, input.content);
+    } else {
+      const edits = (toolName === 'Edit' ? [input] : Array.isArray(input.edits) ? input.edits : []).filter(
+        (e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string',
+      );
+      let after = before;
+      for (const e of edits) {
+        if (after === undefined) break;
+        after = guard.applyEdit(after, e.old_string, e.new_string, e.replace_all === true);
+      }
+      added =
+        after !== undefined
+          ? guard.newlyLoosened(before, after)
+          : guard.newlyLoosened(
+              edits.map((e) => e.old_string).join('\n'),
+              edits.map((e) => e.new_string).join('\n'),
+            );
+    }
+  } catch (err) {
+    debug(`settings guard skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  if (added.length === 0) return;
+  emit('PreToolUse', {
+    permissionDecision: 'deny',
+    permissionDecisionReason:
+      `dev-guardian: this change to Claude Code's settings would switch the guardrail hooks off (${added.join(', ')}). ` +
+      'Ask the user to make it themselves — an assistant is not allowed to turn its own guardrails off.',
+  });
+}
+
 async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
   // Blocking on write is opt-in (secrets.block). Default path does nothing here
   // — PostToolUse already warns.
@@ -586,7 +695,8 @@ async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
 
   const rawPath = extractFilePath(toolName, input);
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
-  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.ignorePaths))) noop();
+  // `blockIgnorePaths`, not `ignorePaths`: see `loadConfig`.
+  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.blockIgnorePaths))) noop();
 
   const { scanForSecrets } = await loadDetectors();
   // Block only on unambiguous, high-confidence provider tokens.
@@ -644,6 +754,7 @@ async function main() {
       }
       if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
         guardianConfigWriteGuard(toolName, input, cwd); // exits via emit() if it applies
+        await claudeSettingsWriteGuard(toolName, input, cwd); // likewise
       }
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
         return handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist);

@@ -16,6 +16,9 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
+import { detectOs } from '../../src/platform/osDetect.js';
+import { candidatesFor } from '../../src/platform/shellProbe.js';
+import { isWslLauncher, resolveExecutable } from '../helpers/resolveExecutable.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
@@ -23,6 +26,37 @@ const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 const ACTIONLINT_INSTALLED = await isInstalled('actionlint');
 const ZIZMOR_INSTALLED = await isInstalled('zizmor');
+
+/**
+ * A bash that can actually run a script, chosen the way the server chooses one
+ * (`platform/shellProbe.ts`): Git Bash first on Windows, then `bash` on PATH —
+ * never WSL, whose Linux view of the filesystem cannot see these Windows temp
+ * paths. From PowerShell, bare `bash` is `C:\Windows\System32\bash.exe`, the
+ * WSL launcher, which with no distro installed fails every script: the five
+ * probe tests below used to fail there for a reason that had nothing to do with
+ * the probe. `null` when no candidate runs `bash -c 'exit 0'` — the tests that
+ * need it are then skipped, visibly, with that reason in their name.
+ *
+ * Each candidate is resolved to an ABSOLUTE path first, and that path is both
+ * probed and later spawned: a bare name can resolve to a different binary the
+ * second time (the WSL launcher in System32, ahead of Git's `bin` on PATH), so
+ * probing `bash` and spawning `bash` could test one program and run another.
+ * A candidate that resolves to the WSL launcher is skipped outright.
+ */
+const PROBE_BASH: string | null = (() => {
+  for (const candidate of candidatesFor(detectOs())) {
+    if (candidate.needs_wsl_path_translate) continue;
+    const abs = resolveExecutable(candidate.command);
+    if (abs === null || (process.platform === 'win32' && isWslLauncher(abs))) continue;
+    const r = spawnSync(abs, [...candidate.args_prefix, '-c', 'exit 0'], {
+      stdio: 'ignore',
+      timeout: 10_000,
+    });
+    if (r.error === undefined && r.status === 0) return abs;
+  }
+  return null;
+})();
+const NO_BASH_REASON = "skipped: no bash here can run `bash -c 'exit 0'` (Git Bash absent; bash on PATH is the WSL stub)";
 
 const tempDirs: string[] = [];
 function makeProject(): string {
@@ -379,7 +413,7 @@ describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (gi
   // correct. A string-matching test would not have caught this: the OLD
   // script's text still mentioned every extension. Only actually RUNNING
   // the extracted script against a real directory catches it.
-  describe('github: the .NET probe script, actually executed against real directories', () => {
+  describe.skipIf(PROBE_BASH === null)(`github: the .NET probe script, actually executed against real directories${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
     function extractProbeScript(project: string): string {
       const doc = parseYaml(renderedBody(project, 'github')) as {
         jobs: Record<string, { steps: Array<{ id?: string; run?: string }> }>;
@@ -394,7 +428,9 @@ describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (gi
       for (const f of files) writeFileSync(join(project, f), '', 'utf8');
       const script = extractProbeScript(project);
       const outputFile = join(project, '.github_output_test');
-      const result = spawnSync('bash', ['-c', script], {
+      // The block is skipped when PROBE_BASH is null; never fall back to a bare `bash`.
+      if (PROBE_BASH === null) throw new Error(NO_BASH_REASON);
+      const result = spawnSync(PROBE_BASH, ['-c', script], {
         cwd: project,
         env: { ...process.env, GITHUB_OUTPUT: outputFile },
         encoding: 'utf8',

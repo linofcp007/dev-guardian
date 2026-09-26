@@ -15,7 +15,13 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MAX_HOOK_CONFIG_BYTES, readSmallJsonFile, readSmallTextFile } from '../../../src/hooks/configFile.js';
+import {
+  MAX_HOOK_CONFIG_BYTES,
+  isRemoteOrDeviceTarget,
+  readSmallJsonFile,
+  readSmallTextFile,
+  walkLinksUnder,
+} from '../../../src/hooks/configFile.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 
 const POSIX = process.platform !== 'win32';
@@ -72,24 +78,25 @@ function readInChild(
   path: string,
   iterations: number,
   timeoutMs: number,
+  under?: string,
 ): Promise<{ timedOut: boolean; code: number | null; counts: Record<string, number>; readMs: number }> {
   const script = join(dir, 'reader.mjs');
   const moduleUrl = pathToFileURL(resolve(MCP_ROOT, 'src', 'hooks', 'configFile.ts')).href;
   writeFileSync(
     script,
     `import { readSmallJsonFile } from ${JSON.stringify(moduleUrl)};\n` +
-      'const [path, n] = process.argv.slice(2);\n' +
+      'const [path, n, under] = process.argv.slice(2);\n' +
       'const counts = {};\n' +
       'const t0 = Date.now();\n' +
       'for (let i = 0; i < Number(n); i++) {\n' +
-      '  const r = readSmallJsonFile(path);\n' +
+      '  const r = readSmallJsonFile(path, undefined, under || undefined);\n' +
       "  const key = r.status === 'refused' ? `refused:${r.reason}` : r.status;\n" +
       '  counts[key] = (counts[key] ?? 0) + 1;\n' +
       '}\n' +
       'process.stdout.write(JSON.stringify({ counts, readMs: Date.now() - t0 }));\n',
   );
   return new Promise((done) => {
-    const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, path, String(iterations)], {
+    const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, path, String(iterations), under ?? ''], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -166,7 +173,7 @@ describe('readSmallJsonFile', () => {
     expect(readSmallJsonFile(p)).toEqual({ status: 'invalid' });
   });
 
-  it.skipIf(!POSIX)('a FIFO is refused at once, never opened (POSIX only: Windows has no FIFOs)', () => {
+  it.skipIf(!POSIX)('a FIFO is opened non-blocking and refused at once (POSIX only: Windows has no FIFOs)', () => {
     const p = join(dir, 'hooks.config.json');
     const made = spawnSync('mkfifo', [p]);
     expect(made.status).toBe(0);
@@ -203,7 +210,7 @@ describe('readSmallJsonFile', () => {
 // the path (non-blocking where the OS has O_NONBLOCK), fstat's what it
 // OPENED, and reads at most cap + 1 bytes from that descriptor.
 describe('readSmallJsonFile — what it opened, not what the path said', () => {
-  it.skipIf(!CAN_SYMLINK)('a symlink to a regular file over the cap is refused as too large (skipped: no symlink rights)', () => {
+  it.skipIf(!CAN_SYMLINK)('a symlink to a regular file over the cap is refused as too large (needs symlink rights; skipped without them)', () => {
     const big = join(dir, 'big.json');
     writeFileSync(big, `{"pad":"${'x'.repeat(MAX_HOOK_CONFIG_BYTES)}"}`);
     const link = join(dir, 'hooks.config.json');
@@ -277,12 +284,115 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
           (k) => !['ok', 'absent', 'refused:not-a-regular-file'].includes(k),
         );
         expect(unexpected).toEqual([]);
+        // The swap really happened: some reads met the FIFO or /dev/zero. A
+        // swapper that never ran would pass every assertion above vacuously.
+        expect(r.counts['refused:not-a-regular-file'] ?? 0).toBeGreaterThan(0);
       } finally {
         swapper.kill('SIGKILL');
       }
     },
     60_000,
   );
+});
+
+// Final review I12: a Windows link to `\\<unreachable host>\…` — the file
+// itself, or `.guardian` as a directory link — made `openSync` wait ~136 s,
+// far past the hook's 15 s. With `under`, the path's components below that
+// directory are walked with lstat + readlink before anything is opened.
+// Targets use 192.0.2.1 (TEST-NET-1, never routed): with the walk, nothing is
+// ever sent there; without it, the child read below is what hangs, and its
+// 45 s kill turns that into a failure instead of a stuck worker.
+describe('readSmallJsonFile — a link to the network is refused before anything is opened (I12)', () => {
+  const UNC = POSIX ? '//192.0.2.1/share' : '\\\\192.0.2.1\\share';
+  const DEVICE = POSIX ? '//./pipe/dev-guardian-x' : '\\\\.\\pipe\\dev-guardian-x';
+  const link = (target: string, path: string, type: 'file' | 'dir'): void => {
+    symlinkSync(target, path, type);
+  };
+
+  it.skipIf(!CAN_SYMLINK)(
+    'a hooks.config.json linked to a UNC path is refused as remote-link, at once (needs symlink rights; skipped without them)',
+    async () => {
+      mkdirSync(join(dir, '.guardian'));
+      const cfg = join(dir, '.guardian', 'hooks.config.json');
+      link(`${UNC}${POSIX ? '/' : '\\'}hooks.json`, cfg, 'file');
+      const r = await readInChild(cfg, 1, 45_000, dir);
+      expect(r.timedOut).toBe(false);
+      expect(r.counts).toEqual({ 'refused:remote-link': 1 });
+      expect(r.readMs).toBeLessThan(2000);
+    },
+    60_000,
+  );
+
+  it.skipIf(!CAN_SYMLINK)(
+    '.guardian as a directory link to a UNC path is refused (needs symlink rights; skipped without them)',
+    async () => {
+      link(UNC, join(dir, '.guardian'), 'dir');
+      const r = await readInChild(join(dir, '.guardian', 'hooks.config.json'), 1, 45_000, dir);
+      expect(r.timedOut).toBe(false);
+      expect(r.counts).toEqual({ 'refused:remote-link': 1 });
+      expect(r.readMs).toBeLessThan(2000);
+    },
+    60_000,
+  );
+
+  it.skipIf(!CAN_SYMLINK)(
+    'a chain of local links ending at a UNC path is refused too (needs symlink rights; skipped without them)',
+    async () => {
+      link(UNC, join(dir, 'hop'), 'dir');
+      link(join(dir, 'hop'), join(dir, '.guardian'), 'dir');
+      const r = await readInChild(join(dir, '.guardian', 'hooks.config.json'), 1, 45_000, dir);
+      expect(r.timedOut).toBe(false);
+      expect(r.counts).toEqual({ 'refused:remote-link': 1 });
+    },
+    60_000,
+  );
+
+  it.skipIf(!CAN_SYMLINK)('a link into the device namespace is refused (needs symlink rights; skipped without them)', () => {
+    const cfg = join(dir, 'hooks.config.json');
+    link(DEVICE, cfg, 'file');
+    expect(readSmallJsonFile(cfg, undefined, dir)).toEqual({ status: 'refused', reason: 'remote-link' });
+  });
+
+  it.skipIf(!CAN_SYMLINK)('local links — absolute and relative, file and directory — are still followed and read (needs symlink rights; skipped without them)', () => {
+    mkdirSync(join(dir, 'real'));
+    writeFileSync(join(dir, 'real', 'hooks.config.json'), '{"secrets":{"block":true}}');
+    link(join(dir, 'real'), join(dir, '.guardian'), 'dir');
+    expect(readSmallJsonFile(join(dir, '.guardian', 'hooks.config.json'), undefined, dir)).toEqual({
+      status: 'ok',
+      value: { secrets: { block: true } },
+    });
+    link(join('real', 'hooks.config.json'), join(dir, 'rel.json'), 'file');
+    expect(readSmallJsonFile(join(dir, 'rel.json'), undefined, dir)).toMatchObject({ status: 'ok' });
+  });
+
+  it.skipIf(!CAN_SYMLINK)('a link loop is refused as unreadable, not followed for ever (needs symlink rights; skipped without them)', () => {
+    link(join(dir, 'b'), join(dir, 'a'), 'dir');
+    link(join(dir, 'a'), join(dir, 'b'), 'dir');
+    expect(readSmallJsonFile(join(dir, 'a', 'hooks.config.json'), undefined, dir)).toEqual({
+      status: 'refused',
+      reason: 'unreadable',
+    });
+  });
+
+  it('a path outside `under`, or `under` itself, is not walked', () => {
+    expect(walkLinksUnder(join(dir, 'proj'), join(dir, 'elsewhere', 'x.json'))).toEqual({ ok: true });
+    expect(walkLinksUnder(dir, dir)).toEqual({ ok: true });
+    expect(walkLinksUnder(dir, join(dir, 'missing', 'x.json'))).toEqual({ ok: true });
+  });
+
+  it.each([
+    ['\\\\host\\share', true],
+    ['//host/share', true],
+    ['\\\\?\\C:\\x', true],
+    ['\\\\.\\pipe\\x', true],
+    ['\\??\\C:\\x', true],
+    ['C:\\x', false],
+    ['/etc/x', false],
+    ['../x', false],
+    ['x', false],
+  ] as const)('isRemoteOrDeviceTarget(%j) is %s', (target, expected) => {
+    expect(isRemoteOrDeviceTarget(target)).toBe(expected);
+  });
 });
 
 describe('readSmallTextFile', () => {

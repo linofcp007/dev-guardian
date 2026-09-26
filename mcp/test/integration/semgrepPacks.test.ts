@@ -57,11 +57,11 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // under heavy load) are never bounded by vitest's default testTimeout, so
 // this file opts into a longer one explicitly.
 vi.setConfig({ testTimeout: 180_000 });
-import { execFileSync, spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { copyFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runSemgrep, semgrepAvailable } from '../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -70,10 +70,6 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const PACK_DIR = resolve(REPO_ROOT, 'configs', 'semgrep');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 /**
@@ -213,11 +209,7 @@ describe('every Semgrep rule pack', () => {
     const problems = packs
       .map((file) => {
         const config = resolve(PACK_DIR, file);
-        const run = spawnSync(
-          'semgrep',
-          ['--validate', '--quiet', '--disable-version-check', '--config', config],
-          { encoding: 'utf8' },
-        );
+        const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', config]);
         if (run.status === 0 && run.stdout === '' && run.stderr === '') return '';
         return [
           `${file}: does not compile. exit=${String(run.status)}`,
@@ -279,11 +271,7 @@ describe('the encoding check can actually fail', () => {
 
   it.skipIf(!AVAILABLE)('and semgrep --validate refuses the poisoned pack', () => {
     const target = poisonedCopy();
-    const run = spawnSync(
-      'semgrep',
-      ['--validate', '--quiet', '--disable-version-check', '--config', target],
-      { encoding: 'utf8' },
-    );
+    const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target]);
     expect(run.status).not.toBe(0);
   });
 
@@ -295,11 +283,7 @@ describe('the encoding check can actually fail', () => {
     const target = poisonedCopy();
     const dir = makeTempDir('guardian-semgrep-poison-target-');
     writeFileSync(resolve(dir, 'Sample.java'), 'class Sample { void f() {} }\n', 'utf8');
-    const run = spawnSync(
-      'semgrep',
-      ['--config', target, '--json', '--quiet', '--no-git-ignore', dir],
-      { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-    );
+    const run = runSemgrep(['--config', target, '--json', '--quiet', '--no-git-ignore', dir]);
     expect(run.status).not.toBe(0);
     if (run.stdout !== '') {
       const parsed: unknown = JSON.parse(run.stdout);

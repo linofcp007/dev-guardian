@@ -114,8 +114,11 @@ export function isPublicRegistryUrl(ecosystem: PkgEcosystem, url: string): boole
 /**
  * The largest registry configuration file read. These reads run inside the
  * install hook's 15 s budget: a FIFO or a device where `.npmrc` belongs is
- * never opened, and an absurd file never read (Task 23 fix round 2, N1) —
- * see `hooks/configFile.ts`. A file refused here is simply not evidence.
+ * opened non-blocking and refused on its descriptor, never read, and an
+ * absurd file is never read (Task 23 fix round 2, N1) — see
+ * `hooks/configFile.ts`. Unlike the hook config files, these paths are not
+ * walked for a link to a network share first. A file refused here is simply
+ * not evidence.
  */
 const MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 
