@@ -11,11 +11,11 @@ Compliance pragmático para projetos web/SaaS: RGPD (utilizadores na UE), licen�
 
 ## 0. Estado atual (sempre primeiro)
 
-`compliance_check { project_path: "<project>" }` — scan de licenças do Trivy e deteção dos documentos de política na raiz do projeto (PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT). Devolve findings para licenças de risco e, em `extras`, `licenses_summary`, `risky_licenses` e `policy_documents_found`.
+`compliance_check { project_path: "<project>" }` — scan de licenças do Trivy, o pack RGPD do Semgrep (`${CLAUDE_PLUGIN_ROOT}/configs/semgrep/rgpd.yml`, offline) e deteção dos documentos de política na raiz do projeto (PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT). Devolve findings para licenças de risco e findings `compliance` do RGPD — subcategoria `rgpd-pii-in-logs` (NIF, NISS, Cartão de Cidadão, IBAN, telefone ou email em chamadas de log, em JS/TS, PHP, Python e C#) e `rgpd-tracker-without-consent` (GA4, Meta Pixel, Hotjar ou `youtube.com/embed` carregados no markup antes do consentimento; o Consent Mode v2 com `analytics_storage` a `denied` e o `fbq('consent', 'revoke')` não contam como achado, por decisão documentada, mas a correção recomendada é não carregar nada antes do consentimento) — e, em `extras`, `licenses_summary`, `risky_licenses` e `policy_documents_found`. Os findings RGPD são heurísticas pelo nome: confirma cada um no código antes de o reportar.
 
 ## RGPD — checklist técnica
 
-Para apps que tratam dados de utilizadores na UE. Nenhuma tool faz esta parte — é leitura do código, guiada pelo que se segue.
+Para apps que tratam dados de utilizadores na UE. O `compliance_check` cobre os logs (secção 4) e os rastreadores no markup (secção 2); o resto é leitura do código, guiada pelo que se segue.
 
 ### 1. Mapeamento de dados pessoais
 
@@ -45,7 +45,11 @@ Lista no formato:
 - Há scripts de terceiros (Google Analytics, Facebook Pixel)? O GA4 não é trivialmente conforme — considera Plausible / Umami / PostHog self-hosted.
 - Cookies essenciais (auth) com `HttpOnly; Secure; SameSite=Strict`.
 
-Templates em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/` (HTML+JS mínimo, sem dependências).
+Os findings `rgpd-tracker-without-consent` do `compliance_check` apontam os rastreadores carregados antes do consentimento. Template para a correção em `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/` — JS e CSS sem dependências, strings em pt-PT e EN, compatível com o Google Consent Mode v2 (tudo `denied` por omissão, `update` com a escolha do visitante), nada carregado antes do consentimento (o "modo básico"), rejeitar tão fácil como aceitar:
+
+- `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/banner.html` — página de exemplo com os três passos de integração (defaults do Consent Mode, rastreadores bloqueados com `type="text/plain"` e `data-src`, inclusão do banner);
+- `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/cookie-banner.js` — o banner (configuração em `window.dgCookieBanner`; evento `dg:consent`);
+- `${CLAUDE_PLUGIN_ROOT}/configs/compliance/cookie-banner/cookie-banner.css` — estilos, com aceitar e rejeitar em pé de igualdade.
 
 ### 3. Direitos do titular
 
@@ -53,7 +57,7 @@ A app suporta **acesso** (exportar os dados, por exemplo `/me/export`), **retifi
 
 ### 4. Logs e PII
 
-Os logs **não** guardam passwords (nem em hash), tokens completos (mascara: `tok_abc...xyz`), bodies de requests com PII, nem IPs completos sem necessidade (anonimiza: `192.168.1.0`). Uma regra Semgrep local ajuda — regista-a com `register_custom_rules { project_path: "<project>", paths: [".semgrep/log-pii.yml"] }` para o `scan_sast` a correr em cada scan:
+Os logs **não** guardam passwords (nem em hash), tokens completos (mascara: `tok_abc...xyz`), bodies de requests com PII, nem IPs completos sem necessidade (anonimiza: `192.168.1.0`). Os identificadores pessoais portugueses (NIF, NISS, Cartão de Cidadão, IBAN, telefone, email) em chamadas de log já são apanhados pelo `compliance_check` (subcategoria `rgpd-pii-in-logs`), pelo nome da variável ou do campo. Para o resto — passwords, tokens, outros nomes do teu domínio — uma regra Semgrep local ajuda; regista-a com `register_custom_rules { project_path: "<project>", paths: [".semgrep/log-pii.yml"] }` para o `scan_sast` a correr em cada scan:
 
 ```yaml
 rules:
@@ -74,7 +78,7 @@ rules:
 
 ### 6. Política de privacidade
 
-Se não existe (o `compliance_check` diz em `policy_documents_found`), parte do template `${CLAUDE_PLUGIN_ROOT}/configs/compliance/privacy-policy-template.md`: que dados recolhe, para quê, durante quanto tempo, com quem partilha, os direitos do titular e como exercê-los, o contacto do responsável. **Rever com um advogado antes de publicar.**
+Se não existe (o `compliance_check` diz em `policy_documents_found`), parte do template `${CLAUDE_PLUGIN_ROOT}/configs/compliance/privacy-policy-template.md` (pt-PT, com o conteúdo dos arts. 13.º e 14.º do RGPD e a CNPD como autoridade de controlo): que dados recolhe e de onde vêm, para quê e com que fundamento, durante quanto tempo, com quem partilha, transferências para fora do EEE, os direitos do titular e como exercê-los, o contacto do responsável. Cada `[[PREENCHER: …]]` é um marcador a substituir ou apagar, e cada `[[CONFIRMAR: …]]` uma afirmação ou um exemplo que só vale para alguns tratamentos (por exemplo, "Não vendemos dados pessoais.") — manter só se for verdade, adaptar ou apagar. Nenhum pode ser publicado (`grep -n "\[\[" politica.md`). **Rever com um advogado antes de publicar.**
 
 ## Licenças open-source
 

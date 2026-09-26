@@ -1,0 +1,12 @@
+<!-- An older static page, .htm extension. The single BUG fires
+     rgpd-tracker-meta-pixel-without-consent exactly once. -->
+<html>
+<head>
+<script src="https://connect.facebook.net/en_US/fbevents.js"></script>
+<script>
+  fbq("init", "555555555555555"); // BUG
+  fbq("track", "PageView");
+</script>
+</head>
+<body></body>
+</html>

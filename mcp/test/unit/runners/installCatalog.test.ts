@@ -81,6 +81,15 @@ describe('knownCompromise (GHSA-69fq-xp46-6x23)', () => {
   });
 });
 
+describe('semgrep catalog entry', () => {
+  // compliance_check runs the RGPD pack (configs/semgrep/rgpd.yml) with it.
+  it('names every tool that runs it, compliance_check included', () => {
+    expect(TOOL_CATALOG['semgrep']?.required_by).toEqual(
+      expect.arrayContaining(['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr', 'compliance_check']),
+    );
+  });
+});
+
 describe('hadolint catalog entry', () => {
   // scan_containers (task 15) runs hadolint on a Dockerfile when it is
   // installed; check_toolchain/install_toolchain need to know about it too.

@@ -288,6 +288,11 @@ describe('the rule inventory', () => {
       // `packs.ts` and the deletion note in the pack.
       'bugfix-cs': { rules: 11, withClauses: 10 },
       routes: { rules: 64, withClauses: 44 },
+      // 8 of 8: every RGPD rule has at least one guard or branch to ablate.
+      // The YouTube rule's only ablatable clause is its JSX consent guard;
+      // its data-src exclusion is structural (a space before `src`), not a
+      // clause. See the pack header.
+      rgpd: { rules: 8, withClauses: 8 },
     };
     for (const [name, want] of Object.entries(expected)) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
@@ -461,7 +466,7 @@ describe('roundTrip', () => {
     // The harness runs a live Semgrep control on top of this; the cheap
     // structural version belongs here so a serialiser regression fails in
     // milliseconds instead of six minutes into an ablation run.
-    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'routes']) {
+    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'routes', 'rgpd']) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
       const source = readFileSync(path, 'utf8');
       const before: unknown = parse(source);
@@ -473,7 +478,7 @@ describe('roundTrip', () => {
 
 describe('the shipped packs', () => {
   it('every enumerated clause either ablates cleanly or says why it cannot', () => {
-    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java']) {
+    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'rgpd']) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
       const source = readFileSync(path, 'utf8');
       const { clauses, ruleIds } = enumerateClauses(source);

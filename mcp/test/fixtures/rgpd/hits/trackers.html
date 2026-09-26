@@ -1,0 +1,67 @@
+<!doctype html>
+<!--
+  Trackers loaded on page load, before any consent. Every `BUG` fires its rule
+  exactly once. The near-misses beside them are shapes a guard must NOT
+  swallow: a consent function that has already closed, a script type that
+  still executes.
+-->
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <title>Loja</title>
+  <!-- BUG rgpd-tracker-ga4-without-consent: the stock gtag.js snippet -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-AAAA1111"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-AAAA1111');
+  </script>
+
+  <!-- BUG rgpd-tracker-ga4-without-consent: type="text/javascript" still executes -->
+  <script type="text/javascript" async
+          src="//www.googletagmanager.com/gtag/js?id=G-BBBB2222"></script>
+
+  <script>
+    // A consent function that has CLOSED before the pixel starts: the pixel
+    // below is not inside it.
+    function abrirBannerConsentimento() { document.body.classList.add('banner'); }
+
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+    n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+    document,'script','https://connect.facebook.net/pt_PT/fbevents.js');
+    fbq('init', '123456789012345'); // BUG rgpd-tracker-meta-pixel-without-consent
+    fbq('track', 'PageView');
+  </script>
+
+  <script>
+    // A function merely NAMED after consent is not a consent check.
+    function iniciarConsentimento() {
+      fbq('init', '222222222222222'); // BUG rgpd-tracker-meta-pixel-without-consent
+    }
+    // A NEGATED consent check starts the pixel exactly when there is none.
+    if (!temConsentimento('marketing')) {
+      fbq('init', '333333333333333'); // BUG rgpd-tracker-meta-pixel-without-consent
+    }
+  </script>
+
+  <script>
+    (function(h,o,t,j,a,r){
+      h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};
+      h._hjSettings={hjid:1234567,hjsv:6};
+      a=o.getElementsByTagName('head')[0];
+      r=o.createElement('script');r.async=1;
+      r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;
+      a.appendChild(r);
+    })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv='); // BUG rgpd-tracker-hotjar-without-consent
+  </script>
+</head>
+<body>
+  <!-- BUG rgpd-youtube-embed-without-nocookie -->
+  <iframe width="560" height="315"
+          src="https://www.youtube.com/embed/dQw4w9WgXcQ"
+          title="Video de apresentacao" allowfullscreen></iframe>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  Trackers a consent-management platform keeps blocked until the visitor
+  agrees. NOTHING here may fire. Each block names the guard that keeps it out.
+-->
+<html lang="pt-PT">
+<head>
+  <!-- type="text/plain": the browser neither fetches nor runs it (text/plain guard) -->
+  <script type="text/plain" data-category="analytics" async
+          src="https://www.googletagmanager.com/gtag/js?id=G-AAAA1111"></script>
+
+  <!-- the pixel inside a blocked inline script (text/plain guard) -->
+  <script type="text/plain" data-cookieconsent="marketing">
+    fbq('init', '123456789012345');
+    fbq('track', 'PageView');
+  </script>
+
+  <!-- Hotjar inside a blocked inline script (text/plain guard) -->
+  <script type='text/plain' data-category='analytics'>
+    (function(h,o,t,j,a,r){
+      h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};
+      h._hjSettings={hjid:1234567,hjsv:6};
+      a=o.getElementsByTagName('head')[0];
+      r=o.createElement('script');r.async=1;
+      r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;
+      a.appendChild(r);
+    })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');
+  </script>
+</head>
+<body>
+  <!-- privacy-enhanced mode: no cookies until the visitor plays the video -->
+  <iframe width="560" height="315"
+          src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ" title="Video"></iframe>
+  <!-- data-src: the CMP copies it to src only after consent -->
+  <iframe width="560" height="315" data-cookieconsent="marketing"
+          data-src="https://www.youtube.com/embed/dQw4w9WgXcQ" title="Video"></iframe>
+  <!-- a link is not an embed -->
+  <a href="https://www.youtube.com/embed/dQw4w9WgXcQ">Ver no YouTube</a>
+</body>
+</html>

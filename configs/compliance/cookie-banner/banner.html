@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  dev-guardian cookie banner — integration example (pt-PT page; set lang="en"
+  for the English strings). Open this file in a browser to try it.
+
+  Three steps, in this order, in every page:
+
+  1. In <head>, BEFORE any Google tag: declare Google Consent Mode v2 with
+     everything non-essential denied. Nothing below may come before it.
+  2. Write every tracker BLOCKED: <script type="text/plain"
+     data-consent-category="analytics|marketing">, with the URL in data-src for
+     an external script, and <iframe data-consent-category="marketing"
+     data-src="...">. The browser neither fetches nor runs a text/plain
+     script, and an iframe with no src loads nothing.
+  3. Load cookie-banner.css and cookie-banner.js. The script shows the banner,
+     sends gtag('consent', 'update', ...) with the visitor's choice, and turns
+     on only the blocked elements of the accepted categories — now and on
+     every later visit.
+
+  Then give visitors a way back: any element with data-cookie-preferences
+  reopens the choice (withdrawing must be as easy as giving, RGPD art. 7(3)).
+
+  Replace G-XXXXXXXXXX, PIXEL_ID and VIDEO_ID with your own. The page's own
+  tracker scan (configs/semgrep/rgpd.yml, run by compliance_check) finds
+  nothing here, and the test suite holds it to that.
+-->
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exemplo de banner de cookies</title>
+
+  <!-- Step 1: Consent Mode v2 defaults. Must be the first script on the page. -->
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('consent', 'default', {
+      'ad_storage': 'denied',
+      'ad_user_data': 'denied',
+      'ad_personalization': 'denied',
+      'analytics_storage': 'denied',
+      'functionality_storage': 'denied',
+      'personalization_storage': 'denied',
+      'security_storage': 'granted',
+      'wait_for_update': 500
+    });
+  </script>
+
+  <!-- Step 2: trackers, blocked until their category is accepted. -->
+  <script type="text/plain" data-consent-category="analytics" async
+          data-src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+  <script type="text/plain" data-consent-category="analytics">
+    gtag('js', new Date());
+    gtag('config', 'G-XXXXXXXXXX');
+  </script>
+
+  <script type="text/plain" data-consent-category="marketing">
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+    n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+    document,'script','https://connect.facebook.net/pt_PT/fbevents.js');
+    fbq('init', 'PIXEL_ID');
+    fbq('track', 'PageView');
+  </script>
+
+  <!-- Step 3: the banner. Configure it before the script loads. -->
+  <link rel="stylesheet" href="cookie-banner.css">
+  <script>
+    window.dgCookieBanner = {
+      policyUrl: '/politica-de-privacidade',
+      version: 1,
+      maxAgeDays: 180
+    };
+  </script>
+  <script src="cookie-banner.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Loja de exemplo</h1>
+    <p>Conteúdo da página.</p>
+
+    <!-- A video: privacy-enhanced domain, and still blocked until marketing
+         consent. The script puts a placeholder with an "allow" button in front
+         of it. -->
+    <iframe width="560" height="315" title="Vídeo de apresentação"
+            data-consent-category="marketing"
+            data-src="https://www.youtube-nocookie.com/embed/VIDEO_ID"
+            allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
+  </main>
+
+  <footer>
+    <a href="/politica-de-privacidade">Política de privacidade</a>
+    <button type="button" data-cookie-preferences>Preferências de cookies</button>
+  </footer>
+</body>
+</html>

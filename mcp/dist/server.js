@@ -49842,8 +49842,101 @@ function failDomain2(code, message3) {
 }
 
 // src/tools/complianceCheck.ts
-import { readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync24, readdirSync as readdirSync15, statSync as statSync10 } from "node:fs";
 import { join as join34 } from "node:path";
+function rgpdRulesPath() {
+  return join34(resolveConfigsDir(), "semgrep", "rgpd.yml");
+}
+function rgpdSubcategory(ruleId) {
+  const id = ruleId.split(".").pop() ?? ruleId;
+  if (id.startsWith("rgpd-pii-in-log-")) return "rgpd-pii-in-logs";
+  if (id.startsWith("rgpd-tracker-") || id.startsWith("rgpd-youtube-")) return "rgpd-tracker-without-consent";
+  return void 0;
+}
+var rgpdParser = {
+  name: semgrepParser.name,
+  parse(input, ctx) {
+    const out = semgrepParser.parse(input, ctx);
+    return {
+      findings: out.findings.map((f) => {
+        const subcategory = rgpdSubcategory(f.rule_id ?? "");
+        return subcategory === void 0 ? { ...f, category: "compliance" } : { ...f, category: "compliance", subcategory };
+      }),
+      cves: out.cves
+    };
+  }
+};
+function loadedRuleCount(raw) {
+  if (raw === null) return null;
+  let root;
+  try {
+    root = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const rules = getProp(getProp(root, "time"), "rules");
+  return Array.isArray(rules) ? rules.length : null;
+}
+async function runRgpdPack(ctx, reportDir, out) {
+  if (!await scannerAvailable("semgrep")) {
+    out.tools_run.push({ name: "semgrep-rgpd", status: "skipped", reason: "not_installed" });
+    out.missing_tools.push("semgrep");
+    return;
+  }
+  const pack = rgpdRulesPath();
+  if (!existsSync24(pack)) {
+    out.tools_run.push({ name: "semgrep-rgpd", status: "failed", reason: `RGPD rule pack not found at ${pack}` });
+    return;
+  }
+  const outFile = join34(reportDir, "rgpd.json");
+  const result = await runProcess({
+    command: "semgrep",
+    args: [
+      `--config=${pack}`,
+      "--metrics=off",
+      // Lists the rules that loaded (`time.rules`): the only way to tell a
+      // project with nothing to read from a pack that loaded nothing.
+      "--time",
+      ...semgrepExcludeArgs(ctx.exclusions),
+      "--json",
+      "--quiet",
+      "--output",
+      outFile,
+      ctx.projectPath
+    ],
+    cwd: ctx.projectPath,
+    // UTF-8 mode: see runners/semgrepReport.ts.
+    env: pythonUtf8Env(ctx.scriptEnv),
+    signal: ctx.signal,
+    onLog: ctx.onLog
+  });
+  const raw = readJsonSafe(outFile);
+  if (raw !== null) out.parser_inputs.push({ parser: rgpdParser, input: raw });
+  const check2 = checkSemgrepReport({ raw, exitCode: result.exitCode, outcome: result.outcome, targets: 1 });
+  if (check2.ok) {
+    out.tools_run.push({ name: "semgrep-rgpd", status: "ok" });
+    return;
+  }
+  const exitClean = result.outcome === "completed" || result.exitCode === 1;
+  if (exitClean && raw !== null && check2.scanned === 0 && check2.errors === 0) {
+    const loaded = loadedRuleCount(raw) ?? 0;
+    if (loaded > 0) {
+      out.tools_run.push({
+        name: "semgrep-rgpd",
+        status: "skipped",
+        reason: "not applicable: the RGPD pack loaded but found no file it reads here (JS/TS, PHP, Python, C#, and HTML/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars templates)"
+      });
+      return;
+    }
+    out.tools_run.push({
+      name: "semgrep-rgpd",
+      status: "failed",
+      reason: "semgrep scanned 0 files and loaded no rule from the RGPD pack \u2014 a pack that failed to load, not a clean result"
+    });
+    return;
+  }
+  out.tools_run.push({ name: "semgrep-rgpd", status: "failed", reason: check2.reason ?? "semgrep failed" });
+}
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
   { pattern: /^GPL-?[23]/i, severity: "high" },
@@ -49955,8 +50048,9 @@ function riskOrder(r) {
 registerToolModule(
   makeScanTool({
     name: "compliance_check",
-    title: "Compliance check (licenses + RGPD policy docs)",
-    description: "Run Trivy license scan and detect common policy documents (PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT) at the project root. Returns Findings for risky licenses and an `extras` payload with `licenses_summary`, `risky_licenses`, and `policy_documents_found`.",
+    title: "Compliance check (licenses + RGPD code rules + policy docs)",
+    // Under 1500 characters (test/unit/pluginSurface/descriptionLimits.test.ts).
+    description: 'Compliance scan of a project. (1) Trivy license scan: Findings for risky licenses, plus `licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cart\xE3o de Cidad\xE3o, IBAN, phone, email \u2014 matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# (subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars markup before consent \u2014 GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed (subcategory rgpd-tracker-without-consent). Consent guards: type="text/plain" scripts, a consent-checking block, JSX or template condition; Consent Mode v2 analytics_storage denied and fbq consent revoke are also accepted, as a documented legal judgement (the messages prescribe loading nothing before consent). Findings are category compliance, severity medium: name-based heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, or a Semgrep error (timeout, partial parse), lowers `coverage` \u2014 never a clean result; a project with no file the pack reads is not applicable (semgrep-rgpd skipped), not missing. Templates for the fixes: configs/compliance/cookie-banner/ and configs/compliance/privacy-policy-template.md.',
     scan_type: "compliance",
     category: "compliance",
     supportsAutoFix: false,
@@ -49964,6 +50058,8 @@ registerToolModule(
       project_path: ProjectPath,
       force: Force
     },
+    // The pack's content joins the cache key: an edited rgpd.yml is a new scan.
+    rulePacks: () => [rgpdRulesPath()],
     invoke: async (_input, ctx) => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "compliance");
       const tools_run = [];
@@ -50007,6 +50103,7 @@ registerToolModule(
         tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
         missing_tools.push("trivy");
       }
+      await runRgpdPack(ctx, reportDir, { tools_run, missing_tools, parser_inputs });
       const policy_documents_found = detectPolicyDocs(ctx.projectPath);
       tools_run.push({ name: "policy-docs", status: "ok" });
       return {
@@ -50026,7 +50123,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync24, readFileSync as readFileSync21, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync25, readFileSync as readFileSync21, statSync as statSync11 } from "node:fs";
 import { join as join35 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -50122,7 +50219,7 @@ async function handler2(input, ctx) {
       args: [projectPath, "-o", `${syftFormat}=${outFile}`, "--quiet"],
       cwd: projectPath
     });
-    if (result.outcome === "completed" && existsSync24(outFile)) {
+    if (result.outcome === "completed" && existsSync25(outFile)) {
       producedBy = "syft";
     }
   }
@@ -50135,7 +50232,7 @@ async function handler2(input, ctx) {
         args: ["fs", "--format", trivyFormat, "--output", outFile, "--quiet", projectPath],
         cwd: projectPath
       });
-      if (result.outcome === "completed" && existsSync24(outFile)) {
+      if (result.outcome === "completed" && existsSync25(outFile)) {
         producedBy = "trivy";
       }
     }
@@ -50201,11 +50298,11 @@ function failDomain3(code, message3) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync26, readdirSync as readdirSync17 } from "node:fs";
+import { existsSync as existsSync27, readdirSync as readdirSync17 } from "node:fs";
 import { join as join37 } from "node:path";
 
 // src/runners/stackDetect.ts
-import { existsSync as existsSync25, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
+import { existsSync as existsSync26, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
 import { join as join36 } from "node:path";
 var MAX_MANIFEST_DEPTH = 3;
 var MAX_DIRS_VISITED = 2e4;
@@ -50241,7 +50338,7 @@ function detectStack(projectPath) {
   const frameworks = unique(projects.flatMap((p) => p.frameworks)).sort();
   const hasTerraform = hasGlob(projectPath, /\.tf$/i);
   const hasKubernetes = detectKubernetes(projectPath);
-  const hasAnsible = existsSync25(join36(projectPath, "roles")) || existsSync25(join36(projectPath, "ansible.cfg"));
+  const hasAnsible = existsSync26(join36(projectPath, "roles")) || existsSync26(join36(projectPath, "ansible.cfg"));
   return {
     os: detectStackOs(),
     arch: detectStackArch(),
@@ -50249,13 +50346,13 @@ function detectStack(projectPath) {
     package_managers: packageManagers,
     frameworks,
     existing_tools: detectExistingTools(projectPath).sort(),
-    has_docker: existsSync25(join36(projectPath, "Dockerfile")),
+    has_docker: existsSync26(join36(projectPath, "Dockerfile")),
     has_compose: hasComposeFile(projectPath),
     has_terraform: hasTerraform,
     has_kubernetes: hasKubernetes,
     has_ansible: hasAnsible,
-    has_github_actions: existsSync25(join36(projectPath, ".github", "workflows")),
-    has_gitlab_ci: existsSync25(join36(projectPath, ".gitlab-ci.yml")),
+    has_github_actions: existsSync26(join36(projectPath, ".github", "workflows")),
+    has_gitlab_ci: existsSync26(join36(projectPath, ".gitlab-ci.yml")),
     has_iac: hasTerraform || hasKubernetes || hasAnsible,
     projects
   };
@@ -50268,9 +50365,9 @@ function detectStackOs() {
       return "windows";
     case "linux":
       if (isWsl()) return "wsl";
-      if (existsSync25("/etc/debian_version")) return "debian";
-      if (existsSync25("/etc/redhat-release")) return "rhel";
-      if (existsSync25("/etc/arch-release")) return "arch";
+      if (existsSync26("/etc/debian_version")) return "debian";
+      if (existsSync26("/etc/redhat-release")) return "rhel";
+      if (existsSync26("/etc/arch-release")) return "arch";
       return "linux";
     default:
       return "unknown";
@@ -50349,7 +50446,7 @@ function detectManifestsIn(dir) {
   const languages = [];
   const packageManagers = [];
   const frameworks = [];
-  const has = (rel2) => existsSync25(join36(dir, rel2));
+  const has = (rel2) => existsSync26(join36(dir, rel2));
   const read2 = (rel2) => readTextSafe(join36(dir, rel2));
   const pkgJsonText = read2("package.json");
   if (pkgJsonText !== null) {
@@ -50441,7 +50538,7 @@ function hasTopLevelExtension(dir, ext) {
   return readDirSafe(dir).some((e) => e.isFile() && e.name.toLowerCase().endsWith(ext));
 }
 function detectWordPress(dir) {
-  const has = (rel2) => existsSync25(join36(dir, rel2));
+  const has = (rel2) => existsSync26(join36(dir, rel2));
   let isWordPress = has("wp-config.php") || has("wp-config-sample.php") || has("wp-content");
   const styleCss = readTextSafe(join36(dir, "style.css"));
   if (styleCss !== null && /^\s*(?:\*\s*)?Theme Name:/im.test(styleCss)) isWordPress = true;
@@ -50469,13 +50566,13 @@ function firstTopLevelPluginHeaderText(dir) {
   return null;
 }
 function hasComposeFile(dir) {
-  return existsSync25(join36(dir, "docker-compose.yml")) || existsSync25(join36(dir, "compose.yml")) || existsSync25(join36(dir, "docker-compose.yaml"));
+  return existsSync26(join36(dir, "docker-compose.yml")) || existsSync26(join36(dir, "compose.yml")) || existsSync26(join36(dir, "docker-compose.yaml"));
 }
 function hasGlob(dir, pattern) {
   return readDirSafe(dir).some((e) => e.isFile() && pattern.test(e.name));
 }
 function detectKubernetes(dir) {
-  if (existsSync25(join36(dir, "k8s")) || existsSync25(join36(dir, "kubernetes"))) return true;
+  if (existsSync26(join36(dir, "k8s")) || existsSync26(join36(dir, "kubernetes"))) return true;
   for (const e of readDirSafe(dir)) {
     if (!e.isFile() || !/\.ya?ml$/i.test(e.name)) continue;
     const text = readTextSafe(join36(dir, e.name));
@@ -50484,7 +50581,7 @@ function detectKubernetes(dir) {
   return false;
 }
 function detectExistingTools(dir) {
-  const has = (rel2) => existsSync25(join36(dir, rel2));
+  const has = (rel2) => existsSync26(join36(dir, rel2));
   const contains = (rel2, needle) => (readTextSafe(join36(dir, rel2)) ?? "").includes(needle);
   const tools = [];
   if (has(".semgrep.yml") || has(join36(".semgrep", "semgrep.yml"))) tools.push("semgrep");
@@ -50549,11 +50646,11 @@ function enrichDotnet(snap, projectPath) {
     if (!arr) return [value];
     return arr.includes(value) ? arr : [...arr, value];
   };
-  const hasFile = (rel2) => existsSync26(join37(projectPath, rel2));
+  const hasFile = (rel2) => existsSync27(join37(projectPath, rel2));
   const anyMatching = (rel2, suffix) => {
     try {
       const target = rel2 === "" ? projectPath : join37(projectPath, rel2);
-      if (!existsSync26(target)) return false;
+      if (!existsSync27(target)) return false;
       return readdirSync17(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
@@ -50614,12 +50711,12 @@ function anyDeepMatching(root, suffix, maxDepth) {
 }
 
 // src/tools/initProject.ts
-import { existsSync as existsSync28 } from "node:fs";
+import { existsSync as existsSync29 } from "node:fs";
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { join as join39 } from "node:path";
 
 // src/configdrift/refresh.ts
-import { copyFileSync as copyFileSync2, existsSync as existsSync27, mkdirSync as mkdirSync6, writeFileSync as writeFileSync9, readFileSync as readFileSync23 } from "node:fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync28, mkdirSync as mkdirSync6, writeFileSync as writeFileSync9, readFileSync as readFileSync23 } from "node:fs";
 import { dirname as dirname16, join as join38 } from "node:path";
 function alongsideName(target, version2) {
   return `${target}.dev-guardian-${version2}.new`;
@@ -50641,7 +50738,7 @@ function refreshConfigs(input) {
     }
     const dstPath = join38(input.projectPath, file.target);
     const entry = findManifestEntry(manifest, file.target);
-    if (!existsSync27(dstPath)) {
+    if (!existsSync28(dstPath)) {
       plan.push({ ...ids(file), action: "create", reason: file.reason });
       if (!input.apply) continue;
       if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
@@ -50693,7 +50790,7 @@ function refreshConfigs(input) {
       }
       continue;
     }
-    if (entry.delivered_as !== void 0 && existsSync27(join38(input.projectPath, entry.delivered_as))) {
+    if (entry.delivered_as !== void 0 && existsSync28(join38(input.projectPath, entry.delivered_as))) {
       plan.push({
         ...ids(file),
         action: "pending_merge",
@@ -50802,7 +50899,7 @@ function deliverAlongside(args) {
   const newPath = join38(input.projectPath, relativeNew);
   const existing = findManifestEntry(manifest, file.target);
   const oursAlready = existing?.delivered_as === relativeNew;
-  if (existsSync27(newPath) && !oursAlready) {
+  if (existsSync28(newPath) && !oursAlready) {
     return {
       item: {
         ...ids(file),
@@ -50973,11 +51070,11 @@ async function handler4(input, ctx) {
     for (const p of proposals) {
       const src = join39(configsDir, p.source);
       const dst = join39(projectPath, p.target);
-      if (!existsSync28(src)) {
+      if (!existsSync29(src)) {
         failed.push({ ...p, error: `source missing: ${src}` });
         continue;
       }
-      if (existsSync28(dst)) {
+      if (existsSync29(dst)) {
         skipped2.push({ ...p, reason_skipped: "already_exists" });
         continue;
       }
@@ -51008,7 +51105,7 @@ async function handler4(input, ctx) {
   let initialStateLines = [];
   if (apply && ctx.shell) {
     const scriptPath = join39(ctx.scriptsDir, "scan", "initial-scan.sh");
-    if (existsSync28(scriptPath)) {
+    if (existsSync29(scriptPath)) {
       const r = await runShellScript({
         shell: ctx.shell,
         scriptPath,
@@ -51076,7 +51173,7 @@ function failDomain5(code, message3) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync29, mkdirSync as mkdirSync7, readdirSync as readdirSync18, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync30, mkdirSync as mkdirSync7, readdirSync as readdirSync18, writeFileSync as writeFileSync10 } from "node:fs";
 import { dirname as dirname17, join as join40 } from "node:path";
 var tool8 = {
   name: "observability_setup",
@@ -51106,7 +51203,7 @@ async function handler5(input, ctx) {
   if (apply) {
     for (const p of proposals) {
       const abs = join40(projectPath, p.target);
-      if (existsSync29(abs)) {
+      if (existsSync30(abs)) {
         skipped2.push({ ...p, reason_skipped: "already_exists" });
         continue;
       }
@@ -51149,15 +51246,15 @@ function inferStack(projectPath, ctx) {
     if (snap.languages?.includes("ruby")) return "ruby";
     if (snap.languages?.includes("csharp")) return "dotnet";
   }
-  if (existsSync29(join40(projectPath, "package.json"))) return "node";
-  if (existsSync29(join40(projectPath, "pyproject.toml")) || existsSync29(join40(projectPath, "requirements.txt")))
+  if (existsSync30(join40(projectPath, "package.json"))) return "node";
+  if (existsSync30(join40(projectPath, "pyproject.toml")) || existsSync30(join40(projectPath, "requirements.txt")))
     return "python";
-  if (existsSync29(join40(projectPath, "composer.json"))) return "php";
-  if (existsSync29(join40(projectPath, "go.mod"))) return "go";
-  if (existsSync29(join40(projectPath, "Cargo.toml"))) return "rust";
-  if (existsSync29(join40(projectPath, "pom.xml")) || existsSync29(join40(projectPath, "build.gradle")))
+  if (existsSync30(join40(projectPath, "composer.json"))) return "php";
+  if (existsSync30(join40(projectPath, "go.mod"))) return "go";
+  if (existsSync30(join40(projectPath, "Cargo.toml"))) return "rust";
+  if (existsSync30(join40(projectPath, "pom.xml")) || existsSync30(join40(projectPath, "build.gradle")))
     return "java";
-  if (existsSync29(join40(projectPath, "Gemfile"))) return "ruby";
+  if (existsSync30(join40(projectPath, "Gemfile"))) return "ruby";
   try {
     const entries2 = readdirSync18(projectPath);
     if (entries2.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
@@ -51441,7 +51538,7 @@ function failDomain6(code, message3) {
 }
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync30, readFileSync as readFileSync24, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync31, readFileSync as readFileSync24, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join41, relative as relative15 } from "node:path";
 import { randomUUID as randomUUID5 } from "node:crypto";
 var inputSchema3 = {
@@ -51516,7 +51613,7 @@ async function runLighthouse(opts) {
     // Lighthouse fetches a real page; cap higher than the default 10 min.
     timeoutMs: 5 * 6e4
   });
-  if (!existsSync30(outFile)) {
+  if (!existsSync31(outFile)) {
     return failDomain7(
       "scanner_failed",
       `Lighthouse did not produce a report. stderr: ${result.stderr.split(/\r?\n/)[0] ?? ""}`
@@ -51611,7 +51708,7 @@ async function runK6(opts) {
       "k6 CLI is not installed. Install from https://k6.io/docs/getting-started/installation/."
     );
   }
-  if (!existsSync30(opts.scriptPath)) {
+  if (!existsSync31(opts.scriptPath)) {
     return failDomain7("scanner_failed", `k6 script not found: ${opts.scriptPath}`);
   }
   const summaryFile = join41(opts.reportDir, "k6-summary.json");
@@ -51621,7 +51718,7 @@ async function runK6(opts) {
     cwd: opts.projectPath,
     timeoutMs: 30 * 6e4
   });
-  if (!existsSync30(summaryFile)) {
+  if (!existsSync31(summaryFile)) {
     writeFileSync11(summaryFile, result.stdout || "{}", "utf8");
   }
   const raw = readFileSync24(summaryFile, "utf8");
@@ -52061,8 +52158,10 @@ var RUN_NAMES = {
   scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
   dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
   dotnet_target_framework_check: scanner(),
-  // compliance_check.
+  // compliance_check: its policy-document walk, and the RGPD Semgrep pack
+  // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
   "policy-docs": scanner(),
+  "semgrep-rgpd": scanner("semgrep"),
   // scan_skill.
   "guardian-scanskill:patterns": scanner(SKILL_TOOL),
   "guardian-scanskill:yara": scanner(SKILL_TOOL),
@@ -52076,7 +52175,7 @@ var RUN_NAMES = {
   security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
   quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
   deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
-  compliance_check: scanner(...TRIVY_FS_KEYS),
+  compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
   scan_wordpress: scanner("semgrep", "gitleaks", ...TRIVY_FS_KEYS, "phpcs"),
   // security_scan_full: its own entry for a child that threw, answered an
   // error, or is not registered — the child wrote no bookkeeping of its own.
@@ -52904,7 +53003,7 @@ var TOOL_CATALOG = {
     name: "semgrep",
     version_floor: "1.0.0",
     probe: { command: "semgrep", args: ["--version"] },
-    required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr"],
+    required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr", "compliance_check"],
     install: {
       win32: {
         scoop: pipxInstall("semgrep"),
@@ -53900,7 +53999,7 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync31, readFileSync as readFileSync25, readdirSync as readdirSync19 } from "node:fs";
+import { existsSync as existsSync32, readFileSync as readFileSync25, readdirSync as readdirSync19 } from "node:fs";
 import { join as join43 } from "node:path";
 var tool16 = {
   name: "license_compatibility",
@@ -53967,7 +54066,7 @@ function isProprietaryLabel(s) {
 function detectProjectLicense(projectPath) {
   try {
     const pkgPath = join43(projectPath, "package.json");
-    if (existsSync31(pkgPath)) {
+    if (existsSync32(pkgPath)) {
       const pkg = JSON.parse(readFileSync25(pkgPath, "utf8"));
       if (typeof pkg.license === "string") return pkg.license;
     }
@@ -53975,7 +54074,7 @@ function detectProjectLicense(projectPath) {
   }
   try {
     const pyProject = join43(projectPath, "pyproject.toml");
-    if (existsSync31(pyProject)) {
+    if (existsSync32(pyProject)) {
       const raw = readFileSync25(pyProject, "utf8");
       const m = /license\s*=\s*["']([^"']+)["']/i.exec(raw) ?? /license-expression\s*=\s*["']([^"']+)["']/i.exec(raw);
       if (m && m[1]) return m[1];
@@ -53984,7 +54083,7 @@ function detectProjectLicense(projectPath) {
   }
   try {
     const composer = join43(projectPath, "composer.json");
-    if (existsSync31(composer)) {
+    if (existsSync32(composer)) {
       const cjson = JSON.parse(readFileSync25(composer, "utf8"));
       if (typeof cjson.license === "string") return cjson.license;
       if (Array.isArray(cjson.license) && typeof cjson.license[0] === "string")
@@ -54003,7 +54102,7 @@ function detectProjectLicense(projectPath) {
   }
   for (const name of ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]) {
     const p = join43(projectPath, name);
-    if (!existsSync31(p)) continue;
+    if (!existsSync32(p)) continue;
     try {
       const head = readFileSync25(p, "utf8").slice(0, 500);
       if (/MIT License/i.test(head)) return "MIT";
@@ -54756,7 +54855,7 @@ function summariseCveIntel(cves, intel, findings) {
 }
 
 // src/tools/sbomDiff.ts
-import { existsSync as existsSync32, readFileSync as readFileSync26 } from "node:fs";
+import { existsSync as existsSync33, readFileSync as readFileSync26 } from "node:fs";
 var RESPONSE_CAP = 50;
 var inputSchema8 = {
   project_path: ProjectPath,
@@ -54878,7 +54977,7 @@ function loadComponents(ctx, scanId) {
   const rec = ctx.storage.scans.getById(scanId);
   if (!rec) return null;
   const filePath = rec.meta?.file_path;
-  if (filePath && existsSync32(filePath)) {
+  if (filePath && existsSync33(filePath)) {
     try {
       const raw = readFileSync26(filePath, "utf8");
       return { components: extractFromSbomJson(raw), source: "full_file" };
@@ -55059,7 +55158,7 @@ function countBySeverity3(findings) {
 }
 
 // src/tools/suggestFix.ts
-import { existsSync as existsSync33, readFileSync as readFileSync27 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync27 } from "node:fs";
 import { join as join44 } from "node:path";
 var ROTATION_GUIDANCE = "This finding flags a credential (a password, key or token), not a code-shape bug \u2014 suggest_fix withholds surrounding source for it so the value is never echoed back into this response. Do not ask for or paste the secret value into further tooling. Rotate/revoke it at its source (the provider dashboard or secret manager), remove it from the file, and replace it with a reference to a secret store or an environment variable placeholder.";
 var inputSchema10 = {
@@ -55098,7 +55197,7 @@ async function handler17(input, ctx) {
   let source_end_line = 0;
   if (!credential && finding4.file_path) {
     const abs = join44(projectPath, finding4.file_path);
-    if (existsSync33(abs)) {
+    if (existsSync34(abs)) {
       try {
         const raw = readFileSync27(abs, "utf8");
         const lines = raw.split(/\r?\n/);
@@ -55252,7 +55351,7 @@ function toBucket(f, reason) {
 }
 
 // src/tools/precommitInstall.ts
-import { existsSync as existsSync34 } from "node:fs";
+import { existsSync as existsSync35 } from "node:fs";
 import { join as join45 } from "node:path";
 var tool22 = {
   name: "precommit_install",
@@ -55270,13 +55369,13 @@ async function handler19(input, _ctx) {
   } catch (e) {
     return failDomain15("not_a_git_repo", e.message);
   }
-  if (!existsSync34(join45(projectPath, ".pre-commit-config.yaml"))) {
+  if (!existsSync35(join45(projectPath, ".pre-commit-config.yaml"))) {
     return failDomain15(
       "scanner_failed",
       "No .pre-commit-config.yaml in project. Run init_project first."
     );
   }
-  if (!existsSync34(join45(projectPath, ".git"))) {
+  if (!existsSync35(join45(projectPath, ".git"))) {
     return failDomain15("not_a_git_repo", "pre-commit needs a git repo to install hooks into.");
   }
   const bin = await scannerAvailable("pre-commit");
@@ -55332,7 +55431,7 @@ function failDomain15(code, message3) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync35, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync36, statSync as statSync12 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join46, resolve as resolve12 } from "node:path";
 var inputSchema11 = {
   project_path: ProjectPath,
@@ -55436,7 +55535,7 @@ function collectDiscovered(projectPath) {
   const rejected = [];
   for (const dir of [".semgrep", "semgrep", "rules"]) {
     const abs = join46(projectPath, dir);
-    if (!existsSync35(abs)) continue;
+    if (!existsSync36(abs)) continue;
     consider(abs, registered, rejected);
   }
   return { registered, rejected };
@@ -55446,7 +55545,7 @@ function failDomain16(code, message3) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync36, statSync as statSync13 } from "node:fs";
+import { existsSync as existsSync37, statSync as statSync13 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool24 = {
@@ -55473,7 +55572,7 @@ async function handler21(input, ctx) {
   const limiter2 = getScanLimiter();
   const dbPath = ctx.storage.rawHandle().name;
   let dbSizeBytes = null;
-  if (dbPath && dbPath !== ":memory:" && existsSync36(dbPath)) {
+  if (dbPath && dbPath !== ":memory:" && existsSync37(dbPath)) {
     try {
       dbSizeBytes = statSync13(dbPath).size;
     } catch {
@@ -56597,7 +56696,7 @@ function failDomain18(code, message3) {
 }
 
 // src/tools/scanWordpress.ts
-import { existsSync as existsSync37 } from "node:fs";
+import { existsSync as existsSync38 } from "node:fs";
 import { join as join48 } from "node:path";
 
 // src/runners/scannerParsers/phpcs.ts
@@ -56684,8 +56783,8 @@ registerToolModule(
       const parser_inputs = [];
       const inp = input;
       const standard = inp.standard ?? "WordPress";
-      const looksWp = existsSync37(join48(ctx.projectPath, "wp-config.php")) || existsSync37(join48(ctx.projectPath, "wp-config-sample.php")) || existsSync37(join48(ctx.projectPath, "style.css")) || // theme root
-      existsSync37(join48(ctx.projectPath, "readme.txt"));
+      const looksWp = existsSync38(join48(ctx.projectPath, "wp-config.php")) || existsSync38(join48(ctx.projectPath, "wp-config-sample.php")) || existsSync38(join48(ctx.projectPath, "style.css")) || // theme root
+      existsSync38(join48(ctx.projectPath, "readme.txt"));
       const warnings = [];
       if (!looksWp) {
         warnings.push(
@@ -56835,7 +56934,7 @@ registerToolModule(
 );
 
 // src/tools/wpAudit.ts
-import { existsSync as existsSync38 } from "node:fs";
+import { existsSync as existsSync39 } from "node:fs";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join49 } from "node:path";
 var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
@@ -56865,7 +56964,7 @@ async function handler25(input, ctx) {
   } catch (e) {
     return failDomain19("not_a_wordpress_install", e.message);
   }
-  if (!existsSync38(join49(installPath, "wp-config.php"))) {
+  if (!existsSync39(join49(installPath, "wp-config.php"))) {
     return failDomain19(
       "not_a_wordpress_install",
       `No wp-config.php in ${installPath}`
@@ -57098,7 +57197,7 @@ function failDomain19(code, message3) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync40, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync41, mkdirSync as mkdirSync9, readFileSync as readFileSync28, writeFileSync as writeFileSync13 } from "node:fs";
 import { randomUUID as randomUUID8 } from "node:crypto";
 import { join as join50 } from "node:path";
 
@@ -57194,7 +57293,7 @@ function severityFromVuln(raw) {
 }
 
 // src/wordpress/siteKeys.ts
-import { existsSync as existsSync39 } from "node:fs";
+import { existsSync as existsSync40 } from "node:fs";
 import { isAbsolute as isAbsolute8, resolve as resolve13 } from "node:path";
 function wpSiteKey(url) {
   return url.replace(/\/$/, "");
@@ -57209,7 +57308,7 @@ function wpInstallKeys(canonical, raw) {
   return unique2(keys);
 }
 function namesOneInstall(raw) {
-  return isAbsolute8(raw) || existsSync39(raw);
+  return isAbsolute8(raw) || existsSync40(raw);
 }
 function wpSiteKeys(url) {
   const key = wpSiteKey(url);
@@ -57256,7 +57355,7 @@ async function handler26(input, ctx) {
   }
   const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
   if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
-  const localInstall = inp.wp_install_path && existsSync40(inp.wp_install_path) ? inp.wp_install_path : void 0;
+  const localInstall = inp.wp_install_path && existsSync41(inp.wp_install_path) ? inp.wp_install_path : void 0;
   const wpscanBin = await scannerAvailable("wpscan");
   if (!wpscanBin) {
     return failDomain20(
@@ -57337,7 +57436,7 @@ async function handler26(input, ctx) {
     warnings.push("WPScan rate-limited \u2014 results are partial. Try again later or set WPSCAN_API_TOKEN.");
   }
   let raw = null;
-  if (existsSync40(outFile)) {
+  if (existsSync41(outFile)) {
     try {
       raw = readFileSync28(outFile, "utf8");
     } catch {
@@ -57393,7 +57492,7 @@ function failDomain20(code, message3) {
 }
 
 // src/tools/wpVulnCheckSource.ts
-import { existsSync as existsSync41 } from "node:fs";
+import { existsSync as existsSync42 } from "node:fs";
 import { join as join53 } from "node:path";
 
 // src/wordpress/sourceInventory.ts
@@ -57996,7 +58095,7 @@ registerToolModule(
       const warnings = [];
       const findings = [];
       const cves = [];
-      const looksLikeWpRoot = existsSync41(join53(ctx.projectPath, "wp-includes")) || existsSync41(join53(ctx.projectPath, "wp-content"));
+      const looksLikeWpRoot = existsSync42(join53(ctx.projectPath, "wp-includes")) || existsSync42(join53(ctx.projectPath, "wp-content"));
       if (!looksLikeWpRoot) {
         warnings.push(
           "not_a_wordpress_install_root: no wp-includes/ or wp-content/ at project_path \u2014 this tool expects the WordPress install root, not a single plugin/theme directory."
@@ -58169,7 +58268,7 @@ registerToolModule(
 );
 
 // src/tools/wpCronAudit.ts
-import { existsSync as existsSync42 } from "node:fs";
+import { existsSync as existsSync43 } from "node:fs";
 import { randomUUID as randomUUID10 } from "node:crypto";
 import { join as join54 } from "node:path";
 var inputSchema17 = {
@@ -58212,7 +58311,7 @@ async function handler27(input, ctx) {
   } catch (e) {
     return failDomain21("not_a_wordpress_install", e.message);
   }
-  if (!existsSync42(join54(installPath, "wp-config.php"))) {
+  if (!existsSync43(join54(installPath, "wp-config.php"))) {
     return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
@@ -58879,7 +58978,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync43, readFileSync as readFileSync29, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync44, readFileSync as readFileSync29, readdirSync as readdirSync20, statSync as statSync14 } from "node:fs";
 import { join as join55, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -59068,7 +59167,7 @@ function collectConfigFiles(root, maxDepth) {
       }
       if (stat2.isDirectory()) {
         walk4(abs, depth + 1);
-      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync43(abs)) {
+      } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync44(abs)) {
         out.push(abs);
       }
     }
@@ -59220,7 +59319,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync44, readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync45, readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
 import { join as join57, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -59370,7 +59469,7 @@ function findMigrationsDirs(root) {
         continue;
       }
       if (!s.isDirectory()) continue;
-      if (name === "Migrations" && existsSync44(abs)) {
+      if (name === "Migrations" && existsSync45(abs)) {
         out.push(abs);
       } else {
         walk4(abs, depth + 1);
@@ -60691,7 +60790,7 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 // src/skillaudit/ingest.ts
 init_execa();
 import {
-  existsSync as existsSync45,
+  existsSync as existsSync46,
   lstatSync as lstatSync5,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync32,
@@ -60821,7 +60920,7 @@ async function ingestTarget(targetRaw) {
     if (looksLikeGitHost(target)) return ingestGit(target);
     return ingestUrl(target);
   }
-  if (!existsSync45(target)) {
+  if (!existsSync46(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
   const st = statSync17(target);
@@ -61326,7 +61425,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync46, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
+import { existsSync as existsSync47, readFileSync as readFileSync33, realpathSync as realpathSync7 } from "node:fs";
 import { basename as basename7, join as join60 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -61381,7 +61480,7 @@ function collectPorts(projectPath) {
   return out;
 }
 function readLines(path6) {
-  if (!existsSync46(path6)) return [];
+  if (!existsSync47(path6)) return [];
   try {
     return readFileSync33(path6, "utf8").split(/\r?\n/);
   } catch {
@@ -65502,11 +65601,11 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { existsSync as existsSync50, readFileSync as readFileSync38 } from "node:fs";
+import { existsSync as existsSync51, readFileSync as readFileSync38 } from "node:fs";
 import { isAbsolute as isAbsolute12, join as join71, relative as relative22 } from "node:path";
 
 // src/fixpr/apply.ts
-import { existsSync as existsSync47, readFileSync as readFileSync36, rmSync as rmSync8, writeFileSync as writeFileSync18 } from "node:fs";
+import { existsSync as existsSync48, readFileSync as readFileSync36, rmSync as rmSync8, writeFileSync as writeFileSync18 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join67, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
@@ -65524,7 +65623,7 @@ async function applyGroup(opts) {
 }
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
-  const missing = plan.files.filter((f) => !existsSync47(join67(worktreePath, f)));
+  const missing = plan.files.filter((f) => !existsSync48(join67(worktreePath, f)));
   if (missing.length > 0) {
     return {
       applied: false,
@@ -66226,13 +66325,13 @@ function fromPyprojectToml(content) {
 }
 
 // src/fixpr/testEnv.ts
-import { existsSync as existsSync48 } from "node:fs";
+import { existsSync as existsSync49 } from "node:fs";
 import { join as join69 } from "node:path";
 var INSTALL_TIMEOUT_MS = 15 * 6e4;
 async function prepareTestEnvironment(opts) {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== "npm") return { ok: true, command: null };
-  const hasLock = existsSync48(join69(treePath, "package-lock.json")) || existsSync48(join69(treePath, "npm-shrinkwrap.json"));
+  const hasLock = existsSync49(join69(treePath, "package-lock.json")) || existsSync49(join69(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
   const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
@@ -66435,7 +66534,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync49, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
+import { existsSync as existsSync50, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { join as join70, resolve as resolve17 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -66492,7 +66591,7 @@ async function removeWorktree(projectPath, path6, timeoutMs) {
     cwd: projectPath,
     timeoutMs
   });
-  if (!existsSync49(path6)) {
+  if (!existsSync50(path6)) {
     return { removed: true, warning: null };
   }
   const detail = removeResult.outcome !== "completed" ? `: ${describeFailure4(removeResult, "git worktree remove")}` : "";
@@ -66994,7 +67093,7 @@ function readManifests(worktreePath) {
   const files = {};
   for (const name of TEST_MANIFESTS) {
     const path6 = join71(worktreePath, name);
-    if (!existsSync50(path6)) continue;
+    if (!existsSync51(path6)) continue;
     try {
       files[name] = readFileSync38(path6, "utf8");
     } catch {
@@ -67819,7 +67918,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync51, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
+import { existsSync as existsSync52, readFileSync as readFileSync39, statSync as statSync20 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join72 } from "node:path";
 
@@ -67967,7 +68066,7 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync51(absolutePath)) return { ...base, exists: false };
+  if (!existsSync52(absolutePath)) return { ...base, exists: false };
   let size;
   try {
     size = statSync20(absolutePath).size;
@@ -68075,7 +68174,7 @@ function countBySeverity5(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync53, statSync as statSync21 } from "node:fs";
+import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
 import { resolve as resolve19 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -68931,7 +69030,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync52, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
+import { existsSync as existsSync53, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, join as join74, resolve as resolve18 } from "node:path";
 var PUBLIC_HOSTS = {
@@ -68948,7 +69047,7 @@ function isPublicRegistryUrl(ecosystem, url) {
 }
 function read(path6) {
   try {
-    return existsSync52(path6) ? readFileSync41(path6, "utf8") : void 0;
+    return existsSync53(path6) ? readFileSync41(path6, "utf8") : void 0;
   } catch {
     return void 0;
   }
@@ -68965,7 +69064,7 @@ function ancestors(ctx) {
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath(s, dir))) break;
     out.push(dir);
-    if (existsSync52(join74(dir, ".git"))) break;
+    if (existsSync53(join74(dir, ".git"))) break;
     const parent = dirname20(dir);
     if (parent === dir) break;
     dir = parent;
@@ -69161,7 +69260,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join74(dir, "package.json"))) || existsSync52(join74(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join74(dir, "package.json"))) || existsSync53(join74(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -70168,7 +70267,7 @@ async function handler44(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve19(inp.project_path);
-    if (!existsSync53(projectDir) || !statSync21(projectDir).isDirectory()) {
+    if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }
