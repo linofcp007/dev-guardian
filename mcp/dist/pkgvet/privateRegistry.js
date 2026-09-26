@@ -676,7 +676,10 @@ function isLocalFolderSource(source) {
 function localFeedHas(folder, configPath, id, ctx) {
     const env = envOf(ctx);
     const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
-    const dir = resolve(dirname(configPath), expanded);
+    // A config written on Windows (`…\NuGetPackages\`) names the same folder
+    // on Linux and macOS, where NuGet reads its backslashes as separators.
+    const portable = (ctx.platform ?? process.platform) === 'win32' ? expanded : expanded.replace(/\\/g, '/');
+    const dir = resolve(dirname(configPath), portable.replace(/[\\/]+$/, ''));
     const lower = id.toLowerCase();
     return listDir(dir, ctx).some((entry) => {
         const e = entry.toLowerCase();
