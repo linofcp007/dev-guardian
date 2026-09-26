@@ -1,7 +1,6 @@
 /**
  * `createWorktree` — the isolation `create_fix_pr` runs every fix inside
- * (design doc the design of record
- * §3).
+ * (the design of record).
  *
  * Two properties this module exists to hold:
  *

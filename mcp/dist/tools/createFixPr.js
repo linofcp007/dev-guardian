@@ -1,7 +1,7 @@
 /**
  * `create_fix_pr` — orchestrates Tasks 1–6 into the tool that applies fixes
  * the scanners themselves already produced, proves them, and opens a pull
- * request (design doc the design of record).
+ * request (the design of record).
  *
  * Flow: resolve the project path → refuse if not a git repository → read the
  * project's open findings → ask `deps_update_plan` for upgrade steps (when

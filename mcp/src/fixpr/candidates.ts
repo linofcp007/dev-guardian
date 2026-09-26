@@ -14,7 +14,7 @@
  *   - `FixGroup.hash` is a function of the SET of fingerprints, not the
  *     order they arrived in. The branch name (a later task) is derived from
  *     it, and an unstable hash breaks the idempotency the design rests on
- *     (design doc §5).
+ *     (the design of record).
  *
  * A dependency finding is paired with an upgrade step by its STRUCTURED
  * package field (see `stepsFor`), never by words in its title or advisory
@@ -136,7 +136,7 @@ export function selectGroups(
   }));
 
   // deferred_reason is null iff deferred is empty — never inferred from
-  // silence downstream (design doc §6: "no silent caps").
+  // silence downstream (the design of record: "no silent caps").
   const deferred_reason =
     deferred.length === 0
       ? null

@@ -1,7 +1,7 @@
 /**
  * Types for `create_fix_pr` — deciding which findings are fixable at all,
  * and how they group into one candidate pull request per ecosystem or
- * scanner (design doc the design of record).
+ * scanner (the design of record).
  *
  * `UpgradeStep` mirrors `depsUpdatePlan.ts`'s interface of the same name.
  * It is declared here, not imported, because that interface has no `export`
@@ -74,10 +74,10 @@ export interface GroupSelection {
 }
 
 /**
- * The scan differential's verdict (design doc §4.1) — produced by
+ * The scan differential's verdict (the design of record) — produced by
  * `verify.ts#judgeScan`, consumed by `verify.ts#mayOpenPr` and, later, by
- * `pr.ts`'s report. Declared here rather than in `verify.ts` itself: design
- * doc §8's module table assigns `ScanVerdict`/`TestVerdict` to `types.ts`
+ * `pr.ts`'s report. Declared here rather than in `verify.ts` itself: the
+ * design of record's module table assigns `ScanVerdict`/`TestVerdict` to `types.ts`
  * alongside `FixCandidate`/`FixGroup`, matching how Task 1 already split
  * `candidates.ts`'s shapes out into this file rather than keeping them local.
  */
@@ -90,7 +90,7 @@ export interface ScanVerdict {
   new_findings: { fingerprint: string; severity: string; title: string }[];
 }
 
-/** The test differential's outcome (design doc §4.2's three-verdict table,
+/** The test differential's outcome (the design of record's three-verdict table,
  *  plus `not_run` for a project with no derivable test command, and
  *  `unattributed` when the fix's run failed and the base-commit tree to
  *  compare against could not be built — no PR either way). */

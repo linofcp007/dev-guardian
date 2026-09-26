@@ -279,8 +279,8 @@ describe('the rule inventory', () => {
       // Jenkins, 45 read by hand, five defensible defects — and 88%/97% of
       // them carrying no guard anywhere near the dereference, which is what
       // made narrowing unavailable. It took 42 of the pack's 91
-      // `pattern-not-inside` clauses with it. See `packs.ts` and section 12 of
-      // the Java design doc.
+      // `pattern-not-inside` clauses with it. See `packs.ts` and the Java design
+      // of record.
       'bugfix-java': { rules: 7, withClauses: 7 },
       // 11 since `null-safety-as-cast-deref` was deleted: it fired 6490 times
       // on 11 800 files of dotnet/runtime with no true positives, and this

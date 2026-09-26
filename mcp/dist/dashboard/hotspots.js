@@ -36,7 +36,7 @@
  *
  * `remaining_files` is the count of distinct files beyond the `limit`
  * slice, so "N hottest files" can never be misread as "N files have
- * findings" (design doc §6, §8).
+ * findings" (the design of record).
  */
 const NO_FILE = '(no file)';
 export function rankFiles(findings, limit) {

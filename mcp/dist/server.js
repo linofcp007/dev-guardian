@@ -53727,7 +53727,7 @@ var inputSchema7 = {
   ),
   dry_run: external_exports.boolean().optional().describe("Print commands without executing. Default: false."),
   elevation_allowed: external_exports.boolean().optional().describe(
-    "Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead."
+    'Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead. Install steps run without a terminal, so on Linux/macOS this only works with passwordless sudo; "sudo: a terminal is required to read the password" means the user must run the reported command themselves.'
   )
 };
 var tool15 = {
@@ -63769,7 +63769,7 @@ function checkSecurityHeaders(input, findings) {
   if (missing.length === 0) return;
   findings.push(buildFinding({
     check: "security_headers",
-    // Per the design doc (section 8): severity is a property of the check,
+    // Per the design of record: severity is a property of the check,
     // and a missing security header is explicitly called out as low there —
     // unlike a confirmed auth bypass, a missing header is a hardening gap,
     // not proof anything has actually been exploited.
@@ -63863,7 +63863,7 @@ var DAST_CHECKS = [
   "open_redirect",
   "rate_limit",
   // Not one of the own engine's nine checks above — nuclei is a separate
-  // scanning engine (design doc §7) whose hits are normalised in
+  // scanning engine (the design of record) whose hits are normalised in
   // `normalizeNuclei.ts`. It still needs a `DastCheck` value of its own:
   // `DastFinding.check` is this closed union, and reusing an existing own-
   // engine value (e.g. tagging a nuclei hit `info_disclosure`) would make

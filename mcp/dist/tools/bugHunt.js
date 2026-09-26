@@ -32,7 +32,7 @@
  * nine for Go, the design of record —
  * Go is where the registry pack leaves the biggest hole among the languages
  * it partially covers (5 Go rules, only 2 land in a bug class), and the
- * design doc's §8 records a fourth exclusion clause that shipped dead and
+ * design of record records a fourth exclusion clause that shipped dead and
  * was removed, as was the tenth rule, `edge-case-append-discarded`, whose
  * true-positive set is empty in any project that compiles; seven for Java,
  * the design of record — Java is

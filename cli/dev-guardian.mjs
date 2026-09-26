@@ -613,7 +613,7 @@ async function loadCiModules() {
 /**
  * Default budget for `--start-command` to become healthy — generous for a
  * typical `npm start`/build-then-serve boot (which can genuinely take tens
- * of seconds under a cold cache) while still bounded: design doc §7 and the
+ * of seconds under a cold cache) while still bounded: the design of record and the
  * app-runner module both exist because "a hang is the worst failure mode in
  * CI" (a job that never finishes burns its whole budget and the log says
  * nothing). Not exposed as a flag — the brief scopes `--start-command` to
@@ -623,7 +623,7 @@ async function loadCiModules() {
 const APP_START_TIMEOUT_MS = 60_000;
 
 /**
- * The pwn-request guard (design doc §7). `--start-command` may be supplied
+ * The pwn-request guard (the design of record). `--start-command` may be supplied
  * only on argv — never honoured from a file inside the scanned repository,
  * because that file can arrive via a pull request from a fork, and a CLI
  * that read a command to run from it would hand that fork arbitrary code
@@ -1112,7 +1112,7 @@ async function cmdScan(argv) {
   // async I/O to flush, so a large write — and `renderHuman`/`renderJson`
   // are UNBOUNDED, scaling with finding count, worst case on exactly the
   // "first scan of an existing codebase, baseline absent, everything new"
-  // case design doc §4 names — can be truncated mid-write on a real Linux CI
+  // case the design of record names — can be truncated mid-write on a real Linux CI
   // runner (invisible in this project's own tests, all of which run on
   // Windows, where stdout-to-pipe is synchronous). Setting `exitCode` and
   // returning lets Node exit on its own once the event loop drains AND the
@@ -1791,10 +1791,10 @@ function cmdCiInit(argv) {
 
 // --- status / dashboard (local reporting) ---------------------------------
 //
-// Design doc §1: "Nothing here runs a scan, mutates the database, opens a
+// The design of record: "Nothing here runs a scan, mutates the database, opens a
 // socket, or reaches the network." Both commands are thin — resolve
 // --project, open THIS project's own database, build one snapshot, render,
-// print or write — and both REPORT rather than gate (design doc §6):
+// print or write — and both REPORT rather than gate (the design of record):
 // `status`/`dashboard` exit 0 whenever they render, including over a
 // project full of critical findings or one that has never been scanned.
 // `scan` is the gate, with its own exit codes; if either of these two ever
@@ -1848,7 +1848,7 @@ function cmdCiInit(argv) {
  * correct for the MCP server, which persists scans, but wrong here: on a
  * directory that has no database yet ANYWHERE `openDatabase` would look, it
  * CREATES one (an empty, freshly-migrated 143 KB file), which contradicts
- * this command's own documented promise (design doc §1: "Nothing here runs a
+ * this command's own documented promise (the design of record: "Nothing here runs a
  * scan, mutates the database, opens a socket, or reaches the network") the
  * moment a user points `status`/`dashboard` at a project it has never
  * touched. Detected by `resolveDbHandle` (below) checking BOTH locations
@@ -2050,7 +2050,7 @@ async function cmdStatus(argv) {
   // `process.exitCode = 0; return;`, never `process.exit(0)` — see the
   // matching comment at the end of cmdScan: stdout to a pipe is
   // asynchronous on POSIX, and the line above scales with finding count
-  // (design doc §8's findings cap is 2000), so it is not guaranteed to fit
+  // (the design of record's findings cap is 2000), so it is not guaranteed to fit
   // inside one synchronous flush.
   process.exitCode = 0;
   return;
@@ -2184,8 +2184,8 @@ async function cmdDashboard(argv) {
  * — an unreadable database file, an --out write failure, anything not
  * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
- * exactly the kind of stray noise the pristine-output requirement (design
- * doc §8, and this task's e2e) exists to keep out of a CI log.
+ * exactly the kind of stray noise the pristine-output requirement (the
+ * design of record, and this task's e2e) exists to keep out of a CI log.
  */
 function fatal(e) {
   process.stderr.write(`dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);

@@ -12,7 +12,7 @@ describe('analyzeRoutes — anonymous exposure', () => {
     }));
     const hit = f.find((x) => x.check === 'anonymous_exposure');
     expect(hit).toBeDefined();
-    // 'high', not 'critical', and the spec (design doc section 8) is the
+    // 'high', not 'critical', and the spec (the design of record) is the
     // reason: auth_hint 'required' can be inherited from a DOCUMENT-level
     // `security` default, so a genuinely public route whose author forgot to
     // write `security: []` on it would otherwise be reported as a critical

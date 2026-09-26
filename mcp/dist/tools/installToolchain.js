@@ -48,7 +48,10 @@ const inputSchema = {
         .boolean()
         .optional()
         .describe('Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). ' +
-        'Default: false — steps needing elevation are reported under `requires_elevation` instead.'),
+        'Default: false — steps needing elevation are reported under `requires_elevation` instead. ' +
+        'Install steps run without a terminal, so on Linux/macOS this only works with passwordless ' +
+        'sudo; "sudo: a terminal is required to read the password" means the user must run the ' +
+        'reported command themselves.'),
 };
 const tool = {
     name: 'install_toolchain',

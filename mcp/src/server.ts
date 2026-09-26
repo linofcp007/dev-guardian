@@ -12,7 +12,8 @@
  *      still starts so resources and pure-SQL tools can serve data.
  *   4. Reap scans whose owning process died (storage/maintenance.ts).
  *      Best-effort: a failure is logged and never stops the server.
- *   5. Add `.guardian/` to the target project's `.gitignore` if missing.
+ *   5. Keep `.guardian/` out of git in the target project's `.gitignore`
+ *      (`.guardian/*` plus `!.guardian/baseline.json` — gitignoreGuard.ts).
  *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
  *   7. Connect the stdio transport. Block until the host closes it. A client
  *      that closes our stdout (EPIPE on the next write) is a disconnect, not
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     logErr(`shell: ${shell.label}`);
   }
 
-  // Ensure .guardian/ is git-ignored in the target project.
+  // Ensure .guardian/ is git-ignored in the target project (baseline.json excepted).
   const guard = ensureGuardianIgnored(projectPath);
   if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
 
