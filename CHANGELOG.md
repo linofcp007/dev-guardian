@@ -670,6 +670,21 @@ keeps working (migrations 004–011 are additive).
 
 ### Fixed
 
+- **The RGPD pack, measured on application code**: 72 findings over eleven
+  open-source applications (Zulip, Saleor, CTFd, Ghost, freeCodeCamp, Site Kit
+  by Google, BookStack, Coolify, Umbraco, Orchard Core, eShop), each triaged by
+  hand — 35 true, 37 false (48.6 % precision). Three false-positive classes are
+  gone, and all 35 true positives stay (92.1 %): `print()` inside a Django
+  management command (`class Command` on a `…Command` base) is the command's
+  terminal output, like `self.stdout.write`, not a log (23 findings); a value
+  that is only the object of an attribute whose name says id, date or size
+  (`email.id`, `email.scheduled_timestamp`, `lookup(email).id`,
+  `user.email.length`, C# `email.Length`) is not what is logged (3); and the
+  tracker rules skip test code — `*.test.*`, `*.spec.*`, `*.stories.*`,
+  `__tests__`, `__mocks__`, `__fixtures__`, `__factories__` (8). The three that
+  remain are a bot account's address and synthetic addresses in a seed script,
+  which a name cannot tell apart. The corpus list, commits and per-rule counts
+  are in the pack header.
 - **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy
   installed. A `package.json` that declares no dependency (and whose lock

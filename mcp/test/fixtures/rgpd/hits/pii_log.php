@@ -26,5 +26,7 @@ class Encomendas
         logger('registo', ['e' => $email]); // BUG: logger() called directly logs at debug level
         error_log(md5($email) . ' ' . $user->niss); // BUG: the niss is whole (excluded: the hashed email)
         error_log(substr($data['iban'], -4) . ' ' . $email); // BUG: the email is whole (excluded: last four)
+        error_log('normalizado ' . $email->toString()); // BUG: a METHOD of a value object still returns the address
+        error_log('contacto ' . $cliente->telefone->numero); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
     }
 }

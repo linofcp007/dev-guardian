@@ -26,6 +26,8 @@ function registo(user, users, req, email, nif_cliente, clienteNif, formData, cli
   this.hashing.logger.info('registo', user.email); // BUG: "hash" in the RECEIVER path is not a masking call
   console.log(mask(user.email), user.nif); // BUG: the nif is not masked (excluded: the email)
   console.log(user.iban.slice(-4), user.email); // BUG: the email is whole (excluded: last four of the IBAN)
+  logger.info('normalizado', email.toLowerCase()); // BUG: a METHOD call on the name still returns the address
+  logger.info('contacto', user.phone.number); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
 }
 
 module.exports = { registo };

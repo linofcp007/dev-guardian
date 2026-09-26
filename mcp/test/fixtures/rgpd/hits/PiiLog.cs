@@ -18,7 +18,7 @@ public class Registo
         _log = log;
     }
 
-    public void Registar(Cliente cliente, string email, string nifCliente, IDictionary<string, string> form)
+    public void Registar(Cliente cliente, string email, string nifCliente, IDictionary<string, string> form, Mensagem mensagem)
     {
         _logger.LogInformation("Login {Email}", cliente.Email); // BUG: structured argument
         _logger.LogWarning($"NIF {cliente.Nif}"); // BUG: interpolated string
@@ -32,9 +32,16 @@ public class Registo
         _logger.LogInformation("{N} {I}", cliente.NIF, cliente.IBAN); // BUG x2: all-caps properties are the value
         _logger.LogInformation("{A} {B}", Mask(cliente.Email), cliente.Niss); // BUG: the Niss (excluded: the email)
         _logger.LogInformation("{A} {B}", cliente.Iban[^4..], cliente.Email); // BUG: the email (excluded: last four)
+        _logger.LogInformation("Normalizado {E}", email.ToLowerInvariant()); // BUG: a METHOD call on the name still returns the address
+        _logger.LogInformation("Para {E}", mensagem.Email.Address); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
     }
 
     private static string Mask(string value) => new string('*', value.Length);
+}
+
+public class Mensagem
+{
+    public System.Net.Mail.MailAddress Email { get; set; } = new("a@b.pt");
 }
 
 public class Cliente

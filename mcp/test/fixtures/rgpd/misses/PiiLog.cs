@@ -21,12 +21,30 @@ public class Registo
         _logger.LogInformation("Email enviado {E}", maskedEmail); // a masked name
         _logger.LogInformation("Confirmado {C}", cliente.EmailConfirmed); // a flag, not the value
         _logger.LogInformation("Cliente {Id}", cliente.Id); // an internal id is the right thing to log
-        Debug.Assert(email.Length > 0); // not a logging method ($METHOD regex)
+        Debug.Assert(email != null); // not a logging method ($METHOD regex; this line was `email.Length > 0` until the attribute-read guard took that shape too, and the regex read DEAD)
         _metrics.Info(email); // not a logger ($LOGGER regex)
         Console.WriteLine(Math.Log(2)); // math, not personal data
+        _logger.LogInformation("Tamanho {T}", email.Length); // a length: a property read on the value (attribute-read guard)
     }
 
+    // `email` is a queued-message OBJECT: what reaches the log is its id and its
+    // date, read as properties; and an address used as a LOOKUP KEY, where what
+    // is logged is the id of the result (attribute-read guard).
+    public void Agendar(MensagemAgendada email, IDictionary<string, string> form)
+    {
+        _logger.LogWarning("Mensagem {Id} agendada para {Data} sem destinatarios", email.Id, email.EnviarEm);
+        _logger.LogInformation("Mapa de ids {Id}", ObterBot(form["email"]).Id);
+    }
+
+    private static Cliente ObterBot(string endereco) => new();
+
     private static string MaskEmail(string value) => "***" + value[^4..];
+}
+
+public class MensagemAgendada
+{
+    public int Id { get; set; }
+    public DateTime EnviarEm { get; set; }
 }
 
 public class Metrics

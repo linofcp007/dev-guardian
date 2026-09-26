@@ -28,10 +28,10 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // testTimeout; see baseRules.test.ts.
 vi.setConfig({ testTimeout: 180_000 });
 import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
-import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, extname, resolve } from 'node:path';
+import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -55,6 +55,8 @@ interface SemgrepRun {
   readonly rows: SemgrepResult[];
   readonly scanned: number;
   readonly errors: number;
+  /** The temp copy that was scanned: `relative(work, row.path)` is the fixture's own path. */
+  readonly work: string;
 }
 
 function run(config: string, dir: string): SemgrepRun {
@@ -66,7 +68,13 @@ function run(config: string, dir: string): SemgrepRun {
     rows: (parsed.results ?? []) as SemgrepResult[],
     scanned: (parsed.paths?.scanned ?? []).length,
     errors: (parsed.errors ?? []).length,
+    work,
   };
+}
+
+/** A row's path relative to the scanned copy, with `/` separators. */
+function fixturePath(result: SemgrepRun, row: SemgrepResult): string {
+  return relative(result.work, row.path).split(sep).join('/');
 }
 
 /** Last dot-separated segment — semgrep prefixes the config path onto ids. */
@@ -88,6 +96,19 @@ function countsByFile(rows: readonly SemgrepResult[]): Record<string, Record<str
 
 function filesIn(dir: string): string[] {
   return readdirSync(dir).sort();
+}
+
+/**
+ * Every FILE under `dir`, recursively, as `/`-separated relative paths.
+ * `misses/` has subdirectories (`__tests__/`, `__mocks__/`, ...: the
+ * test-code directories the tracker rules exclude), so a top-level listing
+ * would count a directory as a file.
+ */
+function allFilesIn(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile())
+    .map((d) => relative(dir, resolve(d.parentPath, d.name)).split(sep).join('/'))
+    .sort();
 }
 
 const PII_JS = 'rgpd-pii-in-log-js';
@@ -113,7 +134,11 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // masking), NestJS's static `Logger.log` and pino's `logger.child({...})`.
   // Fix round 2 added `this.hashing.logger.info(..., user.email)`: "hash" in
   // the RECEIVER path used to count as a masking call and hide the line.
-  'pii_log.js': { [PII_JS]: 21 },
+  // Twenty-three after the round measured on application code, two lines the
+  // attribute-read guard must leave alone: `email.toLowerCase()` (a METHOD
+  // call still returns the address) and `user.phone.number` (an attribute
+  // whose name is not an id, a date or a size still holds the value).
+  'pii_log.js': { [PII_JS]: 23 },
   // The same rule through the TypeScript parser: a typed member, a type
   // assertion, a typed parameter, a subscript.
   'pii_log.ts': { [PII_JS]: 4 },
@@ -124,15 +149,22 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // alternatives read DEAD until a plain variable sat in each); eighteen
   // after fix round 1: `$cliente->NIF`, the fully-qualified
   // `\Illuminate\Support\Facades\Log::`, `Log::channel(...)->`,
-  // `logger()->` and `logger(...)`.
-  'pii_log.php': { [PII_PHP]: 18 },
+  // `logger()->` and `logger(...)`. Twenty after the application-code round:
+  // `$email->toString()` and `$cliente->telefone->numero` (see pii_log.js).
+  'pii_log.php': { [PII_PHP]: 20 },
   // Thirteen: fix round 1 added keyword arguments whose value is a plain
   // name (`extra={"email": email}`, structlog's `nif=nif_cliente`),
-  // structlog's `bind(...)` and an all-caps attribute.
-  'pii_log.py': { [PII_PY]: 13 },
+  // structlog's `bind(...)` and an all-caps attribute. Eighteen after the
+  // application-code round: `email.lower()`, `user.phone.as_e164`
+  // (django-phonenumber-field), a LOGGER inside a Django management command,
+  // and `print()` in two classes that are not management commands — one of
+  // them a model that merely happens to be named `Command`.
+  'pii_log.py': { [PII_PY]: 18 },
   // Thirteen: fix round 2 added `Cliente.Email` — a PascalCase PROPERTY, which
   // the type-constant exclusion (`Campos.EMAIL`) must not take for a type.
-  'PiiLog.cs': { [PII_CS]: 13 },
+  // Fifteen after the application-code round: `email.ToLowerInvariant()` and
+  // `mensagem.Email.Address` (see pii_log.js).
+  'PiiLog.cs': { [PII_CS]: 15 },
   // Two GA4 loaders (the stock snippet, and `type="text/javascript"`, which
   // still executes); three Meta pixels — AFTER a consent function that has
   // already closed, inside a function merely NAMED after consent, inside a
@@ -178,7 +210,33 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'layout.ejs': { [META]: 1 },
   // Unconditional, and (fix round 2) in the `{{else}}` arm of a consent `{{#if}}`.
   'analytics.hbs': { [HOTJAR]: 2 },
+  // A page NAMED "stories" is served to visitors: the `*.stories.*` exclusion
+  // (Storybook) needs the dot on each side and must not swallow it.
+  'stories.html': { [YOUTUBE]: 1 },
 };
+
+/**
+ * The test-code paths every tracker rule excludes (`paths.exclude`), added
+ * after the pack was measured on application code: every tracker finding in
+ * a test, spec, story or test-support directory was markup that is input to a
+ * test, never served to a visitor. Each has a fixture in `misses/` that fires
+ * once the exclusion is removed — see the test that proves it.
+ */
+const TRACKER_EXCLUDES = ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__'];
+
+/**
+ * Whether a `/`-separated fixture path is excluded by one `paths.exclude`
+ * glob. Only the two shapes the pack uses are understood — `*.x.*` on the
+ * file name, and a bare name matching a DIRECTORY segment — and anything else
+ * throws, so a new glob cannot be silently mis-modelled here.
+ */
+function excludedBy(path: string, glob: string): boolean {
+  const segments = path.split('/');
+  const onName = /^\*\.([A-Za-z]+)\.\*$/.exec(glob)?.[1];
+  if (onName !== undefined) return (segments[segments.length - 1] ?? '').includes(`.${onName}.`);
+  if (/^[A-Za-z_]+$/.test(glob)) return segments.slice(0, -1).includes(glob);
+  throw new Error(`a paths.exclude glob this test does not model: ${glob}`);
+}
 
 /**
  * The files whose `// BUG:` / `# BUG:` markers sit on the very line that
@@ -216,7 +274,7 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
 interface RuleDoc {
   id: string;
   languages?: string[];
-  paths?: { include?: string[] };
+  paths?: { include?: string[]; exclude?: string[] };
 }
 
 function packRules(): RuleDoc[] {
@@ -262,9 +320,41 @@ describe('rgpd rules', () => {
     const { rows, scanned, errors } = run(RULES, missesDir);
     expect(errors).toBe(0);
     // Every misses/ file must actually have been looked at, or "nothing" is
-    // "never read".
-    expect(scanned).toBe(filesIn(missesDir).length);
+    // "never read". The files under the test-code directories the tracker
+    // rules exclude are JavaScript, so the JS log rule still reads them and
+    // the count stays exact.
+    expect(scanned).toBe(allFilesIn(missesDir).length);
     expect(rows.map((r) => `${basename(r.path)}:${r.start.line}: ${ruleOf(r)}`)).toEqual([]);
+  });
+
+  /**
+   * `paths.exclude` is not a clause, so the ablation harness never removes it
+   * and could not say whether any of the seven globs is load-bearing. This
+   * does it by hand, for all of them at once: with the exclusions stripped
+   * from the pack, a tracker fires in EXACTLY the misses/ files the globs
+   * exclude, and every glob excludes at least one of them. A glob with no
+   * fixture, or a fixture that no glob covers, fails here.
+   */
+  it.skipIf(!AVAILABLE)('every test-code exclusion of the tracker rules has a misses fixture that fires without it', () => {
+    const doc = parse(readFileSync(RULES, 'utf8')) as { rules: RuleDoc[] };
+    for (const rule of doc.rules) {
+      if (!(rule.languages ?? []).includes('generic')) continue;
+      expect([rule.id, rule.paths?.exclude]).toEqual([rule.id, TRACKER_EXCLUDES]);
+      delete rule.paths?.exclude;
+    }
+    const unexcluded = resolve(makeTempDir('guardian-rgpd-noexclude-'), 'rgpd.yml');
+    writeFileSync(unexcluded, stringify(doc));
+
+    const result = run(unexcluded, resolve(FIXTURES, 'misses'));
+    expect(result.errors).toBe(0);
+    const fired = [...new Set(result.rows.map((r) => fixturePath(result, r)))].sort();
+    const excluded = allFilesIn(resolve(FIXTURES, 'misses')).filter((f) =>
+      TRACKER_EXCLUDES.some((g) => excludedBy(f, g)),
+    );
+    expect(fired).toEqual(excluded);
+    for (const glob of TRACKER_EXCLUDES) {
+      expect([glob, excluded.filter((f) => excludedBy(f, glob)).length > 0]).toEqual([glob, true]);
+    }
   });
 
   /**
@@ -416,6 +506,65 @@ describe('the personal-data name regex', () => {
 });
 
 /**
+ * The attribute-read guard, added after measuring the pack on application
+ * code: a value that only appears as the OBJECT of an attribute read is not
+ * what reaches the log when the attribute's NAME says it is an id, a date or
+ * a size (`email.id`, `email.scheduled_timestamp`, `lookup(email).id`,
+ * `user.email.length`). The guard is keyed on that name list rather than on
+ * "any attribute that is not called", because the broad form dropped values
+ * held under neutral names — `user.phone.as_e164`, `email.address` — which
+ * the member branch cannot see. Four copies, one per log rule; they must not
+ * drift, and the list is exercised here the way the name regex is above.
+ */
+describe('the attribute-read guard name list', () => {
+  function attrRegexes(): string[] {
+    const found: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$ATTR' && typeof regex === 'string') found.push(regex);
+      }
+      for (const value of Object.values(node)) walk(value);
+    };
+    for (const r of packRules()) if (r.id.startsWith('rgpd-pii-in-log-')) walk(r);
+    return found;
+  }
+
+  it('is written once per log rule, identically', () => {
+    const regexes = attrRegexes();
+    expect(regexes.length).toBe(4);
+    expect(new Set(regexes).size).toBe(1);
+  });
+
+  const isMetadata = (name: string): boolean => {
+    const first = attrRegexes()[0];
+    if (first === undefined) throw new Error('no $ATTR regex in the pack');
+    return new RegExp(first).test(name);
+  };
+
+  it.each([
+    'id', 'Id', 'ID', 'pk', 'uuid', 'guid', '_id', 'message_id', 'recipient_ids', 'userId', 'MessageId', 'ExternalID',
+    'scheduled_at', 'sentAt', 'enviar_em', 'EnviarEm', 'send_date', 'SendDate', 'send_time', 'SentTime',
+    'timestamp', 'scheduled_timestamp', 'length', 'Length', 'size', 'count', 'Count',
+  ])('names metadata, not the value: %s', (name) => {
+    expect(isMetadata(name)).toBe(true);
+  });
+
+  it.each([
+    'address', 'Address', 'number', 'numero', 'as_e164', 'national_number', 'value', 'Value', 'to', 'subject',
+    'domain', 'lower', 'toLowerCase', 'ToLowerInvariant', 'format', 'Format', 'update', 'data', 'identity', 'item',
+  ])('does not name metadata, so the value is still judged: %s', (name) => {
+    expect(isMetadata(name)).toBe(false);
+  });
+});
+
+/**
  * What the messages PRESCRIBE — fix round 1, item 6. Google Consent Mode v2
  * with `analytics_storage` denied ("advanced mode": the tag loads and pings
  * before consent) and Meta's `fbq('consent', 'revoke')` (fbevents.js still
@@ -464,5 +613,14 @@ describe('the tracker rules are restricted to markup', () => {
         expect([rule.id, glob, hitExts.has(extname(glob))]).toEqual([rule.id, glob, true]);
       }
     }
+  });
+
+  it('every generic-mode rule skips the same test-code paths, and no hits/ fixture is one of them', () => {
+    for (const rule of packRules()) {
+      if (!(rule.languages ?? []).includes('generic')) continue;
+      expect([rule.id, rule.paths?.exclude]).toEqual([rule.id, TRACKER_EXCLUDES]);
+    }
+    const swallowed = filesIn(resolve(FIXTURES, 'hits')).filter((f) => TRACKER_EXCLUDES.some((g) => excludedBy(f, g)));
+    expect(swallowed).toEqual([]);
   });
 });
