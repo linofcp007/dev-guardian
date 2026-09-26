@@ -119,6 +119,7 @@ import {
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
+import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
@@ -709,32 +710,50 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
 
   if (failures.length === 0) {
     // The ordinary case: no WHOLE `--config=` failed to load —
-    // findConfigDownloadFailures found nothing whole-config-fatal. That
-    // does NOT mean the exit code is clean: a single bad RULE inside an
-    // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
-    // also exits non-zero/non-one, but Semgrep still scans with
-    // everything else that loaded — verified live, not assumed (see
-    // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
-    // what tells the two apart; exit code/outcome alone cannot (same
-    // file, same comment).
+    // findConfigDownloadFailures found nothing whole-config-fatal. The run
+    // is judged by the shared Semgrep judge (runners/semgrepReport.ts), as
+    // scan_sast and this tool's own scoped run are — never by the exit code
+    // alone, which read a partly parsed file and a run that scanned nothing
+    // as ok, coverage full (fix round 1). A single bad RULE inside an
+    // otherwise-valid local file (a typo'd bugfix-js.yml pattern) exits 2
+    // and still scans with everything else (semgrepConfigFailure.ts): its
+    // findings are real and kept, but the run did not cover what it was
+    // given — `failed`, with the rule named in the reason (the bugfix-rules-
+    // jsts task-3 fix: never a failure with NO reason).
     if (raw) parser_inputs.push({ parser: categoryParser, input: raw });
-    const okByExit = result.outcome === 'completed' || result.exitCode === 1;
-    const ok = okByExit || wasAnythingScanned(raw);
-    const toolRun: ToolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
-    if (!okByExit) {
-      // Either genuinely failed, or "ok" only because something was
-      // scanned anyway despite a non-clean exit — both need the
-      // human-readable reason attached. Before this, a malformed local
-      // rule file reported status:'failed' with NO reason at all,
-      // alongside assessCoverage's "install semgrep" warning — which
-      // sends a user chasing their toolchain instead of their own rule
-      // file (bugfix-rules-jsts task-3 fix round).
-      const reason = describeRawErrors(raw);
-      if (reason !== null) toolRun.reason = reason;
+    const check = checkSemgrepReport({
+      raw,
+      exitCode: result.exitCode,
+      outcome: result.outcome,
+      targets: 1,
+      projectPath: ctx.projectPath,
+    });
+    if (check.verdict === 'ok') {
+      tools_run.push({ name: 'semgrep', status: 'ok' });
+    } else if (check.verdict === 'partial' && check.partial !== undefined) {
+      tools_run.push({
+        name: 'semgrep',
+        status: 'ok',
+        reason: describePartialParse(check.partial, 'bugs in the unparsed spans may be missing'),
+        partially_parsed: check.partial,
+      });
+      missing_tools.push('semgrep');
+    } else if (check.verdict === 'scanned_nothing') {
+      tools_run.push({
+        name: 'semgrep',
+        status: 'skipped',
+        reason: 'semgrep scanned 0 files — nothing here is a language its packs cover, or the packs loaded nothing',
+      });
+      missing_tools.push('semgrep');
+    } else {
+      tools_run.push({
+        name: 'semgrep',
+        status: 'failed',
+        reason: describeRawErrors(raw) ?? check.reason ?? 'semgrep failed',
+      });
     }
-    tools_run.push(toolRun);
     return {
-      outcome: ok ? 'completed' : result.outcome,
+      outcome: check.verdict === 'failed' && !wasAnythingScanned(raw) ? result.outcome : 'completed',
       tools_run,
       missing_tools,
       parser_inputs,

@@ -299,7 +299,9 @@ keeps working (migrations 004–011 are additive).
   exits 2; with `--base-url` the DAST step's `partial-surface` gap is accepted
   with the same files. A WordPress plugin with PHP's legal `const NAMESPACE`
   (a Semgrep 1.176.1 `PartialParsing` warning) can now pass the gate once the
-  gap has been looked at. See `docs/ci.md`.
+  gap has been looked at. Only parse types are acceptable (`PartialParsing`,
+  `Syntax error`, `Lexical error`): a per-file `Timeout` still exits 2. See
+  `docs/ci.md`.
 
 ### Changed
 
@@ -977,8 +979,21 @@ keeps working (migrations 004–011 are additive).
   image A's findings, so `diff_scans` and `regression_alert` read them as
   resolved. The `trivy-image` run now records its image (`tools_run[].target`),
   and an image's findings are re-measured only by a scan of the same image —
-  otherwise not re-measured, named `trivy-image (<image>)`. Rows written
-  before keep today's reading.
+  otherwise not re-measured, named `trivy-image (<image>)`. References are
+  compared as Docker resolves them (`nginx`, `nginx:latest` and
+  `docker.io/library/nginx:latest` are one image). Rows written before keep
+  today's reading.
+- **The open set dropped findings a newer scan did not look at again.** A
+  slot's newest scan was its whole answer, so a partly parsed file, a Semgrep
+  that failed beside an ok Bandit, or a scan of image B made every older
+  finding it did not re-measure vanish from `findings/open`, `risk_score`,
+  the dashboard, triage, prioritize, `create_fix_pr`, `validate_finding` and
+  `create_github_issues`, with only `coverage: partial` left to say so. Each
+  slot now carries forward the findings of its older scans that every newer
+  one left open — `runCompare`'s own "not re-measured" predicate, shared —
+  marked `not_remeasured: true`, the older scan listed in `sources` with
+  `carried_for`. A finding a newer scan measured and did not find stays
+  resolved; a scanner the newer scan did not run at all is not a gap.
 - **`scan_dast` over a surface whose route recovery failed** read coverage
   `full`: `map_attack_surface` persists a snapshot whose
   `semgrep-metavar-recovery` step lost some matches, with nothing in
@@ -1000,7 +1015,13 @@ keeps working (migrations 004–011 are additive).
   `map_attack_surface` and the batched scoped runs (`scan_sast`/`bug_hunt`
   with `scope`, `review_pr`): `paths.scanned > 0` with only per-file errors is
   partial coverage — Semgrep `ok` and listed missing, the files named in
-  `tools_run[].partially_parsed`; fatal errors stay `failed`. A comparison
+  `tools_run[].partially_parsed` (one entry per file and error type); fatal
+  errors stay `failed`. Whole-project `bug_hunt` and `scan_wordpress`
+  (`semgrep-wp`), which judged Semgrep by its exit code alone, use it too: a
+  partly parsed file or a run that scanned nothing no longer reads `ok` at
+  coverage full (a single broken rule in `bug_hunt` is now `failed`, its
+  reason naming the rule; `scan_wordpress` with no `.php` file is not
+  applicable). A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
   Semgrep finding in a partly parsed file as not measured by that run —
   never resolved, never new — and names it `semgrep (partly parsed: …)`.

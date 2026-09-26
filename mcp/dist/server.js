@@ -47038,16 +47038,39 @@ async function invokeBugHunt(input, ctx) {
   const failures = findConfigDownloadFailures(raw);
   if (failures.length === 0) {
     if (raw) parser_inputs.push({ parser: categoryParser, input: raw });
-    const okByExit = result.outcome === "completed" || result.exitCode === 1;
-    const ok = okByExit || wasAnythingScanned(raw);
-    const toolRun = { name: "semgrep", status: ok ? "ok" : "failed" };
-    if (!okByExit) {
-      const reason = describeRawErrors(raw);
-      if (reason !== null) toolRun.reason = reason;
+    const check2 = checkSemgrepReport({
+      raw,
+      exitCode: result.exitCode,
+      outcome: result.outcome,
+      targets: 1,
+      projectPath: ctx.projectPath
+    });
+    if (check2.verdict === "ok") {
+      tools_run.push({ name: "semgrep", status: "ok" });
+    } else if (check2.verdict === "partial" && check2.partial !== void 0) {
+      tools_run.push({
+        name: "semgrep",
+        status: "ok",
+        reason: describePartialParse(check2.partial, "bugs in the unparsed spans may be missing"),
+        partially_parsed: check2.partial
+      });
+      missing_tools.push("semgrep");
+    } else if (check2.verdict === "scanned_nothing") {
+      tools_run.push({
+        name: "semgrep",
+        status: "skipped",
+        reason: "semgrep scanned 0 files \u2014 nothing here is a language its packs cover, or the packs loaded nothing"
+      });
+      missing_tools.push("semgrep");
+    } else {
+      tools_run.push({
+        name: "semgrep",
+        status: "failed",
+        reason: describeRawErrors(raw) ?? check2.reason ?? "semgrep failed"
+      });
     }
-    tools_run.push(toolRun);
     return {
-      outcome: ok ? "completed" : result.outcome,
+      outcome: check2.verdict === "failed" && !wasAnythingScanned(raw) ? result.outcome : "completed",
       tools_run,
       missing_tools,
       parser_inputs,
@@ -57352,8 +57375,7 @@ registerToolModule(
             });
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
-            const ok = r.outcome === "completed" || r.exitCode === 1;
-            tools_run.push({ name: "semgrep-wp", status: ok ? "ok" : "failed" });
+            recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
           })()
         );
       } else {
@@ -57463,6 +57485,43 @@ registerToolModule(
     }
   })
 );
+function recordSemgrepWp(args) {
+  const { raw, run, projectPath, tools_run, missing_tools } = args;
+  const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1, projectPath });
+  if (check2.verdict === "ok") {
+    tools_run.push({ name: "semgrep-wp", status: "ok" });
+    return;
+  }
+  if (check2.verdict === "partial" && check2.partial !== void 0) {
+    tools_run.push({
+      name: "semgrep-wp",
+      status: "ok",
+      reason: describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
+      partially_parsed: check2.partial
+    });
+    missing_tools.push("semgrep-wp");
+    return;
+  }
+  if (check2.verdict === "scanned_nothing") {
+    if (!hasFileWithExtension(projectPath, [".php"])) {
+      tools_run.push({
+        name: "semgrep-wp",
+        status: "skipped",
+        reason: "not applicable: no .php file here for p/php or p/wordpress to read"
+      });
+      return;
+    }
+    tools_run.push({
+      name: "semgrep-wp",
+      status: "skipped",
+      reason: "semgrep scanned 0 files although .php files exist \u2014 excluded (.semgrepignore) or the rules loaded nothing"
+    });
+    missing_tools.push("semgrep-wp");
+    return;
+  }
+  const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  tools_run.push({ name: "semgrep-wp", status: "failed", reason: check2.reason ?? stderr ?? "semgrep failed" });
+}
 
 // src/tools/wpAudit.ts
 import { existsSync as existsSync39 } from "node:fs";
