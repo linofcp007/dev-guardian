@@ -1046,6 +1046,21 @@ keeps working (migrations 004–011 are additive).
   `.claude/settings*.json` is denied when the command names a key that
   switches the hooks off, and `claude plugin disable|uninstall` of
   dev-guardian is denied. A program run from a file is still not seen.
+- **`cmd /c` no longer hides a catastrophic command.** `cmd /c rd /s /q C:\`,
+  `cmd /c "rmdir /s /q %USERPROFILE%"`, `cmd /c "rm -rf /"`, `cmd /c "bash -c
+  'rm -rf /'"` and `cmd /c "curl …|sh"` were `ok` — through the PowerShell
+  tool too. Every command of a `cmd /c` line now gets the full assessment of a
+  top-level statement; `%USERPROFILE%`, `%SystemDrive%`, `$env:USERPROFILE`
+  and `C:\Windows` / `C:\Users` / `C:\Program Files` are catastrophic delete
+  targets; cmd's `start` is followed to the program it runs.
+- **The shell guard and the install hook finish inside the hook's timeout.**
+  The pattern rules were quadratic inside a statement (127 × `chmod
+  -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s
+  timeout, after which a command runs unassessed); they are linear now. The
+  command is read to 512 KB and a 2.5 s budget backs the caps up, each named
+  in its warning. The install hook looks each package up once, at most 50
+  per command (60 KB of repeated `npm i x;` took ~57 s). Every measured worst case
+  now answers in under 1 s.
 - **Padding a line no longer hides a catastrophic command from the shell
   guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
   `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
