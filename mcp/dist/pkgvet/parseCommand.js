@@ -586,14 +586,50 @@ function flagValue(words, names) {
     }
     return undefined;
 }
+/** Why a package found only by reading the command as PowerShell does is never denied as missing. */
+const POWERSHELL_READING = 'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) — vetted for malicious versions only';
+function packageKey(p) {
+    return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ''}`;
+}
 /**
  * Every install command in `command`, with the packages each would fetch
  * from a registry. `[]` for a command that installs nothing by name —
  * including a bare `npm install` or `pip install -r requirements.txt`.
+ *
+ * The command is read the POSIX way `splitShell` reads every command. For the
+ * PowerShell tool (`shell: 'powershell'`) it is ALSO read the way PowerShell
+ * reads it ({@link powershellAsPosix}): `npm i a,b` hands npm two packages,
+ * a backtick-newline continues the line, `''` inside `'…'` is one quote, and a
+ * no-break space separates words. A package only that second reading finds is
+ * added — and marked uncertain, so it can only ever be denied as MALICIOUS,
+ * never as missing (follow-up Part Y, item 5).
  */
-export function parseInstallCommands(command) {
-    const out = [];
+export function parseInstallCommands(command, opts = {}) {
     const text = stripComments(command);
+    const out = parseReading(text, null);
+    if (opts.shell !== 'powershell')
+        return out;
+    const asPowerShell = powershellAsPosix(text);
+    if (asPowerShell === text)
+        return out;
+    const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
+    for (const c of parseReading(asPowerShell, POWERSHELL_READING)) {
+        const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
+        if (packages.length === 0)
+            continue;
+        for (const p of packages)
+            seen.add(packageKey(p));
+        out.push({ ...c, packages, skipped: [] });
+    }
+    return out;
+}
+/**
+ * The install commands of one reading of the command. `forced`, when given,
+ * is the reason no package of this reading may be denied as missing;
+ * otherwise the controller ruling's confident-shape test decides.
+ */
+function parseReading(text, forced) {
+    const out = [];
     let split;
     try {
         split = splitShell(text);
@@ -603,7 +639,7 @@ export function parseInstallCommands(command) {
     }
     // Controller ruling, round 2: an ALLOWLIST of confident shapes, not a
     // denylist of uncertainty signals. `null` = deny-eligible.
-    const notConfident = confidentShape(text);
+    const notConfident = forced ?? confidentShape(text);
     const envChange = changesEnvironment(text, split.statements);
     let dirChanged = false;
     for (const statement of split.statements) {
@@ -622,6 +658,77 @@ export function parseInstallCommands(command) {
             if (changesDirectory(words))
                 dirChanged = true;
         }
+    }
+    return out;
+}
+/** Characters PowerShell separates words on that a POSIX shell does not (NBSP, NEL, the Unicode spaces). */
+const UNICODE_SPACE = /[\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\f\v]/;
+/** `text` as a POSIX single-quoted word. */
+function posixSingle(text) {
+    return `'${text.replace(/'/g, "'\\''")}'`;
+}
+/**
+ * The command as PowerShell reads it, respelled for a POSIX reader
+ * (`splitShell`): in `'…'`, `''` is one literal quote; in `"…"`, a backtick
+ * escapes the next character, `""` is one quote and a backslash is literal;
+ * outside quotes, a backtick escapes the next character and a backtick at the
+ * end of a line continues it, a backslash is literal, an unquoted comma
+ * separates the elements of an array (each one its own argument to a native
+ * command) and a Unicode space separates words. Everything else is left as it
+ * is — this is a reading for install vetting, not a PowerShell parser.
+ */
+export function powershellAsPosix(text) {
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        const ch = text.charAt(i);
+        if (ch === "'" || ch === '"') {
+            let lit = '';
+            let j = i + 1;
+            while (j < text.length) {
+                const c = text.charAt(j);
+                if (ch === '"' && c === '`' && j + 1 < text.length) {
+                    lit += text.charAt(j + 1);
+                    j += 2;
+                    continue;
+                }
+                if (c === ch) {
+                    if (text.charAt(j + 1) === ch) {
+                        lit += ch;
+                        j += 2;
+                        continue;
+                    }
+                    break;
+                }
+                lit += c;
+                j += 1;
+            }
+            out += posixSingle(lit);
+            i = j + 1;
+            continue;
+        }
+        if (ch === '`') {
+            const next = text.charAt(i + 1);
+            if (next === '\n')
+                i += 2;
+            else if (next === '\r' && text.charAt(i + 2) === '\n')
+                i += 3;
+            else {
+                if (next !== '')
+                    out += posixSingle(next);
+                i += 2;
+                continue;
+            }
+            out += ' ';
+            continue;
+        }
+        if (ch === '\\')
+            out += '\\\\';
+        else if (ch === ',' || UNICODE_SPACE.test(ch))
+            out += ' ';
+        else
+            out += ch;
+        i += 1;
     }
     return out;
 }
@@ -718,14 +825,21 @@ const ALLOW = {
         bool: set('--dev', '-D', '--allow-prereleases', '--dry-run', '--lock', '-q', '--quiet', '-v', '--verbose', '-n', '--no-interaction'),
         value: set('--group', '-G', '--optional'),
     },
+    // Not `--no-update` / `--no-install` (composer) or `--no-restore` / `-n`
+    // (dotnet): each defers the lookup the command would make, so a name the
+    // public registry lacks is not yet a failed install (follow-up Part Y).
     composer: {
-        bool: set('--dev', '-W', '--with-all-dependencies', '-w', '--with-dependencies', '--update-with-dependencies', '--update-with-all-dependencies', '--no-update', '--no-install', '--no-scripts', '--no-progress', '-n', '--no-interaction', '-q', '--quiet', '--sort-packages'),
+        bool: set('--dev', '-W', '--with-all-dependencies', '-w', '--with-dependencies', '--update-with-dependencies', '--update-with-all-dependencies', '--no-scripts', '--no-progress', '-n', '--no-interaction', '-q', '--quiet', '--sort-packages'),
         value: set(),
     },
-    dotnet: { bool: set('--prerelease', '-n', '--no-restore'), value: set('-v', '--version', '-f', '--framework') },
+    dotnet: { bool: set('--prerelease'), value: set('-v', '--version', '-f', '--framework') },
 };
-/** Characters that, outside quotes, make a command something other than ONE plain simple statement. */
-const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\]]/;
+/**
+ * Characters that, outside quotes, make a command something other than ONE
+ * plain simple statement. `,` too: PowerShell hands a native command each
+ * element of `a,b` as its own argument.
+ */
+const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
 function notSingle(why) {
     return `not a single plain install statement (${why})`;
 }
@@ -751,10 +865,13 @@ export function confidentShape(text) {
     for (let i = 0; i < t.length; i += 1) {
         const ch = t.charAt(i);
         if (quote === "'") {
-            if (ch === "'")
-                quote = null;
-            else
+            if (ch !== "'")
                 cur += ch;
+            // `'a''b'`: two spans to a POSIX shell, ONE with a literal quote to PowerShell.
+            else if (t.charAt(i + 1) === "'")
+                return notSingle("adjacent '…' spans (PowerShell reads '' as a quote)");
+            else
+                quote = null;
             continue;
         }
         if (quote === '"') {

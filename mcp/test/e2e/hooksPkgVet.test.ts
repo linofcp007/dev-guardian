@@ -70,7 +70,8 @@ const CAN_SYMLINK = ((): boolean => {
   }
 })();
 
-const LEAKY_ENV =/^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
+const LEAKY_ENV =
+  /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
 function runHook(command: string, routes: Record<string, Route | Route[]>, opts: { tool?: string; env?: Record<string, string> } = {}): HookOut {
   const base: Record<string, string> = {};
@@ -93,6 +94,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       APPDATA: home,
       LOCALAPPDATA: home,
       ProgramData: home,
+      'ProgramFiles(x86)': home,
       XDG_CONFIG_HOME: home,
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
@@ -351,8 +353,49 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       });
       expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(
-        're-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0',
+        're-run the install with an explicit `--registry <url>`, or prefix the command with `GUARDIAN_PKG_VET=0`.',
       );
+    });
+
+    it('control: the escape hatch it names really works — the prefixed command is not denied', () => {
+      const r = runHook('GUARDIAN_PKG_VET=0 npm i -D react-form-autopilot-helperz', {
+        'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not found on the public registry/);
+    });
+  });
+
+  // Follow-up Part Y: PowerShell hands a native command each element of
+  // `a,b` as its own argument and continues a line after a backtick. Those
+  // packages were never vetted; a MALICIOUS one is now denied through the real
+  // hook, while a missing name there only warns.
+  describe('Part Y — PowerShell shapes through the real hook', () => {
+    const routes = (missing: boolean): Record<string, Route> => ({
+      'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+      'https://registry.npmjs.org/evil-helper-zz': missing ? { status: 404 } : npmDoc('1.0.0'),
+      [OSV]: { osv: missing ? {} : { 'evil-helper-zz@1.0.0': ['MAL-2026-0042'] } },
+    });
+
+    it.each([
+      ['a comma list', 'npm i lodash,evil-helper-zz'],
+      ['a backtick continuation', 'npm i lodash `\n  evil-helper-zz'],
+    ])('%s: a malicious package is denied', (_label, command) => {
+      const r = runHook(command, routes(false), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0042');
+    });
+
+    it('a comma list: a missing name warns, never denies', () => {
+      const r = runHook('npm i lodash,evil-helper-zz', routes(true), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/evil-helper-zz.*not found on the public registry/s);
+    });
+
+    it('the PowerShell deny spells its escape hatch the PowerShell way', () => {
+      const r = runHook('npm i evil-helper-zz', routes(true), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain("`$env:GUARDIAN_PKG_VET = '0'`");
     });
   });
 

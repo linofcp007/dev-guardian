@@ -69277,6 +69277,9 @@ var ALLOW = {
     ),
     value: set("--group", "-G", "--optional")
   },
+  // Not `--no-update` / `--no-install` (composer) or `--no-restore` / `-n`
+  // (dotnet): each defers the lookup the command would make, so a name the
+  // public registry lacks is not yet a failed install (follow-up Part Y).
   composer: {
     bool: set(
       "--dev",
@@ -69286,8 +69289,6 @@ var ALLOW = {
       "--with-dependencies",
       "--update-with-dependencies",
       "--update-with-all-dependencies",
-      "--no-update",
-      "--no-install",
       "--no-scripts",
       "--no-progress",
       "-n",
@@ -69298,7 +69299,7 @@ var ALLOW = {
     ),
     value: set()
   },
-  dotnet: { bool: set("--prerelease", "-n", "--no-restore"), value: set("-v", "--version", "-f", "--framework") }
+  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") }
 };
 
 // src/pkgvet/popular.ts
@@ -69711,13 +69712,21 @@ function npmConfigFiles(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const files = [];
-  for (const dir of ancestors(ctx)) {
+  const near = ancestors(ctx);
+  for (const dir of near) {
     files.push(
       { path: join75(dir, ".npmrc"), parse: fromNpmrc },
       { path: join75(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
       { path: join75(dir, ".yarnrc"), parse: fromYarnrc },
       { path: join75(dir, "bunfig.toml"), parse: fromBunfig }
     );
+  }
+  const top = near[near.length - 1];
+  if (top !== void 0) {
+    for (let dir = dirname20(top), i2 = 0; i2 < 64; dir = dirname20(dir), i2 += 1) {
+      files.push({ path: join75(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      if (dirname20(dir) === dir) break;
+    }
   }
   const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join75(home, ".config");
   const localAppData = envValue(env, "LOCALAPPDATA") ?? join75(home, "AppData", "Local");
@@ -69741,7 +69750,7 @@ var ENV_REGISTRY = {
   npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
   pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
   packagist: /^$/,
-  nuget: /^NUGET_.+$/i
+  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NuGetPackageSourceCredentials_.+)$/i
 };
 function envRegistry(ecosystem, ctx) {
   for (const [key, raw] of Object.entries(envOf(ctx))) {
@@ -69885,9 +69894,11 @@ function pypiRegistry(name, ctx) {
   );
   const appdata = envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming");
   confs.push(join75(appdata, "pip", "pip.ini"), join75(home, "pip", "pip.ini"));
-  const venv = envValue(env, "VIRTUAL_ENV");
-  if (venv !== void 0) confs.push(join75(venv, "pip.conf"), join75(venv, "pip.ini"));
+  for (const prefix of [envValue(env, "VIRTUAL_ENV"), envValue(env, "CONDA_PREFIX")]) {
+    if (prefix !== void 0) confs.push(join75(prefix, "pip.conf"), join75(prefix, "pip.ini"));
+  }
   confs.push(join75(etc, "pip.conf"), join75(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join75(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
   for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join75(d, "pip", "pip.conf"));
   const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join75(programData, "pip", "pip.ini"));
@@ -69978,6 +69989,18 @@ function nugetRegistry(ctx) {
   for (const dir of [join75(appdata, "NuGet"), join75(home, ".nuget", "NuGet"), join75(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
+  }
+  const configDirs = [
+    join75(appdata, "NuGet", "config"),
+    join75(home, ".nuget", "config"),
+    join75(home, ".config", "NuGet", "config"),
+    join75(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join75(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+  ];
+  const programFilesX86 = envValue(env, "ProgramFiles(x86)");
+  if (programFilesX86 !== void 0) configDirs.push(join75(programFilesX86, "NuGet", "Config"));
+  for (const dir of configDirs) {
+    for (const name of listDir(dir, ctx).filter((f) => /\.config$/i.test(f)).sort()) files.push(join75(dir, name));
   }
   for (const path6 of files) {
     const text = read(path6, ctx);

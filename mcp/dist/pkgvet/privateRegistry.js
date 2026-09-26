@@ -305,8 +305,19 @@ function npmConfigFiles(ctx) {
     const env = envOf(ctx);
     const home = homeOf(ctx);
     const files = [];
-    for (const dir of ancestors(ctx)) {
+    const near = ancestors(ctx);
+    for (const dir of near) {
         files.push({ path: join(dir, '.npmrc'), parse: fromNpmrc }, { path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml }, { path: join(dir, '.yarnrc'), parse: fromYarnrc }, { path: join(dir, 'bunfig.toml'), parse: fromBunfig });
+    }
+    // Yarn Berry reads `.yarnrc.yml` in EVERY ancestor up to the filesystem
+    // root — past the repository root and the home directory (follow-up Part Y).
+    const top = near[near.length - 1];
+    if (top !== undefined) {
+        for (let dir = dirname(top), i = 0; i < 64; dir = dirname(dir), i += 1) {
+            files.push({ path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml });
+            if (dirname(dir) === dir)
+                break;
+        }
     }
     const xdg = envValue(env, 'XDG_CONFIG_HOME') ?? join(home, '.config');
     const localAppData = envValue(env, 'LOCALAPPDATA') ?? join(home, 'AppData', 'Local');
@@ -328,14 +339,18 @@ function npmConfigFiles(ctx) {
 /**
  * Environment variables that point a package manager at a registry, matched
  * case-insensitively on the name. The first whose value is not the public
- * registry (or is not a URL at all — `UV_INDEX_STRATEGY`, `NUGET_PACKAGES`)
- * counts. `*NO_INDEX*` counts only when truthy.
+ * registry (or is not a URL at all — `UV_INDEX_STRATEGY`) counts.
+ * `*NO_INDEX*` counts only when truthy. For NuGet, only a variable that names
+ * a source, a feed or a configuration file (`NUGET_*SOURCE*`, `NUGET_*FEED*`,
+ * `NUGET_*CONFIG*`) or a source's credentials
+ * (`NuGetPackageSourceCredentials_<name>`): `NUGET_PACKAGES` (the package
+ * cache) or `NUGET_XMLDOC_MODE` explain nothing (follow-up Part Y).
  */
 const ENV_REGISTRY = {
     npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
     pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
     packagist: /^$/,
-    nuget: /^NUGET_.+$/i,
+    nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NuGetPackageSourceCredentials_.+)$/i,
 };
 function envRegistry(ecosystem, ctx) {
     for (const [key, raw] of Object.entries(envOf(ctx))) {
@@ -523,10 +538,14 @@ function pypiRegistry(name, ctx) {
     confs.push(join(xdg, 'pip', 'pip.conf'), join(home, '.pip', 'pip.conf'), join(home, 'Library', 'Application Support', 'pip', 'pip.conf'));
     const appdata = envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming');
     confs.push(join(appdata, 'pip', 'pip.ini'), join(home, 'pip', 'pip.ini'));
-    const venv = envValue(env, 'VIRTUAL_ENV');
-    if (venv !== undefined)
-        confs.push(join(venv, 'pip.conf'), join(venv, 'pip.ini'));
+    // pip's "site" configuration lives in the environment's prefix: a venv's,
+    // or a conda environment's (`$CONDA_PREFIX`).
+    for (const prefix of [envValue(env, 'VIRTUAL_ENV'), envValue(env, 'CONDA_PREFIX')]) {
+        if (prefix !== undefined)
+            confs.push(join(prefix, 'pip.conf'), join(prefix, 'pip.ini'));
+    }
     confs.push(join(etc, 'pip.conf'), join(etc, 'xdg', 'pip', 'pip.conf'));
+    confs.push(join(ctx.systemLibraryDir ?? '/Library', 'Application Support', 'pip', 'pip.conf'));
     for (const d of (envValue(env, 'XDG_CONFIG_DIRS') ?? '').split(':').filter(Boolean))
         confs.push(join(d, 'pip', 'pip.conf'));
     const programData = envValue(env, 'ProgramData') ?? envValue(env, 'PROGRAMDATA');
@@ -644,6 +663,22 @@ function nugetRegistry(ctx) {
         const f = nugetConfigIn(dir, ctx);
         if (f !== undefined)
             files.push(f);
+    }
+    // Every `*.config` in the additional user-wide directories and the
+    // machine-wide ones, as NuGet reads them (follow-up Part Y).
+    const configDirs = [
+        join(appdata, 'NuGet', 'config'),
+        join(home, '.nuget', 'config'),
+        join(home, '.config', 'NuGet', 'config'),
+        join(ctx.etcDir ?? '/etc', 'opt', 'NuGet', 'Config'),
+        join(ctx.systemLibraryDir ?? '/Library', 'Application Support', 'NuGet', 'Config'),
+    ];
+    const programFilesX86 = envValue(env, 'ProgramFiles(x86)');
+    if (programFilesX86 !== undefined)
+        configDirs.push(join(programFilesX86, 'NuGet', 'Config'));
+    for (const dir of configDirs) {
+        for (const name of listDir(dir, ctx).filter((f) => /\.config$/i.test(f)).sort())
+            files.push(join(dir, name));
     }
     for (const path of files) {
         const text = read(path, ctx);

@@ -28,6 +28,7 @@ const ctx = (env: Record<string, string> = {}) => ({
   env,
   etcDir: join(home, 'no-etc'),
   nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+  systemLibraryDir: join(home, 'no-library'),
 });
 
 describe('customRegistryFor — npm', () => {
@@ -333,8 +334,103 @@ describe('fix round 2 — registry context the hook could still miss', () => {
     expect(customRegistryFor('pypi', 'requests', ctx({ PIP_NO_INDEX: '0' }))).toBeNull();
   });
 
-  it('nuget: any NUGET_* env var counts', () => {
-    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ NUGET_PACKAGES: '/opt/nuget' }))).toMatchObject({ source: 'NUGET_PACKAGES' });
+  // Follow-up Part Y: only a NUGET_* variable that names a source, a feed or a
+  // config file counts; NUGET_PACKAGES is the package cache.
+  it.each([
+    ['NUGET_SOURCE', 'https://nuget.corp.local/v3/index.json'],
+    ['nuget_feed_url', 'https://nuget.corp.local/v3/index.json'],
+    ['NUGET_RESTORE_CONFIG_FILE', '/ci/nuget.config'],
+    ['NuGetPackageSourceCredentials_corp', 'Username=ci;Password=x'],
+  ])('nuget: %s counts', (name, value) => {
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ [name]: value }))).toMatchObject({ source: name });
+  });
+
+  it.each([
+    ['NUGET_PACKAGES', '/opt/nuget'],
+    ['NUGET_XMLDOC_MODE', 'skip'],
+    ['NUGET_HTTP_CACHE_PATH', '/tmp/nuget-http'],
+    ['NUGET_CERT_REVOCATION_MODE', 'offline'],
+  ])('nuget: %s does not', (name, value) => {
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ [name]: value }))).toBeNull();
+  });
+});
+
+// Follow-up Part Y (item 5): configuration the package managers read that
+// this did not — each one a false DENY of a private name waiting to happen.
+describe('customRegistryFor — the configuration locations that were still missing (Part Y)', () => {
+  const NUGET_CORP =
+    '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>';
+
+  it('Yarn Berry reads .yarnrc.yml in every ancestor up to the root — above the repository root too', () => {
+    const repo = join(project, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(project, '.yarnrc.yml'), 'npmRegistryServer: "https://npm.corp.local"\n');
+    expect(customRegistryFor('npm', 'corp-lib', { ...ctx(), projectDir: repo })).toMatchObject({
+      url: 'https://npm.corp.local',
+    });
+    // …which is Yarn's rule, not npm's: a parent .npmrc above the repository root still is not read.
+    rmSync(join(project, '.yarnrc.yml'));
+    writeFileSync(join(project, '.npmrc'), 'registry=https://npm.corp.local/\n');
+    expect(customRegistryFor('npm', 'corp-lib', { ...ctx(), projectDir: repo })).toBeNull();
+  });
+
+  it('NuGet machine-wide configs: %ProgramFiles(x86)%\\NuGet\\Config\\*.config', () => {
+    const pf = join(home, 'pf86');
+    mkdirSync(join(pf, 'NuGet', 'Config'), { recursive: true });
+    writeFileSync(join(pf, 'NuGet', 'Config', 'Corp.Offline.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ 'ProgramFiles(x86)': pf }))).toMatchObject({
+      url: 'https://nuget.corp.local/v3/index.json',
+    });
+  });
+
+  it('NuGet machine-wide configs: /etc/opt/NuGet/Config/*.config', () => {
+    const dir = join(home, 'no-etc', 'opt', 'NuGet', 'Config');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).not.toBeNull();
+  });
+
+  it('NuGet machine-wide configs: /Library/Application Support/NuGet/Config/*.config (macOS)', () => {
+    const lib = join(home, 'Library-system');
+    mkdirSync(join(lib, 'Application Support', 'NuGet', 'Config'), { recursive: true });
+    writeFileSync(join(lib, 'Application Support', 'NuGet', 'Config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', { ...ctx(), systemLibraryDir: lib })).not.toBeNull();
+  });
+
+  it('NuGet extra user configs: %APPDATA%\\NuGet\\config\\*.config, ~/.nuget/config/*.config', () => {
+    const appdata = join(home, 'Roaming');
+    mkdirSync(join(appdata, 'NuGet', 'config'), { recursive: true });
+    writeFileSync(join(appdata, 'NuGet', 'config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ APPDATA: appdata }))).not.toBeNull();
+    rmSync(appdata, { recursive: true, force: true });
+    mkdirSync(join(home, '.nuget', 'config'), { recursive: true });
+    writeFileSync(join(home, '.nuget', 'config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).not.toBeNull();
+  });
+
+  it('a *.config there that names only nuget.org is not custom, and a file not named *.config is not read', () => {
+    const dir = join(home, 'no-etc', 'opt', 'NuGet', 'Config');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'public.config'),
+      '<configuration><packageSources><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>',
+    );
+    writeFileSync(join(dir, 'notes.txt'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toBeNull();
+  });
+
+  it('pip: $CONDA_PREFIX/pip.conf (a conda environment is pip\'s site)', () => {
+    const conda = join(home, 'miniconda', 'envs', 'app');
+    mkdirSync(conda, { recursive: true });
+    writeFileSync(join(conda, 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    expect(customRegistryFor('pypi', 'corp-lib', ctx({ CONDA_PREFIX: conda }))).not.toBeNull();
+  });
+
+  it('pip: /Library/Application Support/pip/pip.conf (macOS system-wide)', () => {
+    const lib = join(home, 'Library-system');
+    mkdirSync(join(lib, 'Application Support', 'pip'), { recursive: true });
+    writeFileSync(join(lib, 'Application Support', 'pip', 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    expect(customRegistryFor('pypi', 'corp-lib', { ...ctx(), systemLibraryDir: lib })).not.toBeNull();
   });
 });
 

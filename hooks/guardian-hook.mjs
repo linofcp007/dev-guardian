@@ -550,18 +550,21 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
  * never from a project file, for the same reason the bash block cannot be
  * downgraded from one (see `projectOverrides`).
  */
-async function vetInstallCommand(command, cwd) {
+async function vetInstallCommand(command, cwd, toolName) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
   try {
     const mod = await import(pathToFileURL(join(DIST_PKGVET, 'hookDecision.js')).href);
-    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR });
+    // The PowerShell tool's commands are also read the way PowerShell reads
+    // them (comma lists, backtick continuations) — see `parseInstallCommands`.
+    const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
+    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell });
   } catch (err) {
     debug(`package vetting skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
 
-async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
+async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
   const command = input?.command;
   if (typeof command !== 'string' || !command) noop();
 
@@ -593,7 +596,7 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
   // point (emit() exits), so it is never vetted. From here on the network
   // may have been used, so the answer goes out through respond(), never
   // emit()/noop() — see respond() for why.
-  const vet = await vetInstallCommand(command, cwd);
+  const vet = await vetInstallCommand(command, cwd, toolName);
   if (vet?.deny) {
     return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
   }
@@ -759,7 +762,7 @@ async function main() {
       return noop();
     case 'PreToolUse':
       if (toolName === 'Bash' || toolName === 'PowerShell') {
-        return handlePreToolUseBash(input, cfg, cwd, allowlist);
+        return handlePreToolUseBash(input, cfg, cwd, allowlist, toolName);
       }
       if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
         guardianConfigWriteGuard(toolName, input, cwd); // exits via emit() if it applies

@@ -12,8 +12,8 @@
  *     registry, npmjs auth token (scoped names) or local workspace package
  *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
  *     little — the install would 404 anyway — and a false deny blocks real
- *     work. That deny carries an escape hatch ({@link ESCAPE_HATCH}); a
- *     malicious one does not;
+ *     work. That deny carries an escape hatch ({@link escapeHatch}, named per
+ *     tool and shell); a malicious one does not;
  *   - **warn** (additionalContext) on a missing name that was not denied
  *     ("not found on the public registry — if it is private or local,
  *     ignore this"), a version < 72 h old, install scripts, typosquat
@@ -29,7 +29,7 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
-import { parseInstallCommands } from './parseCommand.js';
+import { parseInstallCommands, type CommandShell } from './parseCommand.js';
 import type { PackageChecks, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
 import { isExactVersion } from './versions.js';
@@ -50,6 +50,13 @@ export interface HookVetOptions {
   etcDir?: string;
   platform?: NodeJS.Platform;
   nodeExecPath?: string;
+  systemLibraryDir?: string;
+  /**
+   * The shell that will run the command — the hook's `tool_name`. The
+   * PowerShell tool's commands are also read the way PowerShell reads them
+   * (`parseInstallCommands`), and its escape hatch is spelled for it.
+   */
+  shell?: CommandShell;
 }
 
 export interface HookDecision {
@@ -72,7 +79,8 @@ function firstLine(r: PackageVetResult): string {
  * vetted clean.
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
-  const commands = parseInstallCommands(command).filter((c) => c.packages.length > 0);
+  const shell = opts.shell ?? 'bash';
+  const commands = parseInstallCommands(command, { shell }).filter((c) => c.packages.length > 0);
   if (commands.length === 0) return null;
 
   const env = opts.env ?? process.env;
@@ -91,6 +99,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           etcDir: opts.etcDir,
           platform: opts.platform,
           nodeExecPath: opts.nodeExecPath,
+          systemLibraryDir: opts.systemLibraryDir,
         },
         commandRegistries: c.registries,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
@@ -103,11 +112,13 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const warnings: string[] = [];
   const unverified: string[] = [];
   let malicious = false;
+  let missingIn: string | undefined;
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
       const d = decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
+      else if (d.deny !== undefined) missingIn = missingIn ?? cmd.manager;
       if (d.warn !== undefined) warnings.push(d.warn);
       if (d.unverified !== undefined) unverified.push(d.unverified);
     }
@@ -119,10 +130,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         `dev-guardian blocked this install: ${denies.join(' ')} ` +
         'Check the package name against the project documentation or the registry before installing anything. ' +
         // Controller ruling (round 2): a missing-name deny carries its own
-        // escape hatch — an explicit registry flag takes the command out of
-        // the confident shape, so the agent can always proceed. A MALICIOUS
-        // package gets no such hint.
-        (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : ESCAPE_HATCH),
+        // escape hatch — a registry flag, or an inline prefix, takes the
+        // command out of the confident shape, so the agent can always
+        // proceed. A MALICIOUS package gets no such hint.
+        (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn ?? '', shell)),
     };
   }
   const lines: string[] = [];
@@ -136,8 +147,42 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
 
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';
 
-export const ESCAPE_HATCH =
-  'If this package is private or local, re-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0.';
+/** The flag that names a registry, per package manager (`InstallCommand.manager`). */
+const REGISTRY_FLAG: Readonly<Record<string, string>> = {
+  npm: '`--registry <url>`',
+  pnpm: '`--registry <url>`',
+  bun: '`--registry <url>`',
+  pip: '`--index-url <url>`',
+  'uv-pip': '`--index-url <url>`',
+  uv: '`--index <url>`',
+  poetry: '`--source <name>`',
+  dotnet: '`--source <url>`',
+};
+
+/** Tools with no registry flag to name one with (Yarn classic has one, Berry has not; neither form can be told apart here). */
+const NO_REGISTRY_FLAG: Readonly<Record<string, string>> = {
+  yarn: 'Yarn Berry has no registry flag',
+  composer: 'composer has no registry flag',
+};
+
+/**
+ * The missing-name deny's own escape hatch (controller ruling, round 2): a way
+ * to re-run the install that takes it out of the plain shape, so the agent can
+ * always proceed. It names what the tool really has — a registry flag, or
+ * (composer, Yarn Berry) none — and an inline `GUARDIAN_PKG_VET=0`, spelled
+ * for the shell: a `VAR=x` prefix for bash, `$env:` for PowerShell. Neither
+ * touches the hook's own switch; a malicious version is still denied.
+ */
+export function escapeHatch(manager: string, shell: CommandShell = 'bash'): string {
+  const prefix =
+    shell === 'powershell'
+      ? "run `$env:GUARDIAN_PKG_VET = '0'` before it, in the same command"
+      : 'prefix the command with `GUARDIAN_PKG_VET=0`';
+  const flag = REGISTRY_FLAG[manager];
+  if (flag !== undefined) return `If this package is private or local, re-run the install with an explicit ${flag}, or ${prefix}.`;
+  const none = NO_REGISTRY_FLAG[manager];
+  return `If this package is private or local, ${prefix}${none !== undefined ? ` (${none})` : ''}.`;
+}
 
 const CHECK_KEYS: ReadonlyArray<keyof PackageChecks> = [
   'exists',
