@@ -974,6 +974,12 @@ keeps working (migrations 004–011 are additive).
 - **The `.gitignore` guard rewrote a mixed-ending file in one ending**, a diff
   of every line of the other. Each line now keeps its own ending; the lines it
   adds take the file's dominant one.
+- **`verify_live`'s report sanitizer was quadratic in findings that overlap one
+  another** (4000 custom-rule findings over one region: 5.9 s, the MCP server
+  frozen), and scrubbing value by value could leave a fragment of one value
+  where it overlapped another. Each run of overlapping findings is now
+  scrubbed in one pass per match, and overlapping occurrences become one
+  `REDACTED`.
 
 ### Security
 

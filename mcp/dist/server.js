@@ -44450,7 +44450,7 @@ function sanitizeGitleaksReport(text, keep) {
     const rule = stringField(item, "RuleID");
     return rule !== null && keep(rule) ? own[n2] ?? null : null;
   });
-  const others = items.map(() => /* @__PURE__ */ new Set());
+  const scrubberOf = items.map(() => null);
   const groups = /* @__PURE__ */ new Map();
   const unplaceable = /* @__PURE__ */ new Set();
   items.forEach((item, n2) => {
@@ -44469,17 +44469,19 @@ function sanitizeGitleaksReport(text, keep) {
       return span === null ? [] : [{ n: n2, span }];
     });
     placed.sort((a2, b) => a2.span.startLine - b.span.startLine || a2.span.startCol - b.span.startCol);
-    let active = [];
+    let run = [];
+    let runEnd = null;
+    const closeRun = () => {
+      const scrub = makeScrubber(run.flatMap((n2) => own[n2] ?? []));
+      for (const n2 of run) scrubberOf[n2] = scrub;
+      run = [];
+    };
     for (const current of placed) {
-      active = active.filter((a2) => !endsBefore(a2.span, current.span));
-      const mine = own[current.n];
-      for (const a2 of active) {
-        const theirs = own[a2.n];
-        if (theirs != null) others[current.n]?.add(theirs);
-        if (mine != null) others[a2.n]?.add(mine);
-      }
-      active.push(current);
+      if (runEnd !== null && endsBefore(runEnd, current.span)) closeRun();
+      if (run.length === 0 || runEnd === null || endsLater(current.span, runEnd)) runEnd = current.span;
+      run.push(current.n);
     }
+    closeRun();
   }
   const byCommit = /* @__PURE__ */ new Map();
   items.forEach((item, n2) => {
@@ -44507,7 +44509,8 @@ function sanitizeGitleaksReport(text, keep) {
     const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
     if ("Secret" in c3) c3["Secret"] = REDACTED;
     if (typeof c3["Match"] === "string") {
-      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null ? REDACTED : replaceAll(c3["Match"], [value, ...others[n2] ?? []]);
+      const scrub = scrubberOf[n2] ?? null;
+      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null || scrub === null ? REDACTED : scrub(c3["Match"]);
     }
     if (typeof c3["Message"] === "string" && c3["Message"].length > 0) {
       c3["Message"] = cleanMessage(stringField(item, "Commit") ?? "", c3["Message"]);
@@ -44527,6 +44530,74 @@ function replaceAll(text, needles) {
   for (const n2 of sorted) if (out.includes(n2)) out = out.split(n2).join(REDACTED);
   return out;
 }
+var EDGE = 65536;
+function makeScrubber(values) {
+  const at = (a2, i2) => a2[i2] ?? 0;
+  const edges = /* @__PURE__ */ new Map();
+  const parent = [0];
+  const unit = [0];
+  const depth = [0];
+  const longest = [0];
+  for (const v of values) {
+    let node = 0;
+    for (let i2 = 0; i2 < v.length; i2++) {
+      const c3 = v.charCodeAt(i2);
+      let child = edges.get(node * EDGE + c3);
+      if (child === void 0) {
+        child = parent.length;
+        edges.set(node * EDGE + c3, child);
+        parent.push(node);
+        unit.push(c3);
+        depth.push(i2 + 1);
+        longest.push(0);
+      }
+      node = child;
+    }
+    if (node !== 0) longest[node] = v.length;
+  }
+  if (parent.length === 1) return (text) => text;
+  const fail4 = parent.map(() => 0);
+  const order = parent.map((_, n2) => n2).sort((a2, b) => at(depth, a2) - at(depth, b));
+  for (const v of order) {
+    const p = at(parent, v);
+    if (v === 0 || p === 0) continue;
+    const c3 = at(unit, v);
+    let f = at(fail4, p);
+    while (f !== 0 && !edges.has(f * EDGE + c3)) f = at(fail4, f);
+    const target = edges.get(f * EDGE + c3) ?? 0;
+    fail4[v] = target;
+    if (at(longest, v) === 0) longest[v] = at(longest, target);
+  }
+  return (text) => {
+    const spans = [];
+    let node = 0;
+    for (let i2 = 0; i2 < text.length; i2++) {
+      const c3 = text.charCodeAt(i2);
+      let next = edges.get(node * EDGE + c3);
+      while (next === void 0 && node !== 0) {
+        node = at(fail4, node);
+        next = edges.get(node * EDGE + c3);
+      }
+      node = next ?? 0;
+      const length = at(longest, node);
+      if (length === 0) continue;
+      let start = i2 + 1 - length;
+      for (let last = spans.at(-1); last !== void 0 && last.end > start; last = spans.at(-1)) {
+        start = Math.min(start, last.start);
+        spans.pop();
+      }
+      spans.push({ start, end: i2 + 1 });
+    }
+    if (spans.length === 0) return text;
+    let out = "";
+    let pos = 0;
+    for (const s of spans) {
+      out += text.slice(pos, s.start) + REDACTED;
+      pos = s.end;
+    }
+    return out + text.slice(pos);
+  };
+}
 function spanOf(item) {
   const startLine = numberField(item, "StartLine");
   const endLine = numberField(item, "EndLine");
@@ -44537,6 +44608,9 @@ function spanOf(item) {
 }
 function endsBefore(a2, b) {
   return a2.endLine < b.startLine || a2.endLine === b.startLine && a2.endCol < b.startCol;
+}
+function endsLater(a2, b) {
+  return a2.endLine > b.endLine || a2.endLine === b.endLine && a2.endCol > b.endCol;
 }
 function isRecord2(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);

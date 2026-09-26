@@ -42,11 +42,16 @@
  *
  *   - `Secret` → `REDACTED`.
  *   - `Match` → its own value, and the value of every finding whose span
- *     OVERLAPS it (same file and commit; found with a sort + sweep, so the
- *     cost follows the overlaps, not the item count squared) → `REDACTED`.
- *     Another finding's value can only be inside a match that overlaps it.
- *     A match whose group has an item with no position cannot be placed and
- *     is withheld whole, as is the match of an item with no value.
+ *     overlaps it, directly or through a chain of overlapping spans (same
+ *     file and commit) → `REDACTED`. Another finding's value can only be
+ *     inside a match that overlaps it. A sort + sweep merges the spans into
+ *     runs that overlap, and each match is scrubbed of its run's values in
+ *     ONE pass over it (`makeScrubber`): scrubbed value by value, 4000
+ *     findings overlapping one region took 5.9 s — the count squared.
+ *     Overlapping occurrences of two values become one `REDACTED`, so no
+ *     fragment of either survives. A match whose group has an item with no
+ *     position cannot be placed and is withheld whole, as is the match of an
+ *     item with no value.
  *   - `Message` (the commit message, which gitleaks does not redact) and
  *     `Tags` → the values found in that commit / that item → `REDACTED`.
  *   - `Line` and `Fragment`, should a gitleaks version serialize them (the
@@ -151,8 +156,8 @@ export function sanitizeGitleaksReport(text, keep) {
         const rule = stringField(item, 'RuleID');
         return rule !== null && keep(rule) ? (own[n] ?? null) : null;
     });
-    // Overlapping matches, per file and commit.
-    const others = items.map(() => new Set());
+    // Runs of overlapping matches, per file and commit: one scrubber per run.
+    const scrubberOf = items.map(() => null);
     const groups = new Map();
     const unplaceable = new Set();
     items.forEach((item, n) => {
@@ -173,19 +178,22 @@ export function sanitizeGitleaksReport(text, keep) {
             return span === null ? [] : [{ n, span }];
         });
         placed.sort((a, b) => a.span.startLine - b.span.startLine || a.span.startCol - b.span.startCol);
-        let active = [];
+        let run = [];
+        let runEnd = null;
+        const closeRun = () => {
+            const scrub = makeScrubber(run.flatMap((n) => own[n] ?? []));
+            for (const n of run)
+                scrubberOf[n] = scrub;
+            run = [];
+        };
         for (const current of placed) {
-            active = active.filter((a) => !endsBefore(a.span, current.span));
-            const mine = own[current.n];
-            for (const a of active) {
-                const theirs = own[a.n];
-                if (theirs != null)
-                    others[current.n]?.add(theirs);
-                if (mine != null)
-                    others[a.n]?.add(mine);
-            }
-            active.push(current);
+            if (runEnd !== null && endsBefore(runEnd, current.span))
+                closeRun();
+            if (run.length === 0 || runEnd === null || endsLater(current.span, runEnd))
+                runEnd = current.span;
+            run.push(current.n);
         }
+        closeRun();
     }
     // The values of each commit, for its message.
     const byCommit = new Map();
@@ -220,10 +228,11 @@ export function sanitizeGitleaksReport(text, keep) {
         if ('Secret' in c)
             c['Secret'] = REDACTED;
         if (typeof c['Match'] === 'string') {
+            const scrub = scrubberOf[n] ?? null;
             c['Match'] =
-                value === null || unplaceable.has(key) || spanOf(item) === null
+                value === null || unplaceable.has(key) || spanOf(item) === null || scrub === null
                     ? REDACTED
-                    : replaceAll(c['Match'], [value, ...(others[n] ?? [])]);
+                    : scrub(c['Match']);
         }
         if (typeof c['Message'] === 'string' && c['Message'].length > 0) {
             c['Message'] = cleanMessage(stringField(item, 'Commit') ?? '', c['Message']);
@@ -248,6 +257,94 @@ function replaceAll(text, needles) {
             out = out.split(n).join(REDACTED);
     return out;
 }
+/** One UTF-16 code unit per trie edge: an edge's key is `node * EDGE + unit`. */
+const EDGE = 0x10000;
+/**
+ * A function that replaces every occurrence of any of `values` in a text by
+ * `REDACTED`, in one pass over the text however many values there are
+ * (Aho-Corasick over UTF-16 code units — the units `includes` compares). At
+ * each position the longest value ending there marks its span; spans that
+ * overlap merge into one `REDACTED`, so no fragment of any value survives,
+ * and spans that merely touch stay apart, as a value repeated back to back
+ * always did. Building costs about the values' total length.
+ */
+function makeScrubber(values) {
+    const at = (a, i) => a[i] ?? 0;
+    const edges = new Map();
+    const parent = [0];
+    const unit = [0];
+    const depth = [0];
+    /** The length of the longest value that is a suffix of the node's string; 0 for none. */
+    const longest = [0];
+    for (const v of values) {
+        let node = 0;
+        for (let i = 0; i < v.length; i++) {
+            const c = v.charCodeAt(i);
+            let child = edges.get(node * EDGE + c);
+            if (child === undefined) {
+                child = parent.length;
+                edges.set(node * EDGE + c, child);
+                parent.push(node);
+                unit.push(c);
+                depth.push(i + 1);
+                longest.push(0);
+            }
+            node = child;
+        }
+        if (node !== 0)
+            longest[node] = v.length;
+    }
+    if (parent.length === 1)
+        return (text) => text;
+    // Failure links, shallowest node first: each one's parent and every
+    // shorter suffix are settled before it.
+    const fail = parent.map(() => 0);
+    const order = parent.map((_, n) => n).sort((a, b) => at(depth, a) - at(depth, b));
+    for (const v of order) {
+        const p = at(parent, v);
+        if (v === 0 || p === 0)
+            continue;
+        const c = at(unit, v);
+        let f = at(fail, p);
+        while (f !== 0 && !edges.has(f * EDGE + c))
+            f = at(fail, f);
+        const target = edges.get(f * EDGE + c) ?? 0;
+        fail[v] = target;
+        if (at(longest, v) === 0)
+            longest[v] = at(longest, target);
+    }
+    return (text) => {
+        const spans = [];
+        let node = 0;
+        for (let i = 0; i < text.length; i++) {
+            const c = text.charCodeAt(i);
+            let next = edges.get(node * EDGE + c);
+            while (next === undefined && node !== 0) {
+                node = at(fail, node);
+                next = edges.get(node * EDGE + c);
+            }
+            node = next ?? 0;
+            const length = at(longest, node);
+            if (length === 0)
+                continue;
+            let start = i + 1 - length;
+            for (let last = spans.at(-1); last !== undefined && last.end > start; last = spans.at(-1)) {
+                start = Math.min(start, last.start);
+                spans.pop();
+            }
+            spans.push({ start, end: i + 1 });
+        }
+        if (spans.length === 0)
+            return text;
+        let out = '';
+        let pos = 0;
+        for (const s of spans) {
+            out += text.slice(pos, s.start) + REDACTED;
+            pos = s.end;
+        }
+        return out + text.slice(pos);
+    };
+}
 function spanOf(item) {
     const startLine = numberField(item, 'StartLine');
     const endLine = numberField(item, 'EndLine');
@@ -260,6 +357,10 @@ function spanOf(item) {
 /** `a` ends strictly before `b` starts. */
 function endsBefore(a, b) {
     return a.endLine < b.startLine || (a.endLine === b.startLine && a.endCol < b.startCol);
+}
+/** `a` ends strictly after `b` ends. */
+function endsLater(a, b) {
+    return a.endLine > b.endLine || (a.endLine === b.endLine && a.endCol > b.endCol);
 }
 function isRecord(v) {
     return typeof v === 'object' && v !== null && !Array.isArray(v);
