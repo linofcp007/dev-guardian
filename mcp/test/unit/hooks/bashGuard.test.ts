@@ -799,3 +799,86 @@ describe('assessBashCommand — a special file or link onto the hook configurati
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
   });
 });
+
+// Final review I13: the statements inside `do … done`, `then … fi`, `else`,
+// `elif … then` and `{ … }` were never assessed, because the reserved word
+// that opens each body sat where the command name belongs — `do rm -rf /`
+// read as a command called `do`. `( … )` and `a && b` already blocked. The
+// tokeniser now drops a reserved word at a command position, so a body
+// statement is judged exactly like a top-level one.
+describe('assessBashCommand — compound-command bodies are assessed like top-level statements (I13)', () => {
+  const blocked: string[] = [
+    'while :; do rm -rf /; done',
+    'for d in x; do rm -rf /; done',
+    'if true; then rm -rf /; fi',
+    'if x; then :; else rm -rf /; fi',
+    '{ rm -rf /; }',
+    'until false; do rm -rf ~; done',
+    'if a; then :; elif b; then rm -rf /; fi',
+    'if rm -rf /; then echo gone; fi',
+    'while rm -rf ~; do :; done',
+    'for d in a b\ndo\n  rm -rf /\ndone',
+    'if [ -n "$X" ]\nthen\n  rm -rf "$HOME"\nfi',
+    'true && { rm -rf /; }',
+    'echo x | while read -r l; do rm -rf /; done',
+    '! rm -rf /',
+    'if true; then sudo rm -rf /; fi',
+    'f() { rm -rf /; }',
+    'if true; then bash <<EOF\nrm -rf /\nEOF\nfi',
+    "for x in 1; do echo 'rm -rf ~' | bash; done",
+    'if true; then find / -delete; fi',
+  ];
+  it.each(blocked)('blocks %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('block');
+  });
+
+  const warned: string[] = [
+    'if [ -d node_modules ]; then rm -rf node_modules; fi',
+    'for d in dist build; do rm -rf "$d"; done',
+    'if true; then sudo systemctl restart nginx; fi',
+    'for x in 1; do sudo -u www-data ls; done',
+  ];
+  it.each(warned)('warns on %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('warn');
+  });
+
+  // What agents actually write: none of these may start warning or blocking.
+  const ok: string[] = [
+    'for f in *.ts; do echo "$f"; done',
+    'for f in $(ls); do wc -l "$f"; done',
+    'while read -r line; do echo "$line"; done < files.txt',
+    'if [ -f package.json ]; then npm test; fi',
+    'if git diff --quiet; then echo clean; else echo dirty; fi',
+    '{ echo a; echo b; } > out.txt',
+    'for i in 1 2 3; do sleep 1; done',
+    'while true; do git status; sleep 5; done',
+    'for pkg in a b; do npm view "$pkg" version; done',
+    'until curl -sf http://localhost:3000/health; do sleep 1; done',
+    'if ! command -v semgrep >/dev/null 2>&1; then echo "semgrep missing"; fi',
+    "git log --format='%s' | while read -r s; do echo \"$s\"; done",
+    'for d in */; do (cd "$d" && git pull --ff-only); done',
+    '[ -f .env ] || { echo "no .env"; exit 1; }',
+    'echo done; echo fi; echo then',
+    'if true\nthen\n  npm run build\nelse\n  npm ci\nfi',
+    'case "$1" in build) npm run build ;; test) npm test ;; esac',
+    'for f in src/*.ts; do grep -n "rm -rf /" "$f"; done',
+    'Get-ChildItem *.log | ForEach-Object { Remove-Item $_ }',
+    'if (Test-Path dist) { Write-Host "built" }',
+  ];
+  it.each(ok)('stays ok for %j', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+
+  it('drops only an UNQUOTED reserved word at a command position', () => {
+    const { statements } = splitShell('while :; do rm -rf /; done');
+    // `done` stays a statement (its masked text is unchanged) with no command.
+    expect(statements.map((s) => s.commands.map((c) => c.map((w) => w.value)))).toEqual([
+      [[':']],
+      [['rm', '-rf', '/']],
+      [],
+    ]);
+    // Quoted, it is a command name like any other; as an argument, data.
+    expect(splitShell('"do" x').statements[0]?.commands[0]?.map((w) => w.value)).toEqual(['do', 'x']);
+    expect(splitShell('echo do done').statements[0]?.commands[0]?.map((w) => w.value)).toEqual(['echo', 'do', 'done']);
+  });
+});

@@ -39,7 +39,10 @@
  * So `splitShell()` does a small, quote-aware, escape-aware, heredoc-aware
  * scan and yields **statements** (split on `&&`, `||`, `;`, newline, a
  * background `&`, `(`, `)` and backticks) each holding its **pipeline
- * members** as word lists. Rules then run against structure:
+ * members** as word lists. A reserved word at a command position (`do`,
+ * `then`, `else`, `{`, `!`, …) is dropped, so the body of a loop, an `if` or a
+ * brace group is judged like a top-level statement. Rules then run against
+ * structure:
  *
  *   - a statement keeps its pipeline intact, because `curl … | sh` is one
  *     hazard spanning a pipe — splitting on `|` would have silently disarmed
@@ -378,8 +381,20 @@ function skipHeredocBodies(source, from, pending) {
     return pos;
 }
 /**
+ * Shell reserved words that can stand where a command name belongs and are not
+ * themselves a command: the words that open or close a loop, a conditional or
+ * a brace group, plus `!` (pipeline negation). `splitShell` drops one of these
+ * — unquoted, at a command position — so the command that follows it is the
+ * one the rules see. Never `for`/`case`/`select`: the words after those are a
+ * variable name and a word list, not a command.
+ */
+const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!']);
+/**
  * Segments a command into statements and their pipeline members. Quote-,
  * escape- and heredoc-aware; not a shell parser (see the module comment).
+ * The body of a compound command is split like any other statement: the
+ * separators around it (`;`, newline, `&&`, `|`) already end a statement, and
+ * the reserved word that opens it is dropped (`COMPOUND_RESERVED`).
  */
 export function splitShell(command) {
     const statements = [];
@@ -406,7 +421,12 @@ export function splitShell(command) {
      */
     let currentStatement = { masked: '', commands: [] };
     const endWord = () => {
-        if (hasWord)
+        // A reserved word where a command name belongs opens or closes a compound
+        // command (`do rm -rf /`, `then …`, `{ …`); the command is the word AFTER
+        // it. Kept, it read as a command called `do`, and every loop, `if` and
+        // brace-group body went unassessed (final review I13).
+        const reserved = hasWord && !bufQuoted && words.length === 0 && COMPOUND_RESERVED.has(buf);
+        if (hasWord && !reserved)
             words.push({ value: buf, quoted: bufQuoted });
         buf = '';
         bufQuoted = false;

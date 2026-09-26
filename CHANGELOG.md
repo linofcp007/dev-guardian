@@ -905,6 +905,10 @@ keeps working (migrations 004–011 are additive).
   `echo … | bash`) is assessed as a command, with each heredoc attached to the
   statement that opened it; `dd of=` blocks only for a real block device. The
   deny message no longer names the file or key that disables the guard.
+- **The shell guard reads loop, `if` and brace-group bodies.** A command
+  inside `do … done`, `then … fi`, `else`, `elif`, `{ … }` or after `!` was
+  never assessed (`while :; do rm -rf /; done` read as a command called
+  `do`); it is now judged like a top-level statement.
 - **A hook config file can no longer hang the hooks into their timeout.**
   They read `.guardian/hooks.config.json`, `.guardian/hooks-allowlist.json`
   and `~/.config/dev-guardian/hooks.json` with no check on what the path was:
