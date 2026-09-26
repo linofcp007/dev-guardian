@@ -109,10 +109,13 @@ beforeAll(() => {
 
 const isToolShaped = (name: string): boolean => toolPrefixes.has(name.split('_')[0] ?? '');
 
+/** The README and its translations — each lists the commands and resources. */
+const READMES = ['README.md', 'README.pt-PT.md', 'README.es.md'];
+
 function docsWithHook(): { rel: string; text: string; checkAliases: boolean }[] {
   const docs = allDocs().map((d) => ({ rel: d.rel, text: d.text, checkAliases: true }));
-  // The README documents the command set to people who never open commands/.
-  docs.push({ rel: 'README.md', text: readFileSync(resolve(REPO_ROOT, 'README.md'), 'utf8'), checkAliases: true });
+  // The READMEs document the command set to people who never open commands/.
+  for (const rel of READMES) docs.push({ rel, text: readFileSync(resolve(REPO_ROOT, rel), 'utf8'), checkAliases: true });
   const hook = 'hooks/guardian-hook.mjs';
   // The hook is JavaScript: its regex literals end in flags like `/gi`, so only
   // `/guardian…` names are checked there, never the two-letter aliases.
@@ -269,7 +272,7 @@ describe('cross-references', () => {
     });
     const texts = [
       ...allDocs().map((d) => [d.rel, d.text] as const),
-      ['README.md', readFileSync(resolve(REPO_ROOT, 'README.md'), 'utf8')] as const,
+      ...READMES.map((rel) => [rel, readFileSync(resolve(REPO_ROOT, rel), 'utf8')] as const),
     ];
     const seen: string[] = [];
     const unknown: string[] = [];

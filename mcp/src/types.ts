@@ -336,7 +336,7 @@ export interface RouteRecord {
   language: string;
   /**
    * Never inferred from the absence of an auth decorator — see the design
-   * doc. 'none' is emitted only for affirmative public declarations such as
+   * of record. 'none' is emitted only for affirmative public declarations such as
    * WordPress `permission_callback: '__return_true'`.
    */
   auth_hint: 'none' | 'required' | 'unknown';

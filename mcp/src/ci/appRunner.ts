@@ -12,7 +12,7 @@
  * Deliberately separate from `runScans.ts`: the caller (`cli/dev-guardian.mjs`)
  * starts the app, then runs the scan pipeline, then stops the app in a
  * `finally` — `runScans` itself never touches a child process, and this
- * module never touches the scan pipeline. See design doc §7 for why
+ * module never touches the scan pipeline. See the design of record for why
  * `--start-command` lives here and not as an MCP tool parameter: a human
  * types a CLI flag; an MCP tool's parameters can be filled by a model
  * reading the very repository under scan.

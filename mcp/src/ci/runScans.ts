@@ -8,12 +8,12 @@
  * That is `host-rules/AGENTS.md`'s own rule — "invoke the MCP tools rather
  * than shelling out to the scanners" — applied to the CLI itself: there is
  * no second implementation of any scan, so when e.g. `scan_sast` changes, CI
- * changes with it (design doc §3).
+ * changes with it (the design of record).
  *
- * Order is not cosmetic (design doc §3): `map_attack_surface` persists the
+ * Order is not cosmetic (the design of record): `map_attack_surface` persists the
  * route inventory that `scan_dast` and `validate_finding` both refuse
  * without. `SCAN_SEQUENCE` documents the full order; `scan_dast` is included
- * only when the caller supplies a base url (design doc §7 — starting the
+ * only when the caller supplies a base url (the design of record — starting the
  * application is a separate, explicit capability, deliberately withheld from
  * the MCP tool itself).
  *
@@ -52,7 +52,7 @@ import type { ScanStepResult } from './types.js';
 import '../registerAll.js';
 
 /**
- * The full documented order (design doc §3). `scan_dast` always appears
+ * The full documented order (the design of record). `scan_dast` always appears
  * here: it is `buildSequence` below that removes it for a run with no base
  * url, never this constant — so `SCAN_SEQUENCE` always names "the order" in
  * full, and any given run's actual sequence is a sub-sequence of it.

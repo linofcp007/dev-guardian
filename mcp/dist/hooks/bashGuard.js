@@ -792,6 +792,154 @@ function assessFind(words, start) {
     return null;
 }
 /**
+ * The guardrail hooks' own configuration files: a project's
+ * `.guardian/hooks.config.json` / `.guardian/hooks-allowlist.json` and the
+ * user-level `~/.config/dev-guardian/hooks.json` — matched by their last path
+ * segments with the separators optional, because the POSIX-style tokenizer
+ * reads an UNQUOTED `\` as an escape and drops it
+ * (`C:\proj\.guardian\hooks.config.json` arrives as
+ * `C:proj.guardianhooks.config.json`). A quoted `\` is normalised to `/`.
+ */
+const HOOK_CONFIG_PATH = /(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
+function isHookConfigPath(arg) {
+    return HOOK_CONFIG_PATH.test(arg.replace(/\\/g, '/'));
+}
+/** `a/b/c` → `c`, for either separator. */
+function lastSegment(path) {
+    return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
+}
+/** The words that are not options, `--` ending the options; `valued` options consume the next word. */
+function operands(args, valued) {
+    const out = [];
+    let optionsDone = false;
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i] ?? '';
+        if (!optionsDone && a === '--') {
+            optionsDone = true;
+            continue;
+        }
+        if (!optionsDone && a.startsWith('-') && a.length > 1) {
+            if (valued.has(a))
+                i++;
+            continue;
+        }
+        out.push(a);
+    }
+    return out;
+}
+/** `ln [opts] TARGET… LINK`, `ln [opts] TARGET`, `ln -t DIR TARGET…`: the paths it creates. */
+function lnDestinations(args) {
+    let dir;
+    const rest = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i] ?? '';
+        const long = /^--target-directory=(.+)$/.exec(a);
+        if (long !== null)
+            dir = long[1];
+        else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a))
+            dir = args[++i];
+        else if (/^-t./.test(a))
+            dir = a.slice(2);
+        else if (a === '-S' || a === '--suffix')
+            i++;
+        else
+            rest.push(a);
+    }
+    const targets = operands(rest, new Set());
+    if (dir !== undefined)
+        return targets.map((t) => `${dir}/${lastSegment(t)}`);
+    if (targets.length >= 2)
+        return [targets[targets.length - 1] ?? ''];
+    return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
+}
+/** `New-Item`'s link path (`-Path`, `-LiteralPath`, `-Name`, or the first positional) — only for a link item type. */
+function newItemLinkDestinations(args) {
+    let itemType = '';
+    const paths = [];
+    const positional = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i] ?? '';
+        const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+        if (param === null) {
+            positional.push(a);
+            continue;
+        }
+        const name = (param[1] ?? '').toLowerCase();
+        const inline = param[2];
+        const takesValue = ['path', 'literalpath', 'name', 'itemtype', 'type', 'target', 'value', 'credential'].includes(name);
+        const value = inline !== undefined ? inline : takesValue ? (args[++i] ?? '') : undefined;
+        if (value === undefined)
+            continue;
+        if (name === 'itemtype' || name === 'type')
+            itemType = value;
+        else if (name === 'path' || name === 'literalpath' || name === 'name')
+            paths.push(value);
+    }
+    if (!/^(?:symboliclink|hardlink|junction)$/i.test(itemType))
+        return [];
+    if (paths.length === 0 && positional.length > 0)
+        paths.push(positional[0] ?? '');
+    return paths;
+}
+/** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
+function mklinkDestinations(args) {
+    const link = args.find((a) => !a.startsWith('/'));
+    return link === undefined ? [] : [link];
+}
+/**
+ * The paths a FIFO-, device- or link-creating command writes: `mkfifo NAME…`,
+ * `mknod NAME TYPE …`, `ln`'s link names, `mklink`'s link (directly or through
+ * `cmd /c`), and `New-Item -ItemType SymbolicLink|HardLink|Junction`'s path.
+ * Never a link's SOURCE: `ln -s ~/.config/dev-guardian/hooks.json backup.json`
+ * reads the config, it does not replace it.
+ */
+function specialFileDestinations(name, args) {
+    switch (name) {
+        case 'mkfifo':
+            return operands(args, new Set(['-m', '--mode']));
+        case 'mknod':
+            return operands(args, new Set(['-m', '--mode'])).slice(0, 1);
+        case 'ln':
+            return lnDestinations(args);
+        case 'mklink':
+            return mklinkDestinations(args);
+        case 'new-item':
+        case 'ni':
+            return newItemLinkDestinations(args);
+        case 'cmd': {
+            // `cmd /c "mklink a b"` hands cmd one quoted word: split it as cmd would.
+            const words = args.flatMap((a) => a.split(/\s+/).filter((w) => w.length > 0));
+            const at = words.findIndex((a) => a.toLowerCase() === 'mklink');
+            const viaC = words.slice(0, Math.max(at, 0)).some((a) => /^\/[ck]$/i.test(a));
+            return at >= 0 && viaC ? mklinkDestinations(words.slice(at + 1)) : [];
+        }
+        default:
+            return [];
+    }
+}
+/**
+ * A FIFO, a device node or a link created AT one of the hook configuration
+ * files. A FIFO or a link to `/dev/zero` there used to hang the hook until its
+ * 15 s timeout, after which the tool call ran unguarded (Task 23 fix round 2,
+ * N1). The hook's reader now refuses such a file (it judges the descriptor it
+ * opened), so this is defence in depth: refusing to create one there, as the
+ * Write/Edit guard refuses an assistant's edit of the same files.
+ */
+function assessGuardConfigSpecialFile(words, start) {
+    const head = words[start];
+    if (head === undefined)
+        return null;
+    const name = basename(head.value).toLowerCase().replace(/\.exe$/, '');
+    const args = words.slice(start + 1).map((w) => w.value);
+    if (!specialFileDestinations(name, args).some(isHookConfigPath))
+        return null;
+    return {
+        id: 'guard-config-special-file',
+        level: 'block',
+        reason: "Replaces the guardrail hooks' own configuration with a FIFO, a device node or a link",
+    };
+}
+/**
  * True when `script` (already dequoted) IS a remote download, rather than
  * merely containing one — the entire text is a bare `curl`/`wget` invocation,
  * or one wrapped in `$( … )`/backticks. This is what `bash <(curl …)` hands
@@ -924,6 +1072,9 @@ function collect(command, depth, out) {
             const find = assessFind(words, resolved.index);
             if (find !== null)
                 out.push(find);
+            const special = assessGuardConfigSpecialFile(words, resolved.index);
+            if (special !== null)
+                out.push(special);
             if (depth < MAX_NESTING) {
                 for (const script of nestedScripts(words, resolved.index)) {
                     // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c

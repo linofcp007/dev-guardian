@@ -425,11 +425,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants4);
+          this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -446,10 +446,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants4);
+        this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -510,8 +510,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants4) {
-        this.code = optimizeExpr(this.code, names, constants4);
+      optimizeNames(names, constants5) {
+        this.code = optimizeExpr(this.code, names, constants5);
         return this;
       }
       get names() {
@@ -540,12 +540,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         const { nodes } = this;
         let i2 = nodes.length;
         while (i2--) {
           const n2 = nodes[i2];
-          if (n2.optimizeNames(names, constants4))
+          if (n2.optimizeNames(names, constants5))
             continue;
           subtractNames(names, n2.names);
           nodes.splice(i2, 1);
@@ -598,12 +598,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        if (!(super.optimizeNames(names, constants4) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        if (!(super.optimizeNames(names, constants5) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants4);
+        this.condition = optimizeExpr(this.condition, names, constants5);
         return this;
       }
       get names() {
@@ -626,10 +626,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants4);
+        this.iteration = optimizeExpr(this.iteration, names, constants5);
         return this;
       }
       get names() {
@@ -665,10 +665,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants4);
+        this.iterable = optimizeExpr(this.iterable, names, constants5);
         return this;
       }
       get names() {
@@ -710,11 +710,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a, _b;
-        super.optimizeNames(names, constants4);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
+        super.optimizeNames(names, constants5);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
         return this;
       }
       get names() {
@@ -1015,7 +1015,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants4) {
+    function optimizeExpr(expr, names, constants5) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1030,14 +1030,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n2) {
-        const c3 = constants4[n2.str];
+        const c3 = constants5[n2.str];
         if (c3 === void 0 || names[n2.str] !== 1)
           return n2;
         delete names[n2.str];
         return c3;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants4[c3.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c3) => c3 instanceof code_1.Name && names[c3.str] === 1 && constants5[c3.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -48769,7 +48769,7 @@ function readDependencyEvidence(projectPath) {
       return void 0;
     }
   };
-  const readText2 = (file) => {
+  const readText3 = (file) => {
     try {
       return readFileSync20(join33(projectPath, file), "utf8");
     } catch {
@@ -48787,7 +48787,7 @@ function readDependencyEvidence(projectPath) {
   declareKeys(composer?.["require"], "composer", "composer.json");
   declareKeys(composer?.["require-dev"], "composer", "composer.json");
   let inDeps = false;
-  for (const line of readText2("Cargo.toml").split(/\r?\n/)) {
+  for (const line of readText3("Cargo.toml").split(/\r?\n/)) {
     const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
     if (header?.[1]) {
       const table = header[1].trim();
@@ -48800,7 +48800,7 @@ function readDependencyEvidence(projectPath) {
     if (key?.[1]) declare(key[1], "cargo", "Cargo.toml");
   }
   let inRequire = false;
-  for (const line of readText2("go.mod").split(/\r?\n/)) {
+  for (const line of readText3("go.mod").split(/\r?\n/)) {
     const t = line.replace(/\/\/.*$/, "").trim();
     if (/^require\s*\($/.test(t)) inRequire = true;
     else if (inRequire && t === ")") inRequire = false;
@@ -48809,7 +48809,7 @@ function readDependencyEvidence(projectPath) {
       if (m?.[1]) declare(m[1], "go", "go.mod", m[2]);
     }
   }
-  for (const m of readText2("Gemfile").matchAll(/^\s*gem\s+['"]([^'"]+)['"]/gm)) {
+  for (const m of readText3("Gemfile").matchAll(/^\s*gem\s+['"]([^'"]+)['"]/gm)) {
     if (m[1]) declare(m[1], "rubygems", "Gemfile");
   }
   const projects = findDotnetTargets(projectPath).flatMap((t) => projectsForTarget(t));
@@ -48826,7 +48826,7 @@ function readDependencyEvidence(projectPath) {
     }
   }
   let cargoName;
-  for (const line of readText2("Cargo.lock").split(/\r?\n/)) {
+  for (const line of readText3("Cargo.lock").split(/\r?\n/)) {
     if (/^\s*\[\[package\]\]\s*$/.test(line)) cargoName = void 0;
     const n2 = /^\s*name\s*=\s*"([^"]+)"/.exec(line);
     if (n2?.[1]) cargoName = n2[1];
@@ -48836,13 +48836,13 @@ function readDependencyEvidence(projectPath) {
       cargoName = void 0;
     }
   }
-  for (const line of readText2("go.sum").split(/\r?\n/)) {
+  for (const line of readText3("go.sum").split(/\r?\n/)) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
     resolve21(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
-  for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
+  for (const m of readText3("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
     if (m[1]) resolve21(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
@@ -49172,7 +49172,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
       if (topLevel && entry.topLevel === void 0) entry.topLevel = version2;
     }
   };
-  const readText2 = (file) => {
+  const readText3 = (file) => {
     try {
       return readFileSync20(join33(lockDir, file), "utf8");
     } catch {
@@ -49180,7 +49180,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
     }
   };
   if (manager === "npm") {
-    const raw = readText2("package-lock.json") ?? readText2("npm-shrinkwrap.json");
+    const raw = readText3("package-lock.json") ?? readText3("npm-shrinkwrap.json");
     if (raw !== void 0) {
       try {
         const lock = JSON.parse(raw);
@@ -49199,13 +49199,13 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
       }
     }
   } else if (manager === "pnpm") {
-    for (const line of (readText2("pnpm-lock.yaml") ?? "").split(/\r?\n/)) {
+    for (const line of (readText3("pnpm-lock.yaml") ?? "").split(/\r?\n/)) {
       const m = /^ {2}['"]?\/?((?:@[^/\s'"]+\/)?[^@/\s'"]+)[@/](\d[^:'"(\s]*)/.exec(line);
       if (m?.[1] && m[2]) add(m[1], m[2]);
     }
   } else {
     let pending = [];
-    for (const line of (readText2("yarn.lock") ?? "").split(/\r?\n/)) {
+    for (const line of (readText3("yarn.lock") ?? "").split(/\r?\n/)) {
       if (/^[^\s#].*:$/.test(line)) {
         pending = line.slice(0, -1).split(",").map((d) => d.trim().replace(/^"|"$/g, "")).map((d) => {
           const at = d.indexOf("@", 1);
@@ -53727,7 +53727,7 @@ var inputSchema7 = {
   ),
   dry_run: external_exports.boolean().optional().describe("Print commands without executing. Default: false."),
   elevation_allowed: external_exports.boolean().optional().describe(
-    "Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead."
+    'Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead. Install steps run without a terminal, so on Linux/macOS this only works with passwordless sudo; "sudo: a terminal is required to read the password" means the user must run the reported command themselves.'
   )
 };
 var tool15 = {
@@ -63769,7 +63769,7 @@ function checkSecurityHeaders(input, findings) {
   if (missing.length === 0) return;
   findings.push(buildFinding({
     check: "security_headers",
-    // Per the design doc (section 8): severity is a property of the check,
+    // Per the design of record: severity is a property of the check,
     // and a missing security header is explicitly called out as low there —
     // unlike a confirmed auth bypass, a missing header is a hardening gap,
     // not proof anything has actually been exploited.
@@ -63863,7 +63863,7 @@ var DAST_CHECKS = [
   "open_redirect",
   "rate_limit",
   // Not one of the own engine's nine checks above — nuclei is a separate
-  // scanning engine (design doc §7) whose hits are normalised in
+  // scanning engine (the design of record) whose hits are normalised in
   // `normalizeNuclei.ts`. It still needs a `DastCheck` value of its own:
   // `DastFinding.check` is this closed union, and reusing an existing own-
   // engine value (e.g. tagging a nuclei hit `info_disclosure`) would make
@@ -69030,9 +69030,54 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync53, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
+import { existsSync as existsSync53, readdirSync as readdirSync25 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, join as join74, resolve as resolve18 } from "node:path";
+
+// src/hooks/configFile.ts
+import { closeSync as closeSync2, constants as constants4, fstatSync, openSync as openSync2, readSync } from "node:fs";
+var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
+var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
+function readText2(path6, maxBytes) {
+  let fd;
+  try {
+    fd = openSync2(path6, OPEN_FLAGS);
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
+    return { status: "refused", reason: "unreadable" };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
+    const buf = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n2 = readSync(fd, buf, total, buf.length - total, null);
+      if (n2 === 0) break;
+      total += n2;
+    }
+    if (total > maxBytes) return { status: "refused", reason: "too-large" };
+    let text = buf.subarray(0, total).toString("utf8");
+    if (text.charCodeAt(0) === 65279) text = text.slice(1);
+    return { status: "ok", text };
+  } catch {
+    return { status: "refused", reason: "unreadable" };
+  } finally {
+    try {
+      closeSync2(fd);
+    } catch {
+    }
+  }
+}
+function readSmallTextFile(path6, maxBytes) {
+  const r = readText2(path6, maxBytes);
+  return r.status === "ok" ? r.text : void 0;
+}
+
+// src/pkgvet/privateRegistry.ts
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -69045,12 +69090,9 @@ function isPublic(ecosystem, url) {
 function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
 }
+var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function read(path6) {
-  try {
-    return existsSync53(path6) ? readFileSync41(path6, "utf8") : void 0;
-  } catch {
-    return void 0;
-  }
+  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES);
 }
 function samePath(a2, b) {
   const norm = (p) => resolve18(p).replace(/[\\/]+$/, "");

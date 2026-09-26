@@ -1,183 +1,120 @@
 # dev-guardian MCP server
 
-Stdio MCP server that exposes the dev-guardian plugin's security, quality,
-bugfix, deps, compliance, observability, and performance capabilities as
-**57 MCP tools** and **18 MCP resources**.
+The stdio MCP server behind the dev-guardian plugin: **57 tools** and **18 resources** for security, quality, bug hunting, dependencies, compliance, observability and performance. Every tool and resource, with its parameters, is listed in [`docs/tools.md`](../docs/tools.md), which `npm run build` generates from the registry.
 
-The server is registered in the plugin manifest at
-`.claude-plugin/plugin.json` under `mcpServers.dev-guardian` — Claude Code
-and Claude Desktop will discover and launch it automatically once the
-plugin is installed.
-
-## Layout
-
-```
-mcp/
-├── src/
-│   ├── server.ts                # entry point (stdio transport)
-│   ├── tools/                   # 54 MCP tool handlers + scan-tool factory
-│   ├── resources/               # 18 MCP resources (guardian://…)
-│   ├── runners/                 # process + shell + scanner-parser registry
-│   ├── storage/                 # better-sqlite3 + migrations
-│   ├── platform/                # OS / shell / pkg-mgr / path detection
-│   ├── fingerprint/             # stable finding fingerprint (cross-platform)
-│   ├── treeHash/                # working-tree hash (git + fallback walk)
-│   ├── severity/                # severity filter helpers
-│   └── progress/                # MCP notifications/progress emitter
-├── test/
-│   ├── unit/                    # ~150 tests against modules in isolation
-│   ├── integration/             # ~40 tests against the registry + storage
-│   └── e2e/                     # real-scanner test (skipped without scanners)
-└── scripts/
-    ├── copy-assets.mjs          # post-build: copies .sql to dist/
-    └── smoke.mjs                # stdio handshake check (initialize + tools/list)
-```
-
-## Build, run, test
-
-```bash
-# Install deps (Node 20+ required)
-cd mcp && npm install
-
-# Type-check
-npm run typecheck
-
-# Build (tsc + copy SQL migrations into dist/)
-npm run build
-
-# Run unit + integration tests
-npm test
-
-# Smoke-test the built server over stdio
-npm run build && node scripts/smoke.mjs
-
-# Dev loop without rebuilding
-npm run dev    # tsx src/server.ts
-```
-
-## How the plugin host launches it
-
-`.claude-plugin/plugin.json` carries this block:
+Claude Code starts it from `.claude-plugin/plugin.json`:
 
 ```jsonc
 {
   "mcpServers": {
     "dev-guardian": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js"],
+      "env": {}
     }
   }
 }
 ```
 
-When the host loads the plugin, it spawns `node mcp/dist/server.js` and
-communicates with it over stdio JSON-RPC.
+Any other MCP host starts the same file by absolute path — see [`docs/hosts.md`](../docs/hosts.md).
 
-On startup the server:
+## Requirements
 
-1. Opens `<project_root>/.guardian/guardian.db` (or falls back to a temp
-   location with a warning if that directory is not writable).
-2. Runs forward-only SQL migrations.
-3. Probes a usable bash (Git Bash → WSL → PATH bash on Windows;
-   `/bin/bash` → PATH bash on POSIX) and caches the choice in
-   `runtime_meta`.
-4. Reaps any scans left `running` from a previous lifetime.
-5. Adds `.guardian/` to the target project's `.gitignore` if missing.
-6. Connects the stdio transport and registers all tools + resources.
+Node.js **≥ 22.13** (`engines`). Storage is the built-in `node:sqlite`, used without any flag; on an older Node the server prints `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1. `dist/server.js` is an esbuild bundle with no runtime `node_modules`, and it is committed: installing the plugin needs no build.
 
-## Storage model
+## Layout
 
-Single SQLite file at `<project_root>/.guardian/guardian.db`:
-
-| Table                 | Purpose                                                            |
-|-----------------------|--------------------------------------------------------------------|
-| `scans`               | One row per scan invocation (any tool).                            |
-| `findings`            | One row per finding instance, keyed by stable fingerprint.         |
-| `cves`                | CVE rows deduped across scans (Trivy fs output).                   |
-| `suppressions`        | False-positive marks (with optional TTL).                          |
-| `baselines`           | Regression baselines (history-preserving; latest = active).        |
-| `tree_cache`          | tree_hash → scan_id helper for the 5-minute cache window.          |
-| `stack_snapshots`     | Persisted `detect_stack` outputs.                                  |
-| `surface_snapshots`   | Persisted `map_attack_surface` snapshots (routes, imports, spec).  |
-| `finding_validations` | `validate_finding` verdicts, keyed by project + fingerprint.       |
-| `runtime_meta`        | Server-level KV (chosen shell, etc.).                              |
-| `schema_meta`         | Migration version.                                                 |
-
-## Tools (54)
-
-This grouping covers a subset, kept for illustration; it is not exhaustive. The root
-[`README.md`](../README.md) carries the complete, current tool table.
-
-Grouped by category:
-
-- **Security (6)**: `security_scan_full`, `scan_sast`, `scan_secrets`,
-  `scan_deps`, `scan_containers`, `scan_iac`
-- **Quality / Bugs (3)**: `bug_hunt`, `quality_check`, `review_pr`
-- **Deps (2)**: `deps_audit`, `deps_update_plan`
-- **Compliance (2)**: `compliance_check`, `generate_sbom`
-- **Ops (4)**: `detect_stack`, `init_project`, `observability_setup`,
-  `perf_check`
-- **Meta (4)**: `audit_executive`, `diff_scans`, `suppress_finding`,
-  `set_baseline`
-- **Toolchain (2)**: `check_toolchain`, `install_toolchain`
-
-## Resources (18)
-
-This list covers a subset, kept for illustration; it is not exhaustive. The root
-[`README.md`](../README.md) carries the complete, current resource list.
-
-```
-guardian://scans/latest
-guardian://scans/history
-guardian://scans/{scan_id}
-guardian://findings/open
-guardian://findings/critical
-guardian://findings/by-severity/{level}
-guardian://cves/active
-guardian://sbom
-guardian://stack
-guardian://compliance/status
-guardian://baseline
+```text
+mcp/
+├── src/
+│   ├── server.ts        entry point: storage, shell probe, registry, stdio transport
+│   ├── registerAll.ts   the import list that IS the public surface (tools + resources)
+│   ├── tools/           one module per tool, plus the scan-tool factory (scanToolFactory.ts)
+│   ├── resources/       guardian:// resources, paging, project scoping
+│   ├── runners/         process runner (tree kill, timeouts), scanner parsers, install catalogue
+│   ├── storage/         node:sqlite repositories, numbered SQL migrations, retention
+│   ├── history/         open-set, per-scanner comparisons, scan roles
+│   ├── hooks/           pure detectors shared by the hooks and `dev-guardian check`
+│   ├── pkgvet/          package vetting (vet_packages and the install hook)
+│   ├── platform/        OS, shell, project paths, .guardianignore, scopes
+│   └── …                surface/, dast/, validate/, fixpr/, ci/, dashboard/, intel/, secrets/, wordpress/, …
+├── test/
+│   ├── unit/, integration/, e2e/   vitest (e2e needing a real scanner skip without it)
+│   ├── ablate/          the rule-pack ablation harness (npm run ablate)
+│   └── docs/            generator and tests for docs/tools.md and docs/rule-packs.md
+├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs;
+│                        generatePopularPackages.mjs (refreshes configs/popular-packages/)
+└── dist/                compiled output, committed
 ```
 
-All return JSON. Resources with missing data return an explicit empty
-shape (`{ last_run: null }`, `{ active: false }`, etc.) rather than an
-error — see the spec at `.specs/dev-guardian-mcp/requirements.md`
-(US-7 AC-2).
+## Build, run, test
 
-## Cross-platform notes
+```bash
+cd mcp
+npm ci                 # dev dependencies: tsc, esbuild, vitest, tsx
+npm run lint           # tsc over src/ and test/
+npm run build          # tsc, copy SQL migrations, regenerate host rules, bundle, regenerate docs/
+npm test               # vitest (the whole suite)
+node scripts/smoke.mjs # stdio handshake against the built server
+npm run dev            # tsx src/server.ts, no build
+```
 
-- **Windows**: the server probes `Git Bash` → `wsl bash` → `bash.exe` and
-  caches the working choice. Under WSL, the script path and every absolute
-  Windows path argument are translated automatically
-  (`C:\Users\foo` → `/mnt/c/Users/foo`). Without any of those, the server
-  still boots but every script-invoking tool returns a `no_bash_shell`
-  domain error so resources stay queryable.
-- **macOS / Linux**: prefers `/bin/bash`, falls back to `PATH bash`.
-- **Output cap**: every spawned process is bounded to 5 MB of stdout; over
-  that, the tool returns `output_too_large` with the report paths so the
-  scan data is still recoverable from disk.
+`GUARDIAN_REQUIRE_SEMGREP=1` makes a missing Semgrep a failure instead of a skip. Every environment variable is in [`docs/env.md`](../docs/env.md).
 
-## Files outside `mcp/` that this server touches
+## What happens at startup
 
-By design (see US-12 AC-1 in the spec), the MCP server **only** writes to:
+1. Refuse to start, with one line on stderr, on a Node without `node:sqlite`.
+2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL and a real write probe; if `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), it falls back to a user-level location and says so.
+3. Apply the SQL migrations in `src/storage/migrations/`, each under the write lock.
+4. Reap scans left `running` by a process that is gone.
+5. Probe a bash — Git Bash, then WSL, then `bash` on `PATH` on Windows; `/bin/bash`, then `PATH` elsewhere — and cache the choice. Nothing but `install_toolchain`'s bundled install scripts and `init_project`'s first-pass status report uses it; without one those report `no_bash_shell` (or skip) and everything else works.
+6. Keep `.guardian/` out of git in the project's `.gitignore` (`.guardian/*` plus `!.guardian/baseline.json`, so the CI baseline can be committed).
+7. Register the tools and resources and connect stdio. Diagnostics go to stderr only; stdout is the JSON-RPC stream. A client that closes stdout ends the server with exit 0.
+8. After connecting, prune old scans in short background batches (`GUARDIAN_RETENTION_SCANS`, default 50 per project and scan type).
 
-- `mcp/**` (its own source / dist / node_modules)
-- `<project_root>/.guardian/**` (DB + reports)
-- `<project_root>/.gitignore` (one-shot, to add `.guardian/` if missing)
+## Storage
 
-`scripts/`, `configs/`, `skills/`, `commands/` are read-only from the
-server's perspective.
+One SQLite file per project, `.guardian/guardian.db`, shared by every process that opens it (the plugin's server, a project-scoped server, the CLI).
 
-## Adding a new scan tool
+| Table | Holds |
+| --- | --- |
+| `scans` | one row per tool run: type, status, coverage, `tools_run`, `missing_tools`, cache key, owner process |
+| `findings` | findings per scan: fingerprint (per scan) and line-independent `identity` (across scans) |
+| `scan_cves`, `cves` | CVEs per scan (`cves` is the legacy table, still read) |
+| `cve_intel` | CISA KEV / FIRST EPSS per CVE, cached 24 h |
+| `baselines` | baselines per project and scan type |
+| `suppressions` | suppressions by identity or fingerprint, per project, with optional expiry |
+| `tree_cache` | tree hash → scan, for the 5-minute scan cache |
+| `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results |
+| `finding_validations` | `validate_finding` verdicts |
+| `agent_config_hashes` | `audit_agent_config`'s per-server hashes, to flag a changed MCP entry |
+| `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the migration version |
 
-1. Add a parser under `src/runners/scannerParsers/<scanner>.ts` if the
-   scanner emits a new format.
-2. Create `src/tools/<myTool>.ts`, call `makeScanTool({...})` with the
-   factory.
-3. Side-effect import the new file in `src/server.ts`.
-4. Drop fixture JSON and an integration test alongside the existing ones
-   under `test/integration/`.
+Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working.
 
-That's it — caching, persistence, progress notifications, severity
-filtering, fingerprinting, and the MCP wrapper all come for free.
+## Behaviour every tool shares
+
+- **Per project.** A tool's `project_path` defaults to the server's working directory, and every history reader — the resources included — answers for one project, even though one database may hold several.
+- **Coverage is never guessed.** A scanner that is missing, failed or scanned nothing is `skipped` or `failed` with a reason, lands in `missing_tools`, and lowers `coverage` to `partial` or `none`. For Semgrep, `paths.scanned == 0` or a non-empty `errors` array is a failure even on exit 0.
+- **Cache.** A scan-tool call within 5 minutes of an identical one — same project, inputs, tree hash, rule packs and plugin version — is served from the database, but only when the earlier run had full coverage.
+- **Filters are views.** `severity_min`, `categories` and `packages` shape the response; every finding is still recorded, and the response says what it held back.
+- **Bounded output.** Each spawned process is capped at 5 MB of stdout (`output_too_large` beyond that, with the report paths); a process that times out or is cancelled is killed with its whole tree.
+- **Concurrency.** At most `GUARDIAN_MAX_CONCURRENT_SCANS` (default 2) scanner processes at once.
+- **Cancellation.** A host's cancel stops the scanner processes. `create_fix_pr` is the exception to the usual error answer: a cancelled call returns `ok: true` with `cancelled: true` and the groups it finished, and an apply or verification step already in flight stops at the next boundary.
+
+## What the server writes
+
+- `<project>/.guardian/` — the database, and raw scanner output and exported reports under `.guardian/reports/`.
+- `<project>/.gitignore` — the two `.guardian` lines above, once.
+- Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
+- `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
+- `wp_vuln_check_source` caches the Wordfence feed in the user cache directory, never in the project.
+- Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards.
+
+## Adding a scan tool
+
+1. Parsing goes in `src/runners/scannerParsers/<scanner>.ts`, with a unit test.
+2. Create `src/tools/<myTool>.ts` with `makeScanTool({...})` from `scanToolFactory.ts` — caching, persistence, identities, coverage, progress, scopes, `.guardianignore` and cancellation come with it.
+3. Import it in `src/registerAll.ts` and add it to `test/integration/toolSurface.test.ts`: the surface is snapshotted on purpose.
+4. Place every bookkeeping name it writes to `tools_run` / `missing_tools` in `src/history/runNames.ts`; the exhaustiveness test fails otherwise.
+5. Keep the description under 1500 characters, add an integration test, run `npm run build`, and commit `dist/` and the regenerated `docs/` with the change.

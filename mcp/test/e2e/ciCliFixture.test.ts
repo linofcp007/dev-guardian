@@ -689,7 +689,7 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       // real, not merely that --start-command was accepted) AND is gone by
       // the time this CLI subprocess has exited. A wrong implementation that
       // starts the app but never stops it would leave this pid alive
-      // indefinitely; this is the property design doc §7 and the brief both
+      // indefinitely; this is the property the design of record and the brief both
       // call the one that matters most.
       const pid = Number(readFileSync(pidfile, 'utf8').trim());
       expect(Number.isInteger(pid)).toBe(true);
@@ -849,7 +849,7 @@ describe('dev-guardian scan — against a real, clean fixture', () => {
   it('does not write .guardian/baseline.json — scan never mutates the baseline', () => {
     // The wrong implementation this guards against: `scan` silently folding
     // current findings into the baseline, which would turn the gate into
-    // decoration (design doc §4).
+    // decoration (the design of record).
     expect(existsSync(baselinePath)).toBe(false);
   });
 

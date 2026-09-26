@@ -27,7 +27,7 @@ export function dastRuleId(check, method, path) {
 }
 /**
  * Fingerprint for a DAST finding. Stable over (check, method, path, file) —
- * design doc §8 — and deliberately excludes the HTTP status and response
+ * the design of record — and deliberately excludes the HTTP status and response
  * body: a fixed app restarting and flipping 500 -> 200 must not spawn a "new"
  * finding, and surviving exactly that is this function's whole job.
  *
@@ -446,7 +446,7 @@ export function analyzeRoutes(input) {
  * Headers expected on every response. HSTS is deliberately not in this
  * baseline — see `expectedSecurityHeaders` — because it only means anything
  * on a connection that is already TLS. `frame-ancestors` from the design
- * doc's check table is represented here as the `X-Frame-Options` header: the
+ * of record's check table is represented here as the `X-Frame-Options` header: the
  * concrete, single-header signal for clickjacking defence, rather than
  * parsing the (already separately-required) CSP value for a directive.
  */
@@ -494,7 +494,7 @@ function checkSecurityHeaders(input, findings) {
         return;
     findings.push(buildFinding({
         check: 'security_headers',
-        // Per the design doc (section 8): severity is a property of the check,
+        // Per the design of record: severity is a property of the check,
         // and a missing security header is explicitly called out as low there —
         // unlike a confirmed auth bypass, a missing header is a hardening gap,
         // not proof anything has actually been exploited.

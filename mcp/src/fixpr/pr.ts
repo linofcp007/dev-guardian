@@ -1,6 +1,6 @@
 /**
  * `branchName` / `prExists` / `openPr` — the part of `create_fix_pr` that
- * leaves the machine (design doc
+ * leaves the machine (the design of record).
  * Everything before this module runs entirely inside a disposable worktree;
  * this module is the first (and only) place in that flow that talks to the
  * user's own GitHub remote — a branch push and a `gh pr create`.

@@ -303,7 +303,7 @@ describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 r
 
 describe('evaluateGate — baselineAbsent (carried forward from Task 3 review)', () => {
   // Task 3's `renderHuman` needs to tell a reader "no baseline file was
-  // found yet, run `baseline update`" — a fact design doc §4 says the CLI
+  // found yet, run `baseline update`" — a fact the design of record says the CLI
   // must state on a first run. That fact lives one layer up from here:
   // `GateInput.baseline` is `null` precisely when Task 1's `parseBaseline`
   // could not read a file at all (see baseline.ts's module doc, the three

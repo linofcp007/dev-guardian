@@ -1,6 +1,6 @@
 /**
  * `applyGroup` — runs a `FixGroup`'s fix inside an already-created worktree
- * (design doc the design of record §2 and §4.3).
+ * (the design of record).
  *
  * The property this module exists to hold: a command STRING never reaches a
  * shell. `runProcess` is `shell: false` end to end, so every command run
@@ -10,7 +10,7 @@
  * author, and it is never interpolated into anything a shell would
  * interpret, because nothing here ever calls a shell in the first place.
  *
- * Two fix sources, two shapes (design doc §2):
+ * Two fix sources, two shapes (the design of record):
  *
  *   - `deps`: each candidate carries the structured `UpgradeStep`s
  *     `deps_update_plan` planned for its package (Task 10), run ONE STEP AT A
@@ -37,7 +37,7 @@
  *     that is not in the worktree (uncommitted in the user's tree) fails the
  *     group — it can be neither fixed nor verified from committed HEAD.
  *
- * `lockfileOnly` (design doc §4.3): when no test command was derived for the
+ * `lockfileOnly` (the design of record): when no test command was derived for the
  * project, verification never needs an installed `node_modules` tree — only
  * the manifest and lockfile, which `npm audit`/Trivy read directly — so
  * `--package-lock-only` is added to an `npm install` step and the whole

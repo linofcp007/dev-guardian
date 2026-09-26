@@ -1,6 +1,5 @@
 /**
- * Integration tests for `createWorktree` (design doc
- * the design of record §3) against a
+ * Integration tests for `createWorktree` (the design of record) against a
  * REAL throwaway git repository in the system temp directory — a mock proves
  * nothing about `git worktree`'s actual behaviour.
  *

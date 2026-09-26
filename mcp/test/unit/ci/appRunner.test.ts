@@ -1,6 +1,6 @@
 /**
  * `startApp`/`RunningApp.stop` tested against REAL child processes — small
- * `node -e` programs, never a mock (design doc §8, task brief). What this
+ * `node -e` programs, never a mock (the design of record, task brief). What this
  * module exists to prove is PROCESS BEHAVIOUR — did the tree actually die,
  * did a metacharacter actually reach the child as inert data — and a mock
  * proves none of that.

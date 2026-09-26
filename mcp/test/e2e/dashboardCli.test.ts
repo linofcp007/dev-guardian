@@ -2,8 +2,8 @@
  * End-to-end test of `cli/dev-guardian.mjs`'s `status` and `dashboard`
  * commands, invoked as a REAL SUBPROCESS (`node cli/dev-guardian.mjs ...`) —
  * same reasoning and pattern as `ciCliFixture.test.ts`'s own `runCli`: the
- * exit-code and stdout-flush behaviour these two commands depend on (design
- * doc §6, item 5's `process.exitCode = ...; return;` discipline) cannot be
+ * exit-code and stdout-flush behaviour these two commands depend on (the
+ * design of record, item 5's `process.exitCode = ...; return;` discipline) cannot be
  * observed from an in-process call.
  *
  * `runCli` gets an explicit `timeout` (the brief's own template omits one) —
@@ -579,7 +579,7 @@ describe('dev-guardian status / dashboard — genuinely read-only: no database i
       expect(r.stderr).toBe('');
       // The report itself is the one file the user explicitly asked this
       // command to write via --out — that is not a violation of read-only
-      // (design doc §1 is about the DATABASE never being mutated), and this
+      // (the design of record's rule is about the DATABASE never being mutated), and this
       // assertion is what discriminates the two: the requested output exists,
       // the database it was never told to create does not.
       expect(existsSync(out)).toBe(true);

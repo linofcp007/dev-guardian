@@ -143,7 +143,7 @@ describe('renderSarif', () => {
   it('includes a new finding below the fail-on threshold, not only blocking ones', () => {
     // Names the plausible-wrong implementation: rendering `v.blocking`
     // instead of `v.newFindings`. SARIF is meant to annotate everything new
-    // on the PR diff (design doc §6), not just what fails the gate — a
+    // on the PR diff (the design of record), not just what fails the gate — a
     // `low` finding under a `critical` threshold is new but never blocking,
     // and a reviewer should still see it on the line it touched.
     const v = evaluateGate(input({ findings: [finding({ severity: 'low' })], failOn: 'critical' }));
@@ -284,7 +284,7 @@ describe('renderSarif', () => {
   });
 
   it('sets executionSuccessful: false when coverage is not full, even with no baseline gap', () => {
-    // The SARIF-native way to say "this run was incomplete" (design doc §9,
+    // The SARIF-native way to say "this run was incomplete" (the design of record,
     // as amended): a consumer reading only the SARIF upload can now tell a
     // clean scan from an incomplete one from `executionSuccessful` alone,
     // without cross-referencing the exit code. Guards an implementation
@@ -322,8 +322,8 @@ describe('renderSarif', () => {
     expectValidSarif(doc);
   });
 
-  it('does not leak a generic scanner-coverage gap\'s text into SARIF (design doc §9, as amended)', () => {
-    // design doc §9 (original): "SARIF carries findings, not the coverage
+  it('does not leak a generic scanner-coverage gap\'s text into SARIF (the design of record, as amended)', () => {
+    // the design of record (original): "SARIF carries findings, not the coverage
     // signal." As amended per review: the coarse *boolean* signal
     // (executionSuccessful — see the test above) is now deliberately part
     // of SARIF, closing the "a SARIF-only consumer can't tell" gap §9

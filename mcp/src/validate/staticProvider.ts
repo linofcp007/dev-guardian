@@ -17,7 +17,7 @@
  * discovered path is reported, gates or no gates — while `unreachable` is
  * gated on six independent conditions, ALL of which must hold, checked in
  * order, the first failure deciding `unknown` and naming itself in
- * `coverage_gaps` (design doc §5, plus gates 1 and 6 below, ruled in during
+ * `coverage_gaps` (the design of record, plus gates 1 and 6 below, ruled in during
  * Task 5 and the final whole-branch review respectively):
  *
  *   1. The import graph holds at least one edge. An empty graph is evidence
@@ -135,7 +135,7 @@ import type { AttackSurfaceSnapshot, CoverageEntry, Finding, RouteRecord } from 
 /**
  * Languages whose code is resolved at runtime — autoload convention (Ruby),
  * annotation-driven injection (Java/Spring), a DI container (C#/ASP.NET), or
- * a service container (PHP/Laravel) — not by static import. Design doc §5.3:
+ * a service container (PHP/Laravel) — not by static import. The design of record:
  * in each of these, "nothing imports this file" is true of nearly every file
  * and proves nothing, so `unreachable` is never emitted for a file in one of
  * them. The positive direction is unaffected — see the module doc comment.

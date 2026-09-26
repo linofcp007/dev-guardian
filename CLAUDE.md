@@ -8,21 +8,40 @@ For *using* the tools in another project, see [`host-rules/AGENTS.md`](host-rule
 An all-in-one, 100% open-source Claude Code / Cowork plugin for security, bugfix,
 quality, deps, observability, performance and compliance. Two halves:
 
-- **Plugin front-end** — `skills/` (13 skills) + `commands/` (slash commands),
+- **Plugin front-end** — `skills/` (13 skills) + `commands/` (10 slash commands),
   declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript + SQLite), the real engine: 54 tools,
-  18 resources. Built to `mcp/dist/`.
+- **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 57 tools,
+  18 resources, registered by the import list in `mcp/src/registerAll.ts`. Built
+  to `mcp/dist/`; [`docs/tools.md`](docs/tools.md) is generated from the registry.
+  Node ≥ 22.13 is the floor (`engines`), and nothing may need
+  `--experimental-sqlite`.
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered at the plugin root)
-  with the `hooks/guardian-hook.mjs` dispatcher. Dependency-free and fail-open: SessionStart
-  posture briefing, PostToolUse secret warning, PreToolUse catastrophic-Bash
-  block. Detection lives in `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure,
-  unit-tested) and is shared with the `dev-guardian check` CLI subcommand.
+  with the `hooks/guardian-hook.mjs` dispatcher. Dependency-free and fail-open:
+  SessionStart posture briefing; PostToolUse secret warning on writes;
+  PreToolUse on `Bash|PowerShell` — the catastrophic-command block, then
+  install-time package vetting (`mcp/src/pkgvet/hookDecision.ts`, 3 s network
+  budget, `GUARDIAN_PKG_VET=0` opts out); PreToolUse on writes — an assistant's
+  `Write`/`Edit`/`MultiEdit` of the hook configuration is always denied, and
+  writing a provider token is denied when `secrets.block` is on. A project's
+  `.guardian/hooks.config.json` may only make the protective hooks stricter
+  (`projectOverrides` in the dispatcher: its `enabled: false`, `bash.block:
+  false` and `bash.warn: false` are ignored, and SessionStart says so) —
+  because a shell command can still write that file. Detection lives in
+  `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
+  with the `dev-guardian check` CLI subcommand. Every file a hook reads from
+  the project or the user's home goes through `mcp/src/hooks/configFile.ts`:
+  open (non-blocking), `fstat` the DESCRIPTOR, read at most cap + 1 bytes —
+  only a regular file of at most 64 KiB (1 MiB for registry configuration).
+  Never judge the path and then read it: a FIFO swapped in between, or a
+  Windows link to a named pipe (which `stat`s as an empty regular file), hangs
+  the read, and a hook that hits its 15 s timeout lets the tool call through. User-facing
+  detail: [`docs/hooks.md`](docs/hooks.md).
 
 ## Where the design docs went
 
 `docs/superpowers/` — thirteen implementation plans and fourteen designs of
-record — was removed from the tree on 2026-08-22. It is **not lost**: 96 commits
-touch those files, so any of them is one command away.
+record — was removed from the tree on 2026-08-22. It is **not lost**: 97 commits
+touch those files (the removal included), so any of them is one command away.
 
 ```bash
 git log --oneline --diff-filter=D -- docs/superpowers   # find the removal
@@ -30,8 +49,8 @@ git show <commit>^:docs/superpowers/specs/<name>.md     # read one
 git checkout <commit>^ -- docs/superpowers              # restore the tree
 ```
 
-Code comments that used to cite a section by path now say "the design of
-record" instead. The measurements those documents held — why a rule was
+Code comments that used to cite a section by path, or a "design doc §N", now
+say "the design of record" instead. The measurements those documents held — why a rule was
 deleted, which tier moved and against what corpus, which clause was measured
 inert — were written into the rule packs' own comments and into `CHANGELOG.md`
 as they were made, so the reasoning survives in the tree even though the
@@ -41,11 +60,26 @@ documents do not.
 
 ```bash
 cd mcp
-npm install          # first time only — no native modules, storage is node:sqlite
-npm run build        # tsc -> mcp/dist + copy-assets + esbuild bundle
+npm ci               # first time only — Node >= 22.13; no native modules, storage is node:sqlite
+npm run lint         # tsc over src/ AND test/ (two tsconfigs)
+npm run build        # tsc -> mcp/dist, copy-assets, host-rules, esbuild bundle, docs
 npm test             # vitest run (full suite)
 npm run test:coverage # the only run that enforces the coverage thresholds
 ```
+
+`npm run build` ends by regenerating the committed, generated files: every
+`host-rules/*` template and the in-repo rules copies (from
+`mcp/src/hostsetup/rulesTemplate.ts`), then `docs/tools.md` and
+`docs/rule-packs.md` (`npm run docs`, i.e. `tsx test/docs/generate.ts`, from the
+registry and the pack files). Drift tests fail when a committed copy differs, and
+`mcp/test/docs/docs.test.ts` also holds every tool, resource, skill and command
+count in the READMEs, this file and `mcp/README.md` — and the pack table below —
+to the code. The fix for any of those failures is `npm run build` or correcting
+the number, never editing a generated file.
+
+On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
+resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason
+alone.
 
 Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
@@ -59,7 +93,7 @@ npm run ablate -- all                          # every registered pack
 npm run ablate -- bugfix-js                    # one pack
 npm run ablate -- bugfix-java --filter=optional-get # one rule, while iterating
 npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
-npm run ablate -- routes                       # the 64-rule route pack, ~80 min
+npm run ablate -- routes                       # the 64-rule route pack, ~73 min
 ```
 
 Semgrep is found via `--semgrep=<path>`, then `GUARDIAN_SEMGREP`, then `PATH`.
@@ -108,7 +142,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **29 of the 134 rules** across the nine packs are
+nothing but positive terms. **29 of the 142 rules** across the ten packs are
 one of those — 23 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -127,6 +161,11 @@ prints `N/A`.
 | `bugfix-rs` | 1 | 1 | 0 |
 | `base` | 13 | 7 | 6 |
 | `routes` | 64 | 44 | 20 |
+| `rgpd` | 8 | 8 | 0 |
+
+The same numbers, rule by rule, are in [`docs/rule-packs.md`](docs/rule-packs.md),
+which `npm run build` generates; `mcp/test/docs/docs.test.ts` fails when this
+table or the totals above stop matching the pack files.
 
 The report therefore leads with a coverage line naming both halves —
 `44 clause(s) across 10 of 11 rules; 1 rule(s) have no ablatable clauses (axis
@@ -163,11 +202,15 @@ Axis 3 needs a real-code corpus in a language the pack matches, so it is a
 property of the invocation — registered per pack in
 [`mcp/test/ablate/packs.ts`](mcp/test/ablate/packs.ts), overridable with
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
-skipped) where none exists. **Every pack has one now**, and all but the JS/TS
-one read a path from an environment variable, because the corpus cannot live in
-this tree — `GUARDIAN_RUST_SRC`, `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`,
-`GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`, `GUARDIAN_PHP_SRC`; unset means `N/A`,
-set-but-missing **throws**. Measured with the corpora below:
+skipped) where none exists. **Every pack but `base` has one.** `bugfix-js` and
+`routes` use this repo's `mcp/src`; `rgpd` reads `GUARDIAN_RGPD_SRC` and falls
+back to `mcp/src`; the other six read a path from an environment variable,
+because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
+`GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`,
+`GUARDIAN_PHP_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
+no real-code corpus registered and always prints `N/A` for axis 3. `rgpd` finds
+nothing in `mcp/src`, so its axis 3 is vacuous there (its header records the
+precision evidence it does have). Measured with the corpora below:
 
 | pack | corpus | files | baseline findings | axis-3 flags |
 | --- | --- | ---: | ---: | ---: |
@@ -466,8 +509,13 @@ Enforced by the compiler where possible, by review where not:
   gitignored globally *except* `mcp/dist/` (see [`.gitignore`](.gitignore)).
 - **Rebuild before committing TS changes.** A stale `dist/` silently desyncs from
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
-- **Markdownlint stays clean** for `skills/`, `commands/` and `README.md`
-  (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)).
+- **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
+  and `docs/` (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)):
+  `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.
+- **The READMEs come in three languages** — `README.md` (English),
+  `README.pt-PT.md` (European Portuguese: "ficheiro", "utilizador", never the
+  Brazilian forms) and `README.es.md` — each about 300 lines at most, linking
+  to the others. Change all three together; the count test reads each.
 - **Two characters are banned from `configs/semgrep/*.yml`, messages and
   comments alike: `U+00C1` (A-acute) and `U+00CD` (I-acute)** — plus `U+00CF`,
   `U+00D0`, `U+00DD` for languages that use them. Semgrep loads a rule file with
@@ -492,7 +540,9 @@ Enforced by the compiler where possible, by review where not:
   mangling its spelling. Enforced for every pack by
   `mcp/test/integration/semgrepPacks.test.ts`, which also runs
   `semgrep --validate` over each one and carries a positive control.
-- **Releases** bump the version in
+- **Releases** update the clone instructions — `git clone … --branch vX.Y.Z` in
+  the three READMEs and `docs/hosts.md` — to the new tag (they clone the default
+  branch until the first release after 2.0.0), and bump the version in
   [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
   [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
   [`mcp/package.json`](mcp/package.json) (keep all three in lock-step — the MCP
@@ -504,9 +554,20 @@ Enforced by the compiler where possible, by review where not:
 This repo ships its own host configs so opening it in any AI host wires up the
 dev-guardian MCP server out of the box: `.mcp.json` (Claude Code), `.cursor/`,
 `.gemini/`, `.vscode/`, `.windsurf/`, `.github/copilot-instructions.md`, plus root
-`AGENTS.md` / `GEMINI.md`. They use **relative** paths (`mcp/dist/server.js`), so
-run `npm run build` once first. To install the same into *another* project, use the
-`mcp-config` CLI (`node cli/dev-guardian.mjs mcp-config <host> --write`) — it fills in absolute paths.
+`AGENTS.md` / `GEMINI.md`. The MCP entries point at the committed
+`mcp/dist/server.js` — a bare relative path in `.mcp.json` (Claude Code starts
+project servers in the project root) and in `.gemini/settings.json` (with
+`"cwd": "."`), `${workspaceFolder}/…` in `.cursor/mcp.json` and
+`.vscode/mcp.json`. **Never use `${CLAUDE_PROJECT_DIR}` in `.mcp.json`**: Claude
+Code does not expand it there, `node` receives the literal string, and the
+server dies with `MODULE_NOT_FOUND` — only `${CLAUDE_PLUGIN_ROOT}` in
+`plugin.json` is expanded. The rules copies (root `AGENTS.md` and `GEMINI.md`,
+`.cursor/rules/dev-guardian.mdc`, `.windsurf/rules/dev-guardian.md`,
+`.github/copilot-instructions.md`) and every `host-rules/*` template are generated
+from `mcp/src/hostsetup/rulesTemplate.ts` by `npm run build`; edit the template,
+never a copy. To install the same into *another* project, use the `mcp-config`
+CLI (`node cli/dev-guardian.mjs mcp-config <host> --write`) — it fills in
+absolute paths. See [`docs/hosts.md`](docs/hosts.md).
 
 **Never put the CLI back in a top-level `bin/`.** Claude Desktop / claude.ai does not clone the repo:
 it validates it on a remote Anthropic service that *rejects* any plugin shipping a top-level `bin/`

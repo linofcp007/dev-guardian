@@ -746,7 +746,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       expect(entry.module_file, entry.module_file).not.toContain('\\');
     }
 
-    // java/csharp/ruby/php can never resolve an import (design doc §5.3) —
+    // java/csharp/ruby/php can never resolve an import (the design of record) —
     // every guardian_kind:import match the rule pack produced for them (the
     // "matches an import in every one of the nine languages" test above
     // proves each language matched at least one) must land in

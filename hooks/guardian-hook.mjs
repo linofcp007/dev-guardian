@@ -21,12 +21,15 @@
  *     `scan_secrets` (gitleaks) via `/guardian-scan`.
  *   - **Quiet by default, opt-in blocking.** Secrets are *warned* on write;
  *     blocking writes is opt-in. Only catastrophic shell commands are denied
- *     by default. All of it is tunable via `.guardian/hooks.config.json` and
- *     killable with `GUARDIAN_HOOKS=off`.
+ *     by default. A project's `.guardian/hooks.config.json` may tune the
+ *     advisory settings and make the guard stricter, never weaker (see
+ *     `projectOverrides`); switching a protective hook off takes the
+ *     user-level `~/.config/dev-guardian/hooks.json` or the environment
+ *     (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`).
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -102,13 +105,52 @@ async function readStdin() {
   }
 }
 
-function readJsonFile(path) {
+/**
+ * How a hook configuration file is read: `readSmallJsonFile` from
+ * `mcp/dist/hooks/configFile.js`, loaded in `main()` by `loadConfigReader`.
+ * It stats the path first (following a link to its target) and reads only a
+ * regular file of at most 64 KiB, with a leading byte-order mark stripped.
+ * The `existsSync` + `readFileSync` it replaced read whatever was there: a
+ * FIFO or a link to `/dev/zero` at `.guardian/hooks.config.json` blocked the
+ * hook until Claude Code killed it at 15 s — and the tool call then ran
+ * unguarded (Task 23 fix round 2, N1). Until it is loaded, and if it cannot
+ * be (no built `mcp/dist`), every file reads as absent: the protective
+ * defaults.
+ */
+let readSmallJsonFile = () => ({ status: 'absent' });
+
+async function loadConfigReader() {
   try {
-    if (!existsSync(path)) return undefined;
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    return undefined;
+    const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
+    if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
+  } catch (err) {
+    debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+const UNREAD_REASON = {
+  'not-a-regular-file': 'not a regular file',
+  'too-large': 'larger than 64 KiB',
+  unreadable: 'unreadable',
+};
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * The parsed JSON at `path`, or `undefined`. When `label` is given, a file
+ * that exists but was refused or is not JSON is recorded in `unread`, which
+ * SessionStart reports.
+ */
+function readJsonFile(path, label, unread) {
+  const r = readSmallJsonFile(path);
+  if (r.status === 'ok') return r.value;
+  if (label !== undefined && unread !== undefined) {
+    if (r.status === 'refused') unread.push(`${label} was not read (${UNREAD_REASON[r.reason] ?? r.reason})`);
+    else if (r.status === 'invalid') unread.push(`${label} was ignored (not valid JSON)`);
+  }
+  return undefined;
 }
 
 const DEFAULT_CONFIG = {
@@ -133,42 +175,79 @@ function userConfigPath() {
 }
 
 /**
- * Project config (`.guardian/hooks.config.json`) may only make the guard
- * STRICTER, never weaker: a project file is something the assistant itself
- * can write, so a project that got the assistant to set `"bash":{"block":
- * false}` would be turning the guard off from inside the very thing it is
- * supposed to guard. `"bash":{"block":false}` from a project file is
- * therefore stripped here rather than merged — backward-compatible with
- * anyone who already has it (their project simply stops downgrading, rather
- * than erroring), with one debug-only stderr note explaining why. The real
- * switch for this now lives outside the project: the user-level config
- * (`~/.config/dev-guardian/hooks.json`) or `GUARDIAN_HOOKS_BASH_BLOCK=0`,
- * applied afterwards in `loadConfig`.
+ * Project config (`.guardian/hooks.config.json`) may only make the protective
+ * hooks STRICTER, never weaker. A project file is something the assistant
+ * itself can write — the Write/Edit guard below refuses it, but a shell
+ * command (`echo … > .guardian/hooks.config.json`) is not a Write — so every
+ * setting that could switch a protective hook off is ignored when it comes
+ * from there. The earlier version stripped only `"bash":{"block":false}`, and
+ * `{"enabled": false}` in the same file still switched off the shell guard,
+ * install vetting and the config write guard, even over
+ * `GUARDIAN_HOOKS_BASH_BLOCK=1` (Task 23 fix round 1, C1).
+ *
+ * What a project file may set, by construction (an allowlist, so a key added
+ * later is ignored until someone decides which side it is on):
+ *   - `enabled: true`, `bash.block: true`, `bash.warn: true` — stricter or
+ *     equal; the `false` forms are ignored and reported;
+ *   - `secrets.block` — opt-in blocking, only ever stricter than the default;
+ *   - `secrets.warn`, `sessionStart`, `ignorePaths` — advisory: they decide
+ *     what the model is told, never what it is allowed to run.
+ * There is no project-level switch for install vetting at all.
+ *
+ * Switching a protective hook off takes a person, outside the project: the
+ * user-level config (`~/.config/dev-guardian/hooks.json`, whose keys win over
+ * the project's), `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or
+ * `GUARDIAN_PKG_VET=0`. Each ignored setting gets a debug-only stderr note
+ * here, and SessionStart tells the model, once, that it was ignored.
  */
-function stripProjectBashBlockDowngrade(projectFile) {
-  const bash = projectFile.bash;
-  if (!bash || bash.block !== false) return projectFile.bash ?? {};
-  debug(
-    'ignoring "bash":{"block":false} from .guardian/hooks.config.json — a project file may not ' +
-      'downgrade this guard. Use the user-level config (~/.config/dev-guardian/hooks.json) or ' +
-      'GUARDIAN_HOOKS_BASH_BLOCK=0 instead.',
-  );
-  const { block, ...rest } = bash;
-  return rest;
+function projectOverrides(projectFile) {
+  const out = {};
+  const ignored = [];
+  const ignore = (label, debugLabel) => {
+    ignored.push(label);
+    debug(
+      `ignoring ${debugLabel} from .guardian/hooks.config.json — a project file may not ` +
+        'loosen the guardrails. Use the user-level config (~/.config/dev-guardian/hooks.json), ' +
+        'GUARDIAN_HOOKS=off or GUARDIAN_HOOKS_BASH_BLOCK=0 instead.',
+    );
+  };
+
+  if (projectFile.enabled === false) ignore('"enabled": false', '"enabled":false');
+  else if (projectFile.enabled === true) out.enabled = true;
+
+  const bash = projectFile.bash && typeof projectFile.bash === 'object' ? projectFile.bash : {};
+  out.bash = {};
+  if (bash.block === false) ignore('"bash.block": false', '"bash":{"block":false}');
+  else if (bash.block === true) out.bash.block = true;
+  if (bash.warn === false) ignore('"bash.warn": false', '"bash":{"warn":false}');
+  else if (bash.warn === true) out.bash.warn = true;
+
+  const secrets = projectFile.secrets && typeof projectFile.secrets === 'object' ? projectFile.secrets : {};
+  out.secrets = {};
+  if (typeof secrets.warn === 'boolean') out.secrets.warn = secrets.warn;
+  if (typeof secrets.block === 'boolean') out.secrets.block = secrets.block;
+  if (typeof projectFile.sessionStart === 'boolean') out.sessionStart = projectFile.sessionStart;
+  if (Array.isArray(projectFile.ignorePaths)) out.ignorePaths = projectFile.ignorePaths;
+
+  return { overrides: out, ignored };
 }
 
-function loadConfig(cwd) {
-  const projectFile = readJsonFile(join(cwd, '.guardian', 'hooks.config.json')) ?? {};
-  const userFile = readJsonFile(userConfigPath()) ?? {};
-  const projectBash = stripProjectBashBlockDowngrade(projectFile);
+function loadConfig(cwd, unread) {
+  const projectRaw = readJsonFile(join(cwd, '.guardian', 'hooks.config.json'), '.guardian/hooks.config.json', unread);
+  const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread);
+  const projectFile = isPlainObject(projectRaw) ? projectRaw : {};
+  const userFile = isPlainObject(userRaw) ? userRaw : {};
+  const { overrides: project, ignored } = projectOverrides(projectFile);
 
   const merged = {
     ...DEFAULT_CONFIG,
-    ...projectFile,
+    ...(project.enabled !== undefined ? { enabled: project.enabled } : {}),
+    ...(project.sessionStart !== undefined ? { sessionStart: project.sessionStart } : {}),
     ...userFile,
-    secrets: { ...DEFAULT_CONFIG.secrets, ...(projectFile.secrets ?? {}), ...(userFile.secrets ?? {}) },
-    bash: { ...DEFAULT_CONFIG.bash, ...projectBash, ...(userFile.bash ?? {}) },
-    ignorePaths: userFile.ignorePaths ?? projectFile.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...(userFile.secrets ?? {}) },
+    bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...(userFile.bash ?? {}) },
+    ignorePaths: userFile.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    ignoredProjectSettings: ignored,
   };
 
   // Highest precedence: an explicit env var, checked last so it always wins.
@@ -179,8 +258,8 @@ function loadConfig(cwd) {
   return merged;
 }
 
-function loadAllowlist(cwd) {
-  const data = readJsonFile(join(cwd, '.guardian', 'hooks-allowlist.json'));
+function loadAllowlist(cwd, unread) {
+  const data = readJsonFile(join(cwd, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread);
   if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
   if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
   return [];
@@ -318,8 +397,38 @@ async function loadDetectors() {
 
 // ─────────────────────────────── handlers ──────────────────────────────────
 
+/**
+ * The one place the model hears that a project file tried to loosen the
+ * guardrails (see `projectOverrides`). Deliberately does not say how to switch
+ * them off — the same rule as every deny message.
+ */
+function ignoredSettingsNotice(cfg) {
+  const lines = [];
+  const ignored = cfg.ignoredProjectSettings ?? [];
+  if (ignored.length > 0) {
+    lines.push(
+      `⚠️ .guardian/hooks.config.json asks to relax the guardrails (${ignored.join(', ')}) — ` +
+        'ignored: a project file may only make them stricter. If this is intended, ask the user.',
+    );
+  }
+  const unread = cfg.unreadConfigFiles ?? [];
+  if (unread.length > 0) {
+    lines.push(
+      `⚠️ dev-guardian: ${unread.join('; ')} — none of its settings apply, and the guardrails keep their ` +
+        'protective defaults.',
+    );
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
 function handleSessionStart(cwd, cfg) {
-  if (!cfg.sessionStart) noop();
+  const notice = ignoredSettingsNotice(cfg);
+  if (!cfg.sessionStart) {
+    // The briefing is advisory and a project may turn it off — but not the
+    // notice that the same project asked to loosen the guardrails.
+    if (notice) emit('SessionStart', { additionalContext: notice });
+    noop();
+  }
   const lines = [];
   const guardianDir = join(cwd, '.guardian');
   const initialized = existsSync(guardianDir);
@@ -346,6 +455,7 @@ function handleSessionStart(cwd, cfg) {
   } else {
     lines.push('Not yet guardian-initialized — run /guardian-init to set up security & quality scanning.');
   }
+  if (notice) lines.push(notice);
 
   emit('SessionStart', { additionalContext: lines.join('\n') });
 }
@@ -388,9 +498,10 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
  * (no install command, every package clean) or anything at all went wrong:
  * a guardrail that cannot run lets the command through.
  *
- * Opt out with `GUARDIAN_PKG_VET=0` — an environment variable only, never a
- * project file, for the same reason the bash block cannot be downgraded
- * from one (see `stripProjectBashBlockDowngrade`).
+ * Opt out with `GUARDIAN_PKG_VET=0` (vetting alone), or turn every hook off
+ * with the user-level config's `"enabled": false` or `GUARDIAN_HOOKS=off` —
+ * never from a project file, for the same reason the bash block cannot be
+ * downgraded from one (see `projectOverrides`).
  */
 async function vetInstallCommand(command, cwd) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
@@ -414,7 +525,7 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
     // Deliberately does not say HOW to turn this off (item 6) — that used to
     // name the exact project-file/key an assistant could write to disable
     // itself. It cannot be disabled from a project file at all now (see
-    // `stripProjectBashBlockDowngrade`), and the file that CAN change it is
+    // `projectOverrides`), and the file that CAN change it is
     // one an assistant is refused permission to write — see
     // `guardianConfigWriteGuard`.
     emit('PreToolUse', {
@@ -446,9 +557,12 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
 /**
  * Refuses to let an assistant Write/Edit/MultiEdit the guard's own
  * configuration (project `.guardian/hooks*.json` or the user-level
- * `~/.config/dev-guardian/hooks.json`) — item 6's other half. Unconditional:
- * not gated by any config flag, since a downgrade of this exact check is
- * what it exists to prevent. Emits and exits (via `emit`) when it applies;
+ * `~/.config/dev-guardian/hooks.json`) — item 6's other half. Gated by no
+ * setting of its own — a downgrade of this exact check is what it exists to
+ * prevent — and by nothing a project file can set; only the user-level
+ * switches that turn EVERY hook off (`"enabled": false` in the user config,
+ * `GUARDIAN_HOOKS=off`) skip it, like everything else in `main()`. It sees
+ * the Write/Edit/MultiEdit tools only, never a shell write. Emits and exits (via `emit`) when it applies;
  * returns normally (so the caller proceeds to the ordinary write handling)
  * when it does not.
  */
@@ -507,9 +621,12 @@ async function main() {
   const input = payload.tool_input ?? {};
   const cwd = payload.cwd && existsSync(payload.cwd) ? payload.cwd : process.cwd();
 
-  const cfg = loadConfig(cwd);
+  await loadConfigReader();
+  const unread = [];
+  const cfg = loadConfig(cwd, unread);
   if (!cfg.enabled) noop();
-  const allowlist = loadAllowlist(cwd);
+  const allowlist = loadAllowlist(cwd, unread);
+  cfg.unreadConfigFiles = unread;
 
   debug(`event=${event} tool=${toolName} cwd=${cwd}`);
 

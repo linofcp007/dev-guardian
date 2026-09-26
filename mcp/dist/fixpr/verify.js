@@ -1,6 +1,6 @@
 /**
  * `judgeScan` / `judgeTests` / `mayOpenPr` — the two differentials that
- * decide whether an applied fix gets a pull request (design doc
+ * decide whether an applied fix gets a pull request (the design of record).
  * A fix is never applied-and-hoped; it is applied and then proved, twice,
  * and either proof failing means no pull request.
  *

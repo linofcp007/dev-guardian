@@ -747,3 +747,55 @@ describe('assessBashCommand — task-1: ReDoS caps (finding 9)', () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 });
+
+// Task 23 fix round 2, N1: a FIFO or a link to /dev/zero put where the hook
+// reads its own configuration made the hook hang until its 15 s timeout, and
+// the tool call then ran unguarded. The reader now refuses such a file; this
+// rule also refuses to create one there, the way the Write/Edit guard refuses
+// an assistant's edit of the same files.
+describe('assessBashCommand — a special file or link onto the hook configuration (fix round 2)', () => {
+  const blocked = [
+    'mkfifo .guardian/hooks.config.json',
+    'mkfifo ./.guardian/hooks-allowlist.json',
+    'ln -sf /dev/zero .guardian/hooks.config.json',
+    'ln -s /dev/zero ".guardian/hooks-allowlist.json"',
+    'cd proj && ln -sfn /dev/zero .guardian/hooks.config.json',
+    'mknod .guardian/hooks.config.json p',
+    'ln -s /dev/zero ~/.config/dev-guardian/hooks.json',
+    'New-Item -ItemType SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\big.bin',
+    // fix round 3: unquoted Windows absolute paths (the tokenizer drops `\`),
+    // cmd's mklink, the `-Param:value` spelling, and ln's -t directory form.
+    'New-Item -ItemType SymbolicLink -Path C:\\proj\\.guardian\\hooks.config.json -Target \\\\.\\pipe\\x',
+    'New-Item -ItemType:SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\big.bin',
+    'New-Item -Path:.guardian\\hooks.config.json -ItemType HardLink -Value C:\\big.bin',
+    'cmd /c mklink .guardian\\hooks.config.json \\\\.\\pipe\\x',
+    'cmd /c "mklink .guardian\\hooks.config.json \\\\.\\pipe\\x"',
+    'cmd.exe /c mklink C:\\proj\\.guardian\\hooks-allowlist.json C:\\big.bin',
+    'ln -s /dev/zero C:\\Users\\me\\.config\\dev-guardian\\hooks.json',
+    'ln -s /tmp/x/hooks.config.json -t .guardian',
+    'mkfifo -m 600 .guardian/hooks.config.json',
+  ];
+  it.each(blocked)('blocks %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const allowed = [
+    'mkfifo /tmp/pipe',
+    'ln -s ../shared/config.json config.json',
+    'ln -s /dev/zero zeros',
+    'cat .guardian/hooks.config.json',
+    'New-Item -ItemType File -Path notes.txt',
+    'New-Item -ItemType SymbolicLink -Path latest -Target builds\\v2',
+    // fix round 3: the hook config as the link's SOURCE is not a write to it.
+    'ln -s ~/.config/dev-guardian/hooks.json ~/backup/hooks.json',
+    'ln -s .guardian/hooks.config.json backup.json',
+    'cmd /c mklink backup.json .guardian\\hooks.config.json',
+    'New-Item -ItemType SymbolicLink -Path backup.json -Target .guardian\\hooks.config.json',
+    'New-Item -ItemType File -Path .guardian\\hooks.config.json',
+  ];
+  it.each(allowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+});

@@ -30,6 +30,7 @@ Terse and operational — the user is on fire, every extra word costs. In this o
 High stakes: clear, ordered, urgent without drama.
 
 1. `scan_secrets { project_path: "<project>", log_opts: "--all" }` — gitleaks over the history of every ref, plus the files not committed yet. Secrets are redacted in the output.
+   To learn which secrets still work, ask the user first — each secret is sent over the network to its own provider — then re-run with `verify_live: true`: `scan_secrets { project_path: "<project>", log_opts: "--all", verify_live: true }`. A `live` finding is rotated first; `revoked` means the provider refused it; `unknown` (unsupported provider, self-hosted instance, offline, rate limit) means "rotate anyway".
 2. For each finding: the commit that introduced it (`git show -s --format="%h %an %ad" <commit>`) and whether it reached a remote (`git branch -r --contains <commit>`).
 3. Classify each secret by provider (AWS key, GitHub token, Stripe key, JWT signing key, generic) and give a **rotation checklist per provider**: where to revoke, what to regenerate, what depends on it. **Rotation is mandatory**; treat a pushed secret as already seen by someone else.
 4. History rewrite (`git filter-repo`, BFG) is best-effort only — forks, clones, caches and CI logs keep the old objects. Offer it; never present it as the fix.

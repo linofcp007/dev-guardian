@@ -367,7 +367,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
   });
 
   it('names the branch in push_failed detail too, so a local-only branch is not orphaned silently', async () => {
-    // design doc §7, failure path 7: a push failure must still name the
+    // the design of record, failure path 7: a push failure must still name the
     // branch, distinct from failure path 8 (create_failed) which the brief
     // tests directly. Neither the brief's push_failed test nor its
     // create_failed test alone would catch an implementation that names the

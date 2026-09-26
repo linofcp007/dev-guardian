@@ -10,7 +10,7 @@
       "name": "dev-guardian",
       "source": "./",
       "version": "2.0.0",
-      "description": "All-in-one open-source security, bugfix, quality, observability and compliance plugin. Stack-aware (Node/Python/PHP-WordPress/Go/Rust/Ruby/Java/C#-.NET). Trilingual EN/PT/ES.",
+      "description": "Open-source security, bug-hunting, quality, dependency, compliance, observability and performance plugin: skills, slash commands, guardrail hooks and an MCP server over open-source scanners, with local SQLite history. Stack-aware (Node/TypeScript, Python, PHP/WordPress, Go, Rust, Ruby, Java, C#/.NET). Trilingual EN/PT/ES.",
       "category": "security",
       "tags": [
         "security",
