@@ -201,7 +201,30 @@
  * (719), `dotnet/runtime` (11 800) and three sibling projects (146). Every one
  * of those is LIBRARY code with almost no candidate log call, so the zeros say
  * "no false positive where one could have appeared on a name", not "precise
- * on applications" — a corpus of application code is still owed.
+ * on applications".
+ *
+ * **The application corpus** (measured 2026-09-26; commits and per-app counts
+ * in the pack header). Eleven permissively licensed applications, shallow
+ * clones kept OUTSIDE the repo: Zulip, Saleor, CTFd (Python); Ghost,
+ * freeCodeCamp (JS/TS); Site Kit by Google, BookStack, Coolify (PHP); Umbraco,
+ * Orchard Core, eShop (C#). 72 findings triaged by hand, 35 true; three
+ * false-positive classes fixed, 35 of 38 true afterwards. Because each log
+ * rule reads one language, one tree does not serve the pack: the re-ablation
+ * ran each touched rule against a tree of its own language, with the flag
+ * that overrides this registry —
+ *
+ *     npm run ablate -- rgpd --filter=rgpd-pii-in-log-py --real-code=<py tree>
+ *
+ * — where `<py tree>` is the `.py` files of Zulip (`zerver`, `zproject`,
+ * `zilencer`, `corporate`), CTFd (`CTFd`) and Saleor (`saleor`), copied out
+ * without test directories; likewise JS (freeCodeCamp `api/src`, Ghost
+ * `core/server` and `scripts`, Site Kit's `analytics-4` module), PHP (Coolify
+ * and BookStack `app`, Site Kit `includes`), C# (Umbraco `Umbraco.Core` and
+ * `Umbraco.Infrastructure`, three Orchard Core modules, eShop `src`) and the
+ * markup the tracker rules read. `GUARDIAN_RGPD_SRC` still takes ONE tree for
+ * the whole pack; point it at one of those language trees to repeat a rule's
+ * axis 3, not at their union — every clause re-scans the corpus, and the union
+ * is ~15 000 files.
  */
 
 import { existsSync } from 'node:fs';
