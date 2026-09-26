@@ -1046,6 +1046,15 @@ keeps working (migrations 004–011 are additive).
   `.claude/settings*.json` is denied when the command names a key that
   switches the hooks off, and `claude plugin disable|uninstall` of
   dev-guardian is denied. A program run from a file is still not seen.
+- **Padding a line no longer hides a catastrophic command from the shell
+  guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
+  `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
+  statement's pattern text (blank runs collapsed first); whatever a cap
+  still drops adds the warning "part of this command was not assessed (over
+  16 KB)" — never a silent `ok`. Each command of a `cmd /c` line is also
+  checked for `claude plugin disable` and for program text, `npx node -e` /
+  `start /b node -e` are read as program text, and a bare CR (a PowerShell
+  line break) ends a statement.
 - **`enabledPlugins` turning dev-guardian off is denied** in a
   `Write`/`Edit`/`MultiEdit` of Claude Code's settings, like
   `disableAllHooks`.
@@ -1055,9 +1064,16 @@ keeps working (migrations 004–011 are additive).
 - **The install hook's registry configuration reads are link-walked**: a
   `.npmrc` (or `pip.conf`, `nuget.config`, …) linked to an unreachable
   `\\host\share` held the hook into its 15 s timeout, and the install then
-  ran unvetted; such a file is now refused unopened and is not evidence.
+  ran unvetted; such a file is now refused unopened. A registry
+  configuration that is there but could not be read (that link, a loop, a
+  directory or FIFO in its place, over 1 MiB, no permission) is unknown, not
+  absent: a missing name then warns "registry configuration at … could not
+  be read — possibly a private registry" instead of being denied.
   `NUGET_PACKAGES` / `NUGET_XMLDOC_MODE` no longer disable the missing-name
-  deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` count).
+  deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` and
+  `NUGET_FALLBACK_PACKAGES` count), and a machine-wide NuGet config's local
+  folder (Visual Studio's offline feed) explains a 404 only for a package it
+  holds.
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;

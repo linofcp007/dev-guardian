@@ -76,7 +76,8 @@ their respective projects.
   timeout — which used to let the tool call run unguarded — and the shell
   guard denies creating one there. The install hook reads its registry
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
-  link walk. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
+  link walk; one that is there but could not be read counts as possibly a
+  private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
   `MultiEdit` of `.claude/settings.json` or `settings.local.json` is denied
   when it would newly set `disableAllHooks`, an `env` entry setting
   `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or `GUARDIAN_PKG_VET=0`,
