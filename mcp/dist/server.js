@@ -44450,7 +44450,7 @@ function sanitizeGitleaksReport(text, keep) {
     const rule = stringField(item, "RuleID");
     return rule !== null && keep(rule) ? own[n2] ?? null : null;
   });
-  const scrubberOf = items.map(() => null);
+  const scrubbedMatch = items.map(() => null);
   const groups = /* @__PURE__ */ new Map();
   const unplaceable = /* @__PURE__ */ new Set();
   items.forEach((item, n2) => {
@@ -44463,7 +44463,8 @@ function sanitizeGitleaksReport(text, keep) {
     if (list2 === void 0) groups.set(key, [n2]);
     else list2.push(n2);
   });
-  for (const members of groups.values()) {
+  for (const [key, members] of groups) {
+    if (unplaceable.has(key)) continue;
     const placed = members.flatMap((n2) => {
       const span = spanOf(items[n2]);
       return span === null ? [] : [{ n: n2, span }];
@@ -44473,7 +44474,10 @@ function sanitizeGitleaksReport(text, keep) {
     let runEnd = null;
     const closeRun = () => {
       const scrub = makeScrubber(run.flatMap((n2) => own[n2] ?? []));
-      for (const n2 of run) scrubberOf[n2] = scrub;
+      for (const n2 of run) {
+        const match = stringField(items[n2], "Match");
+        if (match !== null && own[n2] != null) scrubbedMatch[n2] = scrub(match);
+      }
       run = [];
     };
     for (const current of placed) {
@@ -44509,8 +44513,8 @@ function sanitizeGitleaksReport(text, keep) {
     const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
     if ("Secret" in c3) c3["Secret"] = REDACTED;
     if (typeof c3["Match"] === "string") {
-      const scrub = scrubberOf[n2] ?? null;
-      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null || scrub === null ? REDACTED : scrub(c3["Match"]);
+      const scrubbed = scrubbedMatch[n2] ?? null;
+      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null || scrubbed === null ? REDACTED : scrubbed;
     }
     if (typeof c3["Message"] === "string" && c3["Message"].length > 0) {
       c3["Message"] = cleanMessage(stringField(item, "Commit") ?? "", c3["Message"]);
@@ -44530,8 +44534,65 @@ function replaceAll(text, needles) {
   for (const n2 of sorted) if (out.includes(n2)) out = out.split(n2).join(REDACTED);
   return out;
 }
-var EDGE = 65536;
+function addRange(ranges, start, end) {
+  let from = start;
+  for (let last = ranges.at(-1); last !== void 0 && last.end > from; last = ranges.at(-1)) {
+    from = Math.min(from, last.start);
+    ranges.pop();
+  }
+  ranges.push({ start: from, end });
+}
+function redactRanges(text, ranges) {
+  if (ranges.length === 0) return text;
+  let out = "";
+  let pos = 0;
+  for (const r of ranges) {
+    out += text.slice(pos, r.start) + REDACTED;
+    pos = r.end;
+  }
+  return out + text.slice(pos);
+}
 function makeScrubber(values) {
+  const distinct = [...new Set(values)].filter((v) => v.length > 0);
+  const [only] = distinct;
+  if (only === void 0) return (text) => text;
+  return distinct.length === 1 ? makeValueScrubber(only) : makeTrieScrubber(distinct);
+}
+function makeValueScrubber(value) {
+  const m = value.length;
+  let border = null;
+  return (text) => {
+    const first = text.indexOf(value);
+    if (first === -1) return text;
+    if (text.indexOf(value, first + 1) === -1) return text.slice(0, first) + REDACTED + text.slice(first + m);
+    border ??= prefixFunction(value);
+    const ranges = [];
+    let q = 0;
+    for (let i2 = first; i2 < text.length; i2++) {
+      const c3 = text.charCodeAt(i2);
+      while (q > 0 && value.charCodeAt(q) !== c3) q = border[q - 1] ?? 0;
+      if (value.charCodeAt(q) === c3) q += 1;
+      if (q === m) {
+        addRange(ranges, i2 + 1 - m, i2 + 1);
+        q = border[m - 1] ?? 0;
+      }
+    }
+    return redactRanges(text, ranges);
+  };
+}
+function prefixFunction(s) {
+  const border = new Int32Array(s.length);
+  let k = 0;
+  for (let i2 = 1; i2 < s.length; i2++) {
+    const c3 = s.charCodeAt(i2);
+    while (k > 0 && s.charCodeAt(k) !== c3) k = border[k - 1] ?? 0;
+    if (s.charCodeAt(k) === c3) k += 1;
+    border[i2] = k;
+  }
+  return border;
+}
+var EDGE = 65536;
+function makeTrieScrubber(values) {
   const at = (a2, i2) => a2[i2] ?? 0;
   const edges = /* @__PURE__ */ new Map();
   const parent = [0];
@@ -44569,7 +44630,7 @@ function makeScrubber(values) {
     if (at(longest, v) === 0) longest[v] = at(longest, target);
   }
   return (text) => {
-    const spans = [];
+    const ranges = [];
     let node = 0;
     for (let i2 = 0; i2 < text.length; i2++) {
       const c3 = text.charCodeAt(i2);
@@ -44580,22 +44641,9 @@ function makeScrubber(values) {
       }
       node = next ?? 0;
       const length = at(longest, node);
-      if (length === 0) continue;
-      let start = i2 + 1 - length;
-      for (let last = spans.at(-1); last !== void 0 && last.end > start; last = spans.at(-1)) {
-        start = Math.min(start, last.start);
-        spans.pop();
-      }
-      spans.push({ start, end: i2 + 1 });
+      if (length !== 0) addRange(ranges, i2 + 1 - length, i2 + 1);
     }
-    if (spans.length === 0) return text;
-    let out = "";
-    let pos = 0;
-    for (const s of spans) {
-      out += text.slice(pos, s.start) + REDACTED;
-      pos = s.end;
-    }
-    return out + text.slice(pos);
+    return redactRanges(text, ranges);
   };
 }
 function spanOf(item) {

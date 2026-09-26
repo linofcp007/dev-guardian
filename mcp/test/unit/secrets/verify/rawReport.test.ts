@@ -15,6 +15,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +28,8 @@ import {
   sweepStaleReportDirs,
 } from '../../../../src/secrets/verify/rawReport.js';
 import { isVerifiableRule } from '../../../../src/secrets/verify/providers.js';
+import { longSecretReport, longValue } from '../../../helpers/longSecretReport.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../../../helpers/tsxNode.js';
 
 const GH = ['ghp', 'Z'.repeat(36)].join('_');
 const AWS = ['AKIA', 'IOSFODNN7', 'ABCDEFG'].join('');
@@ -233,6 +236,63 @@ describe('sanitizeGitleaksReport', () => {
     expect(parsed[1]?.['Match']).toBe(`${REDACTED} ${REDACTED} ${REDACTED}`);
     // Measured ~60 ms; the budget is for a loaded machine, not a benchmark.
     expect(elapsed).toBeLessThan(2_000);
+  });
+
+  /**
+   * Fix round 1: the common case — findings that overlap nothing, each with a
+   * long value. A matcher built for every run, all of them kept until the
+   * output was built, made 1000 such findings take 460 ms (+115 MB) and
+   * 10 000 take 3.9 s (+1 GB), where value-by-value replacement took 19 ms
+   * and 149 ms; 30 000 ended in a fatal heap OOM that no catch can stop.
+   */
+  describe('many findings that overlap nothing, each with a long value', () => {
+    it('stay about as fast as a plain replace — every value still scrubbed', () => {
+      const k = 5_000;
+      const text = longSecretReport(k);
+      const started = performance.now();
+      const out = sanitizeGitleaksReport(text, isVerifiableRule);
+      const elapsed = performance.now() - started;
+      expect(out).not.toBeNull();
+      for (let n = 0; n < k; n += 1) expect(out?.text.includes(longValue(n).slice(40, 120)), `value ${n}`).toBe(false);
+      expect(parse(out?.text)[0]?.['Match']).toBe(REDACTED);
+      // Measured ~80 ms (the per-run matcher: ~2 s); the budget is for a loaded machine.
+      expect(elapsed).toBeLessThan(1_000);
+    });
+
+    it('fit in a small heap: nothing per run outlives the run', () => {
+      // A fatal OOM kills the process, so it is watched from outside: a child
+      // with a 192 MB old space. 4000 findings needed ~450 MB with every
+      // run's matcher kept to the end; the report itself is ~15 MB.
+      const r = spawnSync(
+        process.execPath,
+        ['--max-old-space-size=192', ...TSX_NODE_ARGS, join(MCP_ROOT, 'test', 'helpers', 'sanitizeHeapHarness.ts'), '4000'],
+        { cwd: MCP_ROOT, encoding: 'utf8', timeout: 120_000 },
+      );
+      expect(r.stderr).not.toMatch(/heap out of memory/i);
+      expect(r.stdout.trim()).toBe('ok 4000 0');
+      expect(r.status).toBe(0);
+    }, 180_000);
+  });
+
+  it('a value that repeats itself (self-overlapping, periodic) is scrubbed whole, in linear time', () => {
+    // `abab` inside `ababab` occurs twice, overlapping: replaced value by
+    // value (split/join), the second occurrence was cut and `ab` survived.
+    const short = parse(
+      sanitizeGitleaksReport(JSON.stringify([item('rule-a', 'abab', { Match: 'x ababab y' })]), isVerifiableRule)?.text,
+    );
+    expect(short[0]?.['Match']).toBe(`x ${REDACTED} y`);
+    // The worst case for a search restarted after each occurrence: a long
+    // value of one repeated letter, inside a longer run of it, many times.
+    const value = 'a'.repeat(2_000);
+    const items = Array.from({ length: 1_000 }, (_, n) =>
+      item(`rule-${n}`, value, { File: `f${n}.txt`, Match: `k=${'a'.repeat(4_000)};` }),
+    );
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const elapsed = performance.now() - started;
+    expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
+    // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000 per item.
+    expect(elapsed).toBeLessThan(1_500);
   });
 
   it('a Match holding overlapping occurrences of two values keeps no fragment of either', () => {
