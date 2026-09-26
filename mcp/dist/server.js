@@ -3852,7 +3852,7 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse7(serialize2(uri, options), options);
+        parse8(serialize2(uri, options), options);
       }
       return uri;
     }
@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative24, options, skipNormalization) {
+    function resolveComponent(base, relative25, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse7(serialize2(base, options), options);
-        relative24 = parse7(serialize2(relative24, options), options);
+        base = parse8(serialize2(base, options), options);
+        relative25 = parse8(serialize2(relative25, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative24.scheme) {
-        target.scheme = relative24.scheme;
-        target.userinfo = relative24.userinfo;
-        target.host = relative24.host;
-        target.port = relative24.port;
-        target.path = removeDotSegments(relative24.path || "");
-        target.query = relative24.query;
+      if (!options.tolerant && relative25.scheme) {
+        target.scheme = relative25.scheme;
+        target.userinfo = relative25.userinfo;
+        target.host = relative25.host;
+        target.port = relative25.port;
+        target.path = removeDotSegments(relative25.path || "");
+        target.query = relative25.query;
       } else {
-        if (relative24.userinfo !== void 0 || relative24.host !== void 0 || relative24.port !== void 0) {
-          target.userinfo = relative24.userinfo;
-          target.host = relative24.host;
-          target.port = relative24.port;
-          target.path = removeDotSegments(relative24.path || "");
-          target.query = relative24.query;
+        if (relative25.userinfo !== void 0 || relative25.host !== void 0 || relative25.port !== void 0) {
+          target.userinfo = relative25.userinfo;
+          target.host = relative25.host;
+          target.port = relative25.port;
+          target.path = removeDotSegments(relative25.path || "");
+          target.query = relative25.query;
         } else {
-          if (!relative24.path) {
+          if (!relative25.path) {
             target.path = base.path;
-            if (relative24.query !== void 0) {
-              target.query = relative24.query;
+            if (relative25.query !== void 0) {
+              target.query = relative25.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative24.path[0] === "/") {
-              target.path = removeDotSegments(relative24.path);
+            if (relative25.path[0] === "/") {
+              target.path = removeDotSegments(relative25.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative24.path;
+                target.path = "/" + relative25.path;
               } else if (!base.path) {
-                target.path = relative24.path;
+                target.path = relative25.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative24.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative25.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative24.query;
+            target.query = relative25.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative24.fragment;
+      target.fragment = relative25.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4192,7 +4192,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme };
     }
-    function parse7(uri, opts) {
+    function parse8(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -4229,7 +4229,7 @@ var require_fast_uri = __commonJS({
       resolveComponent,
       equal,
       serialize: serialize2,
-      parse: parse7
+      parse: parse8
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -8588,7 +8588,7 @@ var require_parse = __commonJS({
       }
       return parsed;
     }
-    function parse7(command, args, options) {
+    function parse8(command, args, options) {
       if (args && !Array.isArray(args)) {
         options = args;
         args = null;
@@ -8607,7 +8607,7 @@ var require_parse = __commonJS({
       };
       return options.shell ? parsed : parseNonShell(parsed);
     }
-    module.exports = parse7;
+    module.exports = parse8;
   }
 });
 
@@ -8666,16 +8666,16 @@ var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
-    var parse7 = require_parse();
+    var parse8 = require_parse();
     var enoent = require_enoent();
     function spawn2(command, args, options) {
-      const parsed = parse7(command, args, options);
+      const parsed = parse8(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
     function spawnSync2(command, args, options) {
-      const parsed = parse7(command, args, options);
+      const parsed = parse8(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
@@ -8683,7 +8683,7 @@ var require_cross_spawn = __commonJS({
     module.exports = spawn2;
     module.exports.spawn = spawn2;
     module.exports.sync = spawnSync2;
-    module.exports._parse = parse7;
+    module.exports._parse = parse8;
     module.exports._enoent = enoent;
   }
 });
@@ -22713,7 +22713,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse7(src, reviver, options) {
+    function parse8(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -22754,7 +22754,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse7;
+    exports.parse = parse8;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
@@ -42997,10 +42997,10 @@ function planDotnetRestore(root, target) {
   const withoutLock = [];
   for (const project of projects) {
     const candidates2 = lockFileCandidates(project);
-    const present = candidates2.filter((c3) => existsSync13(c3));
-    lockFiles.push(...present);
+    const present2 = candidates2.filter((c3) => existsSync13(c3));
+    lockFiles.push(...present2);
     absentLockCandidates.push(...candidates2.filter((c3) => !existsSync13(c3)));
-    if (present.length === 0) withoutLock.push(project);
+    if (present2.length === 0) withoutLock.push(project);
   }
   const args = ["restore", target, "--locked-mode", "--nologo", "--verbosity", "quiet"];
   const plan = { target, projects, lockFiles, args, absentLockCandidates };
@@ -48007,9 +48007,9 @@ var reviewPr = makeScanTool({
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
         if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
-        const present = changed.filter((f) => isFileOnDisk(join31(scanRoot, f)));
-        await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present, where });
-        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present.filter(isPython2) });
+        const present2 = changed.filter((f) => isFileOnDisk(join31(scanRoot, f)));
+        await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
+        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir });
       }
       if (!out.cancelled) {
@@ -64171,13 +64171,13 @@ function checkSecurityHeaders(input, findings) {
   const first = completed[0];
   if (first === void 0) return;
   const expected = expectedSecurityHeaders(input.origin);
-  const present = /* @__PURE__ */ new Set();
+  const present2 = /* @__PURE__ */ new Set();
   for (const r of completed) {
     for (const header of expected) {
-      if (r.headers[header] !== void 0) present.add(header);
+      if (r.headers[header] !== void 0) present2.add(header);
     }
   }
-  const missing = expected.filter((h2) => !present.has(h2));
+  const missing = expected.filter((h2) => !present2.has(h2));
   if (missing.length === 0) return;
   findings.push(buildFinding({
     check: "security_headers",
@@ -66868,8 +66868,8 @@ function judgeScan(targets, before, after) {
   for (const target of targets) {
     const targetFinding = beforeByFingerprint.get(target);
     const key = targetFinding === void 0 ? null : resolutionKey(targetFinding);
-    const present = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
-    if (present) still_present.push(target);
+    const present2 = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
+    if (present2) still_present.push(target);
     else resolved.push(target);
   }
   const newFindings = newByRuleAndFile(before.findings, after.findings);
@@ -68601,7 +68601,7 @@ function countBySeverity5(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync55, statSync as statSync21 } from "node:fs";
+import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
 import { resolve as resolve20 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -69457,9 +69457,9 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync54, readdirSync as readdirSync25 } from "node:fs";
+import { lstatSync as lstatSync7, readdirSync as readdirSync25 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname20, join as join75, resolve as resolve19 } from "node:path";
+import { dirname as dirname20, isAbsolute as isAbsolute14, join as join75, parse as parse6, relative as relative24, resolve as resolve19 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync6, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
@@ -69563,8 +69563,43 @@ function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
 }
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
-function read(path6) {
-  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES);
+function isInside4(dir, path6) {
+  const rel2 = relative24(dir, path6);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
+}
+function walkRoot(path6, ctx, under) {
+  const abs = resolve19(path6);
+  if (isRemoteOrDeviceTarget(abs)) return void 0;
+  if (under !== void 0) return under;
+  const holds = (dir2, base) => samePath(dir2, base) || isInside4(dir2, base);
+  const project = ctx.projectDir === void 0 ? void 0 : resolve19(ctx.projectDir);
+  const home = resolve19(homeOf(ctx));
+  if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
+  if (project !== void 0 && isInside4(project, abs)) return project;
+  const dir = dirname20(abs);
+  if (project !== void 0 && holds(dir, project)) return dir;
+  if (isInside4(home, abs)) return home;
+  return parse6(abs).root;
+}
+function read(path6, ctx, under) {
+  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path6, ctx, under));
+}
+function present(path6) {
+  try {
+    lstatSync7(path6);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function listDir(dir, ctx) {
+  const under = walkRoot(dir, ctx);
+  if (under !== void 0 && !walkLinksUnder(under, dir).ok) return [];
+  try {
+    return readdirSync25(dir);
+  } catch {
+    return [];
+  }
 }
 function samePath(a2, b) {
   const norm = (p) => resolve19(p).replace(/[\\/]+$/, "");
@@ -69578,7 +69613,7 @@ function ancestors(ctx) {
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath(s, dir))) break;
     out.push(dir);
-    if (existsSync54(join75(dir, ".git"))) break;
+    if (present(join75(dir, ".git"))) break;
     const parent = dirname20(dir);
     if (parent === dir) break;
     dir = parent;
@@ -69727,10 +69762,10 @@ function npmRegistry(name, ctx) {
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path: path6, parse: parse7 } of npmConfigFiles(ctx)) {
-    const text = read(path6);
+  for (const { path: path6, parse: parse8 } of npmConfigFiles(ctx)) {
+    const text = read(path6, ctx);
     if (text === void 0) continue;
-    const url = parse7(text, scope);
+    const url = parse8(text, scope);
     if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path6, url };
     if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path6;
   }
@@ -69741,7 +69776,7 @@ function npmRegistry(name, ctx) {
 var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
 var MAX_SCAN_DIRS = 3e3;
 var MAX_SCAN_DEPTH = 5;
-function findManifest(root, file, match) {
+function findManifest(root, file, match, ctx) {
   const queue = [{ dir: root, depth: 0 }];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
@@ -69749,7 +69784,7 @@ function findManifest(root, file, match) {
     if (next === void 0) break;
     visited += 1;
     const manifest = join75(next.dir, file);
-    const text = read(manifest);
+    const text = read(manifest, ctx, root);
     if (text !== void 0 && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
@@ -69774,7 +69809,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join75(dir, "package.json"))) || existsSync54(join75(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join75(dir, "package.json"), ctx)) || present(join75(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -69782,7 +69817,7 @@ function npmWorkspacePackage(name, ctx) {
       } catch {
         return false;
       }
-    });
+    }, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -69792,7 +69827,7 @@ function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
     const path6 = join75(dir, "pyproject.toml");
-    const text = read(path6);
+    const text = read(path6, ctx);
     if (text === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
     for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
@@ -69803,7 +69838,7 @@ function uvWorkspacePackage(name, ctx) {
       const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
       const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
       return n2 !== void 0 && pep503(n2) === wanted;
-    });
+    }, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -69857,7 +69892,7 @@ function pypiRegistry(name, ctx) {
   const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join75(programData, "pip", "pip.ini"));
   for (const path6 of confs) {
-    const text = read(path6);
+    const text = read(path6, ctx);
     const url = text === void 0 ? void 0 : fromPipConf(text);
     if (url !== void 0) return { kind: "registry", source: path6, url };
   }
@@ -69866,17 +69901,17 @@ function pypiRegistry(name, ctx) {
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
   uvConfs.push(join75(xdg, "uv", "uv.toml"), join75(appdata, "uv", "uv.toml"), join75(etc, "uv", "uv.toml"));
   for (const path6 of uvConfs) {
-    const text = read(path6);
+    const text = read(path6, ctx);
     const url = text === void 0 ? void 0 : fromUvToml(text);
     if (url !== void 0) return { kind: "registry", source: path6, url };
   }
   for (const dir of ancestors(ctx)) {
     const uvToml = join75(dir, "uv.toml");
-    const uvText = read(uvToml);
+    const uvText = read(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
     const pyproject = join75(dir, "pyproject.toml");
-    const text = read(pyproject);
+    const text = read(pyproject, ctx);
     if (text === void 0) continue;
     const url = fromPyproject(text);
     if (url !== void 0) return { kind: "registry", source: pyproject, url };
@@ -69899,7 +69934,7 @@ function hasRepositories(text) {
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
     const path6 = join75(dir, "composer.json");
-    const text = read(path6);
+    const text = read(path6, ctx);
     if (text === void 0) continue;
     if (hasRepositories(text)) return { kind: "registry", source: path6 };
     break;
@@ -69908,16 +69943,12 @@ function composerRegistry(ctx) {
   const home = homeOf(ctx);
   const composerHome = envValue(env, "COMPOSER_HOME");
   const globals = composerHome !== void 0 ? [join75(composerHome, "config.json")] : [join75(home, ".composer", "config.json"), join75(home, ".config", "composer", "config.json"), join75(envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming"), "Composer", "config.json")];
-  for (const path6 of globals) if (hasRepositories(read(path6))) return { kind: "registry", source: path6 };
+  for (const path6 of globals) if (hasRepositories(read(path6, ctx))) return { kind: "registry", source: path6 };
   return null;
 }
-function nugetConfigIn(dir) {
-  try {
-    const hit = readdirSync25(dir).find((f) => f.toLowerCase() === "nuget.config");
-    return hit === void 0 ? void 0 : join75(dir, hit);
-  } catch {
-    return void 0;
-  }
+function nugetConfigIn(dir, ctx) {
+  const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
+  return hit === void 0 ? void 0 : join75(dir, hit);
 }
 function customNugetSource(text) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
@@ -69934,7 +69965,7 @@ function nugetRegistry(ctx) {
   if (ctx.projectDir !== void 0) {
     let dir = resolve19(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
-      const f = nugetConfigIn(dir);
+      const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
       const parent = dirname20(dir);
       if (parent === dir) break;
@@ -69945,11 +69976,11 @@ function nugetRegistry(ctx) {
   const home = homeOf(ctx);
   const appdata = envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming");
   for (const dir of [join75(appdata, "NuGet"), join75(home, ".nuget", "NuGet"), join75(home, ".config", "NuGet")]) {
-    const f = nugetConfigIn(dir);
+    const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
   for (const path6 of files) {
-    const text = read(path6);
+    const text = read(path6, ctx);
     const url = text === void 0 ? void 0 : customNugetSource(text);
     if (url !== void 0) return { kind: "registry", source: path6, url };
   }
@@ -70145,7 +70176,7 @@ var OSV_ECOSYSTEM = {
 // src/pkgvet/versions.ts
 var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
 var DEV_REST = /(?:^|[-._])dev/i;
-function parse6(version2) {
+function parse7(version2) {
   let s = version2.trim().replace(/^[vV=]+/, "");
   const plus = s.indexOf("+");
   if (plus >= 0) s = s.slice(0, plus);
@@ -70191,8 +70222,8 @@ function compareRest(a2, b) {
   return 0;
 }
 function compareVersions2(a2, b) {
-  const pa = parse6(a2);
-  const pb = parse6(b);
+  const pa = parse7(a2);
+  const pb = parse7(b);
   if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
   const r = compareRelease(pa.release, pb.release);
   if (r !== 0) return r;
@@ -70200,7 +70231,7 @@ function compareVersions2(a2, b) {
   return compareRest(pa.rest, pb.rest);
 }
 function isPrerelease(version2) {
-  const p = parse6(version2);
+  const p = parse7(version2);
   return p === null || p.stage < 2;
 }
 var gte = (x) => (v) => compareVersions2(v, x) >= 0;
@@ -70325,7 +70356,7 @@ function pep440Range(range) {
       const prefix = partial2(ver.slice(0, -2));
       if (prefix === null || prefix.nums.length === 0) return null;
       const inPrefix = (v) => {
-        const p = parse6(v);
+        const p = parse7(v);
         return p !== null && prefix.nums.every((n2, i2) => (p.release[i2] ?? 0) === n2);
       };
       if (op === "==") preds.push(inPrefix);
@@ -70333,7 +70364,7 @@ function pep440Range(range) {
       else return null;
       continue;
     }
-    if (parse6(ver) === null) return null;
+    if (parse7(ver) === null) return null;
     switch (op) {
       case "==":
         preds.push(eq(ver));
@@ -70354,11 +70385,11 @@ function pep440Range(range) {
         preds.push(lt(ver));
         break;
       case "~=": {
-        const p = parse6(ver);
+        const p = parse7(ver);
         if (p === null || p.release.length < 2) return null;
         const prefix = p.release.slice(0, -1);
         preds.push(gte(ver), (v) => {
-          const q = parse6(v);
+          const q = parse7(v);
           return q !== null && prefix.every((n2, i2) => (q.release[i2] ?? 0) === n2);
         });
         break;
@@ -70372,7 +70403,7 @@ function pep440Range(range) {
 function nugetRange(range) {
   const r = range.trim();
   const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
-  if (m === null) return parse6(r) === null ? null : [[eq(r)]];
+  if (m === null) return parse7(r) === null ? null : [[eq(r)]];
   const open = m[1];
   const lo = m[2] ?? "";
   const hasComma = r.includes(",");
@@ -70392,11 +70423,11 @@ function isExactVersion(ecosystem, range) {
     case "npm":
       return EXACT_SEMVER.test(r);
     case "pypi":
-      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse6(r) !== null && !/[,<>=!~*]/.test(r);
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse7(r) !== null && !/[,<>=!~*]/.test(r);
     case "packagist":
       return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
     case "nuget":
-      return parse6(r) !== null && !/[[\](),]/.test(r);
+      return parse7(r) !== null && !/[[\](),]/.test(r);
     default:
       return false;
   }
@@ -70781,7 +70812,7 @@ async function handler44(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve20(inp.project_path);
-    if (!existsSync55(projectDir) || !statSync21(projectDir).isDirectory()) {
+    if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }

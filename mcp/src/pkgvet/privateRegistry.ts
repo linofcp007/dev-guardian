@@ -57,13 +57,15 @@
  * `pypi.org/simple`, `api.nuget.org`) is not custom.
  *
  * Reads files only (node built-ins); never the network. Every read is
- * best-effort: an unreadable file is simply not evidence.
+ * best-effort: an unreadable file is simply not evidence — and so is a file
+ * reached through a link to a network or device path, which is refused before
+ * it is opened (`walkRoot`, follow-up Part Y), as the hook configuration is.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { readSmallTextFile } from '../hooks/configFile.js';
+import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { isRemoteOrDeviceTarget, readSmallTextFile, walkLinksUnder } from '../hooks/configFile.js';
 import type { PkgEcosystem } from './types.js';
 
 export interface RegistryContext {
@@ -116,14 +118,79 @@ export function isPublicRegistryUrl(ecosystem: PkgEcosystem, url: string): boole
  * install hook's 15 s budget: a FIFO or a device where `.npmrc` belongs is
  * opened non-blocking and refused on its descriptor, never read, and an
  * absurd file is never read (Task 23 fix round 2, N1) — see
- * `hooks/configFile.ts`. Unlike the hook config files, these paths are not
- * walked for a link to a network share first. A file refused here is simply
- * not evidence.
+ * `hooks/configFile.ts`. A file refused here is simply not evidence.
  */
 const MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 
-function read(path: string): string | undefined {
-  return readSmallTextFile(path, MAX_REGISTRY_CONFIG_BYTES);
+/** `path` lies strictly below `dir`. */
+function isInside(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * The directory below which `path`'s components are walked for a link to a
+ * network or device path before anything is opened (`walkLinksUnder`, as for
+ * the hook configuration — follow-up Part Y): the project when the file is in
+ * it; the file's own directory when that is one of the project's ancestors (a
+ * parent `.npmrc`, a `nuget.config` up to the root); the home directory when
+ * the file is in there; otherwise the filesystem root (`/etc/pip.conf`,
+ * `%ProgramData%\pip\pip.ini`). Never the project or the home directory
+ * themselves, nor their ancestors: those are the user's layout, and a project
+ * that lives on a share through a link must keep its configuration readable —
+ * so listing one of them is `undefined`, no walk; so is a path that itself
+ * names a share (a roaming profile's `%APPDATA%`), the user's setting rather
+ * than a link to judge.
+ */
+function walkRoot(path: string, ctx: RegistryContext, under?: string): string | undefined {
+  const abs = resolve(path);
+  if (isRemoteOrDeviceTarget(abs)) return undefined;
+  if (under !== undefined) return under;
+  /** `dir` is `base` or one of its ancestors. */
+  const holds = (dir: string, base: string): boolean => samePath(dir, base) || isInside(dir, base);
+  const project = ctx.projectDir === undefined ? undefined : resolve(ctx.projectDir);
+  const home = resolve(homeOf(ctx));
+  if ((project !== undefined && holds(abs, project)) || holds(abs, home)) return undefined;
+  if (project !== undefined && isInside(project, abs)) return project;
+  const dir = dirname(abs);
+  if (project !== undefined && holds(dir, project)) return dir;
+  if (isInside(home, abs)) return home;
+  return parse(abs).root;
+}
+
+/**
+ * A registry configuration file's text, or `undefined`. A link on the way to
+ * a network or device path (`\\host\share`, `\\?\…`) — the file itself or a
+ * directory above it, below {@link walkRoot} — refuses the file unopened: an
+ * open through a link to an unreachable host waits on the network for minutes,
+ * and a hook that dies at its 15 s timeout lets the install through unvetted.
+ */
+function read(path: string, ctx: RegistryContext, under?: string): string | undefined {
+  return readSmallTextFile(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
+}
+
+/**
+ * Whether `path` exists, WITHOUT following a link at it: `lstat` never touches
+ * a link's target, where `existsSync` would open a `.git` linked to a share.
+ */
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The entries of `dir`, or none when a link on the way to it points at a network or device path. */
+function listDir(dir: string, ctx: RegistryContext): string[] {
+  const under = walkRoot(dir, ctx);
+  if (under !== undefined && !walkLinksUnder(under, dir).ok) return [];
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
 }
 
 function samePath(a: string, b: string): boolean {
@@ -144,7 +211,7 @@ function ancestors(ctx: RegistryContext): string[] {
   for (let i = 0; i < 16; i += 1) {
     if (stops.some((s) => samePath(s, dir))) break;
     out.push(dir);
-    if (existsSync(join(dir, '.git'))) break;
+    if (present(join(dir, '.git'))) break;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -338,7 +405,7 @@ function npmRegistry(name: string, ctx: RegistryContext): CustomRegistry | null 
   if (fromEnv !== null) return fromEnv;
   let authSource: string | undefined;
   for (const { path, parse } of npmConfigFiles(ctx)) {
-    const text = read(path);
+    const text = read(path, ctx);
     if (text === undefined) continue;
     const url = parse(text, scope);
     if (url !== undefined && !isPublic('npm', url)) return { kind: 'registry', source: path, url };
@@ -365,7 +432,12 @@ const MAX_SCAN_DEPTH = 5;
  * interpreted: any manifest under a workspace root with the name counts as
  * local — a false "local" only turns a deny into a warning.
  */
-function findManifest(root: string, file: string, match: (text: string) => boolean): string | undefined {
+function findManifest(
+  root: string,
+  file: string,
+  match: (text: string) => boolean,
+  ctx: RegistryContext,
+): string | undefined {
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
@@ -373,7 +445,7 @@ function findManifest(root: string, file: string, match: (text: string) => boole
     if (next === undefined) break;
     visited += 1;
     const manifest = join(next.dir, file);
-    const text = read(manifest);
+    const text = read(manifest, ctx, root);
     if (text !== undefined && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries: string[] = [];
@@ -403,7 +475,7 @@ function hasWorkspaces(packageJson: string | undefined): boolean {
 /** Ruling (f), npm/pnpm/yarn/bun: a package.json named `name` under a workspace root. */
 function npmWorkspacePackage(name: string, ctx: RegistryContext): string | undefined {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join(dir, 'package.json'))) || existsSync(join(dir, 'pnpm-workspace.yaml'));
+    const isRoot = hasWorkspaces(read(join(dir, 'package.json'), ctx)) || present(join(dir, 'pnpm-workspace.yaml'));
     if (!isRoot) continue;
     const hit = findManifest(dir, 'package.json', (text) => {
       try {
@@ -411,7 +483,7 @@ function npmWorkspacePackage(name: string, ctx: RegistryContext): string | undef
       } catch {
         return false;
       }
-    });
+    }, ctx);
     if (hit !== undefined) return hit;
   }
   return undefined;
@@ -424,7 +496,7 @@ function uvWorkspacePackage(name: string, ctx: RegistryContext): string | undefi
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
     const path = join(dir, 'pyproject.toml');
-    const text = read(path);
+    const text = read(path, ctx);
     if (text === undefined) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? '';
     for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
@@ -435,7 +507,7 @@ function uvWorkspacePackage(name: string, ctx: RegistryContext): string | undefi
       const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? '';
       const n = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
       return n !== undefined && pep503(n) === wanted;
-    });
+    }, ctx);
     if (hit !== undefined) return hit;
   }
   return undefined;
@@ -499,7 +571,7 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
   const programData = envValue(env, 'ProgramData') ?? envValue(env, 'PROGRAMDATA');
   if (programData !== undefined) confs.push(join(programData, 'pip', 'pip.ini'));
   for (const path of confs) {
-    const text = read(path);
+    const text = read(path, ctx);
     const url = text === undefined ? undefined : fromPipConf(text);
     if (url !== undefined) return { kind: 'registry', source: path, url };
   }
@@ -510,18 +582,18 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
   if (uvExplicit !== undefined) uvConfs.push(uvExplicit);
   uvConfs.push(join(xdg, 'uv', 'uv.toml'), join(appdata, 'uv', 'uv.toml'), join(etc, 'uv', 'uv.toml'));
   for (const path of uvConfs) {
-    const text = read(path);
+    const text = read(path, ctx);
     const url = text === undefined ? undefined : fromUvToml(text);
     if (url !== undefined) return { kind: 'registry', source: path, url };
   }
 
   for (const dir of ancestors(ctx)) {
     const uvToml = join(dir, 'uv.toml');
-    const uvText = read(uvToml);
+    const uvText = read(uvToml, ctx);
     const uvUrl = uvText === undefined ? undefined : fromUvToml(uvText);
     if (uvUrl !== undefined) return { kind: 'registry', source: uvToml, url: uvUrl };
     const pyproject = join(dir, 'pyproject.toml');
-    const text = read(pyproject);
+    const text = read(pyproject, ctx);
     if (text === undefined) continue;
     const url = fromPyproject(text);
     if (url !== undefined) return { kind: 'registry', source: pyproject, url };
@@ -548,7 +620,7 @@ function hasRepositories(text: string | undefined): boolean {
 function composerRegistry(ctx: RegistryContext): CustomRegistry | null {
   for (const dir of ancestors(ctx)) {
     const path = join(dir, 'composer.json');
-    const text = read(path);
+    const text = read(path, ctx);
     if (text === undefined) continue;
     if (hasRepositories(text)) return { kind: 'registry', source: path };
     break;
@@ -559,19 +631,15 @@ function composerRegistry(ctx: RegistryContext): CustomRegistry | null {
   const globals = composerHome !== undefined
     ? [join(composerHome, 'config.json')]
     : [join(home, '.composer', 'config.json'), join(home, '.config', 'composer', 'config.json'), join(envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming'), 'Composer', 'config.json')];
-  for (const path of globals) if (hasRepositories(read(path))) return { kind: 'registry', source: path };
+  for (const path of globals) if (hasRepositories(read(path, ctx))) return { kind: 'registry', source: path };
   return null;
 }
 
 // ───────────────────────────────────────────────────────────── NuGet
 
-function nugetConfigIn(dir: string): string | undefined {
-  try {
-    const hit = readdirSync(dir).find((f) => f.toLowerCase() === 'nuget.config');
-    return hit === undefined ? undefined : join(dir, hit);
-  } catch {
-    return undefined;
-  }
+function nugetConfigIn(dir: string, ctx: RegistryContext): string | undefined {
+  const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === 'nuget.config');
+  return hit === undefined ? undefined : join(dir, hit);
 }
 
 function customNugetSource(text: string): string | undefined {
@@ -592,7 +660,7 @@ function nugetRegistry(ctx: RegistryContext): CustomRegistry | null {
   if (ctx.projectDir !== undefined) {
     let dir = resolve(ctx.projectDir);
     for (let i = 0; i < 64; i += 1) {
-      const f = nugetConfigIn(dir);
+      const f = nugetConfigIn(dir, ctx);
       if (f !== undefined) files.push(f);
       const parent = dirname(dir);
       if (parent === dir) break;
@@ -603,11 +671,11 @@ function nugetRegistry(ctx: RegistryContext): CustomRegistry | null {
   const home = homeOf(ctx);
   const appdata = envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming');
   for (const dir of [join(appdata, 'NuGet'), join(home, '.nuget', 'NuGet'), join(home, '.config', 'NuGet')]) {
-    const f = nugetConfigIn(dir);
+    const f = nugetConfigIn(dir, ctx);
     if (f !== undefined) files.push(f);
   }
   for (const path of files) {
-    const text = read(path);
+    const text = read(path, ctx);
     const url = text === undefined ? undefined : customNugetSource(text);
     if (url !== undefined) return { kind: 'registry', source: path, url };
   }

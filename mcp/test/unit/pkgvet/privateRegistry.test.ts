@@ -1,10 +1,12 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { customRegistryFor } from '../../../src/pkgvet/privateRegistry.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 
 let project: string;
 let home: string;
@@ -380,4 +382,143 @@ describe('customRegistryFor — files that are not small regular files are not r
     expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
     expect(Date.now() - t0).toBeLessThan(1000);
   });
+});
+
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'pkgvet-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+// Follow-up Part Y (item 4): these reads had the descriptor checks only. A
+// `.npmrc` linked to `\\<unreachable host>\…` held the install hook on its
+// open past the 15 s timeout (~136 s was measured for the hook config), and
+// the install then ran unvetted. Every read now walks the path's links first,
+// as the hook config reader does, and a file reached through a network or
+// device link is not read: it is not evidence.
+describe('customRegistryFor — a file reached through a network or device link is not opened (Part Y)', () => {
+  const WIN = process.platform === 'win32';
+  /**
+   * On POSIX a link target spelled `//tmp/…` is refused by the walk (a UNC
+   * spelling) yet names a LOCAL file — so a reader that follows the link finds
+   * the registry in it, and one that walks first does not. Windows has no such
+   * spelling to test with: Node stores a `\\?\C:\…` link target as the plain
+   * path. There, the unreachable-share test below is the check.
+   */
+  const POSIX_LINKS = CAN_SYMLINK && !WIN;
+  const deviceSpelling = (p: string): string => `/${p}`;
+  const corpNpmrc = (): string => {
+    const real = join(home, 'real-npmrc');
+    writeFileSync(real, 'registry=https://npm.corp.local/\n');
+    return real;
+  };
+
+  it.skipIf(!POSIX_LINKS)('a project .npmrc linked through a //-spelled target is not read (POSIX with symlinks; skipped otherwise)', () => {
+    symlinkSync(deviceSpelling(corpNpmrc()), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user ~/.npmrc linked that way is not read either (POSIX with symlinks; skipped otherwise)', () => {
+    symlinkSync(deviceSpelling(corpNpmrc()), join(home, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+  });
+
+  it.skipIf(!POSIX_LINKS)('nor an .npmrc in a parent directory of the project (POSIX with symlinks; skipped otherwise)', () => {
+    const nested = join(project, 'packages', 'web');
+    mkdirSync(nested, { recursive: true });
+    symlinkSync(deviceSpelling(corpNpmrc()), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', { ...ctx(), projectDir: nested })).toBeNull();
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user pip directory linked that way is not walked into (POSIX with symlinks; skipped otherwise)', () => {
+    const real = join(home, 'real-pip');
+    mkdirSync(real);
+    writeFileSync(join(real, 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    mkdirSync(join(home, '.config'), { recursive: true });
+    symlinkSync(deviceSpelling(real), join(home, '.config', 'pip'), 'dir');
+    expect(customRegistryFor('pypi', 'requests', ctx())).toBeNull();
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user NuGet directory linked that way is not listed (POSIX with symlinks; skipped otherwise)', () => {
+    const real = join(home, 'real-nuget');
+    mkdirSync(real);
+    writeFileSync(
+      join(real, 'NuGet.Config'),
+      '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>',
+    );
+    mkdirSync(join(home, '.nuget'), { recursive: true });
+    symlinkSync(deviceSpelling(real), join(home, '.nuget', 'NuGet'), 'dir');
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toBeNull();
+  });
+
+  it.skipIf(!CAN_SYMLINK)('a local link — absolute or relative — is still followed and read (needs symlink rights; skipped without them)', () => {
+    symlinkSync(corpNpmrc(), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ url: 'https://npm.corp.local/' });
+    rmSync(join(project, '.npmrc'));
+    mkdirSync(join(project, 'cfg'));
+    writeFileSync(join(project, 'cfg', 'npmrc'), 'registry=https://npm.rel.local/\n');
+    symlinkSync(join('cfg', 'npmrc'), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ url: 'https://npm.rel.local/' });
+  });
+
+  // The real failure: a link to a share that never answers. Run in a child
+  // with a kill, because a blocked synchronous open cannot be interrupted from
+  // inside the process. TEST-NET-1 (192.0.2.1) is never routed. On POSIX
+  // `//192.0.2.1/…` is a local path, so this can only fail on Windows.
+  it.skipIf(!CAN_SYMLINK)(
+    'links to an unreachable share — project, parent and user .npmrc, .git, user pip and NuGet directories — cost no wait (needs symlink rights; skipped without them)',
+    async () => {
+      const UNC = WIN ? '\\\\192.0.2.1\\share' : '//192.0.2.1/share';
+      const sep = WIN ? '\\' : '/';
+      const app = join(project, 'app');
+      mkdirSync(app);
+      symlinkSync(`${UNC}${sep}npmrc`, join(app, '.npmrc'), 'file');
+      symlinkSync(`${UNC}${sep}parent-npmrc`, join(project, '.npmrc'), 'file');
+      symlinkSync(`${UNC}${sep}git`, join(project, '.git'), 'dir');
+      symlinkSync(`${UNC}${sep}user-npmrc`, join(home, '.npmrc'), 'file');
+      mkdirSync(join(home, '.config'), { recursive: true });
+      symlinkSync(`${UNC}${sep}pip`, join(home, '.config', 'pip'), 'dir');
+      mkdirSync(join(home, '.nuget'), { recursive: true });
+      symlinkSync(`${UNC}${sep}nuget`, join(home, '.nuget', 'NuGet'), 'dir');
+      const script = join(home, 'probe.mjs');
+      const moduleUrl = pathToFileURL(resolve(MCP_ROOT, 'src', 'pkgvet', 'privateRegistry.ts')).href;
+      writeFileSync(
+        script,
+        `import { customRegistryFor } from ${JSON.stringify(moduleUrl)};\n` +
+          'const [projectDir, homeDir] = process.argv.slice(2);\n' +
+          "const c = { projectDir, homeDir, env: {}, etcDir: homeDir + '/no-etc', nodeExecPath: homeDir + '/no-node/bin/node' };\n" +
+          'const t0 = Date.now();\n' +
+          "const r = [customRegistryFor('npm', 'lodash', c), customRegistryFor('pypi', 'requests', c), customRegistryFor('nuget', 'Corp.Lib', c)];\n" +
+          'process.stdout.write(JSON.stringify({ r, ms: Date.now() - t0 }));\n',
+      );
+      const out = await new Promise<{ timedOut: boolean; stdout: string }>((done) => {
+        const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, app, home], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        child.stdout.on('data', (d: Buffer) => {
+          stdout += d.toString('utf8');
+        });
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          done({ timedOut: true, stdout });
+        }, 45_000);
+        child.on('exit', () => {
+          clearTimeout(timer);
+          done({ timedOut: false, stdout });
+        });
+      });
+      expect(out.timedOut).toBe(false);
+      const parsed = JSON.parse(out.stdout) as { r: unknown[]; ms: number };
+      expect(parsed.r).toEqual([null, null, null]);
+      expect(parsed.ms).toBeLessThan(5000);
+    },
+    60_000,
+  );
 });

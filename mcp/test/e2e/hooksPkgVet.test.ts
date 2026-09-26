@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -56,7 +56,21 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'pkgvet-e2e-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+const LEAKY_ENV =/^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
 function runHook(command: string, routes: Record<string, Route | Route[]>, opts: { tool?: string; env?: Record<string, string> } = {}): HookOut {
   const base: Record<string, string> = {};
@@ -208,6 +222,28 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
   }, 20_000);
+
+  // Follow-up Part Y (item 4): the registry-context reads were not walked for
+  // a network link. A project `.npmrc` linked to an unreachable share held the
+  // hook on its open until the 15 s kill, and the install then ran unvetted.
+  // TEST-NET-1 (192.0.2.1) is never routed; on POSIX `//192.0.2.1/…` is a
+  // local path, so only Windows can fail this.
+  it.skipIf(!CAN_SYMLINK)(
+    'a project .npmrc linked to an unreachable share: answered at once, not after the hook timeout (needs symlink rights; skipped without them)',
+    () => {
+      const unc = process.platform === 'win32' ? '\\\\192.0.2.1\\share\\npmrc' : '//192.0.2.1/share/npmrc';
+      symlinkSync(unc, join(project, '.npmrc'), 'file');
+      const r = runHook('npm install react-form-autopilot-helperz', {
+        'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.status).toBe(0);
+      expect(r.ms).toBeLessThan(10_000);
+      // Not evidence of a private registry: the plain install is still denied.
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    },
+    30_000,
+  );
 
   it('fix round 1 — a missing name after a `cd` is a warning, never a deny (uncertain parse)', () => {
     const r = runHook('cd packages/web && npm install react-form-autopilot-helperz', {
