@@ -69544,10 +69544,12 @@ function readText2(path6, maxBytes) {
     }
   }
 }
-function readSmallTextFile(path6, maxBytes, under) {
-  if (under !== void 0 && !walkLinksUnder(under, path6).ok) return void 0;
-  const r = readText2(path6, maxBytes);
-  return r.status === "ok" ? r.text : void 0;
+function readSmallText(path6, maxBytes, under) {
+  if (under !== void 0) {
+    const walk4 = walkLinksUnder(under, path6);
+    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
+  }
+  return readText2(path6, maxBytes);
 }
 
 // src/pkgvet/privateRegistry.ts
@@ -69582,8 +69584,14 @@ function walkRoot(path6, ctx, under) {
   if (isInside4(home, abs)) return home;
   return parse6(abs).root;
 }
+var firstUnread;
+function noteUnread(path6) {
+  firstUnread = firstUnread ?? path6;
+}
 function read(path6, ctx, under) {
-  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path6, ctx, under));
+  const r = readSmallText(path6, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path6, ctx, under));
+  if (r.status === "refused") noteUnread(path6);
+  return r.status === "ok" ? r.text : void 0;
 }
 function present(path6) {
   try {
@@ -69595,10 +69603,15 @@ function present(path6) {
 }
 function listDir(dir, ctx) {
   const under = walkRoot(dir, ctx);
-  if (under !== void 0 && !walkLinksUnder(under, dir).ok) return [];
+  if (under !== void 0 && !walkLinksUnder(under, dir).ok) {
+    noteUnread(dir);
+    return [];
+  }
   try {
     return readdirSync25(dir);
-  } catch {
+  } catch (e) {
+    const code = e.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir);
     return [];
   }
 }
@@ -69750,7 +69763,7 @@ var ENV_REGISTRY = {
   npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
   pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
   packagist: /^$/,
-  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NuGetPackageSourceCredentials_.+)$/i
+  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NUGET_FALLBACK_PACKAGES|NuGetPackageSourceCredentials_.+)$/i
 };
 function envRegistry(ecosystem, ctx) {
   for (const [key, raw] of Object.entries(envOf(ctx))) {
@@ -69961,15 +69974,29 @@ function nugetConfigIn(dir, ctx) {
   const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
   return hit === void 0 ? void 0 : join75(dir, hit);
 }
-function customNugetSource(text) {
+function customNugetSources(text) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
+  const out = [];
   for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
     const url = m[1] ?? "";
-    if (url !== "" && !isPublic("nuget", url)) return url;
+    if (url !== "" && !isPublic("nuget", url)) out.push(url);
   }
-  return void 0;
+  return out;
 }
-function nugetRegistry(ctx) {
+function isLocalFolderSource(source) {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(source) && !/^[\\/]{2}/.test(source);
+}
+function localFeedHas(folder, configPath, id, ctx) {
+  const env = envOf(ctx);
+  const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
+  const dir = resolve19(dirname20(configPath), expanded);
+  const lower = id.toLowerCase();
+  return listDir(dir, ctx).some((entry) => {
+    const e = entry.toLowerCase();
+    return e === lower || e.startsWith(`${lower}.`) && e.endsWith(".nupkg") && /^\d/.test(e.slice(lower.length + 1));
+  });
+}
+function nugetRegistry(name, ctx) {
   const fromEnv = envRegistry("nuget", ctx);
   if (fromEnv !== null) return fromEnv;
   const files = [];
@@ -69990,42 +70017,56 @@ function nugetRegistry(ctx) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
-  const configDirs = [
-    join75(appdata, "NuGet", "config"),
-    join75(home, ".nuget", "config"),
-    join75(home, ".config", "NuGet", "config"),
+  const userDirs = [join75(appdata, "NuGet", "config"), join75(home, ".nuget", "config"), join75(home, ".config", "NuGet", "config")];
+  const machineDirs = [
     join75(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
     join75(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
   const programFilesX86 = envValue(env, "ProgramFiles(x86)");
-  if (programFilesX86 !== void 0) configDirs.push(join75(programFilesX86, "NuGet", "Config"));
-  for (const dir of configDirs) {
-    for (const name of listDir(dir, ctx).filter((f) => /\.config$/i.test(f)).sort()) files.push(join75(dir, name));
+  if (programFilesX86 !== void 0) machineDirs.push(join75(programFilesX86, "NuGet", "Config"));
+  const machineWide = /* @__PURE__ */ new Set();
+  for (const dir of [...userDirs, ...machineDirs]) {
+    for (const f of listDir(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
+      files.push(join75(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join75(dir, f));
+    }
   }
   for (const path6 of files) {
     const text = read(path6, ctx);
-    const url = text === void 0 ? void 0 : customNugetSource(text);
-    if (url !== void 0) return { kind: "registry", source: path6, url };
+    if (text === void 0) continue;
+    for (const url of customNugetSources(text)) {
+      if (machineWide.has(path6) && isLocalFolderSource(url) && !localFeedHas(url, path6, name, ctx)) continue;
+      return { kind: "registry", source: path6, url };
+    }
   }
   return null;
 }
 function customRegistryFor(ecosystem, name, ctx = {}) {
+  firstUnread = void 0;
+  let found;
   try {
     switch (ecosystem) {
       case "npm":
-        return npmRegistry(name, ctx);
+        found = npmRegistry(name, ctx);
+        break;
       case "pypi":
-        return pypiRegistry(name, ctx);
+        found = pypiRegistry(name, ctx);
+        break;
       case "packagist":
-        return composerRegistry(ctx);
+        found = composerRegistry(ctx);
+        break;
       case "nuget":
-        return nugetRegistry(ctx);
+        found = nugetRegistry(name, ctx);
+        break;
       default:
-        return null;
+        found = null;
     }
   } catch {
-    return null;
+    found = null;
   }
+  const unread = firstUnread;
+  firstUnread = void 0;
+  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread } : found;
 }
 
 // src/pkgvet/registry.ts
@@ -70628,12 +70669,12 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     if (w.custom !== null) {
       const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
-      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : `a custom registry is configured (${where})`;
+      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown2(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? w.custom !== null ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
+    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();

@@ -73,7 +73,7 @@ export type SmallFileRead =
   /** A path that exists but was not read: not a regular file, too large, or reached through a network link. */
   | { status: 'refused'; reason: RefusalReason };
 
-type TextRead =
+export type TextRead =
   | { status: 'absent' }
   | { status: 'ok'; text: string }
   | { status: 'refused'; reason: RefusalReason };
@@ -210,11 +210,25 @@ export function readSmallJsonFile(
 }
 
 /**
+ * A small text file's content — or that it is `absent`, or why it was
+ * `refused` (a network or device link below `under`, a loop, not a regular
+ * file, too large, unreadable). For a caller that must tell "there is no such
+ * file" from "there is one and it was not read": the install hook's registry
+ * context, where the second may name a private registry.
+ */
+export function readSmallText(path: string, maxBytes: number, under?: string): TextRead {
+  if (under !== undefined) {
+    const walk = walkLinksUnder(under, path);
+    if (!walk.ok) return { status: 'refused', reason: walk.reason };
+  }
+  return readText(path, maxBytes);
+}
+
+/**
  * A small text file's content, or `undefined` for anything else. `under`
  * works as in {@link readSmallJsonFile}.
  */
 export function readSmallTextFile(path: string, maxBytes: number, under?: string): string | undefined {
-  if (under !== undefined && !walkLinksUnder(under, path).ok) return undefined;
-  const r = readText(path, maxBytes);
+  const r = readSmallText(path, maxBytes, under);
   return r.status === 'ok' ? r.text : undefined;
 }

@@ -474,6 +474,41 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
     expect(d?.context).toMatch(/react-magic-form-helperz.*not found on the public registry/s);
   });
 
+  // Fix round 1 (controller ruling): registry configuration that is there but
+  // could not be read is UNKNOWN — possibly a private registry — so a missing
+  // name warns instead of being denied. A directory where `.npmrc` belongs is
+  // the portable stand-in for a link to a share, a FIFO or a huge file.
+  it('an unreadable project .npmrc: a missing scoped name warns, naming the file', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const f = fakeFetch({ 'https://registry.npmjs.org/@corp%2Finternal': { status: 404 }, [OSV]: osvClean });
+    const d = await decideInstallCommand('npm i @corp/internal', opts(f.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/@corp\/internal.*not found on the public registry/s);
+    expect(d?.context).toContain(`registry configuration at ${join(project, '.npmrc')} could not be read — possibly a private registry`);
+  });
+
+  it('an unreadable .npmrc does not soften a MALICIOUS version: still denied', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const d = await decideInstallCommand('npm i evil-pkg', opts(malicious().fetchImpl));
+    expect(d?.deny).toMatch(/MAL-2026-9/);
+  });
+
+  it('…nor a name OSV lists as malicious that the registry has already removed', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const f = fakeFetch({
+      'https://registry.npmjs.org/evil-pkg': { status: 404 },
+      [OSV]: () => ({ body: { results: [{ vulns: [{ id: 'MAL-2026-10' }] }] } }),
+    });
+    const d = await decideInstallCommand('npm i evil-pkg', opts(f.fetchImpl));
+    expect(d?.deny).toMatch(/MAL-2026-10/);
+  });
+
+  it('the same command with a readable, empty .npmrc is still denied as missing', async () => {
+    writeFileSync(join(project, '.npmrc'), '');
+    const f = fakeFetch({ 'https://registry.npmjs.org/@corp%2Finternal': { status: 404 }, [OSV]: osvClean });
+    expect((await decideInstallCommand('npm i @corp/internal', opts(f.fetchImpl)))?.deny).toMatch(/does not exist/);
+  });
+
   it('the same comma list from the Bash tool vets nothing: bash hands npm one invalid name', async () => {
     const f = fakeFetch({});
     expect(await decideInstallCommand('npm i lodash,evil-pkg', opts(f.fetchImpl, { shell: 'bash' }))).toBeNull();

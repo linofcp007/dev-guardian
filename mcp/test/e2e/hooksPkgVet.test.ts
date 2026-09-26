@@ -235,17 +235,33 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     () => {
       const unc = process.platform === 'win32' ? '\\\\192.0.2.1\\share\\npmrc' : '//192.0.2.1/share/npmrc';
       symlinkSync(unc, join(project, '.npmrc'), 'file');
-      const r = runHook('npm install react-form-autopilot-helperz', {
-        'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+      const r = runHook('npm i @corp/internal', {
+        'https://registry.npmjs.org/@corp%2Finternal': { status: 404 },
         [OSV]: { osv: {} },
       });
       expect(r.status).toBe(0);
       expect(r.ms).toBeLessThan(10_000);
-      // Not evidence of a private registry: the plain install is still denied.
-      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      // Fix round 1 (controller ruling): a registry configuration that could
+      // not be read may name a private registry — UNKNOWN, so a warning, never
+      // a deny. The reviewer's repro was exactly this: WARN at 166117a, DENY
+      // after the first round.
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(
+        /@corp\/internal.*not found on the public registry.*could not be read — possibly a private registry/s,
+      );
     },
     30_000,
   );
+
+  it('fix round 1 — an unreadable project .npmrc (here a directory) warns, never denies', () => {
+    mkdirSync(join(project, '.npmrc'));
+    const r = runHook('npm i @corp/internal', {
+      'https://registry.npmjs.org/@corp%2Finternal': { status: 404 },
+      [OSV]: { osv: {} },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not be read — possibly a private registry/);
+  });
 
   it('fix round 1 — a missing name after a `cd` is a warning, never a deny (uncertain parse)', () => {
     const r = runHook('cd packages/web && npm install react-form-autopilot-helperz', {

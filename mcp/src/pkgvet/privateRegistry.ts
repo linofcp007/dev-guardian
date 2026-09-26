@@ -56,16 +56,19 @@
  * A configured value that IS the public registry (`registry.npmjs.org`,
  * `pypi.org/simple`, `api.nuget.org`) is not custom.
  *
- * Reads files only (node built-ins); never the network. Every read is
- * best-effort: an unreadable file is simply not evidence — and so is a file
- * reached through a link to a network or device path, which is refused before
- * it is opened (`walkRoot`, follow-up Part Y), as the hook configuration is.
+ * Reads files only (node built-ins); never the network. A file reached through
+ * a link to a network or device path is refused before it is opened
+ * (`walkRoot`, follow-up Part Y), as the hook configuration is. A
+ * configuration that is THERE but could not be read — refused that way, or not
+ * a regular file, too large, no permission — is UNKNOWN, never absent: when
+ * nothing else explains the 404 it is reported as `unreadable` (Part Y fix
+ * round 1, controller ruling), so a missing name warns instead of being denied.
  */
 
 import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { isRemoteOrDeviceTarget, readSmallTextFile, walkLinksUnder } from '../hooks/configFile.js';
+import { isRemoteOrDeviceTarget, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import type { PkgEcosystem } from './types.js';
 
 export interface RegistryContext {
@@ -90,10 +93,16 @@ export interface RegistryContext {
  *   - `registry` — a custom registry / index / source is configured (ruling (d));
  *   - `auth`     — an npmjs auth token is configured, and a PRIVATE scoped
  *                  package on npmjs answers 404 to an anonymous lookup (ruling (e));
- *   - `workspace`— the name is a local workspace package (ruling (f)).
+ *   - `workspace`— the name is a local workspace package (ruling (f));
+ *   - `unreadable` — nothing above was found, but a registry configuration
+ *                  file or directory is THERE and was not read (a link to a
+ *                  network or device path, a loop, not a regular file, too
+ *                  large, no permission). It may name a private registry, so
+ *                  it is unknown, never absent (Part Y fix round 1, controller
+ *                  ruling).
  */
 export interface CustomRegistry {
-  kind: 'registry' | 'auth' | 'workspace';
+  kind: 'registry' | 'auth' | 'workspace' | 'unreadable';
   /** Where it was found: a file path or an environment variable name. */
   source: string;
   url?: string;
@@ -120,7 +129,7 @@ export function isPublicRegistryUrl(ecosystem: PkgEcosystem, url: string): boole
  * install hook's 15 s budget: a FIFO or a device where `.npmrc` belongs is
  * opened non-blocking and refused on its descriptor, never read, and an
  * absurd file is never read (Task 23 fix round 2, N1) — see
- * `hooks/configFile.ts`. A file refused here is simply not evidence.
+ * `hooks/configFile.ts`. A file refused here is UNKNOWN — see `unreadable`.
  */
 const MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 
@@ -161,14 +170,28 @@ function walkRoot(path: string, ctx: RegistryContext, under?: string): string | 
 }
 
 /**
+ * The first registry configuration path the current `customRegistryFor` call
+ * found THERE but could not read. Reset at the start of each (synchronous)
+ * call and read at its end: when nothing else explains a 404, this does.
+ */
+let firstUnread: string | undefined;
+
+function noteUnread(path: string): void {
+  firstUnread = firstUnread ?? path;
+}
+
+/**
  * A registry configuration file's text, or `undefined`. A link on the way to
  * a network or device path (`\\host\share`, `\\?\…`) — the file itself or a
  * directory above it, below {@link walkRoot} — refuses the file unopened: an
  * open through a link to an unreachable host waits on the network for minutes,
  * and a hook that dies at its 15 s timeout lets the install through unvetted.
+ * A refused file is recorded ({@link noteUnread}); an absent one is not.
  */
 function read(path: string, ctx: RegistryContext, under?: string): string | undefined {
-  return readSmallTextFile(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
+  const r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
+  if (r.status === 'refused') noteUnread(path);
+  return r.status === 'ok' ? r.text : undefined;
 }
 
 /**
@@ -184,13 +207,22 @@ function present(path: string): boolean {
   }
 }
 
-/** The entries of `dir`, or none when a link on the way to it points at a network or device path. */
+/**
+ * The entries of `dir` — none when it does not exist, and none, recorded as
+ * unread ({@link noteUnread}), when a link on the way to it points at a network
+ * or device path or it cannot be listed.
+ */
 function listDir(dir: string, ctx: RegistryContext): string[] {
   const under = walkRoot(dir, ctx);
-  if (under !== undefined && !walkLinksUnder(under, dir).ok) return [];
+  if (under !== undefined && !walkLinksUnder(under, dir).ok) {
+    noteUnread(dir);
+    return [];
+  }
   try {
     return readdirSync(dir);
-  } catch {
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') noteUnread(dir);
     return [];
   }
 }
@@ -397,7 +429,7 @@ const ENV_REGISTRY: Record<PkgEcosystem, RegExp> = {
   npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
   pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
   packagist: /^$/,
-  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NuGetPackageSourceCredentials_.+)$/i,
+  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NUGET_FALLBACK_PACKAGES|NuGetPackageSourceCredentials_.+)$/i,
 };
 
 function envRegistry(ecosystem: PkgEcosystem, ctx: RegistryContext): CustomRegistry | null {
@@ -662,16 +694,39 @@ function nugetConfigIn(dir: string, ctx: RegistryContext): string | undefined {
   return hit === undefined ? undefined : join(dir, hit);
 }
 
-function customNugetSource(text: string): string | undefined {
+/** Every package source in a NuGet config that is not nuget.org. */
+function customNugetSources(text: string): string[] {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? '';
+  const out: string[] = [];
   for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
     const url = m[1] ?? '';
-    if (url !== '' && !isPublic('nuget', url)) return url;
+    if (url !== '' && !isPublic('nuget', url)) out.push(url);
   }
-  return undefined;
+  return out;
 }
 
-function nugetRegistry(ctx: RegistryContext): CustomRegistry | null {
+/** A source that is a folder on this machine: not a URL, not a UNC share. */
+function isLocalFolderSource(source: string): boolean {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(source) && !/^[\\/]{2}/.test(source);
+}
+
+/**
+ * Whether a local folder feed holds `id` — flat (`<id>.<version>.nupkg`) or
+ * hierarchical (`<id>/`), any casing. `%VAR%` in the folder is expanded, and
+ * a relative folder is taken from the config file's directory.
+ */
+function localFeedHas(folder: string, configPath: string, id: string, ctx: RegistryContext): boolean {
+  const env = envOf(ctx);
+  const expanded = folder.replace(/%([^%]+)%/g, (whole, name: string) => envValue(env, name) ?? whole);
+  const dir = resolve(dirname(configPath), expanded);
+  const lower = id.toLowerCase();
+  return listDir(dir, ctx).some((entry) => {
+    const e = entry.toLowerCase();
+    return e === lower || (e.startsWith(`${lower}.`) && e.endsWith('.nupkg') && /^\d/.test(e.slice(lower.length + 1)));
+  });
+}
+
+function nugetRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
   const fromEnv = envRegistry('nuget', ctx);
   if (fromEnv !== null) return fromEnv;
   // NuGet reads every nuget.config from the project up to the filesystem
@@ -696,22 +751,30 @@ function nugetRegistry(ctx: RegistryContext): CustomRegistry | null {
   }
   // Every `*.config` in the additional user-wide directories and the
   // machine-wide ones, as NuGet reads them (follow-up Part Y).
-  const configDirs = [
-    join(appdata, 'NuGet', 'config'),
-    join(home, '.nuget', 'config'),
-    join(home, '.config', 'NuGet', 'config'),
+  const userDirs = [join(appdata, 'NuGet', 'config'), join(home, '.nuget', 'config'), join(home, '.config', 'NuGet', 'config')];
+  const machineDirs = [
     join(ctx.etcDir ?? '/etc', 'opt', 'NuGet', 'Config'),
     join(ctx.systemLibraryDir ?? '/Library', 'Application Support', 'NuGet', 'Config'),
   ];
   const programFilesX86 = envValue(env, 'ProgramFiles(x86)');
-  if (programFilesX86 !== undefined) configDirs.push(join(programFilesX86, 'NuGet', 'Config'));
-  for (const dir of configDirs) {
-    for (const name of listDir(dir, ctx).filter((f) => /\.config$/i.test(f)).sort()) files.push(join(dir, name));
+  if (programFilesX86 !== undefined) machineDirs.push(join(programFilesX86, 'NuGet', 'Config'));
+  const machineWide = new Set<string>();
+  for (const dir of [...userDirs, ...machineDirs]) {
+    for (const f of listDir(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
+      files.push(join(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join(dir, f));
+    }
   }
   for (const path of files) {
     const text = read(path, ctx);
-    const url = text === undefined ? undefined : customNugetSource(text);
-    if (url !== undefined) return { kind: 'registry', source: path, url };
+    if (text === undefined) continue;
+    for (const url of customNugetSources(text)) {
+      // A machine-wide config's LOCAL folder — Visual Studio's
+      // Microsoft.VisualStudio.Offline.config is one on every VS machine —
+      // explains a 404 only for a package it holds (fix round 1, M2).
+      if (machineWide.has(path) && isLocalFolderSource(url) && !localFeedHas(url, path, name, ctx)) continue;
+      return { kind: 'registry', source: path, url };
+    }
   }
   return null;
 }
@@ -725,20 +788,31 @@ export function customRegistryFor(
   name: string,
   ctx: RegistryContext = {},
 ): CustomRegistry | null {
+  firstUnread = undefined;
+  let found: CustomRegistry | null;
   try {
     switch (ecosystem) {
       case 'npm':
-        return npmRegistry(name, ctx);
+        found = npmRegistry(name, ctx);
+        break;
       case 'pypi':
-        return pypiRegistry(name, ctx);
+        found = pypiRegistry(name, ctx);
+        break;
       case 'packagist':
-        return composerRegistry(ctx);
+        found = composerRegistry(ctx);
+        break;
       case 'nuget':
-        return nugetRegistry(ctx);
+        found = nugetRegistry(name, ctx);
+        break;
       default:
-        return null;
+        found = null;
     }
   } catch {
-    return null;
+    found = null;
   }
+  // Nothing explains the 404 — unless a configuration that is there could not
+  // be read: it may name a private registry (Part Y fix round 1).
+  const unread = firstUnread;
+  firstUnread = undefined;
+  return found === null && unread !== undefined ? { kind: 'unreadable', source: unread } : found;
 }
