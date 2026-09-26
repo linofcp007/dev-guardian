@@ -50,10 +50,12 @@
  *     nuclei not requested, no image given: the scan did not look — or names
  *     it only in passes skipped with no gap recorded (`trivy` skipped for
  *     want of a Dockerfile: `computeCoverage`'s "nothing to scan"), and
- *     when the older scan ran a pass with a target of its own
- *     (`trivy-image`) that may have produced the finding, and the newer one
- *     did not run that pass again: its Dockerfile pass measures the same
- *     key, but never looked at the image;
+ *     when one scan ran a pass that may have produced the finding and the
+ *     other did not look at that pass's TARGET again: an image
+ *     (`trivy-image`) and the project's files (`trivy-dockerfile`,
+ *     `trivy-config`) are measured under the same key, but a Dockerfile
+ *     pass never looked at the image, nor an image pass at the Dockerfile
+ *     (see `targetNotRun`);
  *   - for a tool the table does not know at all, measured only by a scan
  *     with no gap anywhere (coverage `full`), never by a partial one;
  *   - a scan with no bookkeeping at all (the oldest rows) measured
@@ -258,21 +260,43 @@ function booksOf(storage: Storage, scan: ScanRecord): BookFor {
   };
 }
 
+/** Every pass without a target of its own looks at the project's files. */
+const PROJECT_FILES = 'project files';
+
 /**
- * The own-target pass (`runNames.ts`: `trivy-image`) that `holder` ran ok,
- * that may have produced `f`, and that `asked` did not run ok — or null.
- * `f` shares its key with passes that look elsewhere (an image's
- * misconfiguration and a Dockerfile's are both `trivy:config`), so the
- * other scan's Dockerfile pass says nothing about the image. A scan with no
- * bookkeeping at all measured everything, as everywhere else here.
+ * What a pass looks at: its own target when it has one (`runNames.ts`:
+ * `trivy-image` — an image, named by the pass), else the project's files.
  */
-function ownTargetNotRun(holder: Bookkeeping | null, asked: Bookkeeping, f: Finding): string | null {
+function targetOf(name: string): string {
+  return runNameEntry(name)?.ownTarget === true ? name : PROJECT_FILES;
+}
+
+/**
+ * A pass `holder` ran ok that may have produced `f` (it measures `f`'s key)
+ * and whose TARGET `asked` did not look at — no pass of `asked` with that
+ * target ran ok measuring the key — or null.
+ *
+ * `f` can share its key with passes that look elsewhere: an image's
+ * misconfiguration and a Dockerfile's are both `trivy:config`, and the
+ * finding does not say which pass produced it. So a finding is re-measured
+ * only on every target that may have produced it, in BOTH directions: a
+ * Dockerfile-only scan never looked at the image, and an image-only scan
+ * never looked at the Dockerfile. The second direction was missing (Task
+ * 24, probe H1): an image-only run resolved the Dockerfile's
+ * misconfiguration, and in regression_alert that false resolution cancelled
+ * a real new high. When the holder ran both passes the finding could be
+ * either's, so only a scan that looked at both re-measures it. A scan with
+ * no bookkeeping at all measured everything, as everywhere else here.
+ */
+function targetNotRun(holder: Bookkeeping | null, asked: Bookkeeping, f: Finding): string | null {
   if (holder === null || (asked.tools_run.length === 0 && asked.missing_tools.length === 0)) return null;
   const key = findingKey(f);
+  const measuresKeyOk = (run: ToolRun): boolean =>
+    run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
   for (const run of holder.tools_run) {
-    if (run.status !== 'ok' || runNameEntry(run.name)?.ownTarget !== true) continue;
-    if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
-    if (!asked.tools_run.some((r) => r.name === run.name && r.status === 'ok')) return run.name;
+    if (!measuresKeyOk(run)) continue;
+    const target = targetOf(run.name);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r) && targetOf(r.name) === target)) return run.name;
   }
   return null;
 }
@@ -291,7 +315,7 @@ function answerFor(holder: Bookkeeping | null, asked: Bookkeeping | null, f: Fin
   if (asked === null) return { verdict: 'unmeasured', notRun: null };
   const verdict = bookkeepingVerdict(asked, f);
   if (verdict !== 'measured') return { verdict, notRun: verdict === 'not_run' ? f.tool : null };
-  const pass = ownTargetNotRun(holder, asked, f);
+  const pass = targetNotRun(holder, asked, f);
   return pass === null ? { verdict, notRun: null } : { verdict: 'not_run', notRun: pass };
 }
 

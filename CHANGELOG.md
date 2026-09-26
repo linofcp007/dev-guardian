@@ -173,6 +173,15 @@ version bump.
     scoped scan, or a failed one no longer count.
   No production code calls the unscoped `getLatest` / `listHistory` /
   `listOpen` any more; they remain for the storage tests.
+- An image-only `scan_containers` no longer RESOLVES the Dockerfile's
+  misconfigurations. An image's misconfiguration and a Dockerfile's share
+  the key `trivy:config`, `trivy-image` measures it, and the own-target
+  guard only covered the other direction: `diff_scans` read the Dockerfile
+  finding as resolved, and `regression_alert`'s new image CVE was cancelled
+  by that false resolution (score 0, `regressed: false`). A finding is now
+  re-measured only by a pass with the target of a pass that may have
+  produced it — the image, or the project's files — in both directions;
+  `not_measured` names the pass that was not run again.
 - Secret hygiene in outputs and honest compliance evidence:
   - Raw secrets no longer reach a response, the database, an exported
     report, a GitHub issue body or the dashboard HTML. A new

@@ -51391,13 +51391,18 @@ function booksOf(storage, scan2) {
     return child !== void 0 && usableChild(child) ? child.row : null;
   };
 }
-function ownTargetNotRun(holder, asked, f) {
+var PROJECT_FILES = "project files";
+function targetOf(name) {
+  return runNameEntry(name)?.ownTarget === true ? name : PROJECT_FILES;
+}
+function targetNotRun(holder, asked, f) {
   if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
   const key = findingKey(f);
+  const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
   for (const run of holder.tools_run) {
-    if (run.status !== "ok" || runNameEntry(run.name)?.ownTarget !== true) continue;
-    if (!(keysOfRun(run.name, true)?.includes(key) ?? false)) continue;
-    if (!asked.tools_run.some((r) => r.name === run.name && r.status === "ok")) return run.name;
+    if (!measuresKeyOk(run)) continue;
+    const target = targetOf(run.name);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r) && targetOf(r.name) === target)) return run.name;
   }
   return null;
 }
@@ -51405,7 +51410,7 @@ function answerFor(holder, asked, f) {
   if (asked === null) return { verdict: "unmeasured", notRun: null };
   const verdict = bookkeepingVerdict(asked, f);
   if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
-  const pass = ownTargetNotRun(holder, asked, f);
+  const pass = targetNotRun(holder, asked, f);
   return pass === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass };
 }
 function notMeasured(storage, scan2, scope = "any") {

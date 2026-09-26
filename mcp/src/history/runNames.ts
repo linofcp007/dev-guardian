@@ -96,9 +96,14 @@ export interface RunName {
    * It looks at a target no other pass looks at — `trivy-image`, a container
    * image — under keys other passes also measure: a misconfiguration is
    * `trivy:config` whether the image or the Dockerfile produced it, and the
-   * finding does not say which. So a finding of the older scan, where this
-   * pass ran ok, is re-measured only by a newer scan that ran this same pass
-   * ok again: a Dockerfile-only run never looked at the image.
+   * finding does not say which. Every entry without this flag looks at the
+   * project's files. `runCompare.ts#targetNotRun` keys a finding by the
+   * target of each pass that may have produced it, in both directions: a
+   * finding of a scan where this pass ran ok is re-measured only by a scan
+   * that ran it ok again (a Dockerfile-only run never looked at the image),
+   * and one where a project-files pass produced the key only by a scan that
+   * ran such a pass (an image-only run never looked at the Dockerfile — Task
+   * 24, probe H1).
    */
   ownTarget?: true;
 }

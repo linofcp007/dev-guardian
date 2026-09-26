@@ -719,6 +719,91 @@ describe("Task 15's scanners in the comparison", () => {
     }
   });
 
+  /**
+   * Task 24, item 4 — probes H1 and H1b (carried from Task 8's breaker). An
+   * image's misconfiguration and a Dockerfile's share the key `trivy:config`,
+   * and the finding does not say which pass produced it. `trivy-image`
+   * measures that key, and `ownTarget` guarded only one direction: an
+   * image-only run "re-measured" the Dockerfile misconfiguration it never
+   * looked at and RESOLVED it, and regression_alert's new image CVE was
+   * cancelled by that false resolution — score 0, regressed false (GC3).
+   * A finding is re-measured only by a pass with the TARGET of a pass that
+   * may have produced it: the image, or the project's files.
+   */
+  describe('H1 / H1b: an image pass and a Dockerfile pass never re-measure each other', () => {
+    const I = 'i'.repeat(64);
+    const D2 = 'e'.repeat(64);
+    const dockerfileMisconfig: SeedFinding = {
+      fp: M, tool: 'trivy', rule_id: 'DS-0002', subcategory: 'dockerfile', file: 'Dockerfile', severity: 'high',
+    };
+    const imageCve: SeedFinding = {
+      fp: I, tool: 'trivy', rule_id: 'CVE-2099-0001', subcategory: 'cve', file: 'alpine:3.10 (alpine 3.10.9)', severity: 'high',
+    };
+    const imageMisconfig: SeedFinding = {
+      fp: I, tool: 'trivy', rule_id: 'DS-0026', subcategory: 'dockerfile', file: 'app/Dockerfile', severity: 'high',
+    };
+    const newDockerfileMisconfig: SeedFinding = { ...dockerfileMisconfig, fp: D2, rule_id: 'DS-0001' };
+
+    function pair(
+      first: { runs: ToolRun[]; finding: SeedFinding },
+      second: { runs: ToolRun[]; finding: SeedFinding },
+    ): { s: Seeded; p: string } {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-h1-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: first.runs, findings: [first.finding] });
+      seedScan(s, { id: 'b', type: 'containers', project: p, tools_run: second.runs, findings: [second.finding] });
+      return { s, p };
+    }
+    const alert = async (s: Seeded, p: string): Promise<AlertOut> =>
+      okResult<AlertOut>(await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin));
+
+    it("H1: an image-only run does not resolve the Dockerfile's misconfiguration, so the new image CVE regresses", async () => {
+      const { s, p } = pair(
+        { runs: [{ name: 'trivy-dockerfile', status: 'ok' }], finding: dockerfileMisconfig },
+        { runs: [{ name: 'trivy-image', status: 'ok' }], finding: imageCve },
+      );
+      const d = await diff(s, p, 'containers');
+      expect(d.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
+      expect(d.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([M]);
+      expect(d.not_measured).toEqual(['trivy-dockerfile']);
+
+      const r = await alert(s, p);
+      expect(r.resolved_findings_by_severity['high']).toBe(0);
+      expect(r.not_remeasured_by_severity['high']).toBe(1);
+      expect(r.score_delta).toBe(5);
+      expect(r.regressed).toBe(true);
+    });
+
+    it("H1b: a Dockerfile-only run does not resolve the image's misconfiguration, so the new Dockerfile one regresses", async () => {
+      const { s, p } = pair(
+        { runs: [{ name: 'trivy-image', status: 'ok' }], finding: imageMisconfig },
+        { runs: [{ name: 'trivy-dockerfile', status: 'ok' }], finding: newDockerfileMisconfig },
+      );
+      const d = await diff(s, p, 'containers');
+      expect(d.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
+      expect(d.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([I]);
+      expect(d.not_measured).toEqual(['trivy-image']);
+
+      const r = await alert(s, p);
+      expect(r.resolved_findings_by_severity['high']).toBe(0);
+      expect(r.score_delta).toBe(5);
+      expect(r.regressed).toBe(true);
+    });
+
+    it('control: each pass still resolves its own findings — image by image, Dockerfile by Dockerfile', async () => {
+      const image = pair(
+        { runs: [{ name: 'trivy-image', status: 'ok' }], finding: imageCve },
+        { runs: [{ name: 'trivy-image', status: 'ok' }], finding: { ...imageCve, fp: D2, rule_id: 'CVE-2099-0002' } },
+      );
+      expect((await diff(image.s, image.p, 'containers')).summary).toMatchObject({ new: 1, resolved: 1, not_remeasured: 0 });
+      const dockerfile = pair(
+        { runs: [{ name: 'trivy-dockerfile', status: 'ok' }], finding: dockerfileMisconfig },
+        { runs: [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'trivy-image', status: 'ok' }], finding: imageCve },
+      );
+      expect((await diff(dockerfile.s, dockerfile.p, 'containers')).summary).toMatchObject({ new: 1, resolved: 1, not_remeasured: 0 });
+    });
+  });
+
   it("hadolint's finding: resolved when hadolint ran, whatever else failed; not re-measured when it failed", async () => {
     const lint = [{ fp: H, tool: 'hadolint', category: 'quality' as const, severity: 'medium' as const }];
     const first: ToolRun[] = [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'ok' }];
