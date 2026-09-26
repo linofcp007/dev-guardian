@@ -914,6 +914,11 @@ keeps working (migrations 004–011 are additive).
   `"C:\Users\me\CLAUDE SKILLS\…\.guardian\hooks.config.json"` was cut in two
   and let through; only a word that is itself a whole `mklink …` line is
   split now, the way cmd splits it.
+- **A project's `ignorePaths` no longer switches off a user-enabled secret
+  block.** It narrows the advisory warning only; a `secrets.block: true` set
+  in the user-level config honours the user's own `ignorePaths` or the
+  defaults (`"ignorePaths": ["/"]` in a project file used to exempt every
+  path).
 - **A hook config file that is a FIFO, a device, a link to a network share
   or too large is not read.** The hooks read `.guardian/hooks.config.json`,
   `.guardian/hooks-allowlist.json` and `~/.config/dev-guardian/hooks.json`

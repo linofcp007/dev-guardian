@@ -242,6 +242,11 @@ function projectOverrides(projectFile) {
   return { overrides: out, ignored };
 }
 
+/** Whether the user-level config itself switches the secret block on. */
+function userEnablesSecretBlock(userFile) {
+  return isPlainObject(userFile.secrets) && userFile.secrets.block === true;
+}
+
 function loadConfig(cwd, unread) {
   const projectRaw = readJsonFile(
     join(cwd, '.guardian', 'hooks.config.json'),
@@ -262,6 +267,15 @@ function loadConfig(cwd, unread) {
     secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...(userFile.secrets ?? {}) },
     bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...(userFile.bash ?? {}) },
     ignorePaths: userFile.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    // The paths the opt-in secret BLOCK skips. A project's `ignorePaths` is
+    // advisory — it narrows the warning — and once also exempted paths from a
+    // block the USER had enabled: `"ignorePaths": ["/"]` in a project file
+    // switched that block off (final review M4). A user-enabled block now
+    // honours only the user's own list, or the defaults; a block the project
+    // itself enabled may still be narrowed by the same project's list.
+    blockIgnorePaths:
+      userFile.ignorePaths ??
+      (userEnablesSecretBlock(userFile) ? DEFAULT_CONFIG.ignorePaths : (project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths)),
     ignoredProjectSettings: ignored,
   };
 
@@ -610,7 +624,8 @@ async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
 
   const rawPath = extractFilePath(toolName, input);
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
-  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.ignorePaths))) noop();
+  // `blockIgnorePaths`, not `ignorePaths`: see `loadConfig`.
+  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.blockIgnorePaths))) noop();
 
   const { scanForSecrets } = await loadDetectors();
   // Block only on unambiguous, high-confidence provider tokens.

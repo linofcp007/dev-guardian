@@ -456,6 +456,56 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       projectConfig({ secrets: { warn: false, block: true }, ignorePaths: ['/vendor/'] });
       expect(context(sessionStart())).not.toMatch(/ignored/i);
     });
+
+    // Final review M4: `ignorePaths` is advisory, but it also exempted a path
+    // from the opt-in secret BLOCK — so a project file with
+    // `"ignorePaths": ["/"]` switched off a block the USER had enabled. It now
+    // narrows the warning only; a user-enabled block honours the user's own
+    // ignore list (or the defaults), never the project's.
+    const tokenWriteTo = (rel: string): HookResult =>
+      runHook(preToolUse('Write', { file_path: join(projectDir, rel), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+
+    it('a project "ignorePaths" cannot exempt a path from a user-enabled secret block', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
+
+    it('…while the same project "ignorePaths" still silences the advisory warning', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('the user-level "ignorePaths" still exempts a path from the user-enabled block', () => {
+      userConfig({ secrets: { block: true }, ignorePaths: ['/generated/'] });
+      expect(decision(tokenWriteTo('generated/k.ts'))).toBeUndefined();
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
+
+    it('a user-enabled block keeps the default ignore list when neither file narrows it', () => {
+      userConfig({ secrets: { block: true } });
+      projectConfig({ ignorePaths: ['/'] });
+      expect(decision(tokenWriteTo('test/fixtures/k.ts'))).toBeUndefined();
+    });
+
+    it('a block the PROJECT enabled may still be narrowed by the project\'s own ignorePaths', () => {
+      projectConfig({ secrets: { block: true }, ignorePaths: ['/vendor/'] });
+      expect(decision(tokenWriteTo('vendor/k.ts'))).toBeUndefined();
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
   });
 
   // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync
