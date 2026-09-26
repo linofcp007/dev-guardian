@@ -172,15 +172,18 @@ function toToolRunArray(value) {
 function toStringArray(value) {
     return Array.isArray(value) ? value : [];
 }
-/** The `file` of every well-formed entry of a `partially_parsed` list. */
+/** `{ file, type }` of every well-formed entry of a `partially_parsed` list (type `unknown` when absent). */
 function partialFiles(value) {
     if (!Array.isArray(value))
         return [];
     const out = [];
     for (const entry of value) {
-        const file = entry !== null && typeof entry === 'object' ? entry.file : undefined;
-        if (typeof file === 'string' && file.length > 0 && !out.includes(file))
-            out.push(file);
+        if (entry === null || typeof entry !== 'object')
+            continue;
+        const { file, type } = entry;
+        if (typeof file !== 'string' || file.length === 0)
+            continue;
+        out.push({ file, type: typeof type === 'string' && type.length > 0 ? type : 'unknown' });
     }
     return out;
 }
@@ -202,11 +205,12 @@ const DAST_PARTIAL_SURFACE = 'guardian-dast:partial-surface';
  */
 function partialParsesOf(name, result, toolsRun, missingTools) {
     const out = {};
-    const add = (key, files) => {
+    const add = (key, refs) => {
         const list = out[key] ?? [];
-        for (const file of files)
-            if (!list.includes(file))
-                list.push(file);
+        for (const ref of refs) {
+            if (!list.some((r) => r.file === ref.file && r.type === ref.type))
+                list.push(ref);
+        }
         if (list.length > 0)
             out[key] = list;
     };

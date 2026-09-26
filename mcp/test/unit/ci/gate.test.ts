@@ -423,7 +423,7 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
       tool: 'security_scan_full',
       tools_run: [partialRun(files)],
       missing_tools: ['semgrep'],
-      partial_parses: { semgrep: [...files] },
+      partial_parses: { semgrep: files.map((file) => ({ file, type: 'PartialParsing' })) },
       ...over,
     });
 
@@ -513,12 +513,37 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     expect(blocking.exitCode).toBe(CI_EXIT.GATE_FAILED);
   });
 
+  // Fix round 1: only a PARSE problem can be accepted. A per-file Timeout
+  // (Semgrep gave up on the file) is per-file too, and the shared judge
+  // calls it partial — but accepting a file's parse gap never means
+  // accepting that it was not analysed at all.
+  it('a per-file Timeout on an accepted file still exits 2, naming the type', () => {
+    for (const types of [['Timeout'], ['PartialParsing', 'Timeout']]) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: types.map((type) => ({ file: WP, type })) } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(v.acceptedGaps).toEqual([]);
+      expect(v.coverageGaps[0]).toMatch(/not accepted: Timeout on wp\/rest-controller\.php/);
+      expect(v.coverageGaps[0]).toMatch(/PartialParsing, Syntax error, Lexical error/);
+      expect(v.unusedPartialParseAcceptances).toEqual([]);
+    }
+    for (const type of ['Syntax error', 'Lexical error']) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type }] } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.PASS);
+    }
+  });
+
   it("the DAST step's partial-surface gap is accepted with the surface's files", () => {
     const dast = step({
       tool: 'scan_dast',
       tools_run: [{ name: 'guardian-dast', status: 'ok' }],
       missing_tools: ['guardian-dast:partial-surface'],
-      partial_parses: { 'guardian-dast:partial-surface': [WP] },
+      partial_parses: { 'guardian-dast:partial-surface': [{ file: WP, type: 'PartialParsing' }] },
     });
     expect(evaluateGate(input({ steps: [dast] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
     const v = evaluateGate(input({ steps: [dast], acceptedPartialParses: [WP] }));

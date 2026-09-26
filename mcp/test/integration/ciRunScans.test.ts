@@ -244,9 +244,10 @@ describe('runScans', () => {
 
     const { steps } = await runScans({ projectPath: makeProjectDir(), baseUrl: 'https://example.test' });
     const of = (tool: string) => steps.find((s) => s.tool === tool);
-    expect(of('security_scan_full')?.partial_parses).toEqual({ semgrep: ['wp/a.php', 'b.js'] });
-    expect(of('map_attack_surface')?.partial_parses).toEqual({ semgrep: ['wp/a.php'] });
-    expect(of('scan_dast')?.partial_parses).toEqual({ 'guardian-dast:partial-surface': ['wp/a.php'] });
+    const pp = (file: string, type = 'PartialParsing') => ({ file, type });
+    expect(of('security_scan_full')?.partial_parses).toEqual({ semgrep: [pp('wp/a.php'), pp('b.js')] });
+    expect(of('map_attack_surface')?.partial_parses).toEqual({ semgrep: [pp('wp/a.php')] });
+    expect(of('scan_dast')?.partial_parses).toEqual({ 'guardian-dast:partial-surface': [pp('wp/a.php')] });
     expect(of('license_compatibility')?.partial_parses).toBeUndefined();
     expect(of('detect_stack')?.partial_parses).toBeUndefined();
   });

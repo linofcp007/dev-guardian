@@ -43507,7 +43507,8 @@ function checkSemgrepReport(args) {
 }
 function describePartialParse(partial3, consequence) {
   const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
-  return `partial: ${partial3.length} file(s) only partly parsed \u2014 ${consequence} (${listed})`;
+  const files = new Set(partial3.map((p) => p.file)).size;
+  return `partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`;
 }
 function describeErrors(errors) {
   return errors.map((entry) => {
@@ -43525,6 +43526,7 @@ function perFileErrors(errors) {
     if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
     const file = targetFileOf(entry, rawType);
     if (file === null || /\.ya?ml$/i.test(file)) return null;
+    if (out.some((p) => p.file === file && p.type === type)) continue;
     const message3 = getString(entry, "message") ?? type;
     out.push({ file, type, message: message3.split(/\r?\n/)[0] ?? message3 });
   }

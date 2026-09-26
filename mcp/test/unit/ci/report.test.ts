@@ -111,7 +111,7 @@ function partialStep(): ScanStepResult {
       },
     ],
     missing_tools: ['semgrep'],
-    partial_parses: { semgrep: [WP] },
+    partial_parses: { semgrep: [{ file: WP, type: 'PartialParsing' }] },
   });
 }
 

@@ -73,11 +73,18 @@ export interface ScanStepResult {
   missing_tools: string[];
   /**
    * Per `missing_tools` name whose whole cause is files a scanner could read
-   * only in part (project-relative, `/`-separated): Semgrep's `partial`
-   * verdict (`runners/semgrepReport.ts`), or scan_dast's
-   * `guardian-dast:partial-surface` over a surface only partly parsed. What
-   * the gate matches `--accept-partial-parse` against (`gate.ts`); built by
-   * `runScans.ts`. Absent when there are none.
+   * only in part (project-relative, `/`-separated), each with Semgrep's error
+   * type: Semgrep's `partial` verdict (`runners/semgrepReport.ts`), or
+   * scan_dast's `guardian-dast:partial-surface` over a surface only partly
+   * parsed. What the gate matches `--accept-partial-parse` against — and only
+   * a parse type is acceptable there (`gate.ts`); built by `runScans.ts`.
+   * Absent when there are none.
    */
-  partial_parses?: Record<string, string[]>;
+  partial_parses?: Record<string, PartialParseRef[]>;
+}
+
+/** One file a step's scanner could read only in part, and Semgrep's error type for it. */
+export interface PartialParseRef {
+  file: string;
+  type: string;
 }

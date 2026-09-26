@@ -62,7 +62,10 @@ node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller
 - When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (--accept-partial-parse):` and no longer forces exit 2 (JSON: `accepted_gaps`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
 - Coverage still reads `partial` — in the human report, the JSON and the SARIF (`executionSuccessful: false`). Accepting a gap is not measuring it.
 - Paths are relative to `--project` and matched exactly: `/` or `\` separators and a leading `./` are fine; no globs, no directories, no case folding. An absolute path or one with `..` is a usage error (exit 3).
-- Only a per-file parse problem can be accepted. A Semgrep that was skipped, failed (a rule or config error, an unclean exit), or scanned nothing, and any partly parsed file you did not name, still exits 2. With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed).
+- Only a **parse** problem can be accepted: Semgrep's `PartialParsing`, `Syntax error` or `Lexical error` on a file you named. Semgrep reports other per-file problems the same way — a per-file `Timeout` means it gave up on the file, so nothing in it was analysed — and those still exit 2 whatever you accept; the gap line names the type (`not accepted: Timeout on wp/rest-controller.php`).
+- A Semgrep that was skipped, failed (a rule or config error, an unclean exit), or scanned nothing, and any partly parsed file you did not name, still exits 2.
+- With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
+- The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
 
 ### Things a green pipeline does not tell you
 

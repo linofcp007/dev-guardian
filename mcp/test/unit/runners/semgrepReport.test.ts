@@ -152,6 +152,24 @@ describe('checkSemgrepReport verdicts: ok, partial, scanned_nothing, failed', ()
   });
 });
 
+describe('checkSemgrepReport: the partial list is per file (fix round 1)', () => {
+  it('collapses repeated errors of one type on one file, keeps each type, and counts files', () => {
+    const entry = (type: string, path: string) => ({ level: 'warn', type, message: `${type} at ${path}`, path });
+    const r = checkSemgrepReport({
+      raw: report({
+        paths: { scanned: ['a.php', 'b.php'] },
+        errors: [entry('PartialParsing', 'a.php'), entry('PartialParsing', 'a.php'), entry('Timeout', 'a.php'), entry('PartialParsing', 'b.php')],
+      }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+    });
+    expect(r.verdict).toBe('partial');
+    expect(r.partial?.map((p) => `${p.type}:${p.file}`)).toEqual(['PartialParsing:a.php', 'Timeout:a.php', 'PartialParsing:b.php']);
+    expect(describePartialParse(r.partial ?? [], 'x')).toMatch(/^partial: 2 file\(s\) only partly parsed/);
+  });
+});
+
 describe('describePartialParse', () => {
   it('names every file and its error type, and what may be missing', () => {
     expect(

@@ -252,10 +252,13 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          file a Semgrep step only partly parsed is accepted,
                          its gap prints as "accepted" and does not force exit
                          2. Coverage still reads partial (JSON, SARIF). Matched
-                         exactly: no globs, no directories. A skipped, failed or
-                         scanned-nothing Semgrep, or any file not named, still
-                         exits 2. CLI ARGV ONLY, like --start-command: a
-                         repository file declaring it is refused.
+                         exactly: no globs, no directories. Parse errors only
+                         (PartialParsing, Syntax error, Lexical error): a
+                         per-file Timeout, a skipped, failed or scanned-nothing
+                         Semgrep, or any file not named, still exits 2. With
+                         --base-url, DAST never probed routes in those spans.
+                         CLI ARGV ONLY, like --start-command: a repository
+                         file declaring it is refused.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines

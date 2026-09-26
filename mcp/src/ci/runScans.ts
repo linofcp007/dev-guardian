@@ -49,7 +49,7 @@ import { runMigrations } from '../storage/migrations/runner.js';
 import { Storage } from '../storage/index.js';
 import { TOOLS } from '../tools/index.js';
 import type { Finding, ToolRun } from '../types.js';
-import type { ScanStepResult } from './types.js';
+import type { PartialParseRef, ScanStepResult } from './types.js';
 
 // Side-effect registration of every tool — populates TOOLS. See
 // registerAll.ts's own doc comment; server.ts imports it for the same reason,
@@ -204,13 +204,15 @@ function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? (value as string[]) : [];
 }
 
-/** The `file` of every well-formed entry of a `partially_parsed` list. */
-function partialFiles(value: unknown): string[] {
+/** `{ file, type }` of every well-formed entry of a `partially_parsed` list (type `unknown` when absent). */
+function partialFiles(value: unknown): PartialParseRef[] {
   if (!Array.isArray(value)) return [];
-  const out: string[] = [];
+  const out: PartialParseRef[] = [];
   for (const entry of value as unknown[]) {
-    const file = entry !== null && typeof entry === 'object' ? (entry as { file?: unknown }).file : undefined;
-    if (typeof file === 'string' && file.length > 0 && !out.includes(file)) out.push(file);
+    if (entry === null || typeof entry !== 'object') continue;
+    const { file, type } = entry as { file?: unknown; type?: unknown };
+    if (typeof file !== 'string' || file.length === 0) continue;
+    out.push({ file, type: typeof type === 'string' && type.length > 0 ? type : 'unknown' });
   }
   return out;
 }
@@ -237,11 +239,13 @@ function partialParsesOf(
   result: Record<string, unknown>,
   toolsRun: readonly ToolRun[],
   missingTools: readonly string[],
-): Record<string, string[]> | null {
-  const out: Record<string, string[]> = {};
-  const add = (key: string, files: readonly string[]): void => {
+): Record<string, PartialParseRef[]> | null {
+  const out: Record<string, PartialParseRef[]> = {};
+  const add = (key: string, refs: readonly PartialParseRef[]): void => {
     const list = out[key] ?? [];
-    for (const file of files) if (!list.includes(file)) list.push(file);
+    for (const ref of refs) {
+      if (!list.some((r) => r.file === ref.file && r.type === ref.type)) list.push(ref);
+    }
     if (list.length > 0) out[key] = list;
   };
   for (const run of toolsRun) {

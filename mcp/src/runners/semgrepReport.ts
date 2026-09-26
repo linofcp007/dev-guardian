@@ -140,7 +140,8 @@ export function checkSemgrepReport(args: {
  */
 export function describePartialParse(partial: readonly PartialParse[], consequence: string): string {
   const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
-  return `partial: ${partial.length} file(s) only partly parsed — ${consequence} (${listed})`;
+  const files = new Set(partial.map((p) => p.file)).size;
+  return `partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`;
 }
 
 /** `type: message` per `errors[]` entry (`type` may be a string or `[name, …]`). */
@@ -159,6 +160,9 @@ function describeErrors(errors: readonly unknown[]): string[] {
  * is a YAML file (it cannot be told from a rule pack by its name). The file
  * comes from the entry's `path`, else its first span, else the location list
  * inside a `["PartialParsing", [...]]` type. The message is its first line.
+ * One entry per (file, type): Semgrep repeats an error per rule or per span,
+ * and a file is one file however many times it was reported; its types all
+ * stay, because the gate accepts parse types only (`ci/gate.ts`).
  */
 function perFileErrors(errors: readonly unknown[]): PartialParse[] | null {
   const out: PartialParse[] = [];
@@ -169,6 +173,7 @@ function perFileErrors(errors: readonly unknown[]): PartialParse[] | null {
     if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
     const file = targetFileOf(entry, rawType);
     if (file === null || /\.ya?ml$/i.test(file)) return null;
+    if (out.some((p) => p.file === file && p.type === type)) continue;
     const message = getString(entry, 'message') ?? type;
     out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
   }

@@ -22,7 +22,10 @@
  * One gap can be ACCEPTED rather than failed on (`--accept-partial-parse`,
  * argv only): a Semgrep step that ran but could read some files only in part
  * (the shared judge's `partial` verdict), when the caller named every one of
- * those files. The gap is then printed as accepted and does not force exit 2
+ * those files, and every one is a PARSE problem (`ACCEPTABLE_PARSE_TYPES` —
+ * a per-file Timeout is per-file too, but the file was not analysed at all,
+ * and naming it never accepts that). The gap is then printed as accepted and
+ * does not force exit 2
  * — but `coverage` is computed over every gap, accepted ones included, so it
  * stays `partial` in the verdict, the JSON and the SARIF. Nothing else is
  * acceptable: a skipped, failed or scanned-nothing scanner, or a file the
@@ -32,7 +35,7 @@
 import { SEVERITY_ORDER, type Finding, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
-import { CI_EXIT, type BaselineFile, type CiExitCode, type ScanStepResult } from './types.js';
+import { CI_EXIT, type BaselineFile, type CiExitCode, type PartialParseRef, type ScanStepResult } from './types.js';
 
 export interface GateInput {
   findings: readonly Finding[];
@@ -162,23 +165,42 @@ function describeMissing(name: string, toolsRun: readonly ToolRun[]): string | n
 }
 
 /**
+ * Semgrep error types `--accept-partial-parse` can accept: the file was
+ * read, only part of it could be parsed. Every other per-file type the
+ * shared judge calls partial (a `Timeout`, …) means the file was not
+ * analysed, and stays a gap whatever is accepted.
+ */
+export const ACCEPTABLE_PARSE_TYPES: readonly string[] = ['PartialParsing', 'Syntax error', 'Lexical error'];
+
+/**
  * Whether one `missing_tools` entry of a step is an accepted partial parse:
  * the step names the files that are its whole cause (`partial_parses`), the
- * caller accepted every one, and no run of that name in the step was skipped
- * or failed (that would be a gap of its own, whatever was accepted).
+ * caller accepted every one, every one is a parse problem
+ * ({@link ACCEPTABLE_PARSE_TYPES}), and no run of that name in the step was
+ * skipped or failed (that would be a gap of its own, whatever was accepted).
  */
 function acceptance(
   name: string,
-  files: readonly string[],
+  refs: readonly PartialParseRef[],
   toolsRun: readonly ToolRun[],
   accepted: ReadonlySet<string>,
 ): { accepted: true } | { accepted: false; note: string } {
-  if (files.length === 0) return { accepted: false, note: '' };
+  if (refs.length === 0) return { accepted: false, note: '' };
+  const files = [...new Set(refs.map((r) => r.file))];
   const unaccepted = files.filter((f) => !accepted.has(f));
   if (unaccepted.length > 0) {
     return {
       accepted: false,
       note: ` — not accepted: ${unaccepted.join(', ')} (--accept-partial-parse <path> accepts one file, matched exactly)`,
+    };
+  }
+  const notParse = refs.filter((r) => !ACCEPTABLE_PARSE_TYPES.includes(r.type));
+  if (notParse.length > 0) {
+    return {
+      accepted: false,
+      note:
+        ` — not accepted: ${notParse.map((r) => `${r.type} on ${r.file}`).join(', ')} ` +
+        `(--accept-partial-parse accepts parse errors only: ${ACCEPTABLE_PARSE_TYPES.join(', ')})`,
     };
   }
   const other = toolsRun.find((run) => run.name === name && run.status !== 'ok');
@@ -220,10 +242,11 @@ export function evaluateGate(input: GateInput): GateVerdict {
 
     for (const missing of step.missing_tools) {
       allMissingTools.push(missing);
-      const files = (step.partial_parses?.[missing] ?? []).map(normalizeAcceptedPath);
-      for (const file of files) reported.add(file);
-      const verdict = acceptance(missing, files, step.tools_run, accepted);
+      const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
+      for (const ref of refs) reported.add(ref.file);
+      const verdict = acceptance(missing, refs, step.tools_run, accepted);
       if (verdict.accepted) {
+        const files = [...new Set(refs.map((r) => r.file))];
         acceptedGaps.push(`${step.tool}: ${missing} only partly parsed ${files.join(', ')} — accepted (--accept-partial-parse)`);
         continue;
       }
