@@ -892,6 +892,13 @@ keeps working (migrations 004–011 are additive).
     checkout whose path contains a `.`.
 - The 2.0.0 entry below said `map_attack_surface` reads Postman documents; it
   reads OpenAPI 3.x and Swagger 2.0 only.
+- **Scan retention** ranks scoped scans (`--staged`, `--unpushed`, file lists)
+  apart from whole-project ones, so pre-commit runs can no longer prune the
+  last whole-project scan the open set reads. It also keeps the children of a
+  baselined `security_scan_full` run (and the parent of a baselined child):
+  pruning one made every later finding of its type "not previously measured"
+  and `regression_alert` went quiet. The under-lock re-check re-applies the
+  whole rule.
 
 ### Security
 

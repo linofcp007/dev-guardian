@@ -20,10 +20,17 @@
  * the life of the project. Retention keeps the newest N scans per
  * (project_path, scan_type) — `GUARDIAN_RETENTION_SCANS`, default
  * {@link DEFAULT_RETENTION_SCANS}, `0` disables — and deletes the rest with
- * every row that points at them. What refers to a scan, per the schema
- * (migrations 001–005), and what happens to it:
+ * every row that points at them. Scoped scans (`meta.scope`, a single-plugin
+ * `wp_vuln_check`) are counted apart from whole-project ones: N of each, so
+ * pre-commit runs can never push out the scan the open set reads. What
+ * refers to a scan, per the schema (migrations 001–005), and what happens to
+ * it:
  *
  *   - `baselines.scan_id`   → the scan is NEVER deleted (it is the baseline).
+ *   - an orchestrated run around a baseline → NEVER deleted either: the
+ *     children a baselined `security_full` parent is compared through
+ *     (`meta.child_scans`, `meta.parent_scan_id`), and the parent of a
+ *     baselined child.
  *   - a `running` scan      → NEVER deleted: its owner is still writing to it.
  *   - `findings.scan_id`, `scan_cves.scan_id`, `tree_cache.scan_id`
  *                           → deleted with the scan.
@@ -42,10 +49,11 @@
  * Surface snapshots (`surface_snapshots`) and `finding_validations` carry no
  * scan reference at all — a snapshot is keyed by project and tree hash — so no
  * scan is held back on their account. `scans.cached_from` exists in the schema
- * but nothing writes it (a cache hit returns the original scan's own row), and
- * an audit scan's `meta.sub_scan_ids` is informational JSON nothing reads. A
+ * but nothing writes it (a cache hit returns the original scan's own row). An
+ * audit scan's `meta.sub_scan_ids` is read by `history/runCompare.ts`, which
+ * falls back to the audit's own per-tool entries when a sub-scan is gone. A
  * future table that references `scans(id)` must be added to the list above,
- * indexed, and deleted in {@link deleteScans}.
+ * indexed, and deleted in `deleteRows`.
  */
 
 import type { DB } from './db.js';
@@ -87,30 +95,105 @@ export function resolveRetentionLimit(raw: string | undefined): RetentionLimit {
   };
 }
 
-// Ranked newest-first within each (project, scan type) — the same
-// `started_at DESC, rowid DESC` order every history query in scansRepo uses —
-// and returned OLDEST first, so a run the budget cuts short has removed the
-// oldest history and left the most recent.
-const PRUNABLE_SQL = `
-  SELECT id FROM (
-    SELECT id, status, started_at, rowid AS rid,
-           ROW_NUMBER() OVER (
-             PARTITION BY project_path, scan_type
-             ORDER BY started_at DESC, rowid DESC
-           ) AS rn
-    FROM scans
+// A scoped row — a diff or partial run (`meta.scope`), or a single-plugin
+// `wp_vuln_check` (`meta.slug`) — decided exactly as
+// `history/scanRoles.ts#isScopedScan` decides it. CASE, not AND: SQLite does
+// not promise to evaluate json_valid first, and json_extract throws on the
+// malformed JSON `rowToRecord` tolerates (such a row reads as unscoped there
+// too).
+const SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
+    json_extract(meta, '$.scope') IS NOT NULL
+    OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
+  ELSE 0 END)`;
+
+// The scans an orchestrated run's baseline stands on besides its own row:
+// the children a baselined parent lists in `meta.child_scans` (what
+// `history/runCompare.ts` reads) and the parent a baselined child names in
+// `meta.parent_scan_id`. NULLs are filtered out: `x NOT IN (… NULL …)` is
+// NULL, which would silently keep every row.
+const BASELINED_RUN_MEMBERS_SQL = `
+  SELECT member FROM (
+    SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
+      FROM baselines b
+      JOIN scans p ON p.id = b.scan_id,
+           json_each(CASE WHEN json_valid(p.meta) THEN p.meta ELSE '{}' END, '$.child_scans') AS c
+    UNION
+    SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
+      FROM baselines b
+      JOIN scans s ON s.id = b.scan_id
   )
-  WHERE rn > ?
-    AND status <> 'running'
-    AND id NOT IN (SELECT scan_id FROM baselines)
-  ORDER BY started_at ASC, rid ASC
+  WHERE typeof(member) = 'text'
 `;
 
+// A row retention must keep whatever its rank: still being written, a
+// baseline, or part of a baselined orchestrated run — a child of a baselined
+// parent (by its own `meta.parent_scan_id` or by the parent's list), or the
+// parent of a baselined child. Pruning a baselined parent's `sast` child made
+// every later SAST finding read "not previously measured": `regression_alert`
+// went quiet and `diff_scans from:'baseline'` reported nothing new.
+const PROTECTED_SQL = `(
+  status = 'running'
+  OR id IN (SELECT scan_id FROM baselines)
+  OR EXISTS (
+    SELECT 1 FROM baselines b
+     WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
+  )
+  OR id IN (${BASELINED_RUN_MEMBERS_SQL})
+)`;
+
 /**
- * Every scan beyond the newest `keep` per (project, scan type), except those
- * a baseline points at and those still running. A plain read — no write lock.
- * A scan found here stays prunable: newer scans only push it further down,
- * and {@link deleteScans} re-checks the two exclusions under the lock.
+ * Ranked newest-first within each (project, scan type, scoped?) — the same
+ * `started_at DESC, rowid DESC` order every history query in scansRepo uses —
+ * and returned OLDEST first, so a run the budget cuts short has removed the
+ * oldest history and left the most recent.
+ *
+ * Scoped and whole-project rows are ranked APART. A scoped scan never
+ * describes the project's state, so it must never cost a whole-project scan
+ * its place: ranked together, fifty `--staged` pre-commit runs pushed out the
+ * last whole-project `scan_sast`, and the open set — which skips scoped rows —
+ * lost every SAST finding while still reading coverage `full`.
+ *
+ * `candidates` restricts the ranking to the partitions of that many ids (the
+ * `?` placeholders come right after `keep`'s, as `id IN (…)`), for the
+ * re-check {@link deleteScans} makes under the write lock.
+ */
+function prunableSql(candidates: number): string {
+  const only =
+    candidates > 0
+      ? (() => {
+          const list = Array.from({ length: candidates }, () => '?').join(', ');
+          return {
+            partitions: `WHERE (project_path, scan_type) IN
+                           (SELECT project_path, scan_type FROM scans WHERE id IN (${list}))`,
+            ids: `AND id IN (${list})`,
+          };
+        })()
+      : { partitions: '', ids: '' };
+  return `
+    SELECT id FROM (
+      SELECT id, status, meta, started_at, rowid AS rid,
+             ROW_NUMBER() OVER (
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}
+               ORDER BY started_at DESC, rowid DESC
+             ) AS rn
+      FROM scans
+      ${only.partitions}
+    )
+    WHERE rn > ?
+      ${only.ids}
+      AND NOT ${PROTECTED_SQL}
+    ORDER BY started_at ASC, rid ASC
+  `;
+}
+
+const PRUNABLE_SQL = prunableSql(0);
+
+/**
+ * Every scan beyond the newest `keep` per (project, scan type), scoped and
+ * whole-project rows counted apart, except the protected ones: still
+ * running, a baseline, or part of a baselined orchestrated run. A plain read
+ * — no write lock. {@link deletePrunableScans} re-evaluates the very same
+ * rule under the lock before it deletes anything.
  */
 export function listPrunableScans(db: DB, keep: number): string[] {
   if (!(keep > 0)) return [];
@@ -118,32 +201,55 @@ export function listPrunableScans(db: DB, keep: number): string[] {
 }
 
 /**
- * Deletes `ids` and every row that points at them, in ONE short write
- * transaction. Re-checks, under the lock, that each is still not running and
- * not a baseline — a baseline set by another process since the ids were
- * listed is honoured. Returns how many scans were deleted.
+ * Retention's delete: those of `ids` that are STILL prunable under `keep`,
+ * and every row that points at them, in ONE short write transaction. The
+ * whole rule is re-evaluated under the lock — rank, scope and every
+ * exclusion — over the partitions the ids belong to, so whatever changed
+ * since the ids were listed is honoured: a baseline set by another process
+ * (on the scan itself, or on the orchestrated run it belongs to), or a newer
+ * row gone. Returns how many scans were deleted.
+ */
+export function deletePrunableScans(db: DB, ids: readonly string[], keep: number): number {
+  if (ids.length === 0 || !(keep > 0)) return 0;
+  return db.transaction((): number => {
+    const eligible = db
+      .prepare<(string | number)[], { id: string }>(prunableSql(ids.length))
+      .all(...ids, keep, ...ids)
+      .map((r) => r.id);
+    return deleteRows(db, eligible);
+  })();
+}
+
+/**
+ * Deletes `ids` — whatever their rank — and every row that points at them,
+ * in ONE short write transaction; for a caller that removes a scan it wrote
+ * itself (`create_fix_pr`'s worktree re-scan). Re-checks, under the lock,
+ * that each is not protected: still running, a baseline, or part of a
+ * baselined orchestrated run. Returns how many scans were deleted.
  */
 export function deleteScans(db: DB, ids: readonly string[]): number {
   if (ids.length === 0) return 0;
   return db.transaction((): number => {
     const list = ids.map(() => '?').join(', ');
     const eligible = db
-      .prepare<string[], { id: string }>(
-        `SELECT id FROM scans WHERE id IN (${list})
-           AND status <> 'running' AND id NOT IN (SELECT scan_id FROM baselines)`,
-      )
+      .prepare<string[], { id: string }>(`SELECT id FROM scans WHERE id IN (${list}) AND NOT ${PROTECTED_SQL}`)
       .all(...ids)
       .map((r) => r.id);
-    if (eligible.length === 0) return 0;
-    const del = eligible.map(() => '?').join(', ');
-    db.prepare<string[]>(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare<string[]>(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare<string[]>(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare<string[]>(
-      `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`,
-    ).run(...eligible, ...eligible);
-    return db.prepare<string[]>(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
+    return deleteRows(db, eligible);
   })();
+}
+
+/** The deletes themselves; the caller holds the transaction. */
+function deleteRows(db: DB, eligible: readonly string[]): number {
+  if (eligible.length === 0) return 0;
+  const del = eligible.map(() => '?').join(', ');
+  db.prepare<string[]>(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare<string[]>(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare<string[]>(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare<string[]>(
+    `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`,
+  ).run(...eligible, ...eligible);
+  return db.prepare<string[]>(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
 }
 
 export interface PruneBudget {
@@ -183,7 +289,7 @@ export function pruneScans(db: DB, keep: number, budget: PruneBudget = {}): Prun
   while (pending.length > 0) {
     if (budget.maxBatches !== undefined && batches >= budget.maxBatches) break;
     if (budget.budgetMs !== undefined && now() - started >= budget.budgetMs) break;
-    deleted += deleteScans(db, pending.splice(0, batchSize));
+    deleted += deletePrunableScans(db, pending.splice(0, batchSize), keep);
     batches += 1;
   }
   return { deleted, remaining: pending.length, complete: pending.length === 0 };
@@ -269,7 +375,7 @@ export function scheduleRetention(
     try {
       const db = storage.rawHandle();
       pending ??= listPrunableScans(db, limit.keep);
-      deleted += deleteScans(db, pending.splice(0, batchSize));
+      deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
       left = pending.length;
     } catch (error) {
       log(`retention failed (continuing): ${describe(error)}`);

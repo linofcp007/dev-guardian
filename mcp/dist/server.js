@@ -39326,42 +39326,87 @@ function resolveRetentionLimit(raw) {
     warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
   };
 }
-var PRUNABLE_SQL = `
-  SELECT id FROM (
-    SELECT id, status, started_at, rowid AS rid,
-           ROW_NUMBER() OVER (
-             PARTITION BY project_path, scan_type
-             ORDER BY started_at DESC, rowid DESC
-           ) AS rn
-    FROM scans
+var SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
+    json_extract(meta, '$.scope') IS NOT NULL
+    OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
+  ELSE 0 END)`;
+var BASELINED_RUN_MEMBERS_SQL = `
+  SELECT member FROM (
+    SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
+      FROM baselines b
+      JOIN scans p ON p.id = b.scan_id,
+           json_each(CASE WHEN json_valid(p.meta) THEN p.meta ELSE '{}' END, '$.child_scans') AS c
+    UNION
+    SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
+      FROM baselines b
+      JOIN scans s ON s.id = b.scan_id
   )
-  WHERE rn > ?
-    AND status <> 'running'
-    AND id NOT IN (SELECT scan_id FROM baselines)
-  ORDER BY started_at ASC, rid ASC
+  WHERE typeof(member) = 'text'
 `;
+var PROTECTED_SQL = `(
+  status = 'running'
+  OR id IN (SELECT scan_id FROM baselines)
+  OR EXISTS (
+    SELECT 1 FROM baselines b
+     WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
+  )
+  OR id IN (${BASELINED_RUN_MEMBERS_SQL})
+)`;
+function prunableSql(candidates2) {
+  const only = candidates2 > 0 ? (() => {
+    const list2 = Array.from({ length: candidates2 }, () => "?").join(", ");
+    return {
+      partitions: `WHERE (project_path, scan_type) IN
+                           (SELECT project_path, scan_type FROM scans WHERE id IN (${list2}))`,
+      ids: `AND id IN (${list2})`
+    };
+  })() : { partitions: "", ids: "" };
+  return `
+    SELECT id FROM (
+      SELECT id, status, meta, started_at, rowid AS rid,
+             ROW_NUMBER() OVER (
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}
+               ORDER BY started_at DESC, rowid DESC
+             ) AS rn
+      FROM scans
+      ${only.partitions}
+    )
+    WHERE rn > ?
+      ${only.ids}
+      AND NOT ${PROTECTED_SQL}
+    ORDER BY started_at ASC, rid ASC
+  `;
+}
+var PRUNABLE_SQL = prunableSql(0);
 function listPrunableScans(db, keep) {
   if (!(keep > 0)) return [];
   return db.prepare(PRUNABLE_SQL).all(keep).map((r) => r.id);
+}
+function deletePrunableScans(db, ids2, keep) {
+  if (ids2.length === 0 || !(keep > 0)) return 0;
+  return db.transaction(() => {
+    const eligible = db.prepare(prunableSql(ids2.length)).all(...ids2, keep, ...ids2).map((r) => r.id);
+    return deleteRows(db, eligible);
+  })();
 }
 function deleteScans(db, ids2) {
   if (ids2.length === 0) return 0;
   return db.transaction(() => {
     const list2 = ids2.map(() => "?").join(", ");
-    const eligible = db.prepare(
-      `SELECT id FROM scans WHERE id IN (${list2})
-           AND status <> 'running' AND id NOT IN (SELECT scan_id FROM baselines)`
-    ).all(...ids2).map((r) => r.id);
-    if (eligible.length === 0) return 0;
-    const del = eligible.map(() => "?").join(", ");
-    db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
-    db.prepare(
-      `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
-    ).run(...eligible, ...eligible);
-    return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
+    const eligible = db.prepare(`SELECT id FROM scans WHERE id IN (${list2}) AND NOT ${PROTECTED_SQL}`).all(...ids2).map((r) => r.id);
+    return deleteRows(db, eligible);
   })();
+}
+function deleteRows(db, eligible) {
+  if (eligible.length === 0) return 0;
+  const del = eligible.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(
+    `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
+  ).run(...eligible, ...eligible);
+  return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
 }
 function reapOrphanedScans(storage, log) {
   try {
@@ -39404,7 +39449,7 @@ function scheduleRetention(storage, log, options = {}) {
     try {
       const db = storage.rawHandle();
       pending ??= listPrunableScans(db, limit.keep);
-      deleted += deleteScans(db, pending.splice(0, batchSize));
+      deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
       left = pending.length;
     } catch (error2) {
       log(`retention failed (continuing): ${describe(error2)}`);

@@ -5,6 +5,7 @@ import {
   DEFAULT_RETENTION_SCANS,
   PRUNE_BATCH,
   RETENTION_START_DELAY_MS,
+  deletePrunableScans,
   deleteScans,
   listPrunableScans,
   pruneScans,
@@ -25,8 +26,20 @@ function fresh(): { db: GuardianDatabase; storage: Storage } {
 
 let clock = 0;
 /** A completed scan with one finding, one CVE and a tree-cache row. */
-function seedScan(storage: Storage, id: string, project: string, type: ScanType = 'sast'): void {
-  storage.scans.insert({ scan_id: id, scan_type: type, project_path: project, tree_hash: `h-${id}` });
+function seedScan(
+  storage: Storage,
+  id: string,
+  project: string,
+  type: ScanType = 'sast',
+  meta?: Record<string, unknown>,
+): void {
+  storage.scans.insert({
+    scan_id: id,
+    scan_type: type,
+    project_path: project,
+    tree_hash: `h-${id}`,
+    ...(meta !== undefined ? { meta } : {}),
+  });
   storage.scans.finalize({ scan_id: id, status: 'completed', tools_run: [], missing_tools: [] });
   // Distinct, increasing start times: retention ranks by recency.
   clock += 1;
@@ -176,6 +189,163 @@ describe('pruneScans', () => {
   });
 });
 
+/** A scoped run's `meta` — the shape `scanToolFactory` writes at insert (Task 13). */
+const SCOPED = { scope: { mode: 'staged', files: 1 } };
+
+describe('scoped and whole-project scans are ranked apart (I1)', () => {
+  // A scoped scan (`meta.scope`: `--staged`, `--unpushed`, a file list) is a
+  // `sast` row like any other, but it never describes the project's state
+  // (history/scanRoles.ts#isScopedScan). Ranked together, fifty pre-commit
+  // runs pushed the last whole-project `scan_sast` out, and the open set
+  // lost every SAST finding with nothing to say so.
+  it('three scoped sast scans never push out the one whole-project sast scan (keep 3)', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'full-sast', '/p1', 'sast');
+    for (const id of ['sc1', 'sc2', 'sc3']) seedScan(storage, id, '/p1', 'sast', SCOPED);
+
+    expect(listPrunableScans(db, 3)).toEqual([]);
+    pruneScans(db, 3);
+
+    expect(scanIds(db)).toEqual(['full-sast', 'sc1', 'sc2', 'sc3']);
+  });
+
+  it('keeps the newest N of each kind: old scoped and old whole-project scans are both still pruned', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'w1', '/p1', 'sast');
+    seedScan(storage, 'sc1', '/p1', 'sast', SCOPED);
+    seedScan(storage, 'w2', '/p1', 'sast');
+    seedScan(storage, 'sc2', '/p1', 'sast', SCOPED);
+    seedScan(storage, 'sc3', '/p1', 'sast', SCOPED);
+    seedScan(storage, 'w3', '/p1', 'sast');
+
+    expect(pruneScans(db, 2)).toEqual({ deleted: 2, remaining: 0, complete: true });
+    expect(scanIds(db)).toEqual(['w2', 'sc2', 'sc3', 'w3']);
+  });
+
+  it('a single-plugin wp_vuln_check (meta.slug) is scoped too, as isScopedScan says', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'wp-full', '/p1', 'wp_vuln_check');
+    for (const id of ['wp-a', 'wp-b']) seedScan(storage, id, '/p1', 'wp_vuln_check', { slug: 'akismet' });
+
+    pruneScans(db, 1);
+
+    expect(scanIds(db)).toEqual(['wp-full', 'wp-b']);
+  });
+
+  it('a row with malformed meta is ranked as whole-project and never breaks the prune', () => {
+    const { db, storage } = fresh();
+    for (const id of ['s1', 's2', 's3']) seedScan(storage, id, '/p1');
+    db.prepare("UPDATE scans SET meta = '{not json' WHERE id = 's2'").run();
+
+    expect(pruneScans(db, 1).deleted).toBe(2);
+    expect(scanIds(db)).toEqual(['s3']);
+  });
+
+  it('deletePrunableScans re-ranks under the lock: a row no longer beyond the newest N is kept', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'w1', '/p1', 'sast');
+    seedScan(storage, 'w2', '/p1', 'sast');
+    const listed = listPrunableScans(db, 1);
+    expect(listed).toEqual(['w1']);
+
+    // In between, the newer row goes (another process, another keep): w1 is
+    // the newest whole-project sast scan again.
+    db.prepare("DELETE FROM findings WHERE scan_id = 'w2'").run();
+    db.prepare("DELETE FROM scan_cves WHERE scan_id = 'w2'").run();
+    db.prepare("DELETE FROM tree_cache WHERE scan_id = 'w2'").run();
+    db.prepare("DELETE FROM cves WHERE first_seen_scan_id = 'w2' OR last_seen_scan_id = 'w2'").run();
+    db.prepare("DELETE FROM scans WHERE id = 'w2'").run();
+
+    expect(deletePrunableScans(db, listed, 1)).toBe(0);
+    expect(scanIds(db)).toEqual(['w1']);
+  });
+});
+
+describe('an orchestrated run is kept whole around a baseline (I2)', () => {
+  /**
+   * Task 9's shape: the `security_full` parent first, holding
+   * `meta.child_scans`, then one child per type with `meta.parent_scan_id`.
+   */
+  function seedRun(storage: Storage, id: string, project = '/p1'): void {
+    const types: ScanType[] = ['sast', 'secrets', 'deps', 'iac'];
+    seedScan(storage, id, project, 'security_full', {
+      child_scans: types.map((t) => ({ tool: `scan_${t}`, scan_id: `${id}-${t}`, status: 'completed' })),
+    });
+    for (const t of types) seedScan(storage, `${id}-${t}`, project, t, { parent_scan_id: id });
+  }
+
+  it('never prunes a child of a baselined parent, however far beyond the newest N it is', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'run1');
+    storage.baselines.set({ scan_id: 'run1' });
+    for (const id of ['sa', 'sb', 'sc']) seedScan(storage, id, '/p1', 'sast');
+
+    expect(listPrunableScans(db, 3)).not.toContain('run1-sast');
+    pruneScans(db, 3);
+
+    expect(scanIds(db)).toContain('run1-sast');
+    expect(storage.findings.listByScan('run1-sast')).toHaveLength(1);
+  });
+
+  it('never prunes the parent of a baselined child', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'run1');
+    storage.baselines.set({ scan_id: 'run1-sast' });
+    seedRun(storage, 'run2');
+    seedRun(storage, 'run3');
+
+    pruneScans(db, 1);
+
+    // run1 is beyond the newest security_full, but its sast child is the
+    // baseline, so the run it belongs to stays. Its other children do not
+    // stand under a baseline and go like any other row.
+    expect(scanIds(db)).toEqual(expect.arrayContaining(['run1', 'run1-sast']));
+    expect(scanIds(db)).not.toContain('run1-deps');
+    expect(scanIds(db)).not.toContain('run2');
+  });
+
+  it("follows the parent's child_scans list too — the link runCompare reads", () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'run1', '/p1', 'security_full', {
+      child_scans: [{ tool: 'scan_sast', scan_id: 'old-child', status: 'completed' }],
+    });
+    seedScan(storage, 'old-child', '/p1', 'sast'); // no parent_scan_id of its own
+    storage.baselines.set({ scan_id: 'run1' });
+    for (const id of ['sa', 'sb']) seedScan(storage, id, '/p1', 'sast');
+
+    pruneScans(db, 1);
+
+    expect(scanIds(db)).toEqual(['run1', 'old-child', 'sb']);
+  });
+
+  it('tolerates child_scans entries that are not objects, and malformed baseline meta', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'run1', '/p1', 'security_full', { child_scans: ['x', 3, null, { scan_id: 7 }] });
+    storage.baselines.set({ scan_id: 'run1' });
+    seedScan(storage, 'run0', '/p1', 'security_full');
+    db.prepare("UPDATE scans SET meta = '{broken' WHERE id = 'run0'").run();
+    storage.baselines.set({ scan_id: 'run0' });
+    for (const id of ['s1', 's2', 's3']) seedScan(storage, id, '/p1', 'sast');
+
+    expect(pruneScans(db, 1).deleted).toBe(2);
+    expect(scanIds(db)).toEqual(['run1', 'run0', 's3']);
+  });
+
+  it('deletePrunableScans honours a baseline set on the parent after its children were listed', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'run1');
+    for (const id of ['sa', 'sb']) seedScan(storage, id, '/p1', 'sast');
+    const listed = listPrunableScans(db, 1);
+    expect(listed).toContain('run1-sast');
+
+    storage.baselines.set({ scan_id: 'run1' }); // another process, in between
+
+    deletePrunableScans(db, listed, 1);
+    expect(scanIds(db)).toContain('run1-sast');
+    expect(scanIds(db)).not.toContain('sa');
+  });
+});
+
 describe('every column that references a scan is indexed', () => {
   // Retention deletes a scan with every row pointing at it, and SQLite's own
   // foreign-key check looks each of these columns up again. An unindexed one
@@ -199,7 +369,7 @@ describe('every column that references a scan is indexed', () => {
   });
 });
 
-describe('deleteScans', () => {
+describe('deletePrunableScans', () => {
   it('honours a baseline set after the scan was listed as prunable', () => {
     const { db, storage } = fresh();
     for (const id of ['s1', 's2', 's3']) seedScan(storage, id, '/p1');
@@ -208,8 +378,32 @@ describe('deleteScans', () => {
 
     storage.baselines.set({ scan_id: 's1' }); // another process, in between
 
-    expect(deleteScans(db, listed)).toBe(1);
+    expect(deletePrunableScans(db, listed, 1)).toBe(1);
     expect(scanIds(db)).toEqual(['s1', 's3']);
+  });
+});
+
+describe('deleteScans (a caller removing a scan it wrote, whatever its rank)', () => {
+  it('deletes the newest scan with its rows', () => {
+    const { db, storage } = fresh();
+    for (const id of ['s1', 's2']) seedScan(storage, id, '/p1');
+    expect(deleteScans(db, ['s2'])).toBe(1);
+    expect(scanIds(db)).toEqual(['s1']);
+    expect(count(db, 'findings')).toBe(1);
+  });
+
+  it('never deletes a baseline, a running scan, or a child of a baselined orchestrated run', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'base', '/p1');
+    storage.baselines.set({ scan_id: 'base' });
+    seedScan(storage, 'run', '/p1');
+    db.prepare("UPDATE scans SET status = 'running' WHERE id = 'run'").run();
+    seedScan(storage, 'parent', '/p1', 'security_full', { child_scans: [] });
+    storage.baselines.set({ scan_id: 'parent' });
+    seedScan(storage, 'child', '/p1', 'sast', { parent_scan_id: 'parent' });
+
+    expect(deleteScans(db, ['base', 'run', 'child'])).toBe(0);
+    expect(scanIds(db)).toEqual(['base', 'run', 'parent', 'child']);
   });
 });
 
