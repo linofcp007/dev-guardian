@@ -923,6 +923,10 @@ keeps working (migrations 004–011 are additive).
   `baseline.json`, so the baseline CI needs could never be committed. Both now
   name the two lines the server writes: `.guardian/*` and
   `!.guardian/baseline.json`.
+- **`install_toolchain`'s elevation hint** said only "re-call with
+  `elevation_allowed=true`". Install steps run without a terminal, so that
+  works only with passwordless sudo (or, on Windows, a server already running
+  elevated); the hint now says so and names the command to run yourself.
 
 ### Security
 

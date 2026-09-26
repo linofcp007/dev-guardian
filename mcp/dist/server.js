@@ -54036,7 +54036,7 @@ async function installPerTool(opts) {
     if (picked.spec.needs_elevation && !opts.elevation) {
       opts.result.requires_elevation.push({
         ...entry,
-        hint: "Re-call with elevation_allowed=true to run this step."
+        hint: elevationHint(opts.os, `${picked.spec.command} ${picked.spec.args.join(" ")}`)
       });
       continue;
     }
@@ -54058,6 +54058,12 @@ async function installPerTool(opts) {
       });
     }
   }
+}
+function elevationHint(os, command) {
+  if (os === "win32") {
+    return `Needs an administrator shell. Re-calling with elevation_allowed=true only works when this server itself runs elevated; otherwise run \`${command}\` yourself in an administrator terminal.`;
+  }
+  return `Needs elevation. Re-calling with elevation_allowed=true only works with passwordless sudo (install steps run without a terminal to type a password in); otherwise run \`${command}\` yourself in a terminal.`;
 }
 function describeSpec(spec) {
   return spec.description ?? `${spec.command} ${spec.args.join(" ")}`;

@@ -261,7 +261,7 @@ async function installPerTool(opts) {
         if (picked.spec.needs_elevation && !opts.elevation) {
             opts.result.requires_elevation.push({
                 ...entry,
-                hint: 'Re-call with elevation_allowed=true to run this step.',
+                hint: elevationHint(opts.os, `${picked.spec.command} ${picked.spec.args.join(' ')}`),
             });
             continue;
         }
@@ -284,6 +284,22 @@ async function installPerTool(opts) {
             });
         }
     }
+}
+/**
+ * What to do about a step that needs elevation. "Re-call with
+ * elevation_allowed=true" alone was wrong more often than right: install
+ * steps run without a terminal, so `sudo` can only succeed without a
+ * password, and `choco` only from a server that is already elevated —
+ * otherwise the user has to run the command themselves.
+ */
+export function elevationHint(os, command) {
+    if (os === 'win32') {
+        return ('Needs an administrator shell. Re-calling with elevation_allowed=true only works when this ' +
+            `server itself runs elevated; otherwise run \`${command}\` yourself in an administrator terminal.`);
+    }
+    return ('Needs elevation. Re-calling with elevation_allowed=true only works with passwordless sudo ' +
+        `(install steps run without a terminal to type a password in); otherwise run \`${command}\` ` +
+        'yourself in a terminal.');
 }
 function describeSpec(spec) {
     return spec.description ?? `${spec.command} ${spec.args.join(' ')}`;
