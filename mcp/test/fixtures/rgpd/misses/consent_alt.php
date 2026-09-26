@@ -23,4 +23,6 @@
     fbq('init', '<?php echo esc_js( get_option( 'tema_pixel_id' ) ); ?>');
   </script>
   <iframe src="https://www.youtube.com/embed/<?php echo esc_attr( $video_id ); ?>"></iframe>
+<?php else : ?>
+  <p>O video aparece depois de aceitar os cookies de marketing.</p>
 <?php endif; ?>

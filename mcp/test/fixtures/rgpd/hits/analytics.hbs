@@ -1,4 +1,4 @@
-{{!-- A Handlebars partial. The single BUG fires
+{{!-- A Handlebars partial. Each BUG fires
       rgpd-tracker-hotjar-without-consent exactly once. --}}
 <script>
   (function(h,o,t,j,a,r){
@@ -10,3 +10,8 @@
     a.appendChild(r);
   })(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv='); // BUG
 </script>
+{{#if consent.analytics}}
+<p>Obrigado.</p>
+{{else}}
+<script src="https://static.hotjar.com/c/hotjar-{{hotjarId}}.js?sv=6"></script> {{!-- BUG: the ELSE arm --}}
+{{/if}}

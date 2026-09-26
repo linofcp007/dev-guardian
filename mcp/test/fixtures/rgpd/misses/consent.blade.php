@@ -13,6 +13,8 @@
 <body>
     @if($consent->has('marketing'))
         <iframe src="https://www.youtube.com/embed/{{ $videoId }}"></iframe>
+    @else
+        <p>O video aparece depois de aceitar os cookies de marketing.</p>
     @endif
 </body>
 </html>

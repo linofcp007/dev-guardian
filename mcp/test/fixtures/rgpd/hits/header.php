@@ -33,5 +33,12 @@ function tema_video(string $id): string
   <!-- BUG rgpd-youtube-embed-without-nocookie: a NEGATED consent condition -->
   <iframe src="https://www.youtube.com/embed/sem-consentimento"></iframe>
   <?php endif; ?>
+  <?php if ( wp_has_consent( 'marketing' ) ) : ?>
+  <!-- excluded: the THEN arm is guarded, beside the bug below -->
+  <iframe src="https://www.youtube.com/embed/com-consentimento"></iframe>
+  <?php else : ?>
+  <!-- BUG rgpd-youtube-embed-without-nocookie: the ELSE arm of a consent condition -->
+  <iframe src="https://www.youtube.com/embed/no-else"></iframe>
+  <?php endif; ?>
   <?php wp_head(); ?>
 </head>

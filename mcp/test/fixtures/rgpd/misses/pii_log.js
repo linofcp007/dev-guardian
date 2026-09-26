@@ -19,6 +19,8 @@ function registo(user, req, email, phone, log, maskedEmail, emailHash, isValidEm
   console.log(formik.errors.email); // a form's error message for the field ($OBJ regex)
   logger.info('existe', repo.exists({ email })); // a predicate's boolean (derived-value guard)
   console.log(settings.DEFAULT_FROM_EMAIL); // a setting: an all-caps member with an underscore
+  console.log(CAMPOS.EMAIL, CAMPOS.nif); // a constants object: an ALL-CAPS receiver ($OBJ regex)
+  console.log(process.env.EMAIL); // an environment variable: a setting, not a subject's value ($OBJ regex)
   log.push(email); // an ARRAY named log: not a logging method ($METHOD regex)
   Math.log(phone); // not a logger ($LOGGER regex)
   analytics.track('signup', { plan: user.plan }); // not a logger either

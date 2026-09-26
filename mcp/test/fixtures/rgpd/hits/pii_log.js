@@ -23,6 +23,7 @@ function registo(user, users, req, email, nif_cliente, clienteNif, formData, cli
   console.log(truncate(user.email, 30)); // BUG: truncating is not masking
   Logger.log(user.email); // BUG: NestJS's static Logger
   logger.child({ email }); // BUG: a pino child logger stamps it on every later line
+  this.hashing.logger.info('registo', user.email); // BUG: "hash" in the RECEIVER path is not a masking call
   console.log(mask(user.email), user.nif); // BUG: the nif is not masked (excluded: the email)
   console.log(user.iban.slice(-4), user.email); // BUG: the email is whole (excluded: last four of the IBAN)
 }

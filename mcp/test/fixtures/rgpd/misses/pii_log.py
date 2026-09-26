@@ -16,6 +16,7 @@ def registar(user, data, email, masked_email, log, audit, settings):
     logger.info("pedido %s", data["pedido_id"])  # a subscript whose key is not personal data ($KEY regex)
     logger.info("tamanho %s", len(email))  # a length (derived-value guard)
     logger.info("de %s", settings.DEFAULT_FROM_EMAIL)  # a setting: an all-caps attribute with an underscore
+    logger.info("campo %s", Campo.EMAIL)  # a class constant: an all-caps attribute of a CapWords receiver
     logger.info("pedido", extra={"pedido_id": data["pedido_id"]})  # a keyword argument that is not personal data
     logger.info("pedido %s", data.get("pedido_id"))  # a key that is not personal data
     log.append(email)  # a LIST named log: not a logging method ($METHOD regex)

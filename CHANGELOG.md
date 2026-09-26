@@ -25,7 +25,8 @@ version bump.
   `youtube.com/embed` iframes — unless a consent guard is present
   (`type="text/plain"`, a consent-checking block, JSX condition or template
   condition — WordPress `if (...): endif;`, Twig, Blade, Handlebars, Vue
-  `v-if`). Consent Mode v2 with `analytics_storage` denied and
+  `v-if` — whose THEN arm holds the tracker; an `else`/`elseif` arm is not
+  guarded). Consent Mode v2 with `analytics_storage` denied and
   `fbq('consent', 'revoke')` are also accepted, as a documented legal
   judgement; the messages prescribe loading nothing before consent (EDPB
   Guidelines 2/2023). Findings are category `compliance`, subcategory

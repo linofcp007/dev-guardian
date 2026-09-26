@@ -15,6 +15,7 @@ public class Registo
     public void Registar(Cliente cliente, string email, string maskedEmail, IDictionary<string, string> form)
     {
         _logger.LogInformation("Pedido {P}", form["pedido"]); // a key that is not personal data ($KEY regex)
+        _logger.LogInformation("Campo {C}", Campos.EMAIL); // a constant of a static class: an all-caps member of a PascalCase type name
         _logger.LogInformation("Login {E}", MaskEmail(cliente.Email)); // masking helper
         _logger.LogInformation("Iban {I}", cliente.Iban[^4..]); // last four digits
         _logger.LogInformation("Email enviado {E}", maskedEmail); // a masked name

@@ -16,6 +16,8 @@ class Encomendas
         error_log('utilizador ' . $user->ID); // an internal id is the right thing to log
         error_log('pedido ' . $data['pedido_id']); // a key that is not personal data ($KEY regex)
         error_log('tamanho ' . strlen($email)); // a length (derived-value guard)
+        error_log('campo ' . Campos::EMAIL); // a class constant: `::` on a class name ($OBJ regex)
+        error_log('campo ' . self::NIF . static::IBAN); // self:: and static:: constants
         $this->logger->info('encomenda ' . $order->get_id()); // not personal data
         $this->log->push($email); // not a PSR-3 level ($METHOD regex)
         $this->mailer->info($email); // not a logger ($LOGGER regex)

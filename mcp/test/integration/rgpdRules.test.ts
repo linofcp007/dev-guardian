@@ -119,7 +119,9 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // an all-caps member pair (`cliente.NIF`, `cliente.IBAN` — the constant
   // exclusion used to drop both), `truncate(...)` (truncating is not
   // masking), NestJS's static `Logger.log` and pino's `logger.child({...})`.
-  'pii_log.js': { [PII_JS]: 20 },
+  // Fix round 2 added `this.hashing.logger.info(..., user.email)`: "hash" in
+  // the RECEIVER path used to count as a masking call and hide the line.
+  'pii_log.js': { [PII_JS]: 21 },
   // The same rule through the TypeScript parser: a typed member, a type
   // assertion, a typed parameter, a subscript.
   'pii_log.ts': { [PII_JS]: 4 },
@@ -136,7 +138,9 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // name (`extra={"email": email}`, structlog's `nif=nif_cliente`),
   // structlog's `bind(...)` and an all-caps attribute.
   'pii_log.py': { [PII_PY]: 13 },
-  'PiiLog.cs': { [PII_CS]: 12 },
+  // Thirteen: fix round 2 added `Cliente.Email` — a PascalCase PROPERTY, which
+  // the type-constant exclusion (`Campos.EMAIL`) must not take for a type.
+  'PiiLog.cs': { [PII_CS]: 13 },
   // Two GA4 loaders (the stock snippet, and `type="text/javascript"`, which
   // still executes); three Meta pixels — AFTER a consent function that has
   // already closed, inside a function merely NAMED after consent, inside a
@@ -146,12 +150,17 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'consent_granted.html': { [GA4]: 1 },
   // Consent Mode denying only the AD signals is not a guard for Analytics.
   'consent_ads_only.html': { [GA4]: 1 },
-  // A Consent Mode default and a Meta revoke that are commented out.
+  // A Consent Mode default and a Meta revoke that are commented out: with
+  // `//` and `<!-- -->` here, and inside `/* */` in the next file (fix
+  // round 2 — the file-level guards used to read a block comment as code).
   'commented_guards.html': { [GA4]: 1, [META]: 1 },
+  'commented_block.html': { [GA4]: 1, [META]: 1 },
   // WordPress: `wp_enqueue_script` and the inline tag, a pixel, an embed, and
   // two embeds inside alternative-syntax conditions that are NOT consent
-  // checks (`is_front_page()`, and a negated `! wp_has_consent(...)`).
-  'header.php': { [GA4]: 2, [META]: 1, [YOUTUBE]: 3 },
+  // checks (`is_front_page()`, and a negated `! wp_has_consent(...)`), and
+  // one in the ELSE arm of a real consent condition (fix round 2: the guard
+  // used to run on to `endif` and swallow the `else :` arm).
+  'header.php': { [GA4]: 2, [META]: 1, [YOUTUBE]: 4 },
   // Next.js: `<Script>`, `@next/third-parties`' `<GoogleAnalytics>`, a
   // NON-consent condition (`NODE_ENV === 'production' &&`), a NEGATED
   // consent condition around a fragment, the ELSE branch of a consent
@@ -160,17 +169,23 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'layout.tsx': { [HOTJAR]: 1 },
   // An unconditional embed and one under a `v-if` that is not about consent.
   'Video.vue': { [YOUTUBE]: 2 },
-  // Unconditional, under a non-consent `{% if %}`, under `{% if not consent %}`.
-  'base.twig': { [GA4]: 3 },
+  // Unconditional, under a non-consent `{% if %}`, under `{% if not consent %}`;
+  // fix round 2: under `{% if consent.analytics != true %}` (the `!=` twin of
+  // `not`), in the `{% else %}` arm of a consent condition, and the review's
+  // opt-out template — `{% if cookie_consent == 'rejected' %}{% else %}` with the
+  // Meta pixel in the else arm.
+  'base.twig': { [GA4]: 5, [META]: 1 },
   'pixel.htm': { [META]: 1 },
-  // Blade: a non-consent `@if` and a negated consent `@if`.
-  'app.blade.php': { [GA4]: 2 },
+  // Blade: a non-consent `@if` and a negated consent `@if`; fix round 2: the
+  // `@elseif` and `@else` arms of a consent `@if`.
+  'app.blade.php': { [GA4]: 4 },
   // One per extension fix round 1 added to `paths.include`.
   'layout.js': { [GA4]: 1 },
   '_Layout.cshtml': { [GA4]: 1 },
   'Video.razor': { [YOUTUBE]: 1 },
   'layout.ejs': { [META]: 1 },
-  'analytics.hbs': { [HOTJAR]: 1 },
+  // Unconditional, and (fix round 2) in the `{{else}}` arm of a consent `{{#if}}`.
+  'analytics.hbs': { [HOTJAR]: 2 },
 };
 
 /**

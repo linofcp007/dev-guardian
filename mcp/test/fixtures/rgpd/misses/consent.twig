@@ -24,5 +24,11 @@
   {% if consent.marketing %}
     <iframe src="https://www.youtube.com/embed/{{ video_id }}"></iframe>
   {% endif %}
+  {# The THEN arm is still guarded when an ELSE follows it. #}
+  {% if consent.marketing %}
+    <iframe src="https://www.youtube.com/embed/{{ video_id }}?t=2"></iframe>
+  {% else %}
+    <p>O video aparece depois de aceitar os cookies de marketing.</p>
+  {% endif %}
 </body>
 </html>

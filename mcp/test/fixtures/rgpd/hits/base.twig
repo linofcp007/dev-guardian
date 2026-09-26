@@ -1,18 +1,31 @@
-{# A Twig base layout (Symfony, Craft, Drupal). Each BUG fires
-   rgpd-tracker-ga4-without-consent exactly once. #}
+{# A Twig base layout (Symfony, Craft, Drupal). Each BUG fires its rule
+   exactly once. #}
 <!doctype html>
 <html lang="{{ app.request.locale }}">
 <head>
-  {# BUG #}
+  {# BUG rgpd-tracker-ga4-without-consent #}
   <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_id }}"></script>
   {% if app.environment == 'prod' %}
-    {# BUG: a Twig condition, but not a consent one #}
+    {# BUG rgpd-tracker-ga4-without-consent: a Twig condition, but not a consent one #}
     <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_prod_id }}"></script>
   {% endif %}
   {% if not consent.analytics %}
-    {# BUG: a NEGATED consent condition #}
+    {# BUG rgpd-tracker-ga4-without-consent: a NEGATED consent condition #}
     <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_other_id }}"></script>
   {% endif %}
+  {% if consent.analytics != true %}
+    {# BUG rgpd-tracker-ga4-without-consent: a NEGATED consent condition, with != #}
+    <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_neq_id }}"></script>
+  {% endif %}
+  {% if consent.analytics %}
+    {# excluded: the THEN arm is guarded, beside the bug below #}
+    <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_ok_id }}"></script>
+  {% else %}
+    {# BUG rgpd-tracker-ga4-without-consent: the ELSE arm of a consent condition #}
+    <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_else_id }}"></script>
+  {% endif %}
+  {% if cookie_consent == 'rejected' %}{% else %}<script>fbq('init', '{{ pixel_id }}');</script>{% endif %}
+  {# BUG rgpd-tracker-meta-pixel-without-consent: an opt-out template, the pixel in the ELSE arm (line above) #}
   {% block head %}{% endblock %}
 </head>
 <body>{% block body %}{% endblock %}</body>
