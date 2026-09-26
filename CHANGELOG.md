@@ -941,6 +941,10 @@ keeps working (migrations 004–011 are additive).
   whose Trivy failed made it plan no security update while `risk_score`
   counted the CVE. It now reads the same newest usable deps scan as
   `risk_score` and the dashboard.
+- **A gitleaks history pass that logged no commit count read `ok`** ("an
+  unreported number of commits scanned"). On a repository with commits it is
+  now `failed` unless the report holds findings — git's own count of a range
+  says what there was to read, not what gitleaks read.
 
 ### Security
 

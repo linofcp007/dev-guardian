@@ -223,6 +223,73 @@ describe('gitleaks helper — nothing it meets takes the scan down', () => {
   });
 });
 
+describe('gitleaks helper — a history pass that logs no commit count (final review M8)', () => {
+  // A gitleaks release that changes its `N commits scanned.` log line — or
+  // one that never walked the history — left `commits` null, and the pass
+  // read `ok`, "an unreported number of commit(s) scanned". On a repository
+  // with commits, nothing then says history was read.
+  function historyWithoutCount(report: string) {
+    return async (opts: ProcessRunOptions): Promise<ProcessRunResult> => {
+      const args = opts.args ?? [];
+      calls.push({ ...opts, args });
+      const path = args.find((a) => a.startsWith('--report-path='))?.slice('--report-path='.length);
+      if (path) writeFileSync(path, args.includes('--no-git') ? '[]' : report);
+      return { outcome: 'completed', exitCode: report === '[]' ? 0 : 1, stdout: '', stderr: 'INF scan completed', truncated: false };
+    };
+  }
+
+  it('no count and an empty report: the history pass failed, never ok', async () => {
+    const dir = await repo();
+    vi.mocked(runProcess).mockImplementation(historyWithoutCount('[]'));
+    const out = await runGitleaksScan({
+      projectPath: dir,
+      reportDir: makeTempDir('gl-nocount-report-'),
+      scope: { kind: 'project' },
+      env: process.env,
+      signal: new AbortController().signal,
+    });
+    const history = out.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('failed');
+    expect(history?.reason).toMatch(/no commit count/);
+  });
+
+  it('no count, but the report holds findings: history was read, the pass is ok', async () => {
+    const dir = await repo();
+    vi.mocked(runProcess).mockImplementation(historyWithoutCount(leak('.gitignore')));
+    const out = await runGitleaksScan({
+      projectPath: dir,
+      reportDir: makeTempDir('gl-nocount-report-'),
+      scope: { kind: 'project' },
+      env: process.env,
+      signal: new AbortController().signal,
+    });
+    const history = out.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('ok');
+    expect(history?.reason).toMatch(/an unreported number of commit/);
+    expect(out.parser_inputs.some((i) => String(i.input).includes('aws-access-token'))).toBe(true);
+  });
+
+  it('no count on a commit range whose size git knows: failed as well — git counted, gitleaks did not say', async () => {
+    const dir = await repo();
+    const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    const git = (...a: string[]) => execa('git', a, { cwd: dir });
+    writeFileSync(join(dir, 'two.txt'), 'x\n');
+    await git('add', 'two.txt');
+    await git('-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'y');
+    const next = (await git('rev-parse', 'HEAD')).stdout.trim();
+    vi.mocked(runProcess).mockImplementation(historyWithoutCount('[]'));
+
+    const out = await runGitleaksScan({
+      projectPath: dir,
+      reportDir: makeTempDir('gl-nocount-report-'),
+      scope: { kind: 'range', base: head, head: next },
+      env: process.env,
+      signal: new AbortController().signal,
+    });
+    expect(out.tools_run.find((t) => t.name === 'gitleaks')?.status).toBe('failed');
+  });
+});
+
 describe('gitleaks helper — a directory that is not a repository is scanned in place', () => {
   it('runs `--no-git -s .` in the project with a generated config that excludes vendored trees', async () => {
     const dir = makeTempDir('gl-inplace-');

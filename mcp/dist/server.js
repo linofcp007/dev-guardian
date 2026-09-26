@@ -44299,10 +44299,15 @@ async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix
   }
   const gitError = gitErrorLine(run.stderr);
   if (gitError) problems.push(`git: ${gitError}`);
+  if (commits === null && problems.length === 0 && reportFindings(raw) === 0) {
+    problems.push(
+      `gitleaks logged no commit count and reported nothing \u2014 cannot tell that git history was read (its "N commits scanned" log line is missing${expectedCommits !== null ? `; git counts ${describeCount(expectedCommits, "commit")} to read` : ""})`
+    );
+  }
   if (raw !== null && problems.length === 0) {
     pushParserInput(result, { parser: locatedParser("history", projectPrefix), input: raw }, report.secrets);
   }
-  const scanned = commits ?? expectedCommits;
+  const scanned = commits;
   result.tools_run.push(
     problems.length === 0 ? { name: GITLEAKS_HISTORY, status: "ok", reason: `history: ${describeCount(scanned, "commit")} scanned` } : { name: GITLEAKS_HISTORY, status: "failed", reason: problems.join("; ") }
   );
@@ -44536,6 +44541,11 @@ function runProblems(run, raw) {
   if (raw === null) return [`gitleaks wrote no report (exit ${String(run.exitCode)}): ${fatalLine(run.stderr) ?? ""}`.trim()];
   if (!Array.isArray(parseInputAsJson(raw))) return ["gitleaks report is not a JSON array"];
   return [];
+}
+function reportFindings(raw) {
+  if (raw === null) return 0;
+  const parsed = parseInputAsJson(raw);
+  return Array.isArray(parsed) ? parsed.length : 0;
 }
 var ANSI = /\u001b\[[0-9;]*m/g;
 function commitsScanned(stderr) {
