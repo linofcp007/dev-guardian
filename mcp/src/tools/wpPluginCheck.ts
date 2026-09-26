@@ -22,9 +22,11 @@
  * `wp_install_path` even when that install is not on this machine (an
  * absolute path is its own exact key), else for the server's working
  * directory — even a home directory, as `health_status` does. Refused: an
- * explicit `project_path` that does not resolve, and a RELATIVE
- * `wp_install_path` that does not exist here (fix round 2) — it names no
- * single install (`wordpress/siteKeys.ts#wpInstallPathProblem`).
+ * explicit `project_path` that does not resolve, and — when it is the key —
+ * a RELATIVE `wp_install_path` that does not exist here (fix round 2): it
+ * names no single install (`wordpress/siteKeys.ts#wpInstallPathProblem`).
+ * Beside a valid `project_path`, which keys the lookup, such a path only
+ * feeds the WP-CLI version probe: the probe is skipped with a warning.
  *
  * **The lookup row is scoped.** It is filed as a `wp_vuln_check` of the
  * project with `meta.scope` = `{ kind: 'plugin', slug }`: one plugin's
@@ -83,17 +85,27 @@ async function handler(
   const inp = input as { slug: string; wp_install_path?: string; target_url?: string; project_path?: string };
   if (!inp.slug) return failDomain('unknown_scan_id', 'slug is required.');
   // See the module comment: an explicit project_path must exist, and a
-  // wp_install_path must be absolute or exist here (fix round 2) — a relative
-  // one that does not would be resolved against the server's cwd and share
-  // one record with every other install passed the same way.
+  // wp_install_path that keys the lookup must be absolute or exist here (fix
+  // round 2) — a relative one that does not would be resolved against the
+  // server's cwd and share one record with every other install passed the
+  // same way. Beside a project_path it only feeds the version probe.
+  const hasProject = inp.project_path !== undefined && inp.project_path.length > 0;
   const installProblem =
     inp.wp_install_path !== undefined && inp.wp_install_path.length > 0
       ? wpInstallPathProblem(inp.wp_install_path)
       : null;
-  if (installProblem !== null) return failDomain('unsupported_target', installProblem);
+  if (installProblem !== null && !hasProject) return failDomain('unsupported_target', installProblem);
+  const warnings: string[] = [];
+  if (installProblem !== null) {
+    warnings.push(
+      `${installProblem} The installed version was not detected (the WP-CLI probe was skipped); ` +
+        'the CVE lookup used project_path.',
+    );
+  }
+  const probePath = installProblem === null ? inp.wp_install_path : undefined;
   let projectPath: string;
   const rawProject = inp.project_path ?? inp.wp_install_path;
-  if (inp.project_path !== undefined && inp.project_path.length > 0) {
+  if (inp.project_path !== undefined && hasProject) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
@@ -107,7 +119,7 @@ async function handler(
 
   let installedVersion: string | null = null;
   let active: boolean | null = null;
-  if (inp.wp_install_path) {
+  if (probePath !== undefined && probePath.length > 0) {
     const wpBin = await scannerAvailable('wp');
     if (wpBin) {
       const r = await runProcess({
@@ -115,12 +127,12 @@ async function handler(
         args: [
           'plugin',
           'list',
-          `--path=${inp.wp_install_path}`,
+          `--path=${probePath}`,
           `--name=${inp.slug}`,
           '--fields=name,status,version',
           '--format=json',
         ],
-        cwd: inp.wp_install_path,
+        cwd: probePath,
         timeoutMs: 30_000,
       });
       if (r.outcome === 'completed') {
@@ -185,6 +197,7 @@ async function handler(
     active,
     known_cves: knownCves,
     cve_count: knownCves.length,
+    warnings,
     hint:
       knownCves.length > 0
         ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.`

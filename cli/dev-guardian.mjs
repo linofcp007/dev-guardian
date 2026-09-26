@@ -37,7 +37,9 @@
  *                             --project <path>   default: cwd
  *                             --branch <name>     GitHub push trigger branch, default main
  *                             --write             write the file (default: preview to stdout)
- *                             --force             overwrite an existing pipeline file (with --write)
+ *                             --force             overwrite an existing pipeline file (with --write);
+ *                                                 never one that is a symlink out of the project
+ *                                                 or a broken one
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
  *                             Exit codes: 0 done, 1 missing/unknown target or
@@ -86,15 +88,20 @@
  */
 
 import {
+  closeSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -276,7 +283,11 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
                         default branch without naming one
   --write               Write the pipeline file (default: preview to stdout)
   --force               With --write, overwrite an existing pipeline file
-                        (without it, an existing file is left untouched)
+                        (without it, an existing file is left untouched).
+                        Still refused (exit 3) when that file is a symlink
+                        that resolves outside the project, or a broken one;
+                        replaced in one step (temp file + rename), never
+                        written through a link
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
@@ -303,7 +314,8 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
   never through a symlink that escapes it either way (read or write).
   Exit codes: 0 preview/write completed, 1 missing/unknown target or an
               existing pipeline file refused without --force, 3 usage or
-              configuration error (same convention as scan/baseline update).
+              configuration error, or a --force refused on a symlink (same
+              convention as scan/baseline update).
 
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
@@ -1638,11 +1650,13 @@ function safeLstat(p) {
  * intermediate ancestor to check at all.
  *
  * Does NOT check `outPath` itself — a symlinked LEAF (the pipeline file's
- * own name already existing as a symlink) is a different hazard, handled
- * by `refuseEscapingLeafSymlink` right before the write, because a
- * `--force` overwrite is the only path that can reach it (a plain `wx`
- * create already refuses ANY existing path at that name, symlink or not,
- * via `EEXIST` — see `cmdCiInit`).
+ * own name already existing as a symlink) is a different hazard, handled at
+ * the write: a plain `--write` publishes with `link()` (`createFile`), which
+ * refuses ANY existing entry at that name, a dangling symlink included, and
+ * never follows one; `--force` refuses a leaf link that escapes or dangles
+ * (`refuseEscapingLeafSymlink`) and otherwise replaces the entry by rename
+ * (`replaceFile`). Not `wx` alone: on Windows a `wx` open over a dangling
+ * symlink follows it and creates the link's target, wherever that is.
  */
 function firstEscapingAncestor(projectPath, outPath) {
   const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
@@ -1659,24 +1673,17 @@ function firstEscapingAncestor(projectPath, outPath) {
 }
 
 /**
- * Guards `--force` specifically: without it, `writeFileSync(…, { flag:
- * 'wx' })` already refuses ANY existing path at `outPath` — symlink or
- * not — with `EEXIST`, never following it. `--force` switches to plain
- * `'w'`, which DOES follow an existing symlink (no `O_NOFOLLOW`), so a
- * `dev-guardian.yml` that is itself a symlink pointing OUTSIDE the project
- * would otherwise have `--force` write the generated pipeline through it
- * to wherever it points — silently, since nothing about a plain `'w'`
- * write says whether the path it opened was a symlink at all.
+ * Guards `--force` specifically: an existing `outPath` that is a symlink
+ * resolving OUTSIDE the project, or a broken one (pointing nowhere this
+ * process can resolve), is refused — never "fixed" by guessing what the
+ * link was for. The write itself (`replaceFile`) replaces a link rather
+ * than following it, so this refusal is about intent, not mechanics: a
+ * pipeline file that is a link out of the project is not this command's
+ * to replace.
  *
- * Returns `{ ok: true }` when `outPath` is not a symlink (nothing to
- * guard against) or is a symlink that resolves INSIDE the project (in
- * which case the link itself is removed here, so the subsequent
- * `writeFileSync` creates a plain file rather than writing through the
- * old link — matching what `--force` means for every other existing
- * path: replaced, not followed). Returns `{ ok: false, reason }` when it
- * is a symlink that resolves outside the project, or is broken (points
- * nowhere this process can resolve) — refused either way, never "fixed"
- * by guessing.
+ * Returns `{ ok: true }` when `outPath` is not a symlink, or is one that
+ * resolves INSIDE the project (replaced by a plain file — what `--force`
+ * means for every other existing path); `{ ok: false, reason }` otherwise.
  */
 function refuseEscapingLeafSymlink(projectPath, outPath) {
   const st = safeLstat(outPath);
@@ -1689,8 +1696,91 @@ function refuseEscapingLeafSymlink(projectPath, outPath) {
       reason: real === null ? 'it is a broken symlink' : 'it is a symlink that resolves outside the project',
     };
   }
-  unlinkSync(outPath);
   return { ok: true };
+}
+
+/** Remove `path`, ignoring a failure: it is a temp file this command made. */
+function removeTemp(path) {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone, or held open by a scanner: the name is random and hidden.
+  }
+}
+
+/**
+ * A fresh temp file beside `outPath` holding `content`; its path. The name is
+ * random (`crypto.randomBytes`) and the file is opened `wx`: an entry already
+ * at that name — anyone's, a link included — fails the open with EEXIST and
+ * is never written to or deleted. Once the open succeeded the file is this
+ * call's, and a failed write removes it.
+ */
+function writeTempBeside(outPath, content) {
+  const { dir, base } = parse(outPath);
+  const tmp = join(dir, `.${base}.${randomBytes(8).toString('hex')}.tmp`);
+  const fd = openSync(tmp, 'wx');
+  let written = false;
+  try {
+    writeFileSync(fd, content, 'utf8');
+    written = true;
+  } finally {
+    closeSync(fd);
+    if (!written) removeTemp(tmp);
+  }
+  return tmp;
+}
+
+/**
+ * `--force`'s write: a temp file beside `outPath`, renamed over it in one
+ * step. A rename replaces the directory ENTRY — a symlink or a hard link at
+ * `outPath` is replaced, never written through (a truncating `'w'` write goes
+ * through the inode every name of the file shares) — and `outPath` is never
+ * absent or half-written.
+ */
+function replaceFile(outPath, content) {
+  const tmp = writeTempBeside(outPath, content);
+  try {
+    renameSync(tmp, outPath);
+  } catch (e) {
+    removeTemp(tmp);
+    throw e;
+  }
+}
+
+/**
+ * A plain `--write`: creates `outPath` only when NOTHING is at that name.
+ * Returns false, having written nothing there, when something is.
+ *
+ * The file is written to a temp file and published with `link()`, which
+ * refuses any existing entry at `outPath` — a dangling symlink included —
+ * with EEXIST, and never follows one. Not a `wx` open: on Windows a `wx`
+ * (CREATE_NEW) open over a DANGLING symlink follows it and creates the
+ * link's target, wherever it points (measured), which would put the pipeline
+ * outside the project. The published file is complete from its first moment.
+ *
+ * Where hard links are not supported (FAT/exFAT, some network shares), this
+ * falls back to an `lstat` check and a `wx` write. That leaves one race, on
+ * Windows only: a dangling symlink created at `outPath` between the check and
+ * the open would be followed. POSIX `O_EXCL` never follows a link.
+ */
+function createFile(outPath, content) {
+  const tmp = writeTempBeside(outPath, content);
+  try {
+    linkSync(tmp, outPath);
+    return true;
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') return false;
+    if (safeLstat(outPath) !== null) return false;
+    try {
+      writeFileSync(outPath, content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (e2) {
+      if (e2 instanceof Error && 'code' in e2 && e2.code === 'EEXIST') return false;
+      throw e2;
+    }
+  } finally {
+    removeTemp(tmp);
+  }
 }
 
 function cmdCiInit(argv) {
@@ -1751,6 +1841,14 @@ function cmdCiInit(argv) {
   }
   mkdirSync(dirname(outPath), { recursive: true });
 
+  const refuseExisting = () => {
+    process.stderr.write(
+      `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
+        `Re-run with --force to overwrite it, or remove it first.\n`,
+    );
+    process.exit(1);
+  };
+
   if (args.force) {
     const leaf = refuseEscapingLeafSymlink(projectPath, outPath);
     if (!leaf.ok) {
@@ -1758,26 +1856,10 @@ function cmdCiInit(argv) {
         `ci-init: refusing to overwrite ${outPath} with --force — ${leaf.reason}. Remove it first.`,
       );
     }
-  }
-
-  // `wx`: atomically fail with EEXIST if the path already exists (including
-  // a symlink, dangling or not) — no separate `existsSync` check first,
-  // which would leave a TOCTOU window between the check and the write.
-  // (`--force`'s own symlink hazard is handled just above, before this —
-  // by the time this runs with `--force`, `outPath` is either a plain
-  // file/absent, or was just unlinked because it safely resolved inside
-  // the project.)
-  try {
-    writeFileSync(outPath, rendered, { encoding: 'utf8', flag: args.force ? 'w' : 'wx' });
-  } catch (e) {
-    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') {
-      process.stderr.write(
-        `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
-          `Re-run with --force to overwrite it, or remove it first.\n`,
-      );
-      process.exit(1);
-    }
-    throw e;
+    replaceFile(outPath, rendered);
+  } else if (!createFile(outPath, rendered)) {
+    // Something is at the name — a dangling symlink included (see createFile).
+    refuseExisting();
   }
   process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
   if (targetArg === 'github') {

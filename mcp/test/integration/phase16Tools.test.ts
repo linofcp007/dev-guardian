@@ -203,6 +203,33 @@ describe('wp_plugin_check never refuses for want of a local project', () => {
     expect(r.error.message).toMatch(/target_url/);
   });
 
+  /**
+   * Follow-up (Task 24 minor): with a valid `project_path`, the lookup is
+   * keyed on it and `wp_install_path` only feeds the WP-CLI version probe —
+   * a relative one that does not exist here refused the whole call. It now
+   * skips the probe and says so; the CVEs still come from `project_path`.
+   */
+  it('a bad decorative wp_install_path beside a valid project_path skips the version probe with a warning', async () => {
+    const plugin = makePlugin();
+    const P = projectPath();
+    plugin.storage.scans.insert({ scan_id: 'v', scan_type: 'wp_vuln_check', project_path: P, tree_hash: '' });
+    plugin.storage.cves.upsert({ cve_id: 'CVE-HERE', package_name: 'akismet', severity: 'high', scan_id: 'v' });
+    plugin.storage.scans.finalize({ scan_id: 'v', status: 'completed', tools_run: [{ name: 'wpscan', status: 'ok' }], missing_tools: [] });
+    vi.mocked(scannerAvailable).mockResolvedValue('wp');
+
+    const r = await getTool('wp_plugin_check').handler(
+      { slug: 'akismet', project_path: P, wp_install_path: 'guardian-remote-wp-install' },
+      plugin,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r['project_path']).toBe(P);
+    expect((r['known_cves'] as Array<{ cve_id: string }>).map((c) => c.cve_id)).toEqual(['CVE-HERE']);
+    expect(r['installed_version']).toBeNull();
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    expect(r['warnings']).toEqual([expect.stringMatching(/wp_install_path.*version.*not detected/s)]);
+  });
+
   it('an existing relative wp_install_path resolves to its install', async () => {
     const plugin = makePlugin();
     const P = projectPath();

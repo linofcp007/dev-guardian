@@ -75,7 +75,7 @@ import { detectConfigDrift } from '../configdrift/detect.js';
 import { assignIdentities, dependencyCoordinates, makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
-import { GUARDIAN_IGNORE_FILE, isProjectPath, loadProjectExclusions, } from '../platform/guardianIgnore.js';
+import { GUARDIAN_IGNORE_FILE, loadProjectExclusions, projectPathTest, } from '../platform/guardianIgnore.js';
 import { resolveScope, ScanScopeInput, ScopeError, suggestScopeForFile, } from '../platform/scope.js';
 import { resolveVersion } from '../platform/version.js';
 import { makeProgressEmitter } from '../progress/progressEmitter.js';
@@ -515,8 +515,11 @@ async function runScanBody(args) {
         return before - findings.length;
     };
     // Only paths IN the project: an image target that happens to match a
-    // pattern is not a file the project declared (`isProjectPath`).
-    const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(isProjectPath(projectPath, p) && exclusions.ignores(p)));
+    // pattern is not a file the project declared (`isProjectPath`). The
+    // pattern first — it costs no disk — and then one existence check per
+    // directory (`projectPathTest`), never one per finding.
+    const inProject = projectPathTest(projectPath);
+    const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject(p)));
     const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
     if (dropped.length > 0 && cves.length > 0) {
         const still = cvesStillFound(cves, findings, dropped);

@@ -959,6 +959,35 @@ keeps working (migrations 004–011 are additive).
   unreported number of commits scanned"). On a repository with commits it is
   now `failed` unless the report holds findings — git's own count of a range
   says what there was to read, not what gitleaks read.
+- **Scoped scans and the `.guardianignore` result filter asked the disk once
+  per file or finding**: a `realpath` per file of a directory, glob or diff
+  scope, an existence walk per finding. Both are now one check per directory
+  and the filter tests the pattern first (20 000 files on Windows: a directory
+  scope 2.5 s → 0.16 s, a diff 4.5 s → 1.4 s, the filter 1.4 s → 0.04 s). A
+  link out of the project is still refused, mid-path included; one reached
+  through an untracked junction now says to add it to `.gitignore` or pass
+  `scope.diff.include_untracked: false`.
+- **`wp_plugin_check` refused a call whose `project_path` was valid** because
+  a decorative `wp_install_path` beside it was relative and absent. The lookup
+  is keyed on `project_path`; the WP-CLI version probe is now skipped with a
+  warning instead.
+- **The `.gitignore` guard rewrote a mixed-ending file in one ending**, a diff
+  of every line of the other. Each line now keeps its own ending; the lines it
+  adds take the file's dominant one.
+- **`verify_live`'s report sanitizer was quadratic in findings that overlap one
+  another** (4000 custom-rule findings over one region: 5.9 s, the MCP server
+  frozen), and scrubbing value by value could leave a fragment of one value
+  where it overlapped another, or of a value that overlaps itself (`abab` in
+  `ababab`). Each run of overlapping findings is now scrubbed in one pass per
+  match — a native search for a run of one value, the common case — and
+  overlapping occurrences become one `REDACTED`.
+- **`ci-init --write` created the target of a dangling pipeline-file symlink
+  on Windows**, wherever it pointed: a `wx` open there follows a dangling link.
+  The file is now written to a temp file and published with a hard link, which
+  refuses anything at the name and never follows it. `--force` renames the
+  temp file over the pipeline file, so it never writes through a symlink or a
+  hard link and never leaves the file half-written; `--help` says what it
+  still refuses.
 
 ### Security
 

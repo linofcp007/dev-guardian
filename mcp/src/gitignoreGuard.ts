@@ -32,14 +32,16 @@
  * the line immediately above it — never any OTHER occurrence of that exact
  * comment, since nothing else in this file ever writes it.
  *
- * **Line endings.** An upgrade/append re-splits the file into bare lines
- * and rejoins them, which must use the SAME separator the file already
- * had — a CRLF `.gitignore` (Windows default; also common wherever
+ * **Line endings.** An upgrade/append re-splits the file into lines and
+ * rejoins them, and every line it keeps goes back with the ending it came
+ * with — a CRLF `.gitignore` (Windows default; also common wherever
  * `core.autocrlf` is on) rewritten with a bare `\n` comes back as LF, and
  * git then shows the WHOLE file as changed for what was functionally a
- * two-line edit. `existingEol` detects it once, from whatever line ending
- * appears first; a brand-new file (`created`) has no existing convention to
- * follow and keeps the plain `\n` it always used.
+ * two-line edit; a MIXED file rewritten in any one ending shows every line
+ * of the other. The lines this adds (and a last line that had no ending)
+ * take the file's dominant ending — the more frequent one, a tie going to
+ * whichever appears first (`dominantEol`). A brand-new file (`created`) has
+ * no existing convention to follow and keeps the plain `\n` it always used.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -74,8 +76,9 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
     }
 
     const original = readFileSync(gitignorePath, 'utf8');
-    const eol = existingEol(original);
-    const lines = original.split(/\r?\n/);
+    const eol = dominantEol(original);
+    const withEndings = splitLines(original);
+    const lines = withEndings.map((l) => l.text);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
     // Every old bare line is dropped outright — see the module comment on
     // why its mere presence elsewhere in the file defeats the negation,
@@ -102,9 +105,17 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
     if (!hasEntry) missing.push(ENTRY);
     if (!hasNegation) missing.push(BASELINE_NEGATION);
 
-    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, '');
+    // Trailing blank lines (and a trailing stray `\r`) go; the last line kept
+    // ends in its own ending, or the dominant one when it had none.
+    const body = withEndings.filter((_, i) => !toDrop.has(i));
+    for (let last = body.pop(); last !== undefined; last = body.pop()) {
+      const text = last.text.replace(/\r+$/, '');
+      if (text === '') continue;
+      body.push({ text, eol: last.eol === '' ? eol : last.eol });
+      break;
+    }
     const next =
-      (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : '') +
+      body.map((l) => l.text + l.eol).join('') +
       (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : '');
     writeFileSync(gitignorePath, next, 'utf8');
     return { updated: true, reason: hasOldPattern ? 'upgraded' : 'added' };
@@ -113,7 +124,30 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
   }
 }
 
-/** The file's own line-ending convention — CRLF if its first line break is one, else LF. */
-function existingEol(content: string): '\r\n' | '\n' {
-  return content.includes('\r\n') ? '\r\n' : '\n';
+/** A line of the file and the ending it had there (`''` for a last line without one). */
+interface Line {
+  text: string;
+  eol: string;
+}
+
+/** `content.split(/\r?\n/)`, keeping each line's own ending. */
+function splitLines(content: string): Line[] {
+  const out: Line[] = [];
+  const re = /\r?\n/g;
+  let start = 0;
+  for (let m = re.exec(content); m !== null; m = re.exec(content)) {
+    out.push({ text: content.slice(start, m.index), eol: m[0] });
+    start = m.index + m[0].length;
+  }
+  out.push({ text: content.slice(start), eol: '' });
+  return out;
+}
+
+/** The file's dominant line ending: the more frequent, a tie going to the first; LF when it has none. */
+function dominantEol(content: string): '\r\n' | '\n' {
+  const crlf = content.split('\r\n').length - 1;
+  const lf = content.split('\n').length - 1 - crlf;
+  if (crlf !== lf) return crlf > lf ? '\r\n' : '\n';
+  const first = content.indexOf('\n');
+  return first > 0 && content[first - 1] === '\r' ? '\r\n' : '\n';
 }

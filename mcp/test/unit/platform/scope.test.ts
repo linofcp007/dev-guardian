@@ -204,6 +204,39 @@ describe('scope.diff', () => {
     expect((await refusal(plain, { diff: {} })).code).toBe('not_a_git_repo');
   });
 
+  it('an untracked link out of the project is never followed, and a refusal names the way out', async () => {
+    const dir = await repo({ 'a.py': '' });
+    write(dir, 'a.py', 'a = 2\n');
+    const outside = makeTempDir('scope-outside-');
+    write(outside, 'secret.py');
+    symlinkSync(outside, join(dir, 'link'), 'junction');
+    let refused: ScopeError | null = null;
+    let files: string[] = [];
+    try {
+      files = (await resolve(dir, { diff: {} })).files;
+    } catch (e) {
+      if (!(e instanceof ScopeError)) throw e;
+      refused = e;
+    }
+    if (process.platform === 'win32') {
+      // git for Windows lists the files INSIDE an untracked junction as
+      // untracked files of the project: the scope refuses, and says how to
+      // get past it without deleting the junction.
+      expect(refused?.code).toBe('unsupported_target');
+      expect(refused?.message).toContain('link/secret.py');
+      expect(refused?.message).toMatch(/\.gitignore/);
+      expect(refused?.message).toMatch(/include_untracked: false/);
+    } else {
+      // POSIX git lists the link itself, which is no regular file.
+      expect(refused).toBeNull();
+      expect(files).toEqual(['a.py']);
+    }
+    // Both ways out work.
+    expect((await resolve(dir, { diff: { include_untracked: false } })).files).toEqual(['a.py']);
+    write(dir, '.gitignore', 'link\n');
+    expect((await resolve(dir, { diff: {} })).files).toEqual(['.gitignore', 'a.py']);
+  });
+
   it('a `--`-shaped ref is only ever a ref', async () => {
     const dir = await repo({ 'a.py': '' });
     expect((await refusal(dir, { diff: { base: '--output=/tmp/x' } })).code).toBe('target_not_found');

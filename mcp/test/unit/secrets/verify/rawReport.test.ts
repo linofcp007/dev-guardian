@@ -15,6 +15,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +28,8 @@ import {
   sweepStaleReportDirs,
 } from '../../../../src/secrets/verify/rawReport.js';
 import { isVerifiableRule } from '../../../../src/secrets/verify/providers.js';
+import { longSecretReport, longValue } from '../../../helpers/longSecretReport.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../../../helpers/tsxNode.js';
 
 const GH = ['ghp', 'Z'.repeat(36)].join('_');
 const AWS = ['AKIA', 'IOSFODNN7', 'ABCDEFG'].join('');
@@ -203,6 +206,151 @@ describe('sanitizeGitleaksReport', () => {
     expect(out?.text).not.toContain(['ghp', `000123${'W'.repeat(30)}`].join('_'));
     // Measured ~50 ms; the budget is for a loaded machine, not a benchmark.
     expect(elapsed).toBeLessThan(3_000);
+  });
+
+  it('stays near-linear when MANY findings overlap one wide region — every value still scrubbed from every Match', () => {
+    // The adversarial shape the sweep alone did not bound: 5000 findings
+    // (a custom rule each, say) whose spans all overlap one another in one
+    // (File, Commit) group. Each Match was scrubbed value by value with all
+    // 5000 values: 4000 findings took 5.9 s, the MCP server frozen for it.
+    const k = 5_000;
+    const values = Array.from({ length: k }, (_, n) => `sk_${String(n).padStart(6, '0')}_${'z'.repeat(20)}`);
+    const items = values.map((v, n) =>
+      item(`custom-rule-${n}`, v, {
+        File: 'config/huge.env',
+        Commit: 'c0ffee',
+        StartLine: 1,
+        EndLine: 100,
+        StartColumn: 1 + (n % 7),
+        EndColumn: 80,
+        // Its own value and both neighbours' — each in another finding's span.
+        Match: `${values[n - 1] ?? 'x'} ${v} ${values[n + 1] ?? 'y'}`,
+      }),
+    );
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const elapsed = performance.now() - started;
+    const parsed = parse(out?.text);
+    expect(parsed).toHaveLength(k);
+    for (const v of values) expect(out?.text.includes(v), v).toBe(false);
+    expect(parsed[1]?.['Match']).toBe(`${REDACTED} ${REDACTED} ${REDACTED}`);
+    // Measured ~60 ms; the budget is for a loaded machine, not a benchmark.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  /**
+   * Fix round 1: the common case — findings that overlap nothing, each with a
+   * long value. A matcher built for every run, all of them kept until the
+   * output was built, made 1000 such findings take 460 ms (+115 MB) and
+   * 10 000 take 3.9 s (+1 GB), where value-by-value replacement took 19 ms
+   * and 149 ms; 30 000 ended in a fatal heap OOM that no catch can stop.
+   */
+  describe('many findings that overlap nothing, each with a long value', () => {
+    it('stay about as fast as a plain replace — every value still scrubbed', () => {
+      const k = 5_000;
+      const text = longSecretReport(k);
+      const started = performance.now();
+      const out = sanitizeGitleaksReport(text, isVerifiableRule);
+      const elapsed = performance.now() - started;
+      expect(out).not.toBeNull();
+      for (let n = 0; n < k; n += 1) expect(out?.text.includes(longValue(n).slice(40, 120)), `value ${n}`).toBe(false);
+      expect(parse(out?.text)[0]?.['Match']).toBe(REDACTED);
+      // Measured ~80 ms (the per-run matcher: ~2 s); the budget is for a loaded machine.
+      expect(elapsed).toBeLessThan(1_000);
+    });
+
+    it('fit in a small heap: nothing per run outlives the run', () => {
+      // A fatal OOM kills the process, so it is watched from outside: a child
+      // with a 192 MB old space. 4000 findings needed ~450 MB with every
+      // run's matcher kept to the end; the report itself is ~15 MB.
+      const r = spawnSync(
+        process.execPath,
+        ['--max-old-space-size=192', ...TSX_NODE_ARGS, join(MCP_ROOT, 'test', 'helpers', 'sanitizeHeapHarness.ts'), '4000'],
+        { cwd: MCP_ROOT, encoding: 'utf8', timeout: 120_000 },
+      );
+      expect(r.stderr).not.toMatch(/heap out of memory/i);
+      expect(r.stdout.trim()).toBe('ok 4000 0');
+      expect(r.status).toBe(0);
+    }, 180_000);
+  });
+
+  it('a value that repeats itself (self-overlapping, periodic) is scrubbed whole, in linear time', () => {
+    // `abab` inside `ababab` occurs twice, overlapping: replaced value by
+    // value (split/join), the second occurrence was cut and `ab` survived.
+    const short = parse(
+      sanitizeGitleaksReport(JSON.stringify([item('rule-a', 'abab', { Match: 'x ababab y' })]), isVerifiableRule)?.text,
+    );
+    expect(short[0]?.['Match']).toBe(`x ${REDACTED} y`);
+    // The worst case for a search restarted after each occurrence: a long
+    // value of one repeated letter, inside a longer run of it, many times.
+    const value = 'a'.repeat(2_000);
+    const items = Array.from({ length: 1_000 }, (_, n) =>
+      item(`rule-${n}`, value, { File: `f${n}.txt`, Match: `k=${'a'.repeat(4_000)};` }),
+    );
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const elapsed = performance.now() - started;
+    expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
+    // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000 per item.
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
+  it('a Match holding overlapping occurrences of two values keeps no fragment of either', () => {
+    // `abcd1234` and `1234wxyz` overlap in `1234`: replaced one value after
+    // the other, the second is no longer whole and its tail survived.
+    const a = `${'A'.repeat(12)}1234`;
+    const b = `1234${'W'.repeat(12)}`;
+    const merged = `${'A'.repeat(12)}1234${'W'.repeat(12)}`;
+    const text = JSON.stringify([
+      item('rule-a', a, { StartColumn: 1, EndColumn: 30, Match: `k=${merged};` }),
+      item('rule-b', b, { StartColumn: 5, EndColumn: 34, Match: `k=${merged};` }),
+    ]);
+    const parsed = parse(sanitizeGitleaksReport(text, isVerifiableRule)?.text);
+    expect(parsed.map((i) => i['Match'])).toEqual([`k=${REDACTED};`, `k=${REDACTED};`]);
+  });
+
+  it('agrees with a brute-force scrub on dense random overlaps — every occurrence of every value covered', () => {
+    // Every occurrence of every value in the run marks its characters; runs
+    // of marks that overlap are one REDACTED. A two-letter alphabet makes the
+    // occurrences dense, nested and overlapping.
+    let seed = 7; // mulberry32: the low bits of a plain LCG cycle, and dense cases never came up
+    const rand = (n: number): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    const word = (len: number, alphabet: string): string =>
+      Array.from({ length: len }, () => alphabet[rand(alphabet.length)] ?? '').join('');
+    const bruteForce = (text: string, values: readonly string[]): string => {
+      const spans: Array<[number, number]> = [];
+      for (const v of values) {
+        for (let at = text.indexOf(v); at !== -1; at = text.indexOf(v, at + 1)) spans.push([at, at + v.length]);
+      }
+      spans.sort((a, b) => a[0] - b[0]);
+      const merged: Array<[number, number]> = [];
+      for (const [s, e] of spans) {
+        const last = merged.at(-1);
+        if (last !== undefined && s < last[1]) last[1] = Math.max(last[1], e);
+        else merged.push([s, e]);
+      }
+      let out = '';
+      let pos = 0;
+      for (const [s, e] of merged) {
+        out += text.slice(pos, s) + REDACTED;
+        pos = e;
+      }
+      return out + text.slice(pos);
+    };
+    for (let round = 0; round < 300; round += 1) {
+      const values = Array.from({ length: 1 + rand(6) }, () => word(1 + rand(4), 'ab'));
+      const matches = values.map(() => word(rand(24), 'abc'));
+      const items = values.map((v, n) =>
+        item(`rule-${n}`, v, { StartLine: 3, EndLine: 3, StartColumn: 1 + n, EndColumn: 40, Match: matches[n] ?? '' }),
+      );
+      const parsed = parse(sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule)?.text);
+      parsed.forEach((p, n) => expect(p['Match'], `round ${round}, item ${n}`).toBe(bruteForce(matches[n] ?? '', values)));
+    }
   });
 });
 

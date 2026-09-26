@@ -42,11 +42,19 @@
  *
  *   - `Secret` → `REDACTED`.
  *   - `Match` → its own value, and the value of every finding whose span
- *     OVERLAPS it (same file and commit; found with a sort + sweep, so the
- *     cost follows the overlaps, not the item count squared) → `REDACTED`.
- *     Another finding's value can only be inside a match that overlaps it.
- *     A match whose group has an item with no position cannot be placed and
- *     is withheld whole, as is the match of an item with no value.
+ *     overlaps it, directly or through a chain of overlapping spans (same
+ *     file and commit) → `REDACTED`. Another finding's value can only be
+ *     inside a match that overlaps it. A sort + sweep merges the spans into
+ *     runs that overlap, and each match is scrubbed of its run's values in
+ *     ONE pass over it (`makeScrubber`): scrubbed value by value, 4000
+ *     findings overlapping one region took 5.9 s — the count squared. A run
+ *     of one value (most runs: a finding that overlaps nothing) is a native
+ *     search; only several distinct values build a matcher, and each run's
+ *     matches are scrubbed as it closes, so nothing per run outlives it.
+ *     Overlapping occurrences — of two values, or of one value with itself —
+ *     become one `REDACTED`, so no fragment survives. A match whose group
+ *     has an item with no position cannot be placed and is withheld whole,
+ *     as is the match of an item with no value.
  *   - `Message` (the commit message, which gitleaks does not redact) and
  *     `Tags` → the values found in that commit / that item → `REDACTED`.
  *   - `Line` and `Fragment`, should a gitleaks version serialize them (the
@@ -172,8 +180,11 @@ export function sanitizeGitleaksReport(text: string, keep: (ruleId: string) => b
     return rule !== null && keep(rule) ? (own[n] ?? null) : null;
   });
 
-  // Overlapping matches, per file and commit.
-  const others: Array<Set<string>> = items.map(() => new Set<string>());
+  // Runs of overlapping matches, per file and commit. Each run's matches are
+  // scrubbed as the run closes, so its matcher is garbage before the next run
+  // is built: kept to the end, 10 000 findings with private-key values held
+  // 1 GB, and 30 000 ended in a fatal heap OOM.
+  const scrubbedMatch: Array<string | null> = items.map(() => null);
   const groups = new Map<string, number[]>();
   const unplaceable = new Set<string>();
   items.forEach((item, n) => {
@@ -186,23 +197,30 @@ export function sanitizeGitleaksReport(text: string, keep: (ruleId: string) => b
     if (list === undefined) groups.set(key, [n]);
     else list.push(n);
   });
-  for (const members of groups.values()) {
+  for (const [key, members] of groups) {
+    // A group with an item it cannot place has every match withheld whole.
+    if (unplaceable.has(key)) continue;
     const placed = members.flatMap((n) => {
       const span = spanOf(items[n]);
       return span === null ? [] : [{ n, span }];
     });
     placed.sort((a, b) => a.span.startLine - b.span.startLine || a.span.startCol - b.span.startCol);
-    let active: typeof placed = [];
-    for (const current of placed) {
-      active = active.filter((a) => !endsBefore(a.span, current.span));
-      const mine = own[current.n];
-      for (const a of active) {
-        const theirs = own[a.n];
-        if (theirs != null) others[current.n]?.add(theirs);
-        if (mine != null) others[a.n]?.add(mine);
+    let run: number[] = [];
+    let runEnd: Span | null = null;
+    const closeRun = (): void => {
+      const scrub = makeScrubber(run.flatMap((n) => own[n] ?? []));
+      for (const n of run) {
+        const match = stringField(items[n], 'Match');
+        if (match !== null && own[n] != null) scrubbedMatch[n] = scrub(match);
       }
-      active.push(current);
+      run = [];
+    };
+    for (const current of placed) {
+      if (runEnd !== null && endsBefore(runEnd, current.span)) closeRun();
+      if (run.length === 0 || runEnd === null || endsLater(current.span, runEnd)) runEnd = current.span;
+      run.push(current.n);
     }
+    closeRun();
   }
 
   // The values of each commit, for its message.
@@ -233,10 +251,9 @@ export function sanitizeGitleaksReport(text: string, keep: (ruleId: string) => b
     const key = `${stringField(item, 'File') ?? ''}\u0000${stringField(item, 'Commit') ?? ''}`;
     if ('Secret' in c) c['Secret'] = REDACTED;
     if (typeof c['Match'] === 'string') {
+      const scrubbed = scrubbedMatch[n] ?? null;
       c['Match'] =
-        value === null || unplaceable.has(key) || spanOf(item) === null
-          ? REDACTED
-          : replaceAll(c['Match'], [value, ...(others[n] ?? [])]);
+        value === null || unplaceable.has(key) || spanOf(item) === null || scrubbed === null ? REDACTED : scrubbed;
     }
     if (typeof c['Message'] === 'string' && c['Message'].length > 0) {
       c['Message'] = cleanMessage(stringField(item, 'Commit') ?? '', c['Message']);
@@ -259,6 +276,170 @@ function replaceAll(text: string, needles: Iterable<string>): string {
   return out;
 }
 
+/** A `[start, end)` range of a text, in UTF-16 code units. */
+interface Range {
+  start: number;
+  end: number;
+}
+
+/**
+ * Add an occurrence to `ranges` (kept in order of their ends): one that
+ * OVERLAPS the ranges before it merges with them, so no fragment of any value
+ * survives between two `REDACTED`s; one that merely touches stays apart, as a
+ * value repeated back to back always did.
+ */
+function addRange(ranges: Range[], start: number, end: number): void {
+  let from = start;
+  for (let last = ranges.at(-1); last !== undefined && last.end > from; last = ranges.at(-1)) {
+    from = Math.min(from, last.start);
+    ranges.pop();
+  }
+  ranges.push({ start: from, end });
+}
+
+/** `text` with each of `ranges` (disjoint, in order) replaced by `REDACTED`. */
+function redactRanges(text: string, ranges: readonly Range[]): string {
+  if (ranges.length === 0) return text;
+  let out = '';
+  let pos = 0;
+  for (const r of ranges) {
+    out += text.slice(pos, r.start) + REDACTED;
+    pos = r.end;
+  }
+  return out + text.slice(pos);
+}
+
+/**
+ * A function that replaces every occurrence — overlapping ones included — of
+ * any of `values` in a text by `REDACTED`. Most runs hold one finding, or
+ * several findings of one value, and get the native search
+ * ({@link makeValueScrubber}); only a run of several distinct values builds
+ * the one-pass matcher ({@link makeTrieScrubber}), whose size is theirs.
+ */
+function makeScrubber(values: readonly string[]): (text: string) => string {
+  const distinct = [...new Set(values)].filter((v) => v.length > 0);
+  const [only] = distinct;
+  if (only === undefined) return (text) => text;
+  return distinct.length === 1 ? makeValueScrubber(only) : makeTrieScrubber(distinct);
+}
+
+/**
+ * {@link makeScrubber} for one value. A text holding it at most once — every
+ * match of a finding that overlaps no other — is one or two native
+ * `indexOf`s. One holding it again goes through Knuth-Morris-Pratt from the
+ * first occurrence, which finds every occurrence, overlapping ones included
+ * (`abab` twice in `ababab`, which split/join cut in two), in one pass:
+ * restarting `indexOf` after each occurrence costs the value's length per
+ * occurrence, and a value of one repeated letter occurs at every position.
+ */
+function makeValueScrubber(value: string): (text: string) => string {
+  const m = value.length;
+  /** KMP's prefix function of `value`, built the first time a text repeats it. */
+  let border: Int32Array | null = null;
+  return (text) => {
+    const first = text.indexOf(value);
+    if (first === -1) return text;
+    if (text.indexOf(value, first + 1) === -1) return text.slice(0, first) + REDACTED + text.slice(first + m);
+    border ??= prefixFunction(value);
+    const ranges: Range[] = [];
+    let q = 0;
+    for (let i = first; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      while (q > 0 && value.charCodeAt(q) !== c) q = border[q - 1] ?? 0;
+      if (value.charCodeAt(q) === c) q += 1;
+      if (q === m) {
+        addRange(ranges, i + 1 - m, i + 1);
+        q = border[m - 1] ?? 0;
+      }
+    }
+    return redactRanges(text, ranges);
+  };
+}
+
+/** For each prefix of `s`, the length of its longest proper prefix that is also its suffix. */
+function prefixFunction(s: string): Int32Array {
+  const border = new Int32Array(s.length);
+  let k = 0;
+  for (let i = 1; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    while (k > 0 && s.charCodeAt(k) !== c) k = border[k - 1] ?? 0;
+    if (s.charCodeAt(k) === c) k += 1;
+    border[i] = k;
+  }
+  return border;
+}
+
+/** One UTF-16 code unit per trie edge: an edge's key is `node * EDGE + unit`. */
+const EDGE = 0x10000;
+
+/**
+ * {@link makeScrubber} for several distinct values, in one pass over the
+ * text however many there are (Aho-Corasick over UTF-16 code units — the
+ * units `includes` compares). At each position the longest value ending
+ * there marks its range ({@link addRange} merges the overlapping ones).
+ * Building costs about the values' total length, in time and in memory — it
+ * lives only while its run's matches are scrubbed.
+ */
+function makeTrieScrubber(values: readonly string[]): (text: string) => string {
+  const at = (a: readonly number[], i: number): number => a[i] ?? 0;
+  const edges = new Map<number, number>();
+  const parent = [0];
+  const unit = [0];
+  const depth = [0];
+  /** The length of the longest value that is a suffix of the node's string; 0 for none. */
+  const longest = [0];
+  for (const v of values) {
+    let node = 0;
+    for (let i = 0; i < v.length; i++) {
+      const c = v.charCodeAt(i);
+      let child = edges.get(node * EDGE + c);
+      if (child === undefined) {
+        child = parent.length;
+        edges.set(node * EDGE + c, child);
+        parent.push(node);
+        unit.push(c);
+        depth.push(i + 1);
+        longest.push(0);
+      }
+      node = child;
+    }
+    if (node !== 0) longest[node] = v.length;
+  }
+  if (parent.length === 1) return (text) => text;
+
+  // Failure links, shallowest node first: each one's parent and every
+  // shorter suffix are settled before it.
+  const fail = parent.map(() => 0);
+  const order = parent.map((_, n) => n).sort((a, b) => at(depth, a) - at(depth, b));
+  for (const v of order) {
+    const p = at(parent, v);
+    if (v === 0 || p === 0) continue;
+    const c = at(unit, v);
+    let f = at(fail, p);
+    while (f !== 0 && !edges.has(f * EDGE + c)) f = at(fail, f);
+    const target = edges.get(f * EDGE + c) ?? 0;
+    fail[v] = target;
+    if (at(longest, v) === 0) longest[v] = at(longest, target);
+  }
+
+  return (text) => {
+    const ranges: Range[] = [];
+    let node = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      let next = edges.get(node * EDGE + c);
+      while (next === undefined && node !== 0) {
+        node = at(fail, node);
+        next = edges.get(node * EDGE + c);
+      }
+      node = next ?? 0;
+      const length = at(longest, node);
+      if (length !== 0) addRange(ranges, i + 1 - length, i + 1);
+    }
+    return redactRanges(text, ranges);
+  };
+}
+
 function spanOf(item: unknown): Span | null {
   const startLine = numberField(item, 'StartLine');
   const endLine = numberField(item, 'EndLine');
@@ -271,6 +452,11 @@ function spanOf(item: unknown): Span | null {
 /** `a` ends strictly before `b` starts. */
 function endsBefore(a: Span, b: Span): boolean {
   return a.endLine < b.startLine || (a.endLine === b.startLine && a.endCol < b.startCol);
+}
+
+/** `a` ends strictly after `b` ends. */
+function endsLater(a: Span, b: Span): boolean {
+  return a.endLine > b.endLine || (a.endLine === b.endLine && a.endCol > b.endCol);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

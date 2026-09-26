@@ -19899,7 +19899,7 @@ var require_resolve_block_scalar = __commonJS({
       if (!header)
         return { value: "", type: null, comment: "", range: [start, start, start] };
       const type = header.mode === ">" ? Scalar.Scalar.BLOCK_FOLDED : Scalar.Scalar.BLOCK_LITERAL;
-      const lines = scalar.source ? splitLines(scalar.source) : [];
+      const lines = scalar.source ? splitLines2(scalar.source) : [];
       let chompStart = lines.length;
       for (let i2 = lines.length - 1; i2 >= 0; --i2) {
         const content = lines[i2][1];
@@ -20057,7 +20057,7 @@ var require_resolve_block_scalar = __commonJS({
       }
       return { mode, indent, chomp, comment, length };
     }
-    function splitLines(source) {
+    function splitLines2(source) {
       const split = source.split(/\n( *)/);
       const first = split[0];
       const m = first.match(/^( *)/);
@@ -37322,8 +37322,9 @@ ${BASELINE_NEGATION}
       return { updated: true, reason: "created" };
     }
     const original = readFileSync(gitignorePath, "utf8");
-    const eol = existingEol(original);
-    const lines = original.split(/\r?\n/);
+    const eol = dominantEol(original);
+    const withEndings = splitLines(original);
+    const lines = withEndings.map((l) => l.text);
     const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
     const toDrop = /* @__PURE__ */ new Set();
     lines.forEach((line, i2) => {
@@ -37341,16 +37342,37 @@ ${BASELINE_NEGATION}
     const missing = [];
     if (!hasEntry) missing.push(ENTRY);
     if (!hasNegation) missing.push(BASELINE_NEGATION);
-    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, "");
-    const next = (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : "") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
+    const body = withEndings.filter((_, i2) => !toDrop.has(i2));
+    for (let last = body.pop(); last !== void 0; last = body.pop()) {
+      const text = last.text.replace(/\r+$/, "");
+      if (text === "") continue;
+      body.push({ text, eol: last.eol === "" ? eol : last.eol });
+      break;
+    }
+    const next = body.map((l) => l.text + l.eol).join("") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
     writeFileSync(gitignorePath, next, "utf8");
     return { updated: true, reason: hasOldPattern ? "upgraded" : "added" };
   } catch {
     return { updated: false, reason: "unwritable" };
   }
 }
-function existingEol(content) {
-  return content.includes("\r\n") ? "\r\n" : "\n";
+function splitLines(content) {
+  const out = [];
+  const re = /\r?\n/g;
+  let start = 0;
+  for (let m = re.exec(content); m !== null; m = re.exec(content)) {
+    out.push({ text: content.slice(start, m.index), eol: m[0] });
+    start = m.index + m[0].length;
+  }
+  out.push({ text: content.slice(start), eol: "" });
+  return out;
+}
+function dominantEol(content) {
+  const crlf = content.split("\r\n").length - 1;
+  const lf = content.split("\n").length - 1 - crlf;
+  if (crlf !== lf) return crlf > lf ? "\r\n" : "\n";
+  const first = content.indexOf("\n");
+  return first > 0 && content[first - 1] === "\r" ? "\r\n" : "\n";
 }
 
 // src/platform/scriptsDir.ts
@@ -40907,15 +40929,29 @@ async function loadProjectExclusions(projectPath) {
     semgrepAnchor
   };
 }
-function isProjectPath(projectPath, relPath) {
-  const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-  if (p === "" || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p === ".." || p.startsWith("../")) return false;
-  const segments = p.split("/");
-  if (existsSync10(join13(projectPath, ...segments))) return true;
-  for (let i2 = segments.length - 1; i2 >= 1; i2--) {
-    if (existsSync10(join13(projectPath, ...segments.slice(0, i2)))) return true;
-  }
-  return false;
+function projectPathTest(projectPath) {
+  const exists = /* @__PURE__ */ new Map();
+  const onDisk2 = (segments) => {
+    const key = segments.join("/");
+    let v = exists.get(key);
+    if (v === void 0) {
+      v = existsSync10(join13(projectPath, ...segments));
+      exists.set(key, v);
+    }
+    return v;
+  };
+  return (relPath) => {
+    const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+    if (p === "" || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p === ".." || p.startsWith("../")) return false;
+    const segments = p.split("/");
+    if (segments.length === 1 || segments.some((s) => s === "." || s === "..")) {
+      if (onDisk2(segments)) return true;
+    }
+    for (let i2 = segments.length - 1; i2 >= 1; i2--) {
+      if (onDisk2(segments.slice(0, i2))) return true;
+    }
+    return false;
+  };
 }
 function insideGitWorkTree(projectPath) {
   for (let dir = resolve6(projectPath); ; dir = dirname7(dir)) {
@@ -41228,6 +41264,7 @@ async function resolveScope(projectPath, scope, opts) {
 }
 function resolvePaths(projectPath, entries2) {
   const root = realOrSelf(projectPath);
+  const assertInside = insideChecker(projectPath, root);
   const files = /* @__PURE__ */ new Set();
   const dirs = [];
   const globs = [];
@@ -41249,7 +41286,7 @@ function resolvePaths(projectPath, entries2) {
       dirs.push(rel2);
       for (const f of listProjectFiles(abs)) {
         const fileRel = rel2 === "" ? f : `${rel2}/${f}`;
-        assertInside(projectPath, root, fileRel);
+        assertInside(fileRel);
         files.add(fileRel);
       }
     } else if (kind === "other") {
@@ -41264,7 +41301,7 @@ function resolvePaths(projectPath, entries2) {
       let matched = 0;
       for (const f of allFiles) {
         if (matchesSelfOrAncestor(re, f)) {
-          assertInside(projectPath, root, f);
+          assertInside(f);
           files.add(f);
           matched += 1;
         }
@@ -41325,10 +41362,20 @@ function entryKind(abs, root) {
   if (st.isDirectory()) return "dir";
   return "other";
 }
-function assertInside(projectPath, root, rel2) {
-  if (!staysInside(join15(projectPath, ...rel2.split("/")), root)) {
-    throw new ScopeError(`scope: "${rel2}" resolves outside the project through a link`, "unsupported_target");
-  }
+function insideChecker(projectPath, root, hint = "") {
+  const dirs = /* @__PURE__ */ new Map();
+  return (rel2) => {
+    const slash = rel2.lastIndexOf("/");
+    const dir = slash < 0 ? "" : rel2.slice(0, slash);
+    let inside = dirs.get(dir);
+    if (inside === void 0) {
+      inside = staysInside(dir === "" ? projectPath : join15(projectPath, ...dir.split("/")), root);
+      dirs.set(dir, inside);
+    }
+    if (!inside) {
+      throw new ScopeError(`scope: "${rel2}" resolves outside the project through a link${hint}`, "unsupported_target");
+    }
+  };
 }
 async function requireRepo(projectPath, what) {
   const state = await repoState(projectPath);
@@ -41353,8 +41400,9 @@ async function untracked(cwd) {
     ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
   ]);
 }
-function onDisk(projectPath, rels) {
-  const root = realOrSelf(projectPath);
+var UNTRACKED_LINK_HINT = " (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)";
+function onDisk(projectPath, rels, fromUntracked = false) {
+  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : "");
   const out = /* @__PURE__ */ new Set();
   for (const rel2 of rels) {
     let isFile = false;
@@ -41363,7 +41411,7 @@ function onDisk(projectPath, rels) {
     } catch {
     }
     if (!isFile) continue;
-    assertInside(projectPath, root, rel2);
+    assertInside(rel2);
     out.add(rel2);
   }
   return [...out].sort();
@@ -41404,7 +41452,7 @@ async function resolveDiff(projectPath, diff) {
       `${baseSha}..${headSha}`,
       "--"
     ]);
-    const extra2 = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath)) : [];
+    const extra2 = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath), true) : [];
     return {
       files: [.../* @__PURE__ */ new Set([...committed, ...extra2])].sort(),
       touched,
@@ -41428,8 +41476,8 @@ async function resolveDiff(projectPath, diff) {
   } else {
     tracked = hasCommits ? await listZ(projectPath, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await listZ(projectPath, ["ls-files", "-z", "--cached"]);
   }
-  const extra = includeUntracked ? await untracked(projectPath) : [];
-  const files = onDisk(projectPath, [...tracked, ...extra]);
+  const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
+  const files = [.../* @__PURE__ */ new Set([...onDisk(projectPath, tracked), ...extra])].sort();
   return {
     files,
     touched: [],
@@ -42644,7 +42692,8 @@ async function runScanBody(args) {
     });
     return before - findings.length;
   };
-  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(isProjectPath(projectPath, p) && exclusions.ignores(p)));
+  const inProject = projectPathTest(projectPath);
+  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject(p)));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
@@ -44401,7 +44450,7 @@ function sanitizeGitleaksReport(text, keep) {
     const rule = stringField(item, "RuleID");
     return rule !== null && keep(rule) ? own[n2] ?? null : null;
   });
-  const others = items.map(() => /* @__PURE__ */ new Set());
+  const scrubbedMatch = items.map(() => null);
   const groups = /* @__PURE__ */ new Map();
   const unplaceable = /* @__PURE__ */ new Set();
   items.forEach((item, n2) => {
@@ -44414,23 +44463,29 @@ function sanitizeGitleaksReport(text, keep) {
     if (list2 === void 0) groups.set(key, [n2]);
     else list2.push(n2);
   });
-  for (const members of groups.values()) {
+  for (const [key, members] of groups) {
+    if (unplaceable.has(key)) continue;
     const placed = members.flatMap((n2) => {
       const span = spanOf(items[n2]);
       return span === null ? [] : [{ n: n2, span }];
     });
     placed.sort((a2, b) => a2.span.startLine - b.span.startLine || a2.span.startCol - b.span.startCol);
-    let active = [];
-    for (const current of placed) {
-      active = active.filter((a2) => !endsBefore(a2.span, current.span));
-      const mine = own[current.n];
-      for (const a2 of active) {
-        const theirs = own[a2.n];
-        if (theirs != null) others[current.n]?.add(theirs);
-        if (mine != null) others[a2.n]?.add(mine);
+    let run = [];
+    let runEnd = null;
+    const closeRun = () => {
+      const scrub = makeScrubber(run.flatMap((n2) => own[n2] ?? []));
+      for (const n2 of run) {
+        const match = stringField(items[n2], "Match");
+        if (match !== null && own[n2] != null) scrubbedMatch[n2] = scrub(match);
       }
-      active.push(current);
+      run = [];
+    };
+    for (const current of placed) {
+      if (runEnd !== null && endsBefore(runEnd, current.span)) closeRun();
+      if (run.length === 0 || runEnd === null || endsLater(current.span, runEnd)) runEnd = current.span;
+      run.push(current.n);
     }
+    closeRun();
   }
   const byCommit = /* @__PURE__ */ new Map();
   items.forEach((item, n2) => {
@@ -44458,7 +44513,8 @@ function sanitizeGitleaksReport(text, keep) {
     const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
     if ("Secret" in c3) c3["Secret"] = REDACTED;
     if (typeof c3["Match"] === "string") {
-      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null ? REDACTED : replaceAll(c3["Match"], [value, ...others[n2] ?? []]);
+      const scrubbed = scrubbedMatch[n2] ?? null;
+      c3["Match"] = value === null || unplaceable.has(key) || spanOf(item) === null || scrubbed === null ? REDACTED : scrubbed;
     }
     if (typeof c3["Message"] === "string" && c3["Message"].length > 0) {
       c3["Message"] = cleanMessage(stringField(item, "Commit") ?? "", c3["Message"]);
@@ -44478,6 +44534,118 @@ function replaceAll(text, needles) {
   for (const n2 of sorted) if (out.includes(n2)) out = out.split(n2).join(REDACTED);
   return out;
 }
+function addRange(ranges, start, end) {
+  let from = start;
+  for (let last = ranges.at(-1); last !== void 0 && last.end > from; last = ranges.at(-1)) {
+    from = Math.min(from, last.start);
+    ranges.pop();
+  }
+  ranges.push({ start: from, end });
+}
+function redactRanges(text, ranges) {
+  if (ranges.length === 0) return text;
+  let out = "";
+  let pos = 0;
+  for (const r of ranges) {
+    out += text.slice(pos, r.start) + REDACTED;
+    pos = r.end;
+  }
+  return out + text.slice(pos);
+}
+function makeScrubber(values) {
+  const distinct = [...new Set(values)].filter((v) => v.length > 0);
+  const [only] = distinct;
+  if (only === void 0) return (text) => text;
+  return distinct.length === 1 ? makeValueScrubber(only) : makeTrieScrubber(distinct);
+}
+function makeValueScrubber(value) {
+  const m = value.length;
+  let border = null;
+  return (text) => {
+    const first = text.indexOf(value);
+    if (first === -1) return text;
+    if (text.indexOf(value, first + 1) === -1) return text.slice(0, first) + REDACTED + text.slice(first + m);
+    border ??= prefixFunction(value);
+    const ranges = [];
+    let q = 0;
+    for (let i2 = first; i2 < text.length; i2++) {
+      const c3 = text.charCodeAt(i2);
+      while (q > 0 && value.charCodeAt(q) !== c3) q = border[q - 1] ?? 0;
+      if (value.charCodeAt(q) === c3) q += 1;
+      if (q === m) {
+        addRange(ranges, i2 + 1 - m, i2 + 1);
+        q = border[m - 1] ?? 0;
+      }
+    }
+    return redactRanges(text, ranges);
+  };
+}
+function prefixFunction(s) {
+  const border = new Int32Array(s.length);
+  let k = 0;
+  for (let i2 = 1; i2 < s.length; i2++) {
+    const c3 = s.charCodeAt(i2);
+    while (k > 0 && s.charCodeAt(k) !== c3) k = border[k - 1] ?? 0;
+    if (s.charCodeAt(k) === c3) k += 1;
+    border[i2] = k;
+  }
+  return border;
+}
+var EDGE = 65536;
+function makeTrieScrubber(values) {
+  const at = (a2, i2) => a2[i2] ?? 0;
+  const edges = /* @__PURE__ */ new Map();
+  const parent = [0];
+  const unit = [0];
+  const depth = [0];
+  const longest = [0];
+  for (const v of values) {
+    let node = 0;
+    for (let i2 = 0; i2 < v.length; i2++) {
+      const c3 = v.charCodeAt(i2);
+      let child = edges.get(node * EDGE + c3);
+      if (child === void 0) {
+        child = parent.length;
+        edges.set(node * EDGE + c3, child);
+        parent.push(node);
+        unit.push(c3);
+        depth.push(i2 + 1);
+        longest.push(0);
+      }
+      node = child;
+    }
+    if (node !== 0) longest[node] = v.length;
+  }
+  if (parent.length === 1) return (text) => text;
+  const fail4 = parent.map(() => 0);
+  const order = parent.map((_, n2) => n2).sort((a2, b) => at(depth, a2) - at(depth, b));
+  for (const v of order) {
+    const p = at(parent, v);
+    if (v === 0 || p === 0) continue;
+    const c3 = at(unit, v);
+    let f = at(fail4, p);
+    while (f !== 0 && !edges.has(f * EDGE + c3)) f = at(fail4, f);
+    const target = edges.get(f * EDGE + c3) ?? 0;
+    fail4[v] = target;
+    if (at(longest, v) === 0) longest[v] = at(longest, target);
+  }
+  return (text) => {
+    const ranges = [];
+    let node = 0;
+    for (let i2 = 0; i2 < text.length; i2++) {
+      const c3 = text.charCodeAt(i2);
+      let next = edges.get(node * EDGE + c3);
+      while (next === void 0 && node !== 0) {
+        node = at(fail4, node);
+        next = edges.get(node * EDGE + c3);
+      }
+      node = next ?? 0;
+      const length = at(longest, node);
+      if (length !== 0) addRange(ranges, i2 + 1 - length, i2 + 1);
+    }
+    return redactRanges(text, ranges);
+  };
+}
 function spanOf(item) {
   const startLine = numberField(item, "StartLine");
   const endLine = numberField(item, "EndLine");
@@ -44488,6 +44656,9 @@ function spanOf(item) {
 }
 function endsBefore(a2, b) {
   return a2.endLine < b.startLine || a2.endLine === b.startLine && a2.endCol < b.startCol;
+}
+function endsLater(a2, b) {
+  return a2.endLine > b.endLine || a2.endLine === b.endLine && a2.endCol > b.endCol;
 }
 function isRecord2(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -45586,10 +45757,11 @@ function networkDisabled() {
   return process.env["GUARDIAN_OFFLINE"] === "1";
 }
 function keptByScan(ctx) {
+  const inProject = projectPathTest(ctx.projectPath);
   return (f) => {
     const p = f.file_path;
     if (p === void 0 || p === "") return true;
-    if (ctx.exclusions !== null && isProjectPath(ctx.projectPath, p) && ctx.exclusions.ignores(p)) return false;
+    if (ctx.exclusions !== null && ctx.exclusions.ignores(p) && inProject(p)) return false;
     return ctx.scope === null || ctx.scope.member(p);
   };
 }
@@ -58874,11 +59046,19 @@ registerToolModule(tool32);
 async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  const hasProject = inp.project_path !== void 0 && inp.project_path.length > 0;
   const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
-  if (installProblem !== null) return failDomain22("unsupported_target", installProblem);
+  if (installProblem !== null && !hasProject) return failDomain22("unsupported_target", installProblem);
+  const warnings = [];
+  if (installProblem !== null) {
+    warnings.push(
+      `${installProblem} The installed version was not detected (the WP-CLI probe was skipped); the CVE lookup used project_path.`
+    );
+  }
+  const probePath = installProblem === null ? inp.wp_install_path : void 0;
   let projectPath;
   const rawProject = inp.project_path ?? inp.wp_install_path;
-  if (inp.project_path !== void 0 && inp.project_path.length > 0) {
+  if (inp.project_path !== void 0 && hasProject) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
@@ -58891,7 +59071,7 @@ async function handler29(input, ctx) {
   }
   let installedVersion = null;
   let active = null;
-  if (inp.wp_install_path) {
+  if (probePath !== void 0 && probePath.length > 0) {
     const wpBin = await scannerAvailable("wp");
     if (wpBin) {
       const r = await runProcess({
@@ -58899,12 +59079,12 @@ async function handler29(input, ctx) {
         args: [
           "plugin",
           "list",
-          `--path=${inp.wp_install_path}`,
+          `--path=${probePath}`,
           `--name=${inp.slug}`,
           "--fields=name,status,version",
           "--format=json"
         ],
-        cwd: inp.wp_install_path,
+        cwd: probePath,
         timeoutMs: 3e4
       });
       if (r.outcome === "completed") {
@@ -58957,6 +59137,7 @@ async function handler29(input, ctx) {
     active,
     known_cves: knownCves,
     cve_count: knownCves.length,
+    warnings,
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
 }
