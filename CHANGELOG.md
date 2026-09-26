@@ -931,6 +931,11 @@ keeps working (migrations 004–011 are additive).
   skill's dependency list to `api.osv.dev`. Offline it now sends nothing and
   records `osv.dev: skipped` with `network disabled (GUARDIAN_OFFLINE=1)`, like
   every other network caller; `docs/env.md` and `SECURITY.md` say so.
+- **"The latest scan" could be an orchestrated run that measured nothing**:
+  the search judged the child (an iac child with no IaC is coverage `full`),
+  then answered with its parent without judging it. A parent at coverage
+  `none` is now passed over, with its children, so `set_baseline` and
+  `report_export` default to the newest scan that measured something.
 
 ### Security
 

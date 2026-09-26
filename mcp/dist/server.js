@@ -51999,11 +51999,26 @@ function search(storage, projectPath, types, opts) {
   }
 }
 function latestStateScan(storage, projectPath, scanType, opts = {}) {
-  const found = findLatestUsable(storage, projectPath, scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES, opts);
+  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
+  const found = findLatestUsable(storage, projectPath, types, opts);
   if (scanType !== void 0 || found.scan === null) return found;
-  const run = runOf(storage, projectPath, found.scan);
-  if (run === found.scan) return found;
-  return { ...found, scan: run, coverage: judge(run, void 0) };
+  const hits = [...found.hits];
+  const rejected = /* @__PURE__ */ new Set();
+  let current = found;
+  for (; ; ) {
+    const child = current.scan;
+    if (child === null) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    const run = runOf(storage, projectPath, child);
+    if (run === child) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    if (!rejected.has(run.scan_id)) {
+      const coverage = judge(run, void 0);
+      if (coverage !== "none") return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
+      rejected.add(run.scan_id);
+      hits.push({ slot: run.scan_type, scan: run, reason: "coverage_none" });
+    }
+    current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
+    hits.push(...current.hits);
+  }
 }
 function mapRun(storage, projectPath, scan2) {
   return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
