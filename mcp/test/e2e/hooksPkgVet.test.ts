@@ -253,6 +253,18 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     30_000,
   );
 
+  // Fix round 2: every install was vetted, one by one — 60 KB of `npm i x; `
+  // (6 800 installs) took ~57 s through the hook, past its 15 s timeout.
+  it('fix round 2 — 6 800 installs of one package answer in well under 5 s', () => {
+    const r = runHook('npm i express; '.repeat(6_800), {
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      [OSV]: { osv: {} },
+    });
+    expect(r.status).toBe(0);
+    expect(r.ms).toBeLessThan(5000);
+    expect(r.requests.filter((u) => u.includes('registry.npmjs.org/express'))).toHaveLength(1);
+  }, 30_000);
+
   it('fix round 1 — an unreadable project .npmrc (here a directory) warns, never denies', () => {
     mkdirSync(join(project, '.npmrc'));
     const r = runHook('npm i @corp/internal', {

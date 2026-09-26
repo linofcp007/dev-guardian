@@ -135,8 +135,14 @@ function walkRoot(path, ctx, under) {
  * call and read at its end: when nothing else explains a 404, this does.
  */
 let firstUnread;
-function noteUnread(path) {
-    firstUnread = firstUnread ?? path;
+function noteUnread(path, what) {
+    firstUnread = firstUnread ?? { path, what };
+}
+/** The recorded unread path, cleared for the next call. */
+function takeUnread() {
+    const unread = firstUnread;
+    firstUnread = undefined;
+    return unread;
 }
 /**
  * A registry configuration file's text, or `undefined`. A link on the way to
@@ -146,10 +152,10 @@ function noteUnread(path) {
  * and a hook that dies at its 15 s timeout lets the install through unvetted.
  * A refused file is recorded ({@link noteUnread}); an absent one is not.
  */
-function read(path, ctx, under) {
+function read(path, ctx, under, what = 'configuration') {
     const r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
     if (r.status === 'refused')
-        noteUnread(path);
+        noteUnread(path, what);
     return r.status === 'ok' ? r.text : undefined;
 }
 /**
@@ -173,7 +179,7 @@ function present(path) {
 function listDir(dir, ctx) {
     const under = walkRoot(dir, ctx);
     if (under !== undefined && !walkLinksUnder(under, dir).ok) {
-        noteUnread(dir);
+        noteUnread(dir, 'directory');
         return [];
     }
     try {
@@ -182,7 +188,7 @@ function listDir(dir, ctx) {
     catch (e) {
         const code = e.code;
         if (code !== 'ENOENT' && code !== 'ENOTDIR')
-            noteUnread(dir);
+            noteUnread(dir, 'directory');
         return [];
     }
 }
@@ -437,7 +443,7 @@ function findManifest(root, file, match, ctx) {
             break;
         visited += 1;
         const manifest = join(next.dir, file);
-        const text = read(manifest, ctx, root);
+        const text = read(manifest, ctx, root, 'workspace manifest');
         if (text !== undefined && match(text))
             return manifest;
         if (next.depth >= MAX_SCAN_DEPTH)
@@ -472,7 +478,7 @@ function hasWorkspaces(packageJson) {
 /** Ruling (f), npm/pnpm/yarn/bun: a package.json named `name` under a workspace root. */
 function npmWorkspacePackage(name, ctx) {
     for (const dir of ancestors(ctx)) {
-        const isRoot = hasWorkspaces(read(join(dir, 'package.json'), ctx)) || present(join(dir, 'pnpm-workspace.yaml'));
+        const isRoot = hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) || present(join(dir, 'pnpm-workspace.yaml'));
         if (!isRoot)
             continue;
         const hit = findManifest(dir, 'package.json', (text) => {
@@ -683,8 +689,26 @@ function localFeedHas(folder, configPath, id, ctx) {
     const lower = id.toLowerCase();
     return listDir(dir, ctx).some((entry) => {
         const e = entry.toLowerCase();
-        return e === lower || (e.startsWith(`${lower}.`) && e.endsWith('.nupkg') && /^\d/.test(e.slice(lower.length + 1)));
+        return e === lower || nupkgId(e) === lower;
     });
+}
+/** A NuGet version: `1`, `1.2.3.4`, `1.0.0-beta.1`, `1.0.0+build.5`. */
+const NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+/**
+ * The package id of a `<id>.<version>.nupkg` file name: the id ends where the
+ * version begins — at the first dot-separated segment from which the rest is a
+ * NuGet version (fix round 2: `Foo.2FA.1.0.0.nupkg` is `Foo.2FA`, not `Foo`).
+ */
+function nupkgId(file) {
+    const m = /^(.+)\.nupkg$/i.exec(file);
+    if (m === null)
+        return undefined;
+    const parts = (m[1] ?? '').split('.');
+    for (let i = 1; i < parts.length; i += 1) {
+        if (NUGET_VERSION.test(parts.slice(i).join('.')))
+            return parts.slice(0, i).join('.');
+    }
+    return undefined;
 }
 function nugetRegistry(name, ctx) {
     const fromEnv = envRegistry('nuget', ctx);
@@ -776,8 +800,7 @@ export function customRegistryFor(ecosystem, name, ctx = {}) {
     }
     // Nothing explains the 404 — unless a configuration that is there could not
     // be read: it may name a private registry (Part Y fix round 1).
-    const unread = firstUnread;
-    firstUnread = undefined;
-    return found === null && unread !== undefined ? { kind: 'unreadable', source: unread } : found;
+    const unread = takeUnread();
+    return found === null && unread !== undefined ? { kind: 'unreadable', source: unread.path, what: unread.what } : found;
 }
 //# sourceMappingURL=privateRegistry.js.map

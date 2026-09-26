@@ -220,7 +220,11 @@ function buildResult(w, osv, osvError, now, offlineReason) {
                 : w.custom.kind === 'workspace'
                     ? `it is a local workspace package (${where})`
                     : w.custom.kind === 'unreadable'
-                        ? `registry configuration at ${w.custom.source} could not be read — possibly a private registry`
+                        ? w.custom.what === 'workspace manifest'
+                            ? `workspace manifest at ${w.custom.source} could not be read — possibly a local workspace package`
+                            : w.custom.what === 'directory'
+                                ? `directory ${w.custom.source} could not be listed — it may hold registry configuration`
+                                : `registry configuration at ${w.custom.source} could not be read — possibly a private registry`
                         : `a custom registry is configured (${where})`;
             exists = unknown(`not on ${registry}, but ${why} — possibly a private or local package; not vetted.${didYouMean}`);
         }

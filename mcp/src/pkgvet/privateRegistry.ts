@@ -106,7 +106,12 @@ export interface CustomRegistry {
   /** Where it was found: a file path or an environment variable name. */
   source: string;
   url?: string;
+  /** For `unreadable`: what `source` is (fix round 2) — named in the warning. */
+  what?: UnreadKind;
 }
+
+/** What an unread path was: a registry configuration file, a workspace manifest, or a directory that could not be listed. */
+export type UnreadKind = 'configuration' | 'workspace manifest' | 'directory';
 
 const PUBLIC_HOSTS: Record<PkgEcosystem, RegExp> = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
@@ -174,10 +179,17 @@ function walkRoot(path: string, ctx: RegistryContext, under?: string): string | 
  * found THERE but could not read. Reset at the start of each (synchronous)
  * call and read at its end: when nothing else explains a 404, this does.
  */
-let firstUnread: string | undefined;
+let firstUnread: { path: string; what: UnreadKind } | undefined;
 
-function noteUnread(path: string): void {
-  firstUnread = firstUnread ?? path;
+function noteUnread(path: string, what: UnreadKind): void {
+  firstUnread = firstUnread ?? { path, what };
+}
+
+/** The recorded unread path, cleared for the next call. */
+function takeUnread(): { path: string; what: UnreadKind } | undefined {
+  const unread = firstUnread;
+  firstUnread = undefined;
+  return unread;
 }
 
 /**
@@ -188,9 +200,9 @@ function noteUnread(path: string): void {
  * and a hook that dies at its 15 s timeout lets the install through unvetted.
  * A refused file is recorded ({@link noteUnread}); an absent one is not.
  */
-function read(path: string, ctx: RegistryContext, under?: string): string | undefined {
+function read(path: string, ctx: RegistryContext, under?: string, what: UnreadKind = 'configuration'): string | undefined {
   const r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
-  if (r.status === 'refused') noteUnread(path);
+  if (r.status === 'refused') noteUnread(path, what);
   return r.status === 'ok' ? r.text : undefined;
 }
 
@@ -215,14 +227,14 @@ function present(path: string): boolean {
 function listDir(dir: string, ctx: RegistryContext): string[] {
   const under = walkRoot(dir, ctx);
   if (under !== undefined && !walkLinksUnder(under, dir).ok) {
-    noteUnread(dir);
+    noteUnread(dir, 'directory');
     return [];
   }
   try {
     return readdirSync(dir);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') noteUnread(dir);
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') noteUnread(dir, 'directory');
     return [];
   }
 }
@@ -493,7 +505,7 @@ function findManifest(
     if (next === undefined) break;
     visited += 1;
     const manifest = join(next.dir, file);
-    const text = read(manifest, ctx, root);
+    const text = read(manifest, ctx, root, 'workspace manifest');
     if (text !== undefined && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries: string[] = [];
@@ -523,7 +535,8 @@ function hasWorkspaces(packageJson: string | undefined): boolean {
 /** Ruling (f), npm/pnpm/yarn/bun: a package.json named `name` under a workspace root. */
 function npmWorkspacePackage(name: string, ctx: RegistryContext): string | undefined {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join(dir, 'package.json'), ctx)) || present(join(dir, 'pnpm-workspace.yaml'));
+    const isRoot =
+      hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) || present(join(dir, 'pnpm-workspace.yaml'));
     if (!isRoot) continue;
     const hit = findManifest(dir, 'package.json', (text) => {
       try {
@@ -725,8 +738,26 @@ function localFeedHas(folder: string, configPath: string, id: string, ctx: Regis
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
-    return e === lower || (e.startsWith(`${lower}.`) && e.endsWith('.nupkg') && /^\d/.test(e.slice(lower.length + 1)));
+    return e === lower || nupkgId(e) === lower;
   });
+}
+
+/** A NuGet version: `1`, `1.2.3.4`, `1.0.0-beta.1`, `1.0.0+build.5`. */
+const NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+
+/**
+ * The package id of a `<id>.<version>.nupkg` file name: the id ends where the
+ * version begins — at the first dot-separated segment from which the rest is a
+ * NuGet version (fix round 2: `Foo.2FA.1.0.0.nupkg` is `Foo.2FA`, not `Foo`).
+ */
+function nupkgId(file: string): string | undefined {
+  const m = /^(.+)\.nupkg$/i.exec(file);
+  if (m === null) return undefined;
+  const parts = (m[1] ?? '').split('.');
+  for (let i = 1; i < parts.length; i += 1) {
+    if (NUGET_VERSION.test(parts.slice(i).join('.'))) return parts.slice(0, i).join('.');
+  }
+  return undefined;
 }
 
 function nugetRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
@@ -815,7 +846,6 @@ export function customRegistryFor(
   }
   // Nothing explains the 404 — unless a configuration that is there could not
   // be read: it may name a private registry (Part Y fix round 1).
-  const unread = firstUnread;
-  firstUnread = undefined;
-  return found === null && unread !== undefined ? { kind: 'unreadable', source: unread } : found;
+  const unread = takeUnread();
+  return found === null && unread !== undefined ? { kind: 'unreadable', source: unread.path, what: unread.what } : found;
 }

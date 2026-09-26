@@ -29,7 +29,7 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
-import { parseInstallCommands, type CommandShell } from './parseCommand.js';
+import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import type { PackageChecks, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
 import { isExactVersion } from './versions.js';
@@ -74,13 +74,52 @@ function firstLine(r: PackageVetResult): string {
   return r.reasons[0] ?? 'no reason recorded';
 }
 
+/** The most packages one hook call looks up; the rest are named as not vetted. */
+export const MAX_VETTED_PACKAGES = 50;
+/** How much of a command is read for installs — the shell guard reads the same 512 KB. */
+const MAX_PARSED_LENGTH = 512 * 1024;
+
+/**
+ * The install commands to vet, bounded (fix round 2): every package that
+ * repeats one already seen (same ecosystem, name and range) is dropped, and
+ * past {@link MAX_VETTED_PACKAGES} the rest are counted, not looked up — 60 KB
+ * of `npm i x; ` once took ~57 s through the hook, past its 15 s timeout. A
+ * command over 512 KB is read from its start only, and then no command may be
+ * denied for a missing name: its last word may have been cut in half.
+ */
+function boundedInstalls(command: string, shell: CommandShell): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
+  const cut = command.length > MAX_PARSED_LENGTH;
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell });
+  const seen = new Set<string>();
+  let kept = 0;
+  let notVetted = 0;
+  const commands: InstallCommand[] = [];
+  for (const c of parsed) {
+    const packages = c.packages.filter((pkg) => {
+      const key = `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      if (kept >= MAX_VETTED_PACKAGES) {
+        notVetted += 1;
+        return false;
+      }
+      kept += 1;
+      return true;
+    });
+    if (packages.length === 0) continue;
+    const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
+    commands.push({ ...c, packages, uncertain });
+  }
+  return { commands, notVetted, cut };
+}
+
 /**
  * `null` when there is nothing to say: no install command, or every package
  * vetted clean.
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
   const shell = opts.shell ?? 'bash';
-  const commands = parseInstallCommands(command, { shell }).filter((c) => c.packages.length > 0);
+  const { commands, notVetted, cut } = boundedInstalls(command, shell);
   if (commands.length === 0) return null;
 
   const env = opts.env ?? process.env;
@@ -142,6 +181,12 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     for (const w of warnings) lines.push(`  • ${w}`);
   }
   if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(', ')} — not verified.`);
+  if (notVetted > 0) {
+    lines.push(
+      `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,
+    );
+  }
+  if (cut) lines.push('dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.');
   return lines.length > 0 ? { context: lines.join('\n') } : null;
 }
 

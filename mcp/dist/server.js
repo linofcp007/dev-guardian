@@ -33917,11 +33917,11 @@ function parseUnionDef(def, refs) {
   return asAnyOf(def, refs);
 }
 var asAnyOf = (def, refs) => {
-  const anyOf = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
+  const anyOf2 = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", `${i2}`]
   })).filter((x) => !!x && (!refs.strictUnions || typeof x === "object" && Object.keys(x).length > 0));
-  return anyOf.length ? { anyOf } : void 0;
+  return anyOf2.length ? { anyOf: anyOf2 } : void 0;
 };
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
@@ -66855,11 +66855,11 @@ function scannerNotVerified(target, scan2) {
 
 // src/fixpr/verify.ts
 var OUTPUT_HEAD_LINES = 20;
-function judgeScan(targets, before, after) {
+function judgeScan(targets, before, after2) {
   const beforeByFingerprint = new Map(before.findings.map((finding4) => [finding4.fingerprint, finding4]));
-  const afterFingerprints = new Set(after.findings.map((finding4) => finding4.fingerprint));
+  const afterFingerprints = new Set(after2.findings.map((finding4) => finding4.fingerprint));
   const afterKeys = /* @__PURE__ */ new Set();
-  for (const finding4 of after.findings) {
+  for (const finding4 of after2.findings) {
     const key = resolutionKey(finding4);
     if (key !== null) afterKeys.add(key);
   }
@@ -66872,7 +66872,7 @@ function judgeScan(targets, before, after) {
     if (present2) still_present.push(target);
     else resolved.push(target);
   }
-  const newFindings = newByRuleAndFile(before.findings, after.findings);
+  const newFindings = newByRuleAndFile(before.findings, after2.findings);
   const new_findings = newFindings.map((finding4) => ({
     fingerprint: finding4.fingerprint,
     severity: finding4.severity,
@@ -66885,11 +66885,11 @@ function judgeScan(targets, before, after) {
     new_findings
   };
 }
-function newByRuleAndFile(before, after) {
+function newByRuleAndFile(before, after2) {
   const beforeKeys = new Set(before.map(ruleFileKey));
   const seenNew = /* @__PURE__ */ new Set();
   const result = [];
-  for (const finding4 of after) {
+  for (const finding4 of after2) {
     const key = ruleFileKey(finding4);
     if (beforeKeys.has(key)) continue;
     if (seenNew.has(key)) continue;
@@ -68605,8 +68605,195 @@ import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
 import { resolve as resolve20 } from "node:path";
 
 // src/hooks/bashGuard.ts
+var BASH_RULES = [
+  // ── Catastrophic: block by default ───────────────────────────────────────
+  {
+    id: "no-preserve-root",
+    level: "block",
+    reason: "Uses --no-preserve-root, defeating the root-deletion safeguard",
+    pattern: /--no-preserve-root/i
+  },
+  {
+    id: "remote-pipe-to-shell",
+    level: "block",
+    reason: "Pipes a downloaded script directly into a shell (curl|wget \u2026 | sh/bash)",
+    // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
+    // shell name — used to fall through this pattern, which only allowed
+    // `sudo` directly followed by the shell.
+    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i,
+    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i)
+  },
+  {
+    id: "powershell-iex-download",
+    level: "block",
+    reason: "Downloads and executes remote code via Invoke-Expression",
+    // `irm`/`iwr` are PowerShell's own built-in aliases for
+    // Invoke-RestMethod/Invoke-WebRequest — as common in the wild as the
+    // full names, and the piped-download shape is identical either way.
+    pattern: /(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
+    test: after(/(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)/i, /\|\s*(?:iex|invoke-expression)/i)
+  },
+  {
+    id: "powershell-iex-nested",
+    level: "block",
+    reason: "Downloads and executes remote code via Invoke-Expression",
+    // `iex (irm …)` / `Invoke-Expression (Invoke-RestMethod …)` is the same
+    // hazard as the piped form above, spelled with the download as a nested
+    // call instead of a pipe. `(` is a statement boundary everywhere else in
+    // this file (subshells, command substitution), so this must be
+    // scope:'command' to see across it — narrow enough (iex/Invoke-Expression
+    // immediately opening a paren around a download cmdlet) that it does not
+    // reopen the cross-separator false positives scope:'command' otherwise
+    // reintroduces the download and the pipe are never split across `&&`/`;`
+    // for the same reason the fork-bomb signature needs scope:'command'.
+    pattern: /\b(?:iex|invoke-expression)\s*\(\s*(?:irm|iwr|invoke-restmethod|invoke-webrequest)\b/i,
+    scope: "command"
+  },
+  {
+    id: "powershell-disk-format",
+    level: "block",
+    reason: "Formats or clears an entire disk/volume",
+    pattern: /\b(?:Format-Volume|Clear-Disk)\b/i
+  },
+  {
+    id: "process-substitution-remote-fetch",
+    level: "block",
+    reason: "Executes a downloaded script via process substitution (bash <(curl \u2026))",
+    // `bash <(curl …)` hands bash a fake file whose content is curl's stdout
+    // — the same hazard as `curl … | sh`, spelled with process substitution
+    // instead of a pipe. `<(` is not a statement separator anywhere else in
+    // this file, so scope:'command' (which sees the un-split text) is enough
+    // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
+    // where the whole thing sits inside quotes and is handled separately, by
+    // `isBareRemoteFetch` on the extracted `-c` script text.
+    pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+    scope: "command",
+    test: processSubstitutionFetch
+  },
+  {
+    id: "disk-overwrite",
+    level: "block",
+    reason: "Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/\u2026)",
+    // The `\b` used to sit in front of the whole group, and a leading `\b`
+    // before `>` demands a word character immediately to its left — so the
+    // redirect alternative matched `cat x>/dev/sda` and never the
+    // `cat x > /dev/sda` anybody actually writes. Each alternative anchors
+    // itself now.
+    //
+    // `dd … of=` is deliberately narrower than the rest: it only blocks a
+    // handful of real block-device name families (`sd`/`hd`/`vd`/`xvd`/
+    // `nvme`/`mmcblk`/`disk`/`md`/`dm-`, plus the Windows `\\.\PhysicalDriveN`
+    // spelling) — `dd … of=/dev/null`, `of=/dev/stdout`, `of=/dev/zero` and
+    // an ordinary regular-file target are all common, harmless uses of dd
+    // that this used to block outright by matching any `/dev/` path.
+    // `mkfs`/`wipefs`/`shred` keep matching any `/dev/…` target: unlike dd,
+    // there is no ordinary reason to run any of them against something that
+    // is not a device, so narrowing them has no false positive to fix.
+    // `mkfs`'s target used to have to sit immediately after the command
+    // (`mkfs\s+\/dev\/`), so `mkfs -t ext4 /dev/sdb` — flags between the
+    // command and its target — never matched; `[^\n]*` between them (already
+    // safe here: this rule runs per masked *statement*, so it cannot cross a
+    // `&&`/`;`/newline) fixes that the same way the rest of this alternation
+    // already tolerates flags before its target.
+    pattern: /(?:\bdd\b[^\n]*\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)|\bmkfs(?:\.\w+)?\b[^\n]*\/dev\/|\bwipefs\b[^\n]*\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-))/i,
+    test: anyOf(
+      after(/\bdd\b/i, /\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)/i),
+      after(/\bmkfs(?:\.\w+)?\b/i, /\/dev\//i),
+      after(/\bwipefs\b/i, /\/dev\//i),
+      after(/\bshred\b/i, /\/dev\//i),
+      (t) => />\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)/i.test(t)
+    )
+  },
+  {
+    id: "fork-bomb",
+    level: "block",
+    reason: "Shell fork bomb",
+    // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
+    // characters splitShell() separates on, so this signature only exists
+    // before segmentation. Quoted spans are still masked, so
+    // `echo ':(){ :|:& };:'` stays inert.
+    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    scope: "command"
+  },
+  {
+    id: "chmod-777-root",
+    level: "block",
+    reason: "Recursively makes the filesystem root world-writable",
+    // `chmod 777 -R /` is the same hazard as `chmod -R 777 /` with the flag
+    // and the mode swapped — both orders are real, so both are matched.
+    pattern: /\bchmod\b[^\n]*(?:-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-[a-z]*R[a-z]*\s+\/(?:\s|$))/i,
+    // `-[a-z]*R[a-z]*` backtracked quadratically over a run of R's; a lookahead
+    // for the R and one greedy run cannot.
+    test: after(
+      /\bchmod\b/i,
+      /(?:-(?=[a-z]*R)[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-(?=[a-z]*R)[a-z]*\s+\/(?:\s|$))/i
+    )
+  },
+  // ── Risky: warn only ─────────────────────────────────────────────────────
+  {
+    id: "git-force-push",
+    level: "warn",
+    reason: "Force-push can overwrite remote history",
+    // `+main`/`+master` is git's own shorthand for a forced update of that
+    // ref (a `+` prefix on a push refspec), and `--mirror` force-overwrites
+    // every ref on the remote — same hazard as `--force`, different spelling.
+    pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i,
+    test: after(/\bgit\s+push\b/i, /(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i)
+  },
+  {
+    id: "git-hard-reset",
+    level: "warn",
+    reason: "git reset --hard discards uncommitted work",
+    pattern: /\bgit\s+reset\b[^\n]*--hard\b/i,
+    test: after(/\bgit\s+reset\b/i, /--hard\b/i)
+  },
+  {
+    id: "git-clean-force",
+    level: "warn",
+    reason: "git clean -fd permanently removes untracked files",
+    pattern: /\bgit\s+clean\b[^\n]*-[a-z]*f/i,
+    test: after(/\bgit\s+clean\b/i, /-[a-z]*f/i)
+  },
+  {
+    id: "chmod-777",
+    level: "warn",
+    reason: "chmod 777 grants world-write \u2014 overly permissive",
+    pattern: /\bchmod\b[^\n]*\b0?777\b/i,
+    test: after(/\bchmod\b/i, /\b0?777\b/i)
+  },
+  {
+    id: "history-wipe",
+    level: "warn",
+    reason: "Clears shell history",
+    pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i
+  }
+];
+function after(keyword, tail) {
+  const kw = new RegExp(keyword.source, keyword.flags.replace(/[gy]/g, ""));
+  const tl = new RegExp(tail.source, `${tail.flags.replace(/[gy]/g, "")}g`);
+  return (text) => {
+    const m = kw.exec(text);
+    if (m === null) return false;
+    tl.lastIndex = m.index + m[0].length;
+    return tl.test(text);
+  };
+}
+function anyOf(...tests) {
+  return (text) => tests.some((t) => t(text));
+}
+function processSubstitutionFetch(text) {
+  for (const line of text.split("\n")) {
+    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+    if (shell === null) continue;
+    const shellEnd = shell.index + shell[0].length;
+    for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
+      if (fetch2.index >= shellEnd) return true;
+    }
+  }
+  return false;
+}
 var MAX_STATEMENT_LENGTH = 16 * 1024;
-var MAX_COMMAND_LENGTH = 2 * 1024 * 1024;
+var MAX_COMMAND_LENGTH = 512 * 1024;
 
 // src/pkgvet/parseCommand.ts
 var NAME_RE = {
@@ -69586,12 +69773,17 @@ function walkRoot(path6, ctx, under) {
   return parse6(abs).root;
 }
 var firstUnread;
-function noteUnread(path6) {
-  firstUnread = firstUnread ?? path6;
+function noteUnread(path6, what) {
+  firstUnread = firstUnread ?? { path: path6, what };
 }
-function read(path6, ctx, under) {
+function takeUnread() {
+  const unread = firstUnread;
+  firstUnread = void 0;
+  return unread;
+}
+function read(path6, ctx, under, what = "configuration") {
   const r = readSmallText(path6, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path6, ctx, under));
-  if (r.status === "refused") noteUnread(path6);
+  if (r.status === "refused") noteUnread(path6, what);
   return r.status === "ok" ? r.text : void 0;
 }
 function present(path6) {
@@ -69605,14 +69797,14 @@ function present(path6) {
 function listDir(dir, ctx) {
   const under = walkRoot(dir, ctx);
   if (under !== void 0 && !walkLinksUnder(under, dir).ok) {
-    noteUnread(dir);
+    noteUnread(dir, "directory");
     return [];
   }
   try {
     return readdirSync25(dir);
   } catch (e) {
     const code = e.code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir);
+    if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir, "directory");
     return [];
   }
 }
@@ -69807,7 +69999,7 @@ function findManifest(root, file, match, ctx) {
     if (next === void 0) break;
     visited += 1;
     const manifest = join75(next.dir, file);
-    const text = read(manifest, ctx, root);
+    const text = read(manifest, ctx, root, "workspace manifest");
     if (text !== void 0 && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
@@ -69832,7 +70024,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join75(dir, "package.json"), ctx)) || present(join75(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join75(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join75(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -69995,8 +70187,18 @@ function localFeedHas(folder, configPath, id, ctx) {
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
-    return e === lower || e.startsWith(`${lower}.`) && e.endsWith(".nupkg") && /^\d/.test(e.slice(lower.length + 1));
+    return e === lower || nupkgId(e) === lower;
   });
+}
+var NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+function nupkgId(file) {
+  const m = /^(.+)\.nupkg$/i.exec(file);
+  if (m === null) return void 0;
+  const parts = (m[1] ?? "").split(".");
+  for (let i2 = 1; i2 < parts.length; i2 += 1) {
+    if (NUGET_VERSION.test(parts.slice(i2).join("."))) return parts.slice(0, i2).join(".");
+  }
+  return void 0;
 }
 function nugetRegistry(name, ctx) {
   const fromEnv = envRegistry("nuget", ctx);
@@ -70066,9 +70268,8 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   } catch {
     found = null;
   }
-  const unread = firstUnread;
-  firstUnread = void 0;
-  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread } : found;
+  const unread = takeUnread();
+  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : found;
 }
 
 // src/pkgvet/registry.ts
@@ -70671,7 +70872,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     if (w.custom !== null) {
       const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
-      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
+      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? w.custom.what === "workspace manifest" ? `workspace manifest at ${w.custom.source} could not be read \u2014 possibly a local workspace package` : w.custom.what === "directory" ? `directory ${w.custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown2(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);

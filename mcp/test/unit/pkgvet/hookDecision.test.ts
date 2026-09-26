@@ -503,10 +503,60 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
     expect(d?.deny).toMatch(/MAL-2026-10/);
   });
 
+  it('an unreadable workspace manifest is named as one in the warning', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'a', 'package.json'), { recursive: true });
+    const f = fakeFetch({ 'https://registry.npmjs.org/corp-lib': { status: 404 }, [OSV]: osvClean });
+    const d = await decideInstallCommand('npm i corp-lib', opts(f.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain(
+      `workspace manifest at ${join(project, 'packages', 'a', 'package.json')} could not be read — possibly a local workspace package`,
+    );
+  });
+
   it('the same command with a readable, empty .npmrc is still denied as missing', async () => {
     writeFileSync(join(project, '.npmrc'), '');
     const f = fakeFetch({ 'https://registry.npmjs.org/@corp%2Finternal': { status: 404 }, [OSV]: osvClean });
     expect((await decideInstallCommand('npm i @corp/internal', opts(f.fetchImpl)))?.deny).toMatch(/does not exist/);
+  });
+
+  // Fix round 2: every install of a command was vetted, with no dedup and no
+  // cap — 60 KB of `npm i x; ` (6 800 installs) took ~57 s through the hook,
+  // past its 15 s timeout, after which nothing it found reaches the model.
+  describe('bounded work: one lookup per package, at most 50 packages, the first 512 KB', () => {
+    it('the same package installed 6 800 times is looked up once', async () => {
+      const f = fakeFetch({ 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
+      const t0 = performance.now();
+      expect(await decideInstallCommand('npm i express; '.repeat(6_800), opts(f.fetchImpl))).toBeNull();
+      expect(f.calls.filter((u) => u.endsWith('/express'))).toHaveLength(1);
+      expect(performance.now() - t0).toBeLessThan(3000);
+    });
+
+    it('past 50 distinct packages the rest are not looked up — and the answer says so', async () => {
+      const names = Array.from({ length: 120 }, (_, i) => `pkg-${i}`);
+      const routes: Record<string, Answer | ((body: unknown) => Answer)> = { [OSV]: osvClean };
+      for (const n of names) routes[`https://registry.npmjs.org/${n}`] = npmDoc('1.0.0');
+      const f = fakeFetch(routes);
+      const d = await decideInstallCommand(`npm i ${names.join(' ')}`, opts(f.fetchImpl, { popular: {} }));
+      expect(f.calls.filter((u) => u.startsWith('https://registry.npmjs.org/'))).toHaveLength(50);
+      expect(d?.context).toContain('70 more packages in this command were not vetted (only the first 50 are)');
+    });
+
+    it('a malicious package among the first 50 is still denied', async () => {
+      const d = await decideInstallCommand(`npm i evil-pkg ${Array.from({ length: 80 }, (_, i) => `lodash@4.17.${i}`).join(' ')}`, opts(malicious().fetchImpl));
+      expect(d?.deny).toMatch(/MAL-2026-9/);
+    });
+
+    it('a command over 512 KB is vetted from its start, and never denies a missing name (a cut word is not a name)', async () => {
+      const command = `npm i ${Array.from({ length: 60_000 }, (_, i) => `zz-missing-${i}`).join(' ')}`;
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const f = fakeFetch({ [OSV]: osvClean });
+      const all404 = (async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).startsWith('https://registry.npmjs.org/') ? new Response('', { status: 404 }) : f.fetchImpl(input, init)) as typeof fetch;
+      const d = await decideInstallCommand(command, opts(all404, { popular: {} }));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toContain('past the first 512 KB of this command were not looked for');
+    });
   });
 
   it('the same comma list from the Bash tool vets nothing: bash hands npm one invalid name', async () => {

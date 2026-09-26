@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -453,6 +453,24 @@ describe('customRegistryFor — the configuration locations that were still miss
       expect(customRegistryFor('nuget', 'Corp.Offline.Lib', vsCtx())).toMatchObject({ kind: 'registry' });
     });
 
+    // Fix round 2: the id ends where the version begins — at the first
+    // dot-separated segment from which the rest parses as a NuGet version.
+    it.each([
+      ['Foo', 'Foo.2FA.1.0.0.nupkg', false],
+      ['Foo.2FA', 'Foo.2FA.1.0.0.nupkg', true],
+      ['Foo', 'Foo.1.0.0-beta.1.nupkg', true],
+      ['Foo', 'Foo.2.1.0.0.nupkg', true],
+      ['Foo', 'Foo.1.0.0+build.5.nupkg', true],
+      ['Foo', 'Foo.Bar.1.0.0.nupkg', false],
+      ['Foo', 'Foo.nupkg', false],
+    ] as const)('%s held by %s: %s', (id, file, held) => {
+      const feed = offlineFeed();
+      writeFileSync(join(feed, file), '');
+      const r = customRegistryFor('nuget', id, vsCtx());
+      if (held) expect(r).toMatchObject({ kind: 'registry' });
+      else expect(r).toBeNull();
+    });
+
     it('a package whose name only starts the same does not count', () => {
       const feed = offlineFeed();
       writeFileSync(join(feed, 'Corp.Lib.Extra.1.0.0.nupkg'), '');
@@ -525,7 +543,7 @@ describe('customRegistryFor — NuGet', () => {
 // registry. It is reported as `unreadable`, which turns a missing-name deny
 // into a warning, exactly as a readable private registry does.
 describe('customRegistryFor — files that are not small regular files are not read, and are unknown', () => {
-  const unreadable = (path: string): unknown => ({ kind: 'unreadable', source: path });
+  const unreadable = (path: string): unknown => ({ kind: 'unreadable', source: path, what: 'configuration' });
 
   it('a directory named .npmrc is not read, and is not "no registry"', () => {
     mkdirSync(join(project, '.npmrc'));
@@ -558,6 +576,35 @@ describe('customRegistryFor — files that are not small regular files are not r
     mkdirSync(join(project, 'nuget.config'));
     expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toEqual(unreadable(join(project, 'nuget.config')));
   });
+
+  // Fix round 2: the message names what was refused, not always "registry configuration".
+  it('an unreadable WORKSPACE MANIFEST is named as one', () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'a', 'package.json'), { recursive: true });
+    expect(customRegistryFor('npm', 'corp-lib', ctx())).toEqual({
+      kind: 'unreadable',
+      source: join(project, 'packages', 'a', 'package.json'),
+      what: 'workspace manifest',
+    });
+  });
+
+  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'an ancestor directory that cannot be listed is named as a directory (POSIX, not root)',
+    () => {
+      const sub = join(project, 'sub');
+      mkdirSync(sub);
+      chmodSync(project, 0o300);
+      try {
+        expect(customRegistryFor('nuget', 'Corp.Lib', { ...ctx(), projectDir: sub })).toEqual({
+          kind: 'unreadable',
+          source: project,
+          what: 'directory',
+        });
+      } finally {
+        chmodSync(project, 0o700);
+      }
+    },
+  );
 
   it('an absent file is absent: nothing configured is still public', () => {
     expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
@@ -606,12 +653,12 @@ describe('customRegistryFor — a file reached through a network or device link 
 
   it.skipIf(!POSIX_LINKS)('a project .npmrc linked through a //-spelled target is not read (POSIX with symlinks; skipped otherwise)', () => {
     symlinkSync(deviceSpelling(corpNpmrc()), join(project, '.npmrc'), 'file');
-    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(project, '.npmrc') });
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(project, '.npmrc'), what: 'configuration' });
   });
 
   it.skipIf(!POSIX_LINKS)('a user ~/.npmrc linked that way is not read either (POSIX with symlinks; skipped otherwise)', () => {
     symlinkSync(deviceSpelling(corpNpmrc()), join(home, '.npmrc'), 'file');
-    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.npmrc') });
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.npmrc'), what: 'configuration' });
   });
 
   it.skipIf(!POSIX_LINKS)('nor an .npmrc in a parent directory of the project (POSIX with symlinks; skipped otherwise)', () => {
@@ -621,6 +668,7 @@ describe('customRegistryFor — a file reached through a network or device link 
     expect(customRegistryFor('npm', 'lodash', { ...ctx(), projectDir: nested })).toEqual({
       kind: 'unreadable',
       source: join(project, '.npmrc'),
+      what: 'configuration',
     });
   });
 
@@ -633,6 +681,7 @@ describe('customRegistryFor — a file reached through a network or device link 
     expect(customRegistryFor('pypi', 'requests', ctx())).toEqual({
       kind: 'unreadable',
       source: join(home, '.config', 'pip', 'pip.conf'),
+      what: 'configuration',
     });
   });
 
@@ -645,7 +694,7 @@ describe('customRegistryFor — a file reached through a network or device link 
     );
     mkdirSync(join(home, '.nuget'), { recursive: true });
     symlinkSync(deviceSpelling(real), join(home, '.nuget', 'NuGet'), 'dir');
-    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.nuget', 'NuGet') });
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.nuget', 'NuGet'), what: 'directory' });
   });
 
   it.skipIf(!CAN_SYMLINK)('a local link — absolute or relative — is still followed and read (needs symlink rights; skipped without them)', () => {
@@ -706,9 +755,9 @@ describe('customRegistryFor — a file reached through a network or device link 
       expect(out.timedOut).toBe(false);
       const parsed = JSON.parse(out.stdout) as { r: unknown[]; ms: number };
       expect(parsed.r).toEqual([
-        { kind: 'unreadable', source: join(app, '.npmrc') },
-        { kind: 'unreadable', source: join(home, '.config', 'pip', 'pip.conf') },
-        { kind: 'unreadable', source: join(home, '.nuget', 'NuGet') },
+        { kind: 'unreadable', source: join(app, '.npmrc'), what: 'configuration' },
+        { kind: 'unreadable', source: join(home, '.config', 'pip', 'pip.conf'), what: 'configuration' },
+        { kind: 'unreadable', source: join(home, '.nuget', 'NuGet'), what: 'directory' },
       ]);
       expect(parsed.ms).toBeLessThan(5000);
     },
