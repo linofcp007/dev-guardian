@@ -59,9 +59,10 @@
  * Reads files only (node built-ins); never the network. Every read is
  * best-effort: an unreadable file is simply not evidence.
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { readSmallTextFile } from '../hooks/configFile.js';
 const PUBLIC_HOSTS = {
     npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
     pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -75,13 +76,15 @@ function isPublic(ecosystem, url) {
 export function isPublicRegistryUrl(ecosystem, url) {
     return isPublic(ecosystem, url);
 }
+/**
+ * The largest registry configuration file read. These reads run inside the
+ * install hook's 15 s budget: a FIFO or a device where `.npmrc` belongs is
+ * never opened, and an absurd file never read (Task 23 fix round 2, N1) —
+ * see `hooks/configFile.ts`. A file refused here is simply not evidence.
+ */
+const MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function read(path) {
-    try {
-        return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
-    }
-    catch {
-        return undefined;
-    }
+    return readSmallTextFile(path, MAX_REGISTRY_CONFIG_BYTES);
 }
 function samePath(a, b) {
     const norm = (p) => resolve(p).replace(/[\\/]+$/, '');

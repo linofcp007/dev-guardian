@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -356,5 +357,27 @@ describe('customRegistryFor — NuGet', () => {
     expect(customRegistryFor('nuget', 'Acme.Internal', ctx())).toMatchObject({
       url: 'https://nuget.acme.local/v3/index.json',
     });
+  });
+});
+
+// Task 23 fix round 2, N1: the install hook reads these files synchronously
+// inside a 15 s hook budget. A FIFO or a device where a config file belongs
+// must never be opened, and an absurdly large one never read.
+describe('customRegistryFor — files that are not small regular files are not read', () => {
+  it('a directory named .npmrc is ignored, not thrown on', () => {
+    mkdirSync(join(project, '.npmrc'));
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+  });
+
+  it('an .npmrc over the 1 MiB cap is not read', () => {
+    writeFileSync(join(project, '.npmrc'), `registry=https://npm.acme.local/\n${'#'.repeat(1024 * 1024)}\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('a FIFO .npmrc is not opened (POSIX only: Windows has no FIFOs)', () => {
+    expect(spawnSync('mkfifo', [join(project, '.npmrc')]).status).toBe(0);
+    const t0 = Date.now();
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });

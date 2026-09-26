@@ -48769,7 +48769,7 @@ function readDependencyEvidence(projectPath) {
       return void 0;
     }
   };
-  const readText2 = (file) => {
+  const readText3 = (file) => {
     try {
       return readFileSync20(join33(projectPath, file), "utf8");
     } catch {
@@ -48787,7 +48787,7 @@ function readDependencyEvidence(projectPath) {
   declareKeys(composer?.["require"], "composer", "composer.json");
   declareKeys(composer?.["require-dev"], "composer", "composer.json");
   let inDeps = false;
-  for (const line of readText2("Cargo.toml").split(/\r?\n/)) {
+  for (const line of readText3("Cargo.toml").split(/\r?\n/)) {
     const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
     if (header?.[1]) {
       const table = header[1].trim();
@@ -48800,7 +48800,7 @@ function readDependencyEvidence(projectPath) {
     if (key?.[1]) declare(key[1], "cargo", "Cargo.toml");
   }
   let inRequire = false;
-  for (const line of readText2("go.mod").split(/\r?\n/)) {
+  for (const line of readText3("go.mod").split(/\r?\n/)) {
     const t = line.replace(/\/\/.*$/, "").trim();
     if (/^require\s*\($/.test(t)) inRequire = true;
     else if (inRequire && t === ")") inRequire = false;
@@ -48809,7 +48809,7 @@ function readDependencyEvidence(projectPath) {
       if (m?.[1]) declare(m[1], "go", "go.mod", m[2]);
     }
   }
-  for (const m of readText2("Gemfile").matchAll(/^\s*gem\s+['"]([^'"]+)['"]/gm)) {
+  for (const m of readText3("Gemfile").matchAll(/^\s*gem\s+['"]([^'"]+)['"]/gm)) {
     if (m[1]) declare(m[1], "rubygems", "Gemfile");
   }
   const projects = findDotnetTargets(projectPath).flatMap((t) => projectsForTarget(t));
@@ -48826,7 +48826,7 @@ function readDependencyEvidence(projectPath) {
     }
   }
   let cargoName;
-  for (const line of readText2("Cargo.lock").split(/\r?\n/)) {
+  for (const line of readText3("Cargo.lock").split(/\r?\n/)) {
     if (/^\s*\[\[package\]\]\s*$/.test(line)) cargoName = void 0;
     const n2 = /^\s*name\s*=\s*"([^"]+)"/.exec(line);
     if (n2?.[1]) cargoName = n2[1];
@@ -48836,13 +48836,13 @@ function readDependencyEvidence(projectPath) {
       cargoName = void 0;
     }
   }
-  for (const line of readText2("go.sum").split(/\r?\n/)) {
+  for (const line of readText3("go.sum").split(/\r?\n/)) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
     resolve21(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
-  for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
+  for (const m of readText3("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
     if (m[1]) resolve21(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
@@ -49172,7 +49172,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
       if (topLevel && entry.topLevel === void 0) entry.topLevel = version2;
     }
   };
-  const readText2 = (file) => {
+  const readText3 = (file) => {
     try {
       return readFileSync20(join33(lockDir, file), "utf8");
     } catch {
@@ -49180,7 +49180,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
     }
   };
   if (manager === "npm") {
-    const raw = readText2("package-lock.json") ?? readText2("npm-shrinkwrap.json");
+    const raw = readText3("package-lock.json") ?? readText3("npm-shrinkwrap.json");
     if (raw !== void 0) {
       try {
         const lock = JSON.parse(raw);
@@ -49199,13 +49199,13 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
       }
     }
   } else if (manager === "pnpm") {
-    for (const line of (readText2("pnpm-lock.yaml") ?? "").split(/\r?\n/)) {
+    for (const line of (readText3("pnpm-lock.yaml") ?? "").split(/\r?\n/)) {
       const m = /^ {2}['"]?\/?((?:@[^/\s'"]+\/)?[^@/\s'"]+)[@/](\d[^:'"(\s]*)/.exec(line);
       if (m?.[1] && m[2]) add(m[1], m[2]);
     }
   } else {
     let pending = [];
-    for (const line of (readText2("yarn.lock") ?? "").split(/\r?\n/)) {
+    for (const line of (readText3("yarn.lock") ?? "").split(/\r?\n/)) {
       if (/^[^\s#].*:$/.test(line)) {
         pending = line.slice(0, -1).split(",").map((d) => d.trim().replace(/^"|"$/g, "")).map((d) => {
           const at = d.indexOf("@", 1);
@@ -68174,7 +68174,7 @@ function countBySeverity5(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
+import { existsSync as existsSync54, statSync as statSync22 } from "node:fs";
 import { resolve as resolve19 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -69030,9 +69030,42 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync53, readdirSync as readdirSync25, readFileSync as readFileSync41 } from "node:fs";
+import { existsSync as existsSync53, readdirSync as readdirSync25 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, join as join74, resolve as resolve18 } from "node:path";
+
+// src/hooks/configFile.ts
+import { readFileSync as readFileSync41, statSync as statSync21 } from "node:fs";
+var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
+function readText2(path6, maxBytes) {
+  let size;
+  try {
+    const st = statSync21(path6);
+    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    size = st.size;
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+    return { status: "refused", reason: "unreadable" };
+  }
+  if (size > maxBytes) return { status: "refused", reason: "too-large" };
+  let buf;
+  try {
+    buf = readFileSync41(path6);
+  } catch {
+    return { status: "refused", reason: "unreadable" };
+  }
+  if (buf.length > maxBytes) return { status: "refused", reason: "too-large" };
+  let text = buf.toString("utf8");
+  if (text.charCodeAt(0) === 65279) text = text.slice(1);
+  return { status: "ok", text };
+}
+function readSmallTextFile(path6, maxBytes) {
+  const r = readText2(path6, maxBytes);
+  return r.status === "ok" ? r.text : void 0;
+}
+
+// src/pkgvet/privateRegistry.ts
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -69045,12 +69078,9 @@ function isPublic(ecosystem, url) {
 function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
 }
+var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function read(path6) {
-  try {
-    return existsSync53(path6) ? readFileSync41(path6, "utf8") : void 0;
-  } catch {
-    return void 0;
-  }
+  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES);
 }
 function samePath(a2, b) {
   const norm = (p) => resolve18(p).replace(/[\\/]+$/, "");
@@ -70267,7 +70297,7 @@ async function handler44(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve19(inp.project_path);
-    if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
+    if (!existsSync54(projectDir) || !statSync22(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }

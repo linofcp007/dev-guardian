@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -441,6 +441,92 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it('SessionStart says nothing of the kind for a project file that loosens nothing', () => {
       projectConfig({ secrets: { warn: false, block: true }, ignorePaths: ['/vendor/'] });
       expect(context(sessionStart())).not.toMatch(/ignored/i);
+    });
+  });
+
+  // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync
+  // with no check on what the path was. A FIFO (or a link to /dev/zero) at
+  // .guardian/hooks.config.json or the allowlist blocked the hook until Claude
+  // Code killed it at 15 s — and the tool call then ran unguarded.
+  describe('a hook config that is not a small regular file is not read', () => {
+    const POSIX = process.platform !== 'win32';
+    const guardianDir = (): string => {
+      const d = join(projectDir, '.guardian');
+      mkdirSync(d, { recursive: true });
+      return d;
+    };
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const context = (r: HookResult): string =>
+      (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
+        ?.additionalContext ?? '';
+    const timedRmRf = (): { r: HookResult; ms: number } => {
+      const t0 = Date.now();
+      const r = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), { cwd: projectDir, homeDir });
+      return { r, ms: Date.now() - t0 };
+    };
+    const tokenWrite = (): HookResult =>
+      runHook(
+        preToolUse('Write', { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir),
+        { cwd: projectDir, homeDir },
+      );
+
+    it.skipIf(!POSIX)('a FIFO hooks.config.json: rm -rf / is still denied, at once (POSIX only: Windows has no FIFOs)', () => {
+      expect(spawnSync('mkfifo', [join(guardianDir(), 'hooks.config.json')]).status).toBe(0);
+      const { r, ms } = timedRmRf();
+      expect(decision(r)).toBe('deny');
+      expect(ms).toBeLessThan(5000);
+    });
+
+    it.skipIf(!POSIX)('a hooks.config.json linked to /dev/zero: denied at once (POSIX only: Windows has no /dev/zero)', () => {
+      symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
+      const { r, ms } = timedRmRf();
+      expect(decision(r)).toBe('deny');
+      expect(ms).toBeLessThan(5000);
+    });
+
+    it.skipIf(!POSIX)('a FIFO or /dev/zero allowlist: denied at once, and SessionStart names both (POSIX only)', () => {
+      expect(spawnSync('mkfifo', [join(guardianDir(), 'hooks-allowlist.json')]).status).toBe(0);
+      symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
+      const { r, ms } = timedRmRf();
+      expect(decision(r)).toBe('deny');
+      expect(ms).toBeLessThan(5000);
+      const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
+      expect(ctx).toContain('.guardian/hooks.config.json');
+      expect(ctx).toContain('.guardian/hooks-allowlist.json');
+      expect(ctx).toMatch(/not a regular file/);
+    });
+
+    it('a directory in place of hooks.config.json: denied, and SessionStart names it', () => {
+      mkdirSync(join(guardianDir(), 'hooks.config.json'));
+      expect(decision(timedRmRf().r)).toBe('deny');
+      const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
+      expect(ctx).toMatch(/\.guardian\/hooks\.config\.json was not read \(not a regular file\)/);
+    });
+
+    it('a project config over 64 KiB is not read: its settings do not apply', () => {
+      writeFileSync(
+        join(guardianDir(), 'hooks.config.json'),
+        JSON.stringify({ secrets: { block: true }, pad: 'x'.repeat(70 * 1024) }),
+      );
+      expect(decision(tokenWrite())).toBeUndefined();
+      const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
+      expect(ctx).toMatch(/\.guardian\/hooks\.config\.json was not read \(larger than 64 KiB\)/);
+    });
+
+    it('a user-level config over 64 KiB is not read either: its "enabled": false does not apply', () => {
+      mkdirSync(join(homeDir, '.config', 'dev-guardian'), { recursive: true });
+      writeFileSync(
+        join(homeDir, '.config', 'dev-guardian', 'hooks.json'),
+        JSON.stringify({ enabled: false, pad: 'x'.repeat(70 * 1024) }),
+      );
+      expect(decision(timedRmRf().r)).toBe('deny');
+    });
+
+    it('a UTF-8 byte-order mark does not make a project config unreadable (PowerShell 5 writes one)', () => {
+      writeFileSync(join(guardianDir(), 'hooks.config.json'), '﻿' + JSON.stringify({ secrets: { block: true } }), 'utf8');
+      expect(decision(tokenWrite())).toBe('deny');
     });
   });
 

@@ -792,6 +792,44 @@ function assessFind(words, start) {
     return null;
 }
 /**
+ * The guardrail hooks' own configuration files: a project's
+ * `.guardian/hooks.config.json` / `.guardian/hooks-allowlist.json` and the
+ * user-level `~/.config/dev-guardian/hooks.json`. Matched on `/`-separated
+ * paths, a quoted Windows path normalised first; the separators are optional
+ * because the POSIX-style tokenizer reads an UNQUOTED `\` as an escape and
+ * drops it (`.guardian\hooks.config.json` arrives as `.guardianhooks.config.json`).
+ */
+const HOOK_CONFIG_PATH = /(?:^|[/~])(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
+/** Commands that create a FIFO, a device node or a link at a path they are given. */
+const SPECIAL_FILE_MAKERS = new Set(['mkfifo', 'mknod', 'ln']);
+/**
+ * `mkfifo`, `mknod`, `ln` — or PowerShell's `New-Item -ItemType
+ * SymbolicLink|HardLink|Junction` — naming one of the hook configuration
+ * files. A FIFO or a link to `/dev/zero` there used to hang the hook until its
+ * 15 s timeout, after which the tool call ran unguarded (Task 23 fix round 2,
+ * N1). The hook's reader now refuses such a file, so this is defence in depth:
+ * refusing to create one there, as the Write/Edit guard refuses an assistant's
+ * edit of the same files.
+ */
+function assessGuardConfigSpecialFile(words, start) {
+    const head = words[start];
+    if (head === undefined)
+        return null;
+    const name = basename(head.value).toLowerCase().replace(/\.exe$/, '');
+    const args = words.slice(start + 1).map((w) => w.value);
+    const makesSpecialFile = SPECIAL_FILE_MAKERS.has(name) ||
+        ((name === 'new-item' || name === 'ni') && args.some((a) => /^(?:symboliclink|hardlink|junction)$/i.test(a)));
+    if (!makesSpecialFile)
+        return null;
+    if (!args.some((a) => HOOK_CONFIG_PATH.test(a.replace(/\\/g, '/'))))
+        return null;
+    return {
+        id: 'guard-config-special-file',
+        level: 'block',
+        reason: "Replaces the guardrail hooks' own configuration with a FIFO, a device node or a link",
+    };
+}
+/**
  * True when `script` (already dequoted) IS a remote download, rather than
  * merely containing one — the entire text is a bare `curl`/`wget` invocation,
  * or one wrapped in `$( … )`/backticks. This is what `bash <(curl …)` hands
@@ -924,6 +962,9 @@ function collect(command, depth, out) {
             const find = assessFind(words, resolved.index);
             if (find !== null)
                 out.push(find);
+            const special = assessGuardConfigSpecialFile(words, resolved.index);
+            if (special !== null)
+                out.push(special);
             if (depth < MAX_NESTING) {
                 for (const script of nestedScripts(words, resolved.index)) {
                     // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c

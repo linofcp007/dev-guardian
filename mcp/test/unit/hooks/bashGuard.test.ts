@@ -747,3 +747,38 @@ describe('assessBashCommand — task-1: ReDoS caps (finding 9)', () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 });
+
+// Task 23 fix round 2, N1: a FIFO or a link to /dev/zero put where the hook
+// reads its own configuration made the hook hang until its 15 s timeout, and
+// the tool call then ran unguarded. The reader now refuses such a file; this
+// rule also refuses to create one there, the way the Write/Edit guard refuses
+// an assistant's edit of the same files.
+describe('assessBashCommand — a special file or link onto the hook configuration (fix round 2)', () => {
+  const blocked = [
+    'mkfifo .guardian/hooks.config.json',
+    'mkfifo ./.guardian/hooks-allowlist.json',
+    'ln -sf /dev/zero .guardian/hooks.config.json',
+    'ln -s /dev/zero ".guardian/hooks-allowlist.json"',
+    'cd proj && ln -sfn /dev/zero .guardian/hooks.config.json',
+    'mknod .guardian/hooks.config.json p',
+    'ln -s /dev/zero ~/.config/dev-guardian/hooks.json',
+    'New-Item -ItemType SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\big.bin',
+  ];
+  it.each(blocked)('blocks %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const allowed = [
+    'mkfifo /tmp/pipe',
+    'ln -s ../shared/config.json config.json',
+    'ln -s /dev/zero zeros',
+    'cat .guardian/hooks.config.json',
+    'New-Item -ItemType File -Path notes.txt',
+    'New-Item -ItemType SymbolicLink -Path latest -Target builds\\v2',
+  ];
+  it.each(allowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
+});
