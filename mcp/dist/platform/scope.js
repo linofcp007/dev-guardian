@@ -368,10 +368,10 @@ async function untracked(cwd) {
 const UNTRACKED_LINK_HINT = ' (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)';
 /**
  * The regular files among `rels` that exist — each refused if a link takes it
- * outside the project; `untracked` says they came from `git ls-files --others`.
+ * outside the project; `fromUntracked` says they came from `git ls-files --others`.
  */
-function onDisk(projectPath, rels, untracked = false) {
-    const assertInside = insideChecker(projectPath, realOrSelf(projectPath), untracked ? UNTRACKED_LINK_HINT : '');
+function onDisk(projectPath, rels, fromUntracked = false) {
+    const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : '');
     const out = new Set();
     for (const rel of rels) {
         let isFile = false;

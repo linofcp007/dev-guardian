@@ -431,10 +431,10 @@ const UNTRACKED_LINK_HINT =
 
 /**
  * The regular files among `rels` that exist — each refused if a link takes it
- * outside the project; `untracked` says they came from `git ls-files --others`.
+ * outside the project; `fromUntracked` says they came from `git ls-files --others`.
  */
-function onDisk(projectPath: string, rels: readonly string[], untracked = false): string[] {
-  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), untracked ? UNTRACKED_LINK_HINT : '');
+function onDisk(projectPath: string, rels: readonly string[], fromUntracked = false): string[] {
+  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : '');
   const out = new Set<string>();
   for (const rel of rels) {
     let isFile = false;

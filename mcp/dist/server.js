@@ -41401,8 +41401,8 @@ async function untracked(cwd) {
   ]);
 }
 var UNTRACKED_LINK_HINT = " (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)";
-function onDisk(projectPath, rels, untracked2 = false) {
-  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), untracked2 ? UNTRACKED_LINK_HINT : "");
+function onDisk(projectPath, rels, fromUntracked = false) {
+  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : "");
   const out = /* @__PURE__ */ new Set();
   for (const rel2 of rels) {
     let isFile = false;
