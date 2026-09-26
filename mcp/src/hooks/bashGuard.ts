@@ -984,6 +984,53 @@ function mklinkDestinations(args: readonly string[]): string[] {
 }
 
 /**
+ * Splits a cmd.exe command line the way cmd does for `mklink`: on whitespace
+ * outside double quotes, with the quotes removed and backslashes literal.
+ */
+function splitCmdLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuote = false;
+  let has = false;
+  for (const ch of line) {
+    if (ch === '"') {
+      inQuote = !inQuote;
+      has = true;
+    } else if (!inQuote && /\s/.test(ch)) {
+      if (has) out.push(cur);
+      cur = '';
+      has = false;
+    } else {
+      cur += ch;
+      has = true;
+    }
+  }
+  if (has) out.push(cur);
+  return out;
+}
+
+/**
+ * `cmd /c mklink LINK TARGET` (or `/k`): the link `mklink` creates. The command
+ * cmd runs is the word after the `/c`/`/k` switch. When that word is itself a
+ * whole command line — `cmd /c "mklink a b"` hands cmd ONE quoted word — it is
+ * split the way cmd splits it; any other word is kept whole, so a quoted link
+ * path with a space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the
+ * one path it is. Splitting every word on whitespace, as this used to, cut
+ * such a path in two and never recognised it (final review I11).
+ */
+function cmdMklinkDestinations(args: readonly string[]): string[] {
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return [];
+  const first = args[at + 1];
+  if (first === undefined) return [];
+  const head = first.trim();
+  const line = /\s/.test(head) ? splitCmdLine(head) : [head];
+  const rest = [...line.slice(1), ...args.slice(at + 2)];
+  const command = (line[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+  return command === 'mklink' ? mklinkDestinations(rest) : [];
+}
+
+/**
  * The paths a FIFO-, device- or link-creating command writes: `mkfifo NAME…`,
  * `mknod NAME TYPE …`, `ln`'s link names, `mklink`'s link (directly or through
  * `cmd /c`), and `New-Item -ItemType SymbolicLink|HardLink|Junction`'s path.
@@ -1003,13 +1050,8 @@ function specialFileDestinations(name: string, args: readonly string[]): string[
     case 'new-item':
     case 'ni':
       return newItemLinkDestinations(args);
-    case 'cmd': {
-      // `cmd /c "mklink a b"` hands cmd one quoted word: split it as cmd would.
-      const words = args.flatMap((a) => a.split(/\s+/).filter((w) => w.length > 0));
-      const at = words.findIndex((a) => a.toLowerCase() === 'mklink');
-      const viaC = words.slice(0, Math.max(at, 0)).some((a) => /^\/[ck]$/i.test(a));
-      return at >= 0 && viaC ? mklinkDestinations(words.slice(at + 1)) : [];
-    }
+    case 'cmd':
+      return cmdMklinkDestinations(args);
     default:
       return [];
   }

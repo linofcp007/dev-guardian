@@ -909,6 +909,11 @@ keeps working (migrations 004–011 are additive).
   inside `do … done`, `then … fi`, `else`, `elif`, `{ … }` or after `!` was
   never assessed (`while :; do rm -rf /; done` read as a command called
   `do`); it is now judged like a top-level statement.
+- **`cmd /c mklink` onto a hook config path with a space in it is denied.**
+  The guard split every word on whitespace, so a quoted
+  `"C:\Users\me\CLAUDE SKILLS\…\.guardian\hooks.config.json"` was cut in two
+  and let through; only a word that is itself a whole `mklink …` line is
+  split now, the way cmd splits it.
 - **A hook config file can no longer hang the hooks into their timeout.**
   They read `.guardian/hooks.config.json`, `.guardian/hooks-allowlist.json`
   and `~/.config/dev-guardian/hooks.json` with no check on what the path was:

@@ -798,6 +798,34 @@ describe('assessBashCommand — a special file or link onto the hook configurati
   it.each(allowed)('does not flag %s', (command) => {
     expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
   });
+
+  // Final review I11: the `cmd` case split EVERY word on whitespace, so a
+  // quoted link path with a space in it — this repo's own path has one — was
+  // cut in two and never recognised. Only a word that is itself a whole
+  // `mklink …` command line is split now, the way cmd splits it.
+  const withSpaces = [
+    'cmd /c mklink "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json" \\\\.\\pipe\\x',
+    'cmd.exe /k mklink "C:\\My Projects\\app\\.guardian\\hooks-allowlist.json" C:\\big.bin',
+    'cmd /c \'mklink "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json" \\\\.\\pipe\\x\'',
+    'cmd /q /c mklink /H "C:\\Users\\me\\CLAUDE SKILLS\\.config\\dev-guardian\\hooks.json" C:\\big.bin',
+  ];
+  it.each(withSpaces)('blocks a quoted link path with a space: %s', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('block');
+    expect(a.rules).toContain('guard-config-special-file');
+  });
+
+  const cmdAllowed = [
+    // The hook config is only the SOURCE of the link.
+    'cmd /c mklink "C:\\Users\\me\\CLAUDE SKILLS\\backup.json" "C:\\Users\\me\\CLAUDE SKILLS\\proj\\.guardian\\hooks.config.json"',
+    // cmd runs `echo`, not mklink.
+    'cmd /c echo mklink .guardian\\hooks.config.json x',
+    // No /c or /k: cmd runs nothing.
+    'cmd mklink .guardian\\hooks.config.json x',
+  ];
+  it.each(cmdAllowed)('does not flag %s', (command) => {
+    expect(assessBashCommand(command).rules).not.toContain('guard-config-special-file');
+  });
 });
 
 // Final review I13: the statements inside `do … done`, `then … fi`, `else`,
