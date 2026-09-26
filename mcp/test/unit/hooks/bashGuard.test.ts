@@ -1319,6 +1319,27 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     ])('does not flag %j', expectNotGuarded);
   });
 
+  // `claude plugin disable` writes the very `enabledPlugins` entry the
+  // Write/Edit settings guard refuses.
+  describe("Claude Code's plugin command turning dev-guardian off", () => {
+    it.each([
+      'claude plugin disable dev-guardian@dev-guardian',
+      'claude plugin uninstall dev-guardian',
+      'claude plugins disable dev-guardian@corp --scope project',
+      'claude plugin marketplace remove dev-guardian',
+      'npx @anthropic-ai/claude-code plugin disable dev-guardian@dev-guardian',
+    ])('blocks %j', (command) => expectBlocked(command, 'claude-plugin-disable'));
+
+    it.each([
+      'claude plugin list',
+      'claude plugin install dev-guardian@dev-guardian',
+      'claude plugin enable dev-guardian@dev-guardian',
+      'claude plugin disable other-plugin@market',
+      'claude --version',
+      'claude -p "why is dev-guardian disabled?"',
+    ])('does not flag %j', (command) => expect(assessBashCommand(command).rules).not.toContain('claude-plugin-disable'));
+  });
+
   describe('the ordinary commands that look like these stay ok', () => {
     it.each([
       `node -e "console.log(require('./package.json').version)"`,

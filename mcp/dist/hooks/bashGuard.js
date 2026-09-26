@@ -2008,6 +2008,32 @@ function judgeEffects(e, raw) {
         out.push({ ...RULE_SETTINGS });
     return out;
 }
+const RULE_PLUGIN_OFF = {
+    id: 'claude-plugin-disable',
+    level: 'block',
+    reason: "Switches the guardrail hooks off through Claude Code's plugin command",
+};
+/**
+ * `claude plugin disable|uninstall dev-guardian…` (also `plugins`, `remove`,
+ * `marketplace remove`, and behind `npx @anthropic-ai/claude-code`): it writes
+ * the `enabledPlugins` entry the Write/Edit settings guard refuses, or removes
+ * the plugin and every hook with it.
+ */
+function turnsPluginOff(words, start) {
+    let i = start;
+    const head = words[i]?.value ?? '';
+    if (commandName(head) === 'npx' && /(?:^|\/)claude-code(?:@|$)/.test(words[i + 1]?.value ?? ''))
+        i += 1;
+    else if (commandName(head) !== 'claude')
+        return false;
+    const rest = words.slice(i + 1).map((w) => w.value);
+    if (rest[0] !== 'plugin' && rest[0] !== 'plugins')
+        return false;
+    const verbs = rest[1] === 'marketplace' ? rest.slice(2, 3) : rest.slice(1, 2);
+    if (!verbs.some((v) => /^(?:disable|uninstall|remove|rm)$/.test(v)))
+        return false;
+    return rest.some((a) => /dev-guardian/i.test(a));
+}
 /** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
 function judgeCode(code, lang, raw) {
     const literals = codeLiterals(code, lang);
@@ -2032,6 +2058,8 @@ function assessGuardConfig(words, start, scope) {
     const e = effectsOf(commandName(head.value), withoutRedirections(words.slice(start + 1)), scope.cwd);
     e.writes.push(...redirectTargets(words).map((t) => resolveFrom(scope.cwd, t)));
     const out = judgeEffects(e, scope.raw);
+    if (turnsPluginOff(words, start))
+        out.push({ ...RULE_PLUGIN_OFF });
     const lang = codeLang(commandName(words[interpreterIndex(words, start)]?.value ?? ''));
     for (const code of inlineCode(words, start))
         out.push(...judgeCode(code, lang, scope.raw));
