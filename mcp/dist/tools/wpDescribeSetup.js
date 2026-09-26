@@ -21,12 +21,19 @@
  * `wp_plugin_check`'s single-plugin lookup (a `wp_vuln_check` row that is
  * scoped, `history/scanRoles.ts#isScopedScan`) is never "the latest
  * wp_vuln_check": it holds no CVEs of its own.
+ *
+ * Each is looked up under every spelling an earlier build may have filed it
+ * with (`wordpress/siteKeys.ts`, fix round 1 I3), the newest row across them
+ * answering. Only the audits that report through `meta` (`wp_audit`,
+ * `wp_cron_audit`, `wp_rest_audit`) are read whatever their scanner
+ * coverage; a finding scan that measured nothing is passed over (M3).
  */
 import { z } from 'zod';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
+import { latestUnderKeys, wpInstallKeys, wpSiteKey, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { registerToolModule } from './index.js';
 const tool = {
     name: 'wp_describe_setup',
@@ -57,18 +64,20 @@ async function handler(input, ctx) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
     const siteKey = inp.target_url !== undefined ? wpSiteKey(inp.target_url) : null;
-    const keys = siteKey !== null ? [projectPath, siteKey] : [projectPath];
-    const wpAudit = findLatest(ctx, [projectPath], 'wp_audit');
-    const wpCron = findLatest(ctx, [projectPath], 'wp_cron_audit');
-    const wpRest = siteKey !== null ? findLatest(ctx, [siteKey], 'wp_rest_audit') : null;
-    const wpVuln = findLatest(ctx, keys, 'wp_vuln_check');
+    const installKeys = wpInstallKeys(projectPath, inp.project_path);
+    const siteKeys = inp.target_url !== undefined ? wpSiteKeys(inp.target_url) : [];
+    const keys = [...installKeys, ...siteKeys];
+    const wpAudit = findLatest(ctx, installKeys, 'wp_audit', META_REPORT);
+    const wpCron = findLatest(ctx, installKeys, 'wp_cron_audit', META_REPORT);
+    const wpRest = siteKeys.length > 0 ? findLatest(ctx, siteKeys, 'wp_rest_audit', META_REPORT) : null;
+    const wpVuln = findLatest(ctx, keys, 'wp_vuln_check', FINDING_SCAN);
     // wp_vuln_check_source (Task 18): the source/offline match against the
     // Wordfence feed + wp.org, alongside wp_vuln_check's live-URL/WPScan
     // lookup. Both can legitimately exist for the same project (one needs no
     // live URL, the other needs no API key), so their CVEs are merged below
     // rather than one shadowing the other.
-    const wpVulnSource = findLatest(ctx, [projectPath], 'wp_vuln_check_source');
-    const wpCodeScan = findLatest(ctx, [projectPath], 'wordpress');
+    const wpVulnSource = findLatest(ctx, installKeys, 'wp_vuln_check_source', FINDING_SCAN);
+    const wpCodeScan = findLatest(ctx, installKeys, 'wordpress', FINDING_SCAN);
     const open = openFindings(ctx, keys).filter((f) => f.tool === 'wpscan' || f.tool === 'phpcs' || f.category === 'security');
     const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
     const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
@@ -136,38 +145,20 @@ async function handler(input, ctx) {
     };
 }
 /**
- * The key a WordPress site's URL-addressed scans are filed under:
- * `wp_rest_audit` stores its `target_url` with the trailing slash removed.
+ * An audit that reports through `meta`: read whatever its scanner coverage
+ * (the resources in `resources/wp.ts` read them the same way).
  */
-export function wpSiteKey(url) {
-    return url.replace(/\/$/, '');
-}
-/**
- * The newest unscoped completed scan of `type` under any of `keys` — one
- * project-scoped query per key. These audits report through `meta`, so a
- * run's scanner coverage does not disqualify it (the resources in
- * `resources/wp.ts` read them the same way).
- */
-function findLatest(ctx, keys, type) {
-    let newest = null;
-    for (const key of keys) {
-        const found = findLatestUsable(ctx.storage, key, [type], { skipCoverageNone: false }).scan;
-        if (found === null)
-            continue;
-        if (newest === null) {
-            newest = found;
-            continue;
-        }
-        const [first] = ctx.storage.scans.sortNewestFirst([newest.scan_id, found.scan_id]);
-        if (first === found.scan_id)
-            newest = found;
-    }
-    return newest;
+const META_REPORT = { skipCoverageNone: false };
+/** A finding scan: one that measured nothing is passed over, the one before it answers. */
+const FINDING_SCAN = {};
+/** The newest unscoped completed scan of `type` under any of `keys`. */
+function findLatest(ctx, keys, type, opts) {
+    return latestUnderKeys(ctx.storage, keys, [type], opts);
 }
 /** The open set of every key, deduplicated — a finding under two keys counts once. */
 function openFindings(ctx, keys) {
     const out = [];
-    for (const key of keys) {
+    for (const key of new Set(keys)) {
         const seen = indexFindings(out);
         for (const f of openSetForProject(ctx.storage, key).findings)
             if (!seen.has(f))

@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve18.call(this, root, ref);
+      let _sch = resolve19.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve18(root, ref) {
+    function resolve19(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve18(baseURI, relativeURI, options) {
+    function resolve19(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve18,
+      resolve: resolve19,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve18, reject) {
+        return new Promise(function(resolve19, reject) {
           isexe(path6, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve18(is);
+              resolve19(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve18, reject) => {
+      const step = (i2) => new Promise((resolve19, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve18(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve19(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path6.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve18(subStep(p, i2, 0));
+        resolve19(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve18, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve19, reject) => {
         if (ii === pathExt.length)
-          return resolve18(step(i2 + 1));
+          return resolve19(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve18(p + ext);
+              return resolve19(p + ext);
           }
-          return resolve18(subStep(p, i2, ii + 1));
+          return resolve19(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve18, reject) => {
-        Object.assign(methods, { resolve: resolve18, reject });
+      const promise = new Promise((resolve19, reject) => {
+        Object.assign(methods, { resolve: resolve19, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve18 = promise.resolve.bind(promise);
-      return { resolve: resolve18, promises };
+      const resolve19 = promise.resolve.bind(promise);
+      return { resolve: resolve19, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve18, promises }, subprocess) => {
-      resolve18();
+    waitForConcurrentStreams = async ({ resolve: resolve19, promises }, subprocess) => {
+      resolve19();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve18) => setTimeout(resolve18, pollInterval));
+        await new Promise((resolve19) => setTimeout(resolve19, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve18, reject) => {
+    return new Promise((resolve19, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve18(parseResult.data);
+            resolve19(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve18, reject) => {
+    return new Promise((resolve19, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve18, interval);
+      const timeoutId = setTimeout(resolve19, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36594,7 +36594,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve18) => setTimeout(resolve18, pollInterval));
+      await new Promise((resolve19) => setTimeout(resolve19, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve18) => {
+    return new Promise((resolve19) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve18();
+        resolve19();
       } else {
-        this._stdout.once("drain", resolve18);
+        this._stdout.once("drain", resolve19);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve17 } from "node:path";
+import { resolve as resolve18 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -41523,7 +41523,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve18) => this.waiting.push(resolve18));
+    await new Promise((resolve19) => this.waiting.push(resolve19));
     this.active += 1;
   }
   release() {
@@ -44983,6 +44983,9 @@ function realWithinProject(root, candidate, requireFile) {
   const rel2 = relative10(realRoot, real);
   return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep8}`) && !isAbsolute5(rel2);
 }
+function finished7(outcome) {
+  return outcome === "completed" || outcome === "failed";
+}
 async function runWorkflowScanner(spec, ctx, reportDir) {
   const bin = await scannerAvailable(spec.binary);
   if (!bin) {
@@ -45007,7 +45010,9 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
       toolRun: { name: spec.name, status: "ok" },
       missing: false,
       parserInput: { parser: spec.parser, input: result.stdout },
-      processOutcome: result.outcome
+      // A run its spec accepts is a completed one, whatever the runner
+      // called its exit code (actionlint's exit 1 arrives as `failed`).
+      processOutcome: "completed"
     };
   }
   const toolRun = result.outcome === "completed" ? { name: spec.name, status: "failed" } : { name: spec.name, status: "failed", reason: result.outcome };
@@ -45091,9 +45096,14 @@ registerToolModule(
               args: ["-pyflakes=", "-shellcheck=", "-format", "{{json .}}", ...workflowFiles],
               parser: actionlintParser,
               // exit 0 (no problems) or 1 (problems found) are both a
-              // completed run — same convention as hadolint/jscpd/ruff/
-              // bandit elsewhere.
-              isOk: (r) => r.outcome === "completed" && (r.exitCode === 0 || r.exitCode === 1)
+              // finished run — same convention as hadolint/jscpd/ruff/
+              // bandit elsewhere. The runner reports EVERY non-zero exit as
+              // `outcome: 'failed'` (processRunner.ts), so exit 1 arrives as
+              // `failed` + 1: requiring `completed` here made actionlint with
+              // findings always a failed pass, its findings unparsed and the
+              // whole iac row failed (Task 24 fix round 1, M7). Only a run
+              // that did not finish is refused on its outcome.
+              isOk: (r) => finished7(r.outcome) && (r.exitCode === 0 || r.exitCode === 1)
             },
             ctx,
             reportDir
@@ -45515,8 +45525,8 @@ var scanContainers = makeScanTool({
           signal: ctx.signal,
           onLog: ctx.onLog
         });
-        const finished7 = result.outcome !== "cancelled" && result.outcome !== "timed_out" && result.outcome !== "output_too_large";
-        if (finished7 && (result.exitCode === 0 || result.exitCode === 1)) {
+        const finished8 = result.outcome !== "cancelled" && result.outcome !== "timed_out" && result.outcome !== "output_too_large";
+        if (finished8 && (result.exitCode === 0 || result.exitCode === 1)) {
           parser_inputs.push({ parser: hadolintParser, input: result.stdout });
           tools_run.push({ name: "hadolint", status: "ok" });
         } else {
@@ -46684,8 +46694,8 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
   });
   const entries2 = run.stdout.split(/\r?\n/).filter((l) => l.trim().startsWith("{")).length;
   const errors = staticcheckErrors(run.stdout);
-  const finished7 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
-  if (finished7 && run.exitCode !== 0 && entries2 === 0) {
+  const finished8 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
+  if (finished8 && run.exitCode !== 0 && entries2 === 0) {
     const detail = firstLine3(run.stderr);
     out.tools_run.push({
       name: "staticcheck",
@@ -46694,7 +46704,7 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
     });
     return;
   }
-  if (finished7 && entries2 > 0 && errors.length === entries2) {
+  if (finished8 && entries2 > 0 && errors.length === entries2) {
     out.tools_run.push({
       name: "staticcheck",
       status: "failed",
@@ -47936,7 +47946,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve18 = (name, ecosystem, file, version2) => {
+  const resolve19 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -48003,7 +48013,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve18(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve19(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -48013,7 +48023,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve18(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve19(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -48021,10 +48031,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve18(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve19(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText2("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve18(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve19(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -48040,7 +48050,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve18(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve19(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -48901,13 +48911,13 @@ async function runDotnetOutdated(projectPath, cves) {
     steps.push(...parseDotnetText(text, cves));
   }
   const seen = /* @__PURE__ */ new Set();
-  const unique2 = steps.filter((s) => {
+  const unique3 = steps.filter((s) => {
     const key = `${s.package_name.toLowerCase()}@${s.installed_version}->${s.latest_version}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  return { steps: unique2, unplanned: [], failures };
+  return { steps: unique3, unplanned: [], failures };
 }
 function parseDotnetJson(raw, cves) {
   let parsed;
@@ -56374,111 +56384,33 @@ function severityFromVuln(raw) {
   return "medium";
 }
 
-// src/tools/wpDescribeSetup.ts
-var tool29 = {
-  name: "wp_describe_setup",
-  title: "WordPress posture summary",
-  description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
-  inputSchema: {
-    project_path: ProjectPath,
-    target_url: external_exports.string().url().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
-  },
-  handler: async (input, ctx) => handler26(input, ctx)
-};
-registerToolModule(tool29);
-async function handler26(input, ctx) {
-  const inp = input;
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
-  }
-  const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
-  const keys = siteKey !== null ? [projectPath, siteKey] : [projectPath];
-  const wpAudit = findLatest(ctx, [projectPath], "wp_audit");
-  const wpCron = findLatest(ctx, [projectPath], "wp_cron_audit");
-  const wpRest = siteKey !== null ? findLatest(ctx, [siteKey], "wp_rest_audit") : null;
-  const wpVuln = findLatest(ctx, keys, "wp_vuln_check");
-  const wpVulnSource = findLatest(ctx, [projectPath], "wp_vuln_check_source");
-  const wpCodeScan = findLatest(ctx, [projectPath], "wordpress");
-  const open = openFindings(ctx, keys).filter(
-    (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
-  );
-  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
-  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
-  const cveById = /* @__PURE__ */ new Map();
-  for (const c3 of [...cvesFromLive, ...cvesFromSource]) cveById.set(c3.cve_id, c3);
-  const cves = [...cveById.values()];
-  return {
-    ok: true,
-    project_path: projectPath,
-    ...siteKey !== null ? { target_url: siteKey } : {},
-    audits: {
-      wp_audit: wpAudit ? {
-        scan_id: wpAudit.scan_id,
-        captured_at: wpAudit.started_at,
-        wp_version: wpAudit.meta?.wp_version ?? null,
-        admins_count: (wpAudit.meta?.admins ?? []).length,
-        checksum_mismatches_count: countChecksumIssues(wpAudit.meta),
-        warnings: wpAudit.meta?.warnings ?? []
-      } : null,
-      wp_cron_audit: wpCron ? {
-        scan_id: wpCron.scan_id,
-        flagged_count: wpCron.meta?.flagged_count ?? 0
-      } : null,
-      wp_rest_audit: wpRest ? {
-        scan_id: wpRest.scan_id,
-        exposed_count: wpRest.meta?.exposed_count ?? 0
-      } : null,
-      wp_vuln_check: wpVuln ? {
-        scan_id: wpVuln.scan_id,
-        cves_count: cvesFromLive.length
-      } : null,
-      wp_vuln_check_source: wpVulnSource ? {
-        scan_id: wpVulnSource.scan_id,
-        cves_count: cvesFromSource.length
-      } : null,
-      scan_wordpress: wpCodeScan ? {
-        scan_id: wpCodeScan.scan_id,
-        captured_at: wpCodeScan.started_at
-      } : null
-    },
-    open_findings_count: open.length,
-    open_critical: open.filter((f) => f.severity === "critical").length,
-    open_high: open.filter((f) => f.severity === "high").length,
-    active_cves: cves,
-    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
-  };
-}
+// src/wordpress/siteKeys.ts
+import { resolve as resolve13 } from "node:path";
 function wpSiteKey(url) {
   return url.replace(/\/$/, "");
 }
-function findLatest(ctx, keys, type) {
+function wpInstallKeys(canonical, raw) {
+  const keys = [canonical];
+  if (raw !== void 0 && raw.length > 0) keys.push(raw, resolve13(raw));
+  return unique2(keys);
+}
+function wpSiteKeys(url) {
+  const key = wpSiteKey(url);
+  return unique2([key, `${key}/`, url]);
+}
+function latestUnderKeys(storage, keys, types, opts = {}) {
   let newest = null;
-  for (const key of keys) {
-    const found = findLatestUsable(ctx.storage, key, [type], { skipCoverageNone: false }).scan;
+  for (const key of unique2(keys)) {
+    const found = findLatestUsable(storage, key, types, opts).scan;
     if (found === null) continue;
-    if (newest === null) {
+    if (newest === null || storage.scans.sortNewestFirst([newest.scan_id, found.scan_id])[0] === found.scan_id) {
       newest = found;
-      continue;
     }
-    const [first] = ctx.storage.scans.sortNewestFirst([newest.scan_id, found.scan_id]);
-    if (first === found.scan_id) newest = found;
   }
   return newest;
 }
-function openFindings(ctx, keys) {
-  const out = [];
-  for (const key of keys) {
-    const seen = indexFindings(out);
-    for (const f of openSetForProject(ctx.storage, key).findings) if (!seen.has(f)) out.push(f);
-  }
-  return out;
-}
-function countChecksumIssues(meta) {
-  const cm = meta?.checksum_mismatches ?? {};
-  return (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0);
+function unique2(keys) {
+  return [...new Set(keys)];
 }
 
 // src/tools/wpVulnCheck.ts
@@ -56487,15 +56419,15 @@ var inputSchema16 = {
   target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
   api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
 };
-var tool30 = {
+var tool29 = {
   name: "wp_vuln_check",
   title: "WordPress vuln-DB lookup (WPScan)",
   description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.",
   inputSchema: inputSchema16,
-  handler: async (input, ctx) => handler27(input, ctx)
+  handler: async (input, ctx) => handler26(input, ctx)
 };
-registerToolModule(tool30);
-async function handler27(input, ctx) {
+registerToolModule(tool29);
+async function handler26(input, ctx) {
   const inp = input;
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain20(
@@ -57442,15 +57374,15 @@ var KNOWN_PREFIXES = [
   "wp_version_check"
 ];
 var BASE64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-var tool31 = {
+var tool30 = {
   name: "wp_cron_audit",
   title: "WordPress cron audit (suspicious scheduled events)",
   description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here.",
   inputSchema: inputSchema17,
-  handler: async (input, ctx) => handler28(input, ctx)
+  handler: async (input, ctx) => handler27(input, ctx)
 };
-registerToolModule(tool31);
-async function handler28(input, ctx) {
+registerToolModule(tool30);
+async function handler27(input, ctx) {
   const inp = input;
   let installPath;
   try {
@@ -57570,15 +57502,15 @@ function failDomain21(code, message3) {
 }
 
 // src/tools/wpRecommendHardening.ts
-var tool32 = {
+var tool31 = {
   name: "wp_recommend_hardening",
   title: "WordPress hardening checklist",
   description: "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit (project_path = the install root, default: the server's working directory). Pure read \u2014 inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.",
   inputSchema: { project_path: ProjectPath },
-  handler: async (input, ctx) => handler29(input, ctx)
+  handler: async (input, ctx) => handler28(input, ctx)
 };
-registerToolModule(tool32);
-async function handler29(input, ctx) {
+registerToolModule(tool31);
+async function handler28(input, ctx) {
   const inp = input;
   let projectPath;
   try {
@@ -57744,22 +57676,29 @@ var inputSchema18 = {
     "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
   )
 };
-var tool33 = {
+var tool32 = {
   name: "wp_plugin_check",
   title: "WordPress plugin check (1 plugin)",
   description: "Focused check on one plugin: installed version (when wp_install_path given), latest known, active CVEs from the dev-guardian cves table. Pass target_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.",
   inputSchema: inputSchema18,
-  handler: async (input, ctx) => handler30(input, ctx)
+  handler: async (input, ctx) => handler29(input, ctx)
 };
-registerToolModule(tool33);
-async function handler30(input, ctx) {
+registerToolModule(tool32);
+async function handler29(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
   let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path ?? inp.wp_install_path).path;
-  } catch (e) {
-    return failDomain22("not_a_git_repo", e.message);
+  const rawProject = inp.project_path ?? inp.wp_install_path;
+  if (inp.project_path !== void 0 && inp.project_path.length > 0) {
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return failDomain22("not_a_git_repo", e.message);
+    }
+  } else if (inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0) {
+    projectPath = canonicalPath(inp.wp_install_path);
+  } else {
+    projectPath = serverProjectPath();
   }
   let installedVersion = null;
   let active = null;
@@ -57793,7 +57732,7 @@ async function handler30(input, ctx) {
     }
   }
   const slugLower = inp.slug.toLowerCase();
-  const allActive = cveSources(ctx, projectPath, inp.target_url).flatMap((s) => ctx.storage.cves.listActive(s.scan_id)).filter((c3) => c3.package_name.toLowerCase() === slugLower);
+  const allActive = cveSources(ctx, wpInstallKeys(projectPath, rawProject), inp.target_url).flatMap((s) => ctx.storage.cves.listActive(s.scan_id)).filter((c3) => c3.package_name.toLowerCase() === slugLower);
   const cveMap = /* @__PURE__ */ new Map();
   for (const c3 of allActive) {
     if (!cveMap.has(c3.cve_id)) cveMap.set(c3.cve_id, c3);
@@ -57832,15 +57771,15 @@ async function handler30(input, ctx) {
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
 }
-function cveSources(ctx, projectPath, targetUrl) {
-  const latest = (key, types, slot) => findLatestUsable(ctx.storage, key, types, slot !== void 0 ? { slot } : {}).scan;
+function cveSources(ctx, installKeys, targetUrl) {
+  const siteKeys = targetUrl !== void 0 ? wpSiteKeys(targetUrl) : [];
   const found = [
-    latest(projectPath, CVE_SOURCE_SCAN_TYPES, "deps"),
-    latest(projectPath, ["wp_vuln_check"]),
+    latestUnderKeys(ctx.storage, installKeys, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }),
+    // Filed under the install root, or — URL-only — under the site.
+    latestUnderKeys(ctx.storage, [...installKeys, ...siteKeys], ["wp_vuln_check"]),
     // wp_vuln_check_source (Task 18): source-based match against the
     // Wordfence feed, no live URL — same `cves` shape, same slug key.
-    latest(projectPath, ["wp_vuln_check_source"]),
-    targetUrl !== void 0 ? latest(wpSiteKey(targetUrl), ["wp_vuln_check"]) : null
+    latestUnderKeys(ctx.storage, installKeys, ["wp_vuln_check_source"])
   ];
   return found.filter((s) => s !== null);
 }
@@ -57854,15 +57793,15 @@ var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
   timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
 };
-var tool34 = {
+var tool33 = {
   name: "wp_rest_audit",
   title: "WordPress REST API exposure audit",
   description: "Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak data: users enumeration, draft posts, comments, xmlrpc.php. No POSTs, no auth. Returns one row per endpoint with `exposed: yes/no`.",
   inputSchema: inputSchema19,
-  handler: async (input, ctx) => handler31(input, ctx)
+  handler: async (input, ctx) => handler30(input, ctx)
 };
-registerToolModule(tool34);
-async function handler31(input, ctx) {
+registerToolModule(tool33);
+async function handler30(input, ctx) {
   const inp = input;
   const url = inp.target_url.replace(/\/$/, "");
   const timeoutMs = inp.timeout_ms ?? 15e3;
@@ -57949,15 +57888,15 @@ var inputSchema20 = {
   wp_install_paths: external_exports.array(external_exports.string().min(1)).min(1).max(50).describe("Up to 50 WP install paths to audit in parallel."),
   concurrency: external_exports.number().int().min(1).max(10).optional().describe("Max sites audited at once. Default 4.")
 };
-var tool35 = {
+var tool34 = {
   name: "bulk_audit_wordpress_sites",
   title: "Bulk wp_audit across many sites",
   description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (anything in checksum_mismatches.core + modified plugins + modified themes).",
   inputSchema: inputSchema20,
-  handler: async (input, ctx) => handler32(input, ctx)
+  handler: async (input, ctx) => handler31(input, ctx)
 };
-registerToolModule(tool35);
-async function handler32(input, ctx) {
+registerToolModule(tool34);
+async function handler31(input, ctx) {
   const inp = input;
   const limit = Math.max(1, Math.min(inp.concurrency ?? 4, 10));
   const wpAudit = TOOLS.find((t) => t.name === "wp_audit");
@@ -58013,6 +57952,103 @@ function summarise(path6, result) {
   if (r.scan_id !== void 0) summary.scan_id = r.scan_id;
   if (r.wp_version !== void 0) summary.wp_version = r.wp_version;
   return summary;
+}
+
+// src/tools/wpDescribeSetup.ts
+var tool35 = {
+  name: "wp_describe_setup",
+  title: "WordPress posture summary",
+  description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
+  inputSchema: {
+    project_path: ProjectPath,
+    target_url: external_exports.string().url().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
+  },
+  handler: async (input, ctx) => handler32(input, ctx)
+};
+registerToolModule(tool35);
+async function handler32(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
+  const installKeys = wpInstallKeys(projectPath, inp.project_path);
+  const siteKeys = inp.target_url !== void 0 ? wpSiteKeys(inp.target_url) : [];
+  const keys = [...installKeys, ...siteKeys];
+  const wpAudit = findLatest(ctx, installKeys, "wp_audit", META_REPORT);
+  const wpCron = findLatest(ctx, installKeys, "wp_cron_audit", META_REPORT);
+  const wpRest = siteKeys.length > 0 ? findLatest(ctx, siteKeys, "wp_rest_audit", META_REPORT) : null;
+  const wpVuln = findLatest(ctx, keys, "wp_vuln_check", FINDING_SCAN);
+  const wpVulnSource = findLatest(ctx, installKeys, "wp_vuln_check_source", FINDING_SCAN);
+  const wpCodeScan = findLatest(ctx, installKeys, "wordpress", FINDING_SCAN);
+  const open = openFindings(ctx, keys).filter(
+    (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
+  );
+  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
+  const cveById = /* @__PURE__ */ new Map();
+  for (const c3 of [...cvesFromLive, ...cvesFromSource]) cveById.set(c3.cve_id, c3);
+  const cves = [...cveById.values()];
+  return {
+    ok: true,
+    project_path: projectPath,
+    ...siteKey !== null ? { target_url: siteKey } : {},
+    audits: {
+      wp_audit: wpAudit ? {
+        scan_id: wpAudit.scan_id,
+        captured_at: wpAudit.started_at,
+        wp_version: wpAudit.meta?.wp_version ?? null,
+        admins_count: (wpAudit.meta?.admins ?? []).length,
+        checksum_mismatches_count: countChecksumIssues(wpAudit.meta),
+        warnings: wpAudit.meta?.warnings ?? []
+      } : null,
+      wp_cron_audit: wpCron ? {
+        scan_id: wpCron.scan_id,
+        flagged_count: wpCron.meta?.flagged_count ?? 0
+      } : null,
+      wp_rest_audit: wpRest ? {
+        scan_id: wpRest.scan_id,
+        exposed_count: wpRest.meta?.exposed_count ?? 0
+      } : null,
+      wp_vuln_check: wpVuln ? {
+        scan_id: wpVuln.scan_id,
+        cves_count: cvesFromLive.length
+      } : null,
+      wp_vuln_check_source: wpVulnSource ? {
+        scan_id: wpVulnSource.scan_id,
+        cves_count: cvesFromSource.length
+      } : null,
+      scan_wordpress: wpCodeScan ? {
+        scan_id: wpCodeScan.scan_id,
+        captured_at: wpCodeScan.started_at
+      } : null
+    },
+    open_findings_count: open.length,
+    open_critical: open.filter((f) => f.severity === "critical").length,
+    open_high: open.filter((f) => f.severity === "high").length,
+    active_cves: cves,
+    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
+  };
+}
+var META_REPORT = { skipCoverageNone: false };
+var FINDING_SCAN = {};
+function findLatest(ctx, keys, type, opts) {
+  return latestUnderKeys(ctx.storage, keys, [type], opts);
+}
+function openFindings(ctx, keys) {
+  const out = [];
+  for (const key of new Set(keys)) {
+    const seen = indexFindings(out);
+    for (const f of openSetForProject(ctx.storage, key).findings) if (!seen.has(f)) out.push(f);
+  }
+  return out;
+}
+function countChecksumIssues(meta) {
+  const cm = meta?.checksum_mismatches ?? {};
+  return (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0);
 }
 
 // src/tools/scanDotnetSecrets.ts
@@ -60427,7 +60463,7 @@ function hashFiles(parts) {
 
 // src/tools/mapAttackSurface.ts
 import { readFileSync as readFileSync35 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join62, resolve as resolve14 } from "node:path";
+import { isAbsolute as isAbsolute9, join as join62, resolve as resolve15 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -61527,13 +61563,13 @@ function buildToolRun(run, via) {
 
 // src/surface/specDiscover.ts
 import { readFileSync as readFileSync34, readdirSync as readdirSync23, statSync as statSync18 } from "node:fs";
-import { join as join61, relative as relative20, resolve as resolve13, sep as sep11 } from "node:path";
+import { join as join61, relative as relative20, resolve as resolve14, sep as sep11 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve13(projectPath);
+  const root = resolve14(projectPath);
   const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
@@ -61545,7 +61581,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path6 of paths) {
-    const resolved = resolve13(path6);
+    const resolved = resolve14(path6);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -62239,7 +62275,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path6) {
-  return resolve14(isAbsolute9(path6) ? path6 : join62(projectPath, path6));
+  return resolve15(isAbsolute9(path6) ? path6 : join62(projectPath, path6));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -64644,7 +64680,7 @@ import { isAbsolute as isAbsolute11, join as join70, relative as relative22 } fr
 
 // src/fixpr/apply.ts
 import { existsSync as existsSync46, readFileSync as readFileSync36, rmSync as rmSync7, writeFileSync as writeFileSync18 } from "node:fs";
-import { isAbsolute as isAbsolute10, join as join66, relative as relative21, resolve as resolve15, sep as sep12 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join66, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -64775,7 +64811,7 @@ function editPipPin(worktreePath, step) {
   const file = step.file ?? "";
   const label = `edit ${file || "(no file)"}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
-  const target = resolve15(worktreePath, file);
+  const target = resolve16(worktreePath, file);
   const rel2 = relative21(worktreePath, target);
   if (isAbsolute10(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute10(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
@@ -65574,7 +65610,7 @@ function headOf(stdout, stderr) {
 // src/fixpr/worktree.ts
 import { existsSync as existsSync48, mkdtempSync as mkdtempSync6, realpathSync as realpathSync8, rmSync as rmSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { join as join69, resolve as resolve16 } from "node:path";
+import { join as join69, resolve as resolve17 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
@@ -65664,7 +65700,7 @@ function samePathKey(path6) {
   try {
     real = realpathSync8.native(path6);
   } catch {
-    real = resolve16(path6);
+    real = resolve17(path6);
   }
   const posix = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix.toLowerCase() : posix;
@@ -67647,7 +67683,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve17(process.cwd());
+  const projectPath = resolve18(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

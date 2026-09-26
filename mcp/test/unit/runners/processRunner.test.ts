@@ -50,6 +50,27 @@ async function childEnv(options: {
   return JSON.parse(result.stdout) as Record<string, string>;
 }
 
+/**
+ * The exit-code contract every scanner wrapper — and every test that mocks
+ * `runProcess` — has to match: ANY non-zero exit is `outcome: 'failed'`, with
+ * the code alongside. A scanner that exits 1 for "findings" (actionlint,
+ * hadolint, bandit) therefore reports `failed` + 1, never `completed` + 1. A
+ * mock returning `completed` + 1 describes a runner that does not exist; it
+ * hid scan_iac discarding every actionlint finding (Task 24 fix round 1, M7).
+ */
+describe('runProcess exit-code contract', () => {
+  it.each([
+    [0, 'completed'],
+    [1, 'failed'],
+    [2, 'failed'],
+  ] as const)('exit %i is outcome %s, with the exit code reported', async (code, outcome) => {
+    const dir = makeTempDir('processrunner-exit-');
+    const result = await runProcess({ command: execPath, args: ['-e', `process.exit(${code})`], cwd: dir });
+    expect(result.outcome).toBe(outcome);
+    expect(result.exitCode).toBe(code);
+  });
+});
+
 describe('runProcess environment handling', () => {
   beforeEach(() => {
     process.env[PARENT_ONLY] = 'inherited-value';

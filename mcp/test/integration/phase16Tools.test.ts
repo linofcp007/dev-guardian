@@ -10,7 +10,8 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({
@@ -27,7 +28,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { PluginContext } from '../../src/context.js';
-import { resolveProjectPath } from '../../src/platform/projectPath.js';
+import { canonicalPath, resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -41,6 +42,7 @@ beforeAll(async () => {
   await import('../../src/tools/wpCronAudit.js');
   await import('../../src/tools/wpRecommendHardening.js');
   await import('../../src/tools/wpPluginCheck.js');
+  await import('../../src/tools/wpVulnCheck.js');
   await import('../../src/tools/wpRestAudit.js');
   await import('../../src/tools/bulkAuditWordpressSites.js');
   await import('../../src/tools/wpDescribeSetup.js');
@@ -150,6 +152,122 @@ describe('wp_plugin_check', () => {
       known_cves: Array<{ cve_id: string }>;
     };
     expect(r.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2024-SRC']);
+  });
+});
+
+/**
+ * Fix round 1, M4: `wp_plugin_check { slug }` is a lookup, not a scan of a
+ * directory — it must answer when the server runs in a home directory, and
+ * when `wp_install_path` names an install that is not on this machine.
+ */
+describe('wp_plugin_check never refuses for want of a local project', () => {
+  it('answers from the home directory (no project_path, no wp_install_path)', async () => {
+    const plugin = makePlugin();
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(homedir());
+    try {
+      const r = await getTool('wp_plugin_check').handler({ slug: 'akismet' }, plugin);
+      expect(r.ok).toBe(true);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('answers when wp_install_path does not exist locally, and files the lookup under it', async () => {
+    const plugin = makePlugin();
+    const remote = join(tempProject(), 'not', 'here');
+    const r = await getTool('wp_plugin_check').handler({ slug: 'akismet', wp_install_path: remote }, plugin);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe(canonicalPath(remote));
+  });
+
+  it('still refuses an explicit project_path that does not exist', async () => {
+    const plugin = makePlugin();
+    const r = await getTool('wp_plugin_check').handler(
+      { slug: 'akismet', project_path: join(tempProject(), 'missing') },
+      plugin,
+    );
+    expect(r.ok).toBe(false);
+  });
+});
+
+/**
+ * Fix round 1, I4: `wp_vuln_check` files its row under the key the scoped
+ * readers look it up by — a site URL without its trailing slash, an install
+ * path in its canonical spelling — and `wp_describe_setup` /
+ * `wp_plugin_check` then find it.
+ */
+describe('wp_vuln_check files its row where the project-scoped readers look', () => {
+  const WPSCAN_OUT = {
+    plugins: {
+      'contact-form-7': {
+        version: { number: '5.0' },
+        vulnerabilities: [{ title: 'Stored XSS', references: { cve: ['2099-4242'] }, fixed_in: '5.1' }],
+      },
+    },
+  };
+
+  function mockScanners(homeUrl = 'https://installed.example/'): void {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'wp') {
+        return { outcome: 'completed', exitCode: 0, stdout: `${homeUrl}\n`, stderr: '', truncated: false };
+      }
+      const args = opts.args ?? [];
+      const out = args[args.indexOf('--output') + 1];
+      if (out !== undefined) writeFileSync(out, JSON.stringify(WPSCAN_OUT), 'utf8');
+      return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+
+  it('a trailing-slash target_url is filed without the slash, and both readers find it', async () => {
+    mockScanners();
+    const plugin = makePlugin();
+    const P = projectPath();
+    // No install path: the report directory goes under the working directory.
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(P);
+    try {
+      const r = await getTool('wp_vuln_check').handler({ target_url: 'https://site.example/' }, plugin);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+      expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe('https://site.example');
+
+      const d = (await getTool('wp_describe_setup').handler(
+        { project_path: P, target_url: 'https://site.example/' },
+        plugin,
+      )) as { ok: true; audits: { wp_vuln_check: { scan_id: string } | null }; active_cves: Array<{ cve_id: string }> };
+      expect(d.audits.wp_vuln_check?.scan_id).toBe(r['scan_id']);
+      expect(d.active_cves.map((c) => c.cve_id)).toEqual(['CVE-2099-4242']);
+
+      const p = (await getTool('wp_plugin_check').handler(
+        { slug: 'contact-form-7', project_path: P, target_url: 'https://site.example' },
+        plugin,
+      )) as { ok: true; known_cves: Array<{ cve_id: string }> };
+      expect(p.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2099-4242']);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it('a relative wp_install_path is filed in its canonical spelling, and both readers find it', async () => {
+    mockScanners();
+    const plugin = makePlugin();
+    const P = projectPath();
+    const rel = relative(process.cwd(), P);
+    const r = await getTool('wp_vuln_check').handler({ wp_install_path: rel }, plugin);
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe(P);
+
+    const d = (await getTool('wp_describe_setup').handler({ project_path: P }, plugin)) as {
+      ok: true;
+      audits: { wp_vuln_check: { scan_id: string } | null };
+    };
+    expect(d.audits.wp_vuln_check?.scan_id).toBe(r['scan_id']);
+
+    const p = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7', project_path: P }, plugin)) as {
+      ok: true;
+      known_cves: Array<{ cve_id: string }>;
+    };
+    expect(p.known_cves.map((c) => c.cve_id)).toEqual(['CVE-2099-4242']);
   });
 });
 

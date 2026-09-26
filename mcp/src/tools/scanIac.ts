@@ -208,6 +208,15 @@ interface WorkflowScannerSpec {
   isOk: (result: ProcessRunResult) => boolean;
 }
 
+/**
+ * The process ran to its own exit: not stopped for a timeout, a cancellation
+ * or an oversized output — the same line fileBatchScan's and gitleaksScan's
+ * exit-code checks draw.
+ */
+function finished(outcome: ProcessRunResult['outcome']): boolean {
+  return outcome === 'completed' || outcome === 'failed';
+}
+
 interface WorkflowScannerRun {
   toolRun: ToolRun;
   /** True when the binary was not found at all (caller adds to `missing_tools`). */
@@ -256,7 +265,9 @@ async function runWorkflowScanner(
       toolRun: { name: spec.name, status: 'ok' },
       missing: false,
       parserInput: { parser: spec.parser, input: result.stdout },
-      processOutcome: result.outcome,
+      // A run its spec accepts is a completed one, whatever the runner
+      // called its exit code (actionlint's exit 1 arrives as `failed`).
+      processOutcome: 'completed',
     };
   }
   const toolRun: ToolRun =
@@ -361,9 +372,14 @@ registerToolModule(
               args: ['-pyflakes=', '-shellcheck=', '-format', '{{json .}}', ...workflowFiles],
               parser: actionlintParser,
               // exit 0 (no problems) or 1 (problems found) are both a
-              // completed run — same convention as hadolint/jscpd/ruff/
-              // bandit elsewhere.
-              isOk: (r) => r.outcome === 'completed' && (r.exitCode === 0 || r.exitCode === 1),
+              // finished run — same convention as hadolint/jscpd/ruff/
+              // bandit elsewhere. The runner reports EVERY non-zero exit as
+              // `outcome: 'failed'` (processRunner.ts), so exit 1 arrives as
+              // `failed` + 1: requiring `completed` here made actionlint with
+              // findings always a failed pass, its findings unparsed and the
+              // whole iac row failed (Task 24 fix round 1, M7). Only a run
+              // that did not finish is refused on its outcome.
+              isOk: (r) => finished(r.outcome) && (r.exitCode === 0 || r.exitCode === 1),
             },
             ctx,
             reportDir,

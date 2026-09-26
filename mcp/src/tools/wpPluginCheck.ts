@@ -13,7 +13,16 @@
  * URL-only `wp_vuln_check`): the newest usable dependency scan, the newest
  * `wp_vuln_check` and the newest `wp_vuln_check_source`. It used to union the
  * CVEs of every such scan among the 50 newest rows of the whole database —
- * any project's, and stale ones beside current ones.
+ * any project's, and stale ones beside current ones. Each is looked up under
+ * every spelling an earlier build may have filed it with
+ * (`wordpress/siteKeys.ts`, fix round 1 I3).
+ *
+ * **It never refuses for want of a local project** (fix round 1, M4): the
+ * lookup reads the database, so with no `project_path` it answers for
+ * `wp_install_path` even when that install is not on this machine (its
+ * canonical spelling), else for the server's working directory — even a
+ * home directory, as `health_status` does. Only an explicit `project_path`
+ * that does not resolve is refused.
  *
  * **The lookup row is scoped.** It is filed as a `wp_vuln_check` of the
  * project with `meta.scope` = `{ kind: 'plugin', slug }`: one plugin's
@@ -25,14 +34,14 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { findLatestUsable } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
+import { serverProjectPath } from '../resources/paging.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult } from '../types.js';
+import { latestUnderKeys, wpInstallKeys, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { registerToolModule, type ToolModule } from './index.js';
-import { wpSiteKey } from './wpDescribeSetup.js';
 
 const inputSchema = {
   slug: z.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
@@ -69,11 +78,19 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { slug: string; wp_install_path?: string; target_url?: string; project_path?: string };
   if (!inp.slug) return failDomain('unknown_scan_id', 'slug is required.');
+  // See the module comment: only an explicit project_path is validated.
   let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path ?? inp.wp_install_path).path;
-  } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+  const rawProject = inp.project_path ?? inp.wp_install_path;
+  if (inp.project_path !== undefined && inp.project_path.length > 0) {
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return failDomain('not_a_git_repo', (e as Error).message);
+    }
+  } else if (inp.wp_install_path !== undefined && inp.wp_install_path.length > 0) {
+    projectPath = canonicalPath(inp.wp_install_path);
+  } else {
+    projectPath = serverProjectPath();
   }
 
   let installedVersion: string | null = null;
@@ -112,7 +129,7 @@ async function handler(
   // CVE lookup from local DB (no network call). Match by package_name == slug.
   // CVEs are normalised lowercased in our DB.
   const slugLower = inp.slug.toLowerCase();
-  const allActive = cveSources(ctx, projectPath, inp.target_url)
+  const allActive = cveSources(ctx, wpInstallKeys(projectPath, rawProject), inp.target_url)
     .flatMap((s) => ctx.storage.cves.listActive(s.scan_id))
     .filter((c) => c.package_name.toLowerCase() === slugLower);
 
@@ -170,16 +187,15 @@ async function handler(
  * URL — and the newest `wp_vuln_check_source`. Each is a project-scoped
  * query; a scoped row (another plugin lookup) is never one of them.
  */
-function cveSources(ctx: PluginContext, projectPath: string, targetUrl: string | undefined): ScanRecord[] {
-  const latest = (key: string, types: Parameters<typeof findLatestUsable>[2], slot?: 'deps'): ScanRecord | null =>
-    findLatestUsable(ctx.storage, key, types, slot !== undefined ? { slot } : {}).scan;
+function cveSources(ctx: PluginContext, installKeys: readonly string[], targetUrl: string | undefined): ScanRecord[] {
+  const siteKeys = targetUrl !== undefined ? wpSiteKeys(targetUrl) : [];
   const found = [
-    latest(projectPath, CVE_SOURCE_SCAN_TYPES, 'deps'),
-    latest(projectPath, ['wp_vuln_check']),
+    latestUnderKeys(ctx.storage, installKeys, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }),
+    // Filed under the install root, or — URL-only — under the site.
+    latestUnderKeys(ctx.storage, [...installKeys, ...siteKeys], ['wp_vuln_check']),
     // wp_vuln_check_source (Task 18): source-based match against the
     // Wordfence feed, no live URL — same `cves` shape, same slug key.
-    latest(projectPath, ['wp_vuln_check_source']),
-    targetUrl !== undefined ? latest(wpSiteKey(targetUrl), ['wp_vuln_check']) : null,
+    latestUnderKeys(ctx.storage, installKeys, ['wp_vuln_check_source']),
   ];
   return found.filter((s): s is ScanRecord => s !== null);
 }

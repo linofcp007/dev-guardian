@@ -11,6 +11,7 @@
  * picks them and the test fails; a project-scoped read never sees them.
  */
 
+import { relative, sep } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TOOLS, type ToolModule } from '../../src/tools/index.js';
 import type { StackSnapshot, ToolResult } from '../../src/types.js';
@@ -187,6 +188,81 @@ describe('wp_describe_setup answers for one WordPress project', () => {
       await tool('wp_describe_setup').handler({ project_path: a }, s.plugin),
     );
     expect(r.audits.wp_rest_audit).toBeNull();
+  });
+});
+
+/**
+ * Fix round 1, I3 (constraint 10: stored data keeps working). Builds up to
+ * 2.0.x filed `wp_vuln_check` under the RAW `wp_install_path ?? url`: a
+ * relative path, forward slashes, a trailing separator, a URL's trailing
+ * slash. No migration rewrites them; the readers look them up under every
+ * spelling (`wordpress/siteKeys.ts`).
+ */
+describe('WordPress rows an earlier build filed under a raw spelling are still found', () => {
+  const legacyVuln = (s: Seeded, id: string, key: string, cve: string, slug = 'akismet'): void => {
+    seedScan(s, { id, type: 'wp_vuln_check', project: key, tools_run: [{ name: 'wpscan', status: 'ok' }] });
+    s.storage.cves.upsert({ cve_id: cve, package_name: slug, severity: 'high', scan_id: id });
+  };
+
+  it.each([
+    ['a relative install path', (dir: string): string => relative(process.cwd(), dir)],
+    ['forward slashes', (dir: string): string => dir.replace(/\\/g, '/')],
+    ['a trailing separator', (dir: string): string => `${dir}${sep}`],
+  ])('wp_describe_setup and wp_plugin_check find a wp_vuln_check filed under %s', async (_label, spell) => {
+    const s = freshPlugin();
+    const dir = projectDir('sweep-legacy-');
+    const raw = spell(dir);
+    legacyVuln(s, 'legacy', raw, 'CVE-LEGACY');
+
+    const d = okResult<{ audits: { wp_vuln_check: { scan_id: string; cves_count: number } | null } }>(
+      await tool('wp_describe_setup').handler({ project_path: raw }, s.plugin),
+    );
+    expect(d.audits.wp_vuln_check).toMatchObject({ scan_id: 'legacy', cves_count: 1 });
+
+    const p = okResult<{ known_cves: Array<{ cve_id: string }> }>(
+      await tool('wp_plugin_check').handler({ slug: 'akismet', project_path: raw }, s.plugin),
+    );
+    expect(p.known_cves.map((c) => c.cve_id)).toEqual(['CVE-LEGACY']);
+  });
+
+  it("finds rows filed under a site URL's trailing-slash spelling, and keeps the newest across every key", async () => {
+    const { s, a } = twoProjects();
+    legacyVuln(s, 'old-canonical', a, 'CVE-OLD');
+    legacyVuln(s, 'legacy-url', 'https://legacy.example/', 'CVE-URL');
+    seedScan(s, {
+      id: 'legacy-rest', type: 'wp_rest_audit', project: 'https://legacy.example/',
+      tools_run: [{ name: 'http-probe', status: 'ok' }], meta: { exposed_count: 2 },
+    });
+
+    const d = okResult<{
+      audits: { wp_vuln_check: { scan_id: string } | null; wp_rest_audit: { scan_id: string } | null };
+    }>(await tool('wp_describe_setup').handler({ project_path: a, target_url: 'https://legacy.example' }, s.plugin));
+    // The URL row is newer than the one under the install root: it answers.
+    expect(d.audits.wp_vuln_check?.scan_id).toBe('legacy-url');
+    expect(d.audits.wp_rest_audit?.scan_id).toBe('legacy-rest');
+  });
+});
+
+/**
+ * Fix round 1, M3: only the audits that report through `meta` are read
+ * whatever their scanner coverage. `wp_vuln_check`, `wp_vuln_check_source` and
+ * `scan_wordpress` are finding scans — one that measured nothing is passed
+ * over and the one before it answers, the way `wp_plugin_check` already reads
+ * them.
+ */
+describe('wp_describe_setup passes over a finding scan that measured nothing', () => {
+  it.each([
+    ['wp_vuln_check', 'wpscan', 'wp_vuln_check'],
+    ['wp_vuln_check_source', 'wordfence-feed', 'wp_vuln_check_source'],
+    ['wordpress', 'semgrep-wp', 'scan_wordpress'],
+  ] as const)('%s', async (type, scanner, field) => {
+    const { s, a } = twoProjects();
+    seedScan(s, { id: 'measured', type, project: a, tools_run: [{ name: scanner, status: 'ok' }] });
+    seedScan(s, { id: 'blind', type, project: a, tools_run: [{ name: scanner, status: 'failed' }], missing_tools: [scanner] });
+    const d = okResult<{ audits: Record<string, { scan_id: string } | null> }>(
+      await tool('wp_describe_setup').handler({ project_path: a }, s.plugin),
+    );
+    expect(d.audits[field]?.scan_id).toBe('measured');
   });
 });
 

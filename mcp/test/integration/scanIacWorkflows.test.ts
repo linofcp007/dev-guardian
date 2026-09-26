@@ -130,7 +130,12 @@ describe('scan_iac: workflow scanners gated on .github/workflows', () => {
         return { outcome: 'completed', exitCode: 0, stdout: JSON.stringify([ZIZMOR_FINDING]), stderr: '', truncated: false };
       }
       if (opts.command === 'actionlint') {
-        return { outcome: 'completed', exitCode: 1, stdout: JSON.stringify([ACTIONLINT_FINDING]), stderr: '', truncated: false };
+        // What the real runner returns for actionlint's "problems found":
+        // every non-zero exit is `failed` (processRunner.test.ts pins it).
+        // This mock said `completed` + 1 — a runner that does not exist —
+        // and so hid scan_iac throwing away every actionlint finding and
+        // failing the whole row (Task 24 fix round 1, M7).
+        return { outcome: 'failed', exitCode: 1, stdout: JSON.stringify([ACTIONLINT_FINDING]), stderr: '', truncated: false };
       }
       return ok;
     });
@@ -146,6 +151,39 @@ describe('scan_iac: workflow scanners gated on .github/workflows', () => {
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBe(2);
     expect(r.coverage).toBe('full');
+  });
+
+  it('actionlint exit 1 with findings is a completed run: the iac row is completed, not failed', async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'actionlint' ? '/fake/bin/actionlint' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) =>
+      opts.command === 'actionlint'
+        ? { outcome: 'failed', exitCode: 1, stdout: JSON.stringify([ACTIONLINT_FINDING]), stderr: '', truncated: false }
+        : ok,
+    );
+    const project = makeTempDir('iac-');
+    writeWorkflow(project);
+    const p = plugin(project);
+    const r = (await tool().handler({ project_path: project }, p)) as ToolsRunResult & { scan_id: string };
+    expect(r.ok).toBe(true);
+    expect(p.storage.scans.getById(r.scan_id)?.status).toBe('completed');
+    expect(p.storage.findings.listByScan(r.scan_id).map((f) => f.tool)).toEqual(['actionlint']);
+  });
+
+  it('actionlint exit 2 (its own error) or a timeout is still a failed run', async () => {
+    for (const result of [
+      { outcome: 'failed' as const, exitCode: 2 },
+      { outcome: 'timed_out' as const, exitCode: null },
+    ]) {
+      vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'actionlint' ? '/fake/bin/actionlint' : null));
+      vi.mocked(runProcess).mockImplementation(async (opts) =>
+        opts.command === 'actionlint' ? { ...result, stdout: '', stderr: 'boom', truncated: false } : ok,
+      );
+      const project = makeTempDir('iac-');
+      writeWorkflow(project);
+      const r = (await tool().handler({ project_path: project }, plugin(project))) as ToolsRunResult;
+      expect(r.tools_run.find((t) => t.name === 'actionlint')?.status).toBe('failed');
+      expect(r.coverage).not.toBe('full');
+    }
   });
 
   it('zizmor is invoked with --format=json --no-exit-codes --collect=workflows and one positional arg per workflow file (never the directory)', async () => {
@@ -203,7 +241,8 @@ describe('scan_iac: workflow scanners gated on .github/workflows', () => {
     vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'zizmor' ? '/fake/bin/zizmor' : null));
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       if (opts.command === 'zizmor') {
-        return { outcome: 'completed', exitCode: 1, stdout: '', stderr: 'audit error', truncated: false };
+        // The real runner's shape for exit 1 (processRunner.test.ts).
+        return { outcome: 'failed', exitCode: 1, stdout: '', stderr: 'audit error', truncated: false };
       }
       return ok;
     });

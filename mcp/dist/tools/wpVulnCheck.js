@@ -17,8 +17,8 @@ import { canonicalPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { scannerAvailable } from './scanHelpers.js';
+import { wpSiteKey } from '../wordpress/siteKeys.js';
 import { registerToolModule } from './index.js';
-import { wpSiteKey } from './wpDescribeSetup.js';
 const inputSchema = {
     wp_install_path: z
         .string()

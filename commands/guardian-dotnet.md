@@ -16,7 +16,7 @@ Before step 2, tell the user: `scan_sast`, `deps_audit` and `deps_update_plan` r
 5. `dotnet_target_framework_check { project_path: "<project>" }` — projects on end-of-life .NET.
 6. `dotnet_efcore_audit { project_path: "<project>" }` — dangerous migrations: `DropTable`, `DropColumn`, non-nullable `AlterColumn` without a default, raw SQL with credentials.
 7. `deps_audit { project_path: "<project>" }` — Trivy plus `dotnet list package --vulnerable --include-transitive`; then `deps_update_plan { project_path: "<project>", prefer: "security" }` for the ordered upgrades (`runner_failures` names a lock file out of sync versus an unreachable feed).
-8. `dotnet_describe_setup {}` — one summary of everything the steps above stored.
+8. `dotnet_describe_setup { project_path: "<project>" }` — one summary of everything the steps above stored for this project.
 
 Worst first: security, then correctness, then maintenance. When the .NET SDK is missing, say which steps were skipped and offer `install_toolchain { tools: ["dotnet-sdk"], dry_run: true }`.
 

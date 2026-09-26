@@ -18,7 +18,7 @@ Arguments: $ARGUMENTS
 4. **Live site**, when a URL is given:
    - `wp_vuln_check { target_url: "<url>" }` — WPScan (a token in `WPSCAN_API_TOKEN` avoids the public rate limit);
    - `wp_rest_audit { target_url: "<url>" }` — read-only GETs against REST endpoints that commonly leak (user enumeration, drafts, comments, `xmlrpc.php`).
-5. **Hardening**: `wp_recommend_hardening {}` turns the latest `wp_audit` into a prioritised, copy-pasteable checklist; `wp_describe_setup {}` summarises everything gathered so far.
+5. **Hardening**: `wp_recommend_hardening { project_path: "<install root>" }` turns that install's latest `wp_audit` into a prioritised, copy-pasteable checklist; `wp_describe_setup { project_path: "<install root>", target_url: "<url>" }` summarises everything gathered so far. The install root is the path given, else `<project>`; pass `target_url` only when a URL was given — the live-site results are filed under it. Both answer only for the project and site they are given.
 6. Several installs at once: `bulk_audit_wordpress_sites { wp_install_paths: ["<path>"] }`.
 
 When WP-CLI, WPScan or PHPCS are missing, run what is available, list what was skipped, and offer `install_toolchain { tools: ["wp-cli", "wpscan", "phpcs"], dry_run: true }` first.

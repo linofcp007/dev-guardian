@@ -34,7 +34,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { openSetForProject } from '../history/openSet.js';
+import { isScopedScan } from '../history/scanRoles.js';
 import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
@@ -196,27 +196,42 @@ function toStringArray(value: unknown): string[] {
 }
 
 /**
- * The scanned project's open set, read back out of the ephemeral database
- * rather than out of any step's return payload (see the module doc comment)
- * — the same answer `guardian://findings/open` and every interactive reader
- * gives (`history/openSet.ts`): the newest usable scan of each state type
- * for THIS project, orchestrated `security_full` parents left to their
- * children, suppressions applied.
+ * Every finding this run persisted for the scanned project, read back out of
+ * the ephemeral database rather than out of any step's return payload (see
+ * the module doc comment): each UNSCOPED row of THIS project, whatever its
+ * status.
  *
- * It used to be every row of `listHistory(50)` — whatever project each
- * belonged to, scoped or not, failed or cancelled or not (Task 24). The
- * database being fresh narrows what can be in it, not what a step may write
- * there; the gate must count this project's measurement and nothing else.
+ * - Project-scoped (Task 24): it used to be every row of `listHistory(50)`,
+ *   whatever project each belonged to. The database being fresh narrows what
+ *   can be in it, not what a step may write there — a row filed under
+ *   another path is not this project's measurement. Resolved the way every
+ *   step resolved the `project_path` it was given, so both sides compare the
+ *   same spelling.
+ * - Never a scoped row (`meta.scope`): part of the project, whose silence
+ *   about the rest is not evidence — and whose findings the whole-project
+ *   rows already hold.
+ * - Status-agnostic, deliberately NOT the interactive open set (fix round 1,
+ *   I1): the open set reads completed rows only and falls back to an older
+ *   one, which a throwaway database never has. A `failed` row often carries
+ *   real findings — scan_iac fails the whole row when one pass exits
+ *   non-zero, yet keeps Trivy's results — and `gate.ts`'s rule is that a
+ *   real regression (GATE_FAILED) outranks a coverage gap (INCOMPLETE_SCAN),
+ *   never hides behind it. The gap itself still reaches the gate through
+ *   each step's `tools_run` / `missing_tools`.
  *
- * The path is resolved the way every step resolved the `project_path` it was
- * given, so both sides compare the same spelling.
- *
- * Deduplicated once more by `runners/findingMerge.ts`, which decides what
- * "the same issue" means for the gate across two scanners' reports.
+ * Deduplicated across rows by `runners/findingMerge.ts` (an orchestrated
+ * `security_full` parent repeats its children's findings; two scanners can
+ * report one issue): the same issue must not be counted twice by the gate.
  */
 function collectFindings(storage: Storage, projectPath: string): Finding[] {
-  const findings = openSetForProject(storage, scannedProject(projectPath)).findings;
-  return dedupeFindings(findings.map(({ scan_id: _scanId, ...f }) => f));
+  const project = scannedProject(projectPath);
+  const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+  const all: Finding[] = [];
+  for (const scan of rows) {
+    if (isScopedScan(scan)) continue;
+    all.push(...storage.findings.listByScan(scan.scan_id));
+  }
+  return dedupeFindings(all);
 }
 
 /** `resolveProjectPath`'s spelling of `projectPath`, or its canonical form when it no longer resolves. */
