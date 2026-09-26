@@ -48718,6 +48718,315 @@ init_execa();
 var import_yaml5 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync23, readFileSync as readFileSync20, readdirSync as readdirSync14, statSync as statSync9 } from "node:fs";
 import { dirname as dirname15, join as join33, relative as relative14, sep as sep10 } from "node:path";
+
+// src/history/scanRoles.ts
+var SCAN_TYPE_ROLE = {
+  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
+  // children (sast/secrets/deps/iac) are the sources, never the row itself;
+  // a script-era row is split across sast/secrets/deps/containers, so rows
+  // written before child scans existed do not vanish from the open set.
+  security_full: "state",
+  sast: "state",
+  secrets: "state",
+  deps: "state",
+  deps_audit: "state",
+  containers: "state",
+  iac: "state",
+  bugs: "state",
+  quality: "state",
+  dast: "state",
+  compliance: "state",
+  perf: "state",
+  wordpress: "state",
+  wp_vuln_check: "state",
+  wp_vuln_check_source: "state",
+  dotnet_secrets: "state",
+  dotnet_efcore_audit: "state",
+  sbom: "never",
+  detect_stack: "never",
+  init: "never",
+  observability: "never",
+  audit: "never",
+  skill_audit: "never",
+  agent_audit: "never",
+  review_pr: "never",
+  wp_audit: "never",
+  wp_cron_audit: "never",
+  wp_rest_audit: "never",
+  dotnet_target_framework: "never"
+};
+var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
+function isOrchestratedFullScan(scan2) {
+  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
+}
+function isScriptEraFullScan(scan2) {
+  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
+}
+var SCRIPT_ERA_RUN_SLOTS = {
+  semgrep: "sast",
+  bandit: "sast",
+  gitleaks: "secrets",
+  trivy: "deps",
+  "trivy-dockerfile": "containers"
+};
+function scriptEraSlotOfFinding(f) {
+  switch (f.tool) {
+    case "semgrep":
+    case "bandit":
+      return "sast";
+    case "gitleaks":
+      return "secrets";
+    case "trivy":
+      if (f.category === "license" || f.subcategory === "cve") return "deps";
+      if (f.subcategory === "secret") return "secrets";
+      return "containers";
+    default:
+      return "security_full";
+  }
+}
+function sourceTypesOf(slot) {
+  if (slot === "security_full") return ["security_full"];
+  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
+  return coveredByFull ? [slot, "security_full"] : [slot];
+}
+function runSlotOf(tool48) {
+  return SCRIPT_ERA_RUN_SLOTS[tool48] ?? "security_full";
+}
+function findingInSlot(scan2, finding4, slot) {
+  if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
+  return scriptEraSlotOfFinding(finding4) === slot;
+}
+function slotView(scan2, slot) {
+  if (scan2.scan_type !== "security_full") {
+    return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
+  }
+  return {
+    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
+    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
+  };
+}
+function isScopedScan(scan2) {
+  const meta = scan2.meta;
+  if (meta === void 0) return false;
+  if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
+  return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
+}
+
+// src/history/openSet.ts
+var PAGE = 25;
+var SKIPPED_SAMPLE = 5;
+function findLatestUsable(storage, projectPath, types, opts = {}) {
+  const r = search(storage, projectPath, types, opts);
+  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
+}
+function search(storage, projectPath, types, opts) {
+  const skipCoverageNone = opts.skipCoverageNone ?? true;
+  const hits = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, types, {
+      limit: PAGE,
+      offset,
+      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
+      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
+      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
+    });
+    for (const scan2 of page) {
+      if (isScopedScan(scan2)) continue;
+      if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
+      const judged = judge(scan2, opts.slot);
+      if (judged === null) continue;
+      if (skipCoverageNone && judged === "none") {
+        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
+        continue;
+      }
+      return { scan: scan2, coverage: judged, hits };
+    }
+    if (page.length < PAGE) return { scan: null, coverage: null, hits };
+  }
+}
+function latestStateScan(storage, projectPath, scanType, opts = {}) {
+  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
+  const found = findLatestUsable(storage, projectPath, types, opts);
+  if (scanType !== void 0 || found.scan === null) return found;
+  const hits = [...found.hits];
+  const rejected = /* @__PURE__ */ new Set();
+  let current = found;
+  for (; ; ) {
+    const child = current.scan;
+    if (child === null) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    const run = runOf(storage, projectPath, child);
+    if (run === child) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    if (!rejected.has(run.scan_id)) {
+      const coverage = judge(run, void 0);
+      if (coverage !== "none") return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
+      rejected.add(run.scan_id);
+      hits.push({ slot: run.scan_type, scan: run, reason: "coverage_none" });
+    }
+    current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
+    hits.push(...current.hits);
+  }
+}
+function mapRun(storage, projectPath, scan2) {
+  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
+}
+function runOf(storage, projectPath, scan2) {
+  const parentId = scan2.meta?.["parent_scan_id"];
+  if (typeof parentId !== "string") return scan2;
+  const parent = storage.scans.getById(parentId);
+  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
+    return scan2;
+  }
+  return parent;
+}
+function judge(scan2, slot) {
+  if (slot === void 0 || scan2.scan_type !== "security_full") {
+    return computeCoverage(scan2.tools_run, scan2.missing_tools);
+  }
+  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
+  const view = slotView(scan2, slot);
+  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
+  return computeCoverage(view.tools_run, view.missing_tools);
+}
+function summarizeSkipped(hits) {
+  const byScan = /* @__PURE__ */ new Map();
+  for (const h2 of hits) {
+    const seen = byScan.get(h2.scan.scan_id);
+    if (seen !== void 0) {
+      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
+      continue;
+    }
+    byScan.set(h2.scan.scan_id, {
+      scan_id: h2.scan.scan_id,
+      scan_type: h2.scan.scan_type,
+      started_at: h2.scan.started_at,
+      reason: h2.reason,
+      slots: [h2.slot]
+    });
+  }
+  const all = [...byScan.values()].sort(
+    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
+  );
+  const by_reason = { coverage_none: 0 };
+  const newest = [];
+  for (const s of all) {
+    by_reason[s.reason] += 1;
+    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
+  }
+  return { count: all.length, by_reason, newest };
+}
+function suppressionMatcher(suppressions, now, projectPath) {
+  const fingerprints = /* @__PURE__ */ new Set();
+  const identities = /* @__PURE__ */ new Set();
+  for (const s of suppressions) {
+    if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
+    if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
+    fingerprints.add(s.finding_fingerprint);
+    if (s.finding_identity !== void 0) identities.add(s.finding_identity);
+  }
+  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
+}
+function slotSources(storage, projectPath, slot) {
+  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
+  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
+  if (slot === "security_full") {
+    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
+    return { picks: pick2(r), hits: r.hits };
+  }
+  const dedicated = search(storage, projectPath, [slot], { slot });
+  if (!sourceTypesOf(slot).includes("security_full")) {
+    return { picks: pick2(dedicated), hits: dedicated.hits };
+  }
+  const legacy = search(storage, projectPath, ["security_full"], {
+    slot,
+    ...scriptEra,
+    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
+  });
+  const picks = pick2(dedicated);
+  if (legacy.scan !== null && legacy.coverage !== null) {
+    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
+  }
+  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
+}
+function openSetForProject(storage, projectPath, opts = {}) {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
+  const picked = [];
+  const hits = [];
+  const considered = /* @__PURE__ */ new Map();
+  for (const slot of STATE_SCAN_TYPES) {
+    const found = slotSources(storage, projectPath, slot);
+    for (const h2 of found.hits) {
+      hits.push(h2);
+      considered.set(h2.scan.scan_id, h2.scan);
+    }
+    for (const p of found.picks) {
+      picked.push({ slot, ...p });
+      considered.set(p.scan.scan_id, p.scan);
+    }
+  }
+  const order = storage.scans.sortNewestFirst([...considered.keys()]);
+  const rank = new Map(order.map((id, i2) => [id, i2]));
+  const rankOf = (scanId) => rank.get(scanId) ?? order.length;
+  picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  const byScan = /* @__PURE__ */ new Map();
+  const findings = [];
+  const sources = [];
+  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
+    let rows = byScan.get(scan2.scan_id);
+    if (rows === void 0) {
+      rows = storage.findings.listByScan(scan2.scan_id);
+      byScan.set(scan2.scan_id, rows);
+    }
+    const seen = indexFindings(findings);
+    let contributed = 0;
+    for (const f of rows) {
+      if (!findingInSlot(scan2, f, slot) || isSuppressed(f) || seen.has(f)) continue;
+      findings.push({ ...f, scan_id: scan2.scan_id });
+      contributed += 1;
+    }
+    sources.push({
+      slot,
+      scan_id: scan2.scan_id,
+      scan_type: scan2.scan_type,
+      started_at: scan2.started_at,
+      finished_at: scan2.finished_at,
+      coverage: coverage2,
+      findings: contributed
+    });
+  }
+  findings.sort(
+    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
+  );
+  const skipped2 = summarizeSkipped(hits);
+  const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
+  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped2.count > 0 ? "partial" : "full";
+  const bookkeeping = [
+    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
+  ];
+  return {
+    project_path: projectPath,
+    findings,
+    sources,
+    skipped: skipped2,
+    coverage,
+    scans,
+    bookkeeping,
+    // Named as a run: a child of an orchestrated security_full stands for
+    // its parent (see `latestStateScan`). `picked` is newest first.
+    newest: mapRun(storage, projectPath, scans[0]),
+    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
+  };
+}
+function describeOpenSet(set2) {
+  return {
+    project_path: set2.project_path,
+    coverage: set2.coverage,
+    sources: set2.sources,
+    skipped: set2.skipped
+  };
+}
+
+// src/tools/depsUpdatePlan.ts
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -48984,10 +49293,7 @@ function readDependencyEvidence(projectPath) {
   return out;
 }
 function listActiveCves(ctx, projectPath) {
-  const history = ctx.storage.scans.listHistoryForProject(projectPath, 50);
-  const latest = history.find(
-    (s) => CVE_SOURCE_SCAN_TYPES.includes(s.scan_type) && s.status === "completed"
-  );
+  const latest = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }).scan;
   const out = /* @__PURE__ */ new Map();
   if (!latest) return out;
   for (const cve of ctx.storage.cves.listActive(latest.scan_id)) {
@@ -51871,313 +52177,6 @@ function summariseK6(root) {
 }
 function failDomain7(code, message3) {
   return { ok: false, error: { code, message: message3 } };
-}
-
-// src/history/scanRoles.ts
-var SCAN_TYPE_ROLE = {
-  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
-  // children (sast/secrets/deps/iac) are the sources, never the row itself;
-  // a script-era row is split across sast/secrets/deps/containers, so rows
-  // written before child scans existed do not vanish from the open set.
-  security_full: "state",
-  sast: "state",
-  secrets: "state",
-  deps: "state",
-  deps_audit: "state",
-  containers: "state",
-  iac: "state",
-  bugs: "state",
-  quality: "state",
-  dast: "state",
-  compliance: "state",
-  perf: "state",
-  wordpress: "state",
-  wp_vuln_check: "state",
-  wp_vuln_check_source: "state",
-  dotnet_secrets: "state",
-  dotnet_efcore_audit: "state",
-  sbom: "never",
-  detect_stack: "never",
-  init: "never",
-  observability: "never",
-  audit: "never",
-  skill_audit: "never",
-  agent_audit: "never",
-  review_pr: "never",
-  wp_audit: "never",
-  wp_cron_audit: "never",
-  wp_rest_audit: "never",
-  dotnet_target_framework: "never"
-};
-var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
-function isOrchestratedFullScan(scan2) {
-  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
-}
-function isScriptEraFullScan(scan2) {
-  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
-}
-var SCRIPT_ERA_RUN_SLOTS = {
-  semgrep: "sast",
-  bandit: "sast",
-  gitleaks: "secrets",
-  trivy: "deps",
-  "trivy-dockerfile": "containers"
-};
-function scriptEraSlotOfFinding(f) {
-  switch (f.tool) {
-    case "semgrep":
-    case "bandit":
-      return "sast";
-    case "gitleaks":
-      return "secrets";
-    case "trivy":
-      if (f.category === "license" || f.subcategory === "cve") return "deps";
-      if (f.subcategory === "secret") return "secrets";
-      return "containers";
-    default:
-      return "security_full";
-  }
-}
-function sourceTypesOf(slot) {
-  if (slot === "security_full") return ["security_full"];
-  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
-  return coveredByFull ? [slot, "security_full"] : [slot];
-}
-function runSlotOf(tool48) {
-  return SCRIPT_ERA_RUN_SLOTS[tool48] ?? "security_full";
-}
-function findingInSlot(scan2, finding4, slot) {
-  if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
-  return scriptEraSlotOfFinding(finding4) === slot;
-}
-function slotView(scan2, slot) {
-  if (scan2.scan_type !== "security_full") {
-    return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
-  }
-  return {
-    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
-    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
-  };
-}
-function isScopedScan(scan2) {
-  const meta = scan2.meta;
-  if (meta === void 0) return false;
-  if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
-  return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
-}
-
-// src/history/openSet.ts
-var PAGE = 25;
-var SKIPPED_SAMPLE = 5;
-function findLatestUsable(storage, projectPath, types, opts = {}) {
-  const r = search(storage, projectPath, types, opts);
-  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
-}
-function search(storage, projectPath, types, opts) {
-  const skipCoverageNone = opts.skipCoverageNone ?? true;
-  const hits = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, types, {
-      limit: PAGE,
-      offset,
-      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
-      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
-      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
-    });
-    for (const scan2 of page) {
-      if (isScopedScan(scan2)) continue;
-      if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
-      const judged = judge(scan2, opts.slot);
-      if (judged === null) continue;
-      if (skipCoverageNone && judged === "none") {
-        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
-        continue;
-      }
-      return { scan: scan2, coverage: judged, hits };
-    }
-    if (page.length < PAGE) return { scan: null, coverage: null, hits };
-  }
-}
-function latestStateScan(storage, projectPath, scanType, opts = {}) {
-  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
-  const found = findLatestUsable(storage, projectPath, types, opts);
-  if (scanType !== void 0 || found.scan === null) return found;
-  const hits = [...found.hits];
-  const rejected = /* @__PURE__ */ new Set();
-  let current = found;
-  for (; ; ) {
-    const child = current.scan;
-    if (child === null) return { ...current, hits, skipped: summarizeSkipped(hits) };
-    const run = runOf(storage, projectPath, child);
-    if (run === child) return { ...current, hits, skipped: summarizeSkipped(hits) };
-    if (!rejected.has(run.scan_id)) {
-      const coverage = judge(run, void 0);
-      if (coverage !== "none") return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
-      rejected.add(run.scan_id);
-      hits.push({ slot: run.scan_type, scan: run, reason: "coverage_none" });
-    }
-    current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
-    hits.push(...current.hits);
-  }
-}
-function mapRun(storage, projectPath, scan2) {
-  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
-}
-function runOf(storage, projectPath, scan2) {
-  const parentId = scan2.meta?.["parent_scan_id"];
-  if (typeof parentId !== "string") return scan2;
-  const parent = storage.scans.getById(parentId);
-  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
-    return scan2;
-  }
-  return parent;
-}
-function judge(scan2, slot) {
-  if (slot === void 0 || scan2.scan_type !== "security_full") {
-    return computeCoverage(scan2.tools_run, scan2.missing_tools);
-  }
-  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
-  const view = slotView(scan2, slot);
-  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
-  return computeCoverage(view.tools_run, view.missing_tools);
-}
-function summarizeSkipped(hits) {
-  const byScan = /* @__PURE__ */ new Map();
-  for (const h2 of hits) {
-    const seen = byScan.get(h2.scan.scan_id);
-    if (seen !== void 0) {
-      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
-      continue;
-    }
-    byScan.set(h2.scan.scan_id, {
-      scan_id: h2.scan.scan_id,
-      scan_type: h2.scan.scan_type,
-      started_at: h2.scan.started_at,
-      reason: h2.reason,
-      slots: [h2.slot]
-    });
-  }
-  const all = [...byScan.values()].sort(
-    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
-  );
-  const by_reason = { coverage_none: 0 };
-  const newest = [];
-  for (const s of all) {
-    by_reason[s.reason] += 1;
-    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
-  }
-  return { count: all.length, by_reason, newest };
-}
-function suppressionMatcher(suppressions, now, projectPath) {
-  const fingerprints = /* @__PURE__ */ new Set();
-  const identities = /* @__PURE__ */ new Set();
-  for (const s of suppressions) {
-    if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
-    if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
-    fingerprints.add(s.finding_fingerprint);
-    if (s.finding_identity !== void 0) identities.add(s.finding_identity);
-  }
-  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
-}
-function slotSources(storage, projectPath, slot) {
-  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
-  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
-  if (slot === "security_full") {
-    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
-    return { picks: pick2(r), hits: r.hits };
-  }
-  const dedicated = search(storage, projectPath, [slot], { slot });
-  if (!sourceTypesOf(slot).includes("security_full")) {
-    return { picks: pick2(dedicated), hits: dedicated.hits };
-  }
-  const legacy = search(storage, projectPath, ["security_full"], {
-    slot,
-    ...scriptEra,
-    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
-  });
-  const picks = pick2(dedicated);
-  if (legacy.scan !== null && legacy.coverage !== null) {
-    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
-  }
-  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
-}
-function openSetForProject(storage, projectPath, opts = {}) {
-  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
-  const picked = [];
-  const hits = [];
-  const considered = /* @__PURE__ */ new Map();
-  for (const slot of STATE_SCAN_TYPES) {
-    const found = slotSources(storage, projectPath, slot);
-    for (const h2 of found.hits) {
-      hits.push(h2);
-      considered.set(h2.scan.scan_id, h2.scan);
-    }
-    for (const p of found.picks) {
-      picked.push({ slot, ...p });
-      considered.set(p.scan.scan_id, p.scan);
-    }
-  }
-  const order = storage.scans.sortNewestFirst([...considered.keys()]);
-  const rank = new Map(order.map((id, i2) => [id, i2]));
-  const rankOf = (scanId) => rank.get(scanId) ?? order.length;
-  picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
-  const byScan = /* @__PURE__ */ new Map();
-  const findings = [];
-  const sources = [];
-  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
-    let rows = byScan.get(scan2.scan_id);
-    if (rows === void 0) {
-      rows = storage.findings.listByScan(scan2.scan_id);
-      byScan.set(scan2.scan_id, rows);
-    }
-    const seen = indexFindings(findings);
-    let contributed = 0;
-    for (const f of rows) {
-      if (!findingInSlot(scan2, f, slot) || isSuppressed(f) || seen.has(f)) continue;
-      findings.push({ ...f, scan_id: scan2.scan_id });
-      contributed += 1;
-    }
-    sources.push({
-      slot,
-      scan_id: scan2.scan_id,
-      scan_type: scan2.scan_type,
-      started_at: scan2.started_at,
-      finished_at: scan2.finished_at,
-      coverage: coverage2,
-      findings: contributed
-    });
-  }
-  findings.sort(
-    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
-  );
-  const skipped2 = summarizeSkipped(hits);
-  const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
-  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped2.count > 0 ? "partial" : "full";
-  const bookkeeping = [
-    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
-    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
-  ];
-  return {
-    project_path: projectPath,
-    findings,
-    sources,
-    skipped: skipped2,
-    coverage,
-    scans,
-    bookkeeping,
-    // Named as a run: a child of an orchestrated security_full stands for
-    // its parent (see `latestStateScan`). `picked` is newest first.
-    newest: mapRun(storage, projectPath, scans[0]),
-    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
-  };
-}
-function describeOpenSet(set2) {
-  return {
-    project_path: set2.project_path,
-    coverage: set2.coverage,
-    sources: set2.sources,
-    skipped: set2.skipped
-  };
 }
 
 // src/history/runNames.ts

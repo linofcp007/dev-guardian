@@ -936,6 +936,11 @@ keeps working (migrations 004–011 are additive).
   then answered with its parent without judging it. A parent at coverage
   `none` is now passed over, with its children, so `set_baseline` and
   `report_export` default to the newest scan that measured something.
+- **`deps_update_plan` took its CVEs from the first completed deps-flavoured
+  row in a 50-row window**, so a scoped `deps` run or a `security_scan_full`
+  whose Trivy failed made it plan no security update while `risk_score`
+  counted the CVE. It now reads the same newest usable deps scan as
+  `risk_score` and the dashboard.
 
 ### Security
 

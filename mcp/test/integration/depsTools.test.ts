@@ -1278,6 +1278,71 @@ describe('deps_update_plan', () => {
     expect(r.summary.has_security_updates).toBe(true);
   });
 
+  // Final review M2: the CVE source was the first completed deps-flavoured
+  // row in a 50-row window — a scoped `deps` run, or a security_full whose
+  // Trivy half failed, answered "nothing to update" while risk_score (the
+  // newest USABLE deps scan) still counted the CVE.
+  it.each([
+    ['a newer scoped deps run', { scan_type: 'deps' as const, meta: { scope: { mode: 'staged', files: 1 } } }],
+    [
+      'a newer security_full whose Trivy half failed',
+      {
+        scan_type: 'security_full' as const,
+        tools_run: [{ name: 'semgrep', status: 'ok' as const }, { name: 'trivy', status: 'failed' as const }],
+      },
+    ],
+  ])('takes its CVEs from the newest usable deps scan, never %s', async (_label, newer) => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+
+    plugin.storage.scans.insert({ scan_id: 'usable', scan_type: 'deps', project_path: project, tree_hash: 'h1' });
+    plugin.storage.scans.finalize({
+      scan_id: 'usable',
+      status: 'completed',
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      missing_tools: [],
+    });
+    plugin.storage.cves.upsert({
+      cve_id: 'CVE-2024-XXX',
+      package_name: 'lodash',
+      installed_version: '4.17.20',
+      severity: 'high',
+      scan_id: 'usable',
+    });
+    plugin.storage.scans.insert({
+      scan_id: 'newer',
+      scan_type: newer.scan_type,
+      project_path: project,
+      tree_hash: 'h2',
+      ...('meta' in newer ? { meta: newer.meta } : {}),
+    });
+    plugin.storage.scans.finalize({
+      scan_id: 'newer',
+      status: 'completed',
+      tools_run: 'tools_run' in newer ? newer.tools_run : [{ name: 'trivy', status: 'ok' }],
+      missing_tools: [],
+    });
+    plugin.storage
+      .rawHandle()
+      .prepare("UPDATE scans SET started_at = ? WHERE id = 'newer'")
+      .run(new Date(Date.now() + 60_000).toISOString());
+
+    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      if (cmd === 'npm' && args[0] === 'outdated') {
+        return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as typeof execa);
+
+    const r = (await getTool('deps_update_plan').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      plan: Array<{ classification: string; cve_ids?: string[] }>;
+    };
+    expect(r.plan[0]?.classification).toBe('security');
+    expect(r.plan[0]?.cve_ids).toEqual(['CVE-2024-XXX']);
+  });
+
   it('orders security entries first when prefer=security (default)', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
