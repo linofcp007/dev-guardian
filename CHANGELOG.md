@@ -906,6 +906,14 @@ keeps working (migrations 004–011 are additive).
   missing, an unclean exit or any `errors[]` entry (a `PartialParsing` route
   file) is `failed`, and neither is persisted; a failed run's routes are still
   shown, marked unpersisted. Semgrep now runs in UTF-8 mode here too.
+- **A Gradle build without `gradle.lockfile`, or a Python project Trivy
+  cannot read** (a PEP 621 `pyproject.toml`, a `Pipfile` without
+  `Pipfile.lock`, an unpinned `requirements.txt`, a `requirements-dev.txt`),
+  made `scan_deps`, `deps_audit`, `security_scan_full` and the CI gate report
+  `trivy ok`, coverage `full`, 0 findings — Trivy 0.69.3 returns no Results
+  for any of them. They are now `trivy:gradle` / `trivy:python` coverage
+  gaps; a `pyproject.toml` or `requirements*.txt` that declares nothing is
+  not.
 
 ### Security
 

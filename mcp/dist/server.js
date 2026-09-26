@@ -45464,7 +45464,20 @@ var ECOSYSTEM_MANIFESTS = [
     lockfiles: ["packages.lock.json", "packages.config"]
   },
   { ecosystem: "rubygems", matches: (n2) => n2 === "Gemfile", trivyTypes: ["bundler"], lockfiles: ["Gemfile.lock"] },
-  { ecosystem: "cargo", matches: (n2) => n2 === "Cargo.toml", trivyTypes: ["cargo"], lockfiles: ["Cargo.lock"] }
+  { ecosystem: "cargo", matches: (n2) => n2 === "Cargo.toml", trivyTypes: ["cargo"], lockfiles: ["Cargo.lock"] },
+  {
+    ecosystem: "gradle",
+    matches: (n2) => n2 === "build.gradle" || n2 === "build.gradle.kts",
+    trivyTypes: ["gradle"],
+    lockfiles: ["gradle.lockfile"]
+  },
+  {
+    ecosystem: "python",
+    matches: (n2) => n2 === "pyproject.toml" || n2 === "Pipfile" || /^requirements.*\.txt$/i.test(n2),
+    trivyTypes: ["pip", "pipenv", "poetry", "uv"],
+    lockfiles: ["requirements.txt", "Pipfile.lock", "poetry.lock", "uv.lock"],
+    declaresNothing: pythonManifestDeclaresNothing
+  }
 ];
 var MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
 var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
@@ -45527,6 +45540,38 @@ function npmManifestDeclaresNothing(path6) {
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest;
   return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname13(path6));
+}
+var EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
+var PY_DEPENDENCY_KEYS = /* @__PURE__ */ new Set(["dependencies", "optional-dependencies", "dev-dependencies"]);
+var PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
+function pythonManifestDeclaresNothing(path6) {
+  let text;
+  try {
+    text = readFileSync16(path6, "utf8").replace(/^﻿/, "");
+  } catch {
+    return false;
+  }
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+  if (/\.txt$/i.test(path6)) return lines.length === 0;
+  let table = "";
+  for (const line of lines) {
+    if (line.startsWith("[")) {
+      const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+      if (header?.[1] === void 0) return false;
+      table = header[1].replace(/["'\s]/g, "");
+      continue;
+    }
+    const kv = /^["']?([A-Za-z0-9_.-]+)["']?\s*=\s*(.*)$/.exec(line);
+    if (kv?.[1] === void 0 || kv[2] === void 0) continue;
+    const key = kv[1];
+    const empty = EMPTY_TOML_VALUE.test(kv[2]);
+    const lastSegment = key.slice(key.lastIndexOf(".") + 1);
+    if (PY_DEPENDENCY_KEYS.has(lastSegment) && !empty) return false;
+    if (PY_DEPENDENCY_TABLES.test(table) && !empty && !(table.startsWith("tool.poetry.") && key === "python")) {
+      return false;
+    }
+  }
+  return true;
 }
 function assessManifestCoverage(projectPath, rawTrivyOutput) {
   let entries2;
@@ -52147,6 +52192,8 @@ var RUN_NAMES = {
   "trivy:dotnet": scanner(trivyFsKey("dotnet")),
   "trivy:rubygems": scanner(trivyFsKey("rubygems")),
   "trivy:cargo": scanner(trivyFsKey("cargo")),
+  "trivy:gradle": scanner(trivyFsKey("gradle")),
+  "trivy:python": scanner(trivyFsKey("python")),
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
   // `dotnet list package --vulnerable`, whose findings say

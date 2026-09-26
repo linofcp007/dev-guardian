@@ -202,10 +202,14 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
 //
 // The same silent gap exists for `package.json` without any npm/yarn/pnpm
 // lockfile and for `composer.json` without `composer.lock` — confirmed the
-// same way. It does NOT exist for `requirements.txt` (pip) or `go.mod`
-// (go): both are scanned by Trivy from the bare manifest alone, no lockfile
-// required — also confirmed against 0.69.3 — so they are deliberately
-// excluded from this table; flagging them would be a false alarm.
+// same way. And (final review, I4) for Gradle and Python, measured on
+// 0.69.3: `Results: []` for a `build.gradle` / `build.gradle.kts` without
+// `gradle.lockfile`, a PEP 621 `pyproject.toml` without `poetry.lock` /
+// `uv.lock`, a `Pipfile` without `Pipfile.lock`, a `requirements-dev.txt`
+// (Trivy reads `requirements.txt` only) and an UNPINNED `requirements.txt`
+// (`django`, no `==`). A pinned `requirements.txt` is read on its own (Type
+// `pip`, Target `requirements.txt`), so it covers Python like a lock file.
+// `go.mod` is scanned from the bare manifest — no gap, not in this table.
 //
 // Nor is there a gap for a `package.json` that declares no dependency at
 // all. Measured against 0.69.3: such a manifest produces no `Results` key
@@ -268,6 +272,19 @@ const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
   },
   { ecosystem: 'rubygems', matches: (n) => n === 'Gemfile', trivyTypes: ['bundler'], lockfiles: ['Gemfile.lock'] },
   { ecosystem: 'cargo', matches: (n) => n === 'Cargo.toml', trivyTypes: ['cargo'], lockfiles: ['Cargo.lock'] },
+  {
+    ecosystem: 'gradle',
+    matches: (n) => n === 'build.gradle' || n === 'build.gradle.kts',
+    trivyTypes: ['gradle'],
+    lockfiles: ['gradle.lockfile'],
+  },
+  {
+    ecosystem: 'python',
+    matches: (n) => n === 'pyproject.toml' || n === 'Pipfile' || /^requirements.*\.txt$/i.test(n),
+    trivyTypes: ['pip', 'pipenv', 'poetry', 'uv'],
+    lockfiles: ['requirements.txt', 'Pipfile.lock', 'poetry.lock', 'uv.lock'],
+    declaresNothing: pythonManifestDeclaresNothing,
+  },
 ];
 
 /** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
@@ -365,6 +382,61 @@ function npmManifestDeclaresNothing(path: string): boolean {
   if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest as Record<string, unknown>;
   return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
+}
+
+/** A TOML value that is literally empty: `[]` or `{}`, an optional trailing comment. */
+const EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
+/** Key names that declare dependencies in whatever table they sit in (setuptools' dynamic ones included). */
+const PY_DEPENDENCY_KEYS: ReadonlySet<string> = new Set(['dependencies', 'optional-dependencies', 'dev-dependencies']);
+/** Tables whose every key is a dependency (Poetry's `python` constraint aside). */
+const PY_DEPENDENCY_TABLES =
+  /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
+
+/**
+ * Python's "declares nothing" — nothing Trivy could have missed, so no gap:
+ * a `requirements*.txt` with no line but blanks and comments; a `Pipfile`
+ * with no entry under `[packages]` / `[dev-packages]`; a `pyproject.toml`
+ * that declares no dependency — the common tool-config-only file (`[tool.ruff]`,
+ * `[build-system]`), or a `[project]` without `dependencies`. Read line by
+ * line, conservatively: a dependency key whose value is not literally `[]` /
+ * `{}` (a multi-line array included), an entry in a dependency table
+ * (Poetry's lone `python` constraint aside), a table header this reader
+ * cannot parse, or a file it cannot read — each may declare something, and
+ * stays a gap.
+ */
+function pythonManifestDeclaresNothing(path: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8').replace(/^﻿/, '');
+  } catch {
+    return false;
+  }
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('#'));
+  if (/\.txt$/i.test(path)) return lines.length === 0;
+
+  let table = '';
+  for (const line of lines) {
+    if (line.startsWith('[')) {
+      const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+      if (header?.[1] === undefined) return false;
+      table = header[1].replace(/["'\s]/g, '');
+      continue;
+    }
+    const kv = /^["']?([A-Za-z0-9_.-]+)["']?\s*=\s*(.*)$/.exec(line);
+    // Not a key: the continuation of a value whose key was already judged.
+    if (kv?.[1] === undefined || kv[2] === undefined) continue;
+    const key = kv[1];
+    const empty = EMPTY_TOML_VALUE.test(kv[2]);
+    const lastSegment = key.slice(key.lastIndexOf('.') + 1);
+    if (PY_DEPENDENCY_KEYS.has(lastSegment) && !empty) return false;
+    if (PY_DEPENDENCY_TABLES.test(table) && !empty && !(table.startsWith('tool.poetry.') && key === 'python')) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface ManifestCoverageGap {

@@ -147,6 +147,8 @@ export const RUN_NAMES = {
   'trivy:dotnet': scanner(trivyFsKey('dotnet')),
   'trivy:rubygems': scanner(trivyFsKey('rubygems')),
   'trivy:cargo': scanner(trivyFsKey('cargo')),
+  'trivy:gradle': scanner(trivyFsKey('gradle')),
+  'trivy:python': scanner(trivyFsKey('python')),
 
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
