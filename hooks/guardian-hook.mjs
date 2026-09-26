@@ -133,42 +133,77 @@ function userConfigPath() {
 }
 
 /**
- * Project config (`.guardian/hooks.config.json`) may only make the guard
- * STRICTER, never weaker: a project file is something the assistant itself
- * can write, so a project that got the assistant to set `"bash":{"block":
- * false}` would be turning the guard off from inside the very thing it is
- * supposed to guard. `"bash":{"block":false}` from a project file is
- * therefore stripped here rather than merged — backward-compatible with
- * anyone who already has it (their project simply stops downgrading, rather
- * than erroring), with one debug-only stderr note explaining why. The real
- * switch for this now lives outside the project: the user-level config
- * (`~/.config/dev-guardian/hooks.json`) or `GUARDIAN_HOOKS_BASH_BLOCK=0`,
- * applied afterwards in `loadConfig`.
+ * Project config (`.guardian/hooks.config.json`) may only make the protective
+ * hooks STRICTER, never weaker. A project file is something the assistant
+ * itself can write — the Write/Edit guard below refuses it, but a shell
+ * command (`echo … > .guardian/hooks.config.json`) is not a Write — so every
+ * setting that could switch a protective hook off is ignored when it comes
+ * from there. The earlier version stripped only `"bash":{"block":false}`, and
+ * `{"enabled": false}` in the same file still switched off the shell guard,
+ * install vetting and the config write guard, even over
+ * `GUARDIAN_HOOKS_BASH_BLOCK=1` (Task 23 fix round 1, C1).
+ *
+ * What a project file may set, by construction (an allowlist, so a key added
+ * later is ignored until someone decides which side it is on):
+ *   - `enabled: true`, `bash.block: true`, `bash.warn: true` — stricter or
+ *     equal; the `false` forms are ignored and reported;
+ *   - `secrets.block` — opt-in blocking, only ever stricter than the default;
+ *   - `secrets.warn`, `sessionStart`, `ignorePaths` — advisory: they decide
+ *     what the model is told, never what it is allowed to run.
+ * There is no project-level switch for install vetting at all.
+ *
+ * Switching a protective hook off takes a person, outside the project: the
+ * user-level config (`~/.config/dev-guardian/hooks.json`, whose keys win over
+ * the project's), `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or
+ * `GUARDIAN_PKG_VET=0`. Each ignored setting gets a debug-only stderr note
+ * here, and SessionStart tells the model, once, that it was ignored.
  */
-function stripProjectBashBlockDowngrade(projectFile) {
-  const bash = projectFile.bash;
-  if (!bash || bash.block !== false) return projectFile.bash ?? {};
-  debug(
-    'ignoring "bash":{"block":false} from .guardian/hooks.config.json — a project file may not ' +
-      'downgrade this guard. Use the user-level config (~/.config/dev-guardian/hooks.json) or ' +
-      'GUARDIAN_HOOKS_BASH_BLOCK=0 instead.',
-  );
-  const { block, ...rest } = bash;
-  return rest;
+function projectOverrides(projectFile) {
+  const out = {};
+  const ignored = [];
+  const ignore = (label, debugLabel) => {
+    ignored.push(label);
+    debug(
+      `ignoring ${debugLabel} from .guardian/hooks.config.json — a project file may not ` +
+        'loosen the guardrails. Use the user-level config (~/.config/dev-guardian/hooks.json), ' +
+        'GUARDIAN_HOOKS=off or GUARDIAN_HOOKS_BASH_BLOCK=0 instead.',
+    );
+  };
+
+  if (projectFile.enabled === false) ignore('"enabled": false', '"enabled":false');
+  else if (projectFile.enabled === true) out.enabled = true;
+
+  const bash = projectFile.bash && typeof projectFile.bash === 'object' ? projectFile.bash : {};
+  out.bash = {};
+  if (bash.block === false) ignore('"bash.block": false', '"bash":{"block":false}');
+  else if (bash.block === true) out.bash.block = true;
+  if (bash.warn === false) ignore('"bash.warn": false', '"bash":{"warn":false}');
+  else if (bash.warn === true) out.bash.warn = true;
+
+  const secrets = projectFile.secrets && typeof projectFile.secrets === 'object' ? projectFile.secrets : {};
+  out.secrets = {};
+  if (typeof secrets.warn === 'boolean') out.secrets.warn = secrets.warn;
+  if (typeof secrets.block === 'boolean') out.secrets.block = secrets.block;
+  if (typeof projectFile.sessionStart === 'boolean') out.sessionStart = projectFile.sessionStart;
+  if (Array.isArray(projectFile.ignorePaths)) out.ignorePaths = projectFile.ignorePaths;
+
+  return { overrides: out, ignored };
 }
 
 function loadConfig(cwd) {
   const projectFile = readJsonFile(join(cwd, '.guardian', 'hooks.config.json')) ?? {};
   const userFile = readJsonFile(userConfigPath()) ?? {};
-  const projectBash = stripProjectBashBlockDowngrade(projectFile);
+  const { overrides: project, ignored } = projectOverrides(projectFile);
 
   const merged = {
     ...DEFAULT_CONFIG,
-    ...projectFile,
+    ...(project.enabled !== undefined ? { enabled: project.enabled } : {}),
+    ...(project.sessionStart !== undefined ? { sessionStart: project.sessionStart } : {}),
     ...userFile,
-    secrets: { ...DEFAULT_CONFIG.secrets, ...(projectFile.secrets ?? {}), ...(userFile.secrets ?? {}) },
-    bash: { ...DEFAULT_CONFIG.bash, ...projectBash, ...(userFile.bash ?? {}) },
-    ignorePaths: userFile.ignorePaths ?? projectFile.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...(userFile.secrets ?? {}) },
+    bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...(userFile.bash ?? {}) },
+    ignorePaths: userFile.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    ignoredProjectSettings: ignored,
   };
 
   // Highest precedence: an explicit env var, checked last so it always wins.
@@ -318,8 +353,28 @@ async function loadDetectors() {
 
 // ─────────────────────────────── handlers ──────────────────────────────────
 
+/**
+ * The one place the model hears that a project file tried to loosen the
+ * guardrails (see `projectOverrides`). Deliberately does not say how to switch
+ * them off — the same rule as every deny message.
+ */
+function ignoredSettingsNotice(cfg) {
+  const ignored = cfg.ignoredProjectSettings ?? [];
+  if (ignored.length === 0) return null;
+  return (
+    `⚠️ .guardian/hooks.config.json asks to relax the guardrails (${ignored.join(', ')}) — ` +
+    'ignored: a project file may only make them stricter. If this is intended, ask the user.'
+  );
+}
+
 function handleSessionStart(cwd, cfg) {
-  if (!cfg.sessionStart) noop();
+  const notice = ignoredSettingsNotice(cfg);
+  if (!cfg.sessionStart) {
+    // The briefing is advisory and a project may turn it off — but not the
+    // notice that the same project asked to loosen the guardrails.
+    if (notice) emit('SessionStart', { additionalContext: notice });
+    noop();
+  }
   const lines = [];
   const guardianDir = join(cwd, '.guardian');
   const initialized = existsSync(guardianDir);
@@ -346,6 +401,7 @@ function handleSessionStart(cwd, cfg) {
   } else {
     lines.push('Not yet guardian-initialized — run /guardian-init to set up security & quality scanning.');
   }
+  if (notice) lines.push(notice);
 
   emit('SessionStart', { additionalContext: lines.join('\n') });
 }
@@ -390,7 +446,7 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
  *
  * Opt out with `GUARDIAN_PKG_VET=0` — an environment variable only, never a
  * project file, for the same reason the bash block cannot be downgraded
- * from one (see `stripProjectBashBlockDowngrade`).
+ * from one (see `projectOverrides`).
  */
 async function vetInstallCommand(command, cwd) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
@@ -414,7 +470,7 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist) {
     // Deliberately does not say HOW to turn this off (item 6) — that used to
     // name the exact project-file/key an assistant could write to disable
     // itself. It cannot be disabled from a project file at all now (see
-    // `stripProjectBashBlockDowngrade`), and the file that CAN change it is
+    // `projectOverrides`), and the file that CAN change it is
     // one an assistant is refused permission to write — see
     // `guardianConfigWriteGuard`.
     emit('PreToolUse', {

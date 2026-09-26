@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -150,6 +150,27 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
 
   it('GUARDIAN_PKG_VET=0 opts out: no request, no deny', () => {
     const r = runHook('npm install react-form-autopilot-helperz', {}, { env: { GUARDIAN_PKG_VET: '0' } });
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+  });
+
+  // Task 23 fix round 1, C1: a project `.guardian/hooks.config.json` with
+  // `"enabled": false` switched install vetting off too. A project file may
+  // only make the protective hooks stricter; the user-level config may not.
+  it('project "enabled": false does not switch off the missing-package deny', () => {
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'hooks.config.json'), JSON.stringify({ enabled: false }));
+    const r = runHook('npm install react-form-autopilot-helperz', {
+      'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+      [OSV]: { osv: {} },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+
+  it('the user-level "enabled": false still switches vetting off: no request, no deny', () => {
+    mkdirSync(join(home, '.config', 'dev-guardian'), { recursive: true });
+    writeFileSync(join(home, '.config', 'dev-guardian', 'hooks.json'), JSON.stringify({ enabled: false }));
+    const r = runHook('npm install react-form-autopilot-helperz', {});
     expect(r.output).toBeUndefined();
     expect(r.requests).toEqual([]);
   });

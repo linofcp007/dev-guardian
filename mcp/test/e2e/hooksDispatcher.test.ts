@@ -324,6 +324,126 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Task 23 fix round 1, C1: `{"enabled": false}` in a PROJECT file switched
+  // off every hook — the shell guard, install vetting, the config write guard —
+  // and even beat GUARDIAN_HOOKS_BASH_BLOCK=1. An assistant can write that file
+  // through Bash, which the Write/Edit guard does not cover. A project file may
+  // only make the protective hooks stricter; the advisory settings stay its own.
+  describe('a project hooks config may only make the protective hooks stricter', () => {
+    function projectConfig(config: Record<string, unknown>): void {
+      mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+      writeFileSync(join(projectDir, '.guardian', 'hooks.config.json'), JSON.stringify(config));
+    }
+    function userConfig(config: Record<string, unknown>): void {
+      mkdirSync(join(homeDir, '.config', 'dev-guardian'), { recursive: true });
+      writeFileSync(join(homeDir, '.config', 'dev-guardian', 'hooks.json'), JSON.stringify(config));
+    }
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const context = (r: HookResult): string =>
+      (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
+        ?.additionalContext ?? '';
+    const sessionStart = (): HookResult =>
+      runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir });
+
+    it('project "enabled": false does not switch off the shell guard', () => {
+      projectConfig({ enabled: false });
+      const r = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), { cwd: projectDir, homeDir });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('project "enabled": false no longer beats GUARDIAN_HOOKS_BASH_BLOCK=1', () => {
+      projectConfig({ enabled: false });
+      const r = runHook(preToolUse('PowerShell', { command: 'Remove-Item -Recurse -Force C:\\' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+        env: { GUARDIAN_HOOKS_BASH_BLOCK: '1' },
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('project "enabled": false does not switch off the config write guard', () => {
+      projectConfig({ enabled: false });
+      const target = join(projectDir, '.guardian', 'hooks.config.json');
+      const r = runHook(preToolUse('Write', { file_path: target, content: '{}' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('project "bash": { "warn": false } does not silence the risky-command warning', () => {
+      projectConfig({ bash: { warn: false } });
+      const r = runHook(preToolUse('Bash', { command: 'git reset --hard HEAD~3' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+      expect(context(r)).toMatch(/risky shell command/);
+    });
+
+    it('a project file can still make the guard stricter ("secrets": { "block": true })', () => {
+      projectConfig({ enabled: false, secrets: { block: true } });
+      const target = join(projectDir, 'src', 'config.ts');
+      const r = runHook(preToolUse('Write', { file_path: target, content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('project "secrets": { "warn": false } still silences the advisory secret warning', () => {
+      projectConfig({ secrets: { warn: false } });
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('the user-level "enabled": false still switches every hook off', () => {
+      userConfig({ enabled: false });
+      const r = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), { cwd: projectDir, homeDir });
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('GUARDIAN_HOOKS=off still switches every hook off', () => {
+      const r = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+        env: { GUARDIAN_HOOKS: 'off' },
+      });
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it('SessionStart says, once, which project settings were ignored — without naming the off switch', () => {
+      projectConfig({ enabled: false, bash: { block: false, warn: false } });
+      const ctx = context(sessionStart());
+      expect(ctx).toMatch(/ignored/i);
+      expect(ctx).toContain('"enabled": false');
+      expect(ctx).toContain('"bash.block": false');
+      expect(ctx).toContain('"bash.warn": false');
+      expect(ctx.match(/ignored/gi)?.length).toBe(1);
+      expect(ctx).not.toMatch(/GUARDIAN_HOOKS|hooks\.json/);
+    });
+
+    it('SessionStart still carries that notice when the project also turns the briefing off', () => {
+      projectConfig({ enabled: false, sessionStart: false });
+      const ctx = context(sessionStart());
+      expect(ctx).toContain('"enabled": false');
+    });
+
+    it('SessionStart says nothing of the kind for a project file that loosens nothing', () => {
+      projectConfig({ secrets: { warn: false, block: true }, ignorePaths: ['/vendor/'] });
+      expect(context(sessionStart())).not.toMatch(/ignored/i);
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,
