@@ -41,6 +41,51 @@ version bump.
   and 14 content, the CNPD as supervisory authority, `[[PREENCHER: …]]`
   placeholders).
 
+- CI workflow scanning and a CI config generator. `scan_iac` now also runs
+  zizmor (GitHub Actions security auditor: template injection, unpinned
+  `uses:`, excessive `permissions:`, credential persistence) and actionlint
+  (workflow schema/expression correctness) against `.github/workflows/*.yml`
+  when present, independently of Trivy and, between themselves, concurrently
+  — findings land at `category: security`, `subcategory: ci`; either tool
+  missing is a named gap (`missing_tools`, coverage `partial`), never
+  silence, and a `.guardianignore`-excluded workflow file is left out of
+  the file list handed to either scanner, the same way it is for every
+  other scan tool. A single scanner's own `output_too_large`/unconfirmed
+  `cancelled` outcome can no longer discard the whole scan's already-good
+  findings, and both write their raw output under the report dir so
+  `report_paths` is truthful for every scanner that ran, not just Trivy.
+  Both registered in the install catalogue with per-OS hints (zizmor:
+  pipx/uv/cargo/brew; actionlint: go/brew/scoop/choco).
+  `dev-guardian ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force]`
+  generates a CI pipeline for the PROJECT BEING SCANNED (never for this
+  repo, and never through a symlink escaping it either way): every GitHub
+  Action pinned by full 40-hex commit SHA; Trivy/gitleaks/actionlint pinned
+  by version, a sha256 and an archive-layout path verified against the
+  tool's own GitHub release; bandit/semgrep/zizmor pinned by exact PyPI
+  version via pipx. The generated job resolves dev-guardian's own release
+  tag to its exact commit SHA at generation time (from this checkout's own
+  tags when present, else `git ls-remote`) and verifies it again with
+  `git rev-parse HEAD` after cloning — a moving tag is a supply-chain red
+  flag the pipeline refuses to trust silently — into a directory OUTSIDE
+  the checkout being scanned (`$RUNNER_TEMP`/`/tmp`), never into it, and
+  installs every scanner binary into the same scratch area, never the
+  working directory (an untracked 50 MB tarball there would otherwise read
+  to gitleaks as a coverage gap on every run). Full-history clones
+  (`fetch-depth: 0` / `GIT_DEPTH: 0` / `clone: depth: full`) so gitleaks'
+  own commit-scoped finding identity has real history to attribute secrets
+  to, not a shifting shallow boundary. The GitHub template additionally
+  sets `persist-credentials: false` and conditionally installs the .NET SDK
+  (`actions/setup-dotnet`, pinned by SHA) when a root .csproj/.fsproj/
+  .sln/.slnx is present; GitLab/Bitbucket document that requirement instead
+  of installing it. Runs `dev-guardian scan` gated against the committed
+  baseline, uploading SARIF to code scanning on GitHub (a plain artifact on
+  GitLab/Bitbucket, neither of which ingests raw SARIF). Every pinned value
+  lives in one data file, `configs/ci/pinned.json`, so a release can
+  refresh them together; `--write` uses an atomic exclusive create (`wx`)
+  and never overwrites an existing pipeline file without `--force`.
+  Templates are snapshot-tested and validated against real actionlint/
+  zizmor when installed (`mcp/test/e2e/ciInitCli.test.ts`).
+
 - `wp_vuln_check_source` — WordPress vulnerabilities from source: no live
   URL, no WP-CLI, no WPScan. Reads a local WordPress install's core version
   (`wp-includes/version.php`), plugin versions (main-file header, falling
@@ -118,6 +163,45 @@ version bump.
   the previous audit. Offline; reads config, never executes anything in it.
 
 ### Fixed
+
+- Secret hygiene in outputs and honest compliance evidence:
+  - Raw secrets no longer reach a response, the database, an exported
+    report, a GitHub issue body or the dashboard HTML. A new
+    `redaction/secretFindingRedaction.ts` clears a credential finding's
+    `snippet` (Bandit B105-B107's `code`, Semgrep `extra.lines` when logged
+    in or via Docker, `scan_dotnet_secrets`' matched connection-string line,
+    `dotnet_efcore_audit`'s `efcore-raw-sql-creds`) once, before
+    persistence, in the scan-tool factory and in every tool that inserts
+    findings outside it; `create_github_issues`, `report_export` and the
+    dashboard payload apply it again independently as a second line of
+    defence. `suggest_fix` withholds `surrounding_source` for a credential
+    finding entirely and returns rotation guidance instead — reading the
+    file back would have defeated gitleaks' own `--redact`.
+  - `compliance_evidence` no longer prints three hard-coded bullets per
+    framework regardless of what was actually scanned, and no longer maps
+    GDPR Article 5 (data minimisation) to "SBOM components and license
+    posture" — a wrong mapping, dropped rather than gated. Each remaining
+    control is listed as evidenced (with a pointer to the section that backs
+    it) or NOT COVERED (naming the scan that was never run), and its footer
+    and `report_export`'s now state the real telemetry posture instead of
+    the false "All scans local, no telemetry" claim.
+  - `triage_findings` no longer suggests suppressing a credential finding —
+    a leaked secret under a `test/`/`fixtures/` path used to be bucketed
+    `likely_false_positive` exactly like a real test fixture.
+  - `gitignoreGuard.ts` wrote a bare `.guardian/` line, which excludes the
+    whole directory: git cannot re-include a file under an already-excluded
+    directory, so the CI gate's committed `.guardian/baseline.json` could
+    never actually be committed. Now writes `.guardian/*` +
+    `!.guardian/baseline.json`, and upgrades a project that already has the
+    old bare line (in any of its four spellings) instead of leaving it in
+    place.
+  - `suppress_finding` accepted any 64-hex-character string as `ok: true`,
+    under `unknown_scan_id` — a code that names a different failure — and
+    matched a fingerprint against the whole database, so a suppression
+    could silently apply to another project's finding. Now resolves
+    `project_path` (default: the working directory) like every other tool,
+    looks the fingerprint up within that project's own scans, and answers
+    `unknown_finding` when no completed scan of it ever reported one.
 
 - `dev-guardian scan` / `baseline update` exited 2 ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy

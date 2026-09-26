@@ -184,4 +184,37 @@ describe('create_github_issues', () => {
     if (r.ok) throw new Error('expected failure');
     expect(r.error.message).toContain('Bad credentials');
   });
+
+  it('never pastes a credential finding\'s snippet into the issue body', async () => {
+    const fp = 'c'.repeat(64);
+    const s = freshPlugin();
+    const p = projectDir('gh-secret-');
+    seedScan(s, {
+      id: 's1',
+      type: 'secrets',
+      project: p,
+      findings: [
+        {
+          fp,
+          tool: 'bandit',
+          rule_id: 'B105',
+          subcategory: 'hardcoded_password_string',
+          severity: 'high',
+          snippet: '12 password = "hunter2"',
+        },
+      ],
+    });
+    const repo: FakeRepo = { issues: [], labels: ['dev-guardian', 'security'], calls: [] };
+    fakeGh(repo);
+
+    const r = okResult<{ plans: Array<{ status: string; body: string }> }>(
+      await tool().handler({ project_path: p }, s.plugin),
+    );
+    expect(r.plans).toHaveLength(1);
+    expect(r.plans[0]?.body).not.toContain('hunter2');
+    const create = repo.calls.find((c) => c[0] === 'issue' && c[1] === 'create') ?? [];
+    const bodyIdx = create.indexOf('--body');
+    expect(bodyIdx).toBeGreaterThanOrEqual(0);
+    expect(create[bodyIdx + 1] ?? '').not.toContain('hunter2');
+  });
 });

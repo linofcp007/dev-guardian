@@ -1,20 +1,65 @@
 /**
- * Ensure the target project's `.gitignore` excludes `.guardian/`.
+ * Ensure the target project's `.gitignore` excludes `.guardian/*` while
+ * re-including `.guardian/baseline.json`.
  *
  * Called once at server startup (after the storage is opened, so we know
  * which project root we're operating on). Idempotent: a project with the
- * entry already in place is left alone.
+ * current form already in place is left alone.
+ *
+ * **Why `.guardian/*`, never bare `.guardian/`.** The CI gate needs a
+ * COMMITTED `.guardian/baseline.json` (`ci/baseline.ts`), but git cannot
+ * re-include a file under a directory that is itself excluded —
+ * `!.guardian/baseline.json` is silently powerless once anything upstream of
+ * it excludes `.guardian/` as a directory, regardless of line order. `*`
+ * excludes the directory's CONTENTS instead of the directory itself, which
+ * is what makes the per-file negation below it able to do anything at all.
+ *
+ * **Upgrading, not just detecting.** Every earlier release of this tool
+ * wrote the bare `.guardian/` line (or one of its `/.guardian`,
+ * `.guardian`, `/.guardian/` spellings) — a project that already has one
+ * needs it REMOVED, not merely supplemented: appending the new block below
+ * an old bare line changes nothing, because the bare line still excludes
+ * the directory outright. So `alreadyIgnored` is followed by an upgrade
+ * pass whenever any of the old spellings survives, regardless of whether
+ * the new block is also already present.
+ *
+ * **The legacy pair, not just the entry.** Both shapes this tool has ever
+ * written (`created`: `${HEADER}\n${ENTRY}\n`; `added`: the same two lines
+ * appended after a blank line) put the `# dev-guardian outputs` HEADER
+ * directly above the bare entry. Dropping only the entry line left the old
+ * header behind, and the new block appended below it duplicated the
+ * header. The upgrade removes a bare entry's paired header too, when it is
+ * the line immediately above it — never any OTHER occurrence of that exact
+ * comment, since nothing else in this file ever writes it.
+ *
+ * **Line endings.** An upgrade/append re-splits the file into bare lines
+ * and rejoins them, which must use the SAME separator the file already
+ * had — a CRLF `.gitignore` (Windows default; also common wherever
+ * `core.autocrlf` is on) rewritten with a bare `\n` comes back as LF, and
+ * git then shows the WHOLE file as changed for what was functionally a
+ * two-line edit. `existingEol` detects it once, from whatever line ending
+ * appears first; a brand-new file (`created`) has no existing convention to
+ * follow and keeps the plain `\n` it always used.
  */
 
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const HEADER = '# dev-guardian outputs';
-const ENTRY = '.guardian/';
+const ENTRY = '.guardian/*';
+const BASELINE_NEGATION = '!.guardian/baseline.json';
+
+/** Every bare spelling this tool has ever written for the old, unfixed entry. */
+const OLD_DIRECTORY_PATTERNS: ReadonlySet<string> = new Set([
+  '.guardian',
+  '.guardian/',
+  '/.guardian',
+  '/.guardian/',
+]);
 
 export interface GitignoreGuardResult {
   updated: boolean;
-  reason: 'already_present' | 'added' | 'created' | 'not_a_repo' | 'unwritable';
+  reason: 'already_present' | 'added' | 'created' | 'upgraded' | 'not_a_repo' | 'unwritable';
 }
 
 export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult {
@@ -24,24 +69,51 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
   }
   try {
     if (!existsSync(gitignorePath)) {
-      writeFileSync(gitignorePath, `${HEADER}\n${ENTRY}\n`, 'utf8');
+      writeFileSync(gitignorePath, `${HEADER}\n${ENTRY}\n${BASELINE_NEGATION}\n`, 'utf8');
       return { updated: true, reason: 'created' };
     }
-    const content = readFileSync(gitignorePath, 'utf8');
-    if (alreadyIgnored(content)) {
+
+    const original = readFileSync(gitignorePath, 'utf8');
+    const eol = existingEol(original);
+    const lines = original.split(/\r?\n/);
+    const hasOldPattern = lines.some((l) => OLD_DIRECTORY_PATTERNS.has(l.trim()));
+    // Every old bare line is dropped outright — see the module comment on
+    // why its mere presence elsewhere in the file defeats the negation,
+    // however the rest of the file reads. Both `created` and `added` (the
+    // only two shapes any earlier release ever wrote) put the HEADER line
+    // directly above the bare entry — drop that paired header too, or the
+    // block appended below duplicates it.
+    const toDrop = new Set<number>();
+    lines.forEach((line, i) => {
+      if (!OLD_DIRECTORY_PATTERNS.has(line.trim())) return;
+      toDrop.add(i);
+      const prev = lines[i - 1];
+      if (prev !== undefined && prev.trim() === HEADER) toDrop.add(i - 1);
+    });
+    const kept = lines.filter((_, i) => !toDrop.has(i));
+    const hasEntry = kept.some((l) => l.trim() === ENTRY);
+    const hasNegation = kept.some((l) => l.trim() === BASELINE_NEGATION);
+
+    if (!hasOldPattern && hasEntry && hasNegation) {
       return { updated: false, reason: 'already_present' };
     }
-    const suffix = content.endsWith('\n') ? '' : '\n';
-    appendFileSync(gitignorePath, `${suffix}\n${HEADER}\n${ENTRY}\n`, 'utf8');
-    return { updated: true, reason: 'added' };
+
+    const missing: string[] = [];
+    if (!hasEntry) missing.push(ENTRY);
+    if (!hasNegation) missing.push(BASELINE_NEGATION);
+
+    const trimmedBody = kept.join(eol).replace(/[\r\n]+$/, '');
+    const next =
+      (trimmedBody.length > 0 ? `${trimmedBody}${eol}` : '') +
+      (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : '');
+    writeFileSync(gitignorePath, next, 'utf8');
+    return { updated: true, reason: hasOldPattern ? 'upgraded' : 'added' };
   } catch {
     return { updated: false, reason: 'unwritable' };
   }
 }
 
-function alreadyIgnored(content: string): boolean {
-  const lines = content.split(/\r?\n/).map((l) => l.trim());
-  return lines.some(
-    (l) => l === '.guardian' || l === '.guardian/' || l === '/.guardian' || l === '/.guardian/',
-  );
+/** The file's own line-ending convention — CRLF if its first line break is one, else LF. */
+function existingEol(content: string): '\r\n' | '\n' {
+  return content.includes('\r\n') ? '\r\n' : '\n';
 }

@@ -27,6 +27,7 @@
  */
 
 import type { PluginContext } from '../context.js';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { describeOpenSet, openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -104,6 +105,15 @@ async function handler(
   const keep: Bucket[] = [];
 
   for (const f of open) {
+    // A leaked credential is never suggested for suppression, whatever path
+    // it sits under — a "test fixture" full of real secrets is exactly the
+    // shape a path-based heuristic cannot tell apart from a decoy, and
+    // getting this one wrong means training a maintainer to batch-suppress
+    // an exposed secret instead of rotating it.
+    if (isCredentialFinding(f)) {
+      keep.push(toBucket(f, 'credential finding — suppression is never suggested; rotate the secret instead'));
+      continue;
+    }
     const path = f.file_path ?? '';
     const bucket = classifyByPath(f, path);
     if (bucket === 'likely_fp') {

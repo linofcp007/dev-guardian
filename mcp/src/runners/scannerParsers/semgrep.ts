@@ -16,6 +16,7 @@
 
 import type { Category, Finding, Severity } from '../../types.js';
 import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
+import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import {
   asArray,
   getNumber,
@@ -85,7 +86,12 @@ function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
   const snippet = getString(extra, 'lines');
   if (snippet !== undefined) input.snippet = snippet;
 
-  return makeFinding(input);
+  // The registry secrets family (and any other rule/subcategory naming a
+  // credential) reports the real matched text in `extra.lines` when the
+  // caller is logged in or running via Docker — the anonymous "requires
+  // login" placeholder is the only case that redacts itself. Redacted here,
+  // at the source, rather than trusted to a later step.
+  return redactCredentialSnippet(makeFinding(input));
 }
 
 /**

@@ -53,6 +53,108 @@ async function handler(input, ctx) {
             'Sections without underlying scans are flagged as "(no data — run X)".',
     };
 }
+function complianceMeta(compliance) {
+    return compliance?.meta;
+}
+const FRAMEWORK_LABEL = {
+    gdpr: 'GDPR',
+    soc2: 'SOC 2',
+    iso27001: 'ISO 27001',
+};
+/**
+ * What each framework's mapping used to claim unconditionally, now gated on
+ * whether a scan present in THIS document actually backs it. GDPR Article 5
+ * (data minimisation) is not in this list at all: "SBOM components and
+ * license posture" was never evidence of minimising personal data collected
+ * — a wrong mapping, not an uncovered one, so it is dropped rather than
+ * listed as missing. "Scan cadence" and "dep update plan" are dropped for
+ * the same reason: neither is tracked by any scan this tool reads, so
+ * claiming they were covered — or even naming them as a gap to fill — would
+ * promise evidence this tool has no way to produce.
+ */
+function frameworkControls(framework, args) {
+    const meta = complianceMeta(args.compliance);
+    const hasPolicyDocs = meta?.policy_documents_found !== undefined;
+    const hasLicenses = meta?.licenses_summary !== undefined;
+    const hasDeps = args.deps !== null;
+    const hasBaseline = args.baseline !== null;
+    const hasSbom = args.sbom !== null;
+    switch (framework) {
+        case 'gdpr':
+            return [
+                {
+                    id: 'Article 25',
+                    description: 'privacy by design and by default',
+                    evidenced: hasPolicyDocs,
+                    note: hasPolicyDocs
+                        ? 'privacy and security policy presence — see "Latest compliance scan" above'
+                        : 'no `compliance_check` scan on file — policy-document presence was never checked',
+                },
+                {
+                    id: 'Article 32',
+                    description: 'security of processing',
+                    evidenced: hasDeps,
+                    note: hasDeps
+                        ? 'dependency CVE posture — see "Dependency vulnerability posture" above'
+                        : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+                },
+            ];
+        case 'soc2':
+            return [
+                {
+                    id: 'CC7.1 / CC7.2',
+                    description: 'vulnerability management',
+                    evidenced: hasDeps,
+                    note: hasDeps
+                        ? 'CVE counts — see "Dependency vulnerability posture" above'
+                        : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+                },
+                {
+                    id: 'CC8.1',
+                    description: 'change management',
+                    evidenced: hasBaseline,
+                    note: hasBaseline
+                        ? 'baseline + suppressions traceability — see "Change-tracking / baseline" above'
+                        : 'no baseline set — run `set_baseline`',
+                },
+                {
+                    id: 'CC9.1',
+                    description: 'risk mitigation',
+                    evidenced: hasLicenses,
+                    note: hasLicenses
+                        ? 'license posture — see "Latest compliance scan" above'
+                        : 'no `compliance_check` scan on file — license posture was never measured',
+                },
+            ];
+        case 'iso27001':
+            return [
+                {
+                    id: 'A.8.8',
+                    description: 'management of technical vulnerabilities',
+                    evidenced: hasDeps,
+                    note: hasDeps
+                        ? 'CVE counts — see "Dependency vulnerability posture" above'
+                        : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+                },
+                {
+                    id: 'A.5.20',
+                    description: 'supplier relationships',
+                    evidenced: hasSbom,
+                    note: hasSbom
+                        ? 'SBOM — see "Software Bill of Materials (SBOM)" above'
+                        : 'no SBOM on file — run `generate_sbom`',
+                },
+                {
+                    id: 'A.5.32',
+                    description: 'intellectual property',
+                    evidenced: hasLicenses,
+                    note: hasLicenses
+                        ? 'license compatibility findings — see "Latest compliance scan" above'
+                        : 'no `compliance_check` scan on file — license posture was never measured',
+                },
+            ];
+    }
+}
 function build(args) {
     const out = [];
     out.push(`# Compliance evidence — ${args.framework.toUpperCase()}`);
@@ -68,7 +170,7 @@ function build(args) {
     if (args.compliance) {
         out.push(`- Scan id: \`${args.compliance.scan_id}\``);
         out.push(`- Run at: ${args.compliance.started_at}`);
-        const meta = args.compliance.meta;
+        const meta = complianceMeta(args.compliance);
         if (meta?.licenses_summary) {
             out.push(`- Licenses observed: ${meta.licenses_summary.length}`);
             const risky = meta.risky_licenses ?? [];
@@ -125,28 +227,36 @@ function build(args) {
     }
     out.push('');
     out.push('## Frameworks');
-    switch (args.framework) {
-        case 'gdpr':
-            out.push('### GDPR mapping\n- Article 5 (data minimisation): see SBOM components and license posture.\n' +
-                '- Article 25 (privacy by design): privacy policy + security policy presence above.\n' +
-                '- Article 32 (security of processing): CVE posture + scan cadence (see scan history).');
-            break;
-        case 'soc2':
-            out.push('### SOC 2 trust services criteria\n- CC7.1 / CC7.2 (vulnerability mgmt): CVE counts + baseline above.\n' +
-                '- CC8.1 (change mgmt): baseline + suppressions traceability.\n' +
-                '- CC9.1 (risk mitigation): license posture + dep update plan.');
-            break;
-        case 'iso27001':
-            out.push('### ISO 27001 Annex A controls\n- A.8.8 (technical vulnerabilities): scan cadence + CVE counts.\n' +
-                '- A.5.20 (supplier relationships): SBOM + license posture.\n' +
-                '- A.5.32 (intellectual property): license compatibility findings.');
-            break;
-        default:
-            out.push('No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping.');
+    if (args.framework === 'generic') {
+        out.push('No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping.');
+    }
+    else {
+        const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+        const controls = frameworkControls(args.framework, args);
+        const evidenced = controls.filter((c) => c.evidenced);
+        const notCovered = controls.filter((c) => !c.evidenced);
+        out.push(`### ${label} controls evidenced by this document`);
+        if (evidenced.length === 0) {
+            out.push('(none — see "not covered" below)');
+        }
+        else {
+            for (const c of evidenced)
+                out.push(`- ${c.id} (${c.description}): ${c.note}`);
+        }
+        out.push('');
+        out.push(`### ${label} controls NOT covered by this document`);
+        if (notCovered.length === 0) {
+            out.push('(none)');
+        }
+        else {
+            for (const c of notCovered)
+                out.push(`- ${c.id} (${c.description}): NOT COVERED — ${c.note}`);
+        }
     }
     out.push('');
     out.push('---');
-    out.push('_Generated by dev-guardian. All scans local, no telemetry._');
+    out.push('_Generated by dev-guardian. dev-guardian sends no telemetry of its own; ' +
+        "Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it._");
     return out.join('\n');
 }
 function findLatest(ctx, type) {

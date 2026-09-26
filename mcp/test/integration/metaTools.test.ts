@@ -168,11 +168,12 @@ describe('set_baseline', () => {
 
 describe('suppress_finding', () => {
   it('inserts a suppression and hides the finding from listOpen', async () => {
-    const plugin = makePlugin(tempProject());
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
     plugin.storage.scans.insert({
       scan_id: 's1',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: project,
       tree_hash: 'h',
     });
     const finding = makeFinding({
@@ -191,12 +192,64 @@ describe('suppress_finding', () => {
     });
 
     const r = (await getTool('suppress_finding').handler(
-      { finding_fingerprint: finding.fingerprint, reason: 'fp' },
+      { project_path: project, finding_fingerprint: finding.fingerprint, reason: 'fp' },
       plugin,
     )) as { ok: true; suppression_id: number };
     expect(r.ok).toBe(true);
     expect(r.suppression_id).toBeGreaterThan(0);
     expect(plugin.storage.findings.listOpen()).toHaveLength(0);
+    // Written with the caller's own resolved project (migration 011), so it
+    // is scoped at match time rather than matching every project sharing
+    // this server's storage.
+    expect(plugin.storage.suppressions.listAll()[0]?.project_path).toBe(project);
+  });
+
+  it('rejects a fingerprint no scan of this project ever reported with unknown_finding', async () => {
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
+
+    const r = (await getTool('suppress_finding').handler(
+      { project_path: project, finding_fingerprint: 'a'.repeat(64), reason: 'fp' },
+      plugin,
+    )) as { ok: false; error: { code: string } } | { ok: true };
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('unknown_finding');
+  });
+
+  it('scopes suppression to one project: a fingerprint that only exists in ANOTHER project is unknown here', async () => {
+    const projectA = resolveProjectPath(tempProject()).path;
+    const projectB = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(projectA);
+
+    // The finding was reported only in project B's scan, in the SAME
+    // storage (one server can scan several projects across its life).
+    plugin.storage.scans.insert({
+      scan_id: 'b-scan',
+      scan_type: 'sast',
+      project_path: projectB,
+      tree_hash: 'h',
+    });
+    const finding = makeFinding({
+      tool: 'mock',
+      severity: 'high',
+      category: 'security',
+      title: 't',
+      file_path: 'a.ts',
+    });
+    plugin.storage.findings.bulkInsert([{ ...finding, scan_id: 'b-scan' }]);
+    plugin.storage.scans.finalize({
+      scan_id: 'b-scan',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+
+    const r = (await getTool('suppress_finding').handler(
+      { project_path: projectA, finding_fingerprint: finding.fingerprint, reason: 'fp' },
+      plugin,
+    )) as { ok: false; error: { code: string } } | { ok: true };
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('unknown_finding');
   });
 });
 

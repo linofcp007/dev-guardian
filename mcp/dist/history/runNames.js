@@ -129,6 +129,10 @@ export const RUN_NAMES = {
     // compose-file hardening checks.
     hadolint: scanner('hadolint'),
     'docker-compose': scanner('docker-compose'),
+    // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
+    // existing — independent of Trivy and of each other.
+    zizmor: scanner('zizmor'),
+    actionlint: scanner('actionlint'),
     // scan_wordpress's PHPCS pass, and its missing_tools name.
     'phpcs-wpcs': scanner('phpcs'),
     phpcs: scanner('phpcs'),
@@ -183,7 +187,7 @@ export const RUN_NAMES = {
     scan_sast: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers'),
     scan_secrets: scanner('gitleaks'),
     scan_deps: scanner(...TRIVY_FS_KEYS),
-    scan_iac: scanner(TRIVY_CONFIG),
+    scan_iac: scanner(TRIVY_CONFIG, 'zizmor', 'actionlint'),
     // generate_sbom: the producer of an SBOM row, which holds no findings.
     syft: scanner(),
 };
