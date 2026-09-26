@@ -68605,7 +68605,8 @@ import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
 import { resolve as resolve20 } from "node:path";
 
 // src/hooks/bashGuard.ts
-var MAX_LINE_LENGTH2 = 16 * 1024;
+var MAX_STATEMENT_LENGTH = 16 * 1024;
+var MAX_COMMAND_LENGTH = 2 * 1024 * 1024;
 
 // src/pkgvet/parseCommand.ts
 var NAME_RE = {

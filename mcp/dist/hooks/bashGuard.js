@@ -167,6 +167,7 @@ export const BASH_RULES = [
         // `isBareRemoteFetch` on the extracted `-c` script text.
         pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
         scope: 'command',
+        test: processSubstitutionFetch,
     },
     {
         id: 'disk-overwrite',
@@ -249,6 +250,24 @@ export const BASH_RULES = [
         pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i,
     },
 ];
+/**
+ * `process-substitution-remote-fetch`'s pattern, in linear time: on some
+ * line, a shell name ENDS at or before the start of a `<( curl|wget`. The
+ * pattern itself restarts its `[^\n]*` at every shell name on the line.
+ */
+function processSubstitutionFetch(text) {
+    for (const line of text.split('\n')) {
+        const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+        if (shell === null)
+            continue;
+        const shellEnd = shell.index + shell[0].length;
+        for (const fetch of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
+            if (fetch.index >= shellEnd)
+                return true;
+        }
+    }
+    return false;
+}
 const SUDO_RULE = {
     id: 'sudo',
     level: 'warn',
@@ -697,7 +716,15 @@ function resolveCommand(words) {
     return { index: i, elevated };
 }
 function stripQuotes(token) {
-    return token.replace(/^['"`]+|['"`]+$/g, '');
+    // Loops, not `/['"`]+$/`: that regex restarts at every quote of a long run.
+    const q = (c) => c === "'" || c === '"' || c === '`';
+    let a = 0;
+    let b = token.length;
+    while (a < b && q(token.charAt(a)))
+        a += 1;
+    while (b > a && q(token.charAt(b - 1)))
+        b -= 1;
+    return token.slice(a, b);
 }
 /**
  * Filesystem locations whose recursive deletion is effectively never
@@ -982,15 +1009,42 @@ function globNamesConfig(path) {
     if (!GLOB.test(last))
         return false;
     const names = configNamesIn(dirOf(path));
-    if (names.length === 0)
-        return false;
-    try {
-        const re = new RegExp(`^${last.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
-        return names.some((n) => re.test(n));
+    return names.some((n) => wildcardMatch(last.toLowerCase(), n));
+}
+/**
+ * `*` / `?` matching without backtracking (a `[…]` class matches any one
+ * character): the classic two-pointer walk, O(pattern × name). A pattern
+ * turned into a RegExp of `.*` runs backtracks exponentially on a name it
+ * does not match.
+ */
+function wildcardMatch(pattern, name) {
+    const pat = pattern.replace(/\[[^\]]*\]/g, '?');
+    let pi = 0;
+    let ni = 0;
+    let star = -1;
+    let mark = 0;
+    while (ni < name.length) {
+        const c = pat.charAt(pi);
+        if (pi < pat.length && (c === '?' || c === name.charAt(ni))) {
+            pi += 1;
+            ni += 1;
+        }
+        else if (pi < pat.length && c === '*') {
+            star = pi;
+            mark = ni;
+            pi += 1;
+        }
+        else if (star >= 0) {
+            pi = star + 1;
+            mark += 1;
+            ni = mark;
+        }
+        else
+            return false;
     }
-    catch {
-        return false;
-    }
+    while (pat.charAt(pi) === '*')
+        pi += 1;
+    return pi === pat.length;
 }
 function noEffects() {
     return { writes: [], removes: [], dirs: [], special: [], links: [] };
@@ -1835,7 +1889,15 @@ function codeLiterals(code, lang) {
 }
 /** Literals as paths: trimmed, every run of backslashes read as `/`. */
 function literalPaths(literals) {
-    return literals.map((l) => l.trim().replace(/\\+/g, '/'));
+    return literals.map((l) => tail(l.trim()).replace(/\\+/g, '/'));
+}
+/**
+ * The end of a path, which is all any pattern here is anchored to — so a
+ * megabyte-long word full of `.guardian/hooks` cannot make `hooks[^/]*\.json$`
+ * rescan it from every occurrence.
+ */
+function tail(path) {
+    return path.length > 1024 ? path.slice(-1024) : path;
 }
 /**
  * True when program text names a hook configuration path: a string literal
@@ -2025,7 +2087,14 @@ const RULE_SETTINGS = {
  * write of `.claude/settings*.json` whose command names a loosening key
  * anywhere (`raw`).
  */
-function judgeEffects(e, raw) {
+function judgeEffects(effects, raw) {
+    const e = {
+        writes: effects.writes.map(tail),
+        removes: effects.removes.map(tail),
+        dirs: effects.dirs.map(tail),
+        special: effects.special.map(tail),
+        links: effects.links.map(tail),
+    };
     const out = [];
     if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
         out.push({ ...RULE_SPECIAL });
@@ -2224,8 +2293,12 @@ function collect(command, depth, out, scope) {
     if (cmd.length === 0)
         return;
     const { maskedCommand, statements } = splitShell(cmd);
+    // The whole-command rules are local signatures, or have a linear `test`
+    // (see `BashRule.test`), so they read the whole command uncapped: a long
+    // line of ordinary statements is not "partially assessed".
+    const commandText = collapseBlanks(maskedCommand);
     for (const rule of BASH_RULES) {
-        if (rule.scope === 'command' && rule.pattern.test(maskedCommand)) {
+        if (rule.scope === 'command' && (rule.test ?? ((t) => rule.pattern.test(t)))(commandText)) {
             out.push({ id: rule.id, level: rule.level, reason: rule.reason });
         }
     }
@@ -2233,8 +2306,11 @@ function collect(command, depth, out, scope) {
     // statement boundary to `splitShell`, so it is judged on the command text.
     out.push(...judgeEffects(dotNetEffects(cmd, scope.cwd), scope.raw));
     for (const statement of statements) {
+        // The ReDoS cap applies to each STATEMENT — never to a line before it is
+        // split, which let padding hide every statement after it (fix round 1).
+        const masked = capText(collapseBlanks(statement.masked), scope.notes);
         for (const rule of BASH_RULES) {
-            if (rule.scope !== 'command' && rule.pattern.test(statement.masked)) {
+            if (rule.scope !== 'command' && rule.pattern.test(masked)) {
                 out.push({ id: rule.id, level: rule.level, reason: rule.reason });
             }
         }
@@ -2291,25 +2367,40 @@ function collect(command, depth, out, scope) {
         }
     }
 }
-/** Each scanned line is capped here — see the module doc's ReDoS note. */
-const MAX_LINE_LENGTH = 16 * 1024;
-function capLines(text) {
-    if (text.length <= MAX_LINE_LENGTH)
-        return text; // common case: no line can exceed the whole string
-    return text
-        .split('\n')
-        .map((line) => (line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) : line))
-        .join('\n');
+/** The statement text the pattern rules read is capped here — see the module doc's ReDoS note. */
+const MAX_STATEMENT_LENGTH = 16 * 1024;
+/** The whole command is capped here: the corpus's longest real command is 58 KB. */
+const MAX_COMMAND_LENGTH = 2 * 1024 * 1024;
+const RULE_PARTIAL = {
+    id: 'partially-assessed',
+    level: 'warn',
+    reason: 'part of this command was not assessed (over 16 KB)',
+};
+/** Runs of spaces and tabs as one space: no rule pattern tells them apart, and padding stops counting. */
+function collapseBlanks(text) {
+    return text.replace(/[ \t]{2,}/g, ' ');
+}
+/** `text` cut at the cap, noting that something was dropped. */
+function capText(text, notes) {
+    if (text.length <= MAX_STATEMENT_LENGTH)
+        return text;
+    notes.partial = true;
+    return text.slice(0, MAX_STATEMENT_LENGTH);
 }
 /**
- * Assess a shell command. The overall level is the most severe rule matched.
+ * Assess a shell command. The overall level is the most severe rule matched;
+ * a command a cap cut short is at least a warning (`partially-assessed`).
  */
 export function assessBashCommand(command) {
-    const cmd = capLines((command ?? '').trim());
-    if (!cmd)
+    const whole = (command ?? '').trim();
+    if (!whole)
         return { level: 'ok', reasons: [], rules: [] };
+    const notes = { partial: whole.length > MAX_COMMAND_LENGTH };
+    const cmd = notes.partial ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
     const matched = [];
-    collect(cmd, 0, matched, { raw: cmd, cwd: '' });
+    collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+    if (notes.partial)
+        matched.push({ ...RULE_PARTIAL });
     if (matched.length === 0)
         return { level: 'ok', reasons: [], rules: [] };
     // De-dupe by id, then most severe first.
