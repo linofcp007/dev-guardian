@@ -232,6 +232,7 @@ interface PathPart {
  */
 function resolvePaths(projectPath: string, entries: readonly string[]): PathPart {
   const root = realOrSelf(projectPath);
+  const assertInside = insideChecker(projectPath, root);
   const files = new Set<string>();
   const dirs: string[] = [];
   const globs: RegExp[] = [];
@@ -255,7 +256,7 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
       // The walk never descends through a link; each file is still checked.
       for (const f of listProjectFiles(abs)) {
         const fileRel = rel === '' ? f : `${rel}/${f}`;
-        assertInside(projectPath, root, fileRel);
+        assertInside(fileRel);
         files.add(fileRel);
       }
     } else if (kind === 'other') {
@@ -272,7 +273,7 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
       let matched = 0;
       for (const f of allFiles) {
         if (matchesSelfOrAncestor(re, f)) {
-          assertInside(projectPath, root, f);
+          assertInside(f);
           files.add(f);
           matched += 1;
         }
@@ -354,11 +355,34 @@ function entryKind(abs: string, root: string): 'file' | 'dir' | 'other' | 'missi
   return 'other';
 }
 
-/** Refuse a file whose real location is outside the project (see `staysInside`). */
-function assertInside(projectPath: string, root: string, rel: string): void {
-  if (!staysInside(join(projectPath, ...rel.split('/')), root)) {
-    throw new ScopeError(`scope: "${rel}" resolves outside the project through a link`, 'unsupported_target');
-  }
+/**
+ * A check that refuses a file whose real location is outside the project
+ * (see `staysInside`), with one `realpath` per DIRECTORY, not per file.
+ *
+ * Only for a path whose last component is a regular file, never a link —
+ * which every caller has established (the project walk yields regular files
+ * only; `onDisk` lstat's each one). Such a file's real location is its
+ * directory's real location plus its name, so resolving the directory sees a
+ * link anywhere on the way, the last directory or mid-path, exactly as
+ * resolving the file did. `realpath` opens a handle on Windows: per file, a
+ * 50 000-file directory scope took 11 s where its walk took 0.25 s.
+ *
+ * `hint` is appended to the refusal (see `onDisk`).
+ */
+function insideChecker(projectPath: string, root: string, hint = ''): (rel: string) => void {
+  const dirs = new Map<string, boolean>();
+  return (rel) => {
+    const slash = rel.lastIndexOf('/');
+    const dir = slash < 0 ? '' : rel.slice(0, slash);
+    let inside = dirs.get(dir);
+    if (inside === undefined) {
+      inside = staysInside(dir === '' ? projectPath : join(projectPath, ...dir.split('/')), root);
+      dirs.set(dir, inside);
+    }
+    if (!inside) {
+      throw new ScopeError(`scope: "${rel}" resolves outside the project through a link${hint}`, 'unsupported_target');
+    }
+  };
 }
 
 // ---- diff / since -----------------------------------------------------
@@ -397,9 +421,20 @@ async function untracked(cwd: string): Promise<string[]> {
   ]);
 }
 
-/** The regular files among `rels` that exist — each refused if a link takes it outside the project. */
-function onDisk(projectPath: string, rels: readonly string[]): string[] {
-  const root = realOrSelf(projectPath);
+/**
+ * The refusal's way out for an UNTRACKED file: git for Windows lists the files
+ * inside an untracked junction as untracked files of the project, so a
+ * junction out of it blocks every `scope.diff: {}` until it is ignored.
+ */
+const UNTRACKED_LINK_HINT =
+  ' (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)';
+
+/**
+ * The regular files among `rels` that exist — each refused if a link takes it
+ * outside the project; `untracked` says they came from `git ls-files --others`.
+ */
+function onDisk(projectPath: string, rels: readonly string[], untracked = false): string[] {
+  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), untracked ? UNTRACKED_LINK_HINT : '');
   const out = new Set<string>();
   for (const rel of rels) {
     let isFile = false;
@@ -409,7 +444,7 @@ function onDisk(projectPath: string, rels: readonly string[]): string[] {
       /* deleted, or never there: nothing to read */
     }
     if (!isFile) continue;
-    assertInside(projectPath, root, rel);
+    assertInside(rel);
     out.add(rel);
   }
   return [...out].sort();
@@ -453,7 +488,7 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
       `${baseSha}..${headSha}`,
       '--',
     ]);
-    const extra = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath)) : [];
+    const extra = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath), true) : [];
     return {
       files: [...new Set([...committed, ...extra])].sort(),
       touched,
@@ -482,8 +517,8 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
       ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
   }
-  const extra = includeUntracked ? await untracked(projectPath) : [];
-  const files = onDisk(projectPath, [...tracked, ...extra]);
+  const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
+  const files = [...new Set([...onDisk(projectPath, tracked), ...extra])].sort();
   return {
     files,
     touched: [],

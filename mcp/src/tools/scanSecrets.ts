@@ -34,7 +34,7 @@
  */
 
 import { z } from 'zod';
-import { isProjectPath } from '../platform/guardianIgnore.js';
+import { projectPathTest } from '../platform/guardianIgnore.js';
 import { resolveProjectPath, InvalidProjectPathError } from '../platform/projectPath.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { historyState, repoState } from '../runners/git.js';
@@ -63,10 +63,11 @@ function networkDisabled(): boolean {
  * and scope filters, applied here first so a finding they drop is never sent.
  */
 function keptByScan(ctx: InvokeContext): (f: Finding) => boolean {
+  const inProject = projectPathTest(ctx.projectPath);
   return (f) => {
     const p = f.file_path;
     if (p === undefined || p === '') return true;
-    if (ctx.exclusions !== null && isProjectPath(ctx.projectPath, p) && ctx.exclusions.ignores(p)) return false;
+    if (ctx.exclusions !== null && ctx.exclusions.ignores(p) && inProject(p)) return false;
     return ctx.scope === null || ctx.scope.member(p);
   };
 }

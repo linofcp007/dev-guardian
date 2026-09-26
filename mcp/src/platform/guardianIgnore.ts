@@ -321,14 +321,42 @@ export async function loadProjectExclusions(
  * hides a finding.
  */
 export function isProjectPath(projectPath: string, relPath: string): boolean {
-  const p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-  if (p === '' || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p === '..' || p.startsWith('../')) return false;
-  const segments = p.split('/');
-  if (existsSync(join(projectPath, ...segments))) return true;
-  for (let i = segments.length - 1; i >= 1; i--) {
-    if (existsSync(join(projectPath, ...segments.slice(0, i)))) return true;
-  }
-  return false;
+  return projectPathTest(projectPath)(relPath);
+}
+
+/**
+ * {@link isProjectPath} for many paths of one project, asking the disk about
+ * each DIRECTORY once: a scan's result filter used to `existsSync` every
+ * finding (20 000 findings: 2-4 s on Windows). A path below the top level is
+ * in the project exactly when one of its directories exists — the file itself
+ * cannot exist without its directory — so only a top-level path (or one with
+ * a `.`/`..` segment, where the lexical parent is not the real one) is looked
+ * up by its own name. Answers are memoised for the returned function's
+ * lifetime: make one per scan.
+ */
+export function projectPathTest(projectPath: string): (relPath: string) => boolean {
+  const exists = new Map<string, boolean>();
+  const onDisk = (segments: readonly string[]): boolean => {
+    const key = segments.join('/');
+    let v = exists.get(key);
+    if (v === undefined) {
+      v = existsSync(join(projectPath, ...segments));
+      exists.set(key, v);
+    }
+    return v;
+  };
+  return (relPath) => {
+    const p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    if (p === '' || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p === '..' || p.startsWith('../')) return false;
+    const segments = p.split('/');
+    if (segments.length === 1 || segments.some((s) => s === '.' || s === '..')) {
+      if (onDisk(segments)) return true;
+    }
+    for (let i = segments.length - 1; i >= 1; i--) {
+      if (onDisk(segments.slice(0, i))) return true;
+    }
+    return false;
+  };
 }
 
 /** A `.git` (directory or worktree file) in the project or one of its ancestors. */

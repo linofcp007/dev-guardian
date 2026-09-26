@@ -40907,15 +40907,29 @@ async function loadProjectExclusions(projectPath) {
     semgrepAnchor
   };
 }
-function isProjectPath(projectPath, relPath) {
-  const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-  if (p === "" || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p === ".." || p.startsWith("../")) return false;
-  const segments = p.split("/");
-  if (existsSync10(join13(projectPath, ...segments))) return true;
-  for (let i2 = segments.length - 1; i2 >= 1; i2--) {
-    if (existsSync10(join13(projectPath, ...segments.slice(0, i2)))) return true;
-  }
-  return false;
+function projectPathTest(projectPath) {
+  const exists = /* @__PURE__ */ new Map();
+  const onDisk2 = (segments) => {
+    const key = segments.join("/");
+    let v = exists.get(key);
+    if (v === void 0) {
+      v = existsSync10(join13(projectPath, ...segments));
+      exists.set(key, v);
+    }
+    return v;
+  };
+  return (relPath) => {
+    const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+    if (p === "" || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p === ".." || p.startsWith("../")) return false;
+    const segments = p.split("/");
+    if (segments.length === 1 || segments.some((s) => s === "." || s === "..")) {
+      if (onDisk2(segments)) return true;
+    }
+    for (let i2 = segments.length - 1; i2 >= 1; i2--) {
+      if (onDisk2(segments.slice(0, i2))) return true;
+    }
+    return false;
+  };
 }
 function insideGitWorkTree(projectPath) {
   for (let dir = resolve6(projectPath); ; dir = dirname7(dir)) {
@@ -41228,6 +41242,7 @@ async function resolveScope(projectPath, scope, opts) {
 }
 function resolvePaths(projectPath, entries2) {
   const root = realOrSelf(projectPath);
+  const assertInside = insideChecker(projectPath, root);
   const files = /* @__PURE__ */ new Set();
   const dirs = [];
   const globs = [];
@@ -41249,7 +41264,7 @@ function resolvePaths(projectPath, entries2) {
       dirs.push(rel2);
       for (const f of listProjectFiles(abs)) {
         const fileRel = rel2 === "" ? f : `${rel2}/${f}`;
-        assertInside(projectPath, root, fileRel);
+        assertInside(fileRel);
         files.add(fileRel);
       }
     } else if (kind === "other") {
@@ -41264,7 +41279,7 @@ function resolvePaths(projectPath, entries2) {
       let matched = 0;
       for (const f of allFiles) {
         if (matchesSelfOrAncestor(re, f)) {
-          assertInside(projectPath, root, f);
+          assertInside(f);
           files.add(f);
           matched += 1;
         }
@@ -41325,10 +41340,20 @@ function entryKind(abs, root) {
   if (st.isDirectory()) return "dir";
   return "other";
 }
-function assertInside(projectPath, root, rel2) {
-  if (!staysInside(join15(projectPath, ...rel2.split("/")), root)) {
-    throw new ScopeError(`scope: "${rel2}" resolves outside the project through a link`, "unsupported_target");
-  }
+function insideChecker(projectPath, root, hint = "") {
+  const dirs = /* @__PURE__ */ new Map();
+  return (rel2) => {
+    const slash = rel2.lastIndexOf("/");
+    const dir = slash < 0 ? "" : rel2.slice(0, slash);
+    let inside = dirs.get(dir);
+    if (inside === void 0) {
+      inside = staysInside(dir === "" ? projectPath : join15(projectPath, ...dir.split("/")), root);
+      dirs.set(dir, inside);
+    }
+    if (!inside) {
+      throw new ScopeError(`scope: "${rel2}" resolves outside the project through a link${hint}`, "unsupported_target");
+    }
+  };
 }
 async function requireRepo(projectPath, what) {
   const state = await repoState(projectPath);
@@ -41353,8 +41378,9 @@ async function untracked(cwd) {
     ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
   ]);
 }
-function onDisk(projectPath, rels) {
-  const root = realOrSelf(projectPath);
+var UNTRACKED_LINK_HINT = " (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)";
+function onDisk(projectPath, rels, untracked2 = false) {
+  const assertInside = insideChecker(projectPath, realOrSelf(projectPath), untracked2 ? UNTRACKED_LINK_HINT : "");
   const out = /* @__PURE__ */ new Set();
   for (const rel2 of rels) {
     let isFile = false;
@@ -41363,7 +41389,7 @@ function onDisk(projectPath, rels) {
     } catch {
     }
     if (!isFile) continue;
-    assertInside(projectPath, root, rel2);
+    assertInside(rel2);
     out.add(rel2);
   }
   return [...out].sort();
@@ -41404,7 +41430,7 @@ async function resolveDiff(projectPath, diff) {
       `${baseSha}..${headSha}`,
       "--"
     ]);
-    const extra2 = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath)) : [];
+    const extra2 = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath), true) : [];
     return {
       files: [.../* @__PURE__ */ new Set([...committed, ...extra2])].sort(),
       touched,
@@ -41428,8 +41454,8 @@ async function resolveDiff(projectPath, diff) {
   } else {
     tracked = hasCommits ? await listZ(projectPath, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await listZ(projectPath, ["ls-files", "-z", "--cached"]);
   }
-  const extra = includeUntracked ? await untracked(projectPath) : [];
-  const files = onDisk(projectPath, [...tracked, ...extra]);
+  const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
+  const files = [.../* @__PURE__ */ new Set([...onDisk(projectPath, tracked), ...extra])].sort();
   return {
     files,
     touched: [],
@@ -42644,7 +42670,8 @@ async function runScanBody(args) {
     });
     return before - findings.length;
   };
-  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(isProjectPath(projectPath, p) && exclusions.ignores(p)));
+  const inProject = projectPathTest(projectPath);
+  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject(p)));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
@@ -45586,10 +45613,11 @@ function networkDisabled() {
   return process.env["GUARDIAN_OFFLINE"] === "1";
 }
 function keptByScan(ctx) {
+  const inProject = projectPathTest(ctx.projectPath);
   return (f) => {
     const p = f.file_path;
     if (p === void 0 || p === "") return true;
-    if (ctx.exclusions !== null && isProjectPath(ctx.projectPath, p) && ctx.exclusions.ignores(p)) return false;
+    if (ctx.exclusions !== null && ctx.exclusions.ignores(p) && inProject(p)) return false;
     return ctx.scope === null || ctx.scope.member(p);
   };
 }

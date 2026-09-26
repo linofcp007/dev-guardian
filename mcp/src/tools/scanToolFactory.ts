@@ -79,8 +79,8 @@ import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import {
   GUARDIAN_IGNORE_FILE,
-  isProjectPath,
   loadProjectExclusions,
+  projectPathTest,
   type ProjectExclusions,
 } from '../platform/guardianIgnore.js';
 import {
@@ -784,9 +784,12 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     return before - findings.length;
   };
   // Only paths IN the project: an image target that happens to match a
-  // pattern is not a file the project declared (`isProjectPath`).
+  // pattern is not a file the project declared (`isProjectPath`). The
+  // pattern first — it costs no disk — and then one existence check per
+  // directory (`projectPathTest`), never one per finding.
+  const inProject = projectPathTest(projectPath);
   const findingsExcluded =
-    exclusions === null ? 0 : keepIf((p) => !(isProjectPath(projectPath, p) && exclusions.ignores(p)));
+    exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject(p)));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);

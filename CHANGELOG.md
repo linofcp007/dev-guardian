@@ -959,6 +959,14 @@ keeps working (migrations 004–011 are additive).
   unreported number of commits scanned"). On a repository with commits it is
   now `failed` unless the report holds findings — git's own count of a range
   says what there was to read, not what gitleaks read.
+- **Scoped scans and the `.guardianignore` result filter asked the disk once
+  per file or finding**: a `realpath` per file of a directory, glob or diff
+  scope, an existence walk per finding. Both are now one check per directory
+  and the filter tests the pattern first (20 000 files on Windows: a directory
+  scope 2.5 s → 0.16 s, a diff 4.5 s → 1.4 s, the filter 1.4 s → 0.04 s). A
+  link out of the project is still refused, mid-path included; one reached
+  through an untracked junction now says to add it to `.gitignore` or pass
+  `scope.diff.include_untracked: false`.
 
 ### Security
 
