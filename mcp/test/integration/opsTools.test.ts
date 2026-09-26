@@ -64,6 +64,7 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import type { StackSnapshot } from '../../src/types.js';
 
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
@@ -93,6 +94,15 @@ function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`Tool '${name}' not registered`);
   return t;
+}
+
+/** A `detect_stack` snapshot that detected exactly `languages`. */
+function stackSnapshot(languages: string[]): StackSnapshot {
+  return {
+    os: 'linux', arch: 'x64', languages, package_managers: [], frameworks: [], existing_tools: [],
+    has_docker: false, has_compose: false, has_terraform: false, has_kubernetes: false,
+    has_ansible: false, has_github_actions: false, has_gitlab_ci: false, has_iac: false, projects: [],
+  };
 }
 
 function makePlugin(projectPath: string, scriptsDir?: string): PluginContext {
@@ -252,6 +262,31 @@ describe('init_project', () => {
     expect(r.applied).toBe(false);
     expect(r.files_written).toHaveLength(0);
     expect(existsSync(join(project, '.gitleaks.toml'))).toBe(false);
+  });
+
+  it("reports this project's stack snapshot, never another project's newer one (Task 24)", async () => {
+    const project = tempProject();
+    const other = tempProject();
+    const scriptsDir = makeTempDir('init-scripts-');
+    const configsDir = join(scriptsDir, '..', 'configs');
+    mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
+    writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl\n', 'utf8');
+    const plugin = makePlugin(project, scriptsDir);
+    plugin.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['python']) });
+
+    const none = (await getTool('init_project').handler(
+      { project_path: project, profile: 'minimal', apply: false },
+      plugin,
+    )) as { ok: true; stack_snapshot: { languages: string[] } | null };
+    expect(none.stack_snapshot).toBeNull();
+
+    plugin.storage.stack.insert({ project_path: project, snapshot: stackSnapshot(['go']) });
+    plugin.storage.stack.insert({ project_path: other, snapshot: stackSnapshot(['ruby']) });
+    const own = (await getTool('init_project').handler(
+      { project_path: project, profile: 'minimal', apply: false },
+      plugin,
+    )) as { ok: true; stack_snapshot: { languages: string[] } | null };
+    expect(own.stack_snapshot?.languages).toEqual(['go']);
   });
 
   // --- task 15: paranoid is genuinely stricter, not a standard alias ------
@@ -467,6 +502,19 @@ describe('observability_setup', () => {
     };
     expect(r.stack_inferred).toBe('generic');
     expect(r.proposals[0]?.target).toBe('docs/observability.md');
+  });
+
+  it("infers the stack from this project, never from another project's newer snapshot (Task 24)", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.stack.insert({ project_path: tempProject(), snapshot: stackSnapshot(['python']) });
+
+    const r = (await getTool('observability_setup').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      stack_inferred: string;
+    };
+    expect(r.stack_inferred).toBe('node');
   });
 });
 

@@ -1510,7 +1510,9 @@ describe('compliance_evidence', () => {
   it('reads the dependency section from a deps_audit scan', async () => {
     const plugin = makePlugin();
     seedDepsAuditWithCve(plugin, 'EV');
-    const r = (await getTool('compliance_evidence').handler({}, plugin)) as {
+    // project_path: the evidence is one project's (Task 24) — it read the
+    // server's cwd here, and saw P's scan only through the cross-project leak.
+    const r = (await getTool('compliance_evidence').handler({ project_path: P }, plugin)) as {
       ok: true;
       markdown: string;
     };
@@ -1563,7 +1565,7 @@ describe('compliance_evidence', () => {
     const plugin = makePlugin();
     seedComplianceScan(plugin, 'CE1');
     seedDepsAuditWithCve(plugin, 'CE2');
-    const r = (await getTool('compliance_evidence').handler({ framework: 'gdpr' }, plugin)) as {
+    const r = (await getTool('compliance_evidence').handler({ project_path: P, framework: 'gdpr' }, plugin)) as {
       ok: true;
       markdown: string;
     };

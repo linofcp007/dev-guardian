@@ -1,32 +1,57 @@
 /**
  * `dotnet_describe_setup` — analog of wp_describe_setup, for .NET.
  *
- * Aggregates: latest dotnet_target_framework_check, scan_dotnet_secrets,
- * dotnet_efcore_audit, plus open .NET-relevant findings. Pure read.
+ * Aggregates, for ONE project (`project_path`, default: the server's working
+ * directory): the latest dotnet_target_framework_check, scan_dotnet_secrets,
+ * dotnet_efcore_audit and SAST scan, plus the project's open .NET-relevant
+ * findings. Pure read.
+ *
+ * Every read is project-scoped (Task 24). It used to take "the latest scan
+ * of type X" from the 50 newest rows of the whole database, and its findings
+ * from `findings.listOpen()` — the single newest completed scan of ANY
+ * project and ANY type — so another project's EOL frameworks and SCS
+ * findings answered for this one, and an SBOM run afterwards read as "no
+ * open findings".
  */
+import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const tool = {
     name: 'dotnet_describe_setup',
     title: '.NET posture summary',
-    description: 'Aggregate read of accumulated .NET state: latest dotnet_target_framework_check (EOL frameworks), ' +
+    description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's " +
+        'working directory): latest dotnet_target_framework_check (EOL frameworks), ' +
         'scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open ' +
         '.NET-relevant findings. No scanner spawn.',
-    inputSchema: {},
-    handler: async (_input, ctx) => handler(ctx),
+    inputSchema: { project_path: ProjectPath },
+    handler: async (input, ctx) => handler(input, ctx),
 };
 registerToolModule(tool);
-async function handler(ctx) {
-    const tfm = findLatest(ctx, 'dotnet_target_framework');
-    const secrets = findLatest(ctx, 'dotnet_secrets');
-    const efcore = findLatest(ctx, 'dotnet_efcore_audit');
-    const sastScan = findLatest(ctx, 'sast');
-    const open = ctx.storage.findings.listOpen();
+async function handler(input, ctx) {
+    const inp = input;
+    let projectPath;
+    try {
+        projectPath = resolveProjectPath(inp.project_path).path;
+    }
+    catch (e) {
+        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+    }
+    // The target-framework check reports through `meta`, so its scanner
+    // coverage does not disqualify it; the others are finding scans, and one
+    // that measured nothing is passed over (its zero is not a result).
+    const tfm = findLatest(ctx, projectPath, 'dotnet_target_framework', false);
+    const secrets = findLatest(ctx, projectPath, 'dotnet_secrets', true);
+    const efcore = findLatest(ctx, projectPath, 'dotnet_efcore_audit', true);
+    const sastScan = findLatest(ctx, projectPath, 'sast', true);
+    const open = openSetForProject(ctx.storage, projectPath).findings;
     const dotnetFindings = open.filter((f) => f.tool === 'security-code-scan' ||
         f.tool === 'scan_dotnet_secrets' ||
         f.tool === 'dotnet_efcore_audit' ||
         f.rule_id?.startsWith('SCS'));
     return {
         ok: true,
+        project_path: projectPath,
         audits: {
             target_framework_check: tfm
                 ? {
@@ -66,9 +91,8 @@ async function handler(ctx) {
                         : 'Posture looks clean. Consider running `scan_sast` again if code changed.',
     };
 }
-function findLatest(ctx, type) {
-    const history = ctx.storage.scans.listHistory(50);
-    const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-    return row ? ctx.storage.scans.getById(row.scan_id) : null;
+/** The project's newest unscoped completed scan of `type` — one project-scoped query. */
+function findLatest(ctx, projectPath, type, skipCoverageNone) {
+    return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }
 //# sourceMappingURL=dotnetDescribeSetup.js.map

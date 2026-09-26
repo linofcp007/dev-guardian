@@ -133,6 +133,46 @@ version bump.
 
 ### Fixed
 
+- The last history readers that answered for "whichever project scanned
+  last" now answer for one project. One database holds every project's
+  scans; these still read `scans.getLatest()`, the 50 (or 200, or 1000)
+  newest rows of the whole database, `findings.listOpen()`,
+  `baselines.getActive()`, every active suppression, or the newest stack
+  snapshot of any project:
+  - `health_status`, `dotnet_describe_setup`, `wp_describe_setup`,
+    `wp_recommend_hardening`, `wp_plugin_check` and `compliance_evidence`
+    take an optional `project_path` (default: the server's working
+    directory) and report only that project — `health_status`'s
+    `last_scan` and `total_scans` included. Each response now names its
+    `project_path`. `compliance_evidence` documents the project's own
+    compliance/dependency/SBOM scans, its own baseline, and only the
+    suppressions that apply to it; it used to hand an auditor a document
+    that could describe a different project than the one it named.
+  - The WordPress tools file some rows under the site URL:
+    `wp_describe_setup` and `wp_plugin_check` take an optional `target_url`
+    to include those (`wp_rest_audit`, a URL-only `wp_vuln_check`), and
+    `wp_vuln_check` now files a path-given run under the install root's
+    canonical spelling so the project-scoped read finds it.
+  - `wp_plugin_check`'s single-plugin lookup row sets
+    `meta.scope = { kind: 'plugin', slug }` (and is filed under the
+    project, not `'(no-path)'`), so it can never become "the latest
+    wp_vuln_check" of a project; its CVEs come from the project's own
+    newest dependency, `wp_vuln_check` and `wp_vuln_check_source` scans
+    instead of every such scan among the newest 50 of any project.
+  - `audit_executive` picks its WordPress/.NET sub-tools from the audited
+    project's stack snapshot and compares against that project's previous
+    audit — it ran `scan_wordpress` on a Node project because a WordPress
+    site was detected last, and diffed against another project's audit.
+  - `bug_hunt`, `map_attack_surface`, `init_project` and
+    `observability_setup` read the project's own stack snapshot: a
+    TypeScript project got Python's language packs, and
+    `map_attack_surface` reported another project's languages as its
+    `no_rules` gaps and `stack_detected: true` for a project never detected.
+  - The headless CI pipeline (`ci/runScans.ts`) gates on the scanned project's open
+    set instead of every scan row in its database — another path's scan, a
+    scoped scan, or a failed one no longer count.
+  No production code calls the unscoped `getLatest` / `listHistory` /
+  `listOpen` any more; they remain for the storage tests.
 - Secret hygiene in outputs and honest compliance evidence:
   - Raw secrets no longer reach a response, the database, an exported
     report, a GitHub issue body or the dashboard HTML. A new

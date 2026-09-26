@@ -215,7 +215,7 @@ async function handler(
       freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
     });
     if (cached) {
-      return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
+      return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx, projectPath);
     }
   }
 
@@ -236,6 +236,7 @@ async function handler(
       'Semgrep is not installed and no Docker fallback is available, so no surface was ' +
         'mapped and nothing was persisted. Run install_toolchain, then retry.',
       ctx,
+      projectPath,
     );
   }
 
@@ -258,6 +259,7 @@ async function handler(
       [],
       'Semgrep produced no readable output file; nothing was persisted.',
       ctx,
+      projectPath,
     );
   }
 
@@ -280,6 +282,7 @@ async function handler(
       [],
       'Semgrep output was not valid JSON; nothing was persisted.',
       ctx,
+      projectPath,
     );
   }
 
@@ -293,6 +296,7 @@ async function handler(
       [],
       unreadableMatchesNote(recovery),
       ctx,
+      projectPath,
     );
   }
 
@@ -318,7 +322,7 @@ async function handler(
   // triggered from the write side instead of the read side. Skipping the
   // insert closes it at the source: nothing is ever there to be inherited.
   if (inp.spec_paths !== undefined) {
-    return summarize(snapshot, null, toolsRun, ctx);
+    return summarize(snapshot, null, toolsRun, ctx, projectPath);
   }
 
   const persisted = ctx.storage.surface.insert({
@@ -328,7 +332,7 @@ async function handler(
     cache_key: cacheKey,
   });
 
-  return summarize(snapshot, persisted.id, toolsRun, ctx);
+  return summarize(snapshot, persisted.id, toolsRun, ctx, projectPath);
 }
 
 /** Name used for the recovery step in `tools_run`; it is not a real binary. */
@@ -518,7 +522,7 @@ function buildSnapshot(
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
+    coverage: buildCoverage(resolved, ctx, projectPath, unreadableRouteFiles, unresolvedEdges),
     tools_run: toolsRun,
     missing_tools: [],
     spec_files: specFiles,
@@ -822,6 +826,7 @@ function resolveModuleFile(importingFile: string, specifier: string, knownFiles:
 function buildCoverage(
   routes: RouteRecord[],
   ctx: PluginContext,
+  projectPath: string,
   unreadableRouteFiles: readonly string[],
   unresolvedEdges: readonly ModuleEdge[],
 ): CoverageEntry[] {
@@ -830,7 +835,10 @@ function buildCoverage(
   // including them would create a phantom entry reading `status: 'no_rules'`,
   // literally true and completely meaningless.
   const codeRoutes = routes.filter((r) => r.provenance === 'code');
-  const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+  // THIS project's detected languages — `stack.getLatest()` was the newest
+  // detection of any project, so another project's languages were reported
+  // as this one's `no_rules` gaps (Task 24).
+  const detected = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot.languages ?? [];
 
   // One entry per lost route, so the count is routes-not-shown, not files.
   const unreadableByLanguage = new Map<string, number>();
@@ -888,6 +896,7 @@ function summarize(
   snapshotId: number | null,
   toolsRun: ToolRun[],
   ctx: PluginContext,
+  projectPath: string,
 ): ToolResult<Record<string, unknown>> {
   // `by_language` is a report about source code, same reasoning as
   // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
@@ -922,7 +931,8 @@ function summarize(
     .sort((a, b) => a.path_resolved.localeCompare(b.path_resolved))
     .slice(0, SAMPLE_SIZE);
 
-  const stackDetected = ctx.storage.stack.getLatest() !== null;
+  // "For this project", as NO_STACK_NOTE says — never another project's.
+  const stackDetected = ctx.storage.stack.getLatestForProject(projectPath) !== null;
 
   return {
     ok: true,
@@ -984,6 +994,7 @@ function degradedResult(
   missingTools: string[],
   note: string,
   ctx: PluginContext,
+  projectPath: string,
 ): ToolResult<Record<string, unknown>> {
   return {
     ok: true,
@@ -997,7 +1008,7 @@ function degradedResult(
     webhooks_total: 0,
     tools_run: toolsRun,
     missing_tools: missingTools,
-    stack_detected: ctx.storage.stack.getLatest() !== null,
+    stack_detected: ctx.storage.stack.getLatestForProject(projectPath) !== null,
     spec_routes_total: 0,
     spec_files: [],
     spec_sample: [],

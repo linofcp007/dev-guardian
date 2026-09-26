@@ -13,10 +13,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { canonicalPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { registerToolModule } from './index.js';
+import { wpSiteKey } from './wpDescribeSetup.js';
 const inputSchema = {
     wp_install_path: z
         .string()
@@ -88,7 +90,10 @@ async function handler(input, ctx) {
     ctx.storage.scans.insert({
         scan_id: scanId,
         scan_type: 'wp_vuln_check',
-        project_path: inp.wp_install_path ?? url,
+        // Filed under the key the project-scoped readers look it up by
+        // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
+        // canonical spelling, or the site URL the way wp_rest_audit files it.
+        project_path: inp.wp_install_path !== undefined ? canonicalPath(inp.wp_install_path) : wpSiteKey(url),
         tree_hash: '',
         report_dir: reportDir,
     });

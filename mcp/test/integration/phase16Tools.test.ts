@@ -57,6 +57,11 @@ function tempProject(): string {
   return makeTempDir('phase16-');
 }
 
+/** A real project directory, in the spelling every scan persists. */
+function projectPath(): string {
+  return resolveProjectPath(tempProject()).path;
+}
+
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`Tool '${name}' not registered`);
@@ -112,15 +117,19 @@ describe('Phase 16 — registry', () => {
 });
 
 describe('wp_plugin_check', () => {
+  // Every read is one project's since Task 24: rows are seeded under a real
+  // project and the call names it. They were seeded under '/p' and read from
+  // the server's cwd — found only because the read searched every project.
   it('finds a plugin CVE recorded by a deps_audit scan, which has its own scan type', async () => {
     const plugin = makePlugin();
-    plugin.storage.scans.insert({ scan_id: 'da', scan_type: 'deps_audit', project_path: '/p', tree_hash: 'h' });
+    const P = projectPath();
+    plugin.storage.scans.insert({ scan_id: 'da', scan_type: 'deps_audit', project_path: P, tree_hash: 'h' });
     plugin.storage.cves.upsert({
       cve_id: 'CVE-2024-WP', package_name: 'contact-form-7', severity: 'high', scan_id: 'da',
     });
     plugin.storage.scans.finalize({ scan_id: 'da', status: 'completed', tools_run: [], missing_tools: [] });
 
-    const r = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7' }, plugin)) as {
+    const r = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7', project_path: P }, plugin)) as {
       ok: true;
       known_cves: Array<{ cve_id: string }>;
     };
@@ -129,13 +138,14 @@ describe('wp_plugin_check', () => {
 
   it('also finds a plugin CVE recorded by wp_vuln_check_source (Task 18, source-based)', async () => {
     const plugin = makePlugin();
-    plugin.storage.scans.insert({ scan_id: 'wvs', scan_type: 'wp_vuln_check_source', project_path: '/p', tree_hash: 'h' });
+    const P = projectPath();
+    plugin.storage.scans.insert({ scan_id: 'wvs', scan_type: 'wp_vuln_check_source', project_path: P, tree_hash: 'h' });
     plugin.storage.cves.upsert({
       cve_id: 'CVE-2024-SRC', package_name: 'contact-form-7', severity: 'critical', scan_id: 'wvs',
     });
     plugin.storage.scans.finalize({ scan_id: 'wvs', status: 'completed', tools_run: [], missing_tools: [] });
 
-    const r = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7' }, plugin)) as {
+    const r = (await getTool('wp_plugin_check').handler({ slug: 'contact-form-7', project_path: P }, plugin)) as {
       ok: true;
       known_cves: Array<{ cve_id: string }>;
     };
@@ -155,10 +165,11 @@ describe('wp_recommend_hardening', () => {
 
   it('produces a checklist from wp_audit meta', async () => {
     const plugin = makePlugin();
+    const P = projectPath();
     plugin.storage.scans.insert({
       scan_id: 'wpa',
       scan_type: 'wp_audit',
-      project_path: '/p',
+      project_path: P,
       tree_hash: '',
     });
     plugin.storage.scans.finalize({
@@ -179,7 +190,7 @@ describe('wp_recommend_hardening', () => {
       },
     });
 
-    const r = (await getTool('wp_recommend_hardening').handler({}, plugin)) as {
+    const r = (await getTool('wp_recommend_hardening').handler({ project_path: P }, plugin)) as {
       ok: true;
       audit_found: boolean;
       summary: { total: number; critical: number };
@@ -399,17 +410,18 @@ describe('wp_describe_setup + dotnet_describe_setup', () => {
 
   it('merges CVEs from wp_vuln_check (live) and wp_vuln_check_source (Task 18) without double-counting a shared id', async () => {
     const plugin = makePlugin();
-    plugin.storage.scans.insert({ scan_id: 'live', scan_type: 'wp_vuln_check', project_path: '/p', tree_hash: 'h' });
+    const P = projectPath();
+    plugin.storage.scans.insert({ scan_id: 'live', scan_type: 'wp_vuln_check', project_path: P, tree_hash: 'h' });
     plugin.storage.cves.upsert({ cve_id: 'CVE-SHARED', package_name: 'a', severity: 'high', scan_id: 'live' });
     plugin.storage.cves.upsert({ cve_id: 'CVE-LIVE-ONLY', package_name: 'b', severity: 'medium', scan_id: 'live' });
     plugin.storage.scans.finalize({ scan_id: 'live', status: 'completed', tools_run: [], missing_tools: [] });
 
-    plugin.storage.scans.insert({ scan_id: 'src', scan_type: 'wp_vuln_check_source', project_path: '/p', tree_hash: 'h' });
+    plugin.storage.scans.insert({ scan_id: 'src', scan_type: 'wp_vuln_check_source', project_path: P, tree_hash: 'h' });
     plugin.storage.cves.upsert({ cve_id: 'CVE-SHARED', package_name: 'a', severity: 'high', scan_id: 'src' });
     plugin.storage.cves.upsert({ cve_id: 'CVE-SOURCE-ONLY', package_name: 'c', severity: 'low', scan_id: 'src' });
     plugin.storage.scans.finalize({ scan_id: 'src', status: 'completed', tools_run: [], missing_tools: [] });
 
-    const wp = (await getTool('wp_describe_setup').handler({}, plugin)) as {
+    const wp = (await getTool('wp_describe_setup').handler({ project_path: P }, plugin)) as {
       ok: true;
       audits: {
         wp_vuln_check: { cves_count: number } | null;

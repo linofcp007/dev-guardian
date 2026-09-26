@@ -34,6 +34,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
+import { openSetForProject } from '../history/openSet.js';
+import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
 import { probeShell } from '../platform/shellProbe.js';
@@ -68,12 +70,6 @@ export const SCAN_SEQUENCE: readonly string[] = [
   'scan_dast',
   'validate_finding',
 ];
-
-/** Far more than the scan rows this pipeline can create in one run —
- *  security_scan_full's own and one per child it runs (four), scan_dast's —
- *  generous on purpose so a future step that persists additional scan rows
- *  doesn't silently truncate. */
-const SCAN_HISTORY_LIMIT = 50;
 
 const TEMP_DIR_PREFIX = 'dev-guardian-ci-';
 
@@ -116,7 +112,7 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         steps.push(await runStep(name, buildInput(name, opts), ctx));
       }
 
-      return { findings: collectFindings(storage), steps };
+      return { findings: collectFindings(storage, opts.projectPath), steps };
     } finally {
       try {
         db.close();
@@ -200,23 +196,34 @@ function toStringArray(value: unknown): string[] {
 }
 
 /**
- * Findings this run actually persisted, read back out of the ephemeral
- * database rather than out of any step's return payload (see the module doc
- * comment). The database was created moments ago in a fresh `mkdtemp`
- * directory, so every scan row it holds belongs to this one run — no
- * project-path or "latest scan" filtering is needed to keep another run's
- * data out, unlike the equivalent reads inside an interactive MCP session.
+ * The scanned project's open set, read back out of the ephemeral database
+ * rather than out of any step's return payload (see the module doc comment)
+ * — the same answer `guardian://findings/open` and every interactive reader
+ * gives (`history/openSet.ts`): the newest usable scan of each state type
+ * for THIS project, orchestrated `security_full` parents left to their
+ * children, suppressions applied.
  *
- * Deduplicated across scan rows (`security_scan_full`, each of its child
- * scans, and `scan_dast` all create their own, and the parent row repeats its
- * children's findings): the same issue reported by two rows must not be
- * double-counted by the gate. `runners/findingMerge.ts` decides what "the
- * same" means.
+ * It used to be every row of `listHistory(50)` — whatever project each
+ * belonged to, scoped or not, failed or cancelled or not (Task 24). The
+ * database being fresh narrows what can be in it, not what a step may write
+ * there; the gate must count this project's measurement and nothing else.
+ *
+ * The path is resolved the way every step resolved the `project_path` it was
+ * given, so both sides compare the same spelling.
+ *
+ * Deduplicated once more by `runners/findingMerge.ts`, which decides what
+ * "the same issue" means for the gate across two scanners' reports.
  */
-function collectFindings(storage: Storage): Finding[] {
-  const all: Finding[] = [];
-  for (const scan of storage.scans.listHistory(SCAN_HISTORY_LIMIT)) {
-    all.push(...storage.findings.listByScan(scan.scan_id));
+function collectFindings(storage: Storage, projectPath: string): Finding[] {
+  const findings = openSetForProject(storage, scannedProject(projectPath)).findings;
+  return dedupeFindings(findings.map(({ scan_id: _scanId, ...f }) => f));
+}
+
+/** `resolveProjectPath`'s spelling of `projectPath`, or its canonical form when it no longer resolves. */
+function scannedProject(projectPath: string): string {
+  try {
+    return resolveProjectPath(projectPath).path;
+  } catch {
+    return canonicalPath(projectPath);
   }
-  return dedupeFindings(all);
 }

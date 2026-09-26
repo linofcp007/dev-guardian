@@ -38863,6 +38863,12 @@ var StackRepo = class {
       snapshot: input.snapshot
     };
   }
+  /**
+   * The newest snapshot of ANY project. No production caller since Task 24:
+   * `bug_hunt`, `audit_executive`, `init_project`, `map_attack_surface` and
+   * `observability_setup` each took ANOTHER project's languages from it
+   * whenever that project was detected last. Use `getLatestForProject`.
+   */
   getLatest() {
     const row = this.getLatestStmt.get();
     return row ? rowToSnapshot(row) : null;
@@ -39067,11 +39073,9 @@ var SurfaceRepo = class {
     };
   }
   /**
-   * The newest snapshot in the database, from ANY project.
-   *
-   * Correct for exactly one caller: the `guardian://surface/latest` resource,
-   * whose contract really is "whatever this server last mapped" and which
-   * claims nothing about a project.
+   * The newest snapshot in the database, from ANY project. No production
+   * caller: the `guardian://surface/latest` resource answers for the
+   * server's own project (`getLatestForProject(serverProjectPath())`).
    *
    * Any consumer that relativizes paths against a specific project root,
    * keys anything by one, or TELLS THE CALLER it answered about their
@@ -45690,7 +45694,7 @@ function fallbackLanguages(projectPath) {
   return languages;
 }
 function detectLanguages(plugin, projectPath) {
-  const snapshotLanguages = plugin.storage.stack.getLatest()?.snapshot.languages;
+  const snapshotLanguages = plugin.storage.stack.getLatestForProject(projectPath)?.snapshot.languages;
   return snapshotLanguages ?? fallbackLanguages(projectPath);
 }
 function configuredPacksFor(input, plugin, projectPath) {
@@ -50181,7 +50185,7 @@ async function handler4(input, ctx) {
   }
   if (apply && manifestTouched) writeManifest(projectPath, manifest);
   const adopted = apply && !refresh && skipped.length > 0 ? adoptIdenticalConfigs({ projectPath, configsDir, currentVersion: version2, files: proposals }) : [];
-  const stackSnapshot = readLatestStackSnapshot(ctx);
+  const stackSnapshot = readLatestStackSnapshot(ctx, projectPath);
   let initialStateLines = [];
   if (apply && ctx.shell) {
     const scriptPath = join38(ctx.scriptsDir, "scan", "initial-scan.sh");
@@ -50217,8 +50221,8 @@ async function handler4(input, ctx) {
     initial_state: initialStateLines
   };
 }
-function readLatestStackSnapshot(ctx) {
-  const latest = ctx.storage.stack.getLatest();
+function readLatestStackSnapshot(ctx, projectPath) {
+  const latest = ctx.storage.stack.getLatestForProject(projectPath);
   return latest?.snapshot ?? null;
 }
 async function computeSecretsStatusLine(projectPath) {
@@ -50315,7 +50319,7 @@ async function handler5(input, ctx) {
   };
 }
 function inferStack(projectPath, ctx) {
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   if (snap) {
     if (snap.languages?.includes("javascript") || snap.languages?.includes("typescript")) return "node";
     if (snap.languages?.includes("python")) return "python";
@@ -51854,7 +51858,7 @@ async function handler10(input, ctx, callMeta) {
   const aggregateFindings = [];
   const subInput = { project_path: projectPath };
   if (inp.severity_min) subInput["severity_min"] = inp.severity_min;
-  const subTools = buildSubToolsForStack(ctx);
+  const subTools = buildSubToolsForStack(ctx, projectPath);
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
       const subTool = TOOLS.find((t) => t.name === toolName);
@@ -51915,7 +51919,7 @@ async function handler10(input, ctx, callMeta) {
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
   const aggregate_counts = countBySeverity2(filteredAggregate);
   const top_findings = topFindings2(filteredAggregate, 10);
-  const previousAudit = findPreviousAudit(ctx, auditScanId);
+  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
   let deltas;
   if (previousAudit) {
     const prevFindings = ctx.storage.findings.listByScan(previousAudit);
@@ -52001,8 +52005,8 @@ function worstCoverage(list2) {
   const rank = { none: 0, partial: 1, full: 2 };
   return list2.reduce((worst, c3) => rank[c3] < rank[worst] ? c3 : worst, "full");
 }
-function buildSubToolsForStack(ctx) {
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+function buildSubToolsForStack(ctx, projectPath) {
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   const languages = snap?.languages ?? [];
   const frameworks = snap?.frameworks ?? [];
   const out = [...BASE_SUB_TOOLS];
@@ -52014,11 +52018,11 @@ function buildSubToolsForStack(ctx) {
   }
   return out;
 }
-function findPreviousAudit(ctx, excludeScanId) {
-  const history = ctx.storage.scans.listHistory(200);
-  const prev = history.find(
-    (s) => s.scan_type === "audit" && s.status === "completed" && s.scan_id !== excludeScanId
-  );
+function findPreviousAudit(ctx, projectPath, thisAuditId) {
+  const [prev] = ctx.storage.scans.listCompletedOfTypes(projectPath, ["audit"], {
+    limit: 1,
+    beforeScanId: thisAuditId
+  });
   return prev?.scan_id ?? null;
 }
 function countBySeverity2(findings) {
@@ -54611,13 +54615,24 @@ var SERVER_VERSION = resolveVersion();
 var tool24 = {
   name: "health_status",
   title: "Server health",
-  description: "Return server uptime, DB info, last scan, shell choice, in-flight scan count, and tool/resource counts. Read-only.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler21(ctx)
+  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler21(input, ctx)
 };
 registerToolModule(tool24);
-async function handler21(ctx) {
-  const latest = ctx.storage.scans.getLatest();
+async function handler21(input, ctx) {
+  const inp = input;
+  let projectPath;
+  if (inp.project_path === void 0 || inp.project_path.length === 0) {
+    projectPath = serverProjectPath();
+  } else {
+    try {
+      projectPath = resolveProjectPath(inp.project_path).path;
+    } catch (e) {
+      return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    }
+  }
+  const latest = ctx.storage.scans.getLatestForProject(projectPath);
   const limiter2 = getScanLimiter();
   const dbPath = ctx.storage.rawHandle().name;
   let dbSizeBytes = null;
@@ -54636,10 +54651,12 @@ async function handler21(ctx) {
       node_version: process.version,
       platform: process.platform
     },
+    project_path: projectPath,
     storage: {
       db_path: dbPath,
       db_size_bytes: dbSizeBytes,
-      total_scans: ctx.storage.scans.listHistory(1e3).length,
+      // This project's scans, any status and type — never another project's.
+      total_scans: ctx.storage.scans.countForProject(projectPath),
       ...ctx.storage.runtimeMeta.get("shell_choice") !== null ? { shell_label: ctx.shell?.label ?? "unknown" } : {}
     },
     last_scan: latest ? {
@@ -55249,12 +55266,13 @@ function failDomain17(code, message3) {
 
 // src/tools/complianceEvidence.ts
 var inputSchema13 = {
+  project_path: ProjectPath,
   framework: external_exports.enum(["gdpr", "soc2", "iso27001", "generic"]).optional().describe("Which framework to label the evidence under. Default: generic.")
 };
 var tool26 = {
   name: "compliance_evidence",
   title: "Compliance evidence pack (Markdown)",
-  description: "Generate a Markdown evidence document from accumulated state: latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
+  description: "Generate a Markdown evidence document from one project's accumulated state (project_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
   inputSchema: inputSchema13,
   handler: async (input, ctx) => handler23(input, ctx)
 };
@@ -55262,14 +55280,21 @@ registerToolModule(tool26);
 async function handler23(input, ctx) {
   const inp = input;
   const framework = inp.framework ?? "generic";
-  const compliance = findLatest(ctx, "compliance");
-  const deps = findLatest(ctx, "deps_audit") ?? findLatest(ctx, "deps") ?? findLatest(ctx, "security_full");
-  const sbom = findLatest(ctx, "sbom");
-  const baseline = ctx.storage.baselines.getActive();
-  const suppressions = ctx.storage.suppressions.listActive();
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const storage = ctx.storage;
+  const compliance = findLatestUsable(storage, projectPath, ["compliance"], { skipCoverageNone: false }).scan;
+  const deps = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }).scan;
+  const sbom = findLatestUsable(storage, projectPath, ["sbom"]).scan;
+  const baseline = storage.baselines.getActiveForProject(projectPath);
+  const suppressions = storage.suppressions.listActive().filter((s) => s.project_path === void 0 || s.project_path === projectPath);
   const md = build({
     framework,
-    project_path: deps?.project_path ?? compliance?.project_path ?? "(unknown)",
+    project_path: projectPath,
     generated_at: (/* @__PURE__ */ new Date()).toISOString(),
     compliance,
     deps,
@@ -55280,6 +55305,7 @@ async function handler23(input, ctx) {
   });
   return {
     ok: true,
+    project_path: projectPath,
     framework,
     markdown: md,
     size_bytes: Buffer.byteLength(md, "utf8"),
@@ -55459,11 +55485,6 @@ function build(args) {
     "_Generated by dev-guardian. dev-guardian sends no telemetry of its own; Semgrep's registry mode sends metrics \u2014 pass `local_only: true` to avoid it._"
   );
   return out.join("\n");
-}
-function findLatest(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 
 // src/tools/createGithubIssues.ts
@@ -56335,21 +56356,128 @@ function severityFromVuln(raw) {
   return "medium";
 }
 
+// src/tools/wpDescribeSetup.ts
+var tool29 = {
+  name: "wp_describe_setup",
+  title: "WordPress posture summary",
+  description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
+  inputSchema: {
+    project_path: ProjectPath,
+    target_url: external_exports.string().url().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
+  },
+  handler: async (input, ctx) => handler26(input, ctx)
+};
+registerToolModule(tool29);
+async function handler26(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
+  const keys = siteKey !== null ? [projectPath, siteKey] : [projectPath];
+  const wpAudit = findLatest(ctx, [projectPath], "wp_audit");
+  const wpCron = findLatest(ctx, [projectPath], "wp_cron_audit");
+  const wpRest = siteKey !== null ? findLatest(ctx, [siteKey], "wp_rest_audit") : null;
+  const wpVuln = findLatest(ctx, keys, "wp_vuln_check");
+  const wpVulnSource = findLatest(ctx, [projectPath], "wp_vuln_check_source");
+  const wpCodeScan = findLatest(ctx, [projectPath], "wordpress");
+  const open = openFindings(ctx, keys).filter(
+    (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
+  );
+  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
+  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
+  const cveById = /* @__PURE__ */ new Map();
+  for (const c3 of [...cvesFromLive, ...cvesFromSource]) cveById.set(c3.cve_id, c3);
+  const cves = [...cveById.values()];
+  return {
+    ok: true,
+    project_path: projectPath,
+    ...siteKey !== null ? { target_url: siteKey } : {},
+    audits: {
+      wp_audit: wpAudit ? {
+        scan_id: wpAudit.scan_id,
+        captured_at: wpAudit.started_at,
+        wp_version: wpAudit.meta?.wp_version ?? null,
+        admins_count: (wpAudit.meta?.admins ?? []).length,
+        checksum_mismatches_count: countChecksumIssues(wpAudit.meta),
+        warnings: wpAudit.meta?.warnings ?? []
+      } : null,
+      wp_cron_audit: wpCron ? {
+        scan_id: wpCron.scan_id,
+        flagged_count: wpCron.meta?.flagged_count ?? 0
+      } : null,
+      wp_rest_audit: wpRest ? {
+        scan_id: wpRest.scan_id,
+        exposed_count: wpRest.meta?.exposed_count ?? 0
+      } : null,
+      wp_vuln_check: wpVuln ? {
+        scan_id: wpVuln.scan_id,
+        cves_count: cvesFromLive.length
+      } : null,
+      wp_vuln_check_source: wpVulnSource ? {
+        scan_id: wpVulnSource.scan_id,
+        cves_count: cvesFromSource.length
+      } : null,
+      scan_wordpress: wpCodeScan ? {
+        scan_id: wpCodeScan.scan_id,
+        captured_at: wpCodeScan.started_at
+      } : null
+    },
+    open_findings_count: open.length,
+    open_critical: open.filter((f) => f.severity === "critical").length,
+    open_high: open.filter((f) => f.severity === "high").length,
+    active_cves: cves,
+    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
+  };
+}
+function wpSiteKey(url) {
+  return url.replace(/\/$/, "");
+}
+function findLatest(ctx, keys, type) {
+  let newest = null;
+  for (const key of keys) {
+    const found = findLatestUsable(ctx.storage, key, [type], { skipCoverageNone: false }).scan;
+    if (found === null) continue;
+    if (newest === null) {
+      newest = found;
+      continue;
+    }
+    const [first] = ctx.storage.scans.sortNewestFirst([newest.scan_id, found.scan_id]);
+    if (first === found.scan_id) newest = found;
+  }
+  return newest;
+}
+function openFindings(ctx, keys) {
+  const out = [];
+  for (const key of keys) {
+    const seen = indexFindings(out);
+    for (const f of openSetForProject(ctx.storage, key).findings) if (!seen.has(f)) out.push(f);
+  }
+  return out;
+}
+function countChecksumIssues(meta) {
+  const cm = meta?.checksum_mismatches ?? {};
+  return (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0);
+}
+
 // src/tools/wpVulnCheck.ts
 var inputSchema16 = {
   wp_install_path: external_exports.string().optional().describe("Local path to a WP install (must contain wp-config.php)."),
   target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
   api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
 };
-var tool29 = {
+var tool30 = {
   name: "wp_vuln_check",
   title: "WordPress vuln-DB lookup (WPScan)",
   description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.",
   inputSchema: inputSchema16,
-  handler: async (input, ctx) => handler26(input, ctx)
+  handler: async (input, ctx) => handler27(input, ctx)
 };
-registerToolModule(tool29);
-async function handler26(input, ctx) {
+registerToolModule(tool30);
+async function handler27(input, ctx) {
   const inp = input;
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain20(
@@ -56406,7 +56534,10 @@ async function handler26(input, ctx) {
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
-    project_path: inp.wp_install_path ?? url,
+    // Filed under the key the project-scoped readers look it up by
+    // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
+    // canonical spelling, or the site URL the way wp_rest_audit files it.
+    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url),
     tree_hash: "",
     report_dir: reportDir
   });
@@ -57293,15 +57424,15 @@ var KNOWN_PREFIXES = [
   "wp_version_check"
 ];
 var BASE64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-var tool30 = {
+var tool31 = {
   name: "wp_cron_audit",
   title: "WordPress cron audit (suspicious scheduled events)",
   description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here.",
   inputSchema: inputSchema17,
-  handler: async (input, ctx) => handler27(input, ctx)
+  handler: async (input, ctx) => handler28(input, ctx)
 };
-registerToolModule(tool30);
-async function handler27(input, ctx) {
+registerToolModule(tool31);
+async function handler28(input, ctx) {
   const inp = input;
   let installPath;
   try {
@@ -57421,19 +57552,27 @@ function failDomain21(code, message3) {
 }
 
 // src/tools/wpRecommendHardening.ts
-var tool31 = {
+var tool32 = {
   name: "wp_recommend_hardening",
   title: "WordPress hardening checklist",
-  description: "Generate a prioritised hardening checklist (Markdown) from the latest wp_audit. Pure read \u2014 inspects scans.meta of the most recent wp_audit, applies heuristics, returns recommendations.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler28(ctx)
+  description: "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit (project_path = the install root, default: the server's working directory). Pure read \u2014 inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler29(input, ctx)
 };
-registerToolModule(tool31);
-async function handler28(ctx) {
-  const audit = findLatestWpAudit(ctx);
+registerToolModule(tool32);
+async function handler29(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
     return {
       ok: true,
+      project_path: projectPath,
       audit_found: false,
       message: "No wp_audit on file. Run `wp_audit` first.",
       markdown: "## No data\n\nRun `wp_audit` against a WordPress install first."
@@ -57536,6 +57675,7 @@ async function handler28(ctx) {
   items.sort((a2, b) => order[a2.priority] - order[b.priority]);
   return {
     ok: true,
+    project_path: projectPath,
     audit_found: true,
     audit_scan_id: audit.scan_id,
     items,
@@ -57572,10 +57712,8 @@ function toMarkdown(items, scanId) {
   }
   return out.join("\n");
 }
-function findLatestWpAudit(ctx) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === "wp_audit" && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatestWpAudit(ctx, projectPath) {
+  return findLatestUsable(ctx.storage, projectPath, ["wp_audit"], { skipCoverageNone: false }).scan;
 }
 
 // src/tools/wpPluginCheck.ts
@@ -57583,19 +57721,28 @@ import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
   wp_install_path: external_exports.string().optional().describe("Optional path to a local WP install for version detection."),
-  target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token).")
+  target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token)."),
+  project_path: ProjectPath.describe(
+    "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
+  )
 };
-var tool32 = {
+var tool33 = {
   name: "wp_plugin_check",
   title: "WordPress plugin check (1 plugin)",
   description: "Focused check on one plugin: installed version (when wp_install_path given), latest known, active CVEs from the dev-guardian cves table. Pass target_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.",
   inputSchema: inputSchema18,
-  handler: async (input, ctx) => handler29(input, ctx)
+  handler: async (input, ctx) => handler30(input, ctx)
 };
-registerToolModule(tool32);
-async function handler29(input, ctx) {
+registerToolModule(tool33);
+async function handler30(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path ?? inp.wp_install_path).path;
+  } catch (e) {
+    return failDomain22("not_a_git_repo", e.message);
+  }
   let installedVersion = null;
   let active = null;
   if (inp.wp_install_path) {
@@ -57628,11 +57775,7 @@ async function handler29(input, ctx) {
     }
   }
   const slugLower = inp.slug.toLowerCase();
-  const allActive = ctx.storage.scans.listHistory(50).filter(
-    (s) => s.scan_type === "wp_vuln_check" || // wp_vuln_check_source (Task 18): source-based match against the
-    // Wordfence feed, no live URL — same `cves` shape, same slug key.
-    s.scan_type === "wp_vuln_check_source" || s.scan_type === "deps" || s.scan_type === "deps_audit"
-  ).map((s) => ctx.storage.cves.listActive(s.scan_id)).flat().filter((c3) => c3.package_name.toLowerCase() === slugLower);
+  const allActive = cveSources(ctx, projectPath, inp.target_url).flatMap((s) => ctx.storage.cves.listActive(s.scan_id)).filter((c3) => c3.package_name.toLowerCase() === slugLower);
   const cveMap = /* @__PURE__ */ new Map();
   for (const c3 of allActive) {
     if (!cveMap.has(c3.cve_id)) cveMap.set(c3.cve_id, c3);
@@ -57642,8 +57785,9 @@ async function handler29(input, ctx) {
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
-    project_path: inp.wp_install_path ?? inp.target_url ?? "(no-path)",
-    tree_hash: ""
+    project_path: projectPath,
+    tree_hash: "",
+    meta: { scope: { kind: "plugin", slug: inp.slug } }
   });
   ctx.storage.scans.finalize({
     scan_id: scanId,
@@ -57651,6 +57795,7 @@ async function handler29(input, ctx) {
     tools_run: [{ name: "wp_plugin_check", status: "ok" }],
     missing_tools: [],
     meta: {
+      scope: { kind: "plugin", slug: inp.slug },
       slug: inp.slug,
       installed_version: installedVersion,
       active,
@@ -57659,6 +57804,7 @@ async function handler29(input, ctx) {
   });
   return {
     ok: true,
+    project_path: projectPath,
     scan_id: scanId,
     slug: inp.slug,
     installed_version: installedVersion,
@@ -57667,6 +57813,18 @@ async function handler29(input, ctx) {
     cve_count: knownCves.length,
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
   };
+}
+function cveSources(ctx, projectPath, targetUrl) {
+  const latest = (key, types, slot) => findLatestUsable(ctx.storage, key, types, slot !== void 0 ? { slot } : {}).scan;
+  const found = [
+    latest(projectPath, CVE_SOURCE_SCAN_TYPES, "deps"),
+    latest(projectPath, ["wp_vuln_check"]),
+    // wp_vuln_check_source (Task 18): source-based match against the
+    // Wordfence feed, no live URL — same `cves` shape, same slug key.
+    latest(projectPath, ["wp_vuln_check_source"]),
+    targetUrl !== void 0 ? latest(wpSiteKey(targetUrl), ["wp_vuln_check"]) : null
+  ];
+  return found.filter((s) => s !== null);
 }
 function failDomain22(code, message3) {
   return { ok: false, error: { code, message: message3 } };
@@ -57678,15 +57836,15 @@ var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
   timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
 };
-var tool33 = {
+var tool34 = {
   name: "wp_rest_audit",
   title: "WordPress REST API exposure audit",
   description: "Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak data: users enumeration, draft posts, comments, xmlrpc.php. No POSTs, no auth. Returns one row per endpoint with `exposed: yes/no`.",
   inputSchema: inputSchema19,
-  handler: async (input, ctx) => handler30(input, ctx)
+  handler: async (input, ctx) => handler31(input, ctx)
 };
-registerToolModule(tool33);
-async function handler30(input, ctx) {
+registerToolModule(tool34);
+async function handler31(input, ctx) {
   const inp = input;
   const url = inp.target_url.replace(/\/$/, "");
   const timeoutMs = inp.timeout_ms ?? 15e3;
@@ -57773,15 +57931,15 @@ var inputSchema20 = {
   wp_install_paths: external_exports.array(external_exports.string().min(1)).min(1).max(50).describe("Up to 50 WP install paths to audit in parallel."),
   concurrency: external_exports.number().int().min(1).max(10).optional().describe("Max sites audited at once. Default 4.")
 };
-var tool34 = {
+var tool35 = {
   name: "bulk_audit_wordpress_sites",
   title: "Bulk wp_audit across many sites",
   description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (anything in checksum_mismatches.core + modified plugins + modified themes).",
   inputSchema: inputSchema20,
-  handler: async (input, ctx) => handler31(input, ctx)
+  handler: async (input, ctx) => handler32(input, ctx)
 };
-registerToolModule(tool34);
-async function handler31(input, ctx) {
+registerToolModule(tool35);
+async function handler32(input, ctx) {
   const inp = input;
   const limit = Math.max(1, Math.min(inp.concurrency ?? 4, 10));
   const wpAudit = TOOLS.find((t) => t.name === "wp_audit");
@@ -57837,79 +57995,6 @@ function summarise(path6, result) {
   if (r.scan_id !== void 0) summary.scan_id = r.scan_id;
   if (r.wp_version !== void 0) summary.wp_version = r.wp_version;
   return summary;
-}
-
-// src/tools/wpDescribeSetup.ts
-var tool35 = {
-  name: "wp_describe_setup",
-  title: "WordPress posture summary",
-  description: "Aggregate read of accumulated WP state: latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit, open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler32(ctx)
-};
-registerToolModule(tool35);
-async function handler32(ctx) {
-  const wpAudit = findLatest2(ctx, "wp_audit");
-  const wpCron = findLatest2(ctx, "wp_cron_audit");
-  const wpRest = findLatest2(ctx, "wp_rest_audit");
-  const wpVuln = findLatest2(ctx, "wp_vuln_check");
-  const wpVulnSource = findLatest2(ctx, "wp_vuln_check_source");
-  const wpCodeScan = findLatest2(ctx, "wordpress");
-  const open = ctx.storage.findings.listOpen().filter(
-    (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
-  );
-  const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
-  const cvesFromSource = wpVulnSource ? ctx.storage.cves.listActive(wpVulnSource.scan_id) : [];
-  const cveById = /* @__PURE__ */ new Map();
-  for (const c3 of [...cvesFromLive, ...cvesFromSource]) cveById.set(c3.cve_id, c3);
-  const cves = [...cveById.values()];
-  return {
-    ok: true,
-    audits: {
-      wp_audit: wpAudit ? {
-        scan_id: wpAudit.scan_id,
-        captured_at: wpAudit.started_at,
-        wp_version: wpAudit.meta?.wp_version ?? null,
-        admins_count: (wpAudit.meta?.admins ?? []).length,
-        checksum_mismatches_count: countChecksumIssues(wpAudit.meta),
-        warnings: wpAudit.meta?.warnings ?? []
-      } : null,
-      wp_cron_audit: wpCron ? {
-        scan_id: wpCron.scan_id,
-        flagged_count: wpCron.meta?.flagged_count ?? 0
-      } : null,
-      wp_rest_audit: wpRest ? {
-        scan_id: wpRest.scan_id,
-        exposed_count: wpRest.meta?.exposed_count ?? 0
-      } : null,
-      wp_vuln_check: wpVuln ? {
-        scan_id: wpVuln.scan_id,
-        cves_count: cvesFromLive.length
-      } : null,
-      wp_vuln_check_source: wpVulnSource ? {
-        scan_id: wpVulnSource.scan_id,
-        cves_count: cvesFromSource.length
-      } : null,
-      scan_wordpress: wpCodeScan ? {
-        scan_id: wpCodeScan.scan_id,
-        captured_at: wpCodeScan.started_at
-      } : null
-    },
-    open_findings_count: open.length,
-    open_critical: open.filter((f) => f.severity === "critical").length,
-    open_high: open.filter((f) => f.severity === "high").length,
-    active_cves: cves,
-    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
-  };
-}
-function findLatest2(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
-}
-function countChecksumIssues(meta) {
-  const cm = meta?.checksum_mismatches ?? {};
-  return (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0);
 }
 
 // src/tools/scanDotnetSecrets.ts
@@ -58420,22 +58505,30 @@ function findMigrationsDirs(root) {
 var tool39 = {
   name: "dotnet_describe_setup",
   title: ".NET posture summary",
-  description: "Aggregate read of accumulated .NET state: latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
-  inputSchema: {},
-  handler: async (_input, ctx) => handler36(ctx)
+  description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's working directory): latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler36(input, ctx)
 };
 registerToolModule(tool39);
-async function handler36(ctx) {
-  const tfm = findLatest3(ctx, "dotnet_target_framework");
-  const secrets = findLatest3(ctx, "dotnet_secrets");
-  const efcore = findLatest3(ctx, "dotnet_efcore_audit");
-  const sastScan = findLatest3(ctx, "sast");
-  const open = ctx.storage.findings.listOpen();
+async function handler36(input, ctx) {
+  const inp = input;
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const tfm = findLatest2(ctx, projectPath, "dotnet_target_framework", false);
+  const secrets = findLatest2(ctx, projectPath, "dotnet_secrets", true);
+  const efcore = findLatest2(ctx, projectPath, "dotnet_efcore_audit", true);
+  const sastScan = findLatest2(ctx, projectPath, "sast", true);
+  const open = openSetForProject(ctx.storage, projectPath).findings;
   const dotnetFindings = open.filter(
     (f) => f.tool === "security-code-scan" || f.tool === "scan_dotnet_secrets" || f.tool === "dotnet_efcore_audit" || f.rule_id?.startsWith("SCS")
   );
   return {
     ok: true,
+    project_path: projectPath,
     audits: {
       target_framework_check: tfm ? {
         scan_id: tfm.scan_id,
@@ -58463,10 +58556,8 @@ async function handler36(ctx) {
     recommended_next: !tfm ? "Run `dotnet_target_framework_check` to find EOL frameworks." : !secrets ? "Run `scan_dotnet_secrets` to find MS-specific secrets in configs." : !efcore ? "If you use EF Core, run `dotnet_efcore_audit` for risky migration patterns." : dotnetFindings.length > 0 ? "Open .NET findings exist. Try `triage_findings` + `suggest_fix`." : "Posture looks clean. Consider running `scan_sast` again if code changed."
   };
 }
-function findLatest3(ctx, type) {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === "completed");
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+function findLatest2(ctx, projectPath, type, skipCoverageNone) {
+  return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }
 
 // src/tools/prioritizeFindings.ts
@@ -61898,7 +61989,7 @@ async function handler39(input, ctx) {
       freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString()
     });
     if (cached2) {
-      return summarize3(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx);
+      return summarize3(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx, projectPath);
     }
   }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
@@ -61915,7 +62006,8 @@ async function handler39(input, ctx) {
       ],
       ["semgrep"],
       "Semgrep is not installed and no Docker fallback is available, so no surface was mapped and nothing was persisted. Run install_toolchain, then retry.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   const { toolRun } = invocation;
@@ -61930,7 +62022,8 @@ async function handler39(input, ctx) {
       [failedToolRun],
       [],
       "Semgrep produced no readable output file; nothing was persisted.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   let parsed;
@@ -61946,7 +62039,8 @@ async function handler39(input, ctx) {
       [failedToolRun],
       [],
       "Semgrep output was not valid JSON; nothing was persisted.",
-      ctx
+      ctx,
+      projectPath
     );
   }
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
@@ -61955,7 +62049,8 @@ async function handler39(input, ctx) {
       [toolRun, unreadableMatchesToolRun(recovery)],
       [],
       unreadableMatchesNote(recovery),
-      ctx
+      ctx,
+      projectPath
     );
   }
   const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
@@ -61969,7 +62064,7 @@ async function handler39(input, ctx) {
     inp.spec_paths
   );
   if (inp.spec_paths !== void 0) {
-    return summarize3(snapshot, null, toolsRun, ctx);
+    return summarize3(snapshot, null, toolsRun, ctx, projectPath);
   }
   const persisted = ctx.storage.surface.insert({
     project_path: projectPath,
@@ -61977,7 +62072,7 @@ async function handler39(input, ctx) {
     snapshot,
     cache_key: cacheKey
   });
-  return summarize3(snapshot, persisted.id, toolsRun, ctx);
+  return summarize3(snapshot, persisted.id, toolsRun, ctx, projectPath);
 }
 var RECOVERY_STEP = "semgrep-metavar-recovery";
 function readSources(parsed, projectPath) {
@@ -62053,7 +62148,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
     ports: collectPorts(projectPath),
     webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-    coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
+    coverage: buildCoverage(resolved, ctx, projectPath, unreadableRouteFiles, unresolvedEdges),
     tools_run: toolsRun,
     missing_tools: [],
     spec_files: specFiles,
@@ -62195,9 +62290,9 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
   }
   return joined;
 }
-function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
+function buildCoverage(routes, ctx, projectPath, unreadableRouteFiles, unresolvedEdges) {
   const codeRoutes = routes.filter((r) => r.provenance === "code");
-  const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+  const detected = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot.languages ?? [];
   const unreadableByLanguage = /* @__PURE__ */ new Map();
   for (const file of unreadableRouteFiles) {
     const language = languageFromPath(file);
@@ -62236,7 +62331,7 @@ function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
   return entries2;
 }
 var NO_STACK_NOTE = "No stack snapshot found for this project \u2014 run detect_stack first for fuller coverage context.";
-function summarize3(snapshot, snapshotId, toolsRun, ctx) {
+function summarize3(snapshot, snapshotId, toolsRun, ctx, projectPath) {
   const codeRoutes = snapshot.routes.filter((r) => r.provenance === "code");
   const byLanguage = /* @__PURE__ */ new Map();
   for (const route of codeRoutes) {
@@ -62247,7 +62342,7 @@ function summarize3(snapshot, snapshotId, toolsRun, ctx) {
   ).slice(0, SAMPLE_SIZE);
   const specRoutesList = snapshot.routes.filter((r) => r.provenance === "spec");
   const specSample = [...specRoutesList].sort((a2, b) => a2.path_resolved.localeCompare(b.path_resolved)).slice(0, SAMPLE_SIZE);
-  const stackDetected = ctx.storage.stack.getLatest() !== null;
+  const stackDetected = ctx.storage.stack.getLatestForProject(projectPath) !== null;
   return {
     ok: true,
     // Code routes only — a consumer reading `routes_total` today must get the
@@ -62287,7 +62382,7 @@ function shadowSample(diff) {
   if (diff === null) return [];
   return [...diff.code_only].sort((a2, b) => a2.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
-function degradedResult(toolsRun, missingTools, note, ctx) {
+function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
   return {
     ok: true,
     routes_total: 0,
@@ -62300,7 +62395,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
     webhooks_total: 0,
     tools_run: toolsRun,
     missing_tools: missingTools,
-    stack_detected: ctx.storage.stack.getLatest() !== null,
+    stack_detected: ctx.storage.stack.getLatestForProject(projectPath) !== null,
     spec_routes_total: 0,
     spec_files: [],
     spec_sample: [],
