@@ -2,9 +2,11 @@
  * Claude Code's own settings can switch every dev-guardian hook off without
  * touching dev-guardian's configuration: `"disableAllHooks": true` in
  * `.claude/settings.json` / `.claude/settings.local.json` (project or user
- * level), or an `env` block that sets the hook dispatcher's own switches —
+ * level), an `env` block that sets the hook dispatcher's own switches —
  * `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`,
- * `GUARDIAN_PKG_VET=0`. An assistant writes those files routinely (to allow a
+ * `GUARDIAN_PKG_VET=0` — or an `enabledPlugins` entry that turns the plugin
+ * itself off (`"dev-guardian@<marketplace>": false`, follow-up Part Y). An
+ * assistant writes those files routinely (to allow a
  * command, say), so the Write/Edit guard cannot refuse them wholesale. It
  * refuses exactly one thing: an edit whose RESULT sets one of those keys that
  * the file did not already set (final review M5). A key the user already set
@@ -31,6 +33,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** A plugin id that names dev-guardian, under any marketplace (`dev-guardian@<marketplace>`). */
+const OUR_PLUGIN = /dev-guardian/i;
+
 /** From parsed settings. Env names match case-insensitively (Windows env is). */
 function fromObject(settings: Record<string, unknown>): string[] {
   const found: string[] = [];
@@ -40,6 +45,12 @@ function fromObject(settings: Record<string, unknown>): string[] {
     for (const [key, value] of Object.entries(env)) {
       const sw = ENV_SWITCHES.find((s) => s.name === key.toUpperCase());
       if (sw !== undefined && sw.off.includes(String(value))) found.push(`env ${sw.name}=${String(value)}`);
+    }
+  }
+  const plugins = settings['enabledPlugins'];
+  if (isPlainObject(plugins)) {
+    for (const [id, enabled] of Object.entries(plugins)) {
+      if (enabled === false && OUR_PLUGIN.test(id)) found.push(`enabledPlugins ${id}=false`);
     }
   }
   return found;
@@ -58,8 +69,18 @@ const TEXT_PATTERNS: ReadonlyArray<{ label: string; re: RegExp }> = [
   { label: 'env GUARDIAN_PKG_VET=0', re: /"GUARDIAN_PKG_VET"\s*:\s*(?:"0"|0\b)/i },
 ];
 
+/**
+ * An `enabledPlugins` entry turning dev-guardian off, by pattern: a quoted key
+ * naming dev-guardian set to `false`. In a Claude Code settings file only
+ * `enabledPlugins` has such keys, and an edit fragment may not show the
+ * `enabledPlugins` around it.
+ */
+const PLUGIN_OFF = /"([^"\n]*dev-guardian[^"\n]*)"\s*:\s*false\b/gi;
+
 function fromText(text: string): string[] {
-  return TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label);
+  const found = TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label);
+  for (const m of text.matchAll(PLUGIN_OFF)) found.push(`enabledPlugins ${m[1] ?? ''}=false`);
+  return found;
 }
 
 /**

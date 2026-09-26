@@ -191,9 +191,10 @@ function userConfigPath() {
  * Project config (`.guardian/hooks.config.json`) may only make the protective
  * hooks STRICTER, never weaker. A project file is something the assistant
  * itself can write — the Write/Edit guard below refuses it, and the shell
- * guard refuses the shell writes it can see, but a write made inside another
- * program (`node -e`, `python -c`) is seen by neither — so every setting that
- * could switch a protective hook off is ignored when it comes from there. The earlier version stripped only `"bash":{"block":false}`, and
+ * guard refuses the shell writes it can see, but a program that writes it by
+ * its own means (a script run from disk, a path assembled at run time) is seen
+ * by neither — so every setting that could switch a protective hook off is
+ * ignored when it comes from there. The earlier version stripped only `"bash":{"block":false}`, and
  * `{"enabled": false}` in the same file still switched off the shell guard,
  * install vetting and the config write guard, even over
  * `GUARDIAN_HOOKS_BASH_BLOCK=1` (Task 23 fix round 1, C1).
@@ -279,6 +280,11 @@ function loadConfig(cwd, unread) {
     blockIgnorePaths:
       userFile.ignorePaths ??
       (userEnablesSecretBlock(userFile) ? DEFAULT_CONFIG.ignorePaths : (project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths)),
+    // The same rule for the project's `.guardian/hooks-allowlist.json`: it
+    // silences the warning, but a block the USER enabled ignores it — `["AKIA"]`
+    // there used to exempt every AWS key from that block (follow-up Part Y).
+    // There is no user-level allowlist; a user-enabled block has none.
+    userSecretBlock: userEnablesSecretBlock(userFile),
     ignoredProjectSettings: ignored,
   };
 
@@ -635,9 +641,10 @@ function walkRootFor(abs, cwd) {
  * Refuses a Write/Edit/MultiEdit of Claude Code's own settings
  * (`.claude/settings.json` / `settings.local.json`, project or user level)
  * whose RESULT switches dev-guardian's hooks off — `"disableAllHooks": true`,
- * or an `env` entry `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`
- * or `GUARDIAN_PKG_VET=0` — that the file did not already set (final review
- * M5). Every other edit of those files (permissions, other env vars, other
+ * an `env` entry `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`
+ * or `GUARDIAN_PKG_VET=0`, or an `enabledPlugins` entry turning dev-guardian
+ * off — that the file did not already set (final review M5; `enabledPlugins`:
+ * follow-up Part Y). Every other edit of those files (permissions, other env vars, other
  * hooks) passes: agents make them legitimately. The new content is the Write's
  * `content`, or the Edit/MultiEdit applied to the file on disk; when that
  * cannot be reproduced, the edit's own strings are compared instead. Emits and
@@ -699,8 +706,10 @@ async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
   if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.blockIgnorePaths))) noop();
 
   const { scanForSecrets } = await loadDetectors();
-  // Block only on unambiguous, high-confidence provider tokens.
-  const hits = scanForSecrets(text, { allowlist, minConfidence: 'high' });
+  // Block only on unambiguous, high-confidence provider tokens. The project
+  // allowlist exempts from a block only when the project enabled it (see
+  // `loadConfig`'s `userSecretBlock`).
+  const hits = scanForSecrets(text, { allowlist: cfg.userSecretBlock ? [] : allowlist, minConfidence: 'high' });
   if (hits.length === 0) noop();
 
   const list = hits.slice(0, 6).map((h) => `${h.title} (line ${h.line})`).join(', ');

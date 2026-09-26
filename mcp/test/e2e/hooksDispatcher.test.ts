@@ -506,6 +506,45 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(decision(tokenWriteTo('vendor/k.ts'))).toBeUndefined();
       expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
     });
+
+    // Follow-up Part Y: the project allowlist is the same kind of file as a
+    // project `ignorePaths` — advisory, and written by whoever controls the
+    // project. `["AKIA"]` there used to exempt every AWS key from a block the
+    // USER had enabled. It now narrows the warning only, unless the block is
+    // the project's own.
+    const projectAllowlist = (entries: unknown): void => {
+      mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+      writeFileSync(join(projectDir, '.guardian', 'hooks-allowlist.json'), JSON.stringify(entries));
+    };
+
+    it('a project allowlist cannot exempt a match from a user-enabled secret block', () => {
+      userConfig({ secrets: { block: true } });
+      projectAllowlist(['AKIA']);
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+      projectAllowlist({ secrets: ['AKIAIOSFODNN7EXAMPLE'] });
+      expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
+    });
+
+    it('…while the same project allowlist still silences the advisory warning', () => {
+      userConfig({ secrets: { block: true } });
+      projectAllowlist(['AKIA']);
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+      expect(r.stdout).toBeUndefined();
+    });
+
+    it("a block the PROJECT enabled may still be narrowed by the project's own allowlist", () => {
+      projectConfig({ secrets: { block: true } });
+      projectAllowlist(['AKIA']);
+      expect(decision(tokenWriteTo('src/k.ts'))).toBeUndefined();
+    });
   });
 
   // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync
@@ -722,6 +761,38 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it('a file merely NAMED like settings elsewhere is not judged', () => {
       const r = hook('Write', { file_path: join(projectDir, 'docs', 'settings.json'), content: '{"disableAllHooks": true}' });
       expect(r.stdout).toBeUndefined();
+    });
+
+    // Follow-up Part Y: turning the plugin off in `enabledPlugins` switches
+    // every one of its hooks off, the same as `disableAllHooks`.
+    it('Write of settings.json with enabledPlugins turning dev-guardian off is denied', () => {
+      const r = hook('Write', {
+        file_path: settingsPath(),
+        content: JSON.stringify({ enabledPlugins: { 'dev-guardian@dev-guardian': false } }),
+      });
+      expect(decision(r)).toBe('deny');
+      expect(reason(r)).toMatch(/enabledPlugins dev-guardian@dev-guardian=false/);
+    });
+
+    it('an Edit flipping dev-guardian from true to false is denied; a MultiEdit too', () => {
+      const file = existing({ enabledPlugins: { 'dev-guardian@corp': true, 'other@x': true } });
+      expect(decision(hook('Edit', { file_path: file, old_string: '"dev-guardian@corp": true', new_string: '"dev-guardian@corp": false' }))).toBe('deny');
+      expect(
+        decision(
+          hook('MultiEdit', {
+            file_path: file,
+            edits: [{ old_string: '"other@x": true', new_string: '"other@x": false' }, { old_string: '"dev-guardian@corp": true', new_string: '"dev-guardian@corp": false' }],
+          }),
+        ),
+      ).toBe('deny');
+    });
+
+    it('enabling dev-guardian, or turning another plugin off, is allowed', () => {
+      const file = existing({ enabledPlugins: { 'dev-guardian@corp': true, 'other@x': true } });
+      expect(hook('Edit', { file_path: file, old_string: '"other@x": true', new_string: '"other@x": false' }).stdout).toBeUndefined();
+      expect(
+        hook('Write', { file_path: settingsPath('settings.local.json'), content: '{"enabledPlugins":{"dev-guardian@corp":true}}' }).stdout,
+      ).toBeUndefined();
     });
   });
 
