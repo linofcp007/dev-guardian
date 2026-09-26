@@ -71,14 +71,23 @@ function noop() {
  * non-zero has its JSON ignored, so every package-vetting DENY would have
  * been silently dropped. Idle fetch sockets are unref'd, so the natural exit
  * is immediate; the unref'd timer is only a backstop in case something else
- * still holds the loop open.
+ * still holds the loop open — and even then it waits for the answer to have
+ * been flushed to stdout (the write callback) before it exits, so the
+ * backstop can never cut off the JSON it exists to deliver.
  */
 function respond(eventName, extra) {
-  if (extra) {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }));
-  }
   process.exitCode = 0;
-  setTimeout(() => process.exit(0), 5000).unref();
+  let flushed = !extra;
+  if (extra) {
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }), () => {
+      flushed = true;
+    });
+  }
+  const backstop = () => {
+    if (flushed) process.exit(0);
+    else setTimeout(backstop, 100).unref();
+  };
+  setTimeout(backstop, 5000).unref();
 }
 
 async function readStdin() {

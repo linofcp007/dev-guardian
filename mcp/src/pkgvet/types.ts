@@ -76,4 +76,12 @@ export interface PackageVetResult {
   vulnerability_ids?: string[];
   install_scripts?: string[];
   similar_to?: string;
+  /**
+   * The public registry answered "no such package" — whether that became a
+   * `block` (nothing explains it) or `unknown` (a custom registry, an npmjs
+   * auth token for a scoped name, or a local workspace package does).
+   */
+  not_on_public_registry?: boolean;
+  /** An exact version was requested and the registry does not publish it. */
+  requested_version_unpublished?: boolean;
 }

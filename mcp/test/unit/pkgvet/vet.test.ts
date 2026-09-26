@@ -4,11 +4,12 @@
  * test in this file can reach a real registry.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { nugetSearchUrl } from '../../../src/pkgvet/registry.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
 import { vetPackages, type VetOptions } from '../../../src/pkgvet/vet.js';
 
@@ -141,6 +142,31 @@ describe('vetPackages — npm', () => {
     expect(r?.reasons.join(' ')).toContain('.npmrc');
   });
 
+  it('ruling (e): a scoped 404 with an npmjs auth token configured is UNKNOWN (private scoped package)', async () => {
+    writeFileSync(join(project, '.npmrc'), '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n');
+    const fake = fakeFetch({ 'https://registry.npmjs.org/@acme%2Fprivate': { status: 404 }, [OSV]: osvRoute() });
+    const [r] = await vetPackages([spec('npm', '@acme/private')], opts(fake));
+    expect(r?.verdict).toBe('unknown');
+    expect(r?.not_on_public_registry).toBe(true);
+    expect(r?.reasons.join(' ')).toMatch(/auth token/i);
+  });
+
+  it('ruling (f): a local workspace package that 404s is UNKNOWN, naming the manifest', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'ui'), { recursive: true });
+    writeFileSync(join(project, 'packages', 'ui', 'package.json'), JSON.stringify({ name: 'acme-ui-kit' }));
+    const fake = fakeFetch({ 'https://registry.npmjs.org/acme-ui-kit': { status: 404 }, [OSV]: osvRoute() });
+    const [r] = await vetPackages([spec('npm', 'acme-ui-kit')], opts(fake));
+    expect(r?.verdict).toBe('unknown');
+    expect(r?.reasons.join(' ')).toMatch(/workspace package/i);
+  });
+
+  it('a confident 404 is marked not_on_public_registry as well as blocked', async () => {
+    const fake = fakeFetch({ 'https://registry.npmjs.org/zz-nope-zz': { status: 404 }, [OSV]: osvRoute() });
+    const [r] = await vetPackages([spec('npm', 'zz-nope-zz')], opts(fake));
+    expect(r).toMatchObject({ verdict: 'block', not_on_public_registry: true });
+  });
+
   it('a registry named on the command line counts as a custom registry too', async () => {
     const fake = fakeFetch({ 'https://registry.npmjs.org/acme-internal-lib': { status: 404 }, [OSV]: osvRoute() });
     const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(fake, { commandRegistry: 'https://npm.acme.local' }));
@@ -261,6 +287,7 @@ describe('vetPackages — npm', () => {
     const [r] = await vetPackages([spec('npm', 'left-pad', '9.9.9')], opts(fake));
     expect(r?.verdict).toBe('warn');
     expect(r?.reasons.join(' ')).toMatch(/9\.9\.9.*not published/);
+    expect(r?.requested_version_unpublished).toBe(true);
   });
 });
 
@@ -397,6 +424,44 @@ describe('vetPackages — PyPI, Packagist, NuGet', () => {
     const [r] = await vetPackages([spec('nuget', 'Newtonsoft.Json')], opts(fake));
     expect(r).toMatchObject({ version: '13.0.3', verdict: 'ok' });
     expect(r?.checks.publish_age.status).toBe('pass');
+  });
+
+  it('I3 — NuGet: OSV is asked with the canonical id from the registry, not the typed casing', async () => {
+    const fake = fakeFetch({
+      'https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json': { body: { versions: ['13.0.1'] } },
+      [nugetSearchUrl('newtonsoft.json')]: { body: { data: [{ id: 'Newtonsoft.Json', version: '13.0.1' }] } },
+      'https://api.nuget.org/v3/registration5-gz-semver2/newtonsoft.json/13.0.1.json': { body: { published: iso(900 * DAY) } },
+      [OSV]: osvRoute({ 'Newtonsoft.Json@13.0.1': ['GHSA-5crp-9r3c-p9vr'] }),
+    });
+    const [r] = await vetPackages([spec('nuget', 'newtonsoft.json')], opts(fake));
+    const osvCall = fake.calls.find((c) => c.url === OSV);
+    expect(osvCall?.body).toEqual({ queries: [{ package: { name: 'Newtonsoft.Json', ecosystem: 'NuGet' }, version: '13.0.1' }] });
+    expect(r?.vulnerability_ids).toEqual(['GHSA-5crp-9r3c-p9vr']);
+  });
+
+  it('I3 — NuGet: when the canonical id is unavailable, OSV gets the id as typed', async () => {
+    const fake = fakeFetch({
+      'https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json': { body: { versions: ['13.0.1'] } },
+      [nugetSearchUrl('Newtonsoft.Json')]: { status: 503 },
+      'https://api.nuget.org/v3/registration5-gz-semver2/newtonsoft.json/13.0.1.json': { body: { published: iso(900 * DAY) } },
+      [OSV]: osvRoute(),
+    });
+    await vetPackages([spec('nuget', 'Newtonsoft.Json')], opts(fake));
+    const osvCall = fake.calls.find((c) => c.url === OSV);
+    expect(JSON.stringify(osvCall?.body)).toContain('"name":"Newtonsoft.Json"');
+  });
+
+  it('I3 — Packagist: registry and OSV both get the lower-cased name', async () => {
+    const fake = fakeFetch({
+      'https://repo.packagist.org/p2/laravel/framework.json': {
+        body: { packages: { 'laravel/framework': [{ version: 'v10.0.0', time: iso(700 * DAY) }] } },
+      },
+      [OSV]: osvRoute({ 'laravel/framework@v10.0.0': ['GHSA-3p32-j457-pg5x'] }),
+    });
+    const [r] = await vetPackages([spec('packagist', 'Laravel/Framework')], opts(fake));
+    const osvCall = fake.calls.find((c) => c.url === OSV);
+    expect(JSON.stringify(osvCall?.body)).toContain('"name":"laravel/framework"');
+    expect(r?.vulnerability_ids).toEqual(['GHSA-3p32-j457-pg5x']);
   });
 
   it('NuGet: a nonexistent id is blocked; with a nuget.config private source it is unknown', async () => {

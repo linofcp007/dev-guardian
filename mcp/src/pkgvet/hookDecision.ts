@@ -4,13 +4,22 @@
  * rather than in `hooks/guardian-hook.mjs` so it is unit-testable; the hook
  * itself only calls it and emits the answer.
  *
- *   - **deny** only a package that is malicious or does not exist (and has
- *     no custom registry that could explain its absence);
- *   - **warn** (additionalContext) on a version < 72 h old, install scripts,
- *     typosquat suspicion, known vulnerabilities, an unpublished version;
+ *   - **deny** a malicious package, always; and a package the public
+ *     registry does not have ONLY under a confident parse (controller
+ *     ruling): no unknown flag, no inline environment assignment, no
+ *     directory change before or in the install, no workspace context
+ *     (`InstallCommand.uncertain`), and no custom registry, npmjs auth token
+ *     (scoped names) or local workspace package to explain the 404
+ *     (`privateRegistry.ts`). Blocking a missing name buys little — the
+ *     install would 404 anyway — and a false deny blocks real work;
+ *   - **warn** (additionalContext) on a missing name that was not denied
+ *     ("not found on the public registry — if it is private or local,
+ *     ignore this"), a version < 72 h old, install scripts, typosquat
+ *     suspicion, an unpublished exact version, and known vulnerabilities
+ *     only on an EXACT pin (for a range the installed version is unknown);
  *   - **note** — one line — for anything that could not be vetted (offline,
- *     timeout, HTTP error, rate limit, private registry). The command runs;
- *     the note says it was NOT verified, never that it was;
+ *     timeout, HTTP error, rate limit). The command runs; the note says it
+ *     was NOT verified, never that it was;
  *   - **silent** when every package came back `ok`, and for every command
  *     that installs nothing by name — which never touches the network.
  *
@@ -19,8 +28,9 @@
  */
 
 import { parseInstallCommands } from './parseCommand.js';
-import type { PackageVetResult, PkgEcosystem } from './types.js';
+import type { PackageChecks, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
+import { isExactVersion } from './versions.js';
 
 export interface HookVetOptions {
   /** The project directory (the hook payload's `cwd`). */
@@ -76,37 +86,94 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
       }),
     ),
   );
-  const results = batches.flat();
+  const denies: string[] = [];
+  const warnings: string[] = [];
+  const unverified: string[] = [];
+  commands.forEach((cmd, i) => {
+    for (const r of batches[i] ?? []) {
+      const d = decideOne(r, cmd.uncertain);
+      if (d.deny !== undefined) denies.push(d.deny);
+      if (d.warn !== undefined) warnings.push(d.warn);
+      if (d.unverified !== undefined) unverified.push(d.unverified);
+    }
+  });
 
-  const blocked = results.filter((r) => r.verdict === 'block');
-  if (blocked.length > 0) {
-    const list = blocked
-      .map((r) => {
-        const failing = Object.values(r.checks)
-          .filter((c) => c.status === 'fail' && c.detail !== undefined)
-          .map((c) => c.detail ?? '');
-        const why = failing.length > 0 ? failing.join('; ') : firstLine(r);
-        return `'${label(r)}': ${why}${/[.?!]$/.test(why) ? '' : '.'}`;
-      })
-      .join(' ');
+  if (denies.length > 0) {
     return {
       deny:
-        `dev-guardian blocked this install: ${list} ` +
+        `dev-guardian blocked this install: ${denies.join(' ')} ` +
         'Check the package name against the project documentation or the registry before installing anything. ' +
         'If this package is genuinely intended, ask the user to install it themselves.',
     };
   }
-
   const lines: string[] = [];
-  const warned = results.filter((r) => r.verdict === 'warn');
-  if (warned.length > 0) {
+  if (warnings.length > 0) {
     lines.push('⚠️ dev-guardian package vetting — review before relying on these:');
-    for (const r of warned) lines.push(`  • ${label(r)}: ${r.reasons.slice(0, 3).join('; ')}`);
+    for (const w of warnings) lines.push(`  • ${w}`);
   }
-  const unknown = results.filter((r) => r.verdict === 'unknown');
-  if (unknown.length > 0) {
-    const what = unknown.map((r) => `${label(r)} (${firstLine(r)})`).join(', ');
-    lines.push(`dev-guardian could not vet ${what} — not verified.`);
-  }
+  if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(', ')} — not verified.`);
   return lines.length > 0 ? { context: lines.join('\n') } : null;
+}
+
+const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';
+
+const CHECK_KEYS: ReadonlyArray<keyof PackageChecks> = [
+  'exists',
+  'malicious',
+  'vulnerabilities',
+  'publish_age',
+  'install_scripts',
+  'typosquat',
+];
+
+function sentence(text: string): string {
+  return /[.?!]$/.test(text) ? text : `${text}.`;
+}
+
+/**
+ * One package's contribution to the hook's answer.
+ *
+ *   - malicious (OSV `MAL-` on the version, npm takedown placeholder) → deny, always;
+ *   - missing from the public registry → deny ONLY when the vetting found
+ *     nothing to explain it ((d)-(f): it is `block`, not `unknown`) AND the
+ *     command parse was confident ((a)-(c): `uncertain` is empty); otherwise
+ *     the ruling's "not found … ignore this" warning, with the reason;
+ *   - every other `warn` check, except known vulnerabilities on a version
+ *     the user did not pin exactly (M4: for a range or a bare name the
+ *     installed version is not known here — the tool still reports them);
+ *   - checks that could not run → the one-line "not verified" note.
+ */
+function decideOne(
+  r: PackageVetResult,
+  uncertain: readonly string[],
+): { deny?: string; warn?: string; unverified?: string } {
+  if (r.checks.malicious.status === 'fail') {
+    const why = Object.values(r.checks)
+      .filter((c) => c.status === 'fail' && c.detail !== undefined)
+      .map((c) => c.detail ?? '')
+      .join('; ');
+    return { deny: `'${label(r)}': ${sentence(why)}` };
+  }
+  if (r.not_on_public_registry === true) {
+    if (r.verdict === 'block' && uncertain.length === 0) {
+      return { deny: `'${label(r)}': ${sentence(r.checks.exists.detail ?? firstLine(r))}` };
+    }
+    const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
+    const why = r.verdict === 'block' ? `not denied: ${uncertain.join('; ')}` : (r.checks.exists.detail ?? '');
+    return { warn: `'${label(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+  }
+
+  const pinned = isExactVersion(r.ecosystem, r.requested);
+  const warns = CHECK_KEYS.filter((key) => key !== 'vulnerabilities' || pinned)
+    .map((key) => r.checks[key])
+    .filter((c) => c.status === 'warn' && c.detail !== undefined)
+    .map((c) => c.detail ?? '');
+  if (r.requested_version_unpublished === true) {
+    warns.push(`requested version ${r.requested ?? ''} is not published — possibly a hallucinated version`);
+  }
+  if (warns.length > 0) return { warn: `${label(r)}: ${warns.slice(0, 3).join('; ')}` };
+
+  const unknownCheck = Object.values(r.checks).find((c) => c.status === 'unknown' && c.detail !== undefined);
+  if (unknownCheck !== undefined) return { unverified: `${label(r)} (${unknownCheck.detail ?? ''})` };
+  return {};
 }

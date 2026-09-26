@@ -184,6 +184,27 @@ async function lookupNuget(name, http) {
         return { kind: 'error', reason: 'NuGet returned an unexpected document' };
     return { kind: 'found', info: { versions, times: {}, installScript: {} } };
 }
+/**
+ * nuget.org's search endpoint (the `SearchQueryService` its service index
+ * lists), filtered to one exact id. Used only for the id's CANONICAL casing:
+ * the flat container answers in lower case, and OSV's NuGet names are
+ * case-sensitive (`Newtonsoft.Json`, never `newtonsoft.json`).
+ */
+export function nugetSearchUrl(id) {
+    return `https://azuresearch-usnc.nuget.org/query?q=${encodeURIComponent(`packageid:${id.toLowerCase()}`)}&prerelease=true&semVerLevel=2.0.0&take=1`;
+}
+/** The canonical id nuget.org reports for `id`, or `undefined` when it could not be established. */
+export async function nugetCanonicalId(id, http) {
+    const r = await fetchJson(nugetSearchUrl(id), http);
+    if (r.kind !== 'ok' || !isRecord(r.json) || !Array.isArray(r.json['data']))
+        return undefined;
+    for (const entry of r.json['data']) {
+        const found = isRecord(entry) ? entry['id'] : undefined;
+        if (typeof found === 'string' && found.toLowerCase() === id.toLowerCase())
+            return found;
+    }
+    return undefined;
+}
 /** NuGet registration leaf: the `published` time of one version. */
 export async function nugetPublished(name, version, http) {
     const url = `https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version.toLowerCase())}.json`;

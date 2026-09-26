@@ -1,26 +1,43 @@
 /**
- * Is a registry other than the public one configured for this package?
+ * Could anything OTHER than "it does not exist" explain a 404 from the
+ * public registry?
  *
- * The vetting DENIES a name the public registry has never heard of — that is
- * how a hallucinated dependency is caught before anyone squats it. But a
+ * The vetting may DENY a name the public registry has never heard of — that
+ * is how a hallucinated dependency is caught before anyone squats it. But a
  * company's own packages are ALSO absent from the public registry, by
- * design. When a custom registry is configured for the name, "not on the
- * public registry" stops being evidence of anything, so the verdict becomes
- * `unknown` (with this file's answer as the reason) and never `block`.
+ * design, and so are a monorepo's own workspace packages. When this file
+ * finds an explanation, "not on the public registry" stops being evidence
+ * of anything: the verdict becomes `unknown` (with this file's answer as the
+ * reason) and never `block`. Three kinds (the controller ruling's (d)-(f)):
  *
- * What counts, per ecosystem:
+ *   - `registry`  — a custom registry / index / source is configured;
+ *   - `auth`      — an npmjs credential is configured and the name is
+ *                   scoped: a private scoped package answers 404 anonymously;
+ *   - `workspace` — the name is a local workspace package (package.json
+ *                   `workspaces`, `pnpm-workspace.yaml`, uv workspace members
+ *                   or `[tool.uv.sources]`; composer path repositories are
+ *                   already `repositories`).
+ *
+ * Where `registry` is looked for, per ecosystem:
  *
  *   - npm / pnpm / yarn / bun: `registry=` (all names) or `@scope:registry=`
- *     (that scope) in a project or user `.npmrc`; `NPM_CONFIG_REGISTRY`;
+ *     (that scope) in a project `.npmrc`, the user npmrc
+ *     (`NPM_CONFIG_USERCONFIG` or `~/.npmrc`), npm's global npmrc when
+ *     `npm_config_globalconfig` names it, and pnpm's global rc (XDG,
+ *     `%LOCALAPPDATA%\pnpm\config\rc`, macOS); `NPM_CONFIG_REGISTRY`;
  *     yarn's `.yarnrc.yml` `npmRegistryServer` (global or under
- *     `npmScopes.<scope>`) and classic `.yarnrc` `registry`; bun's
- *     `bunfig.toml` `[install] registry` / `[install.scopes]`.
+ *     `npmScopes.<scope>`, project or `~`) and classic `.yarnrc`
+ *     `registry`; bun's `bunfig.toml` (project or `~/.bunfig.toml`)
+ *     `[install] registry` / `[install.scopes]`.
  *   - pip / uv / poetry: `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`,
  *     `UV_INDEX_URL`, `UV_EXTRA_INDEX_URL`, `UV_INDEX`, `UV_DEFAULT_INDEX`,
- *     `PIP_FIND_LINKS`, `PIP_NO_INDEX`; `pip.conf` / `pip.ini` (user, venv
- *     and `PIP_CONFIG_FILE`); `[[tool.uv.index]]`, `[[tool.poetry.source]]`,
- *     `[[tool.pdm.source]]` or a `[tool.uv]` index URL in `pyproject.toml`;
- *     `uv.toml`.
+ *     `PIP_FIND_LINKS`, `PIP_NO_INDEX`; `pip.conf` / `pip.ini` (user, venv,
+ *     `PIP_CONFIG_FILE`, and global: `/etc/pip.conf`,
+ *     `/etc/xdg/pip/pip.conf`, `XDG_CONFIG_DIRS`, `%ProgramData%\pip\pip.ini`);
+ *     `uv.toml` (`UV_CONFIG_FILE`, `~/.config/uv`, `%APPDATA%\uv`,
+ *     `/etc/uv`, and the project); `[[tool.uv.index]]`,
+ *     `[[tool.poetry.source]]`, `[[tool.pdm.source]]` or a `[tool.uv]`
+ *     index URL in `pyproject.toml`.
  *   - Composer: a `repositories` entry in the project `composer.json` or the
  *     user's global `config.json`.
  *   - NuGet: any `nuget.config` (any casing) from the project up to the
@@ -188,35 +205,151 @@ function fromBunfig(text, scope) {
     }
     return found;
 }
+/** An npmjs credential in an npmrc (`//registry.npmjs.org/:_authToken=`, `_auth=`, …) or `.yarnrc.yml`. */
+const NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
+/**
+ * Every npm-family configuration file that can apply, nearest first:
+ * project ancestors (`.npmrc`, `.yarnrc.yml`, `.yarnrc`, `bunfig.toml`),
+ * then user (`NPM_CONFIG_USERCONFIG` or `~/.npmrc`, `~/.yarnrc.yml`,
+ * `~/.yarnrc`, `~/.bunfig.toml`), pnpm's global rc (XDG, `%LOCALAPPDATA%`,
+ * macOS), and npm's global npmrc when `npm_config_globalconfig` names it.
+ */
+function npmConfigFiles(ctx) {
+    const env = envOf(ctx);
+    const home = homeOf(ctx);
+    const files = [];
+    for (const dir of ancestors(ctx)) {
+        files.push({ path: join(dir, '.npmrc'), parse: fromNpmrc }, { path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml }, { path: join(dir, '.yarnrc'), parse: fromYarnrc }, { path: join(dir, 'bunfig.toml'), parse: fromBunfig });
+    }
+    const xdg = envValue(env, 'XDG_CONFIG_HOME') ?? join(home, '.config');
+    const localAppData = envValue(env, 'LOCALAPPDATA') ?? join(home, 'AppData', 'Local');
+    files.push({ path: envValue(env, 'NPM_CONFIG_USERCONFIG') ?? join(home, '.npmrc'), parse: fromNpmrc }, { path: join(home, '.yarnrc.yml'), parse: fromYarnrcYml }, { path: join(home, '.yarnrc'), parse: fromYarnrc }, { path: join(home, '.bunfig.toml'), parse: fromBunfig }, { path: join(xdg, '.bunfig.toml'), parse: fromBunfig }, { path: join(xdg, 'pnpm', 'rc'), parse: fromNpmrc }, { path: join(localAppData, 'pnpm', 'config', 'rc'), parse: fromNpmrc }, { path: join(home, 'Library', 'Preferences', 'pnpm', 'rc'), parse: fromNpmrc });
+    const globalConfig = envValue(env, 'NPM_CONFIG_GLOBALCONFIG');
+    if (globalConfig !== undefined)
+        files.push({ path: globalConfig, parse: fromNpmrc });
+    return files;
+}
 function npmRegistry(name, ctx) {
     const scope = npmScope(name);
-    const env = envOf(ctx);
-    const candidates = [];
-    for (const dir of ancestors(ctx)) {
-        for (const [file, parse] of [
-            ['.npmrc', fromNpmrc],
-            ['.yarnrc.yml', fromYarnrcYml],
-            ['.yarnrc', fromYarnrc],
-            ['bunfig.toml', fromBunfig],
-        ]) {
-            const path = join(dir, file);
-            const text = read(path);
-            if (text !== undefined)
-                candidates.push({ source: path, url: parse(text, scope) });
+    const envRegistry = envValue(envOf(ctx), 'NPM_CONFIG_REGISTRY');
+    if (envRegistry !== undefined && !isPublic('npm', envRegistry)) {
+        return { kind: 'registry', source: 'NPM_CONFIG_REGISTRY', url: envRegistry };
+    }
+    let authSource;
+    for (const { path, parse } of npmConfigFiles(ctx)) {
+        const text = read(path);
+        if (text === undefined)
+            continue;
+        const url = parse(text, scope);
+        if (url !== undefined && !isPublic('npm', url))
+            return { kind: 'registry', source: path, url };
+        if (authSource === undefined && NPM_AUTH.test(text))
+            authSource = path;
+    }
+    // Ruling (e): a private SCOPED package on npmjs answers 404 to an
+    // anonymous request, so with credentials configured a scoped 404 proves
+    // nothing. npmjs has no private unscoped packages.
+    if (scope !== undefined && authSource !== undefined)
+        return { kind: 'auth', source: authSource };
+    const local = npmWorkspacePackage(name, ctx);
+    return local === undefined ? null : { kind: 'workspace', source: local };
+}
+// ─────────────────────────────────────────────────────── workspaces
+const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', 'target']);
+const MAX_SCAN_DIRS = 3000;
+const MAX_SCAN_DEPTH = 5;
+/**
+ * Every `file` under `root` (depth-limited, never into node_modules,
+ * vendor, virtualenvs or dot-directories), for which `match` returns true.
+ * Glob patterns in the workspace declaration are deliberately NOT
+ * interpreted: any manifest under a workspace root with the name counts as
+ * local — a false "local" only turns a deny into a warning.
+ */
+function findManifest(root, file, match) {
+    const queue = [{ dir: root, depth: 0 }];
+    let visited = 0;
+    while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
+        const next = queue.shift();
+        if (next === undefined)
+            break;
+        visited += 1;
+        const manifest = join(next.dir, file);
+        const text = read(manifest);
+        if (text !== undefined && match(text))
+            return manifest;
+        if (next.depth >= MAX_SCAN_DEPTH)
+            continue;
+        let entries = [];
+        try {
+            entries = readdirSync(next.dir, { withFileTypes: true })
+                .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name))
+                .map((e) => e.name);
         }
+        catch {
+            continue;
+        }
+        for (const e of entries)
+            queue.push({ dir: join(next.dir, e), depth: next.depth + 1 });
     }
-    const userConfig = envValue(env, 'NPM_CONFIG_USERCONFIG') ?? join(homeOf(ctx), '.npmrc');
-    const userText = read(userConfig);
-    if (userText !== undefined)
-        candidates.push({ source: userConfig, url: fromNpmrc(userText, scope) });
-    const envRegistry = envValue(env, 'NPM_CONFIG_REGISTRY');
-    if (envRegistry !== undefined)
-        candidates.unshift({ source: 'NPM_CONFIG_REGISTRY', url: envRegistry });
-    for (const c of candidates) {
-        if (c.url !== undefined && !isPublic('npm', c.url))
-            return { source: c.source, url: c.url };
+    return undefined;
+}
+function hasWorkspaces(packageJson) {
+    if (packageJson === undefined)
+        return false;
+    try {
+        const w = JSON.parse(packageJson).workspaces;
+        if (Array.isArray(w))
+            return w.length > 0;
+        return w !== null && typeof w === 'object' && Array.isArray(w.packages);
     }
-    return null;
+    catch {
+        return false;
+    }
+}
+/** Ruling (f), npm/pnpm/yarn/bun: a package.json named `name` under a workspace root. */
+function npmWorkspacePackage(name, ctx) {
+    for (const dir of ancestors(ctx)) {
+        const isRoot = hasWorkspaces(read(join(dir, 'package.json'))) || existsSync(join(dir, 'pnpm-workspace.yaml'));
+        if (!isRoot)
+            continue;
+        const hit = findManifest(dir, 'package.json', (text) => {
+            try {
+                return JSON.parse(text).name === name;
+            }
+            catch {
+                return false;
+            }
+        });
+        if (hit !== undefined)
+            return hit;
+    }
+    return undefined;
+}
+const pep503 = (n) => n.trim().toLowerCase().replace(/[-_.]+/g, '-');
+/** Ruling (f), uv: a `[tool.uv.workspace]` member named `name`, or a `[tool.uv.sources]` entry for it. */
+function uvWorkspacePackage(name, ctx) {
+    const wanted = pep503(name);
+    for (const dir of ancestors(ctx)) {
+        const path = join(dir, 'pyproject.toml');
+        const text = read(path);
+        if (text === undefined)
+            continue;
+        const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? '';
+        for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
+            if (pep503(m[1] ?? '') === wanted)
+                return path;
+        }
+        if (!/^\s*\[tool\.uv\.workspace\]/m.test(text))
+            continue;
+        const hit = findManifest(dir, 'pyproject.toml', (t) => {
+            const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? '';
+            const n = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
+            return n !== undefined && pep503(n) === wanted;
+        });
+        if (hit !== undefined)
+            return hit;
+    }
+    return undefined;
 }
 // ────────────────────────────────────────────────────────────── PyPI
 const PY_ENV = ['PIP_INDEX_URL', 'PIP_EXTRA_INDEX_URL', 'UV_INDEX_URL', 'UV_EXTRA_INDEX_URL', 'UV_INDEX', 'UV_DEFAULT_INDEX', 'PIP_FIND_LINKS', 'UV_FIND_LINKS'];
@@ -251,19 +384,22 @@ function fromUvToml(text) {
         return m[1];
     return undefined;
 }
-function pypiRegistry(ctx) {
+function pypiRegistry(name, ctx) {
     const env = envOf(ctx);
-    for (const name of PY_ENV) {
-        const v = envValue(env, name);
+    for (const envName of PY_ENV) {
+        const v = envValue(env, envName);
         if (v === undefined)
             continue;
         if (v.split(/\s+/).some((u) => !isPublic('pypi', u)))
-            return { source: name, url: v };
+            return { kind: 'registry', source: envName, url: v };
     }
     const noIndex = envValue(env, 'PIP_NO_INDEX');
     if (noIndex !== undefined && /^(?:1|true|yes|on)$/i.test(noIndex))
-        return { source: 'PIP_NO_INDEX' };
+        return { kind: 'registry', source: 'PIP_NO_INDEX' };
+    // pip: explicit file, user (XDG, ~/.pip, %APPDATA%), venv, and global
+    // (/etc/pip.conf, /etc/xdg/pip/pip.conf and XDG_CONFIG_DIRS, %ProgramData%).
     const home = homeOf(ctx);
+    const etc = ctx.etcDir ?? '/etc';
     const confs = [];
     const explicit = envValue(env, 'PIP_CONFIG_FILE');
     if (explicit !== undefined)
@@ -275,28 +411,47 @@ function pypiRegistry(ctx) {
     const venv = envValue(env, 'VIRTUAL_ENV');
     if (venv !== undefined)
         confs.push(join(venv, 'pip.conf'), join(venv, 'pip.ini'));
+    confs.push(join(etc, 'pip.conf'), join(etc, 'xdg', 'pip', 'pip.conf'));
+    for (const d of (envValue(env, 'XDG_CONFIG_DIRS') ?? '').split(':').filter(Boolean))
+        confs.push(join(d, 'pip', 'pip.conf'));
+    const programData = envValue(env, 'ProgramData') ?? envValue(env, 'PROGRAMDATA');
+    if (programData !== undefined)
+        confs.push(join(programData, 'pip', 'pip.ini'));
     for (const path of confs) {
         const text = read(path);
         const url = text === undefined ? undefined : fromPipConf(text);
         if (url !== undefined)
-            return { source: path, url };
+            return { kind: 'registry', source: path, url };
+    }
+    // uv: UV_CONFIG_FILE, user (XDG / %APPDATA%) and system uv.toml.
+    const uvConfs = [];
+    const uvExplicit = envValue(env, 'UV_CONFIG_FILE');
+    if (uvExplicit !== undefined)
+        uvConfs.push(uvExplicit);
+    uvConfs.push(join(xdg, 'uv', 'uv.toml'), join(appdata, 'uv', 'uv.toml'), join(etc, 'uv', 'uv.toml'));
+    for (const path of uvConfs) {
+        const text = read(path);
+        const url = text === undefined ? undefined : fromUvToml(text);
+        if (url !== undefined)
+            return { kind: 'registry', source: path, url };
     }
     for (const dir of ancestors(ctx)) {
         const uvToml = join(dir, 'uv.toml');
         const uvText = read(uvToml);
         const uvUrl = uvText === undefined ? undefined : fromUvToml(uvText);
         if (uvUrl !== undefined)
-            return { source: uvToml, url: uvUrl };
+            return { kind: 'registry', source: uvToml, url: uvUrl };
         const pyproject = join(dir, 'pyproject.toml');
         const text = read(pyproject);
         if (text === undefined)
             continue;
         const url = fromPyproject(text);
         if (url !== undefined)
-            return { source: pyproject, url };
+            return { kind: 'registry', source: pyproject, url };
         break; // the nearest pyproject.toml is the project; its parents are not
     }
-    return null;
+    const local = uvWorkspacePackage(name, ctx);
+    return local === undefined ? null : { kind: 'workspace', source: local };
 }
 // ────────────────────────────────────────────────────────── Composer
 function hasRepositories(text) {
@@ -320,7 +475,7 @@ function composerRegistry(ctx) {
         if (text === undefined)
             continue;
         if (hasRepositories(text))
-            return { source: path };
+            return { kind: 'registry', source: path };
         break;
     }
     const env = envOf(ctx);
@@ -331,7 +486,7 @@ function composerRegistry(ctx) {
         : [join(home, '.composer', 'config.json'), join(home, '.config', 'composer', 'config.json'), join(envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming'), 'Composer', 'config.json')];
     for (const path of globals)
         if (hasRepositories(read(path)))
-            return { source: path };
+            return { kind: 'registry', source: path };
     return null;
 }
 // ───────────────────────────────────────────────────────────── NuGet
@@ -372,7 +527,7 @@ function nugetRegistry(ctx) {
         const text = read(path);
         const url = text === undefined ? undefined : customNugetSource(text);
         if (url !== undefined)
-            return { source: path, url };
+            return { kind: 'registry', source: path, url };
     }
     return null;
 }
@@ -386,7 +541,7 @@ export function customRegistryFor(ecosystem, name, ctx = {}) {
             case 'npm':
                 return npmRegistry(name, ctx);
             case 'pypi':
-                return pypiRegistry(ctx);
+                return pypiRegistry(name, ctx);
             case 'packagist':
                 return composerRegistry(ctx);
             case 'nuget':

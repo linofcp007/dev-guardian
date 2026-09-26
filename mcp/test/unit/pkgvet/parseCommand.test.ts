@@ -204,3 +204,134 @@ describe('parsePackageSpec (tool input)', () => {
     expect(parsePackageSpec('pypi', 'not a name')).toEqual({ raw: 'not a name', reason: expect.any(String) });
   });
 });
+
+// ─────────────────────────────── fix round 1 (review of Task 16)
+
+function uncertain(command: string): string[] {
+  return parseInstallCommands(command).flatMap((c) => c.uncertain);
+}
+
+describe('C1 — flag values are never vetted as names', () => {
+  it.each([
+    ['pip install -qr req.txt', [], 'req.txt'],
+    ['pip install -Ur requirements.txt requests', [['requests', undefined]], 'requirements.txt'],
+    ['pip install -qc constraints.txt flask', [['flask', undefined]], 'constraints.txt'],
+    ['pip install -qe . flask', [['flask', undefined]], '.'],
+    ['uv pip install -qr req.txt rich', [['rich', undefined]], 'req.txt'],
+    ['pip install -rreq.txt', [], 'req.txt'],
+  ] as Array<[string, Array<[string, string | undefined]>, string]>)(
+    '%s: a short-flag cluster ending in a value flag consumes the next word',
+    (command, expected, reported) => {
+      expect(vetted(command)).toEqual(expected);
+      expect(parseInstallCommands(command)[0]?.skipped.map((s) => s.raw)).toContain(reported);
+      expect(uncertain(command)).toEqual([]);
+    },
+  );
+
+  it('pip -qi / -qf: the consumed word is a registry', () => {
+    expect(vetted('pip install -qi https://pypi.acme.local/simple requests')).toEqual([['requests', undefined]]);
+    expect(parseInstallCommands('pip install -qi https://pypi.acme.local/simple requests')[0]?.customRegistry).toBe(
+      'https://pypi.acme.local/simple',
+    );
+    expect(parseInstallCommands('pip install -qf ./wheels requests')[0]?.customRegistry).toBe('./wheels');
+  });
+
+  it('pip -t / -qt: the target directory is not a package', () => {
+    expect(vetted('pip install -qt ./vendor requests')).toEqual([['requests', undefined]]);
+  });
+
+  it('yarn --mode takes a value', () => {
+    expect(vetted('yarn add --mode update-lockfile react')).toEqual([['react', undefined]]);
+  });
+
+  it('npm -C is --prefix, and takes a value', () => {
+    expect(vetted('npm install -C ./sub lodash')).toEqual([['lodash', undefined]]);
+  });
+
+  it('poetry --optional takes a value', () => {
+    expect(vetted('poetry add --optional extra1 requests')).toEqual([['requests', undefined]]);
+  });
+
+  it('pnpm --allow-build takes a value', () => {
+    expect(vetted('pnpm add --allow-build esbuild vite')).toEqual([['vite', undefined]]);
+  });
+
+  it('an unknown flag makes the parse uncertain (the general net)', () => {
+    expect(uncertain('npm install --some-new-flag value lodash')).toEqual([expect.stringMatching(/--some-new-flag/)]);
+    expect(uncertain('pip install -Z requests')).toEqual([expect.stringMatching(/-Z/)]);
+    expect(uncertain('pip install -qZ requests')).toEqual([expect.stringMatching(/-Z/)]);
+  });
+
+  it('known flags keep the parse confident', () => {
+    expect(uncertain('npm install -D -E --save-dev typescript')).toEqual([]);
+    expect(uncertain('pip install --upgrade --user -q requests')).toEqual([]);
+  });
+});
+
+describe('ruling (b) — an inline environment assignment makes every install uncertain', () => {
+  it.each([
+    'NPM_CONFIG_REGISTRY=https://npm.acme.local npm install foo',
+    'env NPM_CONFIG_REGISTRY=https://npm.acme.local npm install foo',
+    'export PIP_INDEX_URL=https://pypi.acme.local/simple && pip install foo',
+    '$env:NPM_CONFIG_REGISTRY="https://npm.acme.local"; npm install foo',
+    'npm install foo && FOO=1 true',
+  ])('%s', (command) => {
+    expect(uncertain(command).join(' ')).toMatch(/environment/);
+  });
+
+  it('`set -e` (a shell option, not an assignment) keeps the parse confident', () => {
+    expect(uncertain('set -e && npm install foo')).toEqual([]);
+  });
+});
+
+describe('ruling (c) — a directory change before or in the install makes it uncertain', () => {
+  it.each([
+    ['cd packages/web && npm install foo', /directory/],
+    ['pushd api; pip install foo', /directory/],
+    ['Set-Location ..\\app; npm install foo', /directory/],
+    ['Push-Location app; npm install foo', /directory/],
+    ['npm install --prefix ./sub foo', /--prefix/],
+    ['npm install -C ./sub foo', /-C/],
+    ['pnpm -C ./web add foo', /-C/],
+    ['pnpm add --dir ./web foo', /--dir/],
+    ['yarn --cwd ./web add foo', /--cwd/],
+    ['composer -d ./api require acme/foo', /-d/],
+    ['composer require --working-dir=./api acme/foo', /--working-dir/],
+    ['uv add --directory ./svc foo', /--directory/],
+    ['uv add --project ./svc foo', /--project/],
+    ['dotnet add src/App.csproj package Foo', /project/],
+  ] as Array<[string, RegExp]>)('%s', (command, why) => {
+    expect(uncertain(command).join(' ')).toMatch(why);
+  });
+
+  it('a cd AFTER the install does not affect it', () => {
+    expect(uncertain('npm install foo && cd dist')).toEqual([]);
+  });
+});
+
+describe('ruling (f) / I2 — workspace context makes it uncertain', () => {
+  it.each([
+    'pnpm add --workspace @acme/ui',
+    'yarn workspace web add @acme/ui',
+    'npm install @acme/ui -w apps/web',
+    'pnpm --filter web add @acme/ui',
+  ])('%s', (command) => {
+    expect(uncertain(command).join(' ')).toMatch(/workspace/);
+  });
+});
+
+describe('M3 / M5', () => {
+  it('SSH-style git specs are not names', () => {
+    expect(vetted('npm install git@github.com:user/repo.git')).toEqual([]);
+    expect(parseInstallCommands('npm install git@github.com:user/repo.git')[0]?.skipped[0]?.reason).toMatch(/git|VCS/i);
+    // …while an npm alias is still an alias.
+    expect(vetted('npm install my-lodash@npm:lodash@^4')).toEqual([['lodash', '^4']]);
+  });
+
+  it('bun i <pkg> and bun install <pkg> are installs; the bare forms vet nothing', () => {
+    expect(vetted('bun i zod')).toEqual([['zod', undefined]]);
+    expect(vetted('bun install zod')).toEqual([['zod', undefined]]);
+    expect(vetted('bun install')).toEqual([]);
+    expect(vetted('bun i')).toEqual([]);
+  });
+});

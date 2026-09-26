@@ -27,7 +27,9 @@ let project: string;
 beforeEach(() => {
   home = makeTempDir('vetpkg-home-');
   project = makeTempDir('vetpkg-project-');
-  for (const k of ['HOME', 'USERPROFILE', 'APPDATA', 'XDG_CONFIG_HOME', 'COMPOSER_HOME']) vi.stubEnv(k, home);
+  for (const k of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'XDG_CONFIG_HOME', 'COMPOSER_HOME']) {
+    vi.stubEnv(k, home);
+  }
   for (const k of [
     'npm_config_registry',
     'NPM_CONFIG_REGISTRY',
@@ -41,6 +43,10 @@ beforeEach(() => {
     'UV_INDEX',
     'UV_DEFAULT_INDEX',
     'VIRTUAL_ENV',
+    'npm_config_globalconfig',
+    'NPM_CONFIG_GLOBALCONFIG',
+    'UV_CONFIG_FILE',
+    'XDG_CONFIG_DIRS',
   ]) {
     vi.stubEnv(k, '');
   }

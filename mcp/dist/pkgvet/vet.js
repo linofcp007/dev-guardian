@@ -6,11 +6,15 @@
  *
  *   exists           404 → `block` (a name nobody published is most likely a
  *                    hallucinated dependency — and the next thing an attacker
- *                    registers), unless a custom registry is configured for
- *                    it (`privateRegistry.ts`), in which case `unknown`
+ *                    registers), unless a custom registry, an npmjs auth
+ *                    token (scoped names) or a local workspace package
+ *                    explains it (`privateRegistry.ts`), in which case
+ *                    `unknown`. The HOOK further denies it only on a
+ *                    confident command parse (`hookDecision.ts`)
  *   malicious        an OSV `MAL-` advisory on the version that would install
- *                    → `block`; npm's `0.0.1-security` takedown placeholder
- *                    → `block`
+ *                    → `block`; npm's `0.0.x-security` takedown placeholder
+ *                    → `block`. OSV is asked with the name it knows:
+ *                    Packagist lower-cased, NuGet in canonical casing
  *   vulnerabilities  any other OSV advisory on that version → `warn`
  *   publish_age      that version published < 72 h ago → `warn` (the 2025–26
  *                    npm/PyPI worms spread as fresh patch releases)
@@ -32,7 +36,7 @@
 import { queryOsv } from '../runners/osv.js';
 import { loadPopularIndex } from './popular.js';
 import { customRegistryFor, isPublicRegistryUrl } from './privateRegistry.js';
-import { lookupRegistry, npmFullDocument, npmVersionScripts, nugetPublished, } from './registry.js';
+import { lookupRegistry, npmFullDocument, npmVersionScripts, nugetCanonicalId, nugetPublished, } from './registry.js';
 import { buildPopularIndex, findTyposquatTarget } from './typosquat.js';
 import { OSV_ECOSYSTEM, } from './types.js';
 import { isExactVersion, resolveVersion } from './versions.js';
@@ -71,7 +75,7 @@ function ageText(hours) {
 }
 function customFor(spec, opts) {
     if (opts.commandRegistry !== undefined && !isPublicRegistryUrl(spec.ecosystem, opts.commandRegistry)) {
-        return { source: 'the command line', url: opts.commandRegistry };
+        return { kind: 'registry', source: 'the command line', url: opts.commandRegistry };
     }
     return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
@@ -138,8 +142,23 @@ function osvIds(osv, w) {
     if (osv === undefined || w.osvIndex === undefined)
         return [];
     const eco = OSV_ECOSYSTEM[w.spec.ecosystem];
-    const hit = osv.vulnerable_packages.find((g) => g.ecosystem === eco && g.name === w.spec.name && (w.osvVersioned ? g.version === w.version : g.version === undefined));
+    const name = w.osvName ?? w.spec.name;
+    const hit = osv.vulnerable_packages.find((g) => g.ecosystem === eco && g.name === name && (w.osvVersioned ? g.version === w.version : g.version === undefined));
     return hit?.vuln_ids ?? [];
+}
+/**
+ * The name OSV knows the package by. OSV matches Packagist and NuGet names
+ * case-sensitively: Packagist names are lower case (`laravel/framework`);
+ * NuGet ids keep their canonical casing (`Newtonsoft.Json`), which the flat
+ * container does not report, so it comes from nuget.org's search — and,
+ * failing that, the id as typed.
+ */
+function osvNameFor(w, canonical) {
+    if (w.spec.ecosystem === 'packagist')
+        return w.spec.name.toLowerCase();
+    if (w.spec.ecosystem === 'nuget')
+        return canonical ?? w.spec.name;
+    return w.spec.name;
 }
 function buildResult(w, osv, osvError, now, offlineReason) {
     const { spec } = w;
@@ -190,8 +209,13 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     else if (lookup.kind === 'not_found') {
         const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : '';
         if (w.custom !== null) {
-            exists = unknown(`not on ${registry}, but a custom registry is configured (${w.custom.source}${w.custom.url !== undefined ? `: ${w.custom.url}` : ''}) — ` +
-                `possibly a private package; not vetted.${didYouMean}`);
+            const where = `${w.custom.source}${w.custom.url !== undefined ? `: ${w.custom.url}` : ''}`;
+            const why = w.custom.kind === 'auth'
+                ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup`
+                : w.custom.kind === 'workspace'
+                    ? `it is a local workspace package (${where})`
+                    : `a custom registry is configured (${where})`;
+            exists = unknown(`not on ${registry}, but ${why} — possibly a private or local package; not vetted.${didYouMean}`);
         }
         else {
             exists = fail(`does not exist on ${registry} — most likely a hallucinated or mistyped name.${didYouMean}`);
@@ -307,6 +331,10 @@ function buildResult(w, osv, osvError, now, offlineReason) {
         result.install_scripts = w.scripts;
     if (w.typo !== null)
         result.similar_to = w.typo.similar_to;
+    if (lookup?.kind === 'not_found')
+        result.not_on_public_registry = true;
+    if (w.versionMissing === true)
+        result.requested_version_unpublished = true;
     return result;
 }
 /**
@@ -365,6 +393,16 @@ async function networkRounds(work, http, signal, deadline, now) {
         }
         return p;
     });
+    // NuGet's canonical id casing, for OSV (see `osvNameFor`). Started now, in
+    // parallel with the flat-container lookup, but only awaited by the OSV
+    // query — never by round 1 — so a slow search cannot hold the registry
+    // answers back.
+    const canonical = new Map();
+    for (const w of work) {
+        const key = w.spec.name.toLowerCase();
+        if (w.spec.ecosystem === 'nuget' && !canonical.has(key))
+            canonical.set(key, nugetCanonicalId(w.spec.name, http));
+    }
     const answers = await Promise.all(pending);
     work.forEach((w, i) => {
         const answer = answers[i];
@@ -378,17 +416,21 @@ async function networkRounds(work, http, signal, deadline, now) {
         const why = 'network budget exhausted before OSV was consulted';
         return work.map((w) => buildResult(w, undefined, why, now, undefined));
     }
-    const queries = [];
-    for (const w of work) {
-        const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.spec.name };
-        if (w.version !== undefined)
-            q.version = w.version;
-        w.osvVersioned = w.version !== undefined;
-        w.osvIndex = queries.length;
-        queries.push(q);
-    }
     let osvError;
-    const osvPromise = queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) }).catch((e) => {
+    const osvPromise = (async () => {
+        const queries = [];
+        for (const w of work) {
+            const canonicalId = await (canonical.get(w.spec.name.toLowerCase()) ?? Promise.resolve(undefined));
+            w.osvName = osvNameFor(w, canonicalId);
+            const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
+            if (w.version !== undefined)
+                q.version = w.version;
+            w.osvVersioned = w.version !== undefined;
+            w.osvIndex = queries.length;
+            queries.push(q);
+        }
+        return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+    })().catch((e) => {
         osvError = e instanceof Error ? e.message : String(e);
         return { online: false, queried: 0, vulnerable_packages: [] };
     });

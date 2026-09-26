@@ -56,7 +56,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|COMPOSER|VIRTUAL_ENV$|GUARDIAN_)/i;
+const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
 function runHook(command: string, routes: Record<string, Route | Route[]>, opts: { tool?: string; env?: Record<string, string> } = {}): HookOut {
   const base: Record<string, string> = {};
@@ -77,6 +77,8 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       HOME: home,
       USERPROFILE: home,
       APPDATA: home,
+      LOCALAPPDATA: home,
+      ProgramData: home,
       XDG_CONFIG_HOME: home,
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
@@ -166,23 +168,40 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(ctx).toMatch(/lodash/);
   });
 
-  it('a private registry in the project .npmrc turns a missing name into a note, not a deny', () => {
+  it('a private registry in the project .npmrc turns a missing name into a warning, not a deny', () => {
     writeFileSync(join(project, '.npmrc'), 'registry=https://npm.acme.local/\n');
     const r = runHook('npm install acme-private-lib', {
       'https://registry.npmjs.org/acme-private-lib': { status: 404 },
       [OSV]: { osv: {} },
     });
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
-    expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet.*not verified/s);
+    expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(
+      /acme-private-lib.*not found on the public registry — if it is private or local, ignore this/s,
+    );
   });
 
   it('fails open inside the 3 s budget when the registry never answers', () => {
     const r = runHook('npm install express', { 'https://registry.npmjs.org/express': { hang: true }, [OSV]: { hang: true } });
     expect(r.status).toBe(0);
-    expect(r.ms).toBeLessThan(9000);
+    expect(r.ms).toBeLessThan(6000);
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
   }, 20_000);
+
+  it('fix round 1 — a missing name after a `cd` is a warning, never a deny (uncertain parse)', () => {
+    const r = runHook('cd packages/web && npm install react-form-autopilot-helperz', {
+      'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+      [OSV]: { osv: {} },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not found on the public registry.*directory/s);
+  });
+
+  it('fix round 1 — C1: `pip install -qr req.txt` looks nothing up and says nothing', () => {
+    const r = runHook('pip install -qr req.txt', {});
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+  });
 
   it('exits 0 with its answer after REAL sockets were used (no process.exit() with live handles)', async () => {
     // Measured on Windows / Node 24: process.exit() after a real fetch aborts
@@ -217,6 +236,8 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
           HOME: home,
           USERPROFILE: home,
           APPDATA: home,
+      LOCALAPPDATA: home,
+      ProgramData: home,
           GUARDIAN_OFFLINE: '0',
           GUARDIAN_TEST_FETCH_PROXY: `http://127.0.0.1:${port}`,
         },

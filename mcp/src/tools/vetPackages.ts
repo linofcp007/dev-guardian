@@ -48,9 +48,11 @@ const tool: ToolModule = {
     'block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, ' +
     'rate limit, GUARDIAN_OFFLINE=1) — never read it as ok. A name missing from the public registry is ' +
     '`unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, ' +
-    'pyproject index, composer repositories, nuget.config). Accepts "name" or "name@version" (also ' +
-    'name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The same checks run automatically on ' +
-    'npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands via the PreToolUse hook.',
+    'pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured ' +
+    '(scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also ' +
+    'name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks ' +
+    'on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only ' +
+    'on an unambiguous command line, and warns on known vulnerabilities only for an exact version pin.',
   inputSchema: {
     ecosystem: z
       .enum(Object.keys(ECOSYSTEM_ALIASES) as [string, ...string[]])

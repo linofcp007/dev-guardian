@@ -47,10 +47,14 @@ function isPathLike(word) {
         word.startsWith('\\') ||
         /^[A-Za-z]:[\\/]/.test(word));
 }
+/** `git@github.com:user/repo.git` — scp-style SSH git; the host has a dot, which `name@npm:x` never does. */
+const SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 /** A reason this word is not a package name, or `null` when it may be one. */
 function notAPackage(word) {
     if (word.length === 0)
         return 'empty';
+    if (SCP_GIT.test(word))
+        return 'SSH git spec (user@host:path) — not looked up';
     if (isPathLike(word))
         return 'local path — not looked up';
     if (URL_OR_VCS.test(word))
@@ -196,24 +200,32 @@ const NPM_COMMON_BOOL = [
 ];
 const FLAGS = {
     npm: {
-        value: set('--registry', '--prefix', '--tag', '--workspace', '-w', '--omit', '--include', '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix', '--otp', '--scope', '--cpu', '--os', '--libc', '--location'),
+        // `-C` is npm's short form of `--prefix`.
+        value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include', '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix', '--otp', '--scope', '--cpu', '--os', '--libc', '--location'),
         bool: set(...NPM_COMMON_BOOL),
         registry: set('--registry'),
+        dir: set('--prefix', '-C'),
+        workspace: set('--workspace', '-w', '--workspaces'),
     },
     pnpm: {
-        value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir', '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--network-concurrency', '--config', '--loglevel'),
-        bool: set(...NPM_COMMON_BOOL, '--workspace', '-w', '--workspace-root', '--recursive', '-r', '--allow-build'),
+        value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir', '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--network-concurrency', '--config', '--loglevel', '--allow-build'),
+        bool: set(...NPM_COMMON_BOOL, '--workspace', '-w', '--workspace-root', '--recursive', '-r'),
         registry: set('--registry'),
+        dir: set('--dir', '-C'),
+        workspace: set('--workspace', '--filter', '-F'),
     },
     yarn: {
-        value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope'),
-        bool: set(...NPM_COMMON_BOOL, '--ignore-workspace-root-check', '-W', '--cached', '--interactive', '-i', '--prefer-dev', '--mode'),
+        value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope', '--mode'),
+        bool: set(...NPM_COMMON_BOOL, '--ignore-workspace-root-check', '-W', '--cached', '--interactive', '-i', '--prefer-dev'),
         registry: set('--registry'),
+        dir: set('--cwd'),
     },
     bun: {
-        value: set('--registry', '--cwd', '--backend', '--cache-dir', '--config', '-c', '--concurrent-scripts', '--network-concurrency', '--omit', '--linker', '--ca', '--cafile'),
+        value: set('--registry', '--cwd', '--backend', '--cache-dir', '--config', '-c', '--concurrent-scripts', '--network-concurrency', '--omit', '--linker', '--ca', '--cafile', '--filter'),
         bool: set(...NPM_COMMON_BOOL, '--trust', '--analyze', '-a', '--only-missing', '--save-text-lockfile', '--no-cache', '-p'),
         registry: set('--registry'),
+        dir: set('--cwd'),
+        workspace: set('--filter'),
     },
     pip: {
         value: set('-r', '--requirement', '-c', '--constraint', '-e', '--editable', '-t', '--target', '--prefix', '--root', '-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--trusted-host', '--platform', '--python-version', '--implementation', '--abi', '--src', '--upgrade-strategy', '--progress-bar', '--log', '--proxy', '--retries', '--timeout', '--exists-action', '--cert', '--client-cert', '--cache-dir', '--no-binary', '--only-binary', '--config-settings', '-C', '--global-option', '--report', '--python', '--root-user-action', '--keyring-provider', '--group', '--index-strategy', '--extra', '--override', '-p', '--prerelease', '--resolution'),
@@ -238,13 +250,17 @@ const FLAGS = {
             ['-r', 'requirements file (-r) — its contents are not vetted'],
             ['--requirements', 'requirements file (-r) — its contents are not vetted'],
         ]),
+        dir: set('--directory', '--project'),
+        workspace: set('--package'),
     },
     poetry: {
-        value: set('--group', '-G', '--extras', '-E', '--python', '--platform', '--source', '--markers', '--directory', '-C', '--project', '-P'),
-        bool: set('--dev', '-D', '--editable', '-e', '--optional', '--allow-prereleases', '--dry-run', '--lock', '--no-interaction', '-n', '-q', '-v', '-vv', '-vvv', '--quiet', '--verbose', '--no-ansi', '--ansi'),
+        value: set('--group', '-G', '--extras', '-E', '--python', '--platform', '--source', '--markers', '--directory', '-C', '--project', '-P', '--optional'),
+        bool: set('--dev', '-D', '--editable', '-e', '--allow-prereleases', '--dry-run', '--lock', '--no-interaction', '-n', '-q', '-v', '-vv', '-vvv', '--quiet', '--verbose', '--no-ansi', '--ansi'),
         registry: set('--source'),
+        dir: set('--directory', '-C', '--project', '-P'),
     },
     composer: {
+        dir: set('--working-dir', '-d'),
         value: set('--working-dir', '-d'),
         bool: set('--dev', '--no-dev', '--no-update', '--no-install', '--no-audit', '--no-security-blocking', '--update-with-dependencies', '-w', '--update-with-all-dependencies', '-W', '--with-dependencies', '--with-all-dependencies', '--prefer-dist', '--prefer-source', '--prefer-install', '--dry-run', '--no-progress', '--no-scripts', '--no-plugins', '--update-no-dev', '--ignore-platform-reqs', '--prefer-stable', '--prefer-lowest', '--sort-packages', '--optimize-autoloader', '-o', '--classmap-authoritative', '-a', '--apcu-autoloader', '--fixed', '-n', '--no-interaction', '-q', '--quiet', '-v', '-vv', '-vvv', '--ansi', '--no-ansi', '--no-cache', '--minimal-changes', '-m'),
         registry: set(),
@@ -255,11 +271,36 @@ const FLAGS = {
         registry: set('-s', '--source'),
     },
 };
-/** Separates flags (and their values) from positional words. */
+const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
+/**
+ * Separates flags (and their values) from positional words.
+ *
+ * Short-flag clusters are expanded letter by letter (`-qr req.txt` is `-q`
+ * then `-r req.txt`; `-rreq.txt` is `-r req.txt`): the first letter that
+ * takes a value takes the rest of the cluster, or the next word. A flag
+ * this table does not know makes the parse uncertain; an unknown LONG flag
+ * still swallows the next word (missing a package fails open, vetting a
+ * flag's value as a name does not).
+ */
 function walk(words, table) {
     const positionals = [];
     const skipped = [];
+    const uncertain = [];
     let customRegistry;
+    const note = (flag, value) => {
+        if (table.registry.has(flag) && value !== undefined)
+            customRegistry = value;
+        if (table.registryBool?.has(flag))
+            customRegistry = customRegistry ?? flag;
+        const why = table.reported?.get(flag);
+        if (why !== undefined && value !== undefined)
+            skipped.push(skip(value, why));
+        if (table.dir?.has(flag))
+            uncertain.push(`directory changed by ${flag}`);
+        if (table.workspace?.has(flag))
+            uncertain.push(`workspace context (${flag})`);
+    };
+    const known = (flag) => table.value.has(flag) || table.bool.has(flag);
     for (let i = 0; i < words.length; i += 1) {
         const w = words[i];
         if (w === undefined)
@@ -267,28 +308,54 @@ function walk(words, table) {
         const v = w.value;
         if (v === '--')
             continue;
-        if (v.startsWith('-') && v.length > 1) {
-            const eqAt = v.indexOf('=');
-            const flag = eqAt > 0 ? v.slice(0, eqAt) : v;
-            let value;
-            if (eqAt > 0)
-                value = v.slice(eqAt + 1);
-            else if (table.value.has(flag) || (!table.bool.has(flag) && flag.startsWith('--') && !flag.startsWith('--no-'))) {
-                value = words[i + 1]?.value;
-                i += 1;
-            }
-            if (table.registry.has(flag) && value !== undefined)
-                customRegistry = value;
-            if (table.registryBool?.has(flag))
-                customRegistry = customRegistry ?? flag;
-            const why = table.reported?.get(flag);
-            if (why !== undefined && value !== undefined)
-                skipped.push(skip(value, why));
+        if (!v.startsWith('-') || v.length === 1) {
+            positionals.push({ value: v });
             continue;
         }
-        positionals.push({ value: v });
+        const eqAt = v.indexOf('=');
+        if (eqAt > 0) {
+            const flag = v.slice(0, eqAt);
+            if (!known(flag))
+                uncertain.push(`unknown flag ${flag}`);
+            note(flag, v.slice(eqAt + 1));
+            continue;
+        }
+        if (table.value.has(v)) {
+            note(v, words[i + 1]?.value);
+            i += 1;
+            continue;
+        }
+        if (table.bool.has(v)) {
+            note(v, undefined);
+            continue;
+        }
+        if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
+            for (let k = 1; k < v.length; k += 1) {
+                const flag = `-${v.charAt(k)}`;
+                if (table.value.has(flag)) {
+                    const rest = v.slice(k + 1);
+                    if (rest !== '')
+                        note(flag, rest);
+                    else {
+                        note(flag, words[i + 1]?.value);
+                        i += 1;
+                    }
+                    break;
+                }
+                if (!table.bool.has(flag))
+                    uncertain.push(`unknown flag ${flag}`);
+                note(flag, undefined);
+            }
+            continue;
+        }
+        uncertain.push(`unknown flag ${v}`);
+        if (v.startsWith('--') && !v.startsWith('--no-'))
+            i += 1;
     }
-    return customRegistry === undefined ? { positionals, skipped } : { positionals, skipped, customRegistry };
+    const out = { positionals, skipped, uncertain };
+    if (customRegistry !== undefined)
+        out.customRegistry = customRegistry;
+    return out;
 }
 // ─────────────────────────────────────────────────────────── commands
 const RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
@@ -331,6 +398,7 @@ function commandStart(words) {
 }
 const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
 const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
+const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
 /** First positional (non-flag) index at or after `from`, honouring the table's value flags. */
 function nextPositional(words, from, table) {
     for (let i = from; i < words.length; i += 1) {
@@ -381,53 +449,58 @@ function detect(words) {
     const pre = words.slice(i, sub);
     switch (head) {
         case 'npm':
-            return NPM_INSTALL.has(subWord) ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre } : null;
+            return NPM_INSTALL.has(subWord) ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
         case 'pnpm':
+            return subWord === 'add' ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
         case 'bun':
-            return subWord === 'add' || (head === 'bun' && subWord === 'a')
-                ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre }
-                : null;
+            // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` names nothing.
+            return BUN_ADD.has(subWord) ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
         case 'yarn': {
             let at = sub;
+            const uncertain = [];
             if (subWord === 'global')
                 at = nextPositional(words, sub + 1, table);
             else if (subWord === 'workspace') {
                 const ws = nextPositional(words, sub + 1, table);
                 at = ws < 0 ? -1 : nextPositional(words, ws + 1, table);
+                uncertain.push('workspace context (yarn workspace)');
             }
             if (at < 0 || words[at]?.value !== 'add')
                 return null;
-            return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre };
+            return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain };
         }
         case 'pip':
-            return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre } : null;
+            return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
         case 'uv': {
             if (subWord === 'add')
-                return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre };
+                return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
             if (subWord === 'pip') {
                 const inst = nextPositional(words, sub + 1, table);
                 if (inst >= 0 && words[inst]?.value === 'install') {
-                    return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre };
+                    return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [] };
                 }
             }
             return null;
         }
         case 'poetry':
-            return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre } : null;
+            return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
         case 'composer':
             return COMPOSER_REQUIRE.has(subWord)
-                ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre }
+                ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre, uncertain: [] }
                 : null;
         case 'dotnet': {
             if (subWord !== 'add')
                 return null;
             // dotnet add [<PROJECT>] package <NAME>
             let at = nextPositional(words, sub + 1, table);
-            if (at >= 0 && words[at]?.value !== 'package')
+            const uncertain = [];
+            if (at >= 0 && words[at]?.value !== 'package') {
+                uncertain.push('dotnet project argument (the NuGet configuration next to that project was not read)');
                 at = nextPositional(words, at + 1, table);
+            }
             if (at < 0 || words[at]?.value !== 'package')
                 return null;
-            return { manager: head, ecosystem: 'nuget', args: words.slice(at + 1), pre };
+            return { manager: head, ecosystem: 'nuget', args: words.slice(at + 1), pre, uncertain };
         }
         default:
             return null;
@@ -435,13 +508,19 @@ function detect(words) {
 }
 /** Composer lets a constraint follow its package as a separate word: `vendor/pkg "^2.0"`. */
 const COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
-function collect(d) {
+function collect(d, context) {
     const table = FLAGS[d.manager === 'uv-pip' ? 'pip' : d.manager] ?? FLAGS['npm'];
     const flagTable = table ?? { value: set(), bool: set(), registry: set() };
     const preWalk = walk(d.pre, flagTable);
-    const { positionals, skipped, customRegistry } = walk(d.args, flagTable);
+    const { positionals, skipped, customRegistry, uncertain } = walk(d.args, flagTable);
     const packages = [];
-    const out = { ecosystem: d.ecosystem, manager: d.manager, packages, skipped };
+    const out = {
+        ecosystem: d.ecosystem,
+        manager: d.manager,
+        packages,
+        skipped,
+        uncertain: [...new Set([...context, ...d.uncertain, ...preWalk.uncertain, ...uncertain])],
+    };
     const registry = customRegistry ?? preWalk.customRegistry;
     if (registry !== undefined)
         out.customRegistry = registry;
@@ -515,13 +594,63 @@ export function parseInstallCommands(command) {
     catch {
         return out;
     }
+    const envChange = changesEnvironment(command, split.statements);
+    let dirChanged = false;
     for (const statement of split.statements) {
         for (const words of statement.commands) {
             const d = detect(words);
-            if (d !== null)
-                out.push(collect(d));
+            if (d !== null) {
+                const context = [];
+                if (envChange)
+                    context.push('inline environment assignment in the command (it can redirect the registry)');
+                if (dirChanged)
+                    context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
+                out.push(collect(d, context));
+            }
+            if (changesDirectory(words))
+                dirChanged = true;
         }
     }
     return out;
+}
+const DIR_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'push-location', 'pop-location', 'sl', 'cd..']);
+function changesDirectory(words) {
+    const head = words[commandStart(words)];
+    return head !== undefined && DIR_COMMANDS.has(base(head.value));
+}
+const ENV_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx']);
+const POWERSHELL_ENV = /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|\b(?:Set-Item|New-Item)\b[^;\n]*\benv:|SetEnvironmentVariable/i;
+/**
+ * Ruling (b): does ANY part of the command set an environment variable —
+ * `VAR=x cmd`, `env VAR=x cmd`, `export VAR=x`, `set VAR=x`, `setx`,
+ * PowerShell `$env:X=` / `Set-Item Env:`? Any of them can point the package
+ * manager at another registry (`NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, …),
+ * so a name missing from the PUBLIC registry proves nothing afterwards.
+ */
+function changesEnvironment(command, statements) {
+    if (POWERSHELL_ENV.test(command))
+        return true;
+    for (const statement of statements) {
+        for (const words of statement.commands) {
+            const start = commandStart(words);
+            for (let i = 0; i < start; i += 1) {
+                const w = words[i];
+                if (w !== undefined && (ASSIGNMENT.test(w.value) || base(w.value) === 'env'))
+                    return true;
+            }
+            const head = words[start];
+            if (head === undefined)
+                continue;
+            const name = base(head.value);
+            if (name === 'env')
+                return true;
+            if (ENV_COMMANDS.has(name)) {
+                const args = words.slice(start + 1);
+                if (name === 'export' || name === 'setx' || args.some((a) => a.value.includes('=')))
+                    return true;
+            }
+        }
+    }
+    return false;
 }
 //# sourceMappingURL=parseCommand.js.map

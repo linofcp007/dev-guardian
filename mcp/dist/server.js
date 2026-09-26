@@ -66610,8 +66610,10 @@ var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
 }
+var SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 function notAPackage(word) {
   if (word.length === 0) return "empty";
+  if (SCP_GIT.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
   if (isPathLike(word)) return "local path \u2014 not looked up";
   if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
   if (ARCHIVE.test(word)) return "archive file \u2014 not looked up";
@@ -66785,9 +66787,11 @@ var NPM_COMMON_BOOL = [
 ];
 var FLAGS = {
   npm: {
+    // `-C` is npm's short form of `--prefix`.
     value: set(
       "--registry",
       "--prefix",
+      "-C",
       "--tag",
       "--workspace",
       "-w",
@@ -66808,7 +66812,9 @@ var FLAGS = {
       "--location"
     ),
     bool: set(...NPM_COMMON_BOOL),
-    registry: set("--registry")
+    registry: set("--registry"),
+    dir: set("--prefix", "-C"),
+    workspace: set("--workspace", "-w", "--workspaces")
   },
   pnpm: {
     value: set(
@@ -66825,13 +66831,25 @@ var FLAGS = {
       "--lockfile-dir",
       "--network-concurrency",
       "--config",
-      "--loglevel"
+      "--loglevel",
+      "--allow-build"
     ),
-    bool: set(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r", "--allow-build"),
-    registry: set("--registry")
+    bool: set(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
+    registry: set("--registry"),
+    dir: set("--dir", "-C"),
+    workspace: set("--workspace", "--filter", "-F")
   },
   yarn: {
-    value: set("--registry", "--cwd", "--network-timeout", "--modules-folder", "--cache-folder", "--mutex", "--scope"),
+    value: set(
+      "--registry",
+      "--cwd",
+      "--network-timeout",
+      "--modules-folder",
+      "--cache-folder",
+      "--mutex",
+      "--scope",
+      "--mode"
+    ),
     bool: set(
       ...NPM_COMMON_BOOL,
       "--ignore-workspace-root-check",
@@ -66839,10 +66857,10 @@ var FLAGS = {
       "--cached",
       "--interactive",
       "-i",
-      "--prefer-dev",
-      "--mode"
+      "--prefer-dev"
     ),
-    registry: set("--registry")
+    registry: set("--registry"),
+    dir: set("--cwd")
   },
   bun: {
     value: set(
@@ -66857,7 +66875,8 @@ var FLAGS = {
       "--omit",
       "--linker",
       "--ca",
-      "--cafile"
+      "--cafile",
+      "--filter"
     ),
     bool: set(
       ...NPM_COMMON_BOOL,
@@ -66869,7 +66888,9 @@ var FLAGS = {
       "--no-cache",
       "-p"
     ),
-    registry: set("--registry")
+    registry: set("--registry"),
+    dir: set("--cwd"),
+    workspace: set("--filter")
   },
   pip: {
     value: set(
@@ -67047,7 +67068,9 @@ var FLAGS = {
     reported: /* @__PURE__ */ new Map([
       ["-r", "requirements file (-r) \u2014 its contents are not vetted"],
       ["--requirements", "requirements file (-r) \u2014 its contents are not vetted"]
-    ])
+    ]),
+    dir: set("--directory", "--project"),
+    workspace: set("--package")
   },
   poetry: {
     value: set(
@@ -67062,14 +67085,14 @@ var FLAGS = {
       "--directory",
       "-C",
       "--project",
-      "-P"
+      "-P",
+      "--optional"
     ),
     bool: set(
       "--dev",
       "-D",
       "--editable",
       "-e",
-      "--optional",
       "--allow-prereleases",
       "--dry-run",
       "--lock",
@@ -67084,9 +67107,11 @@ var FLAGS = {
       "--no-ansi",
       "--ansi"
     ),
-    registry: set("--source")
+    registry: set("--source"),
+    dir: set("--directory", "-C", "--project", "-P")
   },
   composer: {
+    dir: set("--working-dir", "-d"),
     value: set("--working-dir", "-d"),
     bool: set(
       "--dev",
@@ -67424,31 +67449,122 @@ function fromBunfig(text, scope) {
   }
   return found;
 }
+var NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
+function npmConfigFiles(ctx) {
+  const env = envOf(ctx);
+  const home = homeOf(ctx);
+  const files = [];
+  for (const dir of ancestors(ctx)) {
+    files.push(
+      { path: join73(dir, ".npmrc"), parse: fromNpmrc },
+      { path: join73(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
+      { path: join73(dir, ".yarnrc"), parse: fromYarnrc },
+      { path: join73(dir, "bunfig.toml"), parse: fromBunfig }
+    );
+  }
+  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join73(home, ".config");
+  const localAppData = envValue(env, "LOCALAPPDATA") ?? join73(home, "AppData", "Local");
+  files.push(
+    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join73(home, ".npmrc"), parse: fromNpmrc },
+    { path: join73(home, ".yarnrc.yml"), parse: fromYarnrcYml },
+    { path: join73(home, ".yarnrc"), parse: fromYarnrc },
+    { path: join73(home, ".bunfig.toml"), parse: fromBunfig },
+    { path: join73(xdg, ".bunfig.toml"), parse: fromBunfig },
+    { path: join73(xdg, "pnpm", "rc"), parse: fromNpmrc },
+    { path: join73(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
+    { path: join73(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+  );
+  const globalConfig2 = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
+  if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
+  return files;
+}
 function npmRegistry(name, ctx) {
   const scope = npmScope(name);
-  const env = envOf(ctx);
-  const candidates2 = [];
-  for (const dir of ancestors(ctx)) {
-    for (const [file, parse6] of [
-      [".npmrc", fromNpmrc],
-      [".yarnrc.yml", fromYarnrcYml],
-      [".yarnrc", fromYarnrc],
-      ["bunfig.toml", fromBunfig]
-    ]) {
-      const path6 = join73(dir, file);
-      const text = read(path6);
-      if (text !== void 0) candidates2.push({ source: path6, url: parse6(text, scope) });
+  const envRegistry = envValue(envOf(ctx), "NPM_CONFIG_REGISTRY");
+  if (envRegistry !== void 0 && !isPublic("npm", envRegistry)) {
+    return { kind: "registry", source: "NPM_CONFIG_REGISTRY", url: envRegistry };
+  }
+  let authSource;
+  for (const { path: path6, parse: parse6 } of npmConfigFiles(ctx)) {
+    const text = read(path6);
+    if (text === void 0) continue;
+    const url = parse6(text, scope);
+    if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path6, url };
+    if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path6;
+  }
+  if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource };
+  const local = npmWorkspacePackage(name, ctx);
+  return local === void 0 ? null : { kind: "workspace", source: local };
+}
+var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
+var MAX_SCAN_DIRS = 3e3;
+var MAX_SCAN_DEPTH = 5;
+function findManifest(root, file, match) {
+  const queue = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
+    const next = queue.shift();
+    if (next === void 0) break;
+    visited += 1;
+    const manifest = join73(next.dir, file);
+    const text = read(manifest);
+    if (text !== void 0 && match(text)) return manifest;
+    if (next.depth >= MAX_SCAN_DEPTH) continue;
+    let entries2 = [];
+    try {
+      entries2 = readdirSync23(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
+    } catch {
+      continue;
     }
+    for (const e of entries2) queue.push({ dir: join73(next.dir, e), depth: next.depth + 1 });
   }
-  const userConfig = envValue(env, "NPM_CONFIG_USERCONFIG") ?? join73(homeOf(ctx), ".npmrc");
-  const userText = read(userConfig);
-  if (userText !== void 0) candidates2.push({ source: userConfig, url: fromNpmrc(userText, scope) });
-  const envRegistry = envValue(env, "NPM_CONFIG_REGISTRY");
-  if (envRegistry !== void 0) candidates2.unshift({ source: "NPM_CONFIG_REGISTRY", url: envRegistry });
-  for (const c3 of candidates2) {
-    if (c3.url !== void 0 && !isPublic("npm", c3.url)) return { source: c3.source, url: c3.url };
+  return void 0;
+}
+function hasWorkspaces(packageJson) {
+  if (packageJson === void 0) return false;
+  try {
+    const w = JSON.parse(packageJson).workspaces;
+    if (Array.isArray(w)) return w.length > 0;
+    return w !== null && typeof w === "object" && Array.isArray(w.packages);
+  } catch {
+    return false;
   }
-  return null;
+}
+function npmWorkspacePackage(name, ctx) {
+  for (const dir of ancestors(ctx)) {
+    const isRoot = hasWorkspaces(read(join73(dir, "package.json"))) || existsSync51(join73(dir, "pnpm-workspace.yaml"));
+    if (!isRoot) continue;
+    const hit = findManifest(dir, "package.json", (text) => {
+      try {
+        return JSON.parse(text).name === name;
+      } catch {
+        return false;
+      }
+    });
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
+}
+var pep503 = (n2) => n2.trim().toLowerCase().replace(/[-_.]+/g, "-");
+function uvWorkspacePackage(name, ctx) {
+  const wanted = pep503(name);
+  for (const dir of ancestors(ctx)) {
+    const path6 = join73(dir, "pyproject.toml");
+    const text = read(path6);
+    if (text === void 0) continue;
+    const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
+    for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
+      if (pep503(m[1] ?? "") === wanted) return path6;
+    }
+    if (!/^\s*\[tool\.uv\.workspace\]/m.test(text)) continue;
+    const hit = findManifest(dir, "pyproject.toml", (t) => {
+      const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
+      const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
+      return n2 !== void 0 && pep503(n2) === wanted;
+    });
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
 }
 var PY_ENV = ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_INDEX", "UV_DEFAULT_INDEX", "PIP_FIND_LINKS", "UV_FIND_LINKS"];
 function fromPipConf(text) {
@@ -67476,16 +67592,17 @@ function fromUvToml(text) {
   if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
   return void 0;
 }
-function pypiRegistry(ctx) {
+function pypiRegistry(name, ctx) {
   const env = envOf(ctx);
-  for (const name of PY_ENV) {
-    const v = envValue(env, name);
+  for (const envName of PY_ENV) {
+    const v = envValue(env, envName);
     if (v === void 0) continue;
-    if (v.split(/\s+/).some((u2) => !isPublic("pypi", u2))) return { source: name, url: v };
+    if (v.split(/\s+/).some((u2) => !isPublic("pypi", u2))) return { kind: "registry", source: envName, url: v };
   }
   const noIndex = envValue(env, "PIP_NO_INDEX");
-  if (noIndex !== void 0 && /^(?:1|true|yes|on)$/i.test(noIndex)) return { source: "PIP_NO_INDEX" };
+  if (noIndex !== void 0 && /^(?:1|true|yes|on)$/i.test(noIndex)) return { kind: "registry", source: "PIP_NO_INDEX" };
   const home = homeOf(ctx);
+  const etc = ctx.etcDir ?? "/etc";
   const confs = [];
   const explicit = envValue(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
@@ -67495,24 +67612,38 @@ function pypiRegistry(ctx) {
   confs.push(join73(appdata, "pip", "pip.ini"), join73(home, "pip", "pip.ini"));
   const venv = envValue(env, "VIRTUAL_ENV");
   if (venv !== void 0) confs.push(join73(venv, "pip.conf"), join73(venv, "pip.ini"));
+  confs.push(join73(etc, "pip.conf"), join73(etc, "xdg", "pip", "pip.conf"));
+  for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join73(d, "pip", "pip.conf"));
+  const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
+  if (programData !== void 0) confs.push(join73(programData, "pip", "pip.ini"));
   for (const path6 of confs) {
     const text = read(path6);
     const url = text === void 0 ? void 0 : fromPipConf(text);
-    if (url !== void 0) return { source: path6, url };
+    if (url !== void 0) return { kind: "registry", source: path6, url };
+  }
+  const uvConfs = [];
+  const uvExplicit = envValue(env, "UV_CONFIG_FILE");
+  if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
+  uvConfs.push(join73(xdg, "uv", "uv.toml"), join73(appdata, "uv", "uv.toml"), join73(etc, "uv", "uv.toml"));
+  for (const path6 of uvConfs) {
+    const text = read(path6);
+    const url = text === void 0 ? void 0 : fromUvToml(text);
+    if (url !== void 0) return { kind: "registry", source: path6, url };
   }
   for (const dir of ancestors(ctx)) {
     const uvToml = join73(dir, "uv.toml");
     const uvText = read(uvToml);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
-    if (uvUrl !== void 0) return { source: uvToml, url: uvUrl };
+    if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
     const pyproject = join73(dir, "pyproject.toml");
     const text = read(pyproject);
     if (text === void 0) continue;
     const url = fromPyproject(text);
-    if (url !== void 0) return { source: pyproject, url };
+    if (url !== void 0) return { kind: "registry", source: pyproject, url };
     break;
   }
-  return null;
+  const local = uvWorkspacePackage(name, ctx);
+  return local === void 0 ? null : { kind: "workspace", source: local };
 }
 function hasRepositories(text) {
   if (text === void 0) return false;
@@ -67530,14 +67661,14 @@ function composerRegistry(ctx) {
     const path6 = join73(dir, "composer.json");
     const text = read(path6);
     if (text === void 0) continue;
-    if (hasRepositories(text)) return { source: path6 };
+    if (hasRepositories(text)) return { kind: "registry", source: path6 };
     break;
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue(env, "COMPOSER_HOME");
   const globals = composerHome !== void 0 ? [join73(composerHome, "config.json")] : [join73(home, ".composer", "config.json"), join73(home, ".config", "composer", "config.json"), join73(envValue(env, "APPDATA") ?? join73(home, "AppData", "Roaming"), "Composer", "config.json")];
-  for (const path6 of globals) if (hasRepositories(read(path6))) return { source: path6 };
+  for (const path6 of globals) if (hasRepositories(read(path6))) return { kind: "registry", source: path6 };
   return null;
 }
 function nugetConfigIn(dir) {
@@ -67572,7 +67703,7 @@ function nugetRegistry(ctx) {
   for (const path6 of files) {
     const text = read(path6);
     const url = text === void 0 ? void 0 : customNugetSource(text);
-    if (url !== void 0) return { source: path6, url };
+    if (url !== void 0) return { kind: "registry", source: path6, url };
   }
   return null;
 }
@@ -67582,7 +67713,7 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
       case "npm":
         return npmRegistry(name, ctx);
       case "pypi":
-        return pypiRegistry(ctx);
+        return pypiRegistry(name, ctx);
       case "packagist":
         return composerRegistry(ctx);
       case "nuget":
@@ -67719,6 +67850,18 @@ async function lookupNuget(name, http) {
   const versions = isRecord6(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
   if (versions === null) return { kind: "error", reason: "NuGet returned an unexpected document" };
   return { kind: "found", info: { versions, times: {}, installScript: {} } };
+}
+function nugetSearchUrl(id) {
+  return `https://azuresearch-usnc.nuget.org/query?q=${encodeURIComponent(`packageid:${id.toLowerCase()}`)}&prerelease=true&semVerLevel=2.0.0&take=1`;
+}
+async function nugetCanonicalId(id, http) {
+  const r = await fetchJson(nugetSearchUrl(id), http);
+  if (r.kind !== "ok" || !isRecord6(r.json) || !Array.isArray(r.json["data"])) return void 0;
+  for (const entry of r.json["data"]) {
+    const found = isRecord6(entry) ? entry["id"] : void 0;
+    if (typeof found === "string" && found.toLowerCase() === id.toLowerCase()) return found;
+  }
+  return void 0;
 }
 async function nugetPublished(name, version2, http) {
   const url = `https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version2.toLowerCase())}.json`;
@@ -68086,7 +68229,7 @@ function ageText(hours) {
 }
 function customFor(spec, opts) {
   if (opts.commandRegistry !== void 0 && !isPublicRegistryUrl(spec.ecosystem, opts.commandRegistry)) {
-    return { source: "the command line", url: opts.commandRegistry };
+    return { kind: "registry", source: "the command line", url: opts.commandRegistry };
   }
   return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
@@ -68136,10 +68279,16 @@ async function extrasFor(w, info, http, now) {
 function osvIds(osv, w) {
   if (osv === void 0 || w.osvIndex === void 0) return [];
   const eco = OSV_ECOSYSTEM[w.spec.ecosystem];
+  const name = w.osvName ?? w.spec.name;
   const hit = osv.vulnerable_packages.find(
-    (g) => g.ecosystem === eco && g.name === w.spec.name && (w.osvVersioned ? g.version === w.version : g.version === void 0)
+    (g) => g.ecosystem === eco && g.name === name && (w.osvVersioned ? g.version === w.version : g.version === void 0)
   );
   return hit?.vuln_ids ?? [];
+}
+function osvNameFor(w, canonical) {
+  if (w.spec.ecosystem === "packagist") return w.spec.name.toLowerCase();
+  if (w.spec.ecosystem === "nuget") return canonical ?? w.spec.name;
+  return w.spec.name;
 }
 function buildResult(w, osv, osvError, now, offlineReason) {
   const { spec } = w;
@@ -68175,9 +68324,9 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   } else if (lookup.kind === "not_found") {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     if (w.custom !== null) {
-      exists = unknown2(
-        `not on ${registry2}, but a custom registry is configured (${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}) \u2014 possibly a private package; not vetted.${didYouMean}`
-      );
+      const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
+      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : `a custom registry is configured (${where})`;
+      exists = unknown2(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
@@ -68246,6 +68395,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   if (vulnIds.length > 0) result.vulnerability_ids = vulnIds;
   if (w.scripts !== void 0 && w.scripts.length > 0) result.install_scripts = w.scripts;
   if (w.typo !== null) result.similar_to = w.typo.similar_to;
+  if (lookup?.kind === "not_found") result.not_on_public_registry = true;
+  if (w.versionMissing === true) result.requested_version_unpublished = true;
   return result;
 }
 async function vetPackages(specs, opts = {}) {
@@ -68293,6 +68444,11 @@ async function networkRounds(work, http, signal, deadline, now) {
     }
     return p;
   });
+  const canonical = /* @__PURE__ */ new Map();
+  for (const w of work) {
+    const key = w.spec.name.toLowerCase();
+    if (w.spec.ecosystem === "nuget" && !canonical.has(key)) canonical.set(key, nugetCanonicalId(w.spec.name, http));
+  }
   const answers = await Promise.all(pending);
   work.forEach((w, i2) => {
     const answer = answers[i2];
@@ -68303,21 +68459,23 @@ async function networkRounds(work, http, signal, deadline, now) {
     const why = "network budget exhausted before OSV was consulted";
     return work.map((w) => buildResult(w, void 0, why, now, void 0));
   }
-  const queries = [];
-  for (const w of work) {
-    const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.spec.name };
-    if (w.version !== void 0) q.version = w.version;
-    w.osvVersioned = w.version !== void 0;
-    w.osvIndex = queries.length;
-    queries.push(q);
-  }
   let osvError;
-  const osvPromise = queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) }).catch(
-    (e) => {
-      osvError = e instanceof Error ? e.message : String(e);
-      return { online: false, queried: 0, vulnerable_packages: [] };
+  const osvPromise = (async () => {
+    const queries = [];
+    for (const w of work) {
+      const canonicalId = await (canonical.get(w.spec.name.toLowerCase()) ?? Promise.resolve(void 0));
+      w.osvName = osvNameFor(w, canonicalId);
+      const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
+      if (w.version !== void 0) q.version = w.version;
+      w.osvVersioned = w.version !== void 0;
+      w.osvIndex = queries.length;
+      queries.push(q);
     }
-  );
+    return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+  })().catch((e) => {
+    osvError = e instanceof Error ? e.message : String(e);
+    return { online: false, queried: 0, vulnerable_packages: [] };
+  });
   const extras = work.map(
     (w) => w.lookup?.kind === "found" ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
   );
@@ -68354,7 +68512,7 @@ var ECOSYSTEM_ALIASES = {
 var tool47 = {
   name: "vet_packages",
   title: "Vet packages before installing",
-  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject index, composer repositories, nuget.config). Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The same checks run automatically on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands via the PreToolUse hook.',
+  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured (scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only on an unambiguous command line, and warns on known vulnerabilities only for an exact version pin.',
   inputSchema: {
     ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
     packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version" (a range or tag is resolved to the version it installs).'),
