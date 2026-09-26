@@ -983,9 +983,10 @@ keeps working (migrations 004–011 are additive).
   overlapping occurrences become one `REDACTED`.
 - **`ci-init --write` created the target of a dangling pipeline-file symlink
   on Windows**, wherever it pointed: a `wx` open there follows a dangling link.
-  Anything at the name is now refused first. `--force` writes a temp file and
-  renames it over the pipeline file, so it never writes through a symlink or
-  a hard link and never leaves the file half-written; `--help` says what it
+  The file is now written to a temp file and published with a hard link, which
+  refuses anything at the name and never follows it. `--force` renames the
+  temp file over the pipeline file, so it never writes through a symlink or a
+  hard link and never leaves the file half-written; `--help` says what it
   still refuses.
 
 ### Security

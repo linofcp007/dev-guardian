@@ -88,15 +88,20 @@
  */
 
 import {
+  closeSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1305,10 +1310,6 @@ async function cmdBaseline(argv) {
 // GHSA-69fq-xp46-6x23 lesson already lives in this codebase for
 // (`installCatalog.ts`'s `TRIVY_INSTALL_TAG` comment).
 
-// Only `ci-init` renames files; imported here, beside its one user (an
-// import declaration is hoisted wherever it stands).
-import { renameSync } from 'node:fs';
-
 const CONFIGS_CI_DIR = resolve(ROOT, 'configs', 'ci');
 const PINNED_PATH = resolve(CONFIGS_CI_DIR, 'pinned.json');
 const PLUGIN_JSON_PATH = resolve(ROOT, '.claude-plugin', 'plugin.json');
@@ -1649,11 +1650,13 @@ function safeLstat(p) {
  * intermediate ancestor to check at all.
  *
  * Does NOT check `outPath` itself — a symlinked LEAF (the pipeline file's
- * own name already existing as a symlink) is a different hazard, handled
- * by `refuseEscapingLeafSymlink` right before the write, because a
- * `--force` overwrite is the only path that can reach it (a plain `wx`
- * create already refuses ANY existing path at that name, symlink or not,
- * via `EEXIST` — see `cmdCiInit`).
+ * own name already existing as a symlink) is a different hazard, handled at
+ * the write: a plain `--write` publishes with `link()` (`createFile`), which
+ * refuses ANY existing entry at that name, a dangling symlink included, and
+ * never follows one; `--force` refuses a leaf link that escapes or dangles
+ * (`refuseEscapingLeafSymlink`) and otherwise replaces the entry by rename
+ * (`replaceFile`). Not `wx` alone: on Windows a `wx` open over a dangling
+ * symlink follows it and creates the link's target, wherever that is.
  */
 function firstEscapingAncestor(projectPath, outPath) {
   const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
@@ -1696,29 +1699,87 @@ function refuseEscapingLeafSymlink(projectPath, outPath) {
   return { ok: true };
 }
 
+/** Remove `path`, ignoring a failure: it is a temp file this command made. */
+function removeTemp(path) {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone, or held open by a scanner: the name is random and hidden.
+  }
+}
+
 /**
- * `--force`'s write: the pipeline goes to a fresh temp file beside `outPath`
- * (created `wx` under a random name, so never through anything already
- * there), and `renameSync` moves it over `outPath` in one step. A rename
- * replaces the directory ENTRY — a symlink or a hard link at `outPath` is
- * replaced, never written through (a truncating `'w'` write went through the
- * inode every name of the file shares) — and `outPath` is never absent or
- * half-written. It replaces unlink-then-write, between whose two steps a
- * link created at `outPath` would have been followed.
+ * A fresh temp file beside `outPath` holding `content`; its path. The name is
+ * random (`crypto.randomBytes`) and the file is opened `wx`: an entry already
+ * at that name — anyone's, a link included — fails the open with EEXIST and
+ * is never written to or deleted. Once the open succeeded the file is this
+ * call's, and a failed write removes it.
+ */
+function writeTempBeside(outPath, content) {
+  const { dir, base } = parse(outPath);
+  const tmp = join(dir, `.${base}.${randomBytes(8).toString('hex')}.tmp`);
+  const fd = openSync(tmp, 'wx');
+  let written = false;
+  try {
+    writeFileSync(fd, content, 'utf8');
+    written = true;
+  } finally {
+    closeSync(fd);
+    if (!written) removeTemp(tmp);
+  }
+  return tmp;
+}
+
+/**
+ * `--force`'s write: a temp file beside `outPath`, renamed over it in one
+ * step. A rename replaces the directory ENTRY — a symlink or a hard link at
+ * `outPath` is replaced, never written through (a truncating `'w'` write goes
+ * through the inode every name of the file shares) — and `outPath` is never
+ * absent or half-written.
  */
 function replaceFile(outPath, content) {
-  const { dir, base } = parse(outPath);
-  const tmp = join(dir, `.${base}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`);
-  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  const tmp = writeTempBeside(outPath, content);
   try {
     renameSync(tmp, outPath);
   } catch (e) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // Already gone: nothing left behind.
-    }
+    removeTemp(tmp);
     throw e;
+  }
+}
+
+/**
+ * A plain `--write`: creates `outPath` only when NOTHING is at that name.
+ * Returns false, having written nothing there, when something is.
+ *
+ * The file is written to a temp file and published with `link()`, which
+ * refuses any existing entry at `outPath` — a dangling symlink included —
+ * with EEXIST, and never follows one. Not a `wx` open: on Windows a `wx`
+ * (CREATE_NEW) open over a DANGLING symlink follows it and creates the
+ * link's target, wherever it points (measured), which would put the pipeline
+ * outside the project. The published file is complete from its first moment.
+ *
+ * Where hard links are not supported (FAT/exFAT, some network shares), this
+ * falls back to an `lstat` check and a `wx` write. That leaves one race, on
+ * Windows only: a dangling symlink created at `outPath` between the check and
+ * the open would be followed. POSIX `O_EXCL` never follows a link.
+ */
+function createFile(outPath, content) {
+  const tmp = writeTempBeside(outPath, content);
+  try {
+    linkSync(tmp, outPath);
+    return true;
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') return false;
+    if (safeLstat(outPath) !== null) return false;
+    try {
+      writeFileSync(outPath, content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (e2) {
+      if (e2 instanceof Error && 'code' in e2 && e2.code === 'EEXIST') return false;
+      throw e2;
+    }
+  } finally {
+    removeTemp(tmp);
   }
 }
 
@@ -1796,19 +1857,9 @@ function cmdCiInit(argv) {
       );
     }
     replaceFile(outPath, rendered);
-  } else {
-    // Anything at the name — a DANGLING symlink included — is refused before
-    // the write: on Windows a `wx` (CREATE_NEW) open follows a dangling link
-    // and creates its target, wherever that is (measured). `wx` still backs
-    // this up: it fails with EEXIST on anything that appears in between, and
-    // on POSIX never follows a link at all.
-    if (safeLstat(outPath) !== null) refuseExisting();
-    try {
-      writeFileSync(outPath, rendered, { encoding: 'utf8', flag: 'wx' });
-    } catch (e) {
-      if (e instanceof Error && 'code' in e && e.code === 'EEXIST') refuseExisting();
-      throw e;
-    }
+  } else if (!createFile(outPath, rendered)) {
+    // Something is at the name — a dangling symlink included (see createFile).
+    refuseExisting();
   }
   process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
   if (targetArg === 'github') {
