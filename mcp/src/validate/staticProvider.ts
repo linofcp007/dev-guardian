@@ -492,7 +492,7 @@ function reachableVerdict(
   };
 }
 
-/** Design §7: the nearest reaching route with its method, resolved path and
+/** The design of record: the nearest reaching route with its method, resolved path and
  *  hop count; how many routes reach the file in total; and — only when the
  *  input actually supplied one — a confirmed anonymous exposure. Concrete
  *  facts, never a score. */

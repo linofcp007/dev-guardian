@@ -162,7 +162,7 @@ export async function runNuclei(opts) {
         targetUrl: opts.origin,
         outputPath,
         // The default envelope excludes intrusive templates entirely, and this
-        // tool exposes no flag that widens it (design §7).
+        // tool exposes no flag that widens it (the design of record).
         allowIntrusive: false,
         timeoutMs: NUCLEI_TIMEOUT_MS,
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),

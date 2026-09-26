@@ -1,5 +1,5 @@
 /**
- * The scan's global wall-clock ceiling (design §5).
+ * The scan's global wall-clock ceiling (the design of record).
  *
  * The per-request timeout bounds one probe; the request ceiling bounds how
  * many are planned. Neither bounds the total. A 750-request plan against a

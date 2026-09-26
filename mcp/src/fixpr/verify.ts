@@ -10,10 +10,10 @@
  * decoration. A version bump that trades CVE-A for CVE-B is not a fix, and
  * reporting it as one is exactly the "something that did not happen
  * acquiring the appearance of having happened" this whole project exists to
- * eliminate (design §4.1).
+ * eliminate (the design of record).
  *
  * **The two halves compare by different keys, on purpose, per an amendment
- * to design §4.1 and §10 (2026-08-17, after task-7-review.md's I4).**
+ * to the design of record (2026-08-17, after task-7-review.md's I4).**
  *
  * "Every target resolved" asks whether the SPECIFIC findings we set out to
  * fix are gone, and a target is resolved only when NO after-finding has its
@@ -186,7 +186,7 @@ export async function judgeTests(opts: {
   const { derived, worktreePath, timeoutMs } = opts;
 
   // No command derived: state the absence, touch nothing. Never inferred
-  // from silence downstream — design §4.2's last table row.
+  // from silence downstream — the design of record's last table row.
   if (derived === null) {
     return { outcome: 'not_run', command: null, origin: null, output_head: null };
   }

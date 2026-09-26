@@ -64787,7 +64787,7 @@ async function runNuclei(opts) {
     targetUrl: opts.origin,
     outputPath,
     // The default envelope excludes intrusive templates entirely, and this
-    // tool exposes no flag that widens it (design §7).
+    // tool exposes no flag that widens it (the design of record).
     allowIntrusive: false,
     timeoutMs: NUCLEI_TIMEOUT_MS,
     ...opts.signal === void 0 ? {} : { signal: opts.signal }
@@ -65105,7 +65105,7 @@ async function handler40(input, ctx, callMeta) {
     // The full inventory, not `plan.routes`: the burst's target is almost
     // always a POST, which the default read-only envelope drops from the
     // plan. `probe_rate_limit` is its own authorization for exactly that one
-    // route (design §6).
+    // route (the design of record).
     routes: snapshot.routes,
     origin: target.origin,
     // Shares the deadline's signal, so the burst is inside the ceiling too:
@@ -65622,7 +65622,7 @@ function buildSummary(input) {
     snapshot_stale: stale,
     graph: { files: graph.files.size, edges: edgeCount(graph), truncated: graph.truncated },
     // Verbatim and unfiltered. This is where "the languages with no rules"
-    // (design §9) is answered. Filtering it to the ones that look interesting
+    // (the design of record) is answered. Filtering it to the ones that look interesting
     // would be a coverage-status decision, which belongs to the provider and
     // only ever for the language a finding is actually in.
     snapshot_coverage: persisted.snapshot.coverage,

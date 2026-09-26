@@ -13,7 +13,7 @@
  * run could not see.
  *
  * Report-only, by design and without an opt-out: no suppression is ever
- * written and no `Finding.severity` is ever touched (design §1 non-goals). A
+ * written and no `Finding.severity` is ever touched (the design of record's non-goals). A
  * verdict is a judgment ABOUT a finding, so it lands in its own table
  * (`finding_validations`), never on the finding itself.
  *
@@ -29,7 +29,7 @@
  *                                correct state and not a failure. It still
  *                                must not read as "everything is fine".
  *
- * Staleness (design §8): the verdict's `tree_hash` is the SNAPSHOT's, not the
+ * Staleness (the design of record): the verdict's `tree_hash` is the SNAPSHOT's, not the
  * working tree's. A verdict derived from a snapshot of tree N describes tree
  * N no matter when it was computed; stamping the current hash instead would
  * make a verdict built on stale route data read as fresh forever — the
@@ -235,7 +235,7 @@ function languageOfPath(filePath) {
     return language === 'unknown' ? null : language;
 }
 /**
- * The liveness cross-reference (design §7): a persisted `scan_dast` finding
+ * The liveness cross-reference (the design of record): a persisted `scan_dast` finding
  * whose subcategory is `anonymous_exposure` fires only on a route the spec
  * declared auth-required and the live server served anonymously, so it is
  * evidence rather than inference.

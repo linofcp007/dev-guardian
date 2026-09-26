@@ -75,7 +75,7 @@ export const TOOL_CATEGORIES: Readonly<Record<string, string>> = {
  * The fingerprint delta between two scans — produced by
  * `delta.ts#compareFindings`. `new` = in `to` not `from`, `resolved` = in
  * `from` not `to`, `unchanged` = in both, computed over fingerprint sets
- * (design §7).
+ * (the design of record).
  */
 export interface FindingDelta {
   from_scan_id: string;
@@ -111,7 +111,7 @@ export interface FindingDelta {
 
 /**
  * One file's finding count — produced by `hotspots.ts#rankFiles`. A plain
- * count, not severity-weighted (design §12): a file with 11 low findings
+ * count, not severity-weighted (the design of record): a file with 11 low findings
  * outranks one with 2 criticals by design.
  */
 export interface Hotspot {
@@ -121,7 +121,7 @@ export interface Hotspot {
 
 /**
  * Discloses that a list shown to the user is shorter than its true total,
- * and why — design §8's rule that no cap is ever silent. Present only when
+ * and why — the design of record's rule that no cap is ever silent. Present only when
  * a cap actually cut something; both views render it when it is not null.
  */
 export interface TruncationNotice {

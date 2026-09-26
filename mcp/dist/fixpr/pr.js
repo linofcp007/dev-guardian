@@ -6,7 +6,7 @@
  * user's own GitHub remote — a branch push and a `gh pr create`.
  *
  * **Two known defects in `../tools/createGithubIssues.ts` are not repeated
- * here** (design §5), and both are binding requirements, not aspirations:
+ * here** (the design of record), and both are binding requirements, not aspirations:
  *
  *   1. `issueExistsByFingerprint` returns `false` on ANY non-completed `gh`
  *      outcome, so a network error reads as "does not exist" and creates a
@@ -43,7 +43,7 @@
  * no PR to find) falls back to reporting the worktree failure honestly,
  * unchanged from before this fix.
  *
- * **Of the eight failure paths in design §7, one leaves remote state**: `gh
+ * **Of the eight failure paths in the design of record, one leaves remote state**: `gh
  * pr create` failing after a successful push. That is the one case where a
  * `detail` that just says "creating the PR failed" is not good enough — the
  * user is left with a branch on their own remote and nothing explaining it.
@@ -105,7 +105,7 @@ import { runProcess } from '../runners/processRunner.js';
 export const EXCLUDE_GUARDIAN_DIR = ':(exclude,glob)**/.guardian/**';
 const BRANCH_PREFIX = 'dev-guardian/fix-';
 /**
- * Deterministic and namespaced (design §5): the same set of findings always
+ * Deterministic and namespaced (the design of record): the same set of findings always
  * produces the same branch, so a repeat run is recognisable as one instead
  * of silently piling up duplicates. The first parameter is accepted — not
  * just `key` — so a caller can pass a `FixGroup`'s three relevant fields
@@ -274,11 +274,11 @@ export async function openPr(opts) {
  * that branch meaningful (verification never reached `openPr`; `openPr`
  * itself refused, found a PR already `exists`ing, or found `no_changes` to
  * commit), the branch is still sitting in the project's own refs after the
- * worktree is gone. Left alone, design §6's "a dry run leaves nothing behind
+ * worktree is gone. Left alone, the design of record's "a dry run leaves nothing behind
  * at all — not a branch" is violated on every dry run, AND a later call for
  * the exact same group collides on that stray branch name in `createWorktree`
  * itself, before `prExists`'s own `--state all` idempotency check is ever
- * reached — design §5's whole idempotency mechanism, made unreachable.
+ * reached — the design of record's whole idempotency mechanism, made unreachable.
  *
  * Callers decide WHEN this is safe to call (never after `created`,
  * `push_failed` or `create_failed` — see `createFixPr.ts`'s own `keepBranch`

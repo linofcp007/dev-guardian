@@ -485,7 +485,7 @@ async function handler(
     // The full inventory, not `plan.routes`: the burst's target is almost
     // always a POST, which the default read-only envelope drops from the
     // plan. `probe_rate_limit` is its own authorization for exactly that one
-    // route (design §6).
+    // route (the design of record).
     routes: snapshot.routes,
     origin: target.origin,
     // Shares the deadline's signal, so the burst is inside the ceiling too:
@@ -769,7 +769,7 @@ function specPaths(
 /**
  * `DastFinding` carries `check` and `evidence_id`, which are not columns.
  * They go into `raw` alongside the evidence file's path so a stored finding
- * still points at its proof, per design §8 ("pointed at by the finding, not
+ * still points at its proof, per the design of record ("pointed at by the finding, not
  * inlined into the SQLite row").
  *
  * `evidenceDir` is null when this finding's evidence file was capped or

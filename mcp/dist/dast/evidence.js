@@ -2,7 +2,7 @@
  * Evidence records — the redacted request/response exchanges a DAST finding
  * points at.
  *
- * Design §8 puts raw evidence under `.guardian/reports/dast-<short-scan-id>/`
+ * The design of record puts raw evidence under `.guardian/reports/dast-<short-scan-id>/`
  * rather than inline in the SQLite row, so the finding stays small and
  * diffable while the proof stays readable.
  *

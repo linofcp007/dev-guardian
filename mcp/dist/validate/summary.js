@@ -13,7 +13,7 @@
  * about the inputs (the snapshot aged, the graph was cut, no DAST scan
  * existed), never about a finding.
  *
- * Design §9: "a verdict count without its `coverage_gaps` beside it is not an
+ * The design of record: "a verdict count without its `coverage_gaps` beside it is not an
  * answer." That is why the counts and the gaps are built in one place and
  * returned together, rather than left for a caller to remember to pair.
  */
@@ -65,7 +65,7 @@ export function buildSummary(input) {
         snapshot_stale: stale,
         graph: { files: graph.files.size, edges: edgeCount(graph), truncated: graph.truncated },
         // Verbatim and unfiltered. This is where "the languages with no rules"
-        // (design §9) is answered. Filtering it to the ones that look interesting
+        // (the design of record) is answered. Filtering it to the ones that look interesting
         // would be a coverage-status decision, which belongs to the provider and
         // only ever for the language a finding is actually in.
         snapshot_coverage: persisted.snapshot.coverage,
@@ -81,7 +81,7 @@ export function buildSummary(input) {
     };
 }
 /**
- * Which scan the validated findings came from — design §9's "a verdict count
+ * Which scan the validated findings came from — the design of record's "a verdict count
  * without its `coverage_gaps` beside it is not an answer", applied to the
  * batch's INPUT rather than its coverage.
  *
@@ -122,7 +122,7 @@ function edgeCount(graph) {
     return total;
 }
 /**
- * Age of the consulted DAST run in hours (design §11: "the liveness
+ * Age of the consulted DAST run in hours (the design of record: "the liveness
  * cross-reference is only as fresh as the last scan_dast run, and its age is
  * reported alongside it"). `null` rather than a fabricated number when the
  * stored timestamp cannot be parsed — an unparseable date is not an age of
