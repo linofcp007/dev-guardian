@@ -914,6 +914,10 @@ keeps working (migrations 004–011 are additive).
   for any of them. They are now `trivy:gradle` / `trivy:python` coverage
   gaps; a `pyproject.toml` or `requirements*.txt` that declares nothing is
   not.
+- **`bug_hunt` read a `build.gradle.kts` as Java** and ran `p/java` against a
+  Kotlin project, which read as a Java bug hunt with 0 findings. It is Kotlin,
+  as `detect_stack` says; a language no pack covers (Kotlin, Ruby) is named in
+  `languages_not_covered` with a warning.
 
 ### Security
 

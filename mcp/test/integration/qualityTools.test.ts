@@ -818,6 +818,56 @@ describe('bug_hunt', () => {
     expect(getArgs()).not.toContain('--config=p/javascript');
   });
 
+  // Final review I10: a `build.gradle.kts` (Kotlin build script) was read as
+  // Java — p/java ran against a Kotlin project and the run read as a Java
+  // bug hunt with 0 findings. Kotlin has no pack of any kind; say so.
+  it('a build.gradle.kts project is Kotlin: no p/java, and reported as not covered', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project); // no stack snapshot: the filesystem fallback decides
+    writeFileSync(join(project, 'build.gradle.kts'), 'plugins { kotlin("jvm") version "2.0.0" }\n', 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const r = (await getTool('bug_hunt').handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    )) as { ok: true; languages_not_covered?: string[]; warnings?: string[] };
+
+    expect(getArgs()).not.toContain('--config=p/java');
+    expect(r.languages_not_covered).toEqual(['kotlin']);
+    expect(r.warnings?.join('\n')).toMatch(/kotlin/i);
+  });
+
+  it('says so by default too: the always-on local packs cover no Kotlin either', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    plugin.storage.stack.insert({ project_path: project, snapshot: fakeStackSnapshot(['kotlin', 'java']) });
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    captureArgs(semgrepFx());
+
+    const r = (await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      languages_not_covered?: string[];
+    };
+    expect(r.languages_not_covered).toEqual(['kotlin']);
+  });
+
+  it('a build.gradle project is Java: it keeps p/java, and nothing is reported not covered', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    writeFileSync(join(project, 'build.gradle'), "plugins { id 'java' }\n", 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const { getArgs } = captureArgs(semgrepFx());
+
+    const r = (await getTool('bug_hunt').handler(
+      { project_path: project, force: true, include_language_packs: true },
+      plugin,
+    )) as { ok: true; languages_not_covered?: string[] };
+
+    expect(getArgs()).toContain('--config=p/java');
+    expect(r.languages_not_covered).toBeUndefined();
+  });
+
   it("runs the project's registered custom Semgrep rules", async () => {
     // The reading side of register_custom_rules did not exist until
     // 2026-08-18: the tool persisted paths and its description promised

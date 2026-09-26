@@ -46598,9 +46598,24 @@ function fallbackLanguages(projectPath) {
   if (has("pyproject.toml") || has("requirements.txt") || has("setup.py")) {
     languages.push("python");
   }
-  if (has("pom.xml") || has("build.gradle") || has("build.gradle.kts")) languages.push("java");
+  if (has("pom.xml") || has("build.gradle")) languages.push("java");
+  if (has("build.gradle.kts")) languages.push("kotlin");
   if (has("go.mod")) languages.push("go");
   return languages;
+}
+var LANGUAGES_WITH_BUG_RULES = /* @__PURE__ */ new Set([
+  "javascript",
+  "typescript",
+  "python",
+  "go",
+  "java",
+  "csharp",
+  "php",
+  "rust",
+  ...LANGUAGE_PACKS.keys()
+]);
+function languagesNotCovered(languages) {
+  return [...new Set(languages.filter((l) => !LANGUAGES_WITH_BUG_RULES.has(l)))];
 }
 function detectLanguages(plugin, projectPath) {
   const snapshotLanguages = plugin.storage.stack.getLatestForProject(projectPath)?.snapshot.languages;
@@ -46743,7 +46758,7 @@ registerToolModule(
     },
     // The pack choice is recorded on the scan row (meta, via extras) so
     // create_fix_pr can re-scan a fix with the SAME packs that found it.
-    invoke: async (input, ctx) => recordPackChoice(input, await invokeBugHunt(input, ctx))
+    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await invokeBugHunt(input, ctx)))
   })
 );
 async function invokeBugHunt(input, ctx) {
@@ -46933,6 +46948,18 @@ async function invokeBugHuntOnScope(args) {
   });
   missing_tools.push("semgrep");
   return finish("completed");
+}
+function reportUncoveredLanguages(ctx, invocation) {
+  const uncovered = languagesNotCovered(detectLanguages(ctx.plugin, ctx.rulesProjectPath));
+  if (uncovered.length === 0) return invocation;
+  return {
+    ...invocation,
+    warnings: [
+      ...invocation.warnings ?? [],
+      `No bug_hunt pack covers ${uncovered.join(", ")} (no local bugfix rules, no language pack): that code was not bug-hunted beyond whatever registry rules happen to target it, so a quiet result says nothing about it.`
+    ],
+    extras: { ...invocation.extras ?? {}, languages_not_covered: uncovered }
+  };
 }
 function recordPackChoice(input, invocation) {
   return {
