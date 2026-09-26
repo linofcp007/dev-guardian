@@ -48933,6 +48933,166 @@ var import_yaml5 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync23, readFileSync as readFileSync20, readdirSync as readdirSync14, statSync as statSync9 } from "node:fs";
 import { dirname as dirname15, join as join33, relative as relative14, sep as sep10 } from "node:path";
 
+// src/history/runNames.ts
+var TRIVY_FS = "trivy:fs";
+var TRIVY_CONFIG = "trivy:config";
+var SKILL_OSV = "guardian-scanskill:osv";
+function trivyFsKey(ecosystem) {
+  return `${TRIVY_FS}:${ecosystem}`;
+}
+var TRIVY_FS_KEYS = [TRIVY_FS, ...MANIFEST_ECOSYSTEMS.map(trivyFsKey)];
+var SKILL_TOOL = "guardian-scanskill";
+var SKILL_OSV_RULE = "osv-vulnerable-dependency";
+function findingKey(f) {
+  if (f.tool === "trivy") {
+    if (f.subcategory === "secret") return TRIVY_FS;
+    if (f.category !== "license" && f.subcategory !== "cve") return TRIVY_CONFIG;
+    const eco = f.file_path === void 0 ? null : manifestEcosystemOfTarget(f.file_path);
+    return eco === null ? TRIVY_FS : trivyFsKey(eco);
+  }
+  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
+  return f.tool;
+}
+var scanner = (...measures) => ({ measures });
+var RUN_NAMES = {
+  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
+  semgrep: scanner("semgrep"),
+  "semgrep-wp": scanner("semgrep"),
+  bandit: scanner("bandit"),
+  "security-code-scan": scanner("security-code-scan"),
+  // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
+  "dotnet-analyzers": scanner("dotnet-analyzers"),
+  // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
+  "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
+  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
+  gitleaks: scanner("gitleaks"),
+  "gitleaks-working-tree": scanner("gitleaks"),
+  // Trivy, by pass.
+  trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
+  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
+  // the image's own misconfigurations.
+  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
+  "trivy-config": scanner(TRIVY_CONFIG),
+  "trivy-dockerfile": scanner(TRIVY_CONFIG),
+  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
+  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+  // missing, never ok, so each is a gap in exactly its own ecosystem's
+  // dependency findings: an older scan's NuGet CVE is not re-measured when
+  // packages.lock.json has gone, and an npm CVE beside it still resolves.
+  // (Unlisted, the name would fall back to `trivy`'s not-ok keys — every
+  // Trivy finding, IaC misconfigurations included.) One per
+  // MANIFEST_ECOSYSTEMS entry: the exhaustiveness test holds the two equal.
+  "trivy:npm": scanner(trivyFsKey("npm")),
+  "trivy:composer": scanner(trivyFsKey("composer")),
+  "trivy:dotnet": scanner(trivyFsKey("dotnet")),
+  "trivy:rubygems": scanner(trivyFsKey("rubygems")),
+  "trivy:cargo": scanner(trivyFsKey("cargo")),
+  "trivy:gradle": scanner(trivyFsKey("gradle")),
+  "trivy:python": scanner(trivyFsKey("python")),
+  // deps_audit's native auditors, recorded by command: `npm audit`,
+  // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
+  // `dotnet list package --vulnerable`, whose findings say
+  // `dotnet-list-package`.
+  npm: scanner("npm-audit"),
+  "pip-audit": scanner("pip-audit"),
+  dotnet: scanner("dotnet-list-package"),
+  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
+  // budgets against jscpd's and radon's own reports, so either one not
+  // running ok leaves the budget findings unmeasured too.
+  eslint: scanner("eslint"),
+  ruff: scanner("ruff"),
+  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
+  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
+  staticcheck: scanner("staticcheck"),
+  budgets: scanner("budgets"),
+  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
+  // compose-file hardening checks.
+  hadolint: scanner("hadolint"),
+  "docker-compose": scanner("docker-compose"),
+  // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
+  // existing — independent of Trivy and of each other.
+  zizmor: scanner("zizmor"),
+  actionlint: scanner("actionlint"),
+  // scan_wordpress's PHPCS pass, and its missing_tools name.
+  "phpcs-wpcs": scanner("phpcs"),
+  phpcs: scanner("phpcs"),
+  // scan_dast: the own engine, its partial-run markers, and nuclei.
+  "guardian-dast": scanner("dast"),
+  "guardian-dast:unanswered": scanner("dast"),
+  "guardian-dast:wall-clock": scanner("dast"),
+  // The surface it probed was partial (a file Semgrep only partly parsed):
+  // routes the map could not read were never probed.
+  "guardian-dast:partial-surface": scanner("dast"),
+  nuclei: scanner("nuclei"),
+  // WordPress.
+  wpscan: scanner("wpscan"),
+  wp_plugin_check: scanner(),
+  // a findings-less lookup
+  "wp-cli": scanner(),
+  // wp_audit, wp_cron_audit: report through meta
+  "http-probe": scanner(),
+  // wp_rest_audit: reports through meta
+  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
+  "wordfence-feed": scanner("wordfence"),
+  "wp-plugin-api": scanner("wp-plugin-api"),
+  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
+  // (real matching/checking happened), but some installed components
+  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
+  // unlisted `base:suffix` would inherit `base`'s measures via
+  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
+  // requires an exact literal key, so both get their own entry.
+  "wordfence-feed:unmatched-version": scanner("wordfence"),
+  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
+  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
+  // also audit_executive's entries for those sub-tools.
+  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
+  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
+  dotnet_target_framework_check: scanner(),
+  // compliance_check: its policy-document walk, and the RGPD Semgrep pack
+  // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
+  "policy-docs": scanner(),
+  "semgrep-rgpd": scanner("semgrep"),
+  // scan_skill.
+  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
+  "guardian-scanskill:yara": scanner(SKILL_TOOL),
+  "guardian-scanskill:taint": scanner(SKILL_TOOL),
+  "osv.dev": scanner(SKILL_OSV),
+  // audit_agent_config: its own static checks of the agent workspace config.
+  "agent-audit": scanner("agent-audit"),
+  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
+  // sub-scan's own bookkeeping instead whenever the row still exists; these
+  // speak for a sub-tool that failed before it wrote one.
+  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
+  deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
+  compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
+  scan_wordpress: scanner("semgrep", "gitleaks", ...TRIVY_FS_KEYS, "phpcs"),
+  // security_scan_full: its own entry for a child that threw, answered an
+  // error, or is not registered — the child wrote no bookkeeping of its own.
+  // (An audit reads these through the security_scan_full sub-scan.)
+  scan_sast: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers"),
+  scan_secrets: scanner("gitleaks"),
+  scan_deps: scanner(...TRIVY_FS_KEYS),
+  scan_iac: scanner(TRIVY_CONFIG, "zizmor", "actionlint"),
+  // generate_sbom: the producer of an SBOM row, which holds no findings.
+  syft: scanner()
+};
+var BY_NAME = new Map(Object.entries(RUN_NAMES));
+function runNameEntry(name) {
+  const listed = BY_NAME.get(name);
+  if (listed !== void 0) return listed;
+  const colon = name.indexOf(":");
+  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
+}
+function keysOfRun(name, ok) {
+  const entry = runNameEntry(name);
+  if (entry === null) return null;
+  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
+}
+var KNOWN_FINDING_KEYS = new Set(
+  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
+);
+
 // src/history/scanRoles.ts
 var SCAN_TYPE_ROLE = {
   // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
@@ -49024,6 +49184,341 @@ function isScopedScan(scan2) {
   if (meta === void 0) return false;
   if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
   return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
+}
+
+// src/history/runCompare.ts
+var COMPLETE_COMPARISON = {
+  isNotRemeasured: () => false,
+  isNotPreviouslyMeasured: () => false,
+  notRunByTo: () => null,
+  notRunByFrom: () => null,
+  notMeasuredByTo: [],
+  gapsByTo: [],
+  notMeasuredByFrom: []
+};
+function childrenOf(storage, parent) {
+  const listed = parent.meta?.["child_scans"];
+  if (!Array.isArray(listed)) return [];
+  const out = [];
+  for (const entry of listed) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry;
+    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
+    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
+    if (type !== null) out.push({ type, row });
+  }
+  return out;
+}
+function usableChild(c3) {
+  return c3.row !== null && c3.row.status === "completed";
+}
+function auditBookkeeping(storage, audit) {
+  const ids2 = audit.meta?.["sub_scan_ids"];
+  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
+  const byTool = ids2;
+  const tools_run = [];
+  const missing_tools = [...audit.missing_tools];
+  for (const entry of audit.tools_run) {
+    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
+    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
+    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
+      tools_run.push(entry);
+      continue;
+    }
+    tools_run.push(...sub.tools_run);
+    missing_tools.push(...sub.missing_tools);
+  }
+  return { tools_run, missing_tools };
+}
+function bookkeepingOf(storage, scan2) {
+  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
+}
+function keyVerdict(book, key) {
+  let named = false;
+  let anyOk = false;
+  let anyFailed = false;
+  const okNames = /* @__PURE__ */ new Set();
+  for (const run of book.tools_run) {
+    const ok = run.status === "ok";
+    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
+    named = true;
+    if (ok) {
+      anyOk = true;
+      okNames.add(run.name);
+    } else if (run.status === "failed") {
+      anyFailed = true;
+    }
+  }
+  let missing = false;
+  for (const name of book.missing_tools) {
+    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
+    named = true;
+    if (!okNames.has(name)) missing = true;
+  }
+  if (named) {
+    if (anyFailed || missing) return "unmeasured";
+    return anyOk ? "measured" : "not_run";
+  }
+  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
+  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
+}
+function isEmptyBook(book) {
+  return book.tools_run.length === 0 && book.missing_tools.length === 0;
+}
+function bookkeepingVerdict(book, f) {
+  if (isEmptyBook(book)) return "measured";
+  const verdict = keyVerdict(book, findingKey(f));
+  return verdict === "measured" && partlyParsedRunOf(book, f) !== null ? "unmeasured" : verdict;
+}
+function partlyParsedRunOf(book, f) {
+  if (f.file_path === void 0) return null;
+  const file = f.file_path.replace(/\\/g, "/");
+  const key = findingKey(f);
+  const run = book.tools_run.find(
+    (r) => r.status === "ok" && (r.partially_parsed ?? []).some((p) => p.file === file) && (keysOfRun(r.name, true)?.includes(key) ?? false)
+  );
+  return run === void 0 ? null : { run, file };
+}
+function gapNamesFor(book, key) {
+  const okNames = new Set(book.tools_run.filter((r) => r.status === "ok").map((r) => r.name));
+  const names = [];
+  const add = (name) => {
+    if (!names.includes(name)) names.push(name);
+  };
+  for (const run of book.tools_run) {
+    if (run.status === "failed" && (keysOfRun(run.name, false)?.includes(key) ?? false)) add(run.name);
+  }
+  for (const name of book.missing_tools) {
+    if (!okNames.has(name) && (keysOfRun(name, false)?.includes(key) ?? false)) add(name);
+  }
+  return names;
+}
+function openGapFor(holder, asked, f) {
+  if (isEmptyBook(asked)) return null;
+  const key = findingKey(f);
+  const verdict = keyVerdict(asked, key);
+  if (verdict === "not_run") return null;
+  if (verdict === "unmeasured") {
+    const names = gapNamesFor(asked, key);
+    return names.length > 0 ? names.join(", ") : key;
+  }
+  const partly = partlyParsedRunOf(asked, f);
+  if (partly !== null) return `${partly.run.name} (partly parsed: ${partly.file})`;
+  return targetNotRun(holder, asked, f);
+}
+function mayCarryPast(holder, chain) {
+  if (chain.length === 0 || chain.some(isEmptyBook)) return false;
+  const measuresKeyOk = (run, key) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
+  const stillOpen = (asked, key) => {
+    const verdict = keyVerdict(asked, key);
+    if (verdict === "unmeasured") return true;
+    if (verdict === "not_run") return false;
+    if (asked.tools_run.some((r) => measuresKeyOk(r, key) && (r.partially_parsed ?? []).length > 0)) return true;
+    return holder.tools_run.some(
+      (h2) => measuresKeyOk(h2, key) && !asked.tools_run.some((a2) => measuresKeyOk(a2, key) && sameTarget(targetOf(a2), targetOf(h2)))
+    );
+  };
+  const produced = /* @__PURE__ */ new Set();
+  let unknownProducer = isEmptyBook(holder);
+  if (unknownProducer) for (const key of KNOWN_FINDING_KEYS) produced.add(key);
+  for (const run of holder.tools_run) {
+    if (run.status === "skipped") continue;
+    const keys = keysOfRun(run.name, run.status === "ok");
+    if (keys === null) unknownProducer = true;
+    else for (const key of keys) produced.add(key);
+  }
+  if (unknownProducer && chain.every((a2) => computeCoverage(a2.tools_run, a2.missing_tools) !== "full")) return true;
+  for (const key of produced) {
+    if (chain.every((asked) => stillOpen(asked, key))) return true;
+  }
+  return false;
+}
+function partlyParsedNames(book) {
+  return book.tools_run.filter((run) => run.status === "ok" && (run.partially_parsed ?? []).length > 0).map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(", ")})`);
+}
+function typeResolver(storage, scan2) {
+  if (isOrchestratedFullScan(scan2)) {
+    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
+    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
+  }
+  if (isScriptEraFullScan(scan2)) {
+    return (f) => {
+      const slot = scriptEraSlotOfFinding(f);
+      if (slot === "containers") return "iac";
+      return slot === "security_full" ? null : slot;
+    };
+  }
+  return () => scan2.scan_type;
+}
+function booksOf(storage, scan2) {
+  if (!isOrchestratedFullScan(scan2)) {
+    const book = bookkeepingOf(storage, scan2);
+    return () => book;
+  }
+  const children = childrenOf(storage, scan2);
+  return (fType) => {
+    if (fType === null) return scan2;
+    const child = children.find((c3) => c3.type === fType);
+    return child !== void 0 && usableChild(child) ? child.row : null;
+  };
+}
+var PROJECT_FILES = "project files";
+function targetOf(run) {
+  if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
+  return run.target !== void 0 && run.target !== "" ? { pass: run.name, ref: run.target } : { pass: run.name };
+}
+function sameTarget(a2, b) {
+  if (a2.pass !== b.pass) return false;
+  return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
+}
+function passLabel(run, target) {
+  return target.ref === void 0 ? run.name : `${run.name} (${target.ref})`;
+}
+function targetNotRun(holder, asked, f) {
+  if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
+  const key = findingKey(f);
+  const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
+  for (const run of holder.tools_run) {
+    if (!measuresKeyOk(run)) continue;
+    const target = targetOf(run);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target))) return passLabel(run, target);
+  }
+  return null;
+}
+function answerFor(holder, asked, f) {
+  if (asked === null) return { verdict: "unmeasured", notRun: null };
+  const verdict = bookkeepingVerdict(asked, f);
+  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
+  const pass2 = targetNotRun(holder, asked, f);
+  return pass2 === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass2 };
+}
+function notMeasured(storage, scan2, scope = "any") {
+  const out = [];
+  const add = (x) => {
+    if (!out.includes(x)) out.push(x);
+  };
+  const gapsOf = (book, wholeType) => {
+    if (computeCoverage(book.tools_run, book.missing_tools) === "none") {
+      add(wholeType);
+      return;
+    }
+    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
+    for (const name of names) {
+      if (scope === "gaps") {
+        if (isGap(book, name)) add(name);
+        continue;
+      }
+      const keys = keysOfRun(name, false);
+      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
+    }
+    for (const name of partlyParsedNames(book)) add(name);
+  };
+  if (!isOrchestratedFullScan(scan2)) {
+    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
+    return out;
+  }
+  for (const child of childrenOf(storage, scan2)) {
+    if (!usableChild(child)) add(child.type);
+    else gapsOf(child.row, child.type);
+  }
+  return out;
+}
+function isGap(book, name) {
+  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
+  return as("failed") || book.missing_tools.includes(name) && !as("ok");
+}
+function compareScansFor(storage, from, to) {
+  const typeOfFrom = typeResolver(storage, from);
+  const typeOfTo = typeResolver(storage, to);
+  const fromBooks = booksOf(storage, from);
+  const toBooks = booksOf(storage, to);
+  const inTo = (f) => {
+    const t = typeOfFrom(f);
+    return answerFor(fromBooks(t), toBooks(t), f);
+  };
+  const inFrom = (f) => {
+    const t = typeOfTo(f);
+    return answerFor(toBooks(t), fromBooks(t), f);
+  };
+  return {
+    // Anything short of measured: the newer scan cannot resolve what it did
+    // not look for, whether the scanner failed or did not run.
+    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
+    // Only a gap: a reference that did not run the scanner at all looked at
+    // everything it had to, and the finding is new.
+    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
+    notRunByTo: (f) => inTo(f).notRun,
+    notRunByFrom: (f) => inFrom(f).notRun,
+    notMeasuredByTo: notMeasured(storage, to, "any"),
+    gapsByTo: notMeasured(storage, to, "gaps"),
+    notMeasuredByFrom: notMeasured(storage, from, "gaps")
+  };
+}
+function classifyDiff(check2, fromFindings, toFindings) {
+  const fromIndex = indexFindings(fromFindings);
+  const toIndex = indexFindings(toFindings);
+  const out = {
+    new: [],
+    resolved: [],
+    unchanged: [],
+    notRemeasured: [],
+    notPreviouslyMeasured: [],
+    notRunByTo: [],
+    notRunByFrom: []
+  };
+  const note = (list2, name) => {
+    if (name !== null && !list2.includes(name)) list2.push(name);
+  };
+  for (const f of toFindings) {
+    if (fromIndex.has(f)) out.unchanged.push(f);
+    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
+    else {
+      out.new.push(f);
+      note(out.notRunByFrom, check2.notRunByFrom(f));
+    }
+  }
+  for (const f of fromFindings) {
+    if (toIndex.has(f)) continue;
+    if (check2.isNotRemeasured(f)) {
+      out.notRemeasured.push(f);
+      note(out.notRunByTo, check2.notRunByTo(f));
+    } else out.resolved.push(f);
+  }
+  return out;
+}
+function measurementGaps(check2, d) {
+  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
+  return {
+    byTo,
+    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
+    byFrom: check2.notMeasuredByFrom,
+    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
+  };
+}
+function describeMeasurementGaps(from, to, gaps) {
+  const parts = [];
+  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
+  if (failedByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not measure ${failedByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+    );
+  }
+  if (gaps.notRunByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
+    );
+  }
+  if (gaps.byFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
+    );
+  }
+  if (gaps.notRunByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 // src/history/openSet.ts
@@ -49161,6 +49656,41 @@ function slotSources(storage, projectPath, slot) {
   }
   return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
+var CARRY_WALK_LIMIT = 200;
+function carryForward(storage, projectPath, slot, source, isSuppressed) {
+  const chain = [slotView(source, slot)];
+  const out = [];
+  let walked = 0;
+  for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
+      limit: PAGE,
+      offset,
+      beforeScanId: source.scan_id
+    });
+    for (const scan2 of page) {
+      if (walked >= CARRY_WALK_LIMIT) break;
+      if (isScopedScan(scan2)) continue;
+      const coverage = judge(scan2, slot);
+      if (coverage === null || coverage === "none") continue;
+      walked += 1;
+      const holder = slotView(scan2, slot);
+      if (mayCarryPast(holder, chain)) {
+        const carried = [];
+        for (const finding4 of storage.findings.listByScan(scan2.scan_id)) {
+          if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
+          const gaps = chain.map((asked) => openGapFor(holder, asked, finding4));
+          const gap = gaps[0];
+          if (gap === void 0 || gap === null || gaps.some((g) => g === null)) continue;
+          carried.push({ finding: finding4, gap });
+        }
+        if (carried.length > 0) out.push({ slot, scan: scan2, coverage, findings: carried });
+      }
+      chain.push(holder);
+    }
+    if (page.length < PAGE) break;
+  }
+  return out;
+}
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
   const picked = [];
@@ -49177,10 +49707,19 @@ function openSetForProject(storage, projectPath, opts = {}) {
       considered.set(p.scan.scan_id, p.scan);
     }
   }
+  const carried = [];
+  for (const p of picked) {
+    if (p.slot === "security_full" || p.scan.scan_type !== p.slot) continue;
+    for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, isSuppressed)) {
+      carried.push(c3);
+      considered.set(c3.scan.scan_id, c3.scan);
+    }
+  }
   const order = storage.scans.sortNewestFirst([...considered.keys()]);
   const rank = new Map(order.map((id, i2) => [id, i2]));
   const rankOf = (scanId) => rank.get(scanId) ?? order.length;
   picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
   const byScan = /* @__PURE__ */ new Map();
   const findings = [];
   const sources = [];
@@ -49207,6 +49746,28 @@ function openSetForProject(storage, projectPath, opts = {}) {
       findings: contributed
     });
   }
+  for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
+    const seen = indexFindings(findings);
+    const gaps = [];
+    let contributed = 0;
+    for (const { finding: finding4, gap } of rows) {
+      if (seen.has(finding4)) continue;
+      findings.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
+      contributed += 1;
+      if (!gaps.includes(gap)) gaps.push(gap);
+    }
+    if (contributed === 0) continue;
+    sources.push({
+      slot,
+      scan_id: scan2.scan_id,
+      scan_type: scan2.scan_type,
+      started_at: scan2.started_at,
+      finished_at: scan2.finished_at,
+      coverage: coverage2,
+      findings: contributed,
+      carried_for: gaps
+    });
+  }
   findings.sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
@@ -49215,6 +49776,10 @@ function openSetForProject(storage, projectPath, opts = {}) {
   const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped2.count > 0 ? "partial" : "full";
   const bookkeeping = [
     ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...sources.filter((src) => src.carried_for !== void 0).flatMap((src) => {
+      const scan2 = considered.get(src.scan_id);
+      return scan2 === void 0 ? [] : [{ scan_id: src.scan_id, slot: src.slot, ...slotView(scan2, src.slot) }];
+    }),
     ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
   ];
   return {
@@ -52391,443 +52956,6 @@ function summariseK6(root) {
 }
 function failDomain7(code, message3) {
   return { ok: false, error: { code, message: message3 } };
-}
-
-// src/history/runNames.ts
-var TRIVY_FS = "trivy:fs";
-var TRIVY_CONFIG = "trivy:config";
-var SKILL_OSV = "guardian-scanskill:osv";
-function trivyFsKey(ecosystem) {
-  return `${TRIVY_FS}:${ecosystem}`;
-}
-var TRIVY_FS_KEYS = [TRIVY_FS, ...MANIFEST_ECOSYSTEMS.map(trivyFsKey)];
-var SKILL_TOOL = "guardian-scanskill";
-var SKILL_OSV_RULE = "osv-vulnerable-dependency";
-function findingKey(f) {
-  if (f.tool === "trivy") {
-    if (f.subcategory === "secret") return TRIVY_FS;
-    if (f.category !== "license" && f.subcategory !== "cve") return TRIVY_CONFIG;
-    const eco = f.file_path === void 0 ? null : manifestEcosystemOfTarget(f.file_path);
-    return eco === null ? TRIVY_FS : trivyFsKey(eco);
-  }
-  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
-  return f.tool;
-}
-var scanner = (...measures) => ({ measures });
-var RUN_NAMES = {
-  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
-  semgrep: scanner("semgrep"),
-  "semgrep-wp": scanner("semgrep"),
-  bandit: scanner("bandit"),
-  "security-code-scan": scanner("security-code-scan"),
-  // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
-  "dotnet-analyzers": scanner("dotnet-analyzers"),
-  // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
-  "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
-  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
-  gitleaks: scanner("gitleaks"),
-  "gitleaks-working-tree": scanner("gitleaks"),
-  // Trivy, by pass.
-  trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
-  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
-  // the image's own misconfigurations.
-  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
-  "trivy-config": scanner(TRIVY_CONFIG),
-  "trivy-dockerfile": scanner(TRIVY_CONFIG),
-  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
-  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
-  // missing, never ok, so each is a gap in exactly its own ecosystem's
-  // dependency findings: an older scan's NuGet CVE is not re-measured when
-  // packages.lock.json has gone, and an npm CVE beside it still resolves.
-  // (Unlisted, the name would fall back to `trivy`'s not-ok keys — every
-  // Trivy finding, IaC misconfigurations included.) One per
-  // MANIFEST_ECOSYSTEMS entry: the exhaustiveness test holds the two equal.
-  "trivy:npm": scanner(trivyFsKey("npm")),
-  "trivy:composer": scanner(trivyFsKey("composer")),
-  "trivy:dotnet": scanner(trivyFsKey("dotnet")),
-  "trivy:rubygems": scanner(trivyFsKey("rubygems")),
-  "trivy:cargo": scanner(trivyFsKey("cargo")),
-  "trivy:gradle": scanner(trivyFsKey("gradle")),
-  "trivy:python": scanner(trivyFsKey("python")),
-  // deps_audit's native auditors, recorded by command: `npm audit`,
-  // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
-  // `dotnet list package --vulnerable`, whose findings say
-  // `dotnet-list-package`.
-  npm: scanner("npm-audit"),
-  "pip-audit": scanner("pip-audit"),
-  dotnet: scanner("dotnet-list-package"),
-  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
-  // budgets against jscpd's and radon's own reports, so either one not
-  // running ok leaves the budget findings unmeasured too.
-  eslint: scanner("eslint"),
-  ruff: scanner("ruff"),
-  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
-  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
-  staticcheck: scanner("staticcheck"),
-  budgets: scanner("budgets"),
-  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
-  // compose-file hardening checks.
-  hadolint: scanner("hadolint"),
-  "docker-compose": scanner("docker-compose"),
-  // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
-  // existing — independent of Trivy and of each other.
-  zizmor: scanner("zizmor"),
-  actionlint: scanner("actionlint"),
-  // scan_wordpress's PHPCS pass, and its missing_tools name.
-  "phpcs-wpcs": scanner("phpcs"),
-  phpcs: scanner("phpcs"),
-  // scan_dast: the own engine, its partial-run markers, and nuclei.
-  "guardian-dast": scanner("dast"),
-  "guardian-dast:unanswered": scanner("dast"),
-  "guardian-dast:wall-clock": scanner("dast"),
-  // The surface it probed was partial (a file Semgrep only partly parsed):
-  // routes the map could not read were never probed.
-  "guardian-dast:partial-surface": scanner("dast"),
-  nuclei: scanner("nuclei"),
-  // WordPress.
-  wpscan: scanner("wpscan"),
-  wp_plugin_check: scanner(),
-  // a findings-less lookup
-  "wp-cli": scanner(),
-  // wp_audit, wp_cron_audit: report through meta
-  "http-probe": scanner(),
-  // wp_rest_audit: reports through meta
-  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
-  "wordfence-feed": scanner("wordfence"),
-  "wp-plugin-api": scanner("wp-plugin-api"),
-  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
-  // (real matching/checking happened), but some installed components
-  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
-  // unlisted `base:suffix` would inherit `base`'s measures via
-  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
-  // requires an exact literal key, so both get their own entry.
-  "wordfence-feed:unmatched-version": scanner("wordfence"),
-  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
-  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
-  // also audit_executive's entries for those sub-tools.
-  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
-  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
-  dotnet_target_framework_check: scanner(),
-  // compliance_check: its policy-document walk, and the RGPD Semgrep pack
-  // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
-  "policy-docs": scanner(),
-  "semgrep-rgpd": scanner("semgrep"),
-  // scan_skill.
-  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
-  "guardian-scanskill:yara": scanner(SKILL_TOOL),
-  "guardian-scanskill:taint": scanner(SKILL_TOOL),
-  "osv.dev": scanner(SKILL_OSV),
-  // audit_agent_config: its own static checks of the agent workspace config.
-  "agent-audit": scanner("agent-audit"),
-  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
-  // sub-scan's own bookkeeping instead whenever the row still exists; these
-  // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
-  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
-  deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
-  compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
-  scan_wordpress: scanner("semgrep", "gitleaks", ...TRIVY_FS_KEYS, "phpcs"),
-  // security_scan_full: its own entry for a child that threw, answered an
-  // error, or is not registered — the child wrote no bookkeeping of its own.
-  // (An audit reads these through the security_scan_full sub-scan.)
-  scan_sast: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers"),
-  scan_secrets: scanner("gitleaks"),
-  scan_deps: scanner(...TRIVY_FS_KEYS),
-  scan_iac: scanner(TRIVY_CONFIG, "zizmor", "actionlint"),
-  // generate_sbom: the producer of an SBOM row, which holds no findings.
-  syft: scanner()
-};
-var BY_NAME = new Map(Object.entries(RUN_NAMES));
-function runNameEntry(name) {
-  const listed = BY_NAME.get(name);
-  if (listed !== void 0) return listed;
-  const colon = name.indexOf(":");
-  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
-}
-function keysOfRun(name, ok) {
-  const entry = runNameEntry(name);
-  if (entry === null) return null;
-  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
-}
-var KNOWN_FINDING_KEYS = new Set(
-  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
-);
-
-// src/history/runCompare.ts
-var COMPLETE_COMPARISON = {
-  isNotRemeasured: () => false,
-  isNotPreviouslyMeasured: () => false,
-  notRunByTo: () => null,
-  notRunByFrom: () => null,
-  notMeasuredByTo: [],
-  gapsByTo: [],
-  notMeasuredByFrom: []
-};
-function childrenOf(storage, parent) {
-  const listed = parent.meta?.["child_scans"];
-  if (!Array.isArray(listed)) return [];
-  const out = [];
-  for (const entry of listed) {
-    if (entry === null || typeof entry !== "object") continue;
-    const e = entry;
-    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
-    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
-    if (type !== null) out.push({ type, row });
-  }
-  return out;
-}
-function usableChild(c3) {
-  return c3.row !== null && c3.row.status === "completed";
-}
-function auditBookkeeping(storage, audit) {
-  const ids2 = audit.meta?.["sub_scan_ids"];
-  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
-  const byTool = ids2;
-  const tools_run = [];
-  const missing_tools = [...audit.missing_tools];
-  for (const entry of audit.tools_run) {
-    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
-    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
-    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
-      tools_run.push(entry);
-      continue;
-    }
-    tools_run.push(...sub.tools_run);
-    missing_tools.push(...sub.missing_tools);
-  }
-  return { tools_run, missing_tools };
-}
-function bookkeepingOf(storage, scan2) {
-  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
-}
-function keyVerdict(book, key) {
-  let named = false;
-  let anyOk = false;
-  let anyFailed = false;
-  const okNames = /* @__PURE__ */ new Set();
-  for (const run of book.tools_run) {
-    const ok = run.status === "ok";
-    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
-    named = true;
-    if (ok) {
-      anyOk = true;
-      okNames.add(run.name);
-    } else if (run.status === "failed") {
-      anyFailed = true;
-    }
-  }
-  let missing = false;
-  for (const name of book.missing_tools) {
-    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
-    named = true;
-    if (!okNames.has(name)) missing = true;
-  }
-  if (named) {
-    if (anyFailed || missing) return "unmeasured";
-    return anyOk ? "measured" : "not_run";
-  }
-  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
-  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
-}
-function bookkeepingVerdict(book, f) {
-  if (book.tools_run.length === 0 && book.missing_tools.length === 0) return "measured";
-  const verdict = keyVerdict(book, findingKey(f));
-  return verdict === "measured" && inPartlyParsedFile(book, f) ? "unmeasured" : verdict;
-}
-function inPartlyParsedFile(book, f) {
-  if (f.file_path === void 0) return false;
-  const file = f.file_path.replace(/\\/g, "/");
-  const key = findingKey(f);
-  return book.tools_run.some(
-    (run) => run.status === "ok" && (run.partially_parsed ?? []).some((p) => p.file === file) && (keysOfRun(run.name, true)?.includes(key) ?? false)
-  );
-}
-function partlyParsedNames(book) {
-  return book.tools_run.filter((run) => run.status === "ok" && (run.partially_parsed ?? []).length > 0).map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(", ")})`);
-}
-function typeResolver(storage, scan2) {
-  if (isOrchestratedFullScan(scan2)) {
-    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
-    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
-  }
-  if (isScriptEraFullScan(scan2)) {
-    return (f) => {
-      const slot = scriptEraSlotOfFinding(f);
-      if (slot === "containers") return "iac";
-      return slot === "security_full" ? null : slot;
-    };
-  }
-  return () => scan2.scan_type;
-}
-function booksOf(storage, scan2) {
-  if (!isOrchestratedFullScan(scan2)) {
-    const book = bookkeepingOf(storage, scan2);
-    return () => book;
-  }
-  const children = childrenOf(storage, scan2);
-  return (fType) => {
-    if (fType === null) return scan2;
-    const child = children.find((c3) => c3.type === fType);
-    return child !== void 0 && usableChild(child) ? child.row : null;
-  };
-}
-var PROJECT_FILES = "project files";
-function targetOf(run) {
-  if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
-  return run.target !== void 0 && run.target !== "" ? { pass: run.name, ref: run.target } : { pass: run.name };
-}
-function sameTarget(a2, b) {
-  if (a2.pass !== b.pass) return false;
-  return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
-}
-function passLabel(run, target) {
-  return target.ref === void 0 ? run.name : `${run.name} (${target.ref})`;
-}
-function targetNotRun(holder, asked, f) {
-  if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
-  const key = findingKey(f);
-  const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
-  for (const run of holder.tools_run) {
-    if (!measuresKeyOk(run)) continue;
-    const target = targetOf(run);
-    if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target))) return passLabel(run, target);
-  }
-  return null;
-}
-function answerFor(holder, asked, f) {
-  if (asked === null) return { verdict: "unmeasured", notRun: null };
-  const verdict = bookkeepingVerdict(asked, f);
-  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
-  const pass2 = targetNotRun(holder, asked, f);
-  return pass2 === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass2 };
-}
-function notMeasured(storage, scan2, scope = "any") {
-  const out = [];
-  const add = (x) => {
-    if (!out.includes(x)) out.push(x);
-  };
-  const gapsOf = (book, wholeType) => {
-    if (computeCoverage(book.tools_run, book.missing_tools) === "none") {
-      add(wholeType);
-      return;
-    }
-    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
-    for (const name of names) {
-      if (scope === "gaps") {
-        if (isGap(book, name)) add(name);
-        continue;
-      }
-      const keys = keysOfRun(name, false);
-      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
-    }
-    for (const name of partlyParsedNames(book)) add(name);
-  };
-  if (!isOrchestratedFullScan(scan2)) {
-    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
-    return out;
-  }
-  for (const child of childrenOf(storage, scan2)) {
-    if (!usableChild(child)) add(child.type);
-    else gapsOf(child.row, child.type);
-  }
-  return out;
-}
-function isGap(book, name) {
-  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
-  return as("failed") || book.missing_tools.includes(name) && !as("ok");
-}
-function compareScansFor(storage, from, to) {
-  const typeOfFrom = typeResolver(storage, from);
-  const typeOfTo = typeResolver(storage, to);
-  const fromBooks = booksOf(storage, from);
-  const toBooks = booksOf(storage, to);
-  const inTo = (f) => {
-    const t = typeOfFrom(f);
-    return answerFor(fromBooks(t), toBooks(t), f);
-  };
-  const inFrom = (f) => {
-    const t = typeOfTo(f);
-    return answerFor(toBooks(t), fromBooks(t), f);
-  };
-  return {
-    // Anything short of measured: the newer scan cannot resolve what it did
-    // not look for, whether the scanner failed or did not run.
-    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
-    // Only a gap: a reference that did not run the scanner at all looked at
-    // everything it had to, and the finding is new.
-    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
-    notRunByTo: (f) => inTo(f).notRun,
-    notRunByFrom: (f) => inFrom(f).notRun,
-    notMeasuredByTo: notMeasured(storage, to, "any"),
-    gapsByTo: notMeasured(storage, to, "gaps"),
-    notMeasuredByFrom: notMeasured(storage, from, "gaps")
-  };
-}
-function classifyDiff(check2, fromFindings, toFindings) {
-  const fromIndex = indexFindings(fromFindings);
-  const toIndex = indexFindings(toFindings);
-  const out = {
-    new: [],
-    resolved: [],
-    unchanged: [],
-    notRemeasured: [],
-    notPreviouslyMeasured: [],
-    notRunByTo: [],
-    notRunByFrom: []
-  };
-  const note = (list2, name) => {
-    if (name !== null && !list2.includes(name)) list2.push(name);
-  };
-  for (const f of toFindings) {
-    if (fromIndex.has(f)) out.unchanged.push(f);
-    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
-    else {
-      out.new.push(f);
-      note(out.notRunByFrom, check2.notRunByFrom(f));
-    }
-  }
-  for (const f of fromFindings) {
-    if (toIndex.has(f)) continue;
-    if (check2.isNotRemeasured(f)) {
-      out.notRemeasured.push(f);
-      note(out.notRunByTo, check2.notRunByTo(f));
-    } else out.resolved.push(f);
-  }
-  return out;
-}
-function measurementGaps(check2, d) {
-  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
-  return {
-    byTo,
-    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
-    byFrom: check2.notMeasuredByFrom,
-    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
-  };
-}
-function describeMeasurementGaps(from, to, gaps) {
-  const parts = [];
-  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
-  if (failedByTo.length > 0) {
-    parts.push(
-      `Scan ${to.scan_id} did not measure ${failedByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
-    );
-  }
-  if (gaps.notRunByTo.length > 0) {
-    parts.push(
-      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
-    );
-  }
-  if (gaps.byFrom.length > 0) {
-    parts.push(
-      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
-    );
-  }
-  if (gaps.notRunByFrom.length > 0) {
-    parts.push(
-      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
-    );
-  }
-  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 // src/tools/setBaseline.ts

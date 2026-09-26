@@ -36,6 +36,33 @@
  *     dedicated scan newer than it supersedes it normally. (Chosen over
  *     splitting findings by rule source, which no stored field records.)
  *
+ * ---- What the newest scan did not look at again ----------------------
+ *
+ * A slot's source is its newest usable scan, but "usable" is not "complete":
+ * a Semgrep that only partly parsed a file (the shared judge's `partial`
+ * verdict), a Semgrep that failed beside an ok Bandit, an image pass over
+ * image B. Read as the slot's whole answer, every older finding that scan
+ * did not look at again vanished — from `findings/open`, `risk_score`, the
+ * dashboard, triage, prioritize, create_fix_pr, validate_finding and
+ * create_github_issues — with only `coverage: partial` left to say so.
+ *
+ * So each slot also CARRIES FORWARD the findings of its older usable scans
+ * that the newer ones left open — the one predicate `runCompare.ts` answers
+ * "not re-measured" with (`openGapFor`: a gap the newer scan recorded in
+ * that finding's key, a partly parsed file, a pass over another target),
+ * never a second copy of it:
+ *   - walking back scan by scan, a finding is carried only while EVERY newer
+ *     scan left it open — one that measured it and did not find it resolved
+ *     it for good;
+ *   - a newer copy of the same identity wins;
+ *   - a carried finding is marked `not_remeasured: true`, and the scan it
+ *     came from is listed in `sources` with `carried_for` (the gaps);
+ *   - suppressions still apply;
+ *   - a scanner the newer scan did not run AT ALL (no gap recorded: a
+ *     Python-free project's Bandit) is not a gap, and carries nothing.
+ * `runCompare.ts#mayCarryPast` decides from bookkeeping alone whether an
+ * older scan could hold such a finding, so its findings are read only then.
+ *
  * Every lookup is a project- and type-scoped SQL query, paged only past the
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
@@ -52,6 +79,7 @@ import {
   type Suppression,
   type ToolRun,
 } from '../types.js';
+import { mayCarryPast, openGapFor, type Bookkeeping } from './runCompare.js';
 import {
   STATE_SCAN_TYPES,
   findingInSlot,
@@ -103,6 +131,11 @@ export interface SkippedSummary {
 /** A finding in the open set, with the scan it was read from. */
 export interface OpenFinding extends Finding {
   scan_id: string;
+  /**
+   * Carried forward from an older scan (`scan_id`) because no newer scan of
+   * its slot looked at it again (see the module comment). Absent otherwise.
+   */
+  not_remeasured?: true;
 }
 
 export interface OpenSetSource {
@@ -114,6 +147,13 @@ export interface OpenSetSource {
   coverage: ScanCoverage;
   /** Findings this source contributed after suppressions and deduplication. */
   findings: number;
+  /**
+   * An OLDER scan of the slot whose findings were carried forward: the gaps
+   * of the newer scan(s) that left them open (`semgrep (partly parsed:
+   * wp/a.php)`, `semgrep`, `trivy-image (registry/app:1)`). Absent on a
+   * slot's own source.
+   */
+  carried_for?: string[];
 }
 
 /** The part of one considered scan's bookkeeping that speaks for one slot. */
@@ -432,6 +472,63 @@ function slotSources(
   return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
 
+/** Older scans of a slot the carry-forward walk examines at most (bookkeeping only unless one may carry). */
+const CARRY_WALK_LIMIT = 200;
+
+interface Carried {
+  slot: OpenSetSlot;
+  scan: ScanRecord;
+  coverage: ScanCoverage;
+  findings: Array<{ finding: Finding; gap: string }>;
+}
+
+/**
+ * The findings of `source`'s older usable scans (same slot, same type) that
+ * every newer scan left open — see the module comment. Newest first.
+ */
+function carryForward(
+  storage: Storage,
+  projectPath: string,
+  slot: OpenSetSlot,
+  source: ScanRecord,
+  isSuppressed: (f: Finding) => boolean,
+): Carried[] {
+  const chain: Bookkeeping[] = [slotView(source, slot)];
+  const out: Carried[] = [];
+  let walked = 0;
+  for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
+      limit: PAGE,
+      offset,
+      beforeScanId: source.scan_id,
+    });
+    for (const scan of page) {
+      if (walked >= CARRY_WALK_LIMIT) break;
+      if (isScopedScan(scan)) continue;
+      const coverage = judge(scan, slot);
+      // Measured nothing (or nothing of this slot): no finding to carry, and
+      // no evidence either way about the ones older than it.
+      if (coverage === null || coverage === 'none') continue;
+      walked += 1;
+      const holder = slotView(scan, slot);
+      if (mayCarryPast(holder, chain)) {
+        const carried: Carried['findings'] = [];
+        for (const finding of storage.findings.listByScan(scan.scan_id)) {
+          if (!findingInSlot(scan, finding, slot) || isSuppressed(finding)) continue;
+          const gaps = chain.map((asked) => openGapFor(holder, asked, finding));
+          const gap = gaps[0];
+          if (gap === undefined || gap === null || gaps.some((g) => g === null)) continue;
+          carried.push({ finding, gap });
+        }
+        if (carried.length > 0) out.push({ slot, scan, coverage, findings: carried });
+      }
+      chain.push(holder);
+    }
+    if (page.length < PAGE) break;
+  }
+  return out;
+}
+
 export function openSetForProject(
   storage: Storage,
   projectPath: string,
@@ -454,6 +551,17 @@ export function openSetForProject(
     }
   }
 
+  // What each slot's dedicated source did not look at again (the module
+  // comment). The residual `security_full` slot has no dedicated source.
+  const carried: Carried[] = [];
+  for (const p of picked) {
+    if (p.slot === 'security_full' || p.scan.scan_type !== p.slot) continue;
+    for (const c of carryForward(storage, projectPath, p.slot, p.scan, isSuppressed)) {
+      carried.push(c);
+      considered.set(c.scan.scan_id, c.scan);
+    }
+  }
+
   // Newest first, in SQL's own order (started_at, then rowid — two scans can
   // start in the same millisecond), so where two sources hold the same
   // finding the newer copy — its line numbers, its scan id — is kept.
@@ -461,6 +569,7 @@ export function openSetForProject(
   const rank = new Map(order.map((id, i) => [id, i]));
   const rankOf = (scanId: string): number => rank.get(scanId) ?? order.length;
   picked.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
+  carried.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
 
   const byScan = new Map<string, Finding[]>();
   const findings: OpenFinding[] = [];
@@ -489,6 +598,30 @@ export function openSetForProject(
     });
   }
 
+  // After every source: a newer copy of the same identity always wins.
+  for (const { slot, scan, coverage, findings: rows } of carried) {
+    const seen = indexFindings(findings);
+    const gaps: string[] = [];
+    let contributed = 0;
+    for (const { finding, gap } of rows) {
+      if (seen.has(finding)) continue;
+      findings.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true });
+      contributed += 1;
+      if (!gaps.includes(gap)) gaps.push(gap);
+    }
+    if (contributed === 0) continue;
+    sources.push({
+      slot,
+      scan_id: scan.scan_id,
+      scan_type: scan.scan_type,
+      started_at: scan.started_at,
+      finished_at: scan.finished_at,
+      coverage,
+      findings: contributed,
+      carried_for: gaps,
+    });
+  }
+
   findings.sort(
     (a, b) =>
       SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint),
@@ -504,6 +637,12 @@ export function openSetForProject(
         : 'full';
   const bookkeeping: SlotBookkeeping[] = [
     ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...sources
+      .filter((src) => src.carried_for !== undefined)
+      .flatMap((src) => {
+        const scan = considered.get(src.scan_id);
+        return scan === undefined ? [] : [{ scan_id: src.scan_id, slot: src.slot, ...slotView(scan, src.slot) }];
+      }),
     ...hits.map((h) => ({ scan_id: h.scan.scan_id, slot: h.slot, ...slotView(h.scan, h.slot) })),
   ];
 

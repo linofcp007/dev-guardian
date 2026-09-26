@@ -112,7 +112,8 @@ interface ChildRef {
   row: ScanRecord | null;
 }
 
-type Bookkeeping = Pick<ScanRecord, 'tools_run' | 'missing_tools'>;
+/** The part of a scan's bookkeeping that answers for it (a slot's view, an audit's sub-scans'). */
+export type Bookkeeping = Pick<ScanRecord, 'tools_run' | 'missing_tools'>;
 
 /** How a scan's bookkeeping answers for one finding. */
 type Verdict = 'measured' | 'unmeasured' | 'not_run';
@@ -209,30 +210,124 @@ function keyVerdict(book: Bookkeeping, key: string): Verdict {
   return computeCoverage(book.tools_run, book.missing_tools) === 'full' ? 'measured' : 'unmeasured';
 }
 
+function isEmptyBook(book: Bookkeeping): boolean {
+  return book.tools_run.length === 0 && book.missing_tools.length === 0;
+}
+
 function bookkeepingVerdict(book: Bookkeeping, f: Finding): Verdict {
-  if (book.tools_run.length === 0 && book.missing_tools.length === 0) return 'measured';
+  if (isEmptyBook(book)) return 'measured';
   const verdict = keyVerdict(book, findingKey(f));
-  return verdict === 'measured' && inPartlyParsedFile(book, f) ? 'unmeasured' : verdict;
+  return verdict === 'measured' && partlyParsedRunOf(book, f) !== null ? 'unmeasured' : verdict;
 }
 
 /**
- * Whether `f` sits in a file a run measuring its key could only partly parse
+ * The run measuring `f`'s key that could only partly parse `f`'s file
  * (`ToolRun.partially_parsed`: the shared Semgrep judge's `partial` verdict,
- * `ok` AND missing). The rest of that run measured — the retry shape above —
- * but a finding inside the unparsed span of a named file was not looked for:
- * it is unmeasured, never resolved and never new. (Before that verdict the
- * whole run was `failed`, and none of its findings measured.)
+ * `ok` AND missing), or null. The rest of that run measured — the retry
+ * shape above — but a finding inside the unparsed span of a named file was
+ * not looked for: it is unmeasured, never resolved and never new. (Before
+ * that verdict the whole run was `failed`, and none of its findings
+ * measured.)
  */
-function inPartlyParsedFile(book: Bookkeeping, f: Finding): boolean {
-  if (f.file_path === undefined) return false;
+function partlyParsedRunOf(book: Bookkeeping, f: Finding): { run: ToolRun; file: string } | null {
+  if (f.file_path === undefined) return null;
   const file = f.file_path.replace(/\\/g, '/');
   const key = findingKey(f);
-  return book.tools_run.some(
-    (run) =>
-      run.status === 'ok' &&
-      (run.partially_parsed ?? []).some((p) => p.file === file) &&
-      (keysOfRun(run.name, true)?.includes(key) ?? false),
+  const run = book.tools_run.find(
+    (r) =>
+      r.status === 'ok' &&
+      (r.partially_parsed ?? []).some((p) => p.file === file) &&
+      (keysOfRun(r.name, true)?.includes(key) ?? false),
   );
+  return run === undefined ? null : { run, file };
+}
+
+/** The runs and missing names of `book` that record a gap in `key`: failed, or missing without an ok run. */
+function gapNamesFor(book: Bookkeeping, key: string): string[] {
+  const okNames = new Set(book.tools_run.filter((r) => r.status === 'ok').map((r) => r.name));
+  const names: string[] = [];
+  const add = (name: string): void => {
+    if (!names.includes(name)) names.push(name);
+  };
+  for (const run of book.tools_run) {
+    if (run.status === 'failed' && (keysOfRun(run.name, false)?.includes(key) ?? false)) add(run.name);
+  }
+  for (const name of book.missing_tools) {
+    if (!okNames.has(name) && (keysOfRun(name, false)?.includes(key) ?? false)) add(name);
+  }
+  return names;
+}
+
+/**
+ * The open set's question (`openSet.ts`): does `asked`, a NEWER scan of the
+ * same slot, leave `f` — a finding of the older scan `holder` describes —
+ * still open, because it did not re-measure it for a reason it RECORDED?
+ * Returns that gap's name, or null when `asked` re-measured `f` (and did not
+ * find it: resolved) or did not run `f`'s scanner at all (no gap recorded —
+ * not applicable, not requested: a Python-free project's Bandit).
+ *
+ * The same reading as {@link compareScansFor}'s "not re-measured", from the
+ * same helpers — `keyVerdict`, `partlyParsedRunOf`, `targetNotRun` — minus
+ * its did-not-run-at-all case:
+ *
+ *   - a gap in `f`'s key (`semgrep` failed, or listed missing) → those names;
+ *   - `f`'s file only partly parsed → `semgrep (partly parsed: wp/a.php)`;
+ *   - a pass over another target → `trivy-image (registry/app:1)`.
+ */
+export function openGapFor(holder: Bookkeeping, asked: Bookkeeping, f: Finding): string | null {
+  if (isEmptyBook(asked)) return null;
+  const key = findingKey(f);
+  const verdict = keyVerdict(asked, key);
+  if (verdict === 'not_run') return null;
+  if (verdict === 'unmeasured') {
+    const names = gapNamesFor(asked, key);
+    return names.length > 0 ? names.join(', ') : key;
+  }
+  const partly = partlyParsedRunOf(asked, f);
+  if (partly !== null) return `${partly.run.name} (partly parsed: ${partly.file})`;
+  return targetNotRun(holder, asked, f);
+}
+
+/**
+ * Whether ANY finding of the scan `holder` describes could be left open by
+ * every scan of `chain` (newer ones) — {@link openGapFor} non-null against
+ * each — judged per key from the bookkeeping alone, so the open set reads an
+ * older scan's findings only when one of them could be carried. Necessary,
+ * not sufficient: the per-finding test still decides (a partly parsed FILE,
+ * for one). A key `holder` could have produced is one of a run that did not
+ * skip (a skipped run produced nothing); a scan with no bookkeeping could
+ * have produced anything, and a chain scan with none measured everything.
+ */
+export function mayCarryPast(holder: Bookkeeping, chain: readonly Bookkeeping[]): boolean {
+  if (chain.length === 0 || chain.some(isEmptyBook)) return false;
+  const measuresKeyOk = (run: ToolRun, key: string): boolean =>
+    run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
+  const stillOpen = (asked: Bookkeeping, key: string): boolean => {
+    const verdict = keyVerdict(asked, key);
+    if (verdict === 'unmeasured') return true;
+    if (verdict === 'not_run') return false;
+    if (asked.tools_run.some((r) => measuresKeyOk(r, key) && (r.partially_parsed ?? []).length > 0)) return true;
+    return holder.tools_run.some(
+      (h) =>
+        measuresKeyOk(h, key) &&
+        !asked.tools_run.some((a) => measuresKeyOk(a, key) && sameTarget(targetOf(a), targetOf(h))),
+    );
+  };
+  const produced = new Set<string>();
+  let unknownProducer = isEmptyBook(holder);
+  if (unknownProducer) for (const key of KNOWN_FINDING_KEYS) produced.add(key);
+  for (const run of holder.tools_run) {
+    if (run.status === 'skipped') continue;
+    const keys = keysOfRun(run.name, run.status === 'ok');
+    if (keys === null) unknownProducer = true;
+    else for (const key of keys) produced.add(key);
+  }
+  // A finding tool no name is known to measure is open wherever coverage is not full (keyVerdict).
+  if (unknownProducer && chain.every((a) => computeCoverage(a.tools_run, a.missing_tools) !== 'full')) return true;
+  for (const key of produced) {
+    if (chain.every((asked) => stillOpen(asked, key))) return true;
+  }
+  return false;
 }
 
 /** `semgrep (partly parsed: a.php, b.js)` for each run that only partly parsed some files. */
@@ -310,6 +405,7 @@ function targetOf(run: ToolRun): PassTarget {
   if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
   return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: run.target } : { pass: run.name };
 }
+
 
 /**
  * The same target: the same pass, and — when BOTH runs recorded which image
@@ -419,7 +515,7 @@ export function notMeasured(storage: Storage, scan: ScanRecord, scope: NotMeasur
       const keys = keysOfRun(name, false);
       if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== 'measured')) add(name);
     }
-    // Files a run only partly parsed are a gap on both sides (inPartlyParsedFile).
+    // Files a run only partly parsed are a gap on both sides (partlyParsedRunOf).
     for (const name of partlyParsedNames(book)) add(name);
   };
   if (!isOrchestratedFullScan(scan)) {

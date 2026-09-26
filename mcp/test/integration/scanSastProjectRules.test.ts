@@ -46,11 +46,14 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
+import { openSetForProject } from '../../src/history/openSet.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 
 afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
+  await import('../../src/tools/riskScore.js');
 });
 
 const RULES =
@@ -730,5 +733,56 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     const r = await runSast(project, makePlugin(project));
     expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('skipped');
     expect(r.missing_tools).toContain('dotnet-sdk');
+  });
+});
+
+/**
+ * Follow-up X, fix round 1 (Critical), with real scan_sast rows: a
+ * work-in-progress edit makes one file PartialParsing, the partial scan
+ * becomes the sast slot's source — and the older finding on that file must
+ * not vanish from the open set, or from risk_score. The reviewer's shape.
+ */
+describe('scan_sast: a partly parsed file keeps its older finding in the open set', () => {
+  const hit = (path: string, rule: string, line: string) => ({
+    check_id: rule,
+    path,
+    start: { line: 3 },
+    end: { line: 3 },
+    extra: { severity: 'ERROR', message: `${rule} here`, lines: line },
+  });
+  const A = hit('wp/a.php', 'php-echo-get', 'echo $_GET["x"];');
+  const B = hit('src/b.js', 'js-eval', 'eval(b)');
+  const C = hit('src/c.js', 'js-eval', 'eval(c)');
+  const WARNING = {
+    code: 3,
+    level: 'warn',
+    type: ['PartialParsing', [{ path: 'wp/a.php' }]],
+    message: 'Syntax error at line wp/a.php:9:\n `const NAMESPACE` was unexpected',
+    path: 'wp/a.php',
+  };
+
+  it('keeps a.php from the full scan, flagged; b.js from the partial one; c.js resolved; risk_score counts 2', async () => {
+    const project = makeTempDir('sast-carry-');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath(1, { results: [A, B, C], errors: [], paths: { scanned: ['wp/a.php', 'src/b.js', 'src/c.js'] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(1, { results: [B], errors: [WARNING], paths: { scanned: ['wp/a.php', 'src/b.js', 'src/c.js'] } });
+    const second = await runSast(project, plugin);
+    expect((second as unknown as { coverage: string }).coverage).toBe('partial');
+
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    const files = set.findings.map((f) => `${f.file_path}${f.not_remeasured === true ? ' (not re-measured)' : ''}`).sort();
+    expect(files).toEqual(['src/b.js', 'wp/a.php (not re-measured)']);
+    expect(set.coverage).toBe('partial');
+    expect(set.sources.find((s) => s.carried_for !== undefined)?.carried_for).toEqual([
+      'semgrep (partly parsed: wp/a.php)',
+    ]);
+
+    const risk = TOOLS.find((t) => t.name === 'risk_score');
+    if (risk === undefined) throw new Error('risk_score not registered');
+    const r = (await risk.handler({ project_path: project }, plugin)) as unknown as {
+      components: { findings: { open_findings: number } };
+    };
+    expect(r.components.findings.open_findings).toBe(2);
   });
 });
