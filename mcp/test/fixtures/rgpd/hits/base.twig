@@ -1,0 +1,11 @@
+{# A Twig base layout (Symfony, Craft, Drupal). The single BUG fires
+   rgpd-tracker-ga4-without-consent exactly once. #}
+<!doctype html>
+<html lang="{{ app.request.locale }}">
+<head>
+  {# BUG #}
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_id }}"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>{% block body %}{% endblock %}</body>
+</html>

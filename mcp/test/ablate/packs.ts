@@ -184,6 +184,24 @@
  * have been cheaper (the corpus costs ~23s per clause, roughly doubling the
  * run) and would have thrown away the only real-code evidence available for
  * the highest-volume rule in the repo.
+ *
+ * **`rgpd.yml`, `GUARDIAN_RGPD_SRC`, and why its default corpus is weak.** The
+ * pack spans four languages (the personal-data-in-log rules) and markup (the
+ * tracker rules), so no single tree exercises it. The default is `mcp/src`,
+ * which reaches only `rgpd-pii-in-log-js` — and measured, it holds **zero**
+ * `console.*` calls and no log call with a personal-data name, so the baseline
+ * is 0 for every rule and axis 3 is vacuous across the pack, printed as such
+ * per rule. `GUARDIAN_RGPD_SRC` replaces it with any tree (a real application,
+ * ideally one with templates and logs); unlike the other env corpora it falls
+ * back to `mcp/src` rather than to `N/A`, the same trade the routes pack made.
+ *
+ * What the round that registered it measured, by hand, with the whole pack
+ * (see the pack header for the numbers): 0 findings on `mcp/src` (249 files),
+ * this repo's `node_modules` (1447), WordPress core (1718), CPython's `Lib/`
+ * (719), `dotnet/runtime` (11 800) and three sibling projects (146). Every one
+ * of those is LIBRARY code with almost no candidate log call, so the zeros say
+ * "no false positive where one could have appeared on a name", not "precise
+ * on applications" — a corpus of application code is still owed.
  */
 
 import { existsSync } from 'node:fs';
@@ -217,6 +235,9 @@ export const GO_SRC_ENV = 'GUARDIAN_GO_SRC';
 
 /** Env var naming a tree of real PHP source, for axis 3. */
 export const PHP_SRC_ENV = 'GUARDIAN_PHP_SRC';
+
+/** Env var naming a tree of real application code for the RGPD pack, for axis 3. */
+export const RGPD_SRC_ENV = 'GUARDIAN_RGPD_SRC';
 
 /**
  * An opt-in axis-3 corpus read from an environment variable.
@@ -270,12 +291,22 @@ export function phpCorpus(): RealCorpus | undefined {
   return envCorpus(PHP_SRC_ENV, 'PHP corpus (GUARDIAN_PHP_SRC)', 'a WordPress (or any PHP) tree');
 }
 
+/**
+ * Axis-3 corpus for the RGPD pack: `GUARDIAN_RGPD_SRC` when set (and it
+ * THROWS when set to a missing path, like every env corpus), else `mcp/src`.
+ * See the file header for why this one falls back instead of printing N/A.
+ */
+export function rgpdCorpus(): RealCorpus {
+  return envCorpus(RGPD_SRC_ENV, 'RGPD corpus (GUARDIAN_RGPD_SRC)', 'a tree of real application code') ?? MCP_SRC;
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
 const JAVA_SRC = javaCorpus();
 const PYTHON_SRC = pythonCorpus();
 const GO_SRC = goCorpus();
 const PHP_SRC = phpCorpus();
+const RGPD_SRC = rgpdCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -341,6 +372,16 @@ export const PACKS: readonly PackSpec[] = [
     hitsSubdir: '.',
     decoySubdirs: ['frameworks/fp'],
     realCode: MCP_SRC,
+  },
+  // The RGPD pack: personal data in logs (JS/TS, PHP, Python, C#) and
+  // trackers loaded before consent (markup). See the file header for the
+  // corpus, and `test/integration/rgpdRules.test.ts` for the fixtures.
+  {
+    name: 'rgpd',
+    config: config('rgpd'),
+    fixtures: fixtures('rgpd'),
+    hitsSubdir: 'hits',
+    realCode: RGPD_SRC,
   },
 ];
 

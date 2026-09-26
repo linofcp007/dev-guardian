@@ -1,0 +1,590 @@
+# dev-guardian Semgrep config rgpd.
+# RGPD / ePrivacy no codigo: dados pessoais que vao parar aos logs, e
+# rastreadores carregados antes de o visitante consentir. Corre dentro do
+# `compliance_check`, sempre que o Semgrep esta instalado.
+#
+# Sao duas metades que so partilham o regulamento:
+#
+#   | regras                       | como decidem                                |
+#   | ---------------------------- | ------------------------------------------- |
+#   | rgpd-pii-in-log-{js,php,py,cs} | AST: um identificador com NOME de dado    |
+#   |                              | pessoal portugues dentro de uma chamada de  |
+#   |                              | log                                         |
+#   | rgpd-tracker-*, rgpd-youtube-* | texto: um rastreador no markup (HTML, PHP, |
+#   |                              | JSX/TSX, Vue, Twig) sem nenhum dos guardas  |
+#   |                              | de consentimento que o pack reconhece       |
+#
+# Cada regra tem fixtures em mcp/test/fixtures/rgpd/{hits,misses}/: hits/ tem
+# de disparar com a contagem exata, misses/ nao pode disparar nada. E o
+# template que as mensagens prescrevem, configs/compliance/cookie-banner/, é
+# varrido pelo pack inteiro e tem de sair limpo — um pack que acusa a propria
+# correção que receita manda o utilizador fazer uma alteração de que depois se
+# queixa.
+#
+# ---------------------------------------------------------------------------
+# TODAS AS REGRAS EM WARNING, e a razao é o criterio da serie: aquilo que a
+# regra EMITE é sempre um defeito? Nenhuma destas passa.
+#
+# - O log decide pelo NOME. `email` pode ser o endereço de uma caixa da
+#   empresa; `telefone` pode ser o da loja. O nome é a unica evidencia que um
+#   matcher sintatico tem, e é uma evidencia fraca por definição.
+# - O rastreador decide pela AUSENCIA de um guarda no mesmo ficheiro. Uma CMP
+#   em modo de bloqueio automatico (Cookiebot, por exemplo) reescreve as tags
+#   em tempo de execução sem tocar no markup, e esse guarda é invisivel daqui.
+#
+# ---------------------------------------------------------------------------
+# O REGEX DO NOME é toda a precisao das quatro regras de log, e esta escrito
+# CATORZE vezes — `$FIELD`, `$NAME` e `$KEY` nas quatro linguagens, mais o
+# ramo `.get('chave')` em JS e em Python. Nao se usa uma ancora YAML porque o
+# harness de ablação reescreve o ficheiro pela AST do YAML e um alias
+# pendurado rebenta a reescrita. Catorze copias derivam, por isso o
+# `rgpdRules.test.ts` reduz cada uma ao corpo comum e exige que sejam iguais,
+# e exercita esse corpo contra listas de nomes que tem e nao tem de casar.
+#
+# O corpo tem quatro partes:
+#
+#   1. `(?![A-Z][A-Z0-9_]*$)` — um nome TODO EM MAIUSCULAS é uma constante ou
+#      uma configuração (`DEFAULT_FROM_EMAIL` do Django, `ADMIN_EMAIL` de um
+#      .env), nao o valor de um titular. Nas chaves entre aspas a regra nao
+#      se aplica, porque o texto acaba na aspa: `row['EMAIL']` é uma coluna de
+#      dados e casa.
+#   2. um verbo ou adjetivo à cabeça exclui o nome: `maskedEmail`,
+#      `hashedNif`, `isValidEmail`, `sendEmail`, `validateEmail`. O nome de
+#      uma função ou de um valor derivado nao é o valor.
+#   3. um prefixo opcional, com fronteira de palavra: `user_` em snake_case,
+#      ou `user` antes de uma maiuscula em camelCase — e no minimo dois
+#      caracteres, que é o que deixa o `iPhone` de fora.
+#   4. o NUCLEO (nif, niss, iban, email, telefone, telemovel, phone,
+#      cartao_cidadao, cc_number, contribuinte, seguranca_social) e um
+#      qualificador opcional à portuguesa, com o substantivo à cabeça
+#      (`nif_cliente`, `emailUtilizador`) ou à inglesa (`phoneNumber`,
+#      `emailAddress`), e plural. Um sufixo fora da lista exclui o nome:
+#      `emailSent`, `emailHash`, `EmailConfirmed`, `emailService`.
+#
+# O regex NAO USA modificadores em linha (`(?i:...)`), que o PCRE aceita e o
+# Node 22 nao: a caixa escreve-se com classes (`[Mm]ask`). É isso que deixa o
+# teste avaliar o mesmo regex em JavaScript sem traduzir nada.
+#
+# `metavariable-regex` é ancorado À ESQUERDA mesmo sem `^` — medido nesta
+# ronda: `logger$` NAO casa `this.logger`. Por isso os regexes de recetor
+# escrevem `^(?:.*\.)?logger$` e nunca `(^|\.)logger$`, que falha em
+# silencio.
+#
+# ---------------------------------------------------------------------------
+# O CUSTO, MEDIDO, e porque o ramo do identificador tem uma forma diferente
+# dos outros tres. Um `pattern: $NAME` solto casa TODAS as expressoes do
+# ficheiro antes de o regex filtrar: no jquery.js do WordPress (285 KB) era
+# 0.29 s de 0.38 s da regra inteira. O ramo passou a casar a PROPRIA chamada
+# com uma expressao profunda — `$RECEIVER.$CALL(..., <... $NAME ...>, ...)` —
+# e a focar o `$NAME` (`focus-metavariable`): 0.20 s. O foco é feito DENTRO
+# do ramo, e isso é o que mantem o guarda de mascaramento a funcionar — um
+# `focus-metavariable` ao nivel de fora é aplicado depois dos negativos, e o
+# `pattern-not-inside: mask(...)` passava a comparar com a chamada de log
+# inteira e deixava de excluir fosse o que fosse (medido: tres falsos
+# positivos em misses/).
+#
+# O preço dessa forma: a expressao profunda nao entra no corpo de uma lambda,
+# por isso `log(users.map((email) => email))` escapa ao ramo do identificador.
+# O ramo do MEMBRO continua solto (é barato: 0.03 s no mesmo ficheiro) e
+# apanha a forma comum, `log(users.map((u) => u.email))`, que esta em hits/.
+#
+# O filtro do recetor de log esta num `patterns` aninhado pela mesma razao:
+# os `metavariable-regex` de um nivel filtram depois da intersecao, e ao
+# nivel de fora a intersecao era entre TODAS as chamadas de metodo e todos os
+# valores candidatos.
+#
+# TIMEOUTS: num `semgrep` com os 24 jobs por omissao, nesta maquina, ate uma
+# regra trivial (`$X.$Y($Z)`, nada mais) excedeu os 5 s por ficheiro em seis
+# dos ficheiros JavaScript grandes do WordPress. Os timeouts dependem
+# da carga e nao da regra; o `compliance_check` reporta-os como falha do
+# Semgrep, com a razao, e nunca como um resultado limpo.
+#
+# MEDIÇÕES DE FALSOS POSITIVOS, com o pack inteiro: 0 resultados em
+# `mcp/src` (249 ficheiros), no `node_modules` deste repo (1447), no
+# WordPress 6.9 (1718, incluindo os temas de blocos em HTML), no `Lib/` do
+# CPython (719), em `dotnet/runtime` (11 800) e em tres projetos irmaos deste
+# repo (146). LEIA O ZERO COMO FRACO: todos sao codigo de BIBLIOTECA, quase
+# sem chamadas de log com um destes nomes — o WordPress tem 49 `error_log()`
+# e nenhum com email, telefone, IBAN ou NIF. O zero diz "nenhum falso positivo
+# onde podia ter aparecido um nome", nao "preciso em aplicações". Um corpus de
+# codigo de APLICAÇAO (o `GUARDIAN_RGPD_SRC` da ablação) continua em divida.
+#
+# ---------------------------------------------------------------------------
+# A ABLAÇAO (`npm run ablate -- rgpd`) correu tres vezes nesta ronda, e as
+# duas primeiras mudaram o pack:
+#
+#   1. 75 clauses: 8/8 regras disparam em hits/, 67 vivos, 8 DEAD. Os DEAD
+#      eram quatro regexes de chave (`$KEY` em `x['k']`) sem nenhum subscrito
+#      NAO pessoal dentro de um log em misses/ — faltava a fixture, nao o
+#      clause —, tres alternativas do ramo do identificador em PHP sem um
+#      `$var` dentro de `->`, `::` ou `syslog()` em hits/, e o filtro de
+#      metodo da facade `Log::`, que saiu (ver a regra).
+#   2. Com as fixtures: 2 DEAD, e o par deu MOVES — `->` e `::` sao o mesmo
+#      no no PHP do Semgrep. O ramo `::` saiu.
+#   3. Este ficheiro: 73 clauses em 8 de 8 regras, 8/8 disparam em hits/,
+#      73 vivos, 0 DEAD, 0 a subir a contagem em codigo real.
+#
+# Os 16 SUPPRESSES-TP do eixo 2 sao todos esperados: 8 sao os regexes de
+# nome dos ramos POSITIVOS (tira-los faz o ramo casar tudo), e 8 sao os dois
+# guardas de mascaramento por linguagem, cada um a revelar exatamente o
+# vizinho `(excluded: ...)` da penultima ou ultima linha de hits/. O eixo 3 é
+# vacuo em todas as regras sobre `mcp/src` (0 de base), e o relatorio diz
+# isso regra a regra.
+#
+# ---------------------------------------------------------------------------
+# POR QUE NAO SE PROCURAM OS FORMATOS (`PT50` + 21 digitos, `+351 9xx`, nove
+# digitos de NIF). Um literal de IBAN ou de telefone num log é quase sempre o
+# da propria empresa — "transfira para PT50...", "ligue para +351 21..." —, e
+# isso nao é um dado pessoal de ninguem. Os dados dos titulares entram no log
+# por VARIAVEIS, e sao as variaveis que as regras seguem. Nove digitos
+# soltos, por sua vez, sao indistinguiveis de qualquer outro numero.
+#
+# ---------------------------------------------------------------------------
+# OS GUARDAS DOS RASTREADORES SAO `pattern-not-regex`, de proposito. O
+# `base.yml` documenta o `pattern-not-regex` como armadilha numa regra de AST
+# — um guarda de texto que casa comentarios e strings. Aqui as regras SAO de
+# texto (`languages: [generic]`), e o guarda de texto é a unica forma
+# disponivel. A semantica que importa: o Semgrep so exclui um resultado se o
+# intervalo do `pattern-not-regex` CONTIVER o intervalo do resultado. Os
+# guardas usam isso de tres maneiras:
+#
+#   - ELEMENTO: `<script type="text/plain">...</script>` contem tudo o que
+#     esta dentro dele. É a convenção de bloqueio de todas as CMP (Cookiebot,
+#     CookieConsent, Complianz, Klaro, iubenda): o navegador nao descarrega
+#     nem executa um script de tipo desconhecido.
+#   - FICHEIRO: `\A.*X.*\z` casa o ficheiro inteiro quando X existe em
+#     qualquer lado. Usado para o Consent Mode v2 com `denied` por omissao e
+#     para o `fbq('consent', 'revoke')` da Meta — declarações que valem para
+#     a pagina toda e cuja posição relativa ao loader nao importa (o
+#     dataLayer e a fila do fbq processam os comandos por ordem).
+#   - BLOCO: `consent...{` seguido de chavetas EQUILIBRADAS ate ao alvo — um
+#     `(\{(?:[^{}]|(?1))*\})` recursivo do PCRE. O alvo tem de estar
+#     lexicamente DENTRO de um bloco cuja linha de abertura fala de
+#     consentimento (`if (wp_has_consent('statistics')) {`,
+#     `onConsent('marketing', function () {`). Um bloco que ja fechou antes
+#     do alvo nao conta, e a fixture de hits tem essa forma. A palavra tem de
+#     estar na MESMA LINHA da chaveta: um docblock que menciona
+#     "consentimento" duas linhas acima de uma função nao a torna guardada.
+#
+# ---------------------------------------------------------------------------
+# PONTOS CEGOS CONHECIDOS, escritos para que ninguem os tome por cobertura:
+#
+# - Log: nomes que nao dizem o que guardam (`value`, `data`, `u.e`), objetos
+#   inteiros (`logger.info(user)`), `JSON.stringify(req.body)`, e o IP, que é
+#   dado pessoal (TJUE, Breyer) mas cujo registo é quase sempre legitimo
+#   (seguranca) e inundaria o resultado.
+# - Log: `logging.getLogger(__name__).info(email)` numa linha so, o modulo
+#   `debug` do npm, `trigger_error` em PHP.
+# - Rastreadores: GA carregado por um bundle `.js` (as regras so leem markup),
+#   `react-ga4`, o Google Tag Manager (o GTM pode gerir o consentimento por
+#   dentro), `wp_register_script` seguido de `wp_enqueue_script('handle')`,
+#   um `src={CONSTANTE}` em JSX, e ficheiros `.svelte`, `.astro`, `.erb`,
+#   `.liquid` — que o `paths.include` nao lista porque nao ha fixture que o
+#   prove.
+# - O Consent Mode v2 com `denied` é tratado como guarda, e o modo AVANCADO
+#   (loader carregado, pings sem cookies ate ao consentimento) é uma decisao
+#   juridica, nao sintatica. O template do pack usa o modo basico: nada
+#   carrega antes do consentimento.
+#
+# ---------------------------------------------------------------------------
+# CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentarios: o A
+# maiusculo com acento agudo (U+00C1), o I maiusculo com acento agudo
+# (U+00CD), e mais tres que o portugues nao usa (U+00CF, U+00D0, U+00DD). O
+# carregador de configuração do Semgrep descodifica este ficheiro com o codec
+# do LOCALE e nao em UTF-8; num locale cp1252 UM deles derruba o ficheiro
+# inteiro e o scan devolve `results: 0`, `paths.scanned: 0`, `errors: 0`. O
+# `semgrepPacks.test.ts` apanha isto em todos os packs. Os acentos minusculos
+# sao todos seguros, e `Ã À Â É Ê Ó Ô Õ Ú Ç` tambem.
+
+rules:
+  # ---------------------------------------------------------------------------
+  # DADOS PESSOAIS EM LOGS
+  #
+  # Forma comum as quatro: o recetor e o metodo de log sao filtrados por
+  # regex, o valor é um de tres (ou quatro) ramos — membro, identificador,
+  # subscrito com chave literal, e `.get('chave')` onde a linguagem o usa —,
+  # e dois guardas de mascaramento excluem o valor que ja nao identifica
+  # ninguem.
+  #
+  # O RESULTADO É O IDENTIFICADOR, nao a chamada: `logger.info({email,
+  # nif})` da dois resultados, cada um na expressão que o causa. Isso é o que
+  # deixa o guarda de mascaramento atuar por valor — `log(mask(email), nif)`
+  # acusa o nif e nao o email — em vez de absolver a chamada inteira.
+  #
+  # O FILTRO DO METODO nao é decorativo: `log.push(email)` é um ARRAY chamado
+  # log, e `Math.log(x)` é matematica. Os dois estao em misses/.
+  #
+  # O GUARDA DE MASCARAMENTO casa uma chamada cujo nome COMEÇA por um verbo de
+  # mascaramento (`mask`, `redact`, `hash`, `anonymize`, `mascarar`...) ou é
+  # um hash conhecido (`md5`, `sha256`, `wp_hash`). O regex é o mesmo nas
+  # quatro regras, com `.`, `->` e `::` como separadores. Sem o filtro do
+  # nome, `$MASK(...)` casaria a PROPRIA chamada de log e a regra deixava de
+  # encontrar fosse o que fosse.
+  #
+  # O GUARDA DOS ULTIMOS DIGITOS (`iban.slice(-4)`, `iban[-4:]`,
+  # `substr($iban, -4)`, `iban[^4..]`) existe porque é a pratica bancaria
+  # corrente para identificar uma conta num log sem a expor.
+  #
+  # O EIXO 2 DA ABLAÇAO VAI ACUSAR os dois guardas, e é o guarda a funcionar:
+  # as duas ultimas linhas de cada fixture de hits poem um bug AO LADO de um
+  # valor mascarado, para que uma exclusao larga de mais tenha onde aparecer.
+  # Remover o guarda revela o valor mascarado nessa linha. Uma revelação
+  # numa linha `(excluded: ...)` é o clause a fazer o seu trabalho.
+  - id: rgpd-pii-in-log-js
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Dado pessoal num log (NIF, NISS, Cartão de Cidadão, IBAN, telefone ou
+      email, reconhecido pelo nome da variavel ou do campo). Os logs sao
+      copiados para agregadores, backups e terceiros (Sentry, Datadog,
+      CloudWatch, as breadcrumbs da consola no browser) e ficam fora do
+      controlo de acesso e do prazo de conservação dos dados de origem — isto
+      contraria a minimização (RGPD, art. 5.º, n.º 1, al. c)) e torna o
+      apagamento (art. 17.º) impraticavel. Registe um identificador interno ou
+      uma forma mascarada (`mask(email)`, os ultimos 4 digitos do IBAN). Se o
+      valor nao é de uma pessoa (a caixa de suporte, o telefone da loja), o
+      nome engana e este aviso é ruido.
+    patterns:
+      - patterns:
+          - pattern-inside: $LOGGER.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $LOGGER
+              regex: '^(?:.*\.)?(?:console|_?logger|_?log|winston|pino|bunyan)$'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: '^(?:log|info|warn|warning|error|debug|trace|fatal|verbose|silly|notice|critical)$'
+      - pattern-either:
+          - patterns:
+              - pattern: $OBJ.$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+          - patterns:
+              - pattern: $RECEIVER.$CALL(..., <... $NAME ...>, ...)
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+              - focus-metavariable: $NAME
+          - patterns:
+              - pattern: $OBJ[$KEY]
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+          - patterns:
+              - pattern: $OBJ.get($KEY)
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+      - pattern-not-inside:
+          patterns:
+            - pattern: $MASK(...)
+            - metavariable-regex:
+                metavariable: $MASK
+                regex: '^(?:.*(?:\.|->|::))?(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Tt]runcate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)'
+      - pattern-not-inside: $S.slice(-$N)
+
+  # PHP: WordPress primeiro, porque é onde o PHP escreve dados pessoais em
+  # logs — `error_log()` com `$user->user_email`, e o `wc_get_logger()` do
+  # WooCommerce com `$order->get_billing_email()`. Depois PSR-3 (Monolog,
+  # Symfony), a facade `Log::` do Laravel e o `syslog()`.
+  #
+  # O `$NAME` do PHP inclui o `$` no texto, por isso o regex do nome abre com
+  # `^\$` em vez de `^`; o corpo é o mesmo.
+  - id: rgpd-pii-in-log-php
+    languages: [php]
+    severity: WARNING
+    message: >-
+      Dado pessoal num log (NIF, NISS, Cartão de Cidadão, IBAN, telefone ou
+      email, reconhecido pelo nome da variavel ou do campo). O `error_log()` e
+      os ficheiros do WooCommerce ficam no servidor e nos backups muito para
+      la do prazo de conservação dos dados de origem, fora do controlo de
+      acesso da aplicação — isto contraria a minimização (RGPD, art. 5.º,
+      n.º 1, al. c)) e torna o apagamento (art. 17.º) impraticavel. Registe o
+      ID interno (`$user->ID`, `$order->get_id()`) ou uma forma mascarada.
+      Se o valor nao é de uma pessoa (o `admin_email` do site), o nome engana
+      e este aviso é ruido.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: $LOGGER->$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $LOGGER
+                  regex: '^(?:.*->)?\$?_?(?:logger|log)$|^wc_get_logger\(\)$'
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: '^(?:emergency|alert|critical|error|warning|notice|info|debug|log)$'
+          # A facade NAO filtra o metodo, e foi a ablação a decidir: o filtro
+          # dos niveis PSR-3 aqui leu DEAD, e a forma que ele excluiria é um
+          # dado pessoal num log na mesma — `Log::withContext(['email' =>
+          # $email])` junta o valor a TODAS as linhas seguintes. Tudo o que a
+          # facade `Log::` faz é registar.
+          - patterns:
+              - pattern-inside: $FACADE::$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $FACADE
+                  regex: '^\\?(?:Log|Logger)$'
+          - pattern-inside: error_log(...)
+          - pattern-inside: syslog(...)
+      - pattern-either:
+          - patterns:
+              - pattern: $OBJ->$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+          # SEM ramo `$CLASS::$CALL(...)`: no PHP do Semgrep `A::b()` e
+          # `$a->b()` sao o MESMO NO — medido, cada padrao casa as duas
+          # formas. A ablação leu os dois ramos DEAD sozinhos e MOVES em par;
+          # ficou um.
+          - patterns:
+              - pattern-either:
+                  - pattern: $RECEIVER->$CALL(..., <... $NAME ...>, ...)
+                  - pattern: error_log(..., <... $NAME ...>, ...)
+                  - pattern: syslog(..., <... $NAME ...>, ...)
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: '^\$(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+              - focus-metavariable: $NAME
+          - patterns:
+              - pattern: $OBJ[$KEY]
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+      - pattern-not-inside:
+          patterns:
+            - pattern: $MASK(...)
+            - metavariable-regex:
+                metavariable: $MASK
+                regex: '^(?:.*(?:\.|->|::))?(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Tt]runcate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)'
+      - pattern-not-inside: substr($S, -$N)
+
+  # Python: `logging` e qualquer recetor chamado logger/log (incluindo o
+  # `_LOGGER` do Home Assistant), e o `print()` — que num contentor vai
+  # direto para o agregador de logs.
+  - id: rgpd-pii-in-log-py
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Dado pessoal num log (NIF, NISS, Cartão de Cidadão, IBAN, telefone ou
+      email, reconhecido pelo nome da variavel ou do campo). Os logs — e o
+      `print()`, que num contentor acaba no mesmo agregador — sao copiados
+      para backups e terceiros e ficam fora do controlo de acesso e do prazo
+      de conservação dos dados de origem: isto contraria a minimização (RGPD,
+      art. 5.º, n.º 1, al. c)) e torna o apagamento (art. 17.º) impraticavel.
+      Registe um identificador interno ou uma forma mascarada. Se o valor nao
+      é de uma pessoa, o nome engana e este aviso é ruido.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: $LOGGER.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $LOGGER
+                  regex: '^(?:.*\.)?(?:logging|_?logger|_?log|_?LOGGER|LOG)$'
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: '^(?:debug|info|warning|warn|error|exception|critical|fatal|log)$'
+          - pattern-inside: print(...)
+      - pattern-either:
+          - patterns:
+              - pattern: $OBJ.$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+          - patterns:
+              - pattern-either:
+                  - pattern: $RECEIVER.$CALL(..., <... $NAME ...>, ...)
+                  - pattern: print(..., <... $NAME ...>, ...)
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+              - focus-metavariable: $NAME
+          - patterns:
+              - pattern: $OBJ[$KEY]
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+          - patterns:
+              - pattern: $OBJ.get($KEY, ...)
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+      - pattern-not-inside:
+          patterns:
+            - pattern: $MASK(...)
+            - metavariable-regex:
+                metavariable: $MASK
+                regex: '^(?:.*(?:\.|->|::))?(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Tt]runcate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)'
+      - pattern-not-inside: '$S[-$N:]'
+
+  # C#: `ILogger` (os `LogX` de extensao e o `Log(level, ...)`), o `Log`
+  # estatico do Serilog, log4net/NLog, e `Console`/`Debug`/`Trace`. O
+  # template estruturado (`"Login {Email}"`) é uma string e nao conta; o
+  # argumento a seguir é que conta.
+  - id: rgpd-pii-in-log-cs
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      Dado pessoal num log (NIF, NISS, Cartão de Cidadão, IBAN, telefone ou
+      email, reconhecido pelo nome da variavel ou da propriedade). O template
+      estruturado guarda o valor como campo pesquisavel no Seq, Application
+      Insights ou Elastic, fora do controlo de acesso e do prazo de
+      conservação dos dados de origem — isto contraria a minimização (RGPD,
+      art. 5.º, n.º 1, al. c)) e torna o apagamento (art. 17.º) impraticavel.
+      Registe o Id interno ou uma forma mascarada, ou use a redação do
+      Microsoft.Extensions.Compliance. Se o valor nao é de uma pessoa, o nome
+      engana e este aviso é ruido.
+    patterns:
+      - patterns:
+          - pattern-inside: $LOGGER.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $LOGGER
+              regex: '^(?:.*\.)?(?:_?[Ll]ogger|_?[Ll]og|Debug|Trace)$|^(?:System\.)?Console(?:\.Error|\.Out)?$'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: '^(?:Log(?:Trace|Debug|Information|Warning|Error|Critical)?|Verbose|Debug|Information|Warning|Error|Fatal|Trace|Info|Warn|WriteLine|Write|TraceInformation|TraceWarning|TraceError)$'
+      - pattern-either:
+          - patterns:
+              - pattern: $OBJ.$FIELD
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+          - patterns:
+              - pattern: $RECEIVER.$CALL(..., <... $NAME ...>, ...)
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: '^(?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?$'
+              - focus-metavariable: $NAME
+          - patterns:
+              - pattern: $OBJ[$KEY]
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: '^[''"](?![A-Z][A-Z0-9_]*$)(?!(?:[Ii]s|[Hh]as|[Ss]hould|[Cc]an|[Vv]alid|[Ii]nvalid|[Vv]alidate|[Vv]erify|[Cc]heck|[Pp]arse|[Nn]ormalize|[Nn]ormalise|[Ff]ormat|[Ss]end|[Ss]et|[Uu]pdate|[Ff]ind|[Ll]ookup|[Ss]earch|[Bb]uild|[Rr]ender|[Cc]ompose|[Rr]esolve|[Mm]ask|[Mm]asked|[Hh]ash|[Hh]ashed|[Rr]edact|[Rr]edacted|[Ee]ncrypt|[Ee]ncrypted|[Aa]non|[Aa]nonymize|[Aa]nonymise|[Aa]nonymized|[Aa]nonymised|[Pp]seudonymized|[Pp]seudonymised|[Oo]bfuscated|[Tt]runcated|[Ss]afe|[Pp]artial|[Tt]emplate|[Dd]efault)[_A-Z0-9])(?:(?:[A-Za-z0-9]*_)+|[A-Za-z][A-Za-z0-9]*?[a-z0-9](?=[A-Z]))?(?:nif|Nif|NIF|niss|Niss|NISS|iban|Iban|IBAN|email|Email|EMAIL|e_mail|E_MAIL|telefone|Telefone|TELEFONE|telemovel|Telemovel|TELEMOVEL|telephone|Telephone|TELEPHONE|phone|Phone|PHONE|cartao_(?:de_)?cidadao|CARTAO_(?:DE_)?CIDADAO|[Cc]artao(?:De)?Cidadao|cc_number|CC_NUMBER|[Cc]cNumber|contribuinte|Contribuinte|CONTRIBUINTE|seguranca_social|SEGURANCA_SOCIAL|[Ss]egurancaSocial)(?:_?(?:[Nn]umber|NUMBER|[Nn]umero|NUMERO|[Aa]ddress|ADDRESS|[Cc]liente|CLIENTE|[Uu]tilizador|UTILIZADOR|[Uu]tente|UTENTE|[Tt]itular|TITULAR|[Cc]ontacto|CONTACTO))?(?:es|s)?[''"]$'
+      - pattern-not-inside:
+          patterns:
+            - pattern: $MASK(...)
+            - metavariable-regex:
+                metavariable: $MASK
+                regex: '^(?:.*(?:\.|->|::))?(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Tt]runcate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)'
+      - pattern-not-inside: '$S[^$N..]'
+
+  # ---------------------------------------------------------------------------
+  # RASTREADORES SEM CONSENTIMENTO
+  #
+  # Regras de texto (`generic`), restritas por `paths.include` a ficheiros de
+  # markup. Sem essa lista uma regra generic le TODOS os ficheiros — bundles
+  # .js, documentação .md, lock files — e um URL de rastreador num README nao
+  # é um rastreador. O teste exige uma fixture de hits por cada extensao da
+  # lista, para que um glob com erro nao passe despercebido.
+
+  # GA4: o loader `gtag/js` numa tag `<script src>`, o componente
+  # `<GoogleAnalytics>` do `@next/third-parties`, ou um `wp_enqueue_script`
+  # do WordPress. Quatro guardas: o elemento `text/plain`, o Consent Mode v2
+  # com `denied` declarado no ficheiro, uma condição JSX que fala de
+  # consentimento (`{consent.analytics && <Script .../>}`), e o bloco de
+  # consentimento. O `type="text/javascript"` executa, e esta em hits/ a
+  # prova-lo; o Consent Mode com `granted` por omissao nao é guarda, e tambem
+  # esta em hits/.
+  - id: rgpd-tracker-ga4-without-consent
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.vue', '*.twig']
+    message: >-
+      Google Analytics (gtag.js) carregado antes do consentimento: o script é
+      pedido no carregamento da pagina e define os cookies `_ga`/`_ga_*`
+      antes de o visitante escolher. Cookies de analitica nao sao
+      estritamente necessarios e exigem consentimento previo (Diretiva
+      2002/58/CE, art. 5.º, n.º 3, transposta pela Lei n.º 41/2004; RGPD,
+      art. 7.º). Bloqueie-o ate ao consentimento — `type="text/plain"` gerido
+      por uma CMP, ou carregamento dentro do callback de consentimento — ou
+      declare o Google Consent Mode v2 com `gtag('consent', 'default', ...)` a
+      `denied` antes de qualquer `config`. Ver
+      configs/compliance/cookie-banner/.
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)<script\b[^>]*?\ssrc\s*=\s*\{?\s*[`"'']?(?:https?:)?//(?:www\.)?googletagmanager\.com/gtag/js'
+          - pattern-regex: '<GoogleAnalytics\b[^>]*?\sgaId\s*='
+          - pattern-regex: '\bwp_enqueue_script\s*\(\s*[^,()]+,\s*[`"''](?:https?:)?//(?:www\.)?googletagmanager\.com/gtag/js'
+      - pattern-not-regex: '(?is)<script\b[^>]*?\stype\s*=\s*["'']text/plain["''][^>]*>.*?</script\s*>'
+      - pattern-not-regex: '(?s)\A.*?gtag\(\s*["'']consent["'']\s*,\s*["'']default["'']\s*,\s*\{[^}]*?["'']denied["''].*\z'
+      - pattern-not-regex: '(?is)\{[^{}]*?consent[^{}]*?(?:&&|\?)\s*\(?\s*<(?:script|GoogleAnalytics)\b[^>]*?(?:googletagmanager\.com/gtag/js|gaId\s*=)'
+      - pattern-not-regex: '(?is)consent[^{};\n]*\{(?:[^{}]|(\{(?:[^{}]|(?1))*\}))*?googletagmanager\.com/gtag/js'
+
+  # Meta Pixel: o `fbq('init', ...)` é o momento em que o pixel passa a
+  # enviar eventos ligados a um cookie `_fbp`. Tres guardas: o elemento
+  # `text/plain`, a API de consentimento da propria Meta
+  # (`fbq('consent', 'revoke')` antes do init), e o bloco de consentimento.
+  # Um bloco de consentimento que ja FECHOU antes do init nao conta, e a
+  # fixture de hits tem essa forma.
+  - id: rgpd-tracker-meta-pixel-without-consent
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.vue', '*.twig']
+    message: >-
+      Meta Pixel iniciado antes do consentimento: `fbq('init', ...)` corre no
+      carregamento da pagina, define o cookie `_fbp` e envia eventos para a
+      Meta antes de o visitante escolher. Cookies de marketing exigem
+      consentimento previo (Diretiva 2002/58/CE, art. 5.º, n.º 3, transposta
+      pela Lei n.º 41/2004; RGPD, art. 7.º). Chame `fbq('consent',
+      'revoke')` antes do init e `fbq('consent', 'grant')` quando o visitante
+      aceitar, ou carregue o pixel dentro do callback de consentimento. Ver
+      configs/compliance/cookie-banner/.
+    patterns:
+      - pattern-regex: 'fbq\(\s*[`"'']init[`"'']'
+      - pattern-not-regex: '(?is)<script\b[^>]*?\stype\s*=\s*["'']text/plain["''][^>]*>.*?</script\s*>'
+      - pattern-not-regex: '(?s)\A.*?fbq\(\s*[`"'']consent[`"'']\s*,\s*[`"'']revoke[`"'']\s*\).*\z'
+      - pattern-not-regex: '(?is)consent[^{};\n]*\{(?:[^{}]|(\{(?:[^{}]|(?1))*\}))*?fbq\(\s*[`"'']init[`"'']'
+
+  # Hotjar: o URL do loader `static.hotjar.com/c/hotjar-` aparece no snippet
+  # oficial e em qualquer `<script src>` para ele. O Hotjar grava sessoes —
+  # cliques, scroll, texto escrito — e nao tem API de consentimento propria,
+  # por isso so ha dois guardas: o elemento `text/plain` e o bloco de
+  # consentimento. O URL esta nos ARGUMENTOS da IIFE, depois do corpo dela, e
+  # é por isso que o guarda do bloco salta chavetas equilibradas em vez de
+  # parar na primeira.
+  - id: rgpd-tracker-hotjar-without-consent
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.vue', '*.twig']
+    message: >-
+      Hotjar carregado antes do consentimento: o script grava a sessao do
+      visitante (cliques, movimento, scroll) e define cookies `_hj*` no
+      carregamento da pagina. Exige consentimento previo (Diretiva
+      2002/58/CE, art. 5.º, n.º 3, transposta pela Lei n.º 41/2004; RGPD,
+      art. 7.º). Bloqueie o snippet com `type="text/plain"` gerido por uma
+      CMP, ou execute-o dentro do callback de consentimento. Ver
+      configs/compliance/cookie-banner/.
+    patterns:
+      - pattern-regex: 'static\.hotjar\.com/c/hotjar-'
+      - pattern-not-regex: '(?is)<script\b[^>]*?\stype\s*=\s*["'']text/plain["''][^>]*>.*?</script\s*>'
+      - pattern-not-regex: '(?is)consent[^{};\n]*\{(?:[^{}]|(\{(?:[^{}]|(?1))*\}))*?static\.hotjar\.com/c/hotjar-'
+
+  # YouTube: um `<iframe src>` para `youtube.com/embed` define cookies do
+  # YouTube (YSC, VISITOR_INFO1_LIVE) mal a pagina carrega, sem o visitante
+  # tocar no video. O dominio `youtube-nocookie.com` (modo de privacidade
+  # melhorada) adia-os ate ao play, e o regex nem o casa: depois de
+  # `youtube` vem `-nocookie`, nao `.com`.
+  #
+  # O `\s` antes do `src` é um guarda ESTRUTURAL: `data-src` — o atributo em
+  # que as CMP guardam o URL ate ao consentimento — tem um hifen antes do
+  # `src`, nao um espaço, e fica de fora sem clause nenhum. Um `<a href>` para
+  # o mesmo URL é uma ligação e nao um embed, e tambem fica de fora por nao
+  # ser um `<iframe>`. O unico guarda ablatavel é a condição JSX.
+  - id: rgpd-youtube-embed-without-nocookie
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.vue', '*.twig']
+    message: >-
+      Video do YouTube incorporado a partir de youtube.com/embed: o iframe
+      define cookies do YouTube (YSC, VISITOR_INFO1_LIVE) no carregamento da
+      pagina, antes de qualquer consentimento (Diretiva 2002/58/CE, art. 5.º,
+      n.º 3, transposta pela Lei n.º 41/2004). Use
+      https://www.youtube-nocookie.com/embed/ (modo de privacidade melhorada,
+      sem cookies ate ao play) e, idealmente, so carregue o iframe depois do
+      consentimento de marketing (`data-src` gerido por uma CMP, ou uma
+      imagem de pre-visualizacao que o substitui ao clicar).
+    patterns:
+      - pattern-regex: '(?i)<iframe\b[^>]*?\ssrc\s*=\s*\{?\s*[`"'']?(?:https?:)?//(?:www\.)?youtube\.com/embed/'
+      - pattern-not-regex: '(?is)\{[^{}]*?consent[^{}]*?(?:&&|\?)\s*\(?\s*<iframe\b[^>]*?youtube\.com/embed/'
