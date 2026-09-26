@@ -46533,7 +46533,9 @@ var scanContainers = makeScanTool({
           if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
           tools_run.push({
             name: "trivy-image",
-            status: result.outcome === "completed" ? "ok" : "failed"
+            status: result.outcome === "completed" ? "ok" : "failed",
+            reason: `image ${inp.image}`,
+            target: inp.image
           });
           if (result.outcome !== "completed") anyOutcome = result.outcome;
         }
@@ -52577,8 +52579,16 @@ function booksOf(storage, scan2) {
   };
 }
 var PROJECT_FILES = "project files";
-function targetOf(name) {
-  return runNameEntry(name)?.ownTarget === true ? name : PROJECT_FILES;
+function targetOf(run) {
+  if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
+  return run.target !== void 0 && run.target !== "" ? { pass: run.name, ref: run.target } : { pass: run.name };
+}
+function sameTarget(a2, b) {
+  if (a2.pass !== b.pass) return false;
+  return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
+}
+function passLabel(run, target) {
+  return target.ref === void 0 ? run.name : `${run.name} (${target.ref})`;
 }
 function targetNotRun(holder, asked, f) {
   if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
@@ -52586,8 +52596,8 @@ function targetNotRun(holder, asked, f) {
   const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
   for (const run of holder.tools_run) {
     if (!measuresKeyOk(run)) continue;
-    const target = targetOf(run.name);
-    if (!asked.tools_run.some((r) => measuresKeyOk(r) && targetOf(r.name) === target)) return run.name;
+    const target = targetOf(run);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target))) return passLabel(run, target);
   }
   return null;
 }

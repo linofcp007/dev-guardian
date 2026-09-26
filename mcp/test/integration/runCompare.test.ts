@@ -804,6 +804,83 @@ describe("Task 15's scanners in the comparison", () => {
     });
   });
 
+  /**
+   * Follow-up X5 — two images, one target. `trivy-image` was one target
+   * whatever image it scanned, so scanning image B "re-measured" image A's
+   * findings and resolved them. The run now records the image reference
+   * (`ToolRun.target`), and a finding of an image pass is re-measured only
+   * by a pass over the SAME image. A row written before the reference was
+   * recorded (no `target`) keeps today's reading: any image pass.
+   */
+  describe('X5: an image pass re-measures only its own image', () => {
+    const I = 'i'.repeat(64);
+    const J = 'j'.repeat(64);
+    const imageMisconfig: SeedFinding = {
+      fp: I, tool: 'trivy', rule_id: 'DS-0026', subcategory: 'dockerfile', file: 'app/Dockerfile', severity: 'high',
+    };
+    const imageCve: SeedFinding = {
+      fp: J, tool: 'trivy', rule_id: 'CVE-2099-0001', subcategory: 'cve', file: 'app:1 (alpine 3.10.9)', severity: 'high',
+    };
+    const image = (target: string | undefined): ToolRun =>
+      target === undefined ? { name: 'trivy-image', status: 'ok' } : { name: 'trivy-image', status: 'ok', target };
+
+    function pair(first: ToolRun[], second: ToolRun[], finding: SeedFinding): { s: Seeded; p: string } {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-x5-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: first, findings: [finding] });
+      seedScan(s, { id: 'b', type: 'containers', project: p, tools_run: second });
+      return { s, p };
+    }
+
+    it("scanning image B never resolves image A's misconfiguration, nor its CVE", async () => {
+      for (const finding of [imageMisconfig, imageCve]) {
+        const { s, p } = pair([image('registry/app:1')], [image('registry/other:2')], finding);
+        const d = await diff(s, p, 'containers');
+        expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+        expect(d.not_measured).toEqual(['trivy-image (registry/app:1)']);
+        expect(d.note).toMatch(/registry\/app:1/);
+      }
+    });
+
+    it('control: the same image scanned again resolves it', async () => {
+      const { s, p } = pair([image('registry/app:1')], [image('registry/app:1')], imageMisconfig);
+      expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    });
+
+    it("regression_alert: image B's scan does not cancel a real new high with image A's resolution", async () => {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-x5-alert-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: [image('registry/app:1')], findings: [imageMisconfig] });
+      seedScan(s, {
+        id: 'b', type: 'containers', project: p, tools_run: [image('registry/other:2')],
+        findings: [{ ...imageCve, file: 'registry/other:2 (alpine 3.10.9)' }],
+      });
+      const r = okResult<AlertOut>(await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin));
+      expect(r.resolved_findings_by_severity['high']).toBe(0);
+      expect(r.not_remeasured_by_severity['high']).toBe(1);
+      expect(r.score_delta).toBe(5);
+      expect(r.regressed).toBe(true);
+    });
+
+    it('a legacy row with no image reference, on either side, keeps reading any image pass as the same target', async () => {
+      for (const [first, second] of [
+        [image(undefined), image('registry/other:2')],
+        [image('registry/app:1'), image(undefined)],
+        [image(undefined), image(undefined)],
+      ] satisfies [ToolRun, ToolRun][]) {
+        const { s, p } = pair([first], [second], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+      }
+    });
+
+    it('a Dockerfile pass still never re-measures an image, whatever image it names', async () => {
+      const { s, p } = pair([image('registry/app:1')], [{ name: 'trivy-dockerfile', status: 'ok' }], imageMisconfig);
+      const d = await diff(s, p, 'containers');
+      expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      expect(d.not_measured).toEqual(['trivy-image (registry/app:1)']);
+    });
+  });
+
   it("hadolint's finding: resolved when hadolint ran, whatever else failed; not re-measured when it failed", async () => {
     const lint = [{ fp: H, tool: 'hadolint', category: 'quality' as const, severity: 'medium' as const }];
     const first: ToolRun[] = [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'ok' }];

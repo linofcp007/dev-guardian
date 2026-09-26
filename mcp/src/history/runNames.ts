@@ -103,7 +103,8 @@ export interface RunName {
    * that ran it ok again (a Dockerfile-only run never looked at the image),
    * and one where a project-files pass produced the key only by a scan that
    * ran such a pass (an image-only run never looked at the Dockerfile — Task
-   * 24, probe H1).
+   * 24, probe H1). Which image is the run's own `ToolRun.target`: two images
+   * are two targets, and a row that did not record one reads as any image.
    */
   ownTarget?: true;
 }

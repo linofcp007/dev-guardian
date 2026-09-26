@@ -54,8 +54,9 @@
  *     other did not look at that pass's TARGET again: an image
  *     (`trivy-image`) and the project's files (`trivy-dockerfile`,
  *     `trivy-config`) are measured under the same key, but a Dockerfile
- *     pass never looked at the image, nor an image pass at the Dockerfile
- *     (see `targetNotRun`);
+ *     pass never looked at the image, nor an image pass at the Dockerfile,
+ *     nor a scan of image B at image A (`ToolRun.target`; see
+ *     `targetNotRun`);
  *   - for a tool the table does not know at all, measured only by a scan
  *     with no gap anywhere (coverage `full`), never by a partial one;
  *   - a scan with no bookkeeping at all (the oldest rows) measured
@@ -220,12 +221,25 @@ function booksOf(storage, scan) {
 }
 /** Every pass without a target of its own looks at the project's files. */
 const PROJECT_FILES = 'project files';
+function targetOf(run) {
+    if (runNameEntry(run.name)?.ownTarget !== true)
+        return { pass: PROJECT_FILES };
+    return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: run.target } : { pass: run.name };
+}
 /**
- * What a pass looks at: its own target when it has one (`runNames.ts`:
- * `trivy-image` — an image, named by the pass), else the project's files.
+ * The same target: the same pass, and — when BOTH runs recorded which image
+ * — the same image. A legacy row that did not record it keeps the reading it
+ * had before references were recorded (any run of the pass), so no stored
+ * comparison changes; only two references that disagree tell images apart.
  */
-function targetOf(name) {
-    return runNameEntry(name)?.ownTarget === true ? name : PROJECT_FILES;
+function sameTarget(a, b) {
+    if (a.pass !== b.pass)
+        return false;
+    return a.ref === undefined || b.ref === undefined || a.ref === b.ref;
+}
+/** The name a pass that did not run again is reported under: `trivy-image (registry/app:1)`. */
+function passLabel(run, target) {
+    return target.ref === undefined ? run.name : `${run.name} (${target.ref})`;
 }
 /**
  * A pass `holder` ran ok that may have produced `f` (it measures `f`'s key)
@@ -241,8 +255,11 @@ function targetOf(name) {
  * 24, probe H1): an image-only run resolved the Dockerfile's
  * misconfiguration, and in regression_alert that false resolution cancelled
  * a real new high. When the holder ran both passes the finding could be
- * either's, so only a scan that looked at both re-measures it. A scan with
- * no bookkeeping at all measured everything, as everywhere else here.
+ * either's, so only a scan that looked at both re-measures it. Two images
+ * are two targets (follow-up X5): an image pass re-measures only the image
+ * it scanned, so image B's scan never resolves image A's findings — reported
+ * as `trivy-image (<image A>)`. A scan with no bookkeeping at all measured
+ * everything, as everywhere else here.
  */
 function targetNotRun(holder, asked, f) {
     if (holder === null || (asked.tools_run.length === 0 && asked.missing_tools.length === 0))
@@ -252,9 +269,9 @@ function targetNotRun(holder, asked, f) {
     for (const run of holder.tools_run) {
         if (!measuresKeyOk(run))
             continue;
-        const target = targetOf(run.name);
-        if (!asked.tools_run.some((r) => measuresKeyOk(r) && targetOf(r.name) === target))
-            return run.name;
+        const target = targetOf(run);
+        if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target)))
+            return passLabel(run, target);
     }
     return null;
 }

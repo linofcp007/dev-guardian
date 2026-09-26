@@ -962,6 +962,12 @@ keeps working (migrations 004–011 are additive).
 - **Scan retention** also keeps the sub-scans a baselined `audit_executive`
   row links in `meta.sub_scan_ids`: pruning them made the audit's
   per-scanner comparison fall back to its one-line-per-tool entries.
+- **Two images, one target**: `scan_containers` of image B "re-measured"
+  image A's findings, so `diff_scans` and `regression_alert` read them as
+  resolved. The `trivy-image` run now records its image (`tools_run[].target`),
+  and an image's findings are re-measured only by a scan of the same image —
+  otherwise not re-measured, named `trivy-image (<image>)`. Rows written
+  before keep today's reading.
 
 ### Security
 

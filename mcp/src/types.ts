@@ -109,6 +109,14 @@ export interface ToolRun {
   version?: string;
   status: ToolRunStatus;
   reason?: string;
+  /**
+   * What a pass with a target of its own looked at — `trivy-image`: the
+   * image reference it scanned. `history/runCompare.ts` re-measures such a
+   * pass's findings only by a pass over the same target, so scanning image B
+   * never resolves image A's findings. Absent on every other pass, and on
+   * rows written before it was recorded (read as "any image", as before).
+   */
+  target?: string;
 }
 
 export interface Finding {
