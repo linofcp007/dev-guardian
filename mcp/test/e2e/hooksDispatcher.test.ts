@@ -113,6 +113,30 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       });
     });
 
+    // Fix round 2: `cmd /c` hid a catastrophic delete from the guard — from
+    // the PowerShell tool, where a model naturally writes one that way.
+    it.each(['cmd /c rd /s /q C:\\', 'cmd /c "rmdir /s /q %USERPROFILE%"'])(
+      'denies %s sent as the PowerShell tool',
+      (command) => {
+        const r = runHook(preToolUse('PowerShell', { command }, projectDir), { cwd: projectDir, homeDir });
+        expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      },
+    );
+
+    // Fix round 2: 127 statements of the worst ReDoS shape with `rm -rf /`
+    // last took 27 s through the hook — past its 15 s timeout, after which the
+    // command runs unassessed. It answers in well under 5 s now, and says what
+    // it did not read.
+    it('the worst ReDoS shape answers in well under 5 s, and never silently', () => {
+      const chmod = `chmod -${'R'.repeat(16_000)} 777 x`;
+      const command = `${Array.from({ length: 127 }, () => chmod).join('; ')}; rm -rf /`;
+      const t0 = Date.now();
+      const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
+      expect(Date.now() - t0).toBeLessThan(5000);
+      const out = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput;
+      expect(out?.additionalContext).toMatch(/not assessed \(over 512 KB\)/);
+    }, 30_000);
+
     it('warns (does not deny) an ordinary PowerShell command', () => {
       const r = runHook(preToolUse('PowerShell', { command: 'Get-ChildItem' }, projectDir), {
         cwd: projectDir,

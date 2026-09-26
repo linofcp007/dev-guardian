@@ -115,9 +115,11 @@ export interface BashRule {
   pattern: RegExp;
   scope?: BashRuleScope;
   /**
-   * A linear-time equivalent of `pattern`, used instead of it where the
-   * pattern's `[^\n]*` would rescan a long whole-command line from every
-   * start (only for `scope: 'command'`, whose text is not capped).
+   * A linear-time equivalent of `pattern`, used instead of it wherever it is
+   * given: the pattern's `[^\n]*` restarts at every occurrence of its
+   * keyword, which made a 16 KB statement cost up to ~190 ms and 127 of them
+   * run past the hook's 15 s timeout (fix round 2). The pattern stays as the
+   * specification, and a differential test holds the two equal.
    */
   test?: (text: string) => boolean;
 }
@@ -156,6 +158,7 @@ export const BASH_RULES: BashRule[] = [
     // shell name — used to fall through this pattern, which only allowed
     // `sudo` directly followed by the shell.
     pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i,
+    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i),
   },
   {
     id: 'powershell-iex-download',
@@ -165,6 +168,7 @@ export const BASH_RULES: BashRule[] = [
     // Invoke-RestMethod/Invoke-WebRequest — as common in the wild as the
     // full names, and the piped-download shape is identical either way.
     pattern: /(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
+    test: after(/(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)/i, /\|\s*(?:iex|invoke-expression)/i),
   },
   {
     id: 'powershell-iex-nested',
@@ -230,6 +234,13 @@ export const BASH_RULES: BashRule[] = [
     // already tolerates flags before its target.
     pattern:
       /(?:\bdd\b[^\n]*\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)|\bmkfs(?:\.\w+)?\b[^\n]*\/dev\/|\bwipefs\b[^\n]*\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-))/i,
+    test: anyOf(
+      after(/\bdd\b/i, /\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)/i),
+      after(/\bmkfs(?:\.\w+)?\b/i, /\/dev\//i),
+      after(/\bwipefs\b/i, /\/dev\//i),
+      after(/\bshred\b/i, /\/dev\//i),
+      (t) => />\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)/i.test(t),
+    ),
   },
   {
     id: 'fork-bomb',
@@ -249,6 +260,12 @@ export const BASH_RULES: BashRule[] = [
     // `chmod 777 -R /` is the same hazard as `chmod -R 777 /` with the flag
     // and the mode swapped — both orders are real, so both are matched.
     pattern: /\bchmod\b[^\n]*(?:-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-[a-z]*R[a-z]*\s+\/(?:\s|$))/i,
+    // `-[a-z]*R[a-z]*` backtracked quadratically over a run of R's; a lookahead
+    // for the R and one greedy run cannot.
+    test: after(
+      /\bchmod\b/i,
+      /(?:-(?=[a-z]*R)[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-(?=[a-z]*R)[a-z]*\s+\/(?:\s|$))/i,
+    ),
   },
 
   // ── Risky: warn only ─────────────────────────────────────────────────────
@@ -260,24 +277,28 @@ export const BASH_RULES: BashRule[] = [
     // ref (a `+` prefix on a push refspec), and `--mirror` force-overwrites
     // every ref on the remote — same hazard as `--force`, different spelling.
     pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i,
+    test: after(/\bgit\s+push\b/i, /(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i),
   },
   {
     id: 'git-hard-reset',
     level: 'warn',
     reason: 'git reset --hard discards uncommitted work',
     pattern: /\bgit\s+reset\b[^\n]*--hard\b/i,
+    test: after(/\bgit\s+reset\b/i, /--hard\b/i),
   },
   {
     id: 'git-clean-force',
     level: 'warn',
     reason: 'git clean -fd permanently removes untracked files',
     pattern: /\bgit\s+clean\b[^\n]*-[a-z]*f/i,
+    test: after(/\bgit\s+clean\b/i, /-[a-z]*f/i),
   },
   {
     id: 'chmod-777',
     level: 'warn',
     reason: 'chmod 777 grants world-write — overly permissive',
     pattern: /\bchmod\b[^\n]*\b0?777\b/i,
+    test: after(/\bchmod\b/i, /\b0?777\b/i),
   },
   {
     id: 'history-wipe',
@@ -286,6 +307,29 @@ export const BASH_RULES: BashRule[] = [
     pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i,
   },
 ];
+
+/**
+ * `KEYWORD[^\n]*TAIL` in linear time: the pattern restarts its `[^\n]*` at
+ * every occurrence of the keyword and rescans to the end each time. It matches
+ * exactly when TAIL occurs at or after the end of the FIRST keyword match (a
+ * later keyword never ends earlier), so one keyword search and one TAIL search
+ * from there — in the whole text, so `\b` and lookarounds see the same
+ * neighbours — decide it. TAIL itself must not backtrack over long runs.
+ */
+function after(keyword: RegExp, tail: RegExp): (text: string) => boolean {
+  const kw = new RegExp(keyword.source, keyword.flags.replace(/[gy]/g, ''));
+  const tl = new RegExp(tail.source, `${tail.flags.replace(/[gy]/g, '')}g`);
+  return (text: string): boolean => {
+    const m = kw.exec(text);
+    if (m === null) return false;
+    tl.lastIndex = m.index + m[0].length;
+    return tl.test(text);
+  };
+}
+
+function anyOf(...tests: Array<(text: string) => boolean>): (text: string) => boolean {
+  return (text: string): boolean => tests.some((t) => t(text));
+}
 
 /**
  * `process-substitution-remote-fetch`'s pattern, in linear time: on some
@@ -790,6 +834,8 @@ const RUNNERS = new Set([
   'stdbuf',
   'xargs',
   'watch',
+  // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
+  'start',
 ]);
 
 /** Runner flags that consume the next word, so it is not the command. */
@@ -818,6 +864,20 @@ function resolveCommand(words: ShellWord[]): { index: number; elevated: boolean 
     if (!RUNNERS.has(name)) break;
     if (name === 'sudo' || name === 'doas') elevated = true;
     i += 1;
+    if (name === 'start') {
+      // Its `/x` switches (`/d DIR` takes a value) and one quoted title.
+      let titled = false;
+      while (i < words.length) {
+        const arg = words[i];
+        if (arg === undefined) break;
+        if (!titled && arg.quoted) {
+          titled = true;
+          i += 1;
+        } else if (/^\/[A-Za-z]+$/.test(arg.value)) i += /^\/d$/i.test(arg.value) ? 2 : 1;
+        else break;
+      }
+      continue;
+    }
     while (i < words.length) {
       const arg = words[i];
       if (arg === undefined) break;
@@ -867,6 +927,17 @@ function isCatastrophicTarget(raw: string): boolean {
   if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return true;
   // Native Windows drive roots: C:/, C:\, C:/*, C:\*.
   if (/^[A-Za-z]:[\\/]\*?$/.test(t)) return true;
+  // The same through cmd's and PowerShell's environment spellings — the home
+  // directory, the system drive and the system directories — and those
+  // directories named outright (fix round 2: `rmdir /s /q %USERPROFILE%`).
+  // The POSIX tokenizer drops an unquoted `\`, so `C:\Windows` may arrive
+  // as `C:Windows`.
+  if (
+    /^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)
+  ) {
+    return true;
+  }
+  if (/^[A-Za-z]:[\\/]?(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]\*?)?$/i.test(t)) return true;
   // Top-level system directories (exact, optionally trailing / or /*),
   // including macOS's capitalised ones.
   if (/^\/(?:etc|usr|bin|sbin|var|lib|lib64|boot|sys|proc|root|home|opt|dev|Users|System)(?:\/\*?)?$/.test(t)) {
@@ -1369,6 +1440,46 @@ function cmdCommandWords(words: readonly string[]): string[] {
 /** `cmd /c cmd /c …` nesting judged; deeper is not (a chain thousands deep once overflowed the stack). */
 const MAX_CMD_NESTING = 8;
 
+/** A word as a POSIX shell word that reads back as exactly itself. */
+function posixWord(word: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The line `cmd /c LINE` (or `/k`) runs, as text for the full assessment
+ * (`collect`). A first word that is itself a whole line (`cmd /c "rd /s /q
+ * C:\ & echo"`) is kept as written, its backslashes doubled — cmd reads them
+ * literally, a POSIX reader as escapes — and its `^x` escapes outside double
+ * quotes become POSIX `\x`, so `echo a ^& b` stays one command; every later
+ * shell word is quoted so it reads back as itself (`cmd /c rd /s /q C:\` keeps
+ * its `C:\`). cmd's own `&`, `&&`, `||` and `|` read the same way to the
+ * POSIX reader.
+ */
+function cmdLineText(args: readonly string[]): string | undefined {
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return undefined;
+  const [first, ...more] = args.slice(at + 1);
+  if (first === undefined) return undefined;
+  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
+  return [head, ...more.map(posixWord)].join(' ');
+}
+
+/** A cmd line respelled for the POSIX reader: `\` literal, `^x` outside double quotes an escaped `x`. */
+function cmdTextAsPosix(line: string): string {
+  let out = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === '\\') out += '\\\\';
+    else if (ch === '^' && !inQuote && i + 1 < line.length) {
+      i += 1;
+      out += `\\${line.charAt(i)}`;
+    } else out += ch;
+  }
+  return out;
+}
+
 /** The commands `cmd /c LINE` (or `/k`) runs — see {@link cmdEffects} for how the line is read. */
 function cmdLine(args: readonly string[]): CmdCommand[] {
   const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
@@ -1809,7 +1920,7 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
 // ── program text on the command line
 
 const PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
-const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
+const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
 /** `X run … python -c …`: tools that run an interpreter in a managed environment. */
 const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba']);
 
@@ -1819,6 +1930,13 @@ function isInterpreter(name: string): boolean {
 
 /** Commands that launch the program named after their own flags: `npx node …`, cmd's `start /b node …`. */
 const LAUNCHERS = new Set(['npx', 'bunx', 'pnpx', 'start']);
+/** Package managers whose subcommand launches a program: `pnpm dlx`, `npm exec`, `yarn dlx`, `bun x`, … */
+const LAUNCHER_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  npm: new Set(['exec', 'x']),
+  pnpm: new Set(['dlx', 'exec']),
+  yarn: new Set(['dlx', 'exec']),
+  bun: new Set(['x']),
+};
 /** Launcher options whose next word is their value, not the program (`npx -p pkg`). */
 const LAUNCHER_VALUED = new Set(['-p', '--package', '-c', '--call', '/d']);
 
@@ -1836,15 +1954,18 @@ function interpreterIndex(words: readonly ShellWord[], start: number): number {
   let i = start;
   for (let hops = 0; hops < 4 && i < words.length; hops += 1) {
     const name = interpreterName(words[i]?.value ?? '');
-    if (isInterpreter(name)) return i;
+    // `bun x` launches before `bun` interprets.
+    const launches = LAUNCHER_SUBCOMMANDS[name]?.has(words[i + 1]?.value ?? '') === true;
+    if (isInterpreter(name) && !launches) return i;
     if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === 'run') {
       for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
         if (isInterpreter(interpreterName(words[k]?.value ?? ''))) return k;
       }
       return -1;
     }
-    if (!LAUNCHERS.has(name)) return -1;
-    i += 1;
+    if (launches) i += 2;
+    else if (LAUNCHERS.has(name)) i += 1;
+    else return -1;
     // Past the launcher's own options (and `start`'s empty "" title).
     while (i < words.length) {
       const w = words[i]?.value ?? '';
@@ -1966,6 +2087,8 @@ function inlineCode(words: readonly ShellWord[], start: number): string[] {
     case 'node':
     case 'nodejs':
     case 'bun':
+    case 'tsx':
+    case 'ts-node':
       return nodeCode(args);
     case 'deno':
       return args[0] === 'eval' ? args.slice(1).filter((a) => !a.startsWith('-')).slice(0, 1) : [];
@@ -2001,7 +2124,7 @@ type CodeLang = 'python' | 'js' | 'other';
 
 function codeLang(interpreter: string): CodeLang {
   if (PYTHON.test(interpreter)) return 'python';
-  return ['node', 'nodejs', 'bun', 'deno'].includes(interpreter) ? 'js' : 'other';
+  return ['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node'].includes(interpreter) ? 'js' : 'other';
 }
 
 /**
@@ -2302,8 +2425,8 @@ interface Scope {
   raw: string;
   /** Where the `cd`s so far moved to; `''` = where the command started. */
   cwd: string;
-  /** Shared by every nested scope: set when a cap dropped part of the command. */
-  notes: { partial: boolean };
+  /** Shared by every nested scope: what a cap or the budget dropped, and the clock. */
+  notes: Notes;
 }
 
 /**
@@ -2363,6 +2486,16 @@ const DASH_C = /^-[A-Za-z]*c$/;
  */
 function nestedScripts(words: ShellWord[], start: number): string[] {
   const head = words[start];
+  // `npx -c "…"` / `npm exec -c "…"` runs its argument in a shell (fix round 2).
+  const launcher = head === undefined ? '' : commandName(head.value);
+  if (launcher === 'npx' || launcher === 'pnpx' || (launcher === 'npm' && words[start + 1]?.value === 'exec')) {
+    for (let i = start + 1; i < words.length; i += 1) {
+      const v = words[i]?.value ?? '';
+      if (v === '-c' || v === '--call') return words[i + 1] === undefined ? [] : [words[i + 1]?.value ?? ''];
+      if (v.startsWith('--call=')) return [v.slice('--call='.length)];
+      if (v === '--') break;
+    }
+  }
   if (head !== undefined && basename(head.value) === 'eval') {
     const script = words
       .slice(start + 1)
@@ -2479,11 +2612,17 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   out.push(...judgeEffects(dotNetEffects(cmd, scope.cwd), scope.raw));
 
   for (const statement of statements) {
+    // The total time budget: a hook that outlives Claude Code's 15 s timeout
+    // lets the command run unassessed, so what is left is reported instead.
+    if (scope.notes.now() > scope.notes.deadline) {
+      scope.notes.budget = true;
+      return;
+    }
     // The ReDoS cap applies to each STATEMENT — never to a line before it is
     // split, which let padding hide every statement after it (fix round 1).
     const masked = capText(collapseBlanks(statement.masked), scope.notes);
     for (const rule of BASH_RULES) {
-      if (rule.scope !== 'command' && rule.pattern.test(masked)) {
+      if (rule.scope !== 'command' && (rule.test ?? ((t: string) => rule.pattern.test(t)))(masked)) {
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
@@ -2512,6 +2651,14 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           }
           collect(script, depth + 1, out, { ...scope });
         }
+        // Every command of a `cmd /c` line gets the full assessment, like a
+        // top-level statement: deletes, pattern rules, nested shells (fix
+        // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
+        const head = words[resolved.index];
+        if (head !== undefined && commandName(head.value) === 'cmd') {
+          const line = cmdLineText(withoutRedirections(words.slice(resolved.index + 1)));
+          if (line !== undefined) collect(line, depth + 1, out, { ...scope });
+        }
       }
       const head = words[resolved.index];
       if (head !== undefined) {
@@ -2539,24 +2686,52 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
 
 /** The statement text the pattern rules read is capped here — see the module doc's ReDoS note. */
 const MAX_STATEMENT_LENGTH = 16 * 1024;
-/** The whole command is capped here: the corpus's longest real command is 58 KB. */
-const MAX_COMMAND_LENGTH = 2 * 1024 * 1024;
+/** The whole command is read to here: the corpus's longest real command is 58 KB. */
+const MAX_COMMAND_LENGTH = 512 * 1024;
+/**
+ * The assessment's time budget. The hook has 15 s in all; measured, a 512 KB
+ * command of the worst shapes takes well under a second, so this only backs
+ * the caps up on a machine far slower or busier than expected.
+ */
+const DEFAULT_BUDGET_MS = 2500;
 
-const RULE_PARTIAL: MatchedRule = {
-  id: 'partially-assessed',
-  level: 'warn',
-  reason: 'part of this command was not assessed (over 16 KB)',
-};
+export interface AssessOptions {
+  /** Milliseconds the assessment may take before the rest is reported as not assessed. */
+  budgetMs?: number;
+  /** The clock (tests). */
+  now?: () => number;
+}
+
+/** The warning for what a cap or the budget dropped — never a silent `ok` — naming which one. */
+function partialRule(notes: Notes): MatchedRule | null {
+  const causes = [
+    ...(notes.statement ? ['over 16 KB'] : []),
+    ...(notes.command ? ['over 512 KB'] : []),
+    ...(notes.budget ? ['assessment time budget exhausted'] : []),
+  ];
+  return causes.length === 0
+    ? null
+    : { id: 'partially-assessed', level: 'warn', reason: `part of this command was not assessed (${causes.join('; ')})` };
+}
 
 /** Runs of spaces and tabs as one space: no rule pattern tells them apart, and padding stops counting. */
 function collapseBlanks(text: string): string {
   return text.replace(/[ \t]{2,}/g, ' ');
 }
 
+/** What a cap or the budget dropped, shared by every nested scope; and the budget's clock. */
+interface Notes {
+  statement: boolean;
+  command: boolean;
+  budget: boolean;
+  deadline: number;
+  now: () => number;
+}
+
 /** `text` cut at the cap, noting that something was dropped. */
-function capText(text: string, notes: { partial: boolean }): string {
+function capText(text: string, notes: Notes): string {
   if (text.length <= MAX_STATEMENT_LENGTH) return text;
-  notes.partial = true;
+  notes.statement = true;
   return text.slice(0, MAX_STATEMENT_LENGTH);
 }
 
@@ -2564,15 +2739,23 @@ function capText(text: string, notes: { partial: boolean }): string {
  * Assess a shell command. The overall level is the most severe rule matched;
  * a command a cap cut short is at least a warning (`partially-assessed`).
  */
-export function assessBashCommand(command: string): BashAssessment {
+export function assessBashCommand(command: string, opts: AssessOptions = {}): BashAssessment {
   const whole = (command ?? '').trim();
   if (!whole) return { level: 'ok', reasons: [], rules: [] };
-  const notes = { partial: whole.length > MAX_COMMAND_LENGTH };
-  const cmd = notes.partial ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
+  const now = opts.now ?? ((): number => performance.now());
+  const notes: Notes = {
+    statement: false,
+    command: whole.length > MAX_COMMAND_LENGTH,
+    budget: false,
+    deadline: now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS),
+    now,
+  };
+  const cmd = notes.command ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
 
   const matched: MatchedRule[] = [];
   collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
-  if (notes.partial) matched.push({ ...RULE_PARTIAL });
+  const partial = partialRule(notes);
+  if (partial !== null) matched.push(partial);
 
   if (matched.length === 0) return { level: 'ok', reasons: [], rules: [] };
 
