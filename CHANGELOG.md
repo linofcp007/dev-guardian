@@ -1052,15 +1052,34 @@ keeps working (migrations 004–011 are additive).
   tool too. Every command of a `cmd /c` line now gets the full assessment of a
   top-level statement; `%USERPROFILE%`, `%SystemDrive%`, `$env:USERPROFILE`
   and `C:\Windows` / `C:\Users` / `C:\Program Files` are catastrophic delete
-  targets; cmd's `start` is followed to the program it runs.
+  targets; cmd's `start` is followed to the program it runs. What is nested
+  past the guard's three levels (`cmd /c cmd /c cmd /c cmd /c rd /s /q C:\`,
+  four `bash -c` or `eval` deep) is still not judged, but it warns "nested
+  more than 3 levels deep" where it was a silent `ok`.
+- **The PowerShell tool's commands are read with PowerShell's quoting too.**
+  Read only as a POSIX shell quotes, a Windows path ending in `\"` escaped its
+  closing quote and swallowed the rest of the line: `Remove-Item "C:\Users\"
+  -Recurse -Force` was `ok`, and so was anything after `Get-ChildItem
+  "C:\temp\" ;`. The guard now also reads the command the way PowerShell does
+  (backslash literal, backtick escapes, `''` and `""`) — the reading the
+  install hook already had — and the more severe verdict stands.
+  `check --bash … --powershell` does the same from a terminal.
 - **The shell guard and the install hook finish inside the hook's timeout.**
   The pattern rules were quadratic inside a statement (127 × `chmod
   -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s
   timeout, after which a command runs unassessed); they are linear now. The
   command is read to 512 KB and a 2.5 s budget backs the caps up, each named
-  in its warning. The install hook looks each package up once, at most 50
-  per command (60 KB of repeated `npm i x;` took ~57 s). Every measured worst case
-  now answers in under 1 s.
+  in its warning, checked between the commands of a statement as well as
+  between statements. Work inside one statement was still quadratic (64 KB of
+  `-c -c …` took 15 s; `find -exec`, `git -c`, `python -c`, `| sudo -x`,
+  `time -a … {`, the PowerShell environment check); it is linear now. A
+  command with ~125 000 operands (`rm a a … /`) overflowed the stack, and the
+  hook answered with no decision at all, so the command ran; it is assessed
+  now, and any assessment that fails part-way warns "the assessment failed"
+  (a block found before it still blocks). The install hook looks each package up once, at most 50 per command
+  (60 KB of repeated `npm i x;` took ~57 s), names not on the popular list
+  first, so popular padding cannot push another past the cap. The worst 512 KB
+  shape measured takes about 1.5 s in the shell guard.
 - **Padding a line no longer hides a catastrophic command from the shell
   guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
   `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
@@ -1088,7 +1107,8 @@ keeps working (migrations 004–011 are additive).
   deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` and
   `NUGET_FALLBACK_PACKAGES` count), and a machine-wide NuGet config's local
   folder (Visual Studio's offline feed) explains a 404 only for a package it
-  holds.
+  holds — every id a `.nupkg` name can split into (`foo.2.1.0.0.nupkg` is
+  `foo`, `foo.2` and `foo.2.1`).
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;
