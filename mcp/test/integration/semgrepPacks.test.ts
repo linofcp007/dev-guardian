@@ -269,9 +269,15 @@ describe('the encoding check can actually fail', () => {
     expect(renderOffences(offences)).toContain('LOCALE codec, not UTF-8');
   });
 
+  // Semgrep reads a rule file with the locale codec only outside Python's
+  // UTF-8 mode. With `PYTHONUTF8=1` in the environment — set machine-wide
+  // here since September — the poisoned pack loads cleanly and these two
+  // measured a setting instead of the hazard, so they pin UTF-8 mode off.
+  const LOCALE_CODEC = { env: { PYTHONUTF8: '0' } };
+
   it.skipIf(!AVAILABLE)('and semgrep --validate refuses the poisoned pack', () => {
     const target = poisonedCopy();
-    const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target]);
+    const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target], LOCALE_CODEC);
     expect(run.status).not.toBe(0);
   });
 
@@ -283,7 +289,7 @@ describe('the encoding check can actually fail', () => {
     const target = poisonedCopy();
     const dir = makeTempDir('guardian-semgrep-poison-target-');
     writeFileSync(resolve(dir, 'Sample.java'), 'class Sample { void f() {} }\n', 'utf8');
-    const run = runSemgrep(['--config', target, '--json', '--quiet', '--no-git-ignore', dir]);
+    const run = runSemgrep(['--config', target, '--json', '--quiet', '--no-git-ignore', dir], LOCALE_CODEC);
     expect(run.status).not.toBe(0);
     if (run.stdout !== '') {
       const parsed: unknown = JSON.parse(run.stdout);

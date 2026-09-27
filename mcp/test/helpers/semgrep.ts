@@ -38,7 +38,7 @@ import { spawnSync } from 'node:child_process';
 import { closeSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rmDir } from './tempDir.js';
+import { rmDirOrDefer } from './tempDir.js';
 
 /** Default bound on one Semgrep run. Below every rule-pack file's 180 s `testTimeout`. */
 export const SEMGREP_TIMEOUT_MS = 120_000;
@@ -63,6 +63,8 @@ export interface SemgrepRun {
 export interface SemgrepOptions {
   /** Overrides the bound for this call (and `GUARDIAN_TEST_SEMGREP_TIMEOUT_MS`). */
   readonly timeoutMs?: number;
+  /** Variables set over the inherited environment for this call. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 function semgrepCommand(): { file: string; prefix: string[] } {
@@ -100,6 +102,7 @@ export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}
   let result: ReturnType<typeof spawnSync>;
   try {
     result = spawnSync(file, [...prefix, ...args], {
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
       stdio: ['ignore', out, err],
       timeout: timeoutMs,
       killSignal: 'SIGKILL',
@@ -111,11 +114,8 @@ export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}
   }
   const stdout = readFileSync(outPath, 'utf8');
   const stderr = readFileSync(errPath, 'utf8');
-  try {
-    rmDir(io);
-  } catch {
-    // An orphaned semgrep-core may still hold the file open on Windows.
-  }
+  // An orphaned semgrep-core may still hold the file open on Windows.
+  rmDirOrDefer(io);
 
   const spawnError = result.error as NodeJS.ErrnoException | undefined;
   if (spawnError !== undefined) {
