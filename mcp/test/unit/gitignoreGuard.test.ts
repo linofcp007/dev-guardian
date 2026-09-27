@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -23,13 +24,13 @@ describe('ensureGuardianIgnored', () => {
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'not_a_repo' });
   });
 
-  it('creates .gitignore with .guardian/* + the baseline negation when missing', () => {
+  it('creates .gitignore with **/.guardian/* + the baseline negation when missing', () => {
     const dir = fixture('git-no-gitignore');
     const r = ensureGuardianIgnored(dir);
     expect(r).toEqual({ updated: true, reason: 'created' });
     const content = readFileSync(join(dir, '.gitignore'), 'utf8');
-    expect(content).toContain('.guardian/*');
-    expect(content).toContain('!.guardian/baseline.json');
+    expect(content).toContain('**/.guardian/*');
+    expect(content).toContain('!**/.guardian/baseline.json');
   });
 
   it('appends to an existing .gitignore that lacks the entry', () => {
@@ -38,15 +39,15 @@ describe('ensureGuardianIgnored', () => {
     expect(r).toEqual({ updated: true, reason: 'added' });
     const content = readFileSync(join(dir, '.gitignore'), 'utf8');
     expect(content).toContain('node_modules/');
-    expect(content).toContain('.guardian/*');
-    expect(content).toContain('!.guardian/baseline.json');
+    expect(content).toContain('**/.guardian/*');
+    expect(content).toContain('!**/.guardian/baseline.json');
   });
 
   it('leaves a .gitignore that already has the current form alone', () => {
     const dir = fixture('git-empty');
     writeFileSync(
       join(dir, '.gitignore'),
-      'node_modules/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+      'node_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
     );
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
   });
@@ -65,7 +66,7 @@ describe('ensureGuardianIgnored', () => {
       ['.guardian/', '.guardian/\n'],
       ['/.guardian', '/.guardian\n'],
       ['/.guardian/', '/.guardian/\n'],
-    ])('replaces bare "%s" with .guardian/* + the baseline negation', (_label, oldLine) => {
+    ])('replaces bare "%s" with **/.guardian/* + the baseline negation', (_label, oldLine) => {
       const dir = fixture('git-empty');
       writeFileSync(join(dir, '.gitignore'), `node_modules/\n${oldLine}`);
 
@@ -74,8 +75,8 @@ describe('ensureGuardianIgnored', () => {
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
       expect(content).toContain('node_modules/');
-      expect(content).toContain('.guardian/*');
-      expect(content).toContain('!.guardian/baseline.json');
+      expect(content).toContain('**/.guardian/*');
+      expect(content).toContain('!**/.guardian/baseline.json');
       // The bare directory-exclude line must be GONE, not merely
       // supplemented — its mere presence defeats the negation regardless
       // of where in the file it sits.
@@ -110,7 +111,7 @@ describe('ensureGuardianIgnored', () => {
       expect(r).toEqual({ updated: true, reason: 'upgraded' });
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
-      expect(content).toBe('# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n');
+      expect(content).toBe('# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n');
       expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
     });
 
@@ -127,7 +128,7 @@ describe('ensureGuardianIgnored', () => {
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
       expect(content).toBe(
-        '# header\nnode_modules/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+        '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
       );
       expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
     });
@@ -147,7 +148,7 @@ describe('ensureGuardianIgnored', () => {
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
       expect(content).toBe(
-        '# header\r\nnode_modules/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+        '# header\r\nnode_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
       );
       // No bare LF anywhere — every line ending stayed CRLF.
       expect(content).not.toMatch(/(?<!\r)\n/);
@@ -161,7 +162,7 @@ describe('ensureGuardianIgnored', () => {
       expect(r).toEqual({ updated: true, reason: 'upgraded' });
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
-      expect(content).toBe('# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n');
+      expect(content).toBe('# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n');
       expect(content).not.toMatch(/(?<!\r)\n/);
     });
 
@@ -173,7 +174,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/\r\nd/\r\n');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\r\nb/\nc/\r\nd/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+        'a/\r\nb/\nc/\r\nd/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
       );
     });
 
@@ -182,7 +183,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\nb/\r\n# dev-guardian outputs\r\n.guardian/\nc/\nd/\n');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\nb/\r\nc/\nd/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+        'a/\nb/\r\nc/\nd/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
       );
     });
 
@@ -191,7 +192,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\r\nb/\nc/\r\n# dev-guardian outputs\r\n.guardian/*\r\n!.guardian/baseline.json\r\n',
+        'a/\r\nb/\nc/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
       );
     });
   });
@@ -205,9 +206,41 @@ describe('ensureGuardianIgnored', () => {
     ensureGuardianIgnored(dir);
     const content = readFileSync(join(dir, '.gitignore'), 'utf8');
     const lines = content.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith('#'));
-    expect(lines).toContain('.guardian/*');
-    expect(lines).toContain('!.guardian/baseline.json');
+    expect(lines).toContain('**/.guardian/*');
+    expect(lines).toContain('!**/.guardian/baseline.json');
     expect(lines).not.toContain('.guardian/');
     expect(lines).not.toContain('.guardian');
+  });
+
+  // An unreleased build upgraded `.guardian/` — which matched at every depth —
+  // to a root-only `.guardian/*` pair, and a sub-project's `.guardian/` (its
+  // database and reports) turned up untracked in `git status`.
+  it('replaces the root-only pair an unreleased build wrote, header included', () => {
+    const dir = fixture('git-empty'); // '# header\nnode_modules/\n'
+    writeFileSync(
+      join(dir, '.gitignore'),
+      '# header\nnode_modules/\n# dev-guardian outputs\n.guardian/*\n!.guardian/baseline.json\n',
+    );
+    expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
+      '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
+    );
+    expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
+  });
+
+  it('as git reads it: every .guardian ignored at any depth, every baseline.json committable', () => {
+    const dir = makeTempDir('guard-real-git-');
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    expect(git('init', '-q').status).toBe(0);
+    ensureGuardianIgnored(dir);
+    // `check-ignore -q`: exit 0 = ignored, 1 = not ignored.
+    const ignored = (path: string): boolean => git('check-ignore', '-q', '--no-index', path).status === 0;
+    expect(ignored('.guardian/guardian.db')).toBe(true);
+    expect(ignored('.guardian/reports/scan.json')).toBe(true);
+    expect(ignored('packages/api/.guardian/guardian.db')).toBe(true);
+    expect(ignored('packages/api/.guardian/reports/scan.json')).toBe(true);
+    expect(ignored('.guardian/baseline.json')).toBe(false);
+    expect(ignored('packages/api/.guardian/baseline.json')).toBe(false);
+    expect(ignored('src/guardian.ts')).toBe(false);
   });
 });

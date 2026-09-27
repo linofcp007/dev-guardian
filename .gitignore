@@ -47,8 +47,10 @@ build/
 # Spec docs (local only)
 .specs/
 
-# dev-guardian MCP runtime artefacts (DB + scan reports)
-.guardian/
+# dev-guardian MCP runtime artefacts (DB + scan reports), at any depth; a
+# CI baseline stays committable. The MCP server's own form (gitignoreGuard.ts).
+**/.guardian/*
+!**/.guardian/baseline.json
 
 # superpowers process scratch (briefs, reports, review packages)
 .superpowers/

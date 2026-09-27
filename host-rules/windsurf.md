@@ -161,9 +161,9 @@ copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAS
 pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository
 file declaring it is refused outright, because a fork's pull request could otherwise
 run arbitrary code on the runner. A CI run leaves `.guardian/reports/` in the working
-tree (only the SQLite database is ephemeral) — add `.guardian/*` and
-`!.guardian/baseline.json` to `.gitignore` by hand (never a bare `.guardian/`: git
-cannot re-include the baseline below an ignored directory); the MCP server writes
+tree (only the SQLite database is ephemeral) — add `**/.guardian/*` and
+`!**/.guardian/baseline.json` to `.gitignore` by hand (never a bare `.guardian/`: git
+cannot re-include the baseline below an ignored directory; `**/` covers a sub-project's too); the MCP server writes
 them every time it starts against a project, but the CLI never starts that server.
 
 ## Local dashboard (offline, read-only)

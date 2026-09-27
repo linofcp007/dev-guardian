@@ -13,7 +13,8 @@
  *   4. Reap scans whose owning process died (storage/maintenance.ts).
  *      Best-effort: a failure is logged and never stops the server.
  *   5. Keep `.guardian/` out of git in the target project's `.gitignore`
- *      (`.guardian/*` plus `!.guardian/baseline.json` — gitignoreGuard.ts).
+ *      (every `.guardian` directory's contents, at any depth, with its
+ *      `baseline.json` re-included — gitignoreGuard.ts).
  *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
  *   7. Connect the stdio transport. Block until the host closes it. A client
  *      that closes our stdout (EPIPE on the next write) is a disconnect, not

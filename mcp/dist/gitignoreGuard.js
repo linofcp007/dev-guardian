@@ -1,6 +1,7 @@
 /**
- * Ensure the target project's `.gitignore` excludes `.guardian/*` while
- * re-including `.guardian/baseline.json`.
+ * Ensure the target project's `.gitignore` excludes every `.guardian`
+ * directory's contents (`**\/.guardian/*`) while re-including its
+ * `baseline.json` (`!**\/.guardian/baseline.json`).
  *
  * Called once at server startup (after the storage is opened, so we know
  * which project root we're operating on). Idempotent: a project with the
@@ -14,21 +15,34 @@
  * excludes the directory's CONTENTS instead of the directory itself, which
  * is what makes the per-file negation below it able to do anything at all.
  *
+ * **Why `**\/`.** A pattern with a slash anywhere but at its end matches
+ * from the `.gitignore`'s own directory only, so `.guardian/*` covers the
+ * root and nothing below it — while the bare `.guardian/` it replaced, having
+ * no inner slash, matched at every depth. A tool pointed at a subdirectory
+ * (a monorepo's `packages/api`) keeps its database and reports in
+ * `packages/api/.guardian/`; once an earlier, unreleased build of this guard
+ * upgraded a project's `.guardian/` to the root-only pair, that directory
+ * showed up in `git status` as untracked, one `git add -A` away from being
+ * committed — this repository's own `mcp/.guardian/` did. `**\/` matches at
+ * every depth the way the bare line did, and lets a sub-project commit its
+ * own baseline.
+ *
  * **Upgrading, not just detecting.** Every earlier release of this tool
  * wrote the bare `.guardian/` line (or one of its `/.guardian`,
- * `.guardian`, `/.guardian/` spellings) — a project that already has one
- * needs it REMOVED, not merely supplemented: appending the new block below
- * an old bare line changes nothing, because the bare line still excludes
- * the directory outright. So `alreadyIgnored` is followed by an upgrade
- * pass whenever any of the old spellings survives, regardless of whether
- * the new block is also already present.
+ * `.guardian`, `/.guardian/` spellings), and that unreleased build the
+ * root-only `.guardian/*` + `!.guardian/baseline.json` pair — a project that
+ * already has either needs it REMOVED, not merely supplemented: appending the
+ * new block below an old bare line changes nothing, because the bare line
+ * still excludes the directory outright. So an upgrade pass runs whenever any
+ * legacy line survives, regardless of whether the new block is also already
+ * present.
  *
- * **The legacy pair, not just the entry.** Both shapes this tool has ever
- * written (`created`: `${HEADER}\n${ENTRY}\n`; `added`: the same two lines
+ * **The legacy pair, not just the entry.** Every shape this tool has ever
+ * written (`created`: the header and its entry lines; `added`: the same lines
  * appended after a blank line) put the `# dev-guardian outputs` HEADER
- * directly above the bare entry. Dropping only the entry line left the old
+ * directly above the first entry. Dropping only the entry line left the old
  * header behind, and the new block appended below it duplicated the
- * header. The upgrade removes a bare entry's paired header too, when it is
+ * header. The upgrade removes a legacy entry's paired header too, when it is
  * the line immediately above it — never any OTHER occurrence of that exact
  * comment, since nothing else in this file ever writes it.
  *
@@ -46,14 +60,20 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const HEADER = '# dev-guardian outputs';
-const ENTRY = '.guardian/*';
-const BASELINE_NEGATION = '!.guardian/baseline.json';
-/** Every bare spelling this tool has ever written for the old, unfixed entry. */
+const ENTRY = '**/.guardian/*';
+const BASELINE_NEGATION = '!**/.guardian/baseline.json';
+/**
+ * Every line an earlier release wrote that the current block replaces: the
+ * bare directory spellings, which defeat the negation, and the root-only pair
+ * an unreleased build wrote, which stopped ignoring a `.guardian` below the root.
+ */
 const OLD_DIRECTORY_PATTERNS = new Set([
     '.guardian',
     '.guardian/',
     '/.guardian',
     '/.guardian/',
+    '.guardian/*',
+    '!.guardian/baseline.json',
 ]);
 export function ensureGuardianIgnored(projectPath) {
     const gitignorePath = join(projectPath, '.gitignore');

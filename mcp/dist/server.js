@@ -37300,13 +37300,15 @@ import { resolve as resolve21 } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 var HEADER = "# dev-guardian outputs";
-var ENTRY = ".guardian/*";
-var BASELINE_NEGATION = "!.guardian/baseline.json";
+var ENTRY = "**/.guardian/*";
+var BASELINE_NEGATION = "!**/.guardian/baseline.json";
 var OLD_DIRECTORY_PATTERNS = /* @__PURE__ */ new Set([
   ".guardian",
   ".guardian/",
   "/.guardian",
-  "/.guardian/"
+  "/.guardian/",
+  ".guardian/*",
+  "!.guardian/baseline.json"
 ]);
 function ensureGuardianIgnored(projectPath) {
   const gitignorePath = join(projectPath, ".gitignore");

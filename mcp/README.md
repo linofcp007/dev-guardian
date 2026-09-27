@@ -68,7 +68,7 @@ npm run dev            # tsx src/server.ts, no build
 3. Apply the SQL migrations in `src/storage/migrations/`, each under the write lock.
 4. Reap scans left `running` by a process that is gone.
 5. Probe a bash — Git Bash, then WSL, then `bash` on `PATH` on Windows; `/bin/bash`, then `PATH` elsewhere — and cache the choice. Nothing but `install_toolchain`'s bundled install scripts and `init_project`'s first-pass status report uses it; without one those report `no_bash_shell` (or skip) and everything else works.
-6. Keep `.guardian/` out of git in the project's `.gitignore` (`.guardian/*` plus `!.guardian/baseline.json`, so the CI baseline can be committed).
+6. Keep `.guardian/` out of git in the project's `.gitignore` (`**/.guardian/*` plus `!**/.guardian/baseline.json`, so the CI baseline can be committed and a sub-project's `.guardian/` stays out too).
 7. Register the tools and resources and connect stdio. Diagnostics go to stderr only; stdout is the JSON-RPC stream. A client that closes stdout ends the server with exit 0.
 8. After connecting, prune old scans in short background batches (`GUARDIAN_RETENTION_SCANS`, default 50 per project and scan type).
 

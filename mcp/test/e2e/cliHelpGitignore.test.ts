@@ -5,8 +5,8 @@
  * It used to say "add `.guardian/`" — a bare directory entry, after which
  * git cannot re-include anything below it: `!.guardian/baseline.json` is
  * powerless, and the baseline the CI gate reads can never be committed.
- * The server itself writes `.guardian/*` plus `!.guardian/baseline.json`
- * (`gitignoreGuard.ts`); the help — and the host rules, which said the
+ * The server itself writes the two lines in `gitignoreGuard.ts` (every
+ * `.guardian`'s contents, its `baseline.json` re-included); the help — and the host rules, which said the
  * same — must name the same two lines.
  */
 
@@ -38,8 +38,8 @@ describe('scan --help: the .gitignore advice matches what the server writes', ()
     const written = readFileSync(join(project, '.gitignore'), 'utf8')
       .split(/\r?\n/)
       .map((l) => l.trim())
-      .filter((l) => l.startsWith('.guardian') || l.startsWith('!.guardian'));
-    expect(written).toEqual(['.guardian/*', '!.guardian/baseline.json']);
+      .filter((l) => l.includes('.guardian') && !l.startsWith('#'));
+    expect(written).toEqual(['**/.guardian/*', '!**/.guardian/baseline.json']);
 
     const text = help();
     for (const line of written) expect(text).toContain(`\`${line}\``);

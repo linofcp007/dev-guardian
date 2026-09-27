@@ -868,9 +868,12 @@ keeps working (migrations 004–011 are additive).
     under `test/` or `fixtures/` was bucketed `likely_false_positive`).
   - The `.gitignore` guard wrote a bare `.guardian/` line, under which git
     cannot re-include `.guardian/baseline.json` — the CI baseline could never
-    be committed. It writes `.guardian/*` + `!.guardian/baseline.json`,
+    be committed. It writes `**/.guardian/*` + `!**/.guardian/baseline.json`,
     upgrades the old line in any of its four spellings (header included), and
-    keeps the file's line endings.
+    keeps the file's line endings. The `**/` keeps what the bare line did:
+    it matched at every depth, so a sub-project's `.guardian/` (a scan pointed
+    at `packages/api`) stays out of `git status`, and can commit its own
+    baseline.
 - **Configuration and CLI:**
   - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
     there — the literal placeholder became part of the path and the server
@@ -935,8 +938,8 @@ keeps working (migrations 004–011 are additive).
 - **`dev-guardian scan --help` and the host rules said to add `.guardian/` to
   `.gitignore`** — a bare directory entry, below which git cannot re-include
   `baseline.json`, so the baseline CI needs could never be committed. Both now
-  name the two lines the server writes: `.guardian/*` and
-  `!.guardian/baseline.json`.
+  name the two lines the server writes: `**/.guardian/*` and
+  `!**/.guardian/baseline.json`.
 - **`install_toolchain`'s elevation hint** said only "re-call with
   `elevation_allowed=true`". Install steps run without a terminal, so that
   works only with passwordless sudo (or, on Windows, a server already running

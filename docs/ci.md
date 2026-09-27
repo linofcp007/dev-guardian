@@ -50,11 +50,11 @@ node dev-guardian.mjs baseline update --project .
 - **A CI run leaves `.guardian/` in the workspace** (`security_scan_full` and `map_attack_surface` write raw reports under `.guardian/reports/`). The MCP server adds the right `.gitignore` lines whenever it starts in a project; the CLI never does. A project scanned only in CI needs them by hand — and they must let the baseline through:
 
   ```text
-  .guardian/*
-  !.guardian/baseline.json
+  **/.guardian/*
+  !**/.guardian/baseline.json
   ```
 
-  A bare `.guardian/` line would stop you committing the baseline: git cannot re-include a file inside an excluded directory.
+  A bare `.guardian/` line would stop you committing the baseline: git cannot re-include a file inside an excluded directory. Without the `**/` the lines match at the repository root only, and a sub-project's `.guardian/` (a scan pointed at `packages/api`) shows up untracked.
 
 ## `ci-init`
 
