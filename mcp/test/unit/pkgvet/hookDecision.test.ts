@@ -547,6 +547,36 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
       expect(d?.deny).toMatch(/MAL-2026-9/);
     });
 
+    // Fix round 3: the note was lost when the first 512 KB held no install.
+    it('a command over 512 KB whose start installs nothing still says what was not looked at', async () => {
+      const f = fakeFetch({});
+      const d = await decideInstallCommand(`${'echo x; '.repeat(70_000)}npm i evil-pkg`, opts(f.fetchImpl));
+      expect(d?.context).toContain('past the first 512 KB of this command were not looked for');
+      expect(f.calls).toEqual([]);
+    });
+
+    // Fix round 3: the 50 looked up are the names NOT on the popular list
+    // first, so padding with 50 popular names cannot push a malicious one out.
+    it('padding with 60 popular names does not push a malicious package past the cap', async () => {
+      const popularNames = Array.from({ length: 60 }, (_, i) => `popular-${i}`);
+      const routes: Record<string, Answer | ((body: unknown) => Answer)> = {
+        'https://registry.npmjs.org/evil-pkg': npmDoc('1.0.0'),
+        [OSV]: (body) => ({
+          body: {
+            results: (body as { queries: Array<{ package?: { name?: string } }> }).queries.map((q) =>
+              q.package?.name === 'evil-pkg' ? { vulns: [{ id: 'MAL-2026-11' }] } : {},
+            ),
+          },
+        }),
+      };
+      for (const n of popularNames) routes[`https://registry.npmjs.org/${n}`] = npmDoc('1.0.0');
+      const d = await decideInstallCommand(
+        `npm i ${popularNames.join(' ')} evil-pkg`,
+        opts(fakeFetch(routes).fetchImpl, { popular: { npm: popularNames } }),
+      );
+      expect(d?.deny).toMatch(/MAL-2026-11/);
+    });
+
     it('a command over 512 KB is vetted from its start, and never denies a missing name (a cut word is not a name)', async () => {
       const command = `npm i ${Array.from({ length: 60_000 }, (_, i) => `zz-missing-${i}`).join(' ')}`;
       expect(command.length).toBeGreaterThan(512 * 1024);

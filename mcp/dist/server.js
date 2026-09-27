@@ -70189,18 +70189,19 @@ function localFeedHas(folder, configPath, id, ctx) {
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
-    return e === lower || nupkgId(e) === lower;
+    return e === lower || nupkgIds(e).includes(lower);
   });
 }
 var NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
-function nupkgId(file) {
+function nupkgIds(file) {
   const m = /^(.+)\.nupkg$/i.exec(file);
-  if (m === null) return void 0;
+  if (m === null) return [];
   const parts = (m[1] ?? "").split(".");
+  const ids2 = [];
   for (let i2 = 1; i2 < parts.length; i2 += 1) {
-    if (NUGET_VERSION.test(parts.slice(i2).join("."))) return parts.slice(0, i2).join(".");
+    if (NUGET_VERSION.test(parts.slice(i2).join("."))) ids2.push(parts.slice(0, i2).join("."));
   }
-  return void 0;
+  return ids2;
 }
 function nugetRegistry(name, ctx) {
   const fromEnv = envRegistry("nuget", ctx);

@@ -29,6 +29,8 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 import { parseInstallCommands } from './parseCommand.js';
+import { loadPopularIndex } from './popular.js';
+import { buildPopularIndex, normalizePackageName } from './typosquat.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
 import { isExactVersion } from './versions.js';
 function label(r) {
@@ -49,42 +51,65 @@ const MAX_PARSED_LENGTH = 512 * 1024;
  * command over 512 KB is read from its start only, and then no command may be
  * denied for a missing name: its last word may have been cut in half.
  */
-function boundedInstalls(command, shell) {
+function boundedInstalls(command, shell, isPopular) {
     const cut = command.length > MAX_PARSED_LENGTH;
     const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell });
+    const key = (pkg) => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
     const seen = new Set();
-    let kept = 0;
-    let notVetted = 0;
+    const unique = [];
+    for (const c of parsed) {
+        for (const pkg of c.packages) {
+            if (seen.has(key(pkg)))
+                continue;
+            seen.add(key(pkg));
+            unique.push(pkg);
+        }
+    }
+    // The names NOT on the popular list first (fix round 3): 50 popular names
+    // in front of a malicious one must not push it past the cap.
+    const chosen = new Set([...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, MAX_VETTED_PACKAGES).map(key));
     const commands = [];
     for (const c of parsed) {
-        const packages = c.packages.filter((pkg) => {
-            const key = `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
-            if (seen.has(key))
-                return false;
-            seen.add(key);
-            if (kept >= MAX_VETTED_PACKAGES) {
-                notVetted += 1;
-                return false;
-            }
-            kept += 1;
-            return true;
-        });
+        const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
         if (packages.length === 0)
             continue;
         const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
         commands.push({ ...c, packages, uncertain });
     }
-    return { commands, notVetted, cut };
+    return { commands, notVetted: Math.max(0, unique.length - MAX_VETTED_PACKAGES), cut };
 }
+/** Whether a package is on its ecosystem's popular list — the lists `vet_packages` itself uses. */
+function popularTest(opts) {
+    const indexes = new Map();
+    return (pkg) => {
+        let index = indexes.get(pkg.ecosystem);
+        if (index === undefined) {
+            const override = opts.popular?.[pkg.ecosystem];
+            index =
+                override === null
+                    ? null
+                    : override !== undefined
+                        ? buildPopularIndex(pkg.ecosystem, override)
+                        : opts.popularDir === undefined
+                            ? loadPopularIndex(pkg.ecosystem)
+                            : loadPopularIndex(pkg.ecosystem, opts.popularDir);
+            indexes.set(pkg.ecosystem, index);
+        }
+        return index !== null && index.set.has(normalizePackageName(pkg.ecosystem, pkg.name));
+    };
+}
+/** The note for a command read only to its first 512 KB. */
+const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 /**
  * `null` when there is nothing to say: no install command, or every package
  * vetted clean.
  */
 export async function decideInstallCommand(command, opts) {
     const shell = opts.shell ?? 'bash';
-    const { commands, notVetted, cut } = boundedInstalls(command, shell);
+    const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts));
+    // A cut command whose start installs nothing still says what was not read.
     if (commands.length === 0)
-        return null;
+        return cut ? { context: CUT_NOTE } : null;
     const env = opts.env ?? process.env;
     const offline = env['GUARDIAN_OFFLINE'] === '1';
     const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
@@ -149,7 +174,7 @@ export async function decideInstallCommand(command, opts) {
         lines.push(`dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`);
     }
     if (cut)
-        lines.push('dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.');
+        lines.push(CUT_NOTE);
     return lines.length > 0 ? { context: lines.join('\n') } : null;
 }
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';

@@ -463,6 +463,10 @@ describe('customRegistryFor — the configuration locations that were still miss
       ['Foo', 'Foo.1.0.0+build.5.nupkg', true],
       ['Foo', 'Foo.Bar.1.0.0.nupkg', false],
       ['Foo', 'Foo.nupkg', false],
+      // Fix round 3: every split where `id.` is followed by a version counts —
+      // `foo.2.1.0.0` is `foo` 2.1.0.0 AND `foo.2` 1.0.0.
+      ['foo.2', 'foo.2.1.0.0.nupkg', true],
+      ['foo.2.1', 'foo.2.1.0.0.nupkg', true],
     ] as const)('%s held by %s: %s', (id, file, held) => {
       const feed = offlineFeed();
       writeFileSync(join(feed, file), '');

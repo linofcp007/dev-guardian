@@ -502,3 +502,27 @@ describe('Part Y — edge shapes, one table', () => {
     ]);
   });
 });
+
+// Fix round 3: the PowerShell environment check restarted `[^;\n]*` at every
+// `Set-Item` / `New-Item` — quadratic on every command the hook sees.
+describe('parseInstallCommands — linear on the shapes that were not', () => {
+  it.each([
+    ['Set-Item', 'Set-Item '.repeat(28_000)],
+    ['New-Item', 'New-Item '.repeat(28_000)],
+    ['New-Item … then an install', `${'New-Item '.repeat(28_000)}; npm i lodash`],
+  ])('250 KB of %s parses in well under 1 s', (_label, command) => {
+    const t0 = performance.now();
+    parseInstallCommands(command, { shell: 'bash' });
+    parseInstallCommands(command, { shell: 'powershell' });
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  it('the environment check still sees Set-Item Env: and New-Item env: in a statement', () => {
+    for (const command of [
+      'Set-Item Env:NPM_CONFIG_REGISTRY https://npm.corp; npm i x',
+      'New-Item -Path env:PIP_INDEX_URL -Value https://x; pip install y',
+    ]) {
+      expect(parseInstallCommands(command).flatMap((c) => c.uncertain).join(' ')).toMatch(/environment/);
+    }
+  });
+});

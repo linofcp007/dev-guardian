@@ -738,7 +738,7 @@ function localFeedHas(folder: string, configPath: string, id: string, ctx: Regis
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
-    return e === lower || nupkgId(e) === lower;
+    return e === lower || nupkgIds(e).includes(lower);
   });
 }
 
@@ -746,18 +746,21 @@ function localFeedHas(folder: string, configPath: string, id: string, ctx: Regis
 const NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
 
 /**
- * The package id of a `<id>.<version>.nupkg` file name: the id ends where the
- * version begins — at the first dot-separated segment from which the rest is a
- * NuGet version (fix round 2: `Foo.2FA.1.0.0.nupkg` is `Foo.2FA`, not `Foo`).
+ * The package ids a `<id>.<version>.nupkg` file name can mean: every split
+ * where `<id>.` is followed by a NuGet version (fix round 2:
+ * `Foo.2FA.1.0.0.nupkg` is `Foo.2FA`, not `Foo`; fix round 3: `foo.2.1.0.0` is
+ * `foo` 2.1.0.0 and `foo.2` 1.0.0 and `foo.2.1` 0.0 — a false "held" only
+ * turns a deny into a warning).
  */
-function nupkgId(file: string): string | undefined {
+function nupkgIds(file: string): string[] {
   const m = /^(.+)\.nupkg$/i.exec(file);
-  if (m === null) return undefined;
+  if (m === null) return [];
   const parts = (m[1] ?? '').split('.');
+  const ids: string[] = [];
   for (let i = 1; i < parts.length; i += 1) {
-    if (NUGET_VERSION.test(parts.slice(i).join('.'))) return parts.slice(0, i).join('.');
+    if (NUGET_VERSION.test(parts.slice(i).join('.'))) ids.push(parts.slice(0, i).join('.'));
   }
-  return undefined;
+  return ids;
 }
 
 function nugetRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {

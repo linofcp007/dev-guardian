@@ -26,6 +26,9 @@
  */
 
 import { splitShell, type ShellWord } from '../hooks/bashGuard.js';
+import { powershellAsPosix } from '../hooks/powershellText.js';
+
+export { powershellAsPosix };
 import type { PackageSpec, PkgEcosystem, SkippedSpec } from './types.js';
 
 export interface InstallCommand {
@@ -750,74 +753,6 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
   return out;
 }
 
-/** Characters PowerShell separates words on that a POSIX shell does not (NBSP, NEL, the Unicode spaces). */
-const UNICODE_SPACE = /[\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\f\v]/;
-
-/** `text` as a POSIX single-quoted word. */
-function posixSingle(text: string): string {
-  return `'${text.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * The command as PowerShell reads it, respelled for a POSIX reader
- * (`splitShell`): in `'…'`, `''` is one literal quote; in `"…"`, a backtick
- * escapes the next character, `""` is one quote and a backslash is literal;
- * outside quotes, a backtick escapes the next character and a backtick at the
- * end of a line continues it, a backslash is literal, an unquoted comma
- * separates the elements of an array (each one its own argument to a native
- * command) and a Unicode space separates words. Everything else is left as it
- * is — this is a reading for install vetting, not a PowerShell parser.
- */
-export function powershellAsPosix(text: string): string {
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const ch = text.charAt(i);
-    if (ch === "'" || ch === '"') {
-      let lit = '';
-      let j = i + 1;
-      while (j < text.length) {
-        const c = text.charAt(j);
-        if (ch === '"' && c === '`' && j + 1 < text.length) {
-          lit += text.charAt(j + 1);
-          j += 2;
-          continue;
-        }
-        if (c === ch) {
-          if (text.charAt(j + 1) === ch) {
-            lit += ch;
-            j += 2;
-            continue;
-          }
-          break;
-        }
-        lit += c;
-        j += 1;
-      }
-      out += posixSingle(lit);
-      i = j + 1;
-      continue;
-    }
-    if (ch === '`') {
-      const next = text.charAt(i + 1);
-      if (next === '\n') i += 2;
-      else if (next === '\r' && text.charAt(i + 2) === '\n') i += 3;
-      else {
-        if (next !== '') out += posixSingle(next);
-        i += 2;
-        continue;
-      }
-      out += ' ';
-      continue;
-    }
-    if (ch === '\\') out += '\\\\';
-    else if (ch === ',' || UNICODE_SPACE.test(ch)) out += ' ';
-    else out += ch;
-    i += 1;
-  }
-  return out;
-}
-
 /**
  * The command without its unquoted comments: `# …` to end of line (a `#`
  * that STARTS a word — `user/repo#main` is not a comment) and PowerShell
@@ -1089,7 +1024,22 @@ function changesDirectory(words: readonly ShellWord[]): boolean {
 }
 
 const ENV_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx']);
-const POWERSHELL_ENV = /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|\b(?:Set-Item|New-Item)\b[^;\n]*\benv:|SetEnvironmentVariable/i;
+/**
+ * PowerShell setting an environment variable: `$env:X =`,
+ * `SetEnvironmentVariable`, or `Set-Item` / `New-Item` followed by `env:` in
+ * the same `;`/newline segment. The last one was one regex whose `[^;\n]*`
+ * restarted at every `Set-Item` — 250 KB of them took 14 s, on every command
+ * the hook sees (fix round 3). Per segment, one search after the first
+ * cmdlet decides it the same way.
+ */
+function powershellSetsEnv(command: string): boolean {
+  if (/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|SetEnvironmentVariable/i.test(command)) return true;
+  for (const segment of command.split(/[;\n]/)) {
+    const m = /\b(?:Set-Item|New-Item)\b/i.exec(segment);
+    if (m !== null && /\benv:/i.test(segment.slice(m.index + m[0].length))) return true;
+  }
+  return false;
+}
 
 /**
  * Ruling (b): does ANY part of the command set an environment variable —
@@ -1099,7 +1049,7 @@ const POWERSHELL_ENV = /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|\b(?:Set-Item|New-Item)
  * so a name missing from the PUBLIC registry proves nothing afterwards.
  */
 function changesEnvironment(command: string, statements: ReadonlyArray<{ commands: ShellWord[][] }>): boolean {
-  if (POWERSHELL_ENV.test(command)) return true;
+  if (powershellSetsEnv(command)) return true;
   for (const statement of statements) {
     for (const words of statement.commands) {
       const start = commandStart(words);
