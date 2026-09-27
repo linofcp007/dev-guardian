@@ -68620,8 +68620,10 @@ var BASH_RULES = [
     // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
     // shell name — used to fall through this pattern, which only allowed
     // `sudo` directly followed by the shell.
-    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i,
-    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i)
+    // A flag never contains `|`: `-\S+` spanned pipes and made `| sudo -x|sudo
+    // -x|…` quadratic (fix round 3).
+    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i,
+    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i)
   },
   {
     id: "powershell-iex-download",

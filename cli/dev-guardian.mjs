@@ -9,6 +9,7 @@
  *                           the hooks use, from a plain terminal / CI:
  *                             --file <path>   scan a file for secrets
  *                             --bash "<cmd>"  risk-assess a shell command
+ *                             --powershell    read it as PowerShell quotes too
  *   scan                    Headless CI entry point: run the same scan
  *                           pipeline the MCP tools run, gate the result
  *                           against the committed baseline, and report
@@ -188,7 +189,7 @@ function usage() {
 
 Usage:
   node cli/dev-guardian.mjs mcp-config <host|all> [options]
-  node cli/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
+  node cli/dev-guardian.mjs check (--file <path> | --bash "<command>" [--powershell]) [--min high|medium] [--json]
   node cli/dev-guardian.mjs scan [options]
   node cli/dev-guardian.mjs baseline update [options]
   node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [options]
@@ -215,7 +216,9 @@ mcp-config — wire the MCP server into an AI host
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
-  --min high|medium    Minimum secret confidence to report (default: medium)
+  --powershell         With --bash: also read it with PowerShell's quoting, as
+                        the hook does for the PowerShell tool
+  --min high|medium   Minimum secret confidence to report (default: medium)
   --json               Machine-readable output
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
              2 = usage error (no --file/--bash given) or the --file path does
@@ -474,7 +477,7 @@ function cmdMcpConfig(argv) {
 }
 
 function parseCheckArgs(argv) {
-  const out = { file: undefined, bash: undefined, min: 'medium', json: false };
+  const out = { file: undefined, bash: undefined, min: 'medium', json: false, powershell: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--file') out.file = argv[++i];
@@ -484,6 +487,7 @@ function parseCheckArgs(argv) {
     else if (a === '--min') out.min = argv[++i];
     else if (a.startsWith('--min=')) out.min = a.slice('--min='.length);
     else if (a === '--json') out.json = true;
+    else if (a === '--powershell') out.powershell = true;
   }
   if (out.min !== 'high' && out.min !== 'medium') out.min = 'medium';
   return out;
@@ -506,7 +510,7 @@ function cmdCheck(argv) {
   const opts = parseCheckArgs(argv);
 
   if (opts.bash != null) {
-    const a = assessBashCommand(opts.bash);
+    const a = assessBashCommand(opts.bash, { shell: opts.powershell ? 'powershell' : 'bash' });
     if (opts.json) {
       process.stdout.write(JSON.stringify(a) + '\n');
     } else {

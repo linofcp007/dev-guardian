@@ -97,6 +97,8 @@
  * Pure functions. No I/O. No dependencies.
  */
 
+import { powershellAsPosix } from './powershellText.js';
+
 export type BashRiskLevel = 'ok' | 'warn' | 'block';
 
 /**
@@ -157,8 +159,10 @@ export const BASH_RULES: BashRule[] = [
     // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
     // shell name — used to fall through this pattern, which only allowed
     // `sudo` directly followed by the shell.
-    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i,
-    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba|z|da)?sh\b/i),
+    // A flag never contains `|`: `-\S+` spanned pipes and made `| sudo -x|sudo
+    // -x|…` quadratic (fix round 3).
+    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i,
+    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i),
   },
   {
     id: 'powershell-iex-download',
@@ -582,6 +586,8 @@ export function splitShell(command: string): ShellSplit {
   let bufQuoted = false;
   let bufRedirects: number[] = [];
   let hasWord = false;
+  /** Every word of the current command after its first is an unquoted `-` flag. */
+  let dashTail = true;
   /** Last code character emitted, to tell a background `&` from `2>&1`. */
   let lastCode = '';
   const heredocs: PendingHeredoc[] = [];
@@ -613,15 +619,18 @@ export function splitShell(command: string): ShellSplit {
     const unquotedHead = first !== undefined && !first.quoted ? first.value : '';
     if (opensBody && unquotedHead === 'function' && words.length === 2) {
       words = [];
+      dashTail = true;
       buf = '';
       bufQuoted = false;
       bufRedirects = [];
       hasWord = false;
       return;
     }
-    const afterTime =
-      opensBody && unquotedHead === 'time' && words.slice(1).every((w) => !w.quoted && w.value.startsWith('-'));
+    // `dashTail`: every word after the first is an unquoted `-` flag — kept
+    // as the words arrive (re-checking them at every `{` was quadratic).
+    const afterTime = opensBody && unquotedHead === 'time' && dashTail;
     if (hasWord && !reserved && !afterTime) {
+      if (words.length >= 1 && (bufQuoted || !buf.startsWith('-'))) dashTail = false;
       words.push(
         bufRedirects.length > 0
           ? { value: buf, quoted: bufQuoted, redirectAt: bufRedirects }
@@ -637,6 +646,7 @@ export function splitShell(command: string): ShellSplit {
     endWord();
     if (words.length > 0) commands.push(words);
     words = [];
+    dashTail = true;
   };
   const endStatement = (): void => {
     endCommand();
@@ -1116,6 +1126,12 @@ function namesLooseningKey(text: string): boolean {
   );
 }
 
+/** Whether the whole command names a loosening key — computed once per assessment (fix round 3). */
+function loosens(scope: Scope): boolean {
+  if (scope.notes.loosens === undefined) scope.notes.loosens = namesLooseningKey(scope.raw);
+  return scope.notes.loosens;
+}
+
 /** A command word's name: its last path segment, lower-cased, without `.exe`. */
 function commandName(word: string): string {
   return basename(word).toLowerCase().replace(/\.exe$/, '');
@@ -1256,12 +1272,22 @@ function noEffects(): Effects {
   return { writes: [], removes: [], dirs: [], special: [], links: [] };
 }
 
+/**
+ * `into.push(...from)` without the spread: a spread passes every element as an
+ * argument, and past ~125 000 of them (`rm a a a … /`, 245 KB) the engine
+ * throws RangeError — which the hook turned into no decision at all (fix
+ * round 3, I-1). Every append of a user-sized array in this file goes here.
+ */
+function pushAll<T>(into: T[], from: readonly T[]): void {
+  for (const x of from) into.push(x);
+}
+
 function mergeEffects(into: Effects, from: Effects): void {
-  into.writes.push(...from.writes);
-  into.removes.push(...from.removes);
-  into.dirs.push(...from.dirs);
-  into.special.push(...from.special);
-  into.links.push(...from.links);
+  pushAll(into.writes, from.writes);
+  pushAll(into.removes, from.removes);
+  pushAll(into.dirs, from.dirs);
+  pushAll(into.special, from.special);
+  pushAll(into.links, from.links);
 }
 
 
@@ -1490,7 +1516,7 @@ function cmdLine(args: readonly string[]): CmdCommand[] {
   const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
   // The shell words after the first one continue the line's LAST command.
   const last = commands[commands.length - 1];
-  if (last !== undefined) last.words.push(...args.slice(at + 2));
+  if (last !== undefined) pushAll(last.words, args.slice(at + 2));
   return commands;
 }
 
@@ -1505,7 +1531,7 @@ function cmdInnerCommands(args: readonly string[], depth = 0): ShellWord[][] {
   for (const command of cmdLine(args)) {
     const words = cmdCommandWords(command.words);
     const name = (words[0] ?? '').toLowerCase().replace(/\.exe$/, '');
-    if (name === 'cmd') out.push(...cmdInnerCommands(words.slice(1), depth + 1));
+    if (name === 'cmd') pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
     else out.push(words.map((value) => ({ value, quoted: false })));
   }
   return out;
@@ -1519,7 +1545,7 @@ function cmdEffects(args: readonly string[], cwd: string, depth = 0): Effects {
   for (const command of commands) {
     const [raw, ...rest] = cmdCommandWords(command.words);
     const name = (raw ?? '').toLowerCase().replace(/\.exe$/, '');
-    e.writes.push(...command.redirects.map((r) => resolveFrom(dir, r)));
+    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
     mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
     dir = cwdAfter(name, rest, dir) ?? dir;
   }
@@ -1836,22 +1862,22 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
   const e = noEffects();
   switch (name) {
     case 'mkfifo':
-      e.special.push(...operands(args, new Set(['-m', '--mode'])).map(at));
+      pushAll(e.special, operands(args, new Set(['-m', '--mode'])).map(at));
       return e;
     case 'mknod':
-      e.special.push(...operands(args, new Set(['-m', '--mode'])).slice(0, 1).map(at));
+      pushAll(e.special, operands(args, new Set(['-m', '--mode'])).slice(0, 1).map(at));
       return e;
     case 'ln':
-      e.links.push(...lnDestinations(args).map(at));
+      pushAll(e.links, lnDestinations(args).map(at));
       return e;
     case 'mklink':
-      e.links.push(...mklinkDestinations(args).map(at));
+      pushAll(e.links, mklinkDestinations(args).map(at));
       return e;
     case 'new-item':
     case 'ni': {
       const item = newItemArgs(args);
-      if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType)) e.links.push(...item.paths.map(at));
-      else if (item.itemType === '' || /^file$/i.test(item.itemType)) e.writes.push(...item.paths.map(at));
+      if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType)) pushAll(e.links, item.paths.map(at));
+      else if (item.itemType === '' || /^file$/i.test(item.itemType)) pushAll(e.writes, item.paths.map(at));
       return e;
     }
     case 'cp':
@@ -1865,10 +1891,11 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
     case 'move': {
       const t = parseTransfer(args, name === 'copy' || name === 'move');
       const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
-      if (moves) e.removes.push(...t.sources.map(at));
+      if (moves) pushAll(e.removes, t.sources.map(at));
       if (t.dest === undefined) return e;
       const dest = t.dest;
-      e.writes.push(...(t.into ? [] : [at(dest)]), ...t.sources.map((s) => at(intoDir(dest, s))));
+      if (!t.into) e.writes.push(at(dest));
+      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
       if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
       return e;
     }
@@ -1908,11 +1935,11 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
     default:
       break;
   }
-  if (REMOVERS.has(name)) e.removes.push(...operands(args, new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
+  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
   const written = commandWriteDestinations(name, args).map(at);
-  e.writes.push(...written);
+  pushAll(e.writes, written);
   if (name === 'shred' && args.some((a) => a === '--remove' || a.startsWith('--remove=') || /^-[a-zA-Z]*u/.test(a))) {
-    e.removes.push(...written);
+    pushAll(e.removes, written);
   }
   return e;
 }
@@ -1940,6 +1967,13 @@ const LAUNCHER_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
 /** Launcher options whose next word is their value, not the program (`npx -p pkg`). */
 const LAUNCHER_VALUED = new Set(['-p', '--package', '-c', '--call', '/d']);
 
+/** The index of the first word at or after `from` that is not a `-` flag (`words.length` if none). */
+function firstNonFlag(words: readonly ShellWord[], from: number): number {
+  let k = from;
+  while (k < words.length && (words[k]?.value ?? '').startsWith('-')) k += 1;
+  return k;
+}
+
 /** An interpreter's name as written — `node@20` (through `npx`) is `node`. */
 function interpreterName(word: string): string {
   return commandName(word).replace(/@[\w.^~<>=-]*$/, '');
@@ -1954,8 +1988,10 @@ function interpreterIndex(words: readonly ShellWord[], start: number): number {
   let i = start;
   for (let hops = 0; hops < 4 && i < words.length; hops += 1) {
     const name = interpreterName(words[i]?.value ?? '');
-    // `bun x` launches before `bun` interprets.
-    const launches = LAUNCHER_SUBCOMMANDS[name]?.has(words[i + 1]?.value ?? '') === true;
+    // `bun x` launches before `bun` interprets; global flags may come first
+    // (`pnpm --silent dlx`, `npm --yes exec`).
+    const sub = LAUNCHER_SUBCOMMANDS[name] === undefined ? -1 : firstNonFlag(words, i + 1);
+    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? '') === true;
     if (isInterpreter(name) && !launches) return i;
     if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === 'run') {
       for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
@@ -1963,7 +1999,7 @@ function interpreterIndex(words: readonly ShellWord[], start: number): number {
       }
       return -1;
     }
-    if (launches) i += 2;
+    if (launches) i = sub + 1;
     else if (LAUNCHERS.has(name)) i += 1;
     else return -1;
     // Past the launcher's own options (and `start`'s empty "" title).
@@ -2365,7 +2401,7 @@ const RULE_SETTINGS: MatchedRule = {
  * write of `.claude/settings*.json` whose command names a loosening key
  * anywhere (`raw`).
  */
-function judgeEffects(effects: Effects, raw: string): MatchedRule[] {
+function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   const e: Effects = {
     writes: effects.writes.map(tail),
     removes: effects.removes.map(tail),
@@ -2382,7 +2418,7 @@ function judgeEffects(effects: Effects, raw: string): MatchedRule[] {
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
-  if (e.writes.some((p) => CLAUDE_SETTINGS_PATH.test(p)) && namesLooseningKey(raw)) out.push({ ...RULE_SETTINGS });
+  if (e.writes.some((p) => CLAUDE_SETTINGS_PATH.test(p)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }
 
@@ -2411,11 +2447,11 @@ function turnsPluginOff(words: readonly ShellWord[], start: number): boolean {
 }
 
 /** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
-function judgeCode(code: string, lang: CodeLang, raw: string): MatchedRule[] {
+function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
   const out: MatchedRule[] = [];
   if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
-  if (literalsNameClaudeSettings(literals) && namesLooseningKey(raw)) out.push({ ...RULE_SETTINGS });
+  if (literalsNameClaudeSettings(literals) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }
 
@@ -2440,14 +2476,14 @@ function assessGuardConfig(words: ShellWord[], start: number, scope: Scope): Mat
   const head = words[start];
   if (head === undefined) return [];
   const e = effectsOf(commandName(head.value), withoutRedirections(words.slice(start + 1)), scope.cwd);
-  e.writes.push(...redirectTargets(words).map((t) => resolveFrom(scope.cwd, t)));
-  const out = judgeEffects(e, scope.raw);
+  pushAll(e.writes, redirectTargets(words).map((t) => resolveFrom(scope.cwd, t)));
+  const out = judgeEffects(e, scope);
   // Each command of a `cmd /c` line, as if it stood alone (M1).
   const commands = commandName(head.value) === 'cmd' ? cmdInnerCommands(words.slice(start + 1).map((w) => w.value)) : [];
   for (const [cmdWords, at] of [[words, start] as const, ...commands.map((c) => [c, 0] as const)]) {
     if (turnsPluginOff(cmdWords, at)) out.push({ ...RULE_PLUGIN_OFF });
     const lang = codeLang(interpreterName(cmdWords[interpreterIndex(cmdWords, at)]?.value ?? ''));
-    for (const code of inlineCode(cmdWords, at)) out.push(...judgeCode(code, lang, scope.raw));
+    for (const code of inlineCode(cmdWords, at)) pushAll(out, judgeCode(code, lang, scope));
   }
   return out;
 }
@@ -2488,7 +2524,7 @@ function nestedScripts(words: ShellWord[], start: number): string[] {
   const head = words[start];
   // `npx -c "…"` / `npm exec -c "…"` runs its argument in a shell (fix round 2).
   const launcher = head === undefined ? '' : commandName(head.value);
-  if (launcher === 'npx' || launcher === 'pnpx' || (launcher === 'npm' && words[start + 1]?.value === 'exec')) {
+  if (launcher === 'npx' || launcher === 'pnpx' || (launcher === 'npm' && words[firstNonFlag(words, start + 1)]?.value === 'exec')) {
     for (let i = start + 1; i < words.length; i += 1) {
       const v = words[i]?.value ?? '';
       if (v === '-c' || v === '--call') return words[i + 1] === undefined ? [] : [words[i + 1]?.value ?? ''];
@@ -2504,6 +2540,7 @@ function nestedScripts(words: ShellWord[], start: number): string[] {
       .trim();
     return script.length > 0 ? [script] : [];
   }
+  let sawShell = false;
   for (let i = start; i < words.length; i += 1) {
     const word = words[i];
     if (word === undefined) continue;
@@ -2514,11 +2551,14 @@ function nestedScripts(words: ShellWord[], start: number): string[] {
         name,
       ).filter((s) => s.trim().length > 0);
     }
-    if (word.quoted || !DASH_C.test(word.value)) continue;
-    const namesShell = words.slice(start, i).some((w) => SHELLS.has(basename(w.value)));
-    if (!namesShell) continue;
-    const script = words[i + 1];
-    return script === undefined ? [] : [script.value];
+    // A running flag, not a re-slice of the words before every `-…c` word:
+    // that was quadratic (`-c -c -c …`, `find -exec`, `git -c`, `python
+    // -c`: 64 KB took 15 s — fix round 3, I-2).
+    if (!word.quoted && DASH_C.test(word.value) && sawShell) {
+      const script = words[i + 1];
+      return script === undefined ? [] : [script.value];
+    }
+    if (SHELLS.has(basename(word.value))) sawShell = true;
   }
   return [];
 }
@@ -2561,7 +2601,7 @@ function fedScripts(
 
   if (statement.commands.length === 1 && statement.heredocBodies) {
     const only = statement.commands[0];
-    if (only !== undefined && reads(only)) scripts.push(...statement.heredocBodies.map((text) => ({ text, reader: only })));
+    if (only !== undefined && reads(only)) pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: only })));
   }
 
   if (statement.commands.length >= 2) {
@@ -2609,7 +2649,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `[IO.File]::WriteAllText(…)`: the `(` that opens its arguments is a
   // statement boundary to `splitShell`, so it is judged on the command text.
-  out.push(...judgeEffects(dotNetEffects(cmd, scope.cwd), scope.raw));
+  pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd), scope));
 
   for (const statement of statements) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
@@ -2627,15 +2667,30 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
     }
     for (const words of statement.commands) {
+      // The budget is checked per command too: one statement can hold a
+      // pipeline of thousands of commands (fix round 3, I-2).
+      if (scope.notes.now() > scope.notes.deadline) {
+        scope.notes.budget = true;
+        return;
+      }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
       const del = assessRecursiveDelete(words, resolved.index);
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index);
       if (find !== null) out.push(find);
-      out.push(...assessGuardConfig(words, resolved.index, scope));
+      pushAll(out, assessGuardConfig(words, resolved.index, scope));
+      const scripts = nestedScripts(words, resolved.index);
+      const cmdHead = words[resolved.index];
+      const line =
+        cmdHead !== undefined && commandName(cmdHead.value) === 'cmd'
+          ? cmdLineText(withoutRedirections(words.slice(resolved.index + 1)))
+          : undefined;
+      // Past the nesting depth, what is nested is not judged — and that is a
+      // warning, never a silent ok (fix round 3, I-4).
+      if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined)) scope.notes.depth = true;
       if (depth < MAX_NESTING) {
-        for (const script of nestedScripts(words, resolved.index)) {
+        for (const script of scripts) {
           // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
           // script IS a download, executed without ever spelling `| sh`.
           // Recursing alone would not catch this: the extracted script is
@@ -2654,11 +2709,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
-        const head = words[resolved.index];
-        if (head !== undefined && commandName(head.value) === 'cmd') {
-          const line = cmdLineText(withoutRedirections(words.slice(resolved.index + 1)));
-          if (line !== undefined) collect(line, depth + 1, out, { ...scope });
-        }
+        if (line !== undefined) collect(line, depth + 1, out, { ...scope });
       }
       const head = words[resolved.index];
       if (head !== undefined) {
@@ -2675,11 +2726,12 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // statement or the *preceding* pipeline member). A program an
     // interpreter reads the same way (`python - <<EOF`) is judged as program
     // text, like `python -c`.
+    const fed = fedScripts(statement, isBareShellStdin);
     if (depth < MAX_NESTING) {
-      for (const { text } of fedScripts(statement, isBareShellStdin)) collect(text, depth + 1, out, { ...scope });
-    }
+      for (const { text } of fed) collect(text, depth + 1, out, { ...scope });
+    } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text, reader } of fedScripts(statement, isBareInterpreterStdin)) {
-      out.push(...judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope.raw));
+      pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
     }
   }
 }
@@ -2690,8 +2742,8 @@ const MAX_STATEMENT_LENGTH = 16 * 1024;
 const MAX_COMMAND_LENGTH = 512 * 1024;
 /**
  * The assessment's time budget. The hook has 15 s in all; measured, a 512 KB
- * command of the worst shapes takes well under a second, so this only backs
- * the caps up on a machine far slower or busier than expected.
+ * command of the worst shapes (`<(<(…`, `$($(…`) takes about 1.5 s, so this
+ * only backs the caps up on a machine far slower or busier than expected.
  */
 const DEFAULT_BUDGET_MS = 2500;
 
@@ -2700,6 +2752,13 @@ export interface AssessOptions {
   budgetMs?: number;
   /** The clock (tests). */
   now?: () => number;
+  /**
+   * The shell that will run the command. For `powershell` the command is ALSO
+   * read the way PowerShell quotes (`powershellAsPosix`: backslash literal,
+   * backtick escapes, `''` / `""`), and the more severe verdict of the two
+   * readings wins (fix round 3, I-3, controller ruling).
+   */
+  shell?: 'bash' | 'powershell';
 }
 
 /** The warning for what a cap or the budget dropped — never a silent `ok` — naming which one. */
@@ -2708,6 +2767,8 @@ function partialRule(notes: Notes): MatchedRule | null {
     ...(notes.statement ? ['over 16 KB'] : []),
     ...(notes.command ? ['over 512 KB'] : []),
     ...(notes.budget ? ['assessment time budget exhausted'] : []),
+    ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
+    ...(notes.failed ? ['the assessment failed'] : []),
   ];
   return causes.length === 0
     ? null
@@ -2724,6 +2785,12 @@ interface Notes {
   statement: boolean;
   command: boolean;
   budget: boolean;
+  /** A nested script, cmd line or fed script past {@link MAX_NESTING}, not judged. */
+  depth: boolean;
+  /** {@link namesLooseningKey} of the whole command, once computed. */
+  loosens: boolean | undefined;
+  /** The assessment threw part-way; what it found before that still counts. */
+  failed: boolean;
   deadline: number;
   now: () => number;
 }
@@ -2743,17 +2810,44 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   const whole = (command ?? '').trim();
   if (!whole) return { level: 'ok', reasons: [], rules: [] };
   const now = opts.now ?? ((): number => performance.now());
+  const deadline = now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
+  if (opts.shell !== 'powershell') return assessReading(whole, now, deadline);
+  // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
+  // closing quote and swallows the rest of the command, with no warning.
+  // PowerShell's own reading goes first, so the one budget is never spent on
+  // the POSIX reading before the reading that matches what will run; a block
+  // needs no second reading.
+  const asPowerShell = powershellAsPosix(whole);
+  const ps = assessReading(asPowerShell, now, deadline);
+  if (asPowerShell === whole || ps.level === 'block') return ps;
+  const posix = assessReading(whole, now, deadline);
+  return LEVEL_RANK[posix.level] > LEVEL_RANK[ps.level] ? posix : ps;
+}
+
+/** One reading of the command, assessed. */
+function assessReading(whole: string, now: () => number, deadline: number): BashAssessment {
   const notes: Notes = {
     statement: false,
     command: whole.length > MAX_COMMAND_LENGTH,
     budget: false,
-    deadline: now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS),
+    depth: false,
+    loosens: undefined,
+    failed: false,
+    deadline,
     now,
   };
   const cmd = notes.command ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
 
   const matched: MatchedRule[] = [];
-  collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+  // An exception here used to escape to the hook, which then answered with
+  // no decision at all — and the command ran unassessed (fix round 3, I-1:
+  // 125 000 operands overflowed the stack). Whatever throws now, the answer
+  // is at least a warning, and a block found before it still blocks.
+  try {
+    collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+  } catch {
+    notes.failed = true;
+  }
   const partial = partialRule(notes);
   if (partial !== null) matched.push(partial);
 

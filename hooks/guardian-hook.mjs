@@ -569,7 +569,10 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
   if (typeof command !== 'string' || !command) noop();
 
   const { assessBashCommand } = await loadDetectors();
-  const a = assessBashCommand(command);
+  // The PowerShell tool's commands are also read with PowerShell's quoting:
+  // under POSIX quoting alone, `Remove-Item "C:\Users\" -Recurse -Force` hid
+  // its path behind an escaped closing quote and read as ok.
+  const a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash' });
 
   if (a.level === 'block' && cfg.bash.block) {
     // Deliberately does not say HOW to turn this off (item 6) — that used to
