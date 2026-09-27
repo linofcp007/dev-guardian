@@ -37,6 +37,10 @@ export default defineConfig({
     // the mechanism and the measurements.
     // canonicalTmpdir.ts: os.tmpdir() in its canonical spelling — see the file.
     setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts'],
+    // Removes, before and after the run, the temp directories a test's
+    // cleanup could not (a timed-out test's process still held them) — see
+    // `LEFTOVERS_FILE` in test/helpers/tempDir.ts.
+    globalSetup: ['./test/setup/tempLeftovers.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

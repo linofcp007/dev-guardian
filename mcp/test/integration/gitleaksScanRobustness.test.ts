@@ -16,7 +16,7 @@
 import { execa } from 'execa';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -26,6 +26,8 @@ const faults = vi.hoisted(() => ({
   uncommittedFails: false,
   countFails: false,
   copies: 0,
+  /** Every `guardian-gitleaks-*` copy the scan made, removed after each test. */
+  copyDirs: [] as string[],
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -38,6 +40,11 @@ vi.mock('node:fs', async (importOriginal) => {
         throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${String(from)}'`), { code: 'EBUSY' });
       }
       actual.copyFileSync(from, to);
+    },
+    mkdtempSync: (prefix: string) => {
+      const dir = actual.mkdtempSync(prefix);
+      if (prefix.includes('guardian-gitleaks-')) faults.copyDirs.push(dir);
+      return dir;
     },
     rmSync: (path: string, opts?: Parameters<typeof actual.rmSync>[1]) => {
       if (faults.rmFails && String(path).includes('guardian-gitleaks-')) {
@@ -76,9 +83,15 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
-import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { cleanupTempDirs, makeTempDir, rmDirOrDefer } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+// The scan's own copy is left behind on purpose when `rmFails` is set — and
+// then it is this file's to remove, or every run leaves one (109 had piled up).
+afterEach(() => {
+  faults.rmFails = false;
+  for (const dir of faults.copyDirs.splice(0)) rmDirOrDefer(dir);
+});
 beforeAll(async () => {
   await import('../../src/tools/scanSecrets.js');
 });

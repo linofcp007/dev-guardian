@@ -36,7 +36,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -47,6 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, beforeAll } from 'vitest';
 
 import { detectOs } from '../../src/platform/osDetect.js';
+import { rmDirOrDefer } from '../helpers/tempDir.js';
 import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -226,13 +226,9 @@ function rmDir(dir: string): void {
   // result — an exception raised inside `finally` replaces an in-flight
   // failure from the `try` block above it, which would turn a correctly
   // failing assertion into a confusing, unrelated EPERM instead. A directory
-  // left behind because cleanup itself failed is a leak to notice later,
-  // not a reason to hide what the test actually found.
-  try {
-    rmSync(dir, { recursive: true, force: true });
-  } catch {
-    /* best-effort; see above */
-  }
+  // left behind because cleanup itself failed is removed at the end of the
+  // run (`rmDirOrDefer`), never a reason to hide what the test found.
+  rmDirOrDefer(dir);
 }
 
 /* ------------------------------------------------------------------ */
@@ -602,7 +598,9 @@ const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(9);`;
  * then listens on `argv[1]` — for the "scan throws while the app is
  * healthy" test below, where proving the started TREE (not just the
  * direct process) is torn down is the whole point, same reasoning as
- * `appRunner.test.ts`'s own fixtures.
+ * `appRunner.test.ts`'s own fixtures — including the grandchild ending by
+ * itself after ten minutes, so a test that times out cannot leave it running
+ * for good.
  */
 const FIXTURE_APP_WITH_GRANDCHILD_SCRIPT = `
 const { createServer } = require('node:http');
@@ -610,7 +608,7 @@ const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const port = Number(process.argv[1]);
 const pidfile = process.argv[2];
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));

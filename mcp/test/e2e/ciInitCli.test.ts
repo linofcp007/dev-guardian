@@ -18,7 +18,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -30,6 +29,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { detectOs } from '../../src/platform/osDetect.js';
 import { candidatesFor } from '../../src/platform/shellProbe.js';
 import { isWslLauncher, resolveExecutable } from '../helpers/resolveExecutable.js';
+import { rmDirOrDefer } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
@@ -76,7 +76,7 @@ function makeProject(): string {
   return dir;
 }
 afterEach(() => {
-  for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  for (const d of tempDirs.splice(0)) rmDirOrDefer(d);
 });
 
 // Fix round 2: this repo bumps `.claude-plugin/plugin.json`'s `version`

@@ -27,13 +27,86 @@
  * one got shipped twice.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 /** Recursive delete that retries the Windows lock errors instead of throwing. */
 export function rmDir(path: string): void {
   rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+/**
+ * The directories a cleanup could not remove, one per line, for
+ * {@link removeLeftovers} to remove at the start and the end of the next run
+ * (`test/setup/tempLeftovers.ts`).
+ *
+ * `rmDir`'s retries last a second. A test that TIMED OUT leaves its scanner,
+ * `git` or app process running — vitest abandons the test's promise and
+ * kills nothing — and on Windows a directory that is a live process's working
+ * directory, or holds a file it has open, cannot be removed. The cleanup gave
+ * up, swallowed the error, and the directory stayed: measured on 2026-09-27,
+ * the OS temp directory held 109 `guardian-gitleaks-*`, 40
+ * `guardian-app-runner-*`, 23 `guardian-ci-init-*` and a tail of a dozen more
+ * prefixes, all from the two days before, every leftover of a test that timed
+ * out under load. By the end of the run those processes have exited, or the
+ * next run finds them gone.
+ */
+export const LEFTOVERS_FILE = join(tmpdir(), 'dev-guardian-test-leftovers.txt');
+
+/** {@link rmDir}; when something still holds the directory, it is listed for {@link removeLeftovers} instead. */
+export function rmDirOrDefer(dir: string, list = LEFTOVERS_FILE): void {
+  try {
+    rmDir(dir);
+  } catch {
+    try {
+      appendFileSync(list, `${dir}\n`);
+    } catch {
+      /* the directory stays; nothing more can be done from here */
+    }
+  }
+}
+
+/**
+ * Only what a test made: a directory inside the OS temp directory, or a
+ * `dev-guardian-test-*` directly in the home directory. Anything else listed
+ * is dropped unread — the list is a plain file anyone can write.
+ */
+export function isDisposable(dir: string): boolean {
+  let real: string;
+  try {
+    real = realpathSync.native(dir);
+  } catch {
+    return false; // gone already
+  }
+  const inTmp = relative(realpathSync.native(tmpdir()), real);
+  if (inTmp !== '' && !inTmp.startsWith('..') && !isAbsolute(inTmp)) return true;
+  return dirname(real) === realpathSync.native(homedir()) && basename(real).startsWith('dev-guardian-test-');
+}
+
+/** Removes every listed directory it can; the ones still held stay listed for the next run. */
+export function removeLeftovers(list = LEFTOVERS_FILE): void {
+  let listed: string[];
+  try {
+    listed = readFileSync(list, 'utf8').split(/\r?\n/).filter((l) => l !== '');
+  } catch {
+    return; // no list: nothing was left behind
+  }
+  const still = [...new Set(listed)].filter((dir) => {
+    if (!isDisposable(dir)) return false;
+    try {
+      rmDir(dir);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  try {
+    if (still.length === 0) rmSync(list, { force: true });
+    else writeFileSync(list, `${still.join('\n')}\n`);
+  } catch {
+    /* the next run tries again */
+  }
 }
 
 /**
@@ -81,17 +154,10 @@ export function makeTempDir(prefix: string): string {
  *
  * Runs at `afterAll` rather than `afterEach` deliberately — a directory
  * created in `beforeAll` and used by every test in the file must outlive each
- * individual test. Failures are swallowed: cleanup must never convert a
- * passing suite into a failing one, and a directory a child process still
- * holds open is the OS's problem, not the test's. `rmDir` already retries the
- * Windows lock errors before giving up.
+ * individual test. Failures never throw: cleanup must never convert a
+ * passing suite into a failing one. A directory a child process still holds
+ * open is listed for the end of the run instead ({@link rmDirOrDefer}).
  */
 export function cleanupTempDirs(): void {
-  for (const dir of created.splice(0)) {
-    try {
-      rmDir(dir);
-    } catch {
-      // Intentionally ignored — see the doc comment.
-    }
-  }
+  for (const dir of created.splice(0)) rmDirOrDefer(dir);
 }

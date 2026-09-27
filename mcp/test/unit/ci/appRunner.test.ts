@@ -26,11 +26,12 @@
  * `detached` comment.
  */
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startApp } from '../../../src/ci/appRunner.js';
+import { rmDirOrDefer } from '../../helpers/tempDir.js';
 
 /* ------------------------------------------------------------------ */
 /* Fixture scripts — plain `node -e` programs, no dependencies.        */
@@ -70,6 +71,12 @@ import { startApp } from '../../../src/ci/appRunner.js';
  * Job Object; POSIX needs `detached: false` (default) to STAY in the
  * parent's process group, because that is the one `killTree` can reach and
  * the one a real `npm start` grandchild is actually in.
+ *
+ * Every long-lived process these fixtures start ends by itself after ten
+ * minutes (`setTimeout`, not an endless `setInterval`): the longest test here
+ * takes three, and a test that times out kills nothing — its detached
+ * grandchild used to live on for good, holding its temp directory open (two
+ * were found running hours later, on 2026-09-27).
  */
 const GOOD_APP_SCRIPT = `
 const { createServer } = require('node:http');
@@ -78,7 +85,7 @@ const { writeFileSync } = require('node:fs');
 const port = Number(process.argv[1]);
 const pidfile = process.argv[2];
 const delayMs = Number(process.argv[3] || '0');
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
@@ -91,18 +98,18 @@ gc.on('spawn', () => {
 /**
  * Spawns a grandchild immediately (platform-conditional `detached` — see
  * GOOD_APP_SCRIPT's comment on why), reports pids to `argv[1]`, then never
- * listens anywhere and never exits on its own — for the timeout tests.
+ * listens anywhere and does not exit on its own for ten minutes — for the timeout tests.
  */
 const NEVER_ANSWERS_SCRIPT = `
 const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const pidfile = process.argv[1];
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
 });
-setInterval(() => {}, 60000);
+setTimeout(() => {}, 600000);
 `;
 
 /**
@@ -418,14 +425,9 @@ describe('startApp', () => {
     workDir = mkdtempSync(join(tmpdir(), 'guardian-app-runner-'));
   });
 
-  afterEach(() => {
-    try {
-      rmSync(workDir, { recursive: true, force: true });
-    } catch {
-      /* best-effort — a locked handle here is a leak to notice, not a
-       * reason to fail an unrelated test */
-    }
-  });
+  // A locked handle here is no reason to fail an unrelated test; the
+  // directory is removed at the end of the run instead.
+  afterEach(() => rmDirOrDefer(workDir));
 
   it('resolves once the health url answers', async () => {
     const port = await getFreePort();

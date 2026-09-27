@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, parse, relative } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -6,7 +6,7 @@ import {
   InvalidProjectPathError,
   resolveProjectPath,
 } from '../../../src/platform/projectPath.js';
-import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+import { makeTempDir, cleanupTempDirs, rmDirOrDefer } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 
@@ -49,10 +49,16 @@ describe('resolveProjectPath', () => {
     expect(() => resolveProjectPath(homedir())).toThrowError(InvalidProjectPathError);
   });
 
+  // A direct child of home, not of tmpdir (on Linux /tmp is not under home) —
+  // so `makeTempDir` cannot make it, and it is removed here. Without this, every
+  // run left one `~/dev-guardian-test-<ms>` behind: 377 had piled up.
   it('accepts subdirectories of home', () => {
-    const sub = join(homedir(), `dev-guardian-test-${Date.now()}`);
-    mkdirSync(sub, { recursive: true });
-    expect(resolveProjectPath(sub).path).toBe(realpathSync.native(sub));
+    const sub = mkdtempSync(join(homedir(), 'dev-guardian-test-'));
+    try {
+      expect(resolveProjectPath(sub).path).toBe(realpathSync.native(sub));
+    } finally {
+      rmDirOrDefer(sub);
+    }
   });
 });
 

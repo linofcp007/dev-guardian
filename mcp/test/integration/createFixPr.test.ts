@@ -47,7 +47,7 @@ import type { FixGroup } from '../../src/fixpr/types.js';
 import type { Finding } from '../../src/types.js';
 import '../../src/registerAll.js';
 import { okResult } from '../helpers/toolResult.js';
-import { rmDir } from '../helpers/tempDir.js';
+import { rmDirOrDefer } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 // execFileSync (unlike execa/runProcess, which shell out through
@@ -116,9 +116,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmDir(repo);
-  rmDir(binDir);
-  if (originDir) rmDir(originDir);
+  rmDirOrDefer(repo);
+  rmDirOrDefer(binDir);
+  if (originDir) rmDirOrDefer(originDir);
 });
 
 /**
@@ -331,7 +331,7 @@ describe('create_fix_pr', () => {
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     const res = await mod?.handler({ project_path: notRepo }, ctx() as never);
     expect(res).toMatchObject({ ok: false, error: { code: 'not_a_git_repo' } });
-    rmDir(notRepo);
+    rmDirOrDefer(notRepo);
   });
 
   it('with no findings, reports nothing to do and creates no worktree', async () => {
@@ -858,7 +858,7 @@ describe('create_fix_pr', () => {
   }
 
   const extraDirs: string[] = [];
-  afterEach(() => { for (const d of extraDirs.splice(0)) rmDir(d); });
+  afterEach(() => { for (const d of extraDirs.splice(0)) rmDirOrDefer(d); });
 
   it.skipIf(!REQUIRE_SEMGREP && !SEMGREP_INSTALLED)(
     'Task 11: a dry run applies only the target rule, re-verifies with the same local packs, and changes nothing outside its worktree',
