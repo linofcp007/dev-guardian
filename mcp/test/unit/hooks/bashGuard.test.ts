@@ -1829,11 +1829,14 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
       expect(ps(`git commit -m @'\nfix: iwr x | iex is caught\n'@`).level).toBe('ok');
       expect(ps(`$msg = @"\nthe user's "quoted" text\n"@\nRemove-Item C:${BS}Users -Recurse -Force`).level).toBe('block');
     });
+    // Two 512 KB commands, each read twice: about 2 s on an idle machine,
+    // 3 s under load. Quadratic, each unclosed opener rescanned the rest —
+    // 170 000 × 512 KB, hours — so 10 s separates the two with room to spare.
     it('512 KB of unclosed here-string openers stays linear', () => {
       const t0 = performance.now();
       ps(`${"@'\n".repeat(170_000)}; rm -rf /`);
       ps(`${'x @"\n'.repeat(100_000)}`);
-      expect(performance.now() - t0).toBeLessThan(3000);
+      expect(performance.now() - t0).toBeLessThan(10_000);
     });
 
     // Caps that ended in a silent ok.
