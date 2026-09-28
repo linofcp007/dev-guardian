@@ -319,8 +319,6 @@ async function runAudit(ctx, run, callMeta) {
                 changed: visibleList(comparison.changed),
                 added: visibleList(comparison.added),
                 removed: visibleList(comparison.removed),
-                ...(comparison.rehashed.length > 0 ? { rehashed: visibleList(comparison.rehashed) } : {}),
-                ...(comparison.firstPinned.length > 0 ? { first_pinned: visibleList(comparison.firstPinned) } : {}),
             },
         };
         const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;

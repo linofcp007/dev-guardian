@@ -41,6 +41,18 @@ describe('planTargets', () => {
     expect(planTargets(['nope'], [entry('.mcp.json', 'github')])).toEqual([{ requested: 'nope', kind: 'missing' }]);
   });
 
+  // Fix round 4: a qualified name then a bare one, identical launches, used
+  // to start both entries under two pin keys.
+  it('starts a server once when a qualified and a bare name reach the same launch', () => {
+    const a = entry('.mcp.json', 'gh');
+    const b = entry('.cursor/mcp.json', 'gh');
+    for (const requested of [['.cursor/mcp.json::gh', 'gh'], ['gh', '.cursor/mcp.json::gh']]) {
+      const plan = planTargets(requested, [a, b]);
+      expect(plan.filter((p) => p.kind === 'start'), requested.join(' + ')).toHaveLength(1);
+      expect(plan.filter((p) => p.kind === 'duplicate'), requested.join(' + ')).toHaveLength(1);
+    }
+  });
+
   it('starts an entry once when two requested names both reach it', () => {
     const plan = planTargets(['github', '.mcp.json::github'], [entry('.mcp.json', 'github')]);
     expect(plan.filter((p) => p.kind === 'start')).toHaveLength(1);

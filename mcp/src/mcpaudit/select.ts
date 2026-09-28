@@ -65,7 +65,10 @@ export type PlannedTarget =
 
 export function planTargets(requested: readonly string[], entries: readonly McpServerEntry[]): PlannedTarget[] {
   const plan: PlannedTarget[] = [];
-  const started = new Map<McpServerEntry, string>();
+  // Keyed by what the entry LAUNCHES (fix round 4): `.cursor/mcp.json::gh`
+  // then `gh`, with identical launches, used to start both entries under
+  // two pin keys.
+  const started = new Map<string, string>();
   for (const name of requested) {
     const qualified = entries.filter((e) => qualifiedName(e) === name);
     let candidates = qualified.length > 0 ? qualified : entries.filter((e) => e.name === name);
@@ -87,12 +90,13 @@ export function planTargets(requested: readonly string[], entries: readonly McpS
     candidates = [...candidates];
     const [first, ...rest] = candidates;
     if (first === undefined) continue;
-    const already = started.get(first);
+    const launch = launchIdentity(first);
+    const already = started.get(launch);
     if (already !== undefined) {
       plan.push({ requested: name, kind: 'duplicate', of: already });
       continue;
     }
-    started.set(first, name);
+    started.set(launch, name);
     plan.push({ requested: name, kind: 'start', entry: first, alsoDeclaredIn: rest.map(qualifiedName) });
   }
   return plan;

@@ -51,6 +51,9 @@ function launchIdentity(e) {
 }
 export function planTargets(requested, entries) {
     const plan = [];
+    // Keyed by what the entry LAUNCHES (fix round 4): `.cursor/mcp.json::gh`
+    // then `gh`, with identical launches, used to start both entries under
+    // two pin keys.
     const started = new Map();
     for (const name of requested) {
         const qualified = entries.filter((e) => qualifiedName(e) === name);
@@ -73,12 +76,13 @@ export function planTargets(requested, entries) {
         const [first, ...rest] = candidates;
         if (first === undefined)
             continue;
-        const already = started.get(first);
+        const launch = launchIdentity(first);
+        const already = started.get(launch);
         if (already !== undefined) {
             plan.push({ requested: name, kind: 'duplicate', of: already });
             continue;
         }
-        started.set(first, name);
+        started.set(launch, name);
         plan.push({ requested: name, kind: 'start', entry: first, alsoDeclaredIn: rest.map(qualifiedName) });
     }
     return plan;

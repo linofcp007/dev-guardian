@@ -22,8 +22,7 @@ version bump.
   input and output schema, annotations); a definition changed since the previous audit is a high
   `mcp-tool-definition-changed` ("rug pull"). Prompts, resources and resource templates are pinned
   too (`mcp-<kind>-definition-changed`, medium; resources appearing or going are not reported).
-  Pins carry their hash scheme: one from an older scheme is re-pinned silently when that scheme's
-  recipe still matches, and reported when it does not. It executes the named servers only, with a minimal
+  It executes the named servers only, with a minimal
   environment plus the entry's own `env`, never calls `tools/call`, contacts remote servers only
   with `allow_remote`, and kills the process tree after. Scan type `mcp_tool_audit`.
 - Migration `012`: `mcp_tool_pins` and `mcp_server_pins`.
@@ -54,6 +53,10 @@ version bump.
   any `scheme://host` with a host there (`file://host/…`, `NODE_OPTIONS`, `DOCKER_HOST`, a database
   URL); `ssh`; `docker`/`podman` against another engine. It is a textual gate on configuration
   shapes, not a sandbox — SECURITY.md says so.
+- Pins cover every definition served under a name (reproduced: `[fetch rewritten, fetch original]`
+  read unchanged), and a duplicate tool name is a high `mcp-tool-duplicate-name`; pin lists and
+  everything stored in the scan are escaped (a tool name carrying tag characters came back raw); a
+  qualified and a bare name reaching the same launch start it once.
 - `allow_remote` now also gates `mcp-remote`-style proxies (an `http(s)`/`ws(s)` URL on the command
   line), UNC commands and UNC arguments. A name selects entries exactly: `<source>::<name>` picks one;
   a bare name whose entries launch different servers is refused with the qualified names; another
@@ -73,8 +76,7 @@ version bump.
 - `audit_mcp_tools`' pins: the server's `instructions` are pinned (a change is high
   `mcp-server-instructions-changed`); a removed item leaves a tombstone, so a tool that disappears
   and comes back changed is a high rug pull instead of "added" (an audit that saw no tools used to
-  delete every pin); a kind the previous audit did not pin yet is recorded silently the first time
-  (`first_pinned`), not reported as added.
+  delete every pin).
 
 ## [3.0.0] - 2026-09-28
 

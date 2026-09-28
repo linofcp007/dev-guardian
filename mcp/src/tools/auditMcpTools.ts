@@ -155,14 +155,7 @@ interface ServerReport {
   resource_templates_count?: number;
   malformed_definitions?: number;
   /** Pin keys (`mcpaudit/pins.ts#pinKey`): a tool's name, or `<kind>:<id>`. */
-  pins?: {
-    first_audit: boolean;
-    changed: string[];
-    added: string[];
-    removed: string[];
-    rehashed?: string[];
-    first_pinned?: string[];
-  };
+  pins?: { first_audit: boolean; changed: string[]; added: string[]; removed: string[] };
   warnings?: string[];
 }
 
@@ -429,8 +422,6 @@ async function runAudit(
         changed: visibleList(comparison.changed),
         added: visibleList(comparison.added),
         removed: visibleList(comparison.removed),
-        ...(comparison.rehashed.length > 0 ? { rehashed: visibleList(comparison.rehashed) } : {}),
-        ...(comparison.firstPinned.length > 0 ? { first_pinned: visibleList(comparison.firstPinned) } : {}),
       },
     };
     const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;

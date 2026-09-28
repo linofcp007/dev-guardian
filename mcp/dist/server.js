@@ -71620,14 +71620,7 @@ function rank(s) {
 }
 
 // src/mcpaudit/pins.ts
-var PIN_SCHEME = 3;
-var KIND_SINCE = {
-  tool: 1,
-  prompt: 2,
-  resource: 2,
-  "resource-template": 2,
-  instructions: 3
-};
+var PIN_SCHEME = 1;
 var NON_TOOL_KINDS = ["prompt", "resource", "resource-template", "instructions"];
 var RESERVED_PREFIX = /^(tool|prompt|resource|resource-template|instructions):/;
 var TOMBSTONE = "-";
@@ -71643,85 +71636,55 @@ function parsePinKey(key) {
   }
   return { kind: "tool", id: key };
 }
-function versioned(value, scheme) {
-  return `v${scheme}:${hashConfigValue(value)}`;
+function versioned(value) {
+  return `v${PIN_SCHEME}:${hashConfigValue(value)}`;
 }
-function toolHash(tool49, scheme) {
-  if (scheme === 1) {
-    return hashConfigValue({
-      name: tool49.name,
-      description: tool49.description ?? null,
-      inputSchema: tool49.inputSchema ?? null,
-      annotations: tool49.annotations ?? null
-    });
-  }
-  return versioned(
-    {
-      name: tool49.name,
-      title: tool49.title ?? null,
-      description: tool49.description ?? null,
-      inputSchema: tool49.inputSchema ?? null,
-      outputSchema: tool49.outputSchema ?? null,
-      annotations: tool49.annotations ?? null
-    },
-    scheme
-  );
+function toolDefinitionHash(tool49) {
+  return versioned({
+    name: tool49.name,
+    title: tool49.title ?? null,
+    description: tool49.description ?? null,
+    inputSchema: tool49.inputSchema ?? null,
+    outputSchema: tool49.outputSchema ?? null,
+    annotations: tool49.annotations ?? null
+  });
 }
-function promptHash(p, scheme) {
-  return versioned(
-    { name: p.name, title: p.title ?? null, description: p.description ?? null, arguments: p.arguments ?? null },
-    scheme
-  );
+function promptHash(p) {
+  return versioned({ name: p.name, title: p.title ?? null, description: p.description ?? null, arguments: p.arguments ?? null });
 }
-function resourceHash(r, uriKey, scheme) {
-  return versioned(
-    { [uriKey]: r.uri ?? null, name: r.name, title: r.title ?? null, description: r.description ?? null },
-    scheme
-  );
+function resourceHash(r, uriKey) {
+  return versioned({ [uriKey]: r.uri ?? null, name: r.name, title: r.title ?? null, description: r.description ?? null });
 }
 function pinScheme(stored) {
   const value = stored.startsWith(TOMBSTONE) ? stored.slice(TOMBSTONE.length) : stored;
   const m = /^v(\d+):[0-9a-f]{64}$/.exec(value);
-  if (m?.[1] !== void 0) return Number(m[1]);
-  return /^[0-9a-f]{64}$/.test(value) ? 1 : null;
+  return m?.[1] === void 0 ? null : Number(m[1]);
 }
 function pinnedItems(listing) {
-  const since = (kind, f) => (scheme) => scheme >= KIND_SINCE[kind] ? f(scheme) : null;
-  const items = [];
-  for (const t of listing.tools) {
-    items.push({ key: pinKey("tool", t.name), kind: "tool", label: t.name, hashAt: since("tool", (s) => toolHash(t, s)) });
-  }
-  for (const p of listing.prompts) {
-    items.push({ key: pinKey("prompt", p.name), kind: "prompt", label: p.name, hashAt: since("prompt", (s) => promptHash(p, s)) });
-  }
-  for (const r of listing.resources) {
-    if (r.uri === void 0) continue;
-    items.push({
-      key: pinKey("resource", r.uri),
-      kind: "resource",
-      label: r.uri,
-      hashAt: since("resource", (s) => resourceHash(r, "uri", s))
-    });
-  }
+  const byKey = /* @__PURE__ */ new Map();
+  const add = (kind, id, label, hash) => {
+    const key = pinKey(kind, id);
+    const slot = byKey.get(key);
+    if (slot === void 0) byKey.set(key, { kind, label, hashes: [hash] });
+    else slot.hashes.push(hash);
+  };
+  for (const t of listing.tools) add("tool", t.name, t.name, toolDefinitionHash(t));
+  for (const p of listing.prompts) add("prompt", p.name, p.name, promptHash(p));
+  for (const r of listing.resources) if (r.uri !== void 0) add("resource", r.uri, r.uri, resourceHash(r, "uri"));
   for (const r of listing.resourceTemplates ?? []) {
-    if (r.uri === void 0) continue;
-    items.push({
-      key: pinKey("resource-template", r.uri),
-      kind: "resource-template",
-      label: r.uri,
-      hashAt: since("resource-template", (s) => resourceHash(r, "uriTemplate", s))
-    });
+    if (r.uri !== void 0) add("resource-template", r.uri, r.uri, resourceHash(r, "uriTemplate"));
   }
-  const instructions = listing.instructions;
-  if (instructions !== void 0) {
-    items.push({
-      key: pinKey("instructions", ""),
-      kind: "instructions",
-      label: "instructions",
-      hashAt: since("instructions", (s) => versioned({ instructions }, s))
-    });
+  if (listing.instructions !== void 0) {
+    add("instructions", "", "instructions", versioned({ instructions: listing.instructions }));
   }
-  return items;
+  return [...byKey].map(([key, { kind, label, hashes }]) => ({
+    key,
+    kind,
+    label,
+    // One definition: its own hash. Several: every one of them, order-free.
+    hash: hashes.length === 1 ? hashes[0] ?? "" : versioned({ definitions: [...hashes].sort() }),
+    count: hashes.length
+  }));
 }
 var KIND_WORD = {
   tool: "tool",
@@ -71737,60 +71700,61 @@ var CHANGED_SEVERITY = {
   "resource-template": "medium",
   instructions: "high"
 };
-function judge2(item, stored) {
-  const current = item.hashAt(PIN_SCHEME);
-  if (stored === current) return "same";
-  const scheme = pinScheme(stored);
-  if (scheme === PIN_SCHEME) return "changed";
-  if (scheme !== null && scheme < PIN_SCHEME) {
-    const old = item.hashAt(scheme);
-    return old === stored ? "rehashed" : "changed";
-  }
-  return "unknown-scheme";
-}
 function comparePins(listing, previous, auditedBefore, options = {}) {
   const complete = options.complete !== false;
   const items = /* @__PURE__ */ new Map();
   for (const item of pinnedItems(listing)) items.set(item.key, item);
-  const live2 = (item) => ({ key: item.key, hash: item.hashAt(PIN_SCHEME) ?? "" });
-  const firstAudit = !auditedBefore && previous.size === 0;
-  if (firstAudit) {
-    return {
-      findings: [],
-      firstAudit,
-      changed: [],
-      added: [],
-      removed: [],
-      rehashed: [],
-      firstPinned: [],
-      warnings: [],
-      pins: [...items.values()].map(live2)
-    };
+  const server = escapeInvisible(listing.serverName);
+  const finding4 = (ruleId, severity, what, title, message3) => makeFinding({
+    tool: MCP_AUDIT_TOOL_NAME,
+    rule_id: ruleId,
+    severity,
+    category: "security",
+    subcategory: "mcp_rug_pull",
+    title: escapeInvisible(title),
+    message: escapeInvisible(message3),
+    file_path: listing.sourceLabel,
+    snippet: escapeInvisible(`${server} > ${what}`),
+    fix_available: false
+  });
+  const findings = [];
+  for (const item of items.values()) {
+    if (item.kind !== "tool" || item.count < 2) continue;
+    findings.push(
+      finding4(
+        "mcp-tool-duplicate-name",
+        "high",
+        `tool '${item.label}'`,
+        `MCP server '${server}' serves ${item.count} tools named '${item.label}'`,
+        `Server '${server}' (${listing.sourceLabel}) lists ${item.count} definitions under the tool name '${item.label}'. Clients resolve a duplicate name ambiguously, so the definition that was reviewed need not be the one that is called \u2014 and the model reads all of them.`
+      )
+    );
   }
-  const storedSchemes = [...previous.values()].map(pinScheme).filter((s) => s !== null);
-  const previousScheme = storedSchemes.length > 0 ? Math.max(...storedSchemes) : PIN_SCHEME;
+  const pins = [...items.values()].map((i2) => ({ key: i2.key, hash: i2.hash }));
+  const firstAudit = !auditedBefore && previous.size === 0;
+  if (firstAudit) return { findings, firstAudit, changed: [], added: [], removed: [], warnings: [], pins };
   const changed = [];
   const added = [];
-  const rehashed = [];
-  const firstPinned = [];
   const warnings = [];
   for (const item of items.values()) {
     const stored = previous.get(item.key);
     if (stored === void 0) {
-      if (KIND_SINCE[item.kind] > previousScheme) firstPinned.push(item.key);
-      else added.push(item);
+      added.push(item);
       continue;
     }
     const tombstone = stored.startsWith(TOMBSTONE);
-    const verdict = judge2(item, tombstone ? stored.slice(TOMBSTONE.length) : stored);
-    if (verdict === "changed") changed.push(item);
-    else if (tombstone) added.push(item);
-    else if (verdict === "rehashed") rehashed.push(item.key);
-    else if (verdict === "unknown-scheme") {
-      warnings.push(
-        `${KIND_WORD[item.kind]} '${escapeInvisible(item.label)}': its stored pin (${stored.slice(0, 4)}\u2026) is of a scheme this build does not know, so it could not be compared; re-pinned`
-      );
+    const value = tombstone ? stored.slice(TOMBSTONE.length) : stored;
+    if (value === item.hash) {
+      if (tombstone) added.push(item);
+      continue;
     }
+    if (pinScheme(value) === PIN_SCHEME) {
+      changed.push(item);
+      continue;
+    }
+    warnings.push(
+      `${KIND_WORD[item.kind]} '${escapeInvisible(item.label)}': its stored pin (${escapeInvisible(value.slice(0, 4))}\u2026) is of a scheme this build does not know, so it could not be compared; re-pinned`
+    );
   }
   const removed = [];
   const tombstones = [];
@@ -71807,20 +71771,6 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     }
     removed.sort();
   }
-  const server = escapeInvisible(listing.serverName);
-  const finding4 = (ruleId, severity, what, title, message3) => makeFinding({
-    tool: MCP_AUDIT_TOOL_NAME,
-    rule_id: ruleId,
-    severity,
-    category: "security",
-    subcategory: "mcp_rug_pull",
-    title: escapeInvisible(title),
-    message: escapeInvisible(message3),
-    file_path: listing.sourceLabel,
-    snippet: escapeInvisible(`${server} > ${what}`),
-    fix_available: false
-  });
-  const findings = [];
   for (const item of changed) {
     const what = `${KIND_WORD[item.kind]} '${item.label}'`;
     if (item.kind === "tool") {
@@ -71830,7 +71780,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
           "high",
           what,
           `Rug pull: MCP server '${server}' changed tool '${item.label}' since the previous audit`,
-          `Tool '${item.label}' of server '${server}' (${listing.sourceLabel}) is served with a different definition (title, description, input or output schema, or annotations) than the previous audit_mcp_tools run recorded, under the same name \u2014 or came back changed after being removed. A tool approved once and rewritten later is how a server turns malicious after review. Read the new definition before using the server again; this audit now pins it.`
+          `Tool '${item.label}' of server '${server}' (${listing.sourceLabel}) is served with a different definition (title, description, input or output schema, or annotations, or another definition served beside it under the same name) than the previous audit_mcp_tools run recorded \u2014 or came back changed after being removed. A tool approved once and rewritten later is how a server turns malicious after review. Read the new definition before using the server again; this audit now pins it.`
         )
       );
     } else if (item.kind === "instructions") {
@@ -71911,10 +71861,8 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     changed: changed.map((i2) => i2.key),
     added: added.map((i2) => i2.key),
     removed,
-    rehashed,
-    firstPinned,
     warnings,
-    pins: [...[...items.values()].map(live2), ...tombstones]
+    pins: [...pins, ...tombstones]
   };
 }
 
@@ -75238,12 +75186,13 @@ function planTargets(requested, entries2) {
     candidates2 = [...candidates2];
     const [first, ...rest] = candidates2;
     if (first === void 0) continue;
-    const already = started.get(first);
+    const launch = launchIdentity(first);
+    const already = started.get(launch);
     if (already !== void 0) {
       plan.push({ requested: name, kind: "duplicate", of: already });
       continue;
     }
-    started.set(first, name);
+    started.set(launch, name);
     plan.push({ requested: name, kind: "start", entry: first, alsoDeclaredIn: rest.map(qualifiedName) });
   }
   return plan;
@@ -75463,9 +75412,7 @@ async function runAudit(ctx, run, callMeta) {
         first_audit: comparison.firstAudit,
         changed: visibleList(comparison.changed),
         added: visibleList(comparison.added),
-        removed: visibleList(comparison.removed),
-        ...comparison.rehashed.length > 0 ? { rehashed: visibleList(comparison.rehashed) } : {},
-        ...comparison.firstPinned.length > 0 ? { first_pinned: visibleList(comparison.firstPinned) } : {}
+        removed: visibleList(comparison.removed)
       }
     };
     const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;

@@ -10,9 +10,9 @@
 -- prompt, resource, resource template or the server's instructions.
 -- `hash` is `v<scheme>:<sha256>` of the item's canonical JSON (keys sorted)
 -- — for a tool `{name, title, description, inputSchema, outputSchema,
--- annotations}`; bare hex is scheme 1, over four of those fields, and is
--- re-pinned on the next audit (see pins.ts). A changed hash is a definition
--- that changed under the same name, the "rug pull" that
+-- annotations}`; several definitions served under one key are pinned
+-- together (their hashes, sorted). A changed hash is a definition that
+-- changed under the same name, the "rug pull" that
 -- `mcp-tool-definition-changed` reports. A `-` before the hash is a
 -- TOMBSTONE: an item no longer served, kept so that one coming back changed
 -- is reported as a change, not as new.

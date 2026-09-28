@@ -6,7 +6,8 @@
  *
  * Everything the model sees about each item, as sha256 of its canonical JSON
  * (keys sorted, absent fields as null — `agentaudit/hash.ts`'s
- * `stableStringify`):
+ * `stableStringify`), over the FULL content — hashing is linear and cheap,
+ * so a change past any analysis bound is still caught:
  *
  *   - a tool: `{name, title, description, inputSchema, outputSchema, annotations}`;
  *   - a prompt: `{name, title, description, arguments}`;
@@ -14,7 +15,7 @@
  *   - a resource template: `{uriTemplate, name, title, description}`, keyed
  *     by its uri template;
  *   - the server's `instructions`, which the host puts into the system
- *     prompt (fix round 3, I6).
+ *     prompt.
  *
  * A resource without a uri is analysed but not pinned: there is nothing
  * stable to key it on. Resources are DATA on most servers (files, rows,
@@ -26,41 +27,36 @@
  * one removed info (instructions that appear are high: new text in the
  * system prompt).
  *
- * ## Tombstones (fix round 3, I7)
+ * ## One name, several definitions (fix round 4)
+ *
+ * A listing may serve two tools under one name, and clients resolve that
+ * ambiguously. The first cut kept the LAST definition of a name, so a server
+ * could serve `[fetch rewritten, fetch original]` and read unchanged (0
+ * findings, coverage full; the same across pages). A key's pin now covers
+ * EVERY definition under it (their hashes, sorted), and a duplicate tool
+ * name is itself a high finding, `mcp-tool-duplicate-name`.
+ *
+ * ## Tombstones
  *
  * An item that stops being served is not forgotten: its pin stays as a
- * TOMBSTONE (`-` before the hash). The first cut deleted it, so an audit
- * that happened to see no tools wiped every pin, and a poisoned tool that
- * came back afterwards was merely "added" (low). Now an item that returns
- * unchanged is "added" again, and one that returns with another definition
- * is a change — high for a tool. A tombstone still absent reports nothing.
- * Resources are data and are forgotten instead.
+ * TOMBSTONE (`-` before the hash). Deleting it let an audit that happened to
+ * see no tools wipe every pin, so a poisoned tool that came back afterwards
+ * was merely "added" (low). An item that returns unchanged is "added" again,
+ * one that returns with another definition is a change — high for a tool. A
+ * tombstone still absent reports nothing. Resources are forgotten instead.
  *
  * ## Keys ({@link pinKey})
  *
- * A tool is keyed by its bare name — what every pin written before other
- * kinds were pinned holds. Every other kind is `<kind>:<id>`, and a tool
- * whose name itself starts with a reserved prefix is `tool:<name>`, so no
- * key can be two items.
+ * A tool is keyed by its bare name. Every other kind is `<kind>:<id>`, and a
+ * tool whose name itself starts with a reserved prefix is `tool:<name>`, so
+ * no key can be two items.
  *
- * ## Hash schemes, the upgrade, and kinds an older audit did not pin
+ * ## Scheme
  *
- * A pin is `v<scheme>:<hex>`; bare hex is scheme 1, which covered four of a
- * tool's fields and nothing else. Scheme 2 added title and output schema and
- * the other kinds; scheme 3 (this one) adds the instructions and tombstones
- * — the tool, prompt and resource recipes are the same in 2 and 3.
- *
- *   - A stored pin of an older scheme is compared by hashing what is served
- *     now with THAT scheme's recipe: equal means nothing the old pin
- *     recorded changed, and the item is re-pinned without a finding
- *     (`rehashed`); different is a change, reported. A change across the
- *     upgrade itself in a field the old scheme never recorded cannot be
- *     seen — the old pin holds nothing to compare it with.
- *   - The previous audit's scheme is the newest among its stored pins. An
- *     item of a kind that scheme did not pin is recorded silently the first
- *     time (`firstPinned`, fix round 3, M3) — not reported as added.
- *   - A pin of a scheme this build does not know is re-pinned, and a
- *     warning says it could not be compared.
+ * A pin is `v<scheme>:<hex>` (this is scheme 1). A stored pin of another
+ * scheme — written by another build — cannot be compared: it is re-pinned,
+ * and a warning says so. When the recipe changes, a new scheme number and
+ * the comparison from the old one come with it.
  *
  * Pure functions. No I/O.
  */
@@ -68,16 +64,8 @@ import { hashConfigValue } from '../agentaudit/hash.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { MCP_AUDIT_TOOL_NAME, } from './analyze.js';
 import { escapeInvisible } from './rules.js';
-/** The scheme every pin is written with now. */
-export const PIN_SCHEME = 3;
-/** The scheme that first pinned each kind. */
-const KIND_SINCE = {
-    tool: 1,
-    prompt: 2,
-    resource: 2,
-    'resource-template': 2,
-    instructions: 3,
-};
+/** The scheme every pin is written with. */
+export const PIN_SCHEME = 1;
 const NON_TOOL_KINDS = ['prompt', 'resource', 'resource-template', 'instructions'];
 /** Prefixes a bare tool key may not start with; `resource:` never prefixes `resource-template:`. */
 const RESERVED_PREFIX = /^(tool|prompt|resource|resource-template|instructions):/;
@@ -105,19 +93,10 @@ export function parsePinKey(key) {
     }
     return { kind: 'tool', id: key };
 }
-function versioned(value, scheme) {
-    return `v${scheme}:${hashConfigValue(value)}`;
+function versioned(value) {
+    return `v${PIN_SCHEME}:${hashConfigValue(value)}`;
 }
-/** A tool's pin under `scheme` (bare hex for scheme 1). */
-function toolHash(tool, scheme) {
-    if (scheme === 1) {
-        return hashConfigValue({
-            name: tool.name,
-            description: tool.description ?? null,
-            inputSchema: tool.inputSchema ?? null,
-            annotations: tool.annotations ?? null,
-        });
-    }
+export function toolDefinitionHash(tool) {
     return versioned({
         name: tool.name,
         title: tool.title ?? null,
@@ -125,64 +104,53 @@ function toolHash(tool, scheme) {
         inputSchema: tool.inputSchema ?? null,
         outputSchema: tool.outputSchema ?? null,
         annotations: tool.annotations ?? null,
-    }, scheme);
+    });
 }
-export function toolDefinitionHash(tool) {
-    return toolHash(tool, PIN_SCHEME);
+function promptHash(p) {
+    return versioned({ name: p.name, title: p.title ?? null, description: p.description ?? null, arguments: p.arguments ?? null });
 }
-function promptHash(p, scheme) {
-    return versioned({ name: p.name, title: p.title ?? null, description: p.description ?? null, arguments: p.arguments ?? null }, scheme);
+function resourceHash(r, uriKey) {
+    return versioned({ [uriKey]: r.uri ?? null, name: r.name, title: r.title ?? null, description: r.description ?? null });
 }
-function resourceHash(r, uriKey, scheme) {
-    return versioned({ [uriKey]: r.uri ?? null, name: r.name, title: r.title ?? null, description: r.description ?? null }, scheme);
-}
-/** The scheme a stored pin (live or tombstone) was written with: 1 for bare hex, null when unrecognisable. */
+/** The scheme a stored pin (live or tombstone) was written with, or null when unrecognisable. */
 export function pinScheme(stored) {
     const value = stored.startsWith(TOMBSTONE) ? stored.slice(TOMBSTONE.length) : stored;
     const m = /^v(\d+):[0-9a-f]{64}$/.exec(value);
-    if (m?.[1] !== undefined)
-        return Number(m[1]);
-    return /^[0-9a-f]{64}$/.test(value) ? 1 : null;
+    return m?.[1] === undefined ? null : Number(m[1]);
 }
+/** Every item, one per key; several definitions under one key are pinned together. */
 function pinnedItems(listing) {
-    const since = (kind, f) => (scheme) => scheme >= KIND_SINCE[kind] ? f(scheme) : null;
-    const items = [];
-    for (const t of listing.tools) {
-        items.push({ key: pinKey('tool', t.name), kind: 'tool', label: t.name, hashAt: since('tool', (s) => toolHash(t, s)) });
-    }
-    for (const p of listing.prompts) {
-        items.push({ key: pinKey('prompt', p.name), kind: 'prompt', label: p.name, hashAt: since('prompt', (s) => promptHash(p, s)) });
-    }
-    for (const r of listing.resources) {
-        if (r.uri === undefined)
-            continue;
-        items.push({
-            key: pinKey('resource', r.uri),
-            kind: 'resource',
-            label: r.uri,
-            hashAt: since('resource', (s) => resourceHash(r, 'uri', s)),
-        });
-    }
+    const byKey = new Map();
+    const add = (kind, id, label, hash) => {
+        const key = pinKey(kind, id);
+        const slot = byKey.get(key);
+        if (slot === undefined)
+            byKey.set(key, { kind, label, hashes: [hash] });
+        else
+            slot.hashes.push(hash);
+    };
+    for (const t of listing.tools)
+        add('tool', t.name, t.name, toolDefinitionHash(t));
+    for (const p of listing.prompts)
+        add('prompt', p.name, p.name, promptHash(p));
+    for (const r of listing.resources)
+        if (r.uri !== undefined)
+            add('resource', r.uri, r.uri, resourceHash(r, 'uri'));
     for (const r of listing.resourceTemplates ?? []) {
-        if (r.uri === undefined)
-            continue;
-        items.push({
-            key: pinKey('resource-template', r.uri),
-            kind: 'resource-template',
-            label: r.uri,
-            hashAt: since('resource-template', (s) => resourceHash(r, 'uriTemplate', s)),
-        });
+        if (r.uri !== undefined)
+            add('resource-template', r.uri, r.uri, resourceHash(r, 'uriTemplate'));
     }
-    const instructions = listing.instructions;
-    if (instructions !== undefined) {
-        items.push({
-            key: pinKey('instructions', ''),
-            kind: 'instructions',
-            label: 'instructions',
-            hashAt: since('instructions', (s) => versioned({ instructions }, s)),
-        });
+    if (listing.instructions !== undefined) {
+        add('instructions', '', 'instructions', versioned({ instructions: listing.instructions }));
     }
-    return items;
+    return [...byKey].map(([key, { kind, label, hashes }]) => ({
+        key,
+        kind,
+        label,
+        // One definition: its own hash. Several: every one of them, order-free.
+        hash: hashes.length === 1 ? (hashes[0] ?? '') : versioned({ definitions: [...hashes].sort() }),
+        count: hashes.length,
+    }));
 }
 const KIND_WORD = {
     tool: 'tool',
@@ -198,21 +166,6 @@ const CHANGED_SEVERITY = {
     'resource-template': 'medium',
     instructions: 'high',
 };
-/** `stored` (a live value, no tombstone mark) against what `item` is now. */
-function judge(item, stored) {
-    const current = item.hashAt(PIN_SCHEME);
-    if (stored === current)
-        return 'same';
-    const scheme = pinScheme(stored);
-    if (scheme === PIN_SCHEME)
-        return 'changed';
-    if (scheme !== null && scheme < PIN_SCHEME) {
-        const old = item.hashAt(scheme);
-        // null: that scheme did not pin this kind, yet a pin exists — compare as changed.
-        return old === stored ? 'rehashed' : 'changed';
-    }
-    return 'unknown-scheme';
-}
 /**
  * Compare what `listing` serves with `previous` (pin key → stored value).
  * `auditedBefore` says whether the server was audited at all before — with
@@ -224,50 +177,54 @@ export function comparePins(listing, previous, auditedBefore, options = {}) {
     const items = new Map();
     for (const item of pinnedItems(listing))
         items.set(item.key, item);
-    const live = (item) => ({ key: item.key, hash: item.hashAt(PIN_SCHEME) ?? '' });
-    const firstAudit = !auditedBefore && previous.size === 0;
-    if (firstAudit) {
-        return {
-            findings: [],
-            firstAudit,
-            changed: [],
-            added: [],
-            removed: [],
-            rehashed: [],
-            firstPinned: [],
-            warnings: [],
-            pins: [...items.values()].map(live),
-        };
+    const server = escapeInvisible(listing.serverName);
+    const finding = (ruleId, severity, what, title, message) => makeFinding({
+        tool: MCP_AUDIT_TOOL_NAME,
+        rule_id: ruleId,
+        severity,
+        category: 'security',
+        subcategory: 'mcp_rug_pull',
+        title: escapeInvisible(title),
+        message: escapeInvisible(message),
+        file_path: listing.sourceLabel,
+        snippet: escapeInvisible(`${server} > ${what}`),
+        fix_available: false,
+    });
+    // A duplicate tool name is a finding on every audit, the first included.
+    const findings = [];
+    for (const item of items.values()) {
+        if (item.kind !== 'tool' || item.count < 2)
+            continue;
+        findings.push(finding('mcp-tool-duplicate-name', 'high', `tool '${item.label}'`, `MCP server '${server}' serves ${item.count} tools named '${item.label}'`, `Server '${server}' (${listing.sourceLabel}) lists ${item.count} definitions under the tool name ` +
+            `'${item.label}'. Clients resolve a duplicate name ambiguously, so the definition that was reviewed ` +
+            'need not be the one that is called — and the model reads all of them.'));
     }
-    // The previous audit's scheme: which kinds it pinned.
-    const storedSchemes = [...previous.values()].map(pinScheme).filter((s) => s !== null);
-    const previousScheme = storedSchemes.length > 0 ? Math.max(...storedSchemes) : PIN_SCHEME;
+    const pins = [...items.values()].map((i) => ({ key: i.key, hash: i.hash }));
+    const firstAudit = !auditedBefore && previous.size === 0;
+    if (firstAudit)
+        return { findings, firstAudit, changed: [], added: [], removed: [], warnings: [], pins };
     const changed = [];
     const added = [];
-    const rehashed = [];
-    const firstPinned = [];
     const warnings = [];
     for (const item of items.values()) {
         const stored = previous.get(item.key);
         if (stored === undefined) {
-            if (KIND_SINCE[item.kind] > previousScheme)
-                firstPinned.push(item.key);
-            else
-                added.push(item);
+            added.push(item);
             continue;
         }
         const tombstone = stored.startsWith(TOMBSTONE);
-        const verdict = judge(item, tombstone ? stored.slice(TOMBSTONE.length) : stored);
-        if (verdict === 'changed')
-            changed.push(item);
-        else if (tombstone)
-            added.push(item); // back, unchanged: served again
-        else if (verdict === 'rehashed')
-            rehashed.push(item.key);
-        else if (verdict === 'unknown-scheme') {
-            warnings.push(`${KIND_WORD[item.kind]} '${escapeInvisible(item.label)}': its stored pin (${stored.slice(0, 4)}…) is of a ` +
-                'scheme this build does not know, so it could not be compared; re-pinned');
+        const value = tombstone ? stored.slice(TOMBSTONE.length) : stored;
+        if (value === item.hash) {
+            if (tombstone)
+                added.push(item); // back, unchanged: served again
+            continue;
         }
+        if (pinScheme(value) === PIN_SCHEME) {
+            changed.push(item);
+            continue;
+        }
+        warnings.push(`${KIND_WORD[item.kind]} '${escapeInvisible(item.label)}': its stored pin (${escapeInvisible(value.slice(0, 4))}…) ` +
+            'is of a scheme this build does not know, so it could not be compared; re-pinned');
     }
     const removed = [];
     const tombstones = [];
@@ -287,28 +244,15 @@ export function comparePins(listing, previous, auditedBefore, options = {}) {
         }
         removed.sort();
     }
-    const server = escapeInvisible(listing.serverName);
-    const finding = (ruleId, severity, what, title, message) => makeFinding({
-        tool: MCP_AUDIT_TOOL_NAME,
-        rule_id: ruleId,
-        severity,
-        category: 'security',
-        subcategory: 'mcp_rug_pull',
-        title: escapeInvisible(title),
-        message: escapeInvisible(message),
-        file_path: listing.sourceLabel,
-        snippet: escapeInvisible(`${server} > ${what}`),
-        fix_available: false,
-    });
-    const findings = [];
     for (const item of changed) {
         const what = `${KIND_WORD[item.kind]} '${item.label}'`;
         if (item.kind === 'tool') {
             findings.push(finding('mcp-tool-definition-changed', 'high', what, `Rug pull: MCP server '${server}' changed tool '${item.label}' since the previous audit`, `Tool '${item.label}' of server '${server}' (${listing.sourceLabel}) is served with a different ` +
-                'definition (title, description, input or output schema, or annotations) than the previous ' +
-                'audit_mcp_tools run recorded, under the same name — or came back changed after being removed. ' +
-                'A tool approved once and rewritten later is how a server turns malicious after review. Read ' +
-                'the new definition before using the server again; this audit now pins it.'));
+                'definition (title, description, input or output schema, or annotations, or another definition ' +
+                'served beside it under the same name) than the previous audit_mcp_tools run recorded — or came ' +
+                'back changed after being removed. A tool approved once and rewritten later is how a server ' +
+                'turns malicious after review. Read the new definition before using the server again; this audit ' +
+                'now pins it.'));
         }
         else if (item.kind === 'instructions') {
             findings.push(finding('mcp-server-instructions-changed', 'high', 'instructions', `MCP server '${server}' changed its instructions since the previous audit`, `The instructions server '${server}' (${listing.sourceLabel}) sends at initialize differ from what ` +
@@ -347,10 +291,8 @@ export function comparePins(listing, previous, auditedBefore, options = {}) {
         changed: changed.map((i) => i.key),
         added: added.map((i) => i.key),
         removed,
-        rehashed,
-        firstPinned,
         warnings,
-        pins: [...[...items.values()].map(live), ...tombstones],
+        pins: [...pins, ...tombstones],
     };
 }
 //# sourceMappingURL=pins.js.map
