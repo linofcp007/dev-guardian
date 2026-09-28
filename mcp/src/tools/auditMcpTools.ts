@@ -110,8 +110,12 @@ const inputSchema = {
     .optional()
     .default(false)
     .describe(
-      'Contact servers that reach another machine: a url entry, a command on a network path, or a URL on ' +
-        'the command line (mcp-remote and other proxies). Off by default: they are skipped.',
+      'Contact servers that reach another machine: a url entry (even at localhost), a command on a network ' +
+        'path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ' +
+        'ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use ' +
+        'another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it ' +
+        'carries userinfo, a backslash, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is ' +
+        'not seen. Off by default: they are skipped.',
     ),
   timeout_ms: z
     .number()
@@ -137,8 +141,9 @@ const tool: ToolModule = {
     'a tool or the instructions changed since the previous audit is a high "rug pull", reported once. ' +
     'THIS EXECUTES THIRD-PARTY CODE: it runs the named servers\' commands as the host would, ONLY for ' +
     'the names the caller lists (no wildcard, no default), with a minimal environment plus the entry\'s ' +
-    'own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url, a ' +
-    'network-path command, a URL on the command line) only with allow_remote; it kills the process tree ' +
+    'own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url; a ' +
+    'network-path command; a non-loopback URL in the command line or env; ssh or kubectl; a remote ' +
+    'docker/podman engine) only with allow_remote; it kills the process tree ' +
     'after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean ' +
     'result covers only what it chose to show this client. A name not declared or ambiguous, a remote ' +
     'server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing ' +

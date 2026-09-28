@@ -265,8 +265,13 @@ Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
    `initialize` e os pedidos de listagem de tools, prompts e resources,
    **nunca chama `tools/call`**, e mata a árvore de processos no fim.
    Servidores remotos só com `allow_remote: true`, que o utilizador tem de
-   pedir — remoto é uma entrada com URL, um comando num caminho de rede, ou
-   uma linha de comando que nomeia um URL (`mcp-remote` e outros proxies).
+   pedir — remoto é uma entrada com URL, um comando num caminho de rede, um
+   URL na linha de comando ou num valor de `env` (`mcp-remote` e outros
+   proxies, um URL de base de dados), `ssh` ou `kubectl` em qualquer ponto
+   da linha de comando, ou `docker`/`podman` apontado a outro motor. Um URL
+   cujo host é exatamente `localhost`, `127.x.x.x` ou `[::1]` é local
+   (`postgres://localhost/app` não pede `allow_remote`), mas pode ser um
+   túnel (`ssh -L`, um proxy local) que a configuração não mostra.
    Se vários ficheiros declaram o mesmo nome com comandos diferentes, a tool
    recusa e lista os nomes qualificados (`.mcp.json::github`): pergunta ao
    utilizador qual quer e passa esse.

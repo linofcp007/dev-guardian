@@ -103,14 +103,27 @@ their respective projects.
   it **contacts a remote server only with `allow_remote: true`** — an entry
   is remote when it has a URL; when a UNC or device path appears anywhere in
   its command, an argument or an `env` value (touching it would send the
-  user's credentials to that host over SMB); when any `scheme://host` with
-  a host appears there (`mcp-remote` and other proxies, `file://host/…`,
-  `NODE_OPTIONS`, `DOCKER_HOST`); when its command is `ssh`; or when it runs
-  `docker`/`podman` against another engine (`-H`, `--host`, a context,
-  `--remote`). **This is a textual gate on the shapes a configuration can
-  take, not a sandbox**: a program that looks local still reaches the
-  network by itself once started (`npx` downloads the package; a server
-  calls its own API), and nothing here sees that. It **kills the server's
+  user's credentials to that host over SMB); when a URL with a host appears
+  there (`mcp-remote` and other proxies, `file://host/…`, `NODE_OPTIONS`,
+  `DOCKER_HOST`, a database URL — every `scheme://`, and `http`, `https`,
+  `ws`, `wss` or `ftp` followed by `:` with or without `//`, parsed as
+  WHATWG does; one that does not parse is remote); when any word of its
+  command line, a `-c` / `/c` string included, is `ssh`, `sshpass`, `plink`,
+  `kubectl` or `oc`; or when it runs `docker`, `podman` or `nerdctl`
+  against another engine (`-H`, `--host`, a context, `--remote`,
+  `--connection`, `--url`, `DOCKER_CONTEXT`, `CONTAINER_CONNECTION`). A URL
+  whose parsed host is exactly `localhost`, a `127.x.x.x` address or `[::1]`
+  is local (`DATABASE_URL=postgres://localhost/app` needs no
+  `allow_remote`) — unless it carries userinfo or a backslash before its
+  path, or a query on a non-HTTP scheme (libpq reads a host from
+  `?host=`), since another parser may then read another host; a `url` entry
+  needs `allow_remote` even at localhost. **Loopback is where a tunnel
+  starts**: `ssh -L`, `kubectl port-forward`, a local proxy or a VPN client
+  listening on 127.0.0.1 make a loopback URL reach another machine, and the
+  configuration does not say so. **This is a textual gate on the shapes a
+  configuration can take, not a sandbox**: a program that looks local still
+  reaches the network by itself once started (`npx` downloads the package; a
+  server calls its own API), and nothing here sees that. It **kills the server's
   process tree afterwards** (the process group on POSIX, `taskkill /T` on
   Windows), whether the server answered or not. On Windows the command is
   resolved with asynchronous look-ups over the local `PATH` entries only, so

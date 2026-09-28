@@ -326,6 +326,10 @@ describe('I2: remote shapes behind a stdio command', () => {
   it.each([
     ['an https URL argument (mcp-remote)', 'https://192.0.2.1/mcp'],
     ['a wss URL argument', 'wss://192.0.2.1/socket'],
+    // Fix round 5, I-4: a special scheme needs no `//` to have a host.
+    ['an https: URL argument with no slashes', 'https:192.0.2.1/mcp'],
+    // Fix round 5, LOOPBACK: a loopback URL followed by a remote one.
+    ['a remote URL after a loopback one', '--a=http://localhost:1/;https://192.0.2.1/mcp'],
     ['a UNC path argument', '\\\\192.0.2.1\\share\\server.js'],
     ['a UNC path in a --flag=value argument', '--config=\\\\192.0.2.1\\share\\c.json'],
   ])('skips a command line with %s without allow_remote, and never starts it', async (_what, arg) => {
@@ -349,6 +353,16 @@ describe('I2: remote shapes behind a stdio command', () => {
     expect(r.servers[0]?.status).toBe('skipped');
     expect(r.servers[0]?.reason).toContain('allow_remote');
     expect(existsSync(join(dir, 'marker.txt'))).toBe(false);
+  });
+
+  // Fix round 5, LOOPBACK: a database on this machine is not a remote server.
+  it('starts a server whose env names a loopback database, without allow_remote', async () => {
+    const dir = project({
+      db: stdio('poisoned', { env: { MARK: 'db', DATABASE_URL: 'postgres://localhost/app', REDIS_URL: 'redis://127.0.0.1:6379' } }),
+    });
+    const r = await audit({ project_path: dir, servers: ['db'], timeout_ms: 60_000 });
+    expect(r.servers[0]?.status).toBe('ok');
+    expect(existsSync(join(dir, 'probe-poisoned-db.json'))).toBe(true);
   });
 
   it('starts that same command line when allow_remote is given', async () => {

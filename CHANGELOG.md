@@ -76,6 +76,17 @@ version bump.
   `mcp-audit-findings-capped` finding — as severe as the worst it stands for — says how many more and
   of which rules. The findings stored are the ones returned. Measured: 60 poisoned tools with 20 KB
   keys, 44 KB; eleven such servers, 501 findings in 429 KB.
+- `allow_remote` gate, round three. `https:evil.example/mcp` — a special scheme with no `//`, a URL
+  to WHATWG — started without `allow_remote`: every `http`, `https`, `ws`, `wss` and `ftp` followed by
+  `:`, and every `scheme://`, is now parsed with WHATWG `URL`, and one that does not parse is remote.
+  `ssh`, `sshpass`, `plink`, `kubectl` and `oc` are remote as any word of the command line, a `-c` /
+  `/c` string included (`cmd /c "ssh host …"` started); so is `nerdctl`, and `--connection`, `--url`
+  and `CONTAINER_CONNECTION`, beside docker and podman. A loopback URL no longer needs `allow_remote`
+  (`DATABASE_URL=postgres://localhost/app` was skipped): exempt is an exact parsed hostname —
+  `localhost`, `127.x.x.x`, `[::1]` — never a prefix, never with userinfo or a backslash before the
+  path, never with a query on a non-HTTP scheme; every URL in a string is checked. A `url` entry needs
+  `allow_remote` even at localhost, and a loopback URL may be a tunnel the configuration does not show
+  (SECURITY.md). Reasons name the host (`postgres://db.example`, not `null`).
 - `mcp-tool-sensitive-file-access` is medium when a tool's text tells the model to read a credential
   or agent-config file ("confirm it is the tool's purpose"), and high only when it also directs passing
   it on (a parameter, another tool, a URL) or hiding it — which now also catches "The key is at

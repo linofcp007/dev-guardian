@@ -74741,61 +74741,129 @@ var StreamableHTTPClientTransport = class {
 import { spawn as spawn2 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
 import { delimiter, extname as extname2, isAbsolute as isAbsolute15, resolve as resolve20 } from "node:path";
-var URL_WITH_HOST = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/\\"'<>|]+/i;
+var SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
+var ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
+var URL_END = /[\s"'<>|`]/;
 var UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+var QUERY_SAFE_SCHEMES = /* @__PURE__ */ new Set(["http:", "https:", "ws:", "wss:"]);
+function urlAt(text, start) {
+  const rest = text.slice(start);
+  const end = rest.search(URL_END);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+function isLoopbackHost2(url2) {
+  const host = url2.hostname.toLowerCase();
+  const quad = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return host === "localhost" || host === "[::1]" || quad !== null && quad.slice(1).every((o2) => Number(o2) <= 255);
+}
+function unambiguous(url2, written) {
+  const afterScheme = written.slice(written.indexOf(":") + 1).replace(/^[/\\]*/, "");
+  const authority = afterScheme.split("/")[0] ?? "";
+  if (/[\\@]/.test(authority)) return false;
+  return QUERY_SAFE_SCHEMES.has(url2.protocol) || !written.includes("?");
+}
+function hostLabel(url2) {
+  return `${url2.protocol}//${url2.host}`;
+}
+function urlLabel(url2) {
+  try {
+    return hostLabel(new URL(url2));
+  } catch {
+    return "a URL that does not parse";
+  }
+}
+function remoteInText(text) {
+  if (UNC_ANYWHERE.test(text)) return "names a network or device path";
+  const starts = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(SPECIAL_SCHEME)) starts.add(m.index);
+  for (const m of text.matchAll(ANY_SCHEME_WITH_SLASHES)) starts.add(m.index);
+  for (const start of [...starts].sort((a2, b) => a2 - b)) {
+    const written = urlAt(text, start);
+    let url2;
+    try {
+      url2 = new URL(written);
+    } catch {
+      return `names a URL that does not parse (${JSON.stringify(written.slice(0, 80))})`;
+    }
+    if (url2.hostname === "") continue;
+    if (isLoopbackHost2(url2)) {
+      if (unambiguous(url2, written)) continue;
+      return `names ${hostLabel(url2)} written so that another client may read another host (userinfo, a backslash, or a query on a non-HTTP scheme)`;
+    }
+    return `names ${hostLabel(url2)} (a proxy, a client or a source on another machine)`;
+  }
+  return null;
+}
 function commandName(command) {
   const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
   return base.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
 }
-function remoteEngine(entry, name) {
-  if (name !== "docker" && name !== "podman") return null;
-  const args = entry.args ?? [];
-  for (let i2 = 0; i2 < args.length; i2 += 1) {
-    const a2 = args[i2] ?? "";
-    if (/^(-H|--host)(=|$)/.test(a2) || /^-H\S/.test(a2)) return `${name} is told to use another engine (${a2.split("=")[0] ?? a2})`;
-    if (/^(--context|-c)(=|$)/.test(a2)) {
-      const value = a2.includes("=") ? a2.slice(a2.indexOf("=") + 1) : args[i2 + 1] ?? "";
-      if (value !== "default") return `${name} is told to use the context '${value}'`;
+var REMOTE_COMMANDS = /* @__PURE__ */ new Set(["ssh", "sshpass", "plink", "kubectl", "oc"]);
+var ENGINES = /* @__PURE__ */ new Set(["docker", "podman", "nerdctl"]);
+var ENGINE_FLAG = /^(?:-H.*|--host|--remote|--connection|--url)$/;
+function commandTokens(command, args) {
+  return [command, ...args].flatMap((s) => s.split(/[\s"'`&|;()<>=]+/)).filter((t) => t !== "");
+}
+function remoteEngine(tokens, env) {
+  let seen = null;
+  for (let i2 = 0; i2 < tokens.length; i2 += 1) {
+    const name = commandName(tokens[i2] ?? "");
+    if (!ENGINES.has(name)) continue;
+    seen = name;
+    for (let j = i2 + 1; j < tokens.length && (tokens[j] ?? "").startsWith("-"); j += 1) {
+      const flag = tokens[j] ?? "";
+      if (flag === "-r") return `${name} is told to use a remote engine (-r)`;
+      if (flag === "-c" || flag === "--context") {
+        const value = tokens[j + 1] ?? "";
+        if (value !== "default") return `${name} is told to use the context '${value}'`;
+        j += 1;
+      }
     }
-    if (name === "podman" && /^(--remote|--connection|--url)(=|$)/.test(a2)) return `podman is told to use a remote engine (${a2})`;
+    for (let j = i2 + 1; j < tokens.length; j += 1) {
+      const flag = tokens[j] ?? "";
+      if (ENGINE_FLAG.test(flag)) return `${name} is told to use another engine (${flag.startsWith("-H") ? "-H" : flag})`;
+      if (flag === "--context" && (tokens[j + 1] ?? "") !== "default") {
+        return `${name} is told to use the context '${tokens[j + 1] ?? ""}'`;
+      }
+    }
   }
-  const context = entry.env?.["DOCKER_CONTEXT"];
-  if (typeof context === "string" && context !== "" && context !== "default") {
-    return `${name} is told to use the context '${context}' (DOCKER_CONTEXT)`;
+  if (seen === null) return null;
+  for (const key of ["DOCKER_CONTEXT", "CONTAINER_CONNECTION"]) {
+    const value = env[key];
+    if (typeof value === "string" && value !== "" && value !== "default") {
+      return `${seen} is told to use the ${key === "DOCKER_CONTEXT" ? "context" : "connection"} '${value}' (${key})`;
+    }
   }
   return null;
 }
 function remoteReasonOf(entry) {
   if (entry.command === void 0) {
-    if (entry.url !== void 0) return `remote server at ${originOf(entry.url)}`;
+    if (entry.url !== void 0) return `remote server at ${urlLabel(entry.url)}`;
     return null;
   }
-  if (isRemoteOrDeviceTarget(entry.command)) {
+  const command = entry.command;
+  if (isRemoteOrDeviceTarget(command)) {
     return "its command is on a network or device path (starting it contacts that host)";
   }
-  const name = commandName(entry.command);
-  if (name === "ssh") return "its command is ssh (the server runs on another machine)";
-  const engine = remoteEngine(entry, name);
+  const args = entry.args ?? [];
+  const tokens = commandTokens(command, args);
+  for (const t of tokens) {
+    const name = commandName(t);
+    if (REMOTE_COMMANDS.has(name)) return `its command line runs ${name} (the server runs on, or reaches into, another machine)`;
+  }
+  const engine = remoteEngine(tokens, entry.env ?? {});
   if (engine !== null) return engine;
   const envValues = Object.entries(entry.env ?? {}).flatMap(([k, v]) => typeof v === "string" ? [[k, v]] : []);
   const parts = [
-    { where: "its command line", text: entry.command },
-    ...(entry.args ?? []).map((text) => ({ where: "its command line", text })),
+    { where: "its command line", text: command },
+    ...args.map((text) => ({ where: "its command line", text })),
     ...envValues.map(([k, text]) => ({ where: `its env ${k}`, text }))
   ];
   for (const { where, text } of parts) {
-    const url2 = URL_WITH_HOST.exec(text);
-    if (url2 !== null) return `${where} names ${originOf(url2[0])} (a proxy, a client or a source on another machine)`;
-    if (UNC_ANYWHERE.test(text)) return `${where} names a network or device path`;
+    const why = remoteInText(text);
+    if (why !== null) return `${where} ${why}`;
   }
   return null;
-}
-function originOf(url2) {
-  try {
-    return new URL(url2).origin;
-  } catch {
-    return "a URL";
-  }
 }
 function envValue(env, name) {
   const key = Object.keys(env).find((k) => k.toUpperCase() === name);
@@ -75458,7 +75526,7 @@ var inputSchema28 = {
     "Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini). Off by default."
   ),
   allow_remote: external_exports.boolean().optional().default(false).describe(
-    "Contact servers that reach another machine: a url entry, a command on a network path, or a URL on the command line (mcp-remote and other proxies). Off by default: they are skipped."
+    "Contact servers that reach another machine: a url entry (even at localhost), a command on a network path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it carries userinfo, a backslash, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is not seen. Off by default: they are skipped."
   ),
   timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS7).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
 };
@@ -75467,7 +75535,7 @@ var tool47 = {
   title: "Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)",
   // Worded so this description does not trip the checks it lists: measured,
   // a literal tag block or file name here was a finding on dev-guardian itself.
-  description: "Start the MCP servers named in `servers` (a name, or `<source>::<name>` when several entries share it), list the tools, prompts, resources and templates each serves, and check them: instructions aimed at the model, hidden Unicode and look-alike letters, instructions to read secrets or agent config, to hide actions from the user, to send data out (a URL, an address, an image, a parameter), cross-server shadowing, base64 blobs, oversized descriptions. Pins every definition and the server instructions: a tool or the instructions changed since the previous audit is a high \"rug pull\", reported once. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the names the caller lists (no wildcard, no default), with a minimal environment plus the entry's own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url, a network-path command, a URL on the command line) only with allow_remote; it kills the process tree after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean result covers only what it chose to show this client. A name not declared or ambiguous, a remote server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing a budget cut short is skipped/failed/partial with a reason and lowers coverage, never a clean pass.",
+  description: "Start the MCP servers named in `servers` (a name, or `<source>::<name>` when several entries share it), list the tools, prompts, resources and templates each serves, and check them: instructions aimed at the model, hidden Unicode and look-alike letters, instructions to read secrets or agent config, to hide actions from the user, to send data out (a URL, an address, an image, a parameter), cross-server shadowing, base64 blobs, oversized descriptions. Pins every definition and the server instructions: a tool or the instructions changed since the previous audit is a high \"rug pull\", reported once. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the names the caller lists (no wildcard, no default), with a minimal environment plus the entry's own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url; a network-path command; a non-loopback URL in the command line or env; ssh or kubectl; a remote docker/podman engine) only with allow_remote; it kills the process tree after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean result covers only what it chose to show this client. A name not declared or ambiguous, a remote server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing a budget cut short is skipped/failed/partial with a reason and lowers coverage, never a clean pass.",
   inputSchema: inputSchema28,
   handler: (input, ctx, callMeta) => handler44(input, ctx, callMeta)
 };
