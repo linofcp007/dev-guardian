@@ -63,7 +63,7 @@ export function substituteCliPath(body: string, cliPath: string): string {
 export const RULES_BODY = `# dev-guardian
 
 This project has the **dev-guardian MCP server** registered. It exposes
-54 tools and 18 resources for security, quality, bugfix, deps,
+57 tools and 18 resources for security, quality, bugfix, deps,
 compliance, observability, performance, plus first-class WordPress and
 .NET (C#/F#) support. All scanners run locally. dev-guardian sends no
 telemetry of its own; Semgrep's registry mode sends metrics — pass
