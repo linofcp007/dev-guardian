@@ -721,7 +721,7 @@ describe('bug_hunt', () => {
     };
     const run = r.tools_run.find((t) => t.name === 'semgrep');
     expect(run?.status).toBe('failed');
-    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon/);
+    expect(run?.reason).toBe('the rule configuration did not load — UnknownLanguageError: invalid language: klingon (semgrep exit 8)');
     expect(run?.rule_config_error).toBe(true);
     expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
   });

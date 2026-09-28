@@ -180,7 +180,11 @@ export function semgrepOnFiles(args) {
             return {
                 ok: c.ok,
                 scanned: c.scanned,
-                ...(c.reason !== undefined ? { reason: c.rule_config_error !== undefined ? `the rule configuration did not load — ${c.reason}` : c.reason } : {}),
+                ...(c.rule_config_error !== undefined
+                    ? { reason: `the rule configuration did not load — ${c.rule_config_error} (semgrep exit ${String(args.exitCode)})` }
+                    : c.reason !== undefined
+                        ? { reason: c.reason }
+                        : {}),
                 ...(c.rule_config_error !== undefined ? { ruleConfigError: true } : {}),
             };
         },

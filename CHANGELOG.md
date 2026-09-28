@@ -1076,8 +1076,9 @@ keeps working (migrations 004–011 are additive).
   loaded — every rule of the local rule files failed and no registry pack
   ran — is `failed` (nothing was scanned for), the rules named; a rule
   configuration Semgrep refuses outright (a rule with an unknown language:
-  exit 8, `UnknownLanguageError`) names that error instead of `(no
-  message)`. Both are marked `tools_run[].rule_config_error`, and the
+  exit 8, `UnknownLanguageError`) names that error, once, instead of `(no
+  message)`. The Docker fallback reads the project's rule file on the host to
+  tell (it passes the container's `/src/…` name). Both are marked `tools_run[].rule_config_error`, and the
   coverage warning then says Semgrep ran and its rules did not load, never
   "Install semgrep". A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a

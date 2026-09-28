@@ -752,7 +752,7 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
             toolRun: {
                 name: 'semgrep',
                 status: 'failed',
-                reason: `the rule configuration did not load — ${check.rule_config_error}; ${reason}`,
+                reason: `the rule configuration did not load — ${check.rule_config_error} (semgrep exit ${String(run.exitCode)})`,
                 rule_config_error: true,
             },
             missing: false,

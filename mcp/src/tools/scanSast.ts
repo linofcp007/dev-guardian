@@ -99,6 +99,7 @@ import {
   buildSemgrepDockerArgs,
   CONTAINER_PROJECT_ROOT,
   DEFAULT_SEMGREP_IMAGE,
+  fromContainerPath,
   toContainerPath,
 } from '../runners/dockerScanner.js';
 import {
@@ -380,7 +381,9 @@ function recordSemgrepRun(args: Collect & {
     return;
   }
   const notLoaded = check.rules_not_loaded;
-  if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules)) {
+  // The container's configs are read on the host (`/src/…` is the project).
+  const readAt = (config: string): string => (via !== null ? fromContainerPath(ctx.projectPath, config) : config);
+  if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules, readAt)) {
     // Every local rule failed and no registry pack ran: nothing was scanned
     // for (M-1) — failed, the rules named, never "install semgrep".
     tools_run.push({
@@ -418,7 +421,7 @@ function recordSemgrepRun(args: Collect & {
     tools_run.push({
       name: 'semgrep',
       status: 'failed',
-      reason: [...reasons, `the rule configuration did not load — ${check.rule_config_error}`, detail].join('; '),
+      reason: [...reasons, `the rule configuration did not load — ${check.rule_config_error} (semgrep exit ${String(result.exitCode)})`].join('; '),
       rule_config_error: true,
     });
     return;

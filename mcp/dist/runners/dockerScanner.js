@@ -12,6 +12,7 @@
  * under "CLAUDE SKILLS"). Because we invoke Docker via execa with shell:false,
  * each arg is a single argv element — no shell quoting needed.
  */
+import { join } from 'node:path';
 export const DEFAULT_SEMGREP_IMAGE = 'semgrep/semgrep';
 /**
  * Where the project is mounted inside the container. Semgrep run there
@@ -57,6 +58,22 @@ export function buildSemgrepDockerArgs(opts) {
  * root if the host path is unexpectedly outside the project.
  */
 export function toContainerPath(projectPath, outFileHost) {
+    return toContainerPathImpl(projectPath, outFileHost);
+}
+/**
+ * The host file behind a path the container sees (`/src/<rel>` →
+ * `<projectPath>/<rel>`) — {@link toContainerPath} in reverse. Any other
+ * path is returned as it is.
+ */
+export function fromContainerPath(projectPath, containerPath) {
+    const prefix = `${CONTAINER_PROJECT_ROOT}/`;
+    if (containerPath === CONTAINER_PROJECT_ROOT)
+        return projectPath;
+    if (!containerPath.startsWith(prefix))
+        return containerPath;
+    return join(projectPath, ...containerPath.slice(prefix.length).split('/'));
+}
+function toContainerPathImpl(projectPath, outFileHost) {
     const norm = (p) => p.replace(/\\/g, '/').replace(/\/+$/, '');
     const root = norm(projectPath);
     let rel = norm(outFileHost);

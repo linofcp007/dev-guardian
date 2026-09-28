@@ -345,6 +345,41 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });
 
+  it('the Docker fallback, local_only, every rule failed: failed too — its /src config read on the host (round 3 review, I-1)', async () => {
+    // Two broken patterns in the project's only rule file, Semgrep not on
+    // PATH: the container reports both rules not loaded. Read as
+    // /src/.semgrep.yml on the host, the file was never found and the run
+    // stayed ok + partial.
+    const project = makeTempDir('sast-rules-none-docker-');
+    const two = 'rules:\n  - id: x\n    pattern: eval( (\n    message: m\n    languages: [python]\n    severity: WARNING\n' +
+      '  - id: y\n    pattern: foo(]\n    message: m\n    languages: [python]\n    severity: WARNING\n';
+    writeFileSync(join(project, '.semgrep.yml'), two, 'utf8');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    const configs: string[] = [];
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      configs.push(...(opts.args ?? []).filter((a) => a.startsWith('--config=')));
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        const err = (id: string) => ({ code: 2, level: 'error', type: 'Rule parse error', rule_id: id, message: `Rule parse error in rule ${id}:\n Invalid pattern for Python` });
+        writeFileSync(host, JSON.stringify({ results: [], errors: [err('x'), err('y')], paths: { scanned: ['/src/a.py'] } }), 'utf8');
+      }
+      return { outcome: 'failed' as const, exitCode: 2, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(configs).toEqual(['--config=/src/.semgrep.yml']);
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
+      | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/ran via docker/);
+    expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 2 rule\(s\) failed to load/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', 'y']);
+    expect(run?.rule_config_error).toBe(true);
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
   it('a scoped (batched) local_only run in which no rule loaded is failed too', async () => {
     const project = makeTempDir('sast-rules-none-scope-');
     writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
@@ -369,7 +404,9 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     const r = await runSast(project, makePlugin(project));
     const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
     expect(run?.status).toBe('failed');
-    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon/);
+    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon \(semgrep exit 8\)/);
+    // Said once (round 3 review: the error text was repeated).
+    expect(run?.reason?.split('invalid language: klingon')).toHaveLength(2);
     expect(run?.rule_config_error).toBe(true);
     const warnings = (r as unknown as { warnings: string[] }).warnings.join(' ');
     expect(warnings).toMatch(/semgrep ran, but its rules did not load/);

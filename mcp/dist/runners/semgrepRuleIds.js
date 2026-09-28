@@ -160,9 +160,13 @@ export function localRuleIdNormalizer(configs, ctx = {}) {
  * its findings are stored — is in `failed`. False whenever that cannot be
  * told (a registry pack ran, a file cannot be read or declares nothing): the
  * run then stays a narrower gap (fix round 3, M-1 — a scanner that ran on
- * nothing is never ok).
+ * nothing is never ok). `readAt` maps a config to the file to READ when the
+ * run saw it under another name — the Docker fallback passes `/src/…`, the
+ * container's view of the project, and the rules are read on the host
+ * (round 3's review, I-1: read as `/src/.semgrep.yml` on the host, they were
+ * never found, and the run stayed partial).
  */
-export function noRuleLoaded(configs, failed, ctx = {}) {
+export function noRuleLoaded(configs, failed, ctx = {}, readAt = (config) => config) {
     if (configs.length === 0 || failed.length === 0)
         return false;
     if (configs.some((c) => localKind(c) !== 'file'))
@@ -173,7 +177,7 @@ export function noRuleLoaded(configs, failed, ctx = {}) {
     for (const config of configs) {
         const fp = flavourOf(config, ctx.projectPath, cwd);
         const file = fp.isAbsolute(config) ? config : cwd !== undefined ? fp.resolve(cwd, config) : config;
-        const ids = ruleIdsInFile(file);
+        const ids = ruleIdsInFile(readAt(file));
         if (ids.length === 0)
             return false;
         for (const id of ids) {

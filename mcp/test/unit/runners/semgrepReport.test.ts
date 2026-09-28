@@ -329,3 +329,16 @@ describe('checkSemgrepReport: a refused rule configuration', () => {
     expect(r.rule_config_error).toBeUndefined();
   });
 });
+
+describe('fromContainerPath: the host file behind a /src path', () => {
+  it('maps the mount back to the project; leaves any other path alone', async () => {
+    const { fromContainerPath, toContainerPath } = await import('../../../src/runners/dockerScanner.js');
+    const { join, resolve } = await import('node:path');
+    const project = resolve('/work/my app');
+    expect(fromContainerPath(project, '/src/.semgrep.yml')).toBe(join(project, '.semgrep.yml'));
+    expect(fromContainerPath(project, '/src/rules/team.yml')).toBe(join(project, 'rules', 'team.yml'));
+    expect(fromContainerPath(project, toContainerPath(project, join(project, 'a', 'b.yml')))).toBe(join(project, 'a', 'b.yml'));
+    expect(fromContainerPath(project, '/srcx/a.yml')).toBe('/srcx/a.yml');
+    expect(fromContainerPath(project, 'auto')).toBe('auto');
+  });
+});
