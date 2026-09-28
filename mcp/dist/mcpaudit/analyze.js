@@ -12,6 +12,7 @@
  * Pure function over its inputs. No I/O.
  */
 import { makeFinding } from '../runners/scannerParsers/index.js';
+import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js';
 import { escapeInvisible, findEncodedBlob, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, PASS_ELSEWHERE, readAs, SENSITIVE_PATH_ANYWHERE, scanInvisible, TEXT_RULES, } from './rules.js';
 /**
  * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
@@ -114,6 +115,9 @@ const YIELD_EVERY_STRINGS = 1000;
  * read, and a walk that hits the bound says so.
  */
 const MAX_DEPTH = 128;
+/** What marks the path of an object key, as opposed to its value. */
+const KEY_SUFFIX = ' (key)';
+/** Every string in `value` and every object key, iteratively, each with its (bounded) path. */
 function* walkStrings(value, root, item, onTooDeep) {
     const stack = [{ v: value, path: root, depth: 0 }];
     let tooDeep = false;
@@ -132,9 +136,12 @@ function* walkStrings(value, root, item, onTooDeep) {
             tooDeep = true;
             continue;
         }
+        // A path names where a hit is; it never carries the key text itself past
+        // a few dozen characters (fix round 5, I-3: a 20 KB key was a 20 KB path,
+        // six of them to a message).
         if (Array.isArray(v)) {
             for (let i = v.length - 1; i >= 0; i -= 1)
-                stack.push({ v: v[i], path: `${path}[${i}]`, depth: depth + 1 });
+                stack.push({ v: v[i], path: capPath(`${path}[${i}]`), depth: depth + 1 });
             continue;
         }
         const entries = Object.entries(v);
@@ -143,9 +150,9 @@ function* walkStrings(value, root, item, onTooDeep) {
             if (entry === undefined)
                 continue;
             const [key, child] = entry;
-            const childPath = `${path}.${key}`;
-            yield { item, path: `${childPath} (key)`, text: key };
-            stack.push({ v: child, path: childPath, depth: depth + 1 });
+            const childPath = `${path}.${capSegment(key)}`;
+            yield { item, path: `${capPath(childPath, MAX_PATH_CHARS - KEY_SUFFIX.length)}${KEY_SUFFIX}`, text: key };
+            stack.push({ v: child, path: capPath(childPath), depth: depth + 1 });
         }
     }
     if (tooDeep)
@@ -635,7 +642,7 @@ function finishRun(run, others) {
         const server = shortName(listing.serverName);
         // Every string below may carry text the server chose; `escapeInvisible`
         // keeps an invisible payload from riding out in the audit's own output.
-        findings.push(makeFinding({
+        findings.push(capFindingText(makeFinding({
             tool: MCP_AUDIT_TOOL_NAME,
             rule_id: first.rule,
             severity,
@@ -648,7 +655,7 @@ function finishRun(run, others) {
             file_path: listing.sourceLabel,
             snippet: escapeInvisible(`${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`),
             fix_available: false,
-        }));
+        })));
     }
     return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };
 }

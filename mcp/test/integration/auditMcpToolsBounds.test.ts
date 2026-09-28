@@ -234,6 +234,40 @@ describe('I-1: one server cannot cost another its results', () => {
   });
 });
 
+/**
+ * Fix round 5, I-3 (reproduced): paths were built from full key text and a
+ * message held up to six of them — a 1.8 MB fixture gave 1.29 MB messages;
+ * 50 servers gave 7725 findings in a 6.4 MB result.
+ */
+describe('I-3: the result is bounded', () => {
+  it('caps messages, paths and the findings of one server, and stays small in bytes', async () => {
+    const dir = project({ loud: stdio('loud') });
+    const r = await audit({ project_path: dir, servers: ['loud'], timeout_ms: 60_000 });
+    expect(r.findings.length).toBeLessThanOrEqual(51);
+    expect(r.findings.some((f) => f.rule_id === 'mcp-audit-findings-capped')).toBe(true);
+    expect(r.findings.every((f) => Buffer.byteLength(f.message ?? '') <= 2048)).toBe(true);
+    expect(r.findings.every((f) => Buffer.byteLength(f.snippet ?? '') <= 1024)).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThan(150_000);
+  });
+
+  it('keeps 500 findings over eleven such servers, with one summary of the rest', async () => {
+    const servers: Record<string, unknown> = {};
+    for (let i = 0; i < 11; i += 1) servers[`loud${i}`] = stdio('loud', { env: { MARK: String(i) } });
+    const dir = project(servers);
+    const r = await audit({ project_path: dir, servers: Object.keys(servers), timeout_ms: 60_000 });
+    expect(r.servers.every((s) => s.status === 'ok')).toBe(true);
+    expect(r.findings).toHaveLength(501);
+    const last = r.findings[r.findings.length - 1];
+    expect(last?.rule_id).toBe('mcp-audit-findings-capped');
+    // 11 x 60 = 660 found, and every one is accounted for: listed, or
+    // counted by a summary that is listed.
+    const counted = (f: { rule_id?: string; message?: string }): number =>
+      f.rule_id === 'mcp-audit-findings-capped' ? Number(/(\d+) more findings/.exec(f.message ?? '')?.[1]) : 1;
+    expect(r.findings.reduce((n, f) => n + counted(f), 0)).toBe(660);
+    expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThan(1_500_000);
+  }, 180_000);
+});
+
 describe('C1 residual: the analysis is bounded, yields, and is never a clean pass when cut', () => {
   const quick = (r: ChildAudit): void => {
     expect(r.killed, 'the audit never returned and was killed').toBe(false);

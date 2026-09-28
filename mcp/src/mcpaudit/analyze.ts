@@ -14,6 +14,7 @@
 
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Finding, Severity } from '../types.js';
+import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js';
 import {
   escapeInvisible,
   findEncodedBlob,
@@ -211,10 +212,13 @@ const YIELD_EVERY_STRINGS = 1000;
  */
 const MAX_DEPTH = 128;
 
-/** Every string in `value` and every object key, iteratively; a bound reached is pushed to `cuts`. */
+/** What marks the path of an object key, as opposed to its value. */
+const KEY_SUFFIX = ' (key)';
+
 /** Called once per walk that met nesting past {@link MAX_DEPTH}. */
 type OnTooDeep = (item: string, root: string) => void;
 
+/** Every string in `value` and every object key, iteratively, each with its (bounded) path. */
 function* walkStrings(value: unknown, root: string, item: string, onTooDeep: OnTooDeep): Generator<TextField> {
   const stack: Array<{ v: unknown; path: string; depth: number }> = [{ v: value, path: root, depth: 0 }];
   let tooDeep = false;
@@ -231,8 +235,11 @@ function* walkStrings(value: unknown, root: string, item: string, onTooDeep: OnT
       tooDeep = true;
       continue;
     }
+    // A path names where a hit is; it never carries the key text itself past
+    // a few dozen characters (fix round 5, I-3: a 20 KB key was a 20 KB path,
+    // six of them to a message).
     if (Array.isArray(v)) {
-      for (let i = v.length - 1; i >= 0; i -= 1) stack.push({ v: v[i], path: `${path}[${i}]`, depth: depth + 1 });
+      for (let i = v.length - 1; i >= 0; i -= 1) stack.push({ v: v[i], path: capPath(`${path}[${i}]`), depth: depth + 1 });
       continue;
     }
     const entries = Object.entries(v as Record<string, unknown>);
@@ -240,9 +247,9 @@ function* walkStrings(value: unknown, root: string, item: string, onTooDeep: OnT
       const entry = entries[i];
       if (entry === undefined) continue;
       const [key, child] = entry;
-      const childPath = `${path}.${key}`;
-      yield { item, path: `${childPath} (key)`, text: key };
-      stack.push({ v: child, path: childPath, depth: depth + 1 });
+      const childPath = `${path}.${capSegment(key)}`;
+      yield { item, path: `${capPath(childPath, MAX_PATH_CHARS - KEY_SUFFIX.length)}${KEY_SUFFIX}`, text: key };
+      stack.push({ v: child, path: capPath(childPath), depth: depth + 1 });
     }
   }
   if (tooDeep) onTooDeep(item, root);
@@ -811,7 +818,7 @@ function finishRun(run: AnalysisRun, others: readonly OtherServer[]): ListingAna
     // Every string below may carry text the server chose; `escapeInvisible`
     // keeps an invisible payload from riding out in the audit's own output.
     findings.push(
-      makeFinding({
+      capFindingText(makeFinding({
         tool: MCP_AUDIT_TOOL_NAME,
         rule_id: first.rule,
         severity,
@@ -828,7 +835,7 @@ function finishRun(run: AnalysisRun, others: readonly OtherServer[]): ListingAna
           `${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`,
         ),
         fix_available: false,
-      }),
+      })),
     );
   }
   return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };

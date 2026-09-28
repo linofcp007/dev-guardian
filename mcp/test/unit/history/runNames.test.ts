@@ -173,8 +173,6 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     '`agent-audit:<source label>` — a failed pass of the agent-audit base (a config that exists and was not read), which runNameEntry falls back to',
   'tools/auditMcpTools.ts:runName':
     "`${MCP_AUDIT_TOOL_NAME}:<server>` — a pass of the MCP_AUDIT_TOOL_NAME base, which runNameEntry falls back to",
-  'tools/auditMcpTools.ts:escapeInvisible(name)':
-    'never reaches tools_run: a per-server report object (`servers` in the response and meta), not a ToolRun',
 };
 
 /** Every `tools_run` / `missing_tools` write whose name is an expression, as `file:expression`. */

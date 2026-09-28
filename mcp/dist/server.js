@@ -46706,8 +46706,8 @@ async function verifyGitleaksFindings(input) {
     const checked = perEntry.flatMap(
       ({ items }) => items.flatMap((x) => x.check === null || x.finding === null ? [] : [{ finding: x.finding, check: x.check }])
     );
-    const summary = summarize(checked);
-    return { parser_inputs, summary, warnings: warningsFor(summary, input.unavailable) };
+    const summary2 = summarize(checked);
+    return { parser_inputs, summary: summary2, warnings: warningsFor(summary2, input.unavailable) };
   } finally {
     for (const c3 of candidates2) c3.secret = "";
     candidates2.length = 0;
@@ -46737,7 +46737,7 @@ function summarize(checked) {
     if (finding4.line_start !== void 0) record4.line_start = finding4.line_start;
     records.push(record4);
   }
-  const summary = {
+  const summary2 = {
     verified: sent.length,
     live: count2("live"),
     revoked: count2("revoked"),
@@ -46751,8 +46751,8 @@ function summarize(checked) {
     verifiable_rules: PROVIDERS.flatMap((p) => p.rules),
     findings: records.slice(0, MAX_RECORDS)
   };
-  if (records.length > MAX_RECORDS) summary.findings_not_listed = records.length - MAX_RECORDS;
-  return summary;
+  if (records.length > MAX_RECORDS) summary2.findings_not_listed = records.length - MAX_RECORDS;
+  return summary2;
 }
 function warningsFor(s, unavailable) {
   const out = [];
@@ -51430,11 +51430,11 @@ async function handler(input, ctx, callMeta) {
   const runnerFailures = plansByEcosystem.flatMap((p) => p.failures ?? []);
   appendCatchAllUnplanned({ projectPath, cves, steps: flat, unplanned, runnerFailures });
   const ordered = orderPlan(flat, inp.prefer ?? "security");
-  const summary = summarize2(ordered);
+  const summary2 = summarize2(ordered);
   return {
     ok: true,
     plan: ordered,
-    summary,
+    summary: summary2,
     unplanned,
     runner_failures: runnerFailures,
     stack_detected: ecosystems,
@@ -53025,7 +53025,7 @@ async function handler2(input, ctx) {
   }
   const stat3 = statSync11(outFile);
   const raw = readFileSync22(outFile, "utf8");
-  const summary = summarize3(raw);
+  const summary2 = summarize3(raw);
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "sbom",
@@ -53044,8 +53044,8 @@ async function handler2(input, ctx) {
       produced_by: producedBy,
       file_path: outFile,
       size_bytes: stat3.size,
-      components_count: summary.components_count,
-      top_packages: summary.top_packages
+      components_count: summary2.components_count,
+      top_packages: summary2.top_packages
     }
   });
   const payload = {
@@ -53055,8 +53055,8 @@ async function handler2(input, ctx) {
     produced_by: producedBy,
     file_path: outFile,
     size_bytes: stat3.size,
-    components_count: summary.components_count,
-    top_packages: summary.top_packages
+    components_count: summary2.components_count,
+    top_packages: summary2.top_packages
   };
   let inlined = false;
   if (stat3.size <= inlineMaxBytes) {
@@ -54403,14 +54403,14 @@ async function runLighthouse(opts) {
   } catch {
     return failDomain7("scanner_failed", "Lighthouse output was not valid JSON.");
   }
-  const summary = summariseLighthouse(parsed);
-  const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
+  const summary2 = summariseLighthouse(parsed);
+  const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary2.core_web_vitals);
   return {
     ok: true,
     tool: "lighthouse",
     url: opts.url,
     report_path: outFile,
-    summary,
+    summary: summary2,
     findings: budgetResult.findings,
     budgets: budgetResult.budgets,
     ...budgetResult.warnings.length > 0 ? { warnings: budgetResult.warnings } : {}
@@ -54505,13 +54505,13 @@ async function runK6(opts) {
   } catch {
     return failDomain7("scanner_failed", "k6 summary was not valid JSON.");
   }
-  const summary = summariseK6(parsed);
+  const summary2 = summariseK6(parsed);
   return {
     ok: true,
     tool: "k6",
     script: opts.scriptPath,
     report_path: summaryFile,
-    summary
+    summary: summary2
   };
 }
 function summariseK6(root) {
@@ -54872,15 +54872,15 @@ async function handler10(input, ctx, callMeta) {
       const result = await subTool.handler(subInput, ctx, callMeta);
       if (result.ok) {
         const r = result;
-        const summary = { tool: toolName, ok: true };
-        if (r.scan_id !== void 0) summary.scan_id = r.scan_id;
+        const summary2 = { tool: toolName, ok: true };
+        if (r.scan_id !== void 0) summary2.scan_id = r.scan_id;
         if (r.findings_count_by_severity !== void 0)
-          summary.findings_count_by_severity = r.findings_count_by_severity;
-        if (r.top_findings !== void 0) summary.top_findings = r.top_findings;
-        if (r.coverage !== void 0) summary.coverage = r.coverage;
-        if (r.missing_tools !== void 0) summary.missing_tools = r.missing_tools;
-        if (r.warnings !== void 0) summary.warnings = r.warnings;
-        return [toolName, summary];
+          summary2.findings_count_by_severity = r.findings_count_by_severity;
+        if (r.top_findings !== void 0) summary2.top_findings = r.top_findings;
+        if (r.coverage !== void 0) summary2.coverage = r.coverage;
+        if (r.missing_tools !== void 0) summary2.missing_tools = r.missing_tools;
+        if (r.warnings !== void 0) summary2.warnings = r.warnings;
+        return [toolName, summary2];
       }
       return [
         toolName,
@@ -54888,12 +54888,12 @@ async function handler10(input, ctx, callMeta) {
       ];
     })
   );
-  for (const [name, summary] of subResultsArr) {
-    subResults[name] = summary;
+  for (const [name, summary2] of subResultsArr) {
+    subResults[name] = summary2;
   }
   const subScanIds = {};
-  for (const [name, summary] of Object.entries(subResults)) {
-    subScanIds[name] = summary.scan_id ?? null;
+  for (const [name, summary2] of Object.entries(subResults)) {
+    subScanIds[name] = summary2.scan_id ?? null;
   }
   if (callMeta?.signal?.aborted === true) {
     ctx.storage.scans.finalize({
@@ -54908,9 +54908,9 @@ async function handler10(input, ctx, callMeta) {
       "The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated."
     );
   }
-  for (const summary of Object.values(subResults)) {
-    if (summary.ok && summary.scan_id) {
-      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
+  for (const summary2 of Object.values(subResults)) {
+    if (summary2.ok && summary2.scan_id) {
+      aggregateFindings.push(...ctx.storage.findings.listByScan(summary2.scan_id));
     }
   }
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
@@ -54942,19 +54942,19 @@ async function handler10(input, ctx, callMeta) {
   const aggregateMissing = /* @__PURE__ */ new Set();
   const coverageList = [];
   const coverage_warnings = [];
-  for (const summary of Object.values(subResults)) {
-    if (!summary.ok) {
+  for (const summary2 of Object.values(subResults)) {
+    if (!summary2.ok) {
       coverageList.push("none");
       coverage_warnings.push(
-        `${summary.tool}: did not run (${summary.error?.code ?? "failed"}) \u2014 not covered.`
+        `${summary2.tool}: did not run (${summary2.error?.code ?? "failed"}) \u2014 not covered.`
       );
       continue;
     }
-    coverageList.push(summary.coverage ?? "full");
-    for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
-    if (summary.coverage && summary.coverage !== "full") {
-      const loud = (summary.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
-      coverage_warnings.push(loud ?? `${summary.tool}: coverage=${summary.coverage}.`);
+    coverageList.push(summary2.coverage ?? "full");
+    for (const m of summary2.missing_tools ?? []) aggregateMissing.add(m);
+    if (summary2.coverage && summary2.coverage !== "full") {
+      const loud = (summary2.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
+      coverage_warnings.push(loud ?? `${summary2.tool}: coverage=${summary2.coverage}.`);
     }
   }
   const overallCoverage = worstCoverage(coverageList);
@@ -61094,14 +61094,14 @@ function summarise(path8, result) {
   const r = result;
   const cm = r.checksum_mismatches ?? {};
   const flagged = (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a2, b) => a2 + (b?.length ?? 0), 0);
-  const summary = {
+  const summary2 = {
     wp_install_path: path8,
     ok: true,
     flagged_count: flagged
   };
-  if (r.scan_id !== void 0) summary.scan_id = r.scan_id;
-  if (r.wp_version !== void 0) summary.wp_version = r.wp_version;
-  return summary;
+  if (r.scan_id !== void 0) summary2.scan_id = r.scan_id;
+  if (r.wp_version !== void 0) summary2.wp_version = r.wp_version;
+  return summary2;
 }
 
 // src/tools/wpDescribeSetup.ts
@@ -61840,14 +61840,14 @@ async function handler37(input, ctx) {
     (a2, b) => b.priority_score - a2.priority_score || a2.finding.fingerprint.localeCompare(b.finding.fingerprint)
   );
   const top = ranked.slice(0, limit);
-  const summary = {
+  const summary2 = {
     total_open: open.length,
     returned: top.length,
     score_range: scoreRange(top)
   };
   return {
     ok: true,
-    summary,
+    summary: summary2,
     ranked: top,
     open_set: describeOpenSet(set2),
     cve_intel: uncorrelatedCoverage(open),
@@ -70856,6 +70856,127 @@ function countBySeverity5(findings) {
 // src/tools/auditMcpTools.ts
 import { randomUUID as randomUUID20 } from "node:crypto";
 
+// src/mcpaudit/output.ts
+var MAX_PATH_SEGMENT_CHARS = 64;
+var MAX_PATH_CHARS = 256;
+var MAX_MESSAGE_BYTES = 2048;
+var MAX_TITLE_BYTES = 512;
+var MAX_SNIPPET_BYTES = 1024;
+var MAX_REPORT_STRING_BYTES = 2048;
+var MAX_LIST_ENTRY_BYTES = 256;
+var MAX_LIST_ENTRIES = 100;
+var MAX_FINDINGS_PER_SERVER = 50;
+var MAX_FINDINGS_TOTAL = 500;
+var CAPPED_RULE_ID = "mcp-audit-findings-capped";
+var ELLIPSIS = "\u2026";
+var ELLIPSIS_BYTES = 3;
+function utf8Length(cp) {
+  if (cp < 128) return 1;
+  if (cp < 2048) return 2;
+  if (cp < 65536) return 3;
+  return 4;
+}
+function capText(text, maxBytes) {
+  if (text.length <= maxBytes / 3 || Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const budget = maxBytes - ELLIPSIS_BYTES;
+  let bytes = 0;
+  let end = 0;
+  for (const ch of text.slice(0, maxBytes)) {
+    const cp = ch.codePointAt(0) ?? 0;
+    const size = utf8Length(cp);
+    if (bytes + size > budget) break;
+    bytes += size;
+    end += ch.length;
+  }
+  return `${text.slice(0, end)}${ELLIPSIS}`;
+}
+function capList(values, maxEntries = MAX_LIST_ENTRIES, entryBytes = MAX_LIST_ENTRY_BYTES) {
+  const out = values.slice(0, maxEntries).map((v) => capText(v, entryBytes));
+  if (values.length > maxEntries) out.push(`${ELLIPSIS} and ${values.length - maxEntries} more`);
+  return out;
+}
+function capSegment(key) {
+  return key.length <= MAX_PATH_SEGMENT_CHARS ? key : `${key.slice(0, MAX_PATH_SEGMENT_CHARS - 1)}${ELLIPSIS}`;
+}
+function capPath(path8, max = MAX_PATH_CHARS) {
+  return path8.length <= max ? path8 : `${path8.slice(0, max - 1)}${ELLIPSIS}`;
+}
+function capFindingText(f) {
+  const title = capText(f.title, MAX_TITLE_BYTES);
+  const message3 = f.message === void 0 ? void 0 : capText(f.message, MAX_MESSAGE_BYTES);
+  const snippet = f.snippet === void 0 ? void 0 : capText(f.snippet, MAX_SNIPPET_BYTES);
+  if (title === f.title && message3 === f.message && snippet === f.snippet) return f;
+  return {
+    ...f,
+    title,
+    ...message3 === void 0 ? {} : { message: message3 },
+    ...snippet === void 0 ? {} : { snippet }
+  };
+}
+var RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+function emptyTally() {
+  return { count: 0, rules: /* @__PURE__ */ new Map(), worst: "info" };
+}
+function addToTally(t, rule, count2, severity) {
+  t.count += count2;
+  t.rules.set(rule, (t.rules.get(rule) ?? 0) + count2);
+  if (RANK[severity] > RANK[t.worst]) t.worst = severity;
+}
+function mergeTally(into, from) {
+  for (const [rule, n2] of from.rules) addToTally(into, rule, n2, from.worst);
+}
+function mostSevere(findings, keep) {
+  if (findings.length <= keep) return { kept: [...findings], dropped: [] };
+  const order = findings.map((f, i2) => ({ f, i: i2 }));
+  order.sort((a2, b) => RANK[b.f.severity] - RANK[a2.f.severity] || a2.i - b.i);
+  const keepIdx = new Set(order.slice(0, keep).map((o2) => o2.i));
+  return {
+    kept: findings.filter((_, i2) => keepIdx.has(i2)),
+    dropped: findings.filter((_, i2) => !keepIdx.has(i2))
+  };
+}
+function summary(tally, where, filePath) {
+  const rules = [...tally.rules.entries()].sort((a2, b) => b[1] - a2[1] || a2[0].localeCompare(b[0])).map(([rule, n2]) => `${rule} \xD7${n2}`);
+  return capFindingText(
+    makeFinding({
+      tool: "mcp-tool-audit",
+      rule_id: CAPPED_RULE_ID,
+      // As severe as the worst it stands for: a summary must not hide a high.
+      severity: tally.worst,
+      category: "security",
+      subcategory: "mcp_tool_poisoning",
+      title: `${where}: ${tally.count} more findings not listed`,
+      message: `${tally.count} more findings ${where === "audit_mcp_tools" ? "of this audit" : `for ${where}`} were not listed or stored \u2014 the output keeps the ${MAX_FINDINGS_PER_SERVER} most severe per server and ${MAX_FINDINGS_TOTAL} in all. By rule: ${rules.join(", ")}. The most severe of them is ${tally.worst}. Audit fewer servers at a time, or read the definitions themselves, to see each one.`,
+      file_path: filePath,
+      snippet: `${where}: ${rules.join(", ")}`,
+      fix_available: false
+    })
+  );
+}
+function capFindings(servers) {
+  const tallies = /* @__PURE__ */ new Map();
+  const all = [];
+  for (const s of servers) {
+    const { kept: kept2, dropped: dropped2 } = mostSevere(s.findings, MAX_FINDINGS_PER_SERVER);
+    all.push(...kept2.map(capFindingText));
+    if (dropped2.length === 0) continue;
+    const tally2 = emptyTally();
+    for (const f of dropped2) addToTally(tally2, f.rule_id ?? f.tool, 1, f.severity);
+    const s0 = summary(tally2, s.label, s.sourceLabel);
+    tallies.set(s0, tally2);
+    all.push(s0);
+  }
+  if (all.length <= MAX_FINDINGS_TOTAL) return all;
+  const { kept, dropped } = mostSevere(all, MAX_FINDINGS_TOTAL);
+  const tally = emptyTally();
+  for (const f of dropped) {
+    const inner = tallies.get(f);
+    if (inner === void 0) addToTally(tally, f.rule_id ?? f.tool, 1, f.severity);
+    else mergeTally(tally, inner);
+  }
+  return [...kept, summary(tally, "audit_mcp_tools", servers[0]?.sourceLabel ?? "")];
+}
+
 // src/mcpaudit/rules.ts
 var SKILL_TEXT_RULE_IDS = /* @__PURE__ */ new Set([
   "pi-override-instructions",
@@ -71262,6 +71383,7 @@ var ANALYSIS_BOUNDS = {
 };
 var YIELD_EVERY_STRINGS = 1e3;
 var MAX_DEPTH = 128;
+var KEY_SUFFIX = " (key)";
 function* walkStrings(value, root, item, onTooDeep) {
   const stack = [{ v: value, path: root, depth: 0 }];
   let tooDeep = false;
@@ -71279,7 +71401,7 @@ function* walkStrings(value, root, item, onTooDeep) {
       continue;
     }
     if (Array.isArray(v)) {
-      for (let i2 = v.length - 1; i2 >= 0; i2 -= 1) stack.push({ v: v[i2], path: `${path8}[${i2}]`, depth: depth + 1 });
+      for (let i2 = v.length - 1; i2 >= 0; i2 -= 1) stack.push({ v: v[i2], path: capPath(`${path8}[${i2}]`), depth: depth + 1 });
       continue;
     }
     const entries2 = Object.entries(v);
@@ -71287,9 +71409,9 @@ function* walkStrings(value, root, item, onTooDeep) {
       const entry = entries2[i2];
       if (entry === void 0) continue;
       const [key, child] = entry;
-      const childPath = `${path8}.${key}`;
-      yield { item, path: `${childPath} (key)`, text: key };
-      stack.push({ v: child, path: childPath, depth: depth + 1 });
+      const childPath = `${path8}.${capSegment(key)}`;
+      yield { item, path: `${capPath(childPath, MAX_PATH_CHARS - KEY_SUFFIX.length)}${KEY_SUFFIX}`, text: key };
+      stack.push({ v: child, path: capPath(childPath), depth: depth + 1 });
     }
   }
   if (tooDeep) onTooDeep(item, root);
@@ -71687,7 +71809,7 @@ function finishRun(run, others) {
     const shownPaths = paths.slice(0, 6).join(", ") + (paths.length > 6 ? `, and ${paths.length - 6} more` : "");
     const server = shortName(listing.serverName);
     findings.push(
-      makeFinding({
+      capFindingText(makeFinding({
         tool: MCP_AUDIT_TOOL_NAME,
         rule_id: first.rule,
         severity,
@@ -71702,7 +71824,7 @@ function finishRun(run, others) {
           `${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`
         ),
         fix_available: false
-      })
+      }))
     );
   }
   return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };
@@ -71721,9 +71843,9 @@ async function analyzeServerListingAsync(listing, others, options = {}) {
   }
   return finishRun(run, others);
 }
-var RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+var RANK2 = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function rank(s) {
-  return RANK[s];
+  return RANK2[s];
 }
 
 // src/mcpaudit/pins.ts
@@ -75394,6 +75516,12 @@ async function handler44(input, ctx, callMeta) {
 function visibleList(values) {
   return values.map(escapeInvisible);
 }
+function reportList(values, entryBytes = MAX_LIST_ENTRY_BYTES) {
+  return capList(visibleList(values), MAX_LIST_ENTRIES, entryBytes);
+}
+function reportText(value, maxBytes = MAX_REPORT_STRING_BYTES) {
+  return capText(escapeInvisible(value), maxBytes);
+}
 async function runAudit(ctx, run, callMeta) {
   const { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected } = run;
   const toolsRun = [];
@@ -75418,11 +75546,11 @@ async function runAudit(ctx, run, callMeta) {
   const unreadableNote = collected.sourcesUnreadable.length === 0 ? "" : `; these config sources exist and could not be read: ${collected.sourcesUnreadable.map((u2) => `${u2.source} (${u2.reason})`).join(", ")}`;
   const notRun = (name, status, reason, extra = {}) => {
     const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? escapeInvisible(name)}`;
-    const shown = escapeInvisible(reason);
+    const shown = reportText(reason);
     toolsRun.push({ name: runName, status, reason: shown });
     missingTools.push(runName);
     reports.push({
-      name: escapeInvisible(name),
+      name: reportText(name, MAX_LIST_ENTRY_BYTES),
       ...extra,
       status,
       reason: shown,
@@ -75447,9 +75575,9 @@ async function runAudit(ctx, run, callMeta) {
     }
     if (target.kind === "duplicate") {
       reports.push({
-        name: escapeInvisible(name),
+        name: reportText(name, MAX_LIST_ENTRY_BYTES),
         status: "skipped",
-        reason: escapeInvisible(`the same server as '${target.of}', audited once`),
+        reason: reportText(`the same server as '${target.of}', audited once`),
         tools_count: 0,
         prompts_count: 0,
         resources_count: 0
@@ -75461,7 +75589,7 @@ async function runAudit(ctx, run, callMeta) {
     const base = {
       server_key: qualified,
       source: escapeInvisible(entry.sourceLabel),
-      ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: visibleList(target.alsoDeclaredIn) } : {}
+      ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: reportList(target.alsoDeclaredIn) } : {}
     };
     if (signal?.aborted === true) {
       notRun(name, "skipped", "cancelled before it was started", base);
@@ -75482,7 +75610,7 @@ async function runAudit(ctx, run, callMeta) {
     const withTransport = {
       ...base,
       ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
-      ...outcome.warnings.length > 0 ? { warnings: visibleList(outcome.warnings) } : {}
+      ...outcome.warnings.length > 0 ? { warnings: reportList(outcome.warnings, MAX_REPORT_STRING_BYTES) } : {}
     };
     if (!isListed(outcome)) {
       notRun(name, outcome.status, outcome.reason, withTransport);
@@ -75519,18 +75647,18 @@ async function runAudit(ctx, run, callMeta) {
       const message3 = e instanceof Error ? e.message : String(e);
       partialReasons.push(`this server's listing could not be fully processed (${message3.slice(0, 200)}); its pins were left as they were`);
     }
-    const reason = partialReasons.length === 0 ? void 0 : escapeInvisible(partialReasons.join("; "));
-    const warnings2 = [...withTransport.warnings ?? [], ...visibleList(comparison?.warnings ?? [])];
+    const reason = partialReasons.length === 0 ? void 0 : reportText(partialReasons.join("; "));
+    const warnings2 = reportList([...withTransport.warnings ?? [], ...comparison?.warnings ?? []], MAX_REPORT_STRING_BYTES);
     const report = {
-      name: escapeInvisible(name),
+      name: reportText(name, MAX_LIST_ENTRY_BYTES),
       ...withTransport,
       ...warnings2.length > 0 ? { warnings: warnings2 } : {},
       status: reason === void 0 ? "ok" : "partial",
       ...reason === void 0 ? {} : { reason },
       ...outcome.serverInfo === void 0 ? {} : {
         server_info: {
-          name: escapeInvisible(outcome.serverInfo.name),
-          version: escapeInvisible(outcome.serverInfo.version)
+          name: reportText(outcome.serverInfo.name, MAX_LIST_ENTRY_BYTES),
+          version: reportText(outcome.serverInfo.version, MAX_LIST_ENTRY_BYTES)
         }
       },
       tools_count: normalized.tools.length,
@@ -75541,9 +75669,9 @@ async function runAudit(ctx, run, callMeta) {
       ...comparison === null ? {} : {
         pins: {
           first_audit: comparison.firstAudit,
-          changed: visibleList(comparison.changed),
-          added: visibleList(comparison.added),
-          removed: visibleList(comparison.removed)
+          changed: reportList(comparison.changed),
+          added: reportList(comparison.added),
+          removed: reportList(comparison.removed)
         }
       }
     };
@@ -75590,7 +75718,15 @@ async function runAudit(ctx, run, callMeta) {
     others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
   }
   for (const a2 of audited) a2.findings.push(...shadowingFromMentions(a2.target, a2.mentions, others));
-  for (const a2 of audited) findings.push(...a2.findings);
+  findings.push(
+    ...capFindings(
+      audited.map((a2) => ({
+        label: `MCP server '${a2.report.server_key ?? a2.report.name}'`,
+        sourceLabel: a2.target.sourceLabel,
+        findings: a2.findings
+      }))
+    )
+  );
   if (findings.length > 0) {
     ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   }
@@ -75599,7 +75735,7 @@ async function runAudit(ctx, run, callMeta) {
     if (a2.complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, a2.target.serverKey, a2.pins);
     else ctx.storage.mcpToolPins.upsertServerPins(projectPath, a2.target.serverKey, a2.pins);
   }
-  const warnings = visibleList(collected.warnings);
+  const warnings = reportList(collected.warnings, MAX_REPORT_STRING_BYTES);
   const sourcesRead = visibleList(collected.sourcesRead);
   const sourcesUnreadable = collected.sourcesUnreadable.map((u2) => ({
     source: escapeInvisible(u2.source),
@@ -78051,14 +78187,14 @@ async function handler45(input, _ctx, callMeta) {
     registry: { projectDir },
     ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {}
   });
-  const summary = { block: 0, warn: 0, unknown: 0, ok: 0 };
-  for (const r of results) summary[r.verdict] += 1;
+  const summary2 = { block: 0, warn: 0, unknown: 0, ok: 0 };
+  for (const r of results) summary2[r.verdict] += 1;
   return {
     ok: true,
     ecosystem,
     // Nothing vetted (every spec skipped) is not a clean bill of health.
     verdict: results.length === 0 ? "unknown" : worstVerdict(results),
-    summary,
+    summary: summary2,
     packages: results,
     skipped: skipped2,
     network: offline ? "disabled (GUARDIAN_OFFLINE=1)" : `online, ${TOOL_BUDGET_MS / 1e3} s budget`

@@ -68,6 +68,14 @@ version bump.
   full); -32601 stays silent on a list's first page only — on a later page it cut the list, and the
   server is partial with nothing tombstoned (reproduced: page 2 answering -32601 read ok and tombstoned
   the unseen tools).
+- What `audit_mcp_tools` returns was bounded by nothing a server could not choose (reproduced: a
+  1.8 MB listing gave two findings with 1.29 MB messages; 50 servers gave 7725 findings in 6.4 MB). A
+  key in a field path is cut to 64 characters and a path to 256; a message to 2 KiB of UTF-8, a title
+  to 512 bytes, a snippet to 1 KiB; each report list (pins changed/added/removed, warnings) to 100
+  entries. A server keeps its 50 most severe findings and the audit 500; past each cap, one
+  `mcp-audit-findings-capped` finding — as severe as the worst it stands for — says how many more and
+  of which rules. The findings stored are the ones returned. Measured: 60 poisoned tools with 20 KB
+  keys, 44 KB; eleven such servers, 501 findings in 429 KB.
 - `mcp-tool-sensitive-file-access` is medium when a tool's text tells the model to read a credential
   or agent-config file ("confirm it is the tool's purpose"), and high only when it also directs passing
   it on (a parameter, another tool, a URL) or hiding it — which now also catches "The key is at

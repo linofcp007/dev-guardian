@@ -42,6 +42,7 @@ import { z } from 'zod';
 import { collectMcpEntries } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
 import { analyzeServerListingAsync, MCP_AUDIT_TOOL_NAME, normalizeListing, shadowingFromMentions, } from '../mcpaudit/analyze.js';
+import { capFindings, capList, capText, MAX_LIST_ENTRIES, MAX_LIST_ENTRY_BYTES, MAX_REPORT_STRING_BYTES, } from '../mcpaudit/output.js';
 import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { isListed, probeServer } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
@@ -168,6 +169,18 @@ async function handler(input, ctx, callMeta) {
 function visibleList(values) {
     return values.map(escapeInvisible);
 }
+/**
+ * A report list as it is returned: visible, and bounded — at most
+ * {@link MAX_LIST_ENTRIES} entries, each cut (fix round 5, I-3). A server of
+ * 1000 tools with 64 KiB names was a pin list of megabytes.
+ */
+function reportList(values, entryBytes = MAX_LIST_ENTRY_BYTES) {
+    return capList(visibleList(values), MAX_LIST_ENTRIES, entryBytes);
+}
+/** One reason or name of a report: visible, and cut. */
+function reportText(value, maxBytes = MAX_REPORT_STRING_BYTES) {
+    return capText(escapeInvisible(value), maxBytes);
+}
 async function runAudit(ctx, run, callMeta) {
     const { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected } = run;
     const toolsRun = [];
@@ -201,11 +214,11 @@ async function runAudit(ctx, run, callMeta) {
             .join(', ')}`;
     const notRun = (name, status, reason, extra = {}) => {
         const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? escapeInvisible(name)}`;
-        const shown = escapeInvisible(reason);
+        const shown = reportText(reason);
         toolsRun.push({ name: runName, status, reason: shown });
         missingTools.push(runName);
         reports.push({
-            name: escapeInvisible(name),
+            name: reportText(name, MAX_LIST_ENTRY_BYTES),
             ...extra,
             status,
             reason: shown,
@@ -228,9 +241,9 @@ async function runAudit(ctx, run, callMeta) {
         }
         if (target.kind === 'duplicate') {
             reports.push({
-                name: escapeInvisible(name),
+                name: reportText(name, MAX_LIST_ENTRY_BYTES),
                 status: 'skipped',
-                reason: escapeInvisible(`the same server as '${target.of}', audited once`),
+                reason: reportText(`the same server as '${target.of}', audited once`),
                 tools_count: 0,
                 prompts_count: 0,
                 resources_count: 0,
@@ -242,7 +255,7 @@ async function runAudit(ctx, run, callMeta) {
         const base = {
             server_key: qualified,
             source: escapeInvisible(entry.sourceLabel),
-            ...(target.alsoDeclaredIn.length > 0 ? { also_declared_in: visibleList(target.alsoDeclaredIn) } : {}),
+            ...(target.alsoDeclaredIn.length > 0 ? { also_declared_in: reportList(target.alsoDeclaredIn) } : {}),
         };
         if (signal?.aborted === true) {
             notRun(name, 'skipped', 'cancelled before it was started', base);
@@ -263,7 +276,7 @@ async function runAudit(ctx, run, callMeta) {
         const withTransport = {
             ...base,
             ...(outcome.transport === undefined ? {} : { transport: outcome.transport }),
-            ...(outcome.warnings.length > 0 ? { warnings: visibleList(outcome.warnings) } : {}),
+            ...(outcome.warnings.length > 0 ? { warnings: reportList(outcome.warnings, MAX_REPORT_STRING_BYTES) } : {}),
         };
         if (!isListed(outcome)) {
             notRun(name, outcome.status, outcome.reason, withTransport);
@@ -306,10 +319,10 @@ async function runAudit(ctx, run, callMeta) {
             const message = e instanceof Error ? e.message : String(e);
             partialReasons.push(`this server's listing could not be fully processed (${message.slice(0, 200)}); its pins were left as they were`);
         }
-        const reason = partialReasons.length === 0 ? undefined : escapeInvisible(partialReasons.join('; '));
-        const warnings = [...(withTransport.warnings ?? []), ...visibleList(comparison?.warnings ?? [])];
+        const reason = partialReasons.length === 0 ? undefined : reportText(partialReasons.join('; '));
+        const warnings = reportList([...(withTransport.warnings ?? []), ...(comparison?.warnings ?? [])], MAX_REPORT_STRING_BYTES);
         const report = {
-            name: escapeInvisible(name),
+            name: reportText(name, MAX_LIST_ENTRY_BYTES),
             ...withTransport,
             ...(warnings.length > 0 ? { warnings } : {}),
             status: reason === undefined ? 'ok' : 'partial',
@@ -318,8 +331,8 @@ async function runAudit(ctx, run, callMeta) {
                 ? {}
                 : {
                     server_info: {
-                        name: escapeInvisible(outcome.serverInfo.name),
-                        version: escapeInvisible(outcome.serverInfo.version),
+                        name: reportText(outcome.serverInfo.name, MAX_LIST_ENTRY_BYTES),
+                        version: reportText(outcome.serverInfo.version, MAX_LIST_ENTRY_BYTES),
                     },
                 }),
             tools_count: normalized.tools.length,
@@ -332,9 +345,9 @@ async function runAudit(ctx, run, callMeta) {
                 : {
                     pins: {
                         first_audit: comparison.firstAudit,
-                        changed: visibleList(comparison.changed),
-                        added: visibleList(comparison.added),
-                        removed: visibleList(comparison.removed),
+                        changed: reportList(comparison.changed),
+                        added: reportList(comparison.added),
+                        removed: reportList(comparison.removed),
                     },
                 }),
         };
@@ -389,8 +402,13 @@ async function runAudit(ctx, run, callMeta) {
     }
     for (const a of audited)
         a.findings.push(...shadowingFromMentions(a.target, a.mentions, others));
-    for (const a of audited)
-        findings.push(...a.findings);
+    // Bounded before it is stored or returned (fix round 5, I-3): 50 per
+    // server and 500 in all, each cap summarised in one finding.
+    findings.push(...capFindings(audited.map((a) => ({
+        label: `MCP server '${a.report.server_key ?? a.report.name}'`,
+        sourceLabel: a.target.sourceLabel,
+        findings: a.findings,
+    }))));
     if (findings.length > 0) {
         ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
     }
@@ -402,7 +420,7 @@ async function runAudit(ctx, run, callMeta) {
         else
             ctx.storage.mcpToolPins.upsertServerPins(projectPath, a.target.serverKey, a.pins);
     }
-    const warnings = visibleList(collected.warnings);
+    const warnings = reportList(collected.warnings, MAX_REPORT_STRING_BYTES);
     const sourcesRead = visibleList(collected.sourcesRead);
     const sourcesUnreadable = collected.sourcesUnreadable.map((u) => ({
         source: escapeInvisible(u.source),
