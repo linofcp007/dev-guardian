@@ -40,6 +40,7 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
 import type { PluginContext } from '../../src/context.js';
 import { CUSTOM_RULES_META_KEY, customRulesMetaKey } from '../../src/platform/customRules.js';
 import { planSemgrepConfigs } from '../../src/runners/semgrepConfigs.js';
+import { ruleIdsInFile, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -58,6 +59,34 @@ beforeAll(async () => {
 
 const RULES =
   'rules:\n  - id: x\n    pattern: foo(...)\n    message: m\n    languages: [python]\n    severity: WARNING\n';
+
+/**
+ * The plugin's own LLM-application pack. Every native Semgrep run of
+ * scan_sast appends it (runners/semgrepConfigs.ts), in both modes: it is a
+ * rule file on disk, so `local_only` runs it too. Located from this file, not
+ * through the code under test.
+ */
+const LLM_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'configs', 'semgrep', 'llm.yml');
+
+/**
+ * A report in which every rule of `.semgrep.yml` (`projectIds`) AND every
+ * rule of the LLM pack failed to load — the pack's ids spelled as Semgrep
+ * reports a rule file outside its working directory (the whole path, dotted).
+ */
+function everyRuleFailed(projectIds: readonly string[], scanned: string): unknown {
+  const pack = ruleIdsInFile(LLM_PACK).map((id) => `${semgrepConfigPrefix(LLM_PACK)}.${id}`);
+  return {
+    results: [],
+    errors: [...projectIds, ...pack].map((id) => ({
+      code: 2,
+      level: 'error',
+      type: 'Rule parse error',
+      rule_id: id,
+      message: `Rule parse error in rule ${id}:\n Invalid pattern`,
+    })),
+    paths: { scanned: [scanned] },
+  };
+}
 
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
@@ -318,22 +347,42 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     paths: { scanned: ['a.py'] },
   };
 
-  it('local_only, and every rule of .semgrep.yml failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
+  it('local_only, and every rule of every config — .semgrep.yml and the LLM pack — failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
     const project = makeTempDir('sast-rules-none-');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
-    mockSemgrepOnPath(2, ALL_FAILED);
+    const packIds = ruleIdsInFile(LLM_PACK);
+    expect(packIds.length).toBeGreaterThan(0);
+    mockSemgrepOnPath(2, everyRuleFailed(['x'], 'a.py'));
     const r = await runSast(project, makePlugin(project), { local_only: true });
     const run = r.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
       | undefined;
     expect(run?.status).toBe('failed');
-    expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 1 rule\(s\) failed to load \(x — Invalid pattern\)/);
-    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
+    expect(run?.reason).toMatch(
+      new RegExp(`no rule loaded: Semgrep ran, but every one of its ${1 + packIds.length} rule\\(s\\) failed to load \\(x — Invalid pattern`),
+    );
+    // The pack's rules are named as their findings are stored: bare.
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', ...packIds]);
     expect(run?.rule_config_error).toBe(true);
     const out = r as unknown as { coverage: string; warnings: string[] };
     expect(out.coverage).toBe('none');
     expect(out.warnings.join(' ')).toMatch(/semgrep ran, but its rules did not load/);
     expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('local_only, every rule of .semgrep.yml failed but the LLM pack loaded: its rules ran — ok and missing, the project rule named, never "no rule loaded"', async () => {
+    const project = makeTempDir('sast-rules-none-pack-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }> }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/^Semgrep ran, but 1 rule\(s\) did not load: x — Invalid pattern/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });
 
   it('the same failure with the registry ruleset in the run: the registry rules ran — partial stays', async () => {
@@ -384,7 +433,7 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     const project = makeTempDir('sast-rules-none-scope-');
     writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
-    mockSemgrepOnPath(2, ALL_FAILED);
+    mockSemgrepOnPath(2, everyRuleFailed(['x'], 'a.py'));
     const r = await runSast(project, makePlugin(project), { local_only: true, scope: { paths: ['a.py'] } });
     const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
     expect(run?.status).toBe('failed');
@@ -583,7 +632,7 @@ describe('scan_sast argv and cache key come from one plan', () => {
     await runSast(project, plugin);
     const configs = semgrepArgs().filter((a) => a.startsWith('--config=')).map((a) => a.slice('--config='.length));
     expect(configs).toEqual(planSemgrepConfigs(project, plugin, false).rulePacks);
-    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team]);
+    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team, LLM_PACK]);
   });
 
   it('says, in the response warnings, which 2.0.x registrations outside the project it no longer runs', async () => {
@@ -616,6 +665,70 @@ describe('scan_sast argv and cache key come from one plan', () => {
 
     await runSast(project, plugin);
     expect(semgrepArgs()).not.toContain(`--config=${otherRules}`);
+  });
+});
+
+describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.yml)", () => {
+  it('the pack is on disk where the plan looks for it', () => {
+    expect(existsSync(LLM_PACK)).toBe(true);
+    const plan = planSemgrepConfigs(makeTempDir('sast-llm-plan-'), makePlugin(makeTempDir('sast-llm-plugin-')), false);
+    expect(plan.pluginPacks).toEqual([LLM_PACK]);
+  });
+
+  it('appends it to every native run, after the registry and the project rules — and local_only runs it too', async () => {
+    const project = makeTempDir('sast-llm-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    for (const local_only of [false, true]) {
+      captured.length = 0;
+      mockSemgrepOnPath();
+      await runSast(project, makePlugin(project), { local_only });
+      const configs = semgrepArgs().filter((a) => a.startsWith('--config='));
+      expect(configs.at(-1)).toBe(`--config=${LLM_PACK}`);
+      expect(configs.filter((c) => c === `--config=${LLM_PACK}`)).toHaveLength(1);
+    }
+  });
+
+  it('a scoped run passes it too', async () => {
+    const project = makeTempDir('sast-llm-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    mockSemgrepOnPath();
+    await runSast(project, makePlugin(project), { scope: { paths: ['a.py'] } });
+    expect(semgrepArgs()).toContain(`--config=${LLM_PACK}`);
+  });
+
+  it('local_only with no rules of the project is still no scan: the LLM pack alone is not a SAST ruleset', async () => {
+    const project = makeTempDir('sast-llm-alone-');
+    mockSemgrepOnPath();
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(captured.some((c) => c.command === 'semgrep')).toBe(false);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('skipped');
+    expect(run?.reason ?? '').toContain('llm.yml');
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  it('the Docker fallback cannot see the pack: it says so, and the run is partial — never a silent pass', async () => {
+    const project = makeTempDir('sast-llm-docker-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      captured.push({ command: opts.command, args: [...(opts.args ?? [])] });
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        writeFileSync(host, JSON.stringify({ results: [], errors: [], paths: { scanned: ['/src/a.py'] } }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project));
+    const call = captured.find((c) => c.command === 'docker');
+    if (call === undefined) throw new Error('docker was never invoked');
+    expect(call.args.some((a) => a.includes('llm.yml'))).toBe(false);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason ?? '').toMatch(/llm\.yml.*did not run/);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });
 });
 

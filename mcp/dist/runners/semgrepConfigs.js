@@ -10,10 +10,29 @@
  * this project with `register_custom_rules`. `local_only` also turns metrics
  * off, which is only possible once `--config=auto` is gone: Semgrep refuses
  * to build an auto config with metrics off.
+ *
+ * Last, the plugin's own LLM-application pack (`configs/semgrep/llm.yml`:
+ * model output reaching an interpreter, remote code in a model load, request
+ * data in a system prompt, a completion with no token cap), in both modes — it
+ * is a rule file on disk, so `local_only` runs it too. It is an ADDITION, not
+ * a SAST ruleset: `local_only` with no project or registered rules is still
+ * no scan (`nothingToRun`), because a run of a dozen LLM rules reported as a
+ * clean SAST scan would be exactly the false clean this product refuses. Its
+ * rule ids come out bare (`runners/semgrepRuleIds.ts`: a file directly in the
+ * plugin's pack directory). The Docker fallback cannot see it — the container
+ * mounts only the project — and `scan_sast` names that gap.
  */
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { inspectCustomSemgrepConfigs, legacyRegistrationNote, legacyRegistrationsNotApplied, } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import { pluginPacksDir } from './semgrepRuleIds.js';
+/** The plugin's LLM-application pack, by file name in `configs/semgrep/`. */
+export const LLM_RULES_FILE = 'llm.yml';
+/** Absolute path of the plugin's LLM-application pack. */
+export function llmRulesPath() {
+    return join(pluginPacksDir(), LLM_RULES_FILE);
+}
 export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const inspection = inspectProjectSemgrepConfigs(projectPath);
     const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
@@ -21,18 +40,24 @@ export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const projectConfigs = inspection.usable.map((c) => c.path);
     const local = [...projectConfigs, ...custom.usable];
     const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(projectPath) ? ['p/csharp'] : [])];
-    const rulePacks = [...registry, ...local];
+    // Never pass a --config that does not resolve: Semgrep aborts the WHOLE
+    // scan when one fails to load. A damaged install without the pack says so.
+    const llmPack = llmRulesPath();
+    const pluginPacks = existsSync(llmPack) ? [llmPack] : [];
+    const rulePacks = [...registry, ...local, ...pluginPacks];
     return {
         args: [...(localOnly ? ['--metrics=off'] : []), ...rulePacks.map((c) => `--config=${c}`)],
         rulePacks,
         registry,
         projectConfigs,
+        pluginPacks,
         notes: [
             ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
             ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
             ...(legacy !== null ? [legacy] : []),
+            ...(pluginPacks.length === 0 ? [`the plugin's LLM-application pack was not found at ${llmPack} — its rules did not run`] : []),
         ],
-        nothingToRun: rulePacks.length === 0,
+        nothingToRun: registry.length === 0 && local.length === 0,
     };
 }
 /** A `.csproj` / `.fsproj` at the project root — `scan_sast`'s own .NET signal. */

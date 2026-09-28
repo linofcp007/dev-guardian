@@ -8,6 +8,23 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **Semgrep pack for LLM applications** (`configs/semgrep/llm.yml`, 8 rules, Python and JS/TS),
+  run by `scan_sast` on every native Semgrep run, `local_only` included: model output reaching
+  eval/exec, a shell, SQL or `vm` (OWASP LLM05), a model-chosen tool name used with
+  `getattr`/`globals()`/`import` without an allowlist (LLM06), `trust_remote_code=True` without a
+  commit-pinned revision and `torch.load` without `weights_only=True` (LLM03), HTTP request data in
+  a system/developer prompt (LLM01), OpenAI calls with no token cap (LLM10, low). Findings are
+  `security`, with `owasp-llm` and CWE ids in the rule metadata.
+- Measured on 29 permissively licensed LLM applications before shipping (commits and per-rule
+  precision in the pack header); candidates with no true positive — pickle loads, HTML sinks,
+  JS SQL/dispatch, a Python system-prompt rule — were dropped.
+- `local_only` with no project rules is still reported as no scan (the LLM pack alone is not a
+  SAST ruleset); the Docker fallback, which cannot see the pack, names it and reports partial
+  coverage.
+- `GUARDIAN_LLM_SRC`: the axis-3 corpus of `npm run ablate -- llm`.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

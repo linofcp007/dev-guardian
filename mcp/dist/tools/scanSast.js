@@ -91,7 +91,7 @@ import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.j
 import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, fromContainerPath, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
-import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { hasDotnetProject, LLM_RULES_FILE, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
@@ -105,17 +105,18 @@ registerToolModule(makeScanTool({
     title: 'SAST scan (Semgrep)',
     description: 'Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset ' +
         "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-        '.dev-guardian/configs.json records as its target) and any rules registered for this ' +
-        'project with register_custom_rules. Also runs Bandit when Python files are present, and ' +
+        '.dev-guardian/configs.json records), rules registered for this project with ' +
+        "register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model " +
+        'output reaching eval/shell/SQL, model-chosen tool names, trust_remote_code, torch.load, ' +
+        'request data in a system prompt, no token cap). Also runs Bandit when Python files are present, and ' +
         'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
         'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
         '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
         "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
         'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
-        'did not load, is partial coverage, named. Output JSON is written to ' +
-        '.guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads ' +
-        'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
-        'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
+        'did not load, is partial coverage, named. Reports go to .guardian/reports/sast-<scan>/. ' +
+        'PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. ' +
+        '(Semgrep refuses it with metrics off). ' +
         'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
         'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
         'changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
@@ -142,11 +143,11 @@ registerToolModule(makeScanTool({
         local_only: z
             .boolean()
             .optional()
-            .describe("Run only rules already on disk (the project's own Semgrep config plus anything " +
-            'registered with register_custom_rules), skip the Semgrep registry, and pass ' +
-            '--metrics=off so no telemetry leaves the machine. Fewer rules than the default. ' +
-            'When the project has no local rules the scan is reported as skipped rather than ' +
-            'as a clean result. Default: false.'),
+            .describe("Run only rules already on disk (the project's own Semgrep config, anything " +
+            "registered with register_custom_rules, and the plugin's LLM-application pack), skip " +
+            'the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer ' +
+            'rules than the default. When the project has no rules of its own the scan is reported ' +
+            'as skipped rather than as a clean result. Default: false.'),
         scope: ScanScopeInput,
     },
     invoke: async (input, ctx) => {
@@ -193,7 +194,8 @@ async function runSemgrep(args) {
             name: 'semgrep',
             status: 'skipped',
             reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
-                'nothing registered with register_custom_rules. Run init_project, or drop ' +
+                'nothing registered with register_custom_rules (the plugin\'s LLM-application pack, ' +
+                `${LLM_RULES_FILE}, is an addition and not run alone as a SAST scan). Run init_project, or drop ` +
                 'local_only to use the Semgrep registry.',
         });
         missing_tools.push('semgrep');
@@ -221,7 +223,8 @@ async function runSemgrep(args) {
     // Semgrep not on PATH — fall back to the official Docker image when a
     // daemon is reachable. The container cannot see host paths, so a project
     // config is named by where it sits inside the /src mount; registered
-    // custom rules (which may live anywhere on the host) are not passed.
+    // custom rules (which may live anywhere on the host) are not passed, and
+    // neither is the plugin's LLM pack — a gap this run names (below).
     const dockerBin = await scannerAvailable('docker');
     if (!dockerBin) {
         tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
@@ -258,7 +261,13 @@ async function runSemgrep(args) {
         signal: ctx.signal,
         onLog: ctx.onLog,
     });
-    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
+    // The plugin's own packs live outside the project mount: they did not run.
+    // Named on the run, and a run that is otherwise ok is partial — never a
+    // clean result that quietly left rules out.
+    const unseen = plan.pluginPacks.map((p) => `${basename(p)} (the plugin's LLM-application pack) did not run: the container mounts only the project`);
+    recordSemgrepRun({ ctx, result, outFile, notes: [...plan.notes, ...unseen], via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
+    if (unseen.length > 0 && tools_run.at(-1)?.status === 'ok' && !missing_tools.includes('semgrep'))
+        missing_tools.push('semgrep');
 }
 /**
  * One Semgrep run's `tools_run` entry, judged by its report (Global
