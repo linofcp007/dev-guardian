@@ -28,9 +28,13 @@ version bump.
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in
   `configs/ci/pinned.json`). Only that job holds `id-token: write` and `attestations: write`; the
-  scan job keeps exactly its permissions (stated per job in this rendering, `permissions: {}` above). Verify with `gh attestation verify` (see
-  `docs/ci.md`). Command line only — a `.guardian/ci.json` declaring `attest` is refused; GitLab and
-  Bitbucket refuse `--attest`.
+  scan job keeps exactly its permissions (stated per job in this rendering, `permissions: {}` above).
+  Verify with `gh attestation verify --signer-workflow … --source-ref refs/heads/<branch>` (see
+  `docs/ci.md`). The attest job refuses an empty or unreadable report and runs even when the gate
+  failed (it proves origin, not a pass); on a public repository the JSON report is in the public log
+  and the reports artifact is downloadable. Command line only — a `.guardian/ci.json` declaring
+  `attest` is refused; GitLab and Bitbucket refuse `--attest`. A malformed template section marker
+  (`# {{#attest}}`, `# {{ #ATTEST }}`) makes `ci-init` throw.
 
 ## [3.0.0] - 2026-09-28
 

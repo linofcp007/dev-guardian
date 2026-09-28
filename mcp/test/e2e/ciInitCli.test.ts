@@ -807,11 +807,12 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const upload = pinnedAction('upload_artifact');
     const download = pinnedAction('download_artifact');
     const steps = doc.jobs['attest']?.steps ?? [];
-    expect(steps.map((s) => s.uses)).toEqual([
+    expect(steps.map((s) => s.uses ?? 'run')).toEqual([
       `actions/download-artifact@${download.sha}`,
+      'run',
       `actions/attest-build-provenance@${provenance.sha}`,
     ]);
-    const subjects = (steps[1]?.with?.['subject-path'] ?? '').trim().split('\n');
+    const subjects = (steps[2]?.with?.['subject-path'] ?? '').trim().split('\n');
     expect(subjects).toEqual(['dev-guardian-report.json', 'dev-guardian-results.sarif']);
 
     const keep = doc.jobs['scan']?.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
@@ -866,6 +867,68 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/gh attestation verify dev-guardian-results\.sarif/);
+  });
+
+  // Review M6: --signer-workflow names the workflow FILE, and a copy of it on
+  // any branch — edited to run on a push there — signs as that same path.
+  it('the verify hint pins the branch the pipeline triggers on (--source-ref), in --help, the write message and the workflow', () => {
+    const help = runCli(['--help']);
+    const section = help.stdout.slice(help.stdout.indexOf('ci-init <github|gitlab|bitbucket> —'));
+    expect(section).toMatch(/--source-ref refs\/heads\/<branch>/);
+    for (const [argv, branch] of [[[], 'main'], [['--branch', 'release/2'], 'release/2']] as const) {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest', ...argv]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`--source-ref refs/heads/${branch}`);
+      const workflow = readFileSync(join(project, '.github', 'workflows', 'dev-guardian.yml'), 'utf8');
+      expect(workflow).toContain(`--source-ref refs/heads/${branch}`);
+    }
+  });
+
+  // Review M5: an attestation proves where a file came from, not that it is
+  // a report — and `tee` creates the file even when the scan crashed first.
+  it('the attest job refuses an empty or unreadable report before attesting it', () => {
+    const { doc } = renderGithub(['--attest']);
+    const steps = doc.jobs['attest']?.steps ?? [];
+    const check = steps.find((s) => s.uses === undefined);
+    expect(steps.indexOf(check ?? {})).toBeLessThan(steps.findIndex((s) => s.uses?.startsWith('actions/attest-build-provenance@')));
+    expect(check?.run).toMatch(/^set -euo pipefail\n/);
+  });
+
+  it.skipIf(PROBE_BASH === null)(`the report check fails an empty report, broken JSON or a missing SARIF, and passes real ones${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const { doc } = renderGithub(['--attest']);
+    const script = doc.jobs['attest']?.steps.find((s) => s.uses === undefined)?.run ?? '';
+    const REPORT = JSON.stringify({ exit_code: 1, coverage: 'full', coverage_gaps: [], new_findings: [] });
+    const SARIF = JSON.stringify({ version: '2.1.0', $schema: 'https://json.schemastore.org/sarif-2.1.0.json', runs: [] });
+    const cases: Array<[string, Record<string, string>, boolean]> = [
+      ['both real', { 'dev-guardian-report.json': REPORT, 'dev-guardian-results.sarif': SARIF }, true],
+      ['an empty report (the scan crashed; tee created the file)', { 'dev-guardian-report.json': '', 'dev-guardian-results.sarif': SARIF }, false],
+      ['broken JSON', { 'dev-guardian-report.json': '{"exit_code": 1,', 'dev-guardian-results.sarif': SARIF }, false],
+      ['JSON that is not a report', { 'dev-guardian-report.json': '[]', 'dev-guardian-results.sarif': SARIF }, false],
+      ['no SARIF', { 'dev-guardian-report.json': REPORT }, false],
+      ['a SARIF that is not SARIF 2.1.0', { 'dev-guardian-report.json': REPORT, 'dev-guardian-results.sarif': '{"runs": []}' }, false],
+    ];
+    for (const [name, files, pass] of cases) {
+      const dir = makeProject();
+      for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content);
+      writeFileSync(join(dir, 'check.sh'), script);
+      const r = spawnSync(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+      expect(r.status === 0, `${name}: exit ${r.status}\n${r.stderr}`).toBe(pass);
+    }
+  }, 120_000); // six bash + node spawns: seconds each on a loaded Windows machine
+
+  it('--help, the write message and the workflow say the attestation runs whatever the gate said, and what a public repository exposes', () => {
+    const help = runCli(['--help']);
+    const section = help.stdout.slice(help.stdout.indexOf('ci-init <github|gitlab|bitbucket> —'));
+    expect(section).toMatch(/even when the gate failed/);
+    expect(section).toMatch(/public repository/);
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
+    expect(r.stdout).toMatch(/proves where the reports came from, not that the gate passed/);
+    expect(r.stdout).toMatch(/public repository/);
+    const workflow = readFileSync(join(project, '.github', 'workflows', 'dev-guardian.yml'), 'utf8');
+    expect(workflow).toMatch(/even when the gate failed/);
+    expect(workflow).toMatch(/printed to the job log/);
   });
 
   it('renders exactly as expected (snapshot)', () => {

@@ -109,7 +109,11 @@ Resolving the tag needs `git`: from the local checkout's tags when they are ther
 `ci-init github --attest` makes the pipeline prove where its reports came from. On a push to the branch:
 
 - the scan step also writes the JSON report (`--format json`, through `tee` under `pipefail`, so the log still shows it and the scan's exit code still decides the step), and the scan job keeps `dev-guardian-report.json` and `dev-guardian-results.sarif` as the `dev-guardian-reports` artifact;
-- a separate `attest` job downloads them and signs a SLSA build-provenance attestation for both with `actions/attest-build-provenance` — Sigstore keyless, with the workflow's own OIDC identity, stored in the repository's attestations. Every action involved is pinned by commit SHA in [`configs/ci/pinned.json`](../configs/ci/pinned.json).
+- a separate `attest` job downloads them, refuses a report that is empty or not a report (`tee` creates the file even when the scan crashed before writing one), and signs a SLSA build-provenance attestation for both with `actions/attest-build-provenance` — Sigstore keyless, with the workflow's own OIDC identity, stored in the repository's attestations. Every action involved is pinned by commit SHA in [`configs/ci/pinned.json`](../configs/ci/pinned.json).
+
+The `attest` job runs **even when the gate failed**: an attestation proves where a report came from — this workflow, this commit, this run — never that the gate passed. Read the report for that.
+
+On a **public repository** this exposes the results: the full JSON report (every new finding, with its file and line) is printed to the public job log, and the `dev-guardian-reports` artifact — SARIF and JSON — can be downloaded by any signed-in GitHub user while it is retained. Secrets stay redacted in both, as everywhere else.
 
 Permissions: the `attest` job holds `id-token: write` and `attestations: write` and nothing else. The scan job — which builds and scans the project, and so runs code from it — keeps exactly `contents: read`, `security-events: write` and `actions: read`, as without `--attest`; with two jobs these move from the workflow level to each job (`permissions: {}` at the top). Pull requests are not attested: a fork's pull request gets no OIDC token, and nobody verifies a pull request's reports later.
 
@@ -120,12 +124,14 @@ To verify a report, download the run's artifact and check it against the workflo
 ```text
 gh run download <run-id> --repo OWNER/REPO --name dev-guardian-reports
 gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \
-  --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml
+  --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \
+  --source-ref refs/heads/main
 gh attestation verify dev-guardian-report.json --repo OWNER/REPO \
-  --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml
+  --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \
+  --source-ref refs/heads/main
 ```
 
-Add `--source-ref refs/heads/main` to also require the attested run to have been on that branch.
+Use the branch you passed to `--branch` (`ci-init` prints the command with it). Keep `--source-ref`: `--signer-workflow` names the workflow **file**, and a copy of it on any other branch — edited to run on a push there — signs as the same path.
 
 `--attest` is **command line only**, like `scan --start-command`: a `.guardian/ci.json` declaring `attest` makes `ci-init` refuse (exit 3), because a pull request could edit that file and hand a job the right to sign in the repository's name. GitLab and Bitbucket refuse `--attest` (exit 3): Bitbucket's OIDC tokens are no Sigstore identity, and on GitLab a cosign keyless signature of the reports would carry no provenance and have no store to be verified against — not the same guarantee, so the generator does not pretend it is.
 

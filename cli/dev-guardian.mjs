@@ -321,11 +321,19 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
                         GitHub Enterprise Cloud for a private one. CLI ARGV ONLY,
                         like scan's --start-command: a .guardian/ci.json
                         declaring "attest" is refused.
+                        It attests even when the gate failed (an attestation
+                        proves origin, not a pass), after refusing an empty or
+                        unreadable report. On a public repository the full JSON
+                        report is printed to the public job log and the reports
+                        artifact is downloadable by any signed-in GitHub user.
                         Verify a report: download the run's dev-guardian-reports
                         artifact, then
                           gh attestation verify dev-guardian-results.sarif \\
                             --repo OWNER/REPO \\
-                            --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml
+                            --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \\
+                            --source-ref refs/heads/<branch>
+                        (--signer-workflow names the file; a copy of it on
+                        another branch signs as the same path.)
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
@@ -1496,14 +1504,21 @@ const PLACEHOLDER_TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
  * output.
  */
 const SECTION_LINE = /^\s*# \{\{([#^/])([A-Z0-9_]+)\}\}\s*$/;
-/** Anything shaped like a marker that is NOT on a line of its own. */
-const SECTION_TOKEN = /\{\{[#^/][A-Z0-9_]+\}\}/;
+/**
+ * Anything that STARTS like a marker — `{{` then `#`, `^` or `/`, spaces
+ * allowed — on a line that is not exactly one. A near-miss (`# {{#attest}}`,
+ * `# {{ #ATTEST }}`, `#{{#ATTEST}}`) would otherwise pass as a plain YAML
+ * comment and keep its block whatever the flag said. No GitHub Actions
+ * expression starts that way (`${{ !cancelled() }}`, `${{ github.ref }}`).
+ */
+const SECTION_TOKEN = /\{\{\s*[#^/]/;
 
 /**
  * Keeps or drops each marked block of `text` by `sections[NAME]` (see
  * `SECTION_LINE`). Refuses — throws — a section the caller did not declare
  * (so a typo is never silently kept or dropped), an unclosed, unopened or
- * nested one, and a marker sharing its line with anything else.
+ * nested one, and any malformed marker, including one sharing its line with
+ * anything else.
  */
 function applyCiSections(text, sections) {
   const out = [];
@@ -1511,7 +1526,11 @@ function applyCiSections(text, sections) {
   for (const line of text.split('\n')) {
     const m = SECTION_LINE.exec(line);
     if (m === null) {
-      if (SECTION_TOKEN.test(line)) throw new Error(`ci-init: section marker not on a line of its own: ${line.trim()}`);
+      if (SECTION_TOKEN.test(line)) {
+        throw new Error(
+          `ci-init: malformed section marker (a marker is a line holding only "# {{#NAME}}", "# {{^NAME}}" or "# {{/NAME}}", NAME in A-Z0-9_): ${line.trim()}`,
+        );
+      }
       if (open === null || open.keep) out.push(line);
       continue;
     }
@@ -1982,13 +2001,30 @@ const ATTEST_GITHUB_ONLY =
   "identity, and on GitLab a cosign keyless signature of the reports would carry no provenance and no " +
   'store to verify it against. Generate the pipeline without --attest.';
 
-/** How to check a report `--attest` attested — the same words in --help, the write message and docs/ci.md. */
-const ATTEST_VERIFY_HINT =
-  'Verify a report the attest job signed: download the `dev-guardian-reports` artifact of that run ' +
-  '(gh run download <run-id> --repo OWNER/REPO --name dev-guardian-reports), then\n' +
-  '  gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \\\n' +
-  '    --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml\n' +
-  '  (and the same for dev-guardian-report.json).';
+/**
+ * How to check a report `--attest` attested — the same words in --help, the
+ * write message, the workflow's header and docs/ci.md. `--source-ref` pins
+ * the branch the pipeline triggers on: `--signer-workflow` names the workflow
+ * FILE, and a copy of it on any other branch — edited to run on a push there
+ * — signs as the same path.
+ */
+function attestVerifyHint(branch) {
+  return (
+    'Verify a report the attest job signed: download the `dev-guardian-reports` artifact of that run ' +
+    '(gh run download <run-id> --repo OWNER/REPO --name dev-guardian-reports), then\n' +
+    '  gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \\\n' +
+    '    --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \\\n' +
+    `    --source-ref refs/heads/${branch}\n` +
+    '  (and the same for dev-guardian-report.json). --source-ref matters: --signer-workflow names the ' +
+    'workflow file, and a copy of it on another branch signs as the same path.'
+  );
+}
+
+/** What `--attest` proves and exposes — said on every write. */
+const ATTEST_SCOPE_NOTE =
+  'The attest job runs even when the gate failed: an attestation proves where the reports came from, not that ' +
+  'the gate passed. On a public repository the full JSON report is printed to the public job log, and the ' +
+  'reports artifact can be downloaded by any signed-in GitHub user while it is retained.';
 
 function cmdCiInit(argv) {
   const parsed = parseCiInitArgs(argv);
@@ -2093,7 +2129,8 @@ function cmdCiInit(argv) {
     process.stdout.write(
       'The attest job needs artifact attestations: any public repository, or GitHub Enterprise Cloud for a ' +
         'private one — elsewhere it fails.\n' +
-        `${ATTEST_VERIFY_HINT}\n`,
+        `${ATTEST_SCOPE_NOTE}\n` +
+        `${attestVerifyHint(args.branch)}\n`,
     );
   }
   process.stdout.write(

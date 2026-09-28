@@ -91,20 +91,32 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      json\`, kept with \`tee\` so the log still shows it, under \`pipefail\`
 #      so the scan's own exit code still decides the step — and on a push
 #      the scan job keeps both reports as the \`dev-guardian-reports\`
-#      artifact. Anyone verifying downloads them from there.
+#      artifact. Anyone verifying downloads them from there. On a PUBLIC
+#      repository that exposes them: the full JSON report (every new
+#      finding, its file and line) is printed to the job log, and the
+#      artifact can be downloaded by any signed-in GitHub user while it is
+#      retained.
 #  11. (\`ci-init --attest\`) A separate \`attest\` job signs a SLSA
 #      build-provenance attestation for the two reports with
 #      actions/attest-build-provenance (Sigstore keyless, stored in this
 #      repository's attestations). It is the ONLY job with \`id-token:
 #      write\` and \`attestations: write\`, and it holds nothing else: the
 #      scan job builds and scans the project, so it gets no signing
-#      capability of its own. Push only — a fork's pull request gets no
-#      OIDC token, and a pull request's reports are not what anyone
-#      verifies later. Artifact attestations need a public repository, or
-#      GitHub Enterprise Cloud for a private one; elsewhere this job fails,
-#      loudly. Verify a downloaded report with:
+#      capability of its own. It runs even when the gate failed — an
+#      attestation proves where a report came from, never that the gate
+#      passed — but first refuses a report that is empty or not a report
+#      (\`tee\` creates the file even when the scan crashed before writing
+#      one). Push only — a fork's pull request gets no OIDC token, and a
+#      pull request's reports are not what anyone verifies later. Artifact
+#      attestations need a public repository, or GitHub Enterprise Cloud for
+#      a private one; elsewhere this job fails, loudly. Verify a downloaded
+#      report with:
 #        gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \\
-#          --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml
+#          --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \\
+#          --source-ref refs/heads/main
+#      \`--source-ref\` matters: \`--signer-workflow\` names this FILE, and a
+#      copy of it on any other branch, edited to run on a push there, signs
+#      as the same path.
 name: dev-guardian
 
 on:
@@ -238,6 +250,23 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dev-guardian-reports
+
+      # tee creates dev-guardian-report.json even when the scan crashed
+      # before writing a report: attest a report, never an empty file.
+      - name: Refuse an empty or unreadable report
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const report = JSON.parse(fs.readFileSync("dev-guardian-report.json", "utf8"));
+            if (report === null || typeof report !== "object" || Array.isArray(report) || !("exit_code" in report) || !("coverage" in report)) {
+              throw new Error("dev-guardian-report.json is not a dev-guardian scan report");
+            }
+            const sarif = JSON.parse(fs.readFileSync("dev-guardian-results.sarif", "utf8"));
+            if (sarif === null || typeof sarif !== "object" || sarif.version !== "2.1.0" || !Array.isArray(sarif.runs)) {
+              throw new Error("dev-guardian-results.sarif is not a SARIF 2.1.0 log");
+            }
+          '
 
       - name: Attest the reports' build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

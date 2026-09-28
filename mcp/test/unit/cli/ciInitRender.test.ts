@@ -100,4 +100,19 @@ describe('renderCiTemplate: sections', () => {
   it('throws on a marker that is not on a line of its own', () => {
     expect(() => renderCiTemplate('run: x # {{#ATTEST}}', {}, { ATTEST: true })).toThrow(/section marker/);
   });
+
+  // Review M7: a near-miss used to pass as a plain YAML comment, so its
+  // block was kept whatever the flag said.
+  it.each(['# {{#attest}}', '# {{ #ATTEST }}', '#{{#ATTEST}}', '  # {{/ ATTEST}}', '# {{^Attest}}', '# {{#ATTEST-2}}'])(
+    'a malformed marker %j throws — it is never read as a plain comment',
+    (marker) => {
+      const text = ['a', marker, 'b'].join('\n');
+      expect(() => renderCiTemplate(text, {}, { ATTEST: false })).toThrow(/malformed section marker/);
+    },
+  );
+
+  it('a GitHub expression is not a marker: `${{ !cancelled() }}` and `${{ github.ref }}` render untouched', () => {
+    const text = "if: ${{ !cancelled() && github.event_name == 'push' }}\nx: ${{ github.ref }}";
+    expect(renderCiTemplate(text, {}, { ATTEST: true })).toBe(text);
+  });
 });
