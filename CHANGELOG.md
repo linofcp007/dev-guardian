@@ -13,6 +13,12 @@ version bump.
 - `cosign` in the toolchain catalogue (`check_toolchain` probes `cosign version`; `install_toolchain`
   installs v3.1.3 — winget and scoop pinned to it, Linux and macOS from the release binary checked
   against its sha256, Homebrew on macOS).
+- `scan_containers` checks the image's Sigstore signature with cosign. With `signer_identity` (or
+  `signer_identity_regexp`) and `signer_issuer` (or `signer_issuer_regexp`): a real `cosign verify`,
+  a rejection is a high finding. Without them: whether a signature and a signed SLSA provenance
+  attestation exist (`image-unsigned` low, `image-no-provenance` info), and `image_signature` says an
+  existing signature's signer was NOT verified. cosign missing or `GUARDIAN_OFFLINE=1`: `cosign`
+  skipped, in `missing_tools`. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
 
 ## [3.0.0] - 2026-09-28
 

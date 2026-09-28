@@ -47233,6 +47233,281 @@ function finding(opts) {
   });
 }
 
+// src/runners/cosignCheck.ts
+var COSIGN_VERIFY_TOOL_NAME = "cosign-verify";
+var COSIGN_TREE_TOOL_NAME = "cosign-tree";
+var COSIGN_TIMEOUT_MS = 18e4;
+var SIGNATURE_TYPES = /* @__PURE__ */ new Set([
+  "https://sigstore.dev/cosign/sign/v1",
+  "application/vnd.dev.cosign.artifact.sig.v1+json"
+]);
+var PROVENANCE_TYPE = /^https:\/\/slsa\.dev\/provenance\//;
+var BUNDLE_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
+var PROVENANCE_PREDICATE_TYPES = ["https://slsa.dev/provenance/v1", "https://slsa.dev/provenance/v0.2"];
+var TREE_HEADER = /Supply Chain Security Related artifacts for an image:/;
+var TREE_NONE = /No Supply Chain Security Related Artifacts found for image/;
+var TREE_SIGNATURES = /Signatures for an image tag:/;
+var TREE_ATTESTATIONS = /Attestations for an image tag:/;
+var TREE_SBOMS = /SBOMs for an image tag:/;
+var TREE_REFERRER = /(\S+) artifacts via OCI referrer:/;
+var TREE_FETCH_ERROR = /^Error fetching (?:artifact|layers for artifact) /;
+function parseCosignTree(stdout, stderr) {
+  const lines = stdout.split(/\r?\n/);
+  if (!lines.some((l) => TREE_HEADER.test(l))) return null;
+  const listing = {
+    signature: false,
+    legacyAttestations: false,
+    referrerTypes: [],
+    ambiguousBundles: false,
+    fetchErrors: stderr.split(/\r?\n/).filter((l) => TREE_FETCH_ERROR.test(l.trim()))
+  };
+  let recognised = false;
+  for (const line of lines) {
+    if (TREE_NONE.test(line)) {
+      recognised = true;
+    } else if (TREE_SIGNATURES.test(line)) {
+      recognised = true;
+      listing.signature = true;
+    } else if (TREE_ATTESTATIONS.test(line)) {
+      recognised = true;
+      listing.legacyAttestations = true;
+    } else if (TREE_SBOMS.test(line)) {
+      recognised = true;
+    } else {
+      const type = TREE_REFERRER.exec(line)?.[1];
+      if (type === void 0) continue;
+      recognised = true;
+      listing.referrerTypes.push(type);
+      if (SIGNATURE_TYPES.has(type)) listing.signature = true;
+      else if (BUNDLE_TYPE.test(type)) listing.ambiguousBundles = true;
+    }
+  }
+  return recognised ? listing : null;
+}
+function signatureFromTree(tree) {
+  if (tree.signature) return "present";
+  return tree.fetchErrors.length > 0 || tree.ambiguousBundles ? "unknown" : "absent";
+}
+function provenanceFromTree(tree) {
+  if (tree.referrerTypes.some((t) => PROVENANCE_TYPE.test(t))) return "present";
+  if (tree.legacyAttestations) return "download";
+  return tree.fetchErrors.length > 0 || tree.ambiguousBundles ? "unknown" : "absent";
+}
+function classifyAttestationDownload(r) {
+  if (r.outcome === "output_too_large") return "present";
+  if (r.outcome === "completed") return r.stdout.trim().length > 0 ? "present" : "unknown";
+  if (r.outcome === "failed" && /no attestations with predicate type/.test(r.stderr)) return "absent";
+  return "unknown";
+}
+var IDENTITY_MISMATCH = /no matching CertificateIdentity found|none of the expected identities matched/;
+var BAD_REGEXP = /error parsing regexp/;
+function classifyVerify(r) {
+  if (r.outcome === "completed") return { verdict: "verified" };
+  if (r.outcome !== "failed") return { verdict: "error", detail: `cosign verify ${r.outcome.replace(/_/g, " ")}` };
+  const detail = firstError(r.stderr) ?? `cosign verify exited ${r.exitCode ?? "(no exit code)"}`;
+  switch (r.exitCode) {
+    case 10:
+      return { verdict: "rejected", reason: "no_signature", detail };
+    case 12:
+      return { verdict: "rejected", reason: "no_matching_signature", detail };
+    case 13:
+      return { verdict: "rejected", reason: "no_certificate", detail };
+    case 1:
+      if (IDENTITY_MISMATCH.test(r.stderr) && !BAD_REGEXP.test(r.stderr)) {
+        return { verdict: "rejected", reason: "no_matching_signature", detail: firstMismatch(r.stderr) ?? detail };
+      }
+      return { verdict: "error", detail };
+    default:
+      return { verdict: "error", detail };
+  }
+}
+function verifyArgs(image, policy) {
+  const args = ["verify"];
+  if (policy.identity !== void 0) args.push(`--certificate-identity=${policy.identity}`);
+  if (policy.identityRegexp !== void 0) args.push(`--certificate-identity-regexp=${policy.identityRegexp}`);
+  if (policy.issuer !== void 0) args.push(`--certificate-oidc-issuer=${policy.issuer}`);
+  if (policy.issuerRegexp !== void 0) args.push(`--certificate-oidc-issuer-regexp=${policy.issuerRegexp}`);
+  args.push(image);
+  return args;
+}
+function firstError(stderr) {
+  for (const raw of stderr.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("Error: ")) return clip2(line.slice("Error: ".length));
+  }
+  const first = stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return first === void 0 ? null : clip2(first.trim());
+}
+function firstMismatch(stderr) {
+  const line = stderr.split(/\r?\n/).find((l) => IDENTITY_MISMATCH.test(l));
+  return line === void 0 ? null : clip2(line.trim());
+}
+function clip2(text) {
+  return text.length > 400 ? `${text.slice(0, 399)}\u2026` : text;
+}
+var UNVERIFIED_NOTE = "A signature exists, but its signer was NOT verified: anyone can sign an image. Pass signer_identity (or signer_identity_regexp) and signer_issuer (or signer_issuer_regexp) to verify who signed it.";
+function skippedSummary(image, reason) {
+  return { image, check: "skipped", signature: "unknown", provenance: "unknown", note: `Not checked: ${reason}.` };
+}
+async function cosign(args, ctx) {
+  return runProcess({
+    command: "cosign",
+    args,
+    cwd: ctx.cwd,
+    env: ctx.env,
+    timeoutMs: COSIGN_TIMEOUT_MS,
+    ...ctx.signal !== void 0 ? { signal: ctx.signal } : {},
+    ...ctx.onLog !== void 0 ? { onLog: ctx.onLog } : {}
+  });
+}
+async function verifyImage(image, policy, ctx) {
+  const r = await cosign(verifyArgs(image, policy), ctx);
+  const v = classifyVerify(r);
+  const signer = describePolicy(policy);
+  const cancelled = r.outcome === "cancelled";
+  if (v.verdict === "verified") {
+    return {
+      run: { name: "cosign-verify", status: "ok", reason: `image ${image}: signature verified (${signer})`, target: image },
+      findings: [],
+      summary: {
+        image,
+        check: "verify",
+        signature: "verified",
+        provenance: "not_checked",
+        note: `Signed by ${signer}, verified against Sigstore's trust root. Provenance is not checked when a signer is given.`
+      },
+      cancelled
+    };
+  }
+  if (v.verdict === "error") {
+    return {
+      run: { name: "cosign-verify", status: "failed", reason: `image ${image}: cosign verify did not complete \u2014 ${v.detail}`, target: image },
+      findings: [],
+      summary: { image, check: "verify", signature: "unknown", provenance: "not_checked", note: `Not verified: cosign did not complete (${v.detail}).` },
+      cancelled
+    };
+  }
+  const title = v.reason === "no_signature" ? `Image ${image} has no signature to verify` : `Image ${image} is not signed by the expected signer`;
+  const finding4 = makeFinding({
+    tool: COSIGN_VERIFY_TOOL_NAME,
+    rule_id: "image-signature-not-verified",
+    severity: "high",
+    category: "security",
+    subcategory: "supply-chain",
+    title,
+    message: `cosign verify rejected ${image} for ${signer}: ${v.detail}. Nothing shows this image was built and signed by the identity you expect \u2014 do not deploy it until it verifies (or correct signer_identity / signer_issuer if the image is legitimately signed by another workflow).`,
+    file_path: image,
+    snippet: image,
+    fix_available: false
+  });
+  return {
+    run: { name: "cosign-verify", status: "ok", reason: `image ${image}: signature NOT verified (${signer}) \u2014 ${v.detail}`, target: image },
+    findings: [finding4],
+    summary: { image, check: "verify", signature: "rejected", provenance: "not_checked", note: `Rejected: ${v.detail}.` },
+    cancelled
+  };
+}
+async function detectImageSupplyChain(image, ctx) {
+  const treeRun = await cosign(["tree", image], ctx);
+  const tree = treeRun.outcome === "completed" ? parseCosignTree(treeRun.stdout, treeRun.stderr) : null;
+  if (tree === null) {
+    const why = treeRun.outcome === "completed" ? "its output was not a listing this version of dev-guardian can read" : firstError(treeRun.stderr) ?? `cosign tree ${treeRun.outcome.replace(/_/g, " ")}`;
+    return {
+      run: { name: "cosign-tree", status: "failed", reason: `image ${image}: cosign tree did not complete \u2014 ${why}`, target: image },
+      findings: [],
+      summary: { image, check: "detect", signature: "unknown", provenance: "unknown", note: `Not checked: cosign tree did not complete (${why}).` },
+      cancelled: treeRun.outcome === "cancelled"
+    };
+  }
+  const signature = signatureFromTree(tree);
+  let provenance;
+  let cancelled = false;
+  const fromTree = provenanceFromTree(tree);
+  if (fromTree !== "download") {
+    provenance = fromTree;
+  } else {
+    const answers = [];
+    for (const type of PROVENANCE_PREDICATE_TYPES) {
+      const r = await cosign(["download", "attestation", `--predicate-type=${type}`, image], ctx);
+      if (r.outcome === "cancelled") cancelled = true;
+      const answer = classifyAttestationDownload(r);
+      answers.push(answer);
+      if (answer === "present") break;
+    }
+    provenance = answers.includes("present") ? "present" : answers.every((a2) => a2 === "absent") ? "absent" : "unknown";
+    if (provenance === "absent" && (tree.fetchErrors.length > 0 || tree.ambiguousBundles)) provenance = "unknown";
+  }
+  const findings = [];
+  if (signature === "absent") {
+    findings.push(
+      makeFinding({
+        tool: COSIGN_TREE_TOOL_NAME,
+        rule_id: "image-unsigned",
+        severity: "low",
+        category: "security",
+        subcategory: "supply-chain",
+        title: `Image ${image} has no Sigstore signature`,
+        message: `cosign found no signature for ${image} \u2014 neither a .sig tag nor a signing bundle attached as an OCI referrer \u2014 so nothing ties it to who built it. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
+        file_path: image,
+        snippet: image,
+        fix_available: false
+      })
+    );
+  }
+  if (provenance === "absent") {
+    findings.push(
+      makeFinding({
+        tool: COSIGN_TREE_TOOL_NAME,
+        rule_id: "image-no-provenance",
+        severity: "info",
+        category: "security",
+        subcategory: "supply-chain",
+        title: `Image ${image} has no SLSA provenance attestation`,
+        message: `No signed SLSA provenance attestation (https://slsa.dev/provenance/v0.2 or v1) was found for ${image}, as a legacy .att tag or an OCI referrer, so there is no signed record of the source and build that produced it. BuildKit's unsigned provenance inside an image index is not counted. Generate one where the image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).`,
+        file_path: image,
+        snippet: image,
+        fix_available: false
+      })
+    );
+  }
+  const complete = signature !== "unknown" && provenance !== "unknown";
+  const parts = [
+    `signature ${signature === "present" ? "present (signer NOT verified)" : signature}`,
+    `SLSA provenance ${provenance === "present" ? "present (signer NOT verified)" : provenance}`
+  ];
+  if (tree.fetchErrors.length > 0) parts.push(`cosign could not fetch ${tree.fetchErrors.length} referrer(s)`);
+  const notes = [];
+  if (signature === "present") notes.push(UNVERIFIED_NOTE);
+  if (provenance === "present") {
+    notes.push(
+      signature === "present" ? "The provenance attestation's signer was not verified either." : "A SLSA provenance attestation exists, but its signer was NOT verified."
+    );
+  }
+  if (!complete) notes.push("What is unknown could not be read from the registry \u2014 it was not found absent.");
+  return {
+    run: {
+      name: "cosign-tree",
+      status: complete ? "ok" : "failed",
+      reason: `image ${image}: ${parts.join("; ")}`,
+      target: image
+    },
+    findings,
+    summary: {
+      image,
+      check: "detect",
+      signature: signature === "present" ? "present_unverified" : signature,
+      provenance: provenance === "present" ? "present_unverified" : provenance,
+      note: notes.length > 0 ? notes.join(" ") : "Neither a signature nor SLSA provenance was found."
+    },
+    cancelled: cancelled || treeRun.outcome === "cancelled"
+  };
+}
+function describePolicy(policy) {
+  const identity3 = policy.identity !== void 0 ? `identity ${policy.identity}` : `identity matching ${policy.identityRegexp ?? "?"}`;
+  const issuer = policy.issuer !== void 0 ? `issuer ${policy.issuer}` : `issuer matching ${policy.issuerRegexp ?? "?"}`;
+  return `${identity3}, ${issuer}`;
+}
+
 // src/runners/scannerParsers/hadolint.ts
 var HADOLINT_TOOL_NAME = "hadolint";
 var hadolintParser = {
@@ -47279,11 +47554,18 @@ var composeParser = {
     return { findings: checkCompose(text, filePath), cves: [] };
   }
 };
+var cosignParser = {
+  name: "cosign",
+  parse(input) {
+    return { findings: input, cves: [] };
+  }
+};
 var IMAGE_REF = /^(?!-)\S+$/;
+var SignerValue = external_exports.string().min(1).max(1024);
 var scanContainers = makeScanTool({
   name: "scan_containers",
   title: "Container scan (Dockerfile + image + compose)",
-  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags.",
+  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. For the image, cosign checks its Sigstore signature (unless GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or signer_issuer_regexp), a real cosign verify \u2014 a rejection is a high finding; without them, only whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and image_signature says an existing signature was NOT verified. cosign missing or offline: skipped and in missing_tools, never a pass.",
   scan_type: "containers",
   category: "security",
   supportsAutoFix: false,
@@ -47292,6 +47574,18 @@ var scanContainers = makeScanTool({
     severity_min: SeverityMin,
     dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
     image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
+    signer_identity: SignerValue.optional().describe(
+      "The identity `image` must be signed by: the signing certificate's subject \u2014 a workflow URL such as https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs signer_issuer (or signer_issuer_regexp); runs cosign verify."
+    ),
+    signer_identity_regexp: SignerValue.optional().describe(
+      "signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every release workflow of one repository. Not with signer_identity."
+    ),
+    signer_issuer: SignerValue.optional().describe(
+      "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) or https://accounts.google.com."
+    ),
+    signer_issuer_regexp: SignerValue.optional().describe(
+      "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
+    ),
     force: Force
   },
   invoke: async (input, ctx) => {
@@ -47301,6 +47595,7 @@ var scanContainers = makeScanTool({
     const parser_inputs = [];
     let anyOutcome = "completed";
     const inp = input;
+    let imageSignature;
     const invalid = invalidInput(ctx.projectPath, inp);
     if (invalid) throw new Error(invalid);
     const dockerfile = inp.dockerfile_path !== void 0 ? resolve11(ctx.projectPath, inp.dockerfile_path) : existsSync18(join28(ctx.projectPath, "Dockerfile")) ? join28(ctx.projectPath, "Dockerfile") : void 0;
@@ -47365,6 +47660,31 @@ var scanContainers = makeScanTool({
     } else {
       tools_run.push({ name: "trivy", status: "skipped", reason: "no_dockerfile_or_image" });
     }
+    if (inp.image !== void 0) {
+      const policy = signerPolicy(inp);
+      if (ctx.scriptEnv["GUARDIAN_OFFLINE"] === "1") {
+        const reason = "network disabled (GUARDIAN_OFFLINE=1)";
+        tools_run.push({ name: "cosign", status: "skipped", reason });
+        missing_tools.push("cosign");
+        imageSignature = skippedSummary(inp.image, reason);
+      } else if (await scannerAvailable("cosign") === null) {
+        tools_run.push({ name: "cosign", status: "skipped", reason: "not_installed" });
+        missing_tools.push("cosign");
+        imageSignature = skippedSummary(inp.image, "cosign is not installed");
+      } else {
+        const cosignCtx = {
+          cwd: ctx.projectPath,
+          env: ctx.scriptEnv,
+          ...ctx.signal !== void 0 ? { signal: ctx.signal } : {},
+          onLog: ctx.onLog
+        };
+        const check2 = policy !== null ? await verifyImage(inp.image, policy, cosignCtx) : await detectImageSupplyChain(inp.image, cosignCtx);
+        tools_run.push(check2.run);
+        parser_inputs.push({ parser: cosignParser, input: check2.findings });
+        imageSignature = check2.summary;
+        if (check2.cancelled) anyOutcome = "cancelled";
+      }
+    }
     if (dockerfile !== void 0) {
       const hadolintBin = await scannerAvailable("hadolint");
       if (!hadolintBin) {
@@ -47407,7 +47727,8 @@ var scanContainers = makeScanTool({
       tools_run,
       missing_tools,
       parser_inputs,
-      report_paths: [reportDir]
+      report_paths: [reportDir],
+      ...imageSignature !== void 0 ? { extras: { image_signature: imageSignature } } : {}
     };
   }
 });
@@ -47441,12 +47762,48 @@ function readComposeFileSafe(path8) {
     return null;
   }
 }
+var SIGNER_FIELDS = ["signer_identity", "signer_identity_regexp", "signer_issuer", "signer_issuer_regexp"];
+function signerPolicy(inp) {
+  const policy = {};
+  if (inp.signer_identity !== void 0) policy.identity = inp.signer_identity;
+  if (inp.signer_identity_regexp !== void 0) policy.identityRegexp = inp.signer_identity_regexp;
+  if (inp.signer_issuer !== void 0) policy.issuer = inp.signer_issuer;
+  if (inp.signer_issuer_regexp !== void 0) policy.issuerRegexp = inp.signer_issuer_regexp;
+  return Object.keys(policy).length > 0 ? policy : null;
+}
 function invalidInput(projectPath, inp) {
   if (inp.image !== void 0 && !IMAGE_REF.test(inp.image)) {
     return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or start with "-".`;
   }
   if (inp.dockerfile_path !== void 0 && !isInside3(projectPath, inp.dockerfile_path)) {
     return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
+  }
+  return invalidSigner(inp);
+}
+function invalidSigner(inp) {
+  const given = SIGNER_FIELDS.filter((f) => inp[f] !== void 0);
+  if (given.length === 0) return null;
+  if (inp.image === void 0) {
+    return `${given.join(", ")} name(s) who must have signed an image, but no image was given \u2014 pass image.`;
+  }
+  for (const field2 of given) {
+    if (/[\u0000-\u001f\u007f]/.test(inp[field2] ?? "")) {
+      return `${field2} contains a control character; an identity, issuer or regexp never needs one.`;
+    }
+  }
+  if (inp.signer_identity !== void 0 && inp.signer_identity_regexp !== void 0) {
+    return "Pass signer_identity OR signer_identity_regexp, not both.";
+  }
+  if (inp.signer_issuer !== void 0 && inp.signer_issuer_regexp !== void 0) {
+    return "Pass signer_issuer OR signer_issuer_regexp, not both.";
+  }
+  const identity3 = inp.signer_identity !== void 0 || inp.signer_identity_regexp !== void 0;
+  const issuer = inp.signer_issuer !== void 0 || inp.signer_issuer_regexp !== void 0;
+  if (identity3 && !issuer) {
+    return "A signer identity needs its OIDC issuer too \u2014 pass signer_issuer (or signer_issuer_regexp); an identity alone would accept it from any issuer.";
+  }
+  if (issuer && !identity3) {
+    return "An OIDC issuer needs the identity it vouches for \u2014 pass signer_identity (or signer_identity_regexp) too.";
   }
   return null;
 }
@@ -49824,6 +50181,15 @@ var RUN_NAMES = {
   // compose-file hardening checks.
   hadolint: scanner("hadolint"),
   "docker-compose": scanner("docker-compose"),
+  // scan_containers' cosign check of the image it was given
+  // (runners/cosignCheck.ts). Two passes, two keys: an existence check that
+  // finds a signature must never resolve a verification's "signed by the
+  // wrong identity". Each looks at its image only, and only on request (it
+  // needs an image). `cosign` is only ever skipped — not installed, or
+  // GUARDIAN_OFFLINE=1 — so neither pass ran.
+  "cosign-verify": { measures: ["cosign-verify"], ownTarget: true, onRequest: true },
+  "cosign-tree": { measures: ["cosign-tree"], ownTarget: true, onRequest: true },
+  cosign: scanner("cosign-verify", "cosign-tree"),
   // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
   // existing — independent of Trivy and of each other.
   zizmor: scanner("zizmor"),

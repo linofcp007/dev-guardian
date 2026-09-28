@@ -94,7 +94,8 @@ their respective projects.
 
 `GUARDIAN_OFFLINE=1` stops the lookups dev-guardian makes on its own initiative
 — marked ★ below: threat intelligence, package vetting, `scan_skill`'s OSV
-lookup, live secret verification and the Wordfence / wordpress.org feed. What could not be checked
+lookup, live secret verification, the Wordfence / wordpress.org feed and
+`scan_containers`' cosign check of an image's signature. What could not be checked
 is then reported as `unknown` or as a coverage gap, never as clean. It does
 **not** stop a request to a target you named (DAST, a skill URL, a Lighthouse
 URL), anything a third-party scanner or build tool does on its own, or the
@@ -121,6 +122,7 @@ project's own build and test commands.
 | The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
 | Docker registry (`semgrep/semgrep` image) | `scan_sast`, `map_attack_surface` | only when Semgrep is not installed and Docker is |
 | Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
+| The image's registry, and Sigstore's public-good trust root (`tuf-repo-cdn.sigstore.dev`) — Rekor (`rekor.sigstore.dev`) only for a signature that carries no inclusion proof | `scan_containers` given an `image`, which runs cosign ★: `cosign tree` and `cosign download attestation` without a signer, `cosign verify` with `signer_identity` + `signer_issuer` | per call, when cosign is installed; `GUARDIAN_OFFLINE=1` starts no cosign at all (`cosign` is then skipped and in `missing_tools`). cosign reads registry credentials from the Docker config, like Trivy, and keeps its trust root under `~/.sigstore`. It never signs, attests or pushes anything. |
 | Maven Central | Trivy, for a `pom.xml` (in the tools above) | when it resolves Maven dependencies |
 | Package registries, through the package managers | `deps_audit` (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI), `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
 | The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |

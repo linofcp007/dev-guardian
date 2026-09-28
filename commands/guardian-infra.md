@@ -12,7 +12,8 @@ Arguments: $ARGUMENTS
 1. `scan_containers { project_path: "<project>", dockerfile_path: "<Dockerfile>" }` for the Dockerfile, and `scan_containers { project_path: "<project>", image: "<image reference>" }` when an image is named or built. With neither argument it scans `./Dockerfile`. One call covers:
    - Trivy — a Dockerfile config check, or an image's vulnerable OS and application packages, embedded secrets and misconfigurations;
    - hadolint on the Dockerfile, when it is installed (`install_toolchain { tools: ["hadolint"], dry_run: true }` shows how to add it);
-   - a compose file at the project root: `privileged: true`, host networking, a mounted `docker.sock`, and unpinned or `:latest` image tags.
+   - a compose file at the project root: `privileged: true`, host networking, a mounted `docker.sock`, and unpinned or `:latest` image tags;
+   - for an image, its Sigstore signature, with cosign (`install_toolchain { tools: ["cosign"], dry_run: true }`): with `signer_identity` (or `signer_identity_regexp`) and `signer_issuer` (or `signer_issuer_regexp`) a real `cosign verify`, where a rejection is a high finding; without them only whether a signature and a signed SLSA provenance attestation exist. Report `image_signature` as it is: `present_unverified` means nobody checked who signed — ask the user for the expected signer (for a GitHub Actions build, the workflow URL and `https://token.actions.githubusercontent.com`) rather than calling the image trusted. cosign missing or `GUARDIAN_OFFLINE=1` is a gap, not a pass.
 2. Checklist the tool does not automate — say so when you report them:
    - the base image: pinned by digest or at least an exact tag, from an official or trusted registry, recently rebuilt;
    - the container runs as a non-root `USER`;

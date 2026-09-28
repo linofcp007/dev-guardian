@@ -106,7 +106,7 @@ JavaScript/TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (com
 
 ## Ferramentas
 
-Corridas pelas tools MCP: Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (quando instalado no projeto), staticcheck, hadolint, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, os analyzers do .NET SDK, OSV.dev.
+Corridas pelas tools MCP: Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (quando instalado no projeto), staticcheck, hadolint, cosign, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, os analyzers do .NET SDK, OSV.dev.
 
 Recomendadas mas configuradas à mão (as tools não as correm): Renovate (o `init_project` instala o `renovate.json`), GlitchTip / Sentry, Prometheus + Grafana, Uptime Kuma, Artillery, Playwright.
 
