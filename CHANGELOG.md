@@ -8,6 +8,22 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- Findings carry `cwe` and `owasp` (OWASP Top 10:2025), migration 013; annotations, not part of the fingerprint or identity. Stored findings without them read as unknown, never as a category.
+- The 2025 categories and their 249 CWEs come from owasp.org (retrieved 2026-09-28, held to each page's own count); a scanner's OWASP label counts only when it is a 2025 label naming the same category.
+- Semgrep `metadata.cwe`/`metadata.owasp` are read as strings or lists (lists used to be dropped); Trivy `CweIDs`, Bandit `issue_cwe`; a committed secret is CWE-798 (gitleaks, Trivy); a vulnerable dependency is CWE-1395 plus its advisory's CWEs and counts under A03 only (Trivy, npm audit, pip-audit, dotnet list package).
+- Every rule of `base`, `bugfix-*` and `rgpd` names its CWE and OWASP 2025 category; the nine packs match the same 516 fixture findings as before.
+- `report_export`: a CWE / OWASP column and an "OWASP Top 10:2025 coverage" table; SARIF results and rules carry `external/cwe/cwe-<n>` and `owasp-2025-a<nn>` tags (the CI SARIF too).
+- `compliance_evidence` frameworks `owasp-top10-2025` and `nist-csf-2.0`, with per-category evidence; the OWASP → CSF 2.0 mapping is dev-guardian's own and says so.
+- Dashboard: `findings.by_owasp`, `owasp_unmapped` and `coverage.owasp`; the status line lists the categories not tested.
+- An OWASP category counts as tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it in that language naming at least two distinct CWEs; fewer is "thin" (partial) — three rules of one CWE are one check repeated — a language with none is partial, nothing at all is "not tested", never clean. Rules and distinct CWEs per (category, language) are recorded with their measurement date: the registry's p/default, Bandit 1.9.4, and our own packs (recounted by test).
+- The project's languages are the union of the detect_stack snapshot and the languages of exactly the files the scanners read: git's listing (minus a sparse checkout's skip-worktree entries), the project's `.semgrepignore` or Semgrep's default ignores (measured on 1.176.1), `.guardianignore`. A directory name never hides a language (`com/example/…` is code); a language seen only under `examples/`, `docs/`, `spec/`, `third_party/` … at the top level is counted, named ("rust only under examples/") and never fully tested. A `.h` counts as C unless the project has C++; `*.gradle.kts`, `.d.ts` and generated code do not count. A language only the files show is named. A truncated or unreadable listing makes every rule-based claim partial at most. Scans record the languages on their row (`review_pr` none for a head it never checked out), and reports judge a scan against them (older rows: today's tree, listed without blocking the server, said so).
+- A language found only in paths the scanners skip (`pkg/build/`, `dist/`, `test/`, a `.guardianignore` entry) is named on the languages line ("rust only under pkg/build/ (skipped by Semgrep) — not counted", at most three paths then "+N more"), never counted and never a status; the ignore files and the walk are read asynchronously on the MCP server.
+- "Would be tested by" lists only what could make a category tested; thin and narrow scanners are listed apart as "would partly cover".
+- A scanner that sees one slice of a category whatever the language never makes it tested on its own: gitleaks is partial for A07 ("hard-coded credentials only"), Trivy and the npm/pip-audit/dotnet auditors are partial for A03 ("known-vulnerable dependencies only; build and distribution integrity not assessed").
+- A multi-pass scanner is incomplete when any of its passes failed or is listed missing (`gitleaks` beside `gitleaks-working-tree`, the npm/pip-audit/dotnet auditors). `review_pr` records `local_only` on its scan row. `report_export` on an `audit_executive` row reads its sub-scans. `compliance_evidence` lists partial categories apart from the evidenced ones.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

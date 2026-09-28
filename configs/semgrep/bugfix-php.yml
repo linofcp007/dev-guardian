@@ -93,6 +93,17 @@
 #
 # Os acentos minusculos sao todos seguros, e `Ã À Â É Ê Ó Ô Õ Ú Ç` tambem.
 
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # A REGRA MAIS FORTE DO PACK, e a mais barata: 13 de 13 nas fixtures, zero
   # nos quase-acertos e ZERO em 1467 ficheiros de WordPress.
@@ -130,6 +141,10 @@ rules:
   # que o indice fora dos limites é passado a um helper. Troca um falso
   # positivo por um falso negativo, por isso nao foi aplicado aqui tambem.
   - id: bugfix-php-off-by-one-loop-lte-count
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     pattern-either:
       - patterns:
           - pattern-either:
@@ -187,6 +202,10 @@ rules:
   # WARNING e nao ERROR: um `if (!is_dir($d)) mkdir($d)` num script de arranque
   # de processo unico esta correto, e a regra nao ve a diferença.
   - id: bugfix-php-race-condition-toctou-file
+    metadata:
+      cwe:
+        - "CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition"
+      owasp: []
     pattern-either:
       - pattern: 'if (file_exists($F)) { ... unlink($F); ... }'
       - pattern: 'if (!is_dir($D)) { ... mkdir($D, ...); ... }'
@@ -257,6 +276,11 @@ rules:
   # testa-la e a primeira com dados. Registado no §3 do design, nao corrigido
   # aqui: é uma alteração separada, com contagens de fixtures proprias.
   - id: bugfix-php-error-handling-empty-catch
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - patterns:
           - pattern: 'try { ... } catch ($E $V) { }'
@@ -302,6 +326,10 @@ rules:
   # que é exatamente o perfil de um WARNING. A invariante nao é visivel a um
   # matcher sintatico.
   - id: bugfix-php-edge-case-strpos-truthiness
+    metadata:
+      cwe:
+        - "CWE-253: Incorrect Check of Function Return Value"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: 'if ($F(...)) ...'
@@ -361,6 +389,11 @@ rules:
   # WARNING e nao ERROR: a correção depende inteiramente de ter reconhecido um
   # guarda, e um guarda pode estar sempre a uma chamada de distancia.
   - id: bugfix-php-null-safety-json-decode-deref
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - patterns:
           - pattern-either:
@@ -423,6 +456,10 @@ rules:
   # mesmo é "vazio ou ausente", que é uma decisao de dominio invisivel a um
   # matcher sintatico.
   - id: bugfix-php-null-safety-loose-null-compare
+    metadata:
+      cwe:
+        - "CWE-1024: Comparison of Incompatible Types"
+      owasp: []
     pattern-either:
       - pattern: '$X == null'
       - pattern: '$X != null'

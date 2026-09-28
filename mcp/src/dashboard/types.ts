@@ -173,6 +173,31 @@ export interface CoverageState {
   partial_tools?: string[];
   /** Rendered verbatim by both views. Empty iff level === 'full'. */
   omitted_categories: string[]; // e.g. ['container and dependency', 'secrets']
+  /**
+   * Per OWASP Top 10:2025 category, whether a scanner able to detect it ran
+   * ok in the scans behind these numbers (`frameworks/coverage.ts`). Read
+   * with `findings.by_owasp`: a category with no findings there and
+   * `not_tested` here was never looked for — it is not clean. `buildSnapshot`
+   * always sets it; optional, like `partial_tools`, so hand-built fixtures
+   * that predate it render nothing about OWASP rather than crash.
+   */
+  owasp?: OwaspCoverageEntry[];
+  /**
+   * The source languages `owasp` was judged against, and where they came
+   * from (`frameworks/projectLanguages.ts`) — "tested" is a claim about
+   * them. Set whenever `owasp` is.
+   */
+  owasp_languages?: { languages: string[] | null; source: string; incomplete?: string };
+}
+
+export interface OwaspCoverageEntry {
+  id: string; // 'A05:2025'
+  title: string;
+  status: 'tested' | 'partial' | 'not_tested';
+  /** Open findings carrying this category. */
+  findings: number;
+  /** Why it is partial or not tested (thin rule counts, uncovered languages, incomplete runs). */
+  reasons?: string[];
 }
 
 export interface ScanSummary {
@@ -190,6 +215,15 @@ export interface FindingsSummary {
   by_severity: Record<Severity, number>;
   by_category: Record<string, number>;
   by_tool: Record<string, number>;
+  /**
+   * Open findings per OWASP Top 10:2025 category, only categories with at
+   * least one (a finding in two categories counts in both). Never read
+   * alone — see `coverage.owasp`. Always set by `buildSnapshot`; optional
+   * for the same reason as `coverage.owasp`.
+   */
+  by_owasp?: Record<string, number>;
+  /** Open findings with no OWASP 2025 category: unknown, never filed under one. */
+  owasp_unmapped?: number;
   hotspots: Hotspot[]; // file + count, descending
   items: Finding[]; // possibly capped — see §8
 }

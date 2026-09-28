@@ -68,6 +68,8 @@
  * scanner has, and a result filter here for all of them. What it excluded —
  * files and findings — is in every response (`exclusions`), fresh or cached.
  */
+import { OWASP_SCAN_TYPES } from '../frameworks/coverage.js';
+import { PROJECT_LANGUAGES_META_KEY, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
@@ -98,7 +100,12 @@ const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
  * and `exclusions`, the factory writes it precisely so that a cache hit
  * answers with it, exactly as the fresh run did.
  */
-const FACTORY_META_KEYS = new Set(['severity_min', 'parent_scan_id', 'run_warnings']);
+const FACTORY_META_KEYS = new Set([
+    'severity_min',
+    'parent_scan_id',
+    'run_warnings',
+    PROJECT_LANGUAGES_META_KEY,
+]);
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
 export function makeScanTool(config) {
@@ -641,6 +648,14 @@ async function runScanBody(args) {
         meta['exclusions'] = exclusionReport;
     if (invocation.warnings !== undefined && invocation.warnings.length > 0)
         meta['run_warnings'] = invocation.warnings;
+    // The project's source languages as they are NOW, when the scan ran, for
+    // every scan type an OWASP detector reads: a later report judges this
+    // scan's coverage against them, not against whatever the working tree
+    // holds by then (`frameworks/projectLanguages.ts`). A tool that scanned
+    // another tree (review_pr's head) records its own.
+    if (OWASP_SCAN_TYPES.has(config.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === undefined) {
+        meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+    }
     if (Object.keys(meta).length > 0)
         finalize.meta = meta;
     const finishedAt = plugin.storage.scans.finalize(finalize);

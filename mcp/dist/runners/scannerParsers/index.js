@@ -17,6 +17,7 @@
  * may flag them via the `subcategory` if it matters.
  */
 import { computeFingerprint } from '../../fingerprint/findingFingerprint.js';
+import { classifyTaxonomy } from '../../frameworks/taxonomy.js';
 /**
  * Convert backslashes to forward slashes and strip a Windows drive prefix.
  * Idempotent for already-POSIX paths.
@@ -60,6 +61,13 @@ export function clampSnippet(snippet) {
  * Constructor for a Finding that auto-computes the fingerprint and applies
  * the defaults required by the strict `Finding` type. Parsers should always
  * go through this helper rather than building findings by hand.
+ *
+ * `taxonomy` is what the scanner said about the weakness — CWEs and OWASP
+ * labels, as strings or lists, raw (`frameworks/taxonomy.ts`
+ * `classifyTaxonomy` normalises them and derives the 2025 categories). It
+ * sets `cwe`/`owasp` and is deliberately NOT part of the fingerprint: a
+ * scanner that starts naming a CWE must not turn a stored finding into a new
+ * one.
  */
 export function makeFinding(input) {
     const snippet = clampSnippet(input.snippet);
@@ -99,7 +107,32 @@ export function makeFinding(input) {
         finding.line_end = input.line_end;
     if (snippet !== undefined)
         finding.snippet = snippet;
+    if (input.taxonomy !== undefined) {
+        const { cwe, owasp } = classifyTaxonomy(input.taxonomy);
+        if (cwe !== undefined)
+            finding.cwe = cwe;
+        if (owasp !== undefined)
+            finding.owasp = owasp;
+    }
     return finding;
+}
+/**
+ * The weakness every finding of a class is by definition, whatever its
+ * scanner calls it: a known-vulnerable dependency is CWE-1395 (Dependency on
+ * Vulnerable Third-Party Component), a committed secret CWE-798 (Use of
+ * Hard-coded Credentials). OWASP Top 10:2025 maps them to A03 and A07.
+ */
+export const DEPENDENCY_CWE = 'CWE-1395';
+export const SECRET_CWE = 'CWE-798';
+/**
+ * A known-vulnerable dependency's taxonomy: CWE-1395 plus whatever CWEs its
+ * advisory names (the flaw inside the package), and OWASP A03 ONLY. The
+ * advisory's CWE-79 is a flaw in someone else's code that the project
+ * inherits through its supply chain, not the project's own injection bug,
+ * so it is recorded in `cwe` and never counted under A05.
+ */
+export function dependencyTaxonomy(advisoryCwes = []) {
+    return { cwe: [DEPENDENCY_CWE, ...advisoryCwes], owasp: ['A03:2025'], deriveOwasp: false };
 }
 /**
  * Standard scanner severity strings → canonical `Severity`. Scanners differ

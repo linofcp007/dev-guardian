@@ -75,6 +75,8 @@ export function renderDashboard(rawSnapshot: DashboardSnapshot): string {
   const truncationNotice = truncationSection(snapshot.truncation);
   if (truncationNotice !== null) sections.push(truncationNotice);
   sections.push(severitySection(snapshot.findings));
+  const owasp = owaspSection(snapshot.findings, snapshot.coverage);
+  if (owasp !== null) sections.push(owasp);
   sections.push(deltasSection(snapshot, scan.scan_type));
   sections.push(findingsTableSection(snapshot.findings));
   sections.push(hotspotsSection(snapshot.findings.hotspots));
@@ -229,6 +231,43 @@ function severitySection(findings: FindingsSummary): string {
   return `<section>
   <h2>Findings by severity</h2>
   ${body}
+</section>`;
+}
+
+// ---------------------------------------------------------------------------
+// OWASP Top 10:2025 — open findings per category beside whether a scanner
+// able to detect the category ran ok. No outbound links: the page stays as
+// self-contained as the rest of it.
+// ---------------------------------------------------------------------------
+
+const OWASP_STATUS_TEXT: Record<'tested' | 'partial' | 'not_tested', string> = {
+  tested: 'tested',
+  partial: 'partial',
+  not_tested: 'not tested',
+};
+
+function owaspSection(findings: FindingsSummary, coverage: CoverageState): string | null {
+  const entries = coverage.owasp ?? [];
+  if (entries.length === 0) return null;
+  const rows = entries
+    .map(
+      (e) => `<tr>
+  <td>${escapeHtml(e.id)} ${escapeHtml(e.title)}</td>
+  <td>${e.status === 'not_tested' ? '<strong>not tested</strong>' : escapeHtml(OWASP_STATUS_TEXT[e.status])}${(e.reasons ?? []).length > 0 ? `<br><small>${escapeHtml((e.reasons ?? []).join('; '))}</small>` : ''}</td>
+  <td>${findings.by_owasp?.[e.id] ?? 0}</td>
+</tr>`,
+    )
+    .join('');
+  const unmapped = findings.owasp_unmapped ?? 0;
+  const langs = coverage.owasp_languages;
+  const langText =
+    langs === undefined
+      ? ''
+      : ` Judged for: ${langs.languages === null ? 'unknown languages' : langs.languages.length === 0 ? 'no source language' : langs.languages.join(', ')} (${langs.source}).`;
+  return `<section>
+  <h2>OWASP Top 10:2025</h2>
+  <p class="pdk-meta">${escapeHtml(`A category is tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it naming two or more CWEs; a scanner that sees only a slice of it (secrets, vulnerable dependencies) makes it partial at most — "not tested" is not clean.${langText}`)}${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? '' : 's'} carry no OWASP 2025 category.` : ''}</p>
+  <table><thead><tr><th>Category</th><th>Coverage</th><th>Open findings</th></tr></thead><tbody>${rows}</tbody></table>
 </section>`;
 }
 

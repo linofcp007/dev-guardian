@@ -73,6 +73,17 @@
 #
 # It also retired a rule and moved two tiers — see `error-handling-empty-catch`
 # below, and the deletion note where `catch-returns-null` used to be.
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # (audit wave) ONE false negative closed, and one non-bug recorded — the
   # difference between the two only became visible by ablating each added
@@ -140,6 +151,11 @@ rules:
   # Still missed, and left missed rather than chased: a catch body of `;` or
   # `void 0`, which are non-empty blocks.
   - id: bugfix-js-error-handling-empty-catch
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: try { ... } catch ($E) { }
@@ -203,6 +219,11 @@ rules:
   # `.catch(() => undefined)` (expression-bodied), a two-parameter arrow,
   # and `.then(ok, () => {})`'s second argument.
   - id: bugfix-js-error-handling-empty-promise-catch
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: $P.catch(() => {})
@@ -272,6 +293,10 @@ rules:
   # paths are written in, and a body that reaches the element through a
   # method (`s.charAt(i)`) instead of a subscript.
   - id: bugfix-js-off-by-one-loop-lte-length
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern: $A[$I]
       - pattern-inside: for (...; $I <= $A.length; ...) ...
@@ -305,6 +330,10 @@ rules:
   # a guard elsewhere can make true. Known gap: the cached-length form
   # (`const n = items.length; items[n]`).
   - id: bugfix-js-off-by-one-index-at-length
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern: $A[$A.length]
       - pattern-not-inside: $A[$A.length] = ...
@@ -315,6 +344,11 @@ rules:
     languages: [javascript, typescript]
 
   - id: bugfix-js-race-condition-floating-mutation
+    metadata:
+      cwe:
+        - "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')"
+      owasp:
+        - "A06:2025 - Insecure Design"
     # Two corrections versus the first draft of this pattern, both found by
     # the near-miss fixture (mcp/test/fixtures/bugfix-js/misses/
     # race-condition.ts) firing when it must not — per this rule set's own
@@ -529,6 +563,11 @@ rules:
   # keeps this rule at WARNING. reduceRight has the identical hazard and is
   # still not covered.
   - id: bugfix-js-edge-case-reduce-without-initial
+    metadata:
+      cwe:
+        - "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $A.reduce($F)
       - pattern-not: "[...].reduce($F)"
@@ -543,6 +582,10 @@ rules:
   # `Number.parseInt(s)` (the ES2015 alias, identical hazard) and
   # `parseInt(s, undefined)`.
   - id: bugfix-js-edge-case-parseint-without-radix
+    metadata:
+      cwe:
+        - "CWE-704: Incorrect Type Conversion or Cast"
+      owasp: []
     pattern: parseInt($S)
     message: >-
       parseInt sem radix pode interpretar o número na base errada (ex.:
@@ -600,6 +643,11 @@ rules:
   # promise. Also still missed, and recorded: the result stored in a variable
   # first, a `!` non-null assertion, `filter(p)[0].prop`, and destructuring.
   - id: bugfix-js-null-safety-unchecked-find
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: $A.find((...) => ...).$PROP
@@ -742,6 +790,11 @@ rules:
   # than index) accesses on the result, a `!` non-null assertion, and the
   # result stored in a variable first.
   - id: bugfix-js-null-safety-unchecked-match
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: $S.match($ARG)[$I]
@@ -790,6 +843,11 @@ rules:
   # missed: destructuring (`const { API_URL } = process.env`) and aliasing
   # (`const env = process.env`), both of which need dataflow.
   - id: bugfix-js-null-safety-unchecked-env
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: process.env.$X.$P
@@ -865,6 +923,10 @@ rules:
   # in a class component's `componentDidMount`, in a helper the effect
   # calls, and inside `useLayoutEffect`.
   - id: bugfix-js-memory-leak-listener-without-cleanup
+    metadata:
+      cwe:
+        - "CWE-401: Missing Release of Memory after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern: $EL.addEventListener(...)
       - pattern-inside: |
@@ -932,6 +994,10 @@ rules:
   # rule cannot follow, e.g. `registry.add(() => clearInterval(t))` at a
   # nesting the block ellipsis does not reach.
   - id: bugfix-js-memory-leak-interval-without-clear
+    metadata:
+      cwe:
+        - "CWE-401: Missing Release of Memory after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern-either:
           # Captured handle, in any of const / let / var / field / ref form.
@@ -981,6 +1047,10 @@ rules:
   # useEffect — and `emitter.on(...)`, which is the same leak class under a
   # different verb.
   - id: bugfix-js-memory-leak-subscribe-without-unsubscribe
+    metadata:
+      cwe:
+        - "CWE-401: Missing Release of Memory after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern: $O.subscribe(...)
       - pattern-inside: |

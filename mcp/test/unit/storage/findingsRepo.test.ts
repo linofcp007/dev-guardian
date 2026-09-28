@@ -317,3 +317,52 @@ describe('FindingsRepo — identityForFingerprint', () => {
     expect(findings.identityForFingerprint('unknown')).toBeNull();
   });
 });
+
+describe('FindingsRepo — CWE and OWASP 2025 taxonomy (schema 13)', () => {
+  it('stores cwe/owasp and reads them back as they were', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'a', cwe: ['CWE-79', 'CWE-89'], owasp: ['A05:2025'] }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'b', cwe: ['CWE-1321'] }), scan_id: 's1' },
+    ]);
+    const byFp = Object.fromEntries(findings.listByScan('s1').map((f) => [f.fingerprint, f]));
+    expect(byFp['a']?.cwe).toEqual(['CWE-79', 'CWE-89']);
+    expect(byFp['a']?.owasp).toEqual(['A05:2025']);
+    expect(byFp['b']?.cwe).toEqual(['CWE-1321']);
+    expect(byFp['b']).not.toHaveProperty('owasp');
+  });
+
+  it('a finding with neither field reads back with neither — unknown, not "no category"', () => {
+    const { db, scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([{ ...makeFinding({ fingerprint: 'a', cwe: [], owasp: [] }), scan_id: 's1' }]);
+    const [f] = findings.listByScan('s1');
+    expect(f).not.toHaveProperty('cwe');
+    expect(f).not.toHaveProperty('owasp');
+    const row = db.prepare(`SELECT cwe, owasp FROM findings WHERE fingerprint = 'a'`).get();
+    expect(row).toEqual({ cwe: null, owasp: null });
+  });
+
+  it('never turns an unreadable or foreign stored value into a category', () => {
+    const { db, scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'a' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'b' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'c' }), scan_id: 's1' },
+    ]);
+    db.exec(`UPDATE findings SET cwe = 'not json', owasp = '{"a":1}' WHERE fingerprint = 'a'`);
+    db.exec(
+      `UPDATE findings SET cwe = '["CWE-79", 7, "xss"]', owasp = '["A03:2021", "A05:2025", "A11:2025"]' WHERE fingerprint = 'b'`,
+    );
+    db.exec(`UPDATE findings SET cwe = '[]', owasp = '[]' WHERE fingerprint = 'c'`);
+    const byFp = Object.fromEntries(findings.listByScan('s1').map((f) => [f.fingerprint, f]));
+    expect(byFp['a']).not.toHaveProperty('cwe');
+    expect(byFp['a']).not.toHaveProperty('owasp');
+    expect(byFp['b']?.cwe).toEqual(['CWE-79']);
+    expect(byFp['b']?.owasp).toEqual(['A05:2025']);
+    expect(byFp['c']).not.toHaveProperty('cwe');
+    expect(byFp['c']).not.toHaveProperty('owasp');
+  });
+});

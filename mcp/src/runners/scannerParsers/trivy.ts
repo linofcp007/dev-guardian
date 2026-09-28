@@ -17,10 +17,12 @@ import { dirname, join } from 'node:path';
 import type { Category, Finding, Severity } from '../../types.js';
 import {
   asArray,
+  dependencyTaxonomy,
   getNumber,
   getProp,
   getString,
   makeFinding,
+  SECRET_CWE,
   normalizeSeverity,
   parseInputAsJson,
   toRelativeIfPossible,
@@ -88,6 +90,9 @@ function mapVulnerability(raw: unknown, target: string, ctx: ParserContext): Fin
     title,
     fix_available: fixed !== undefined && fixed.length > 0,
     file_path: toRelativeIfPossible(target, ctx.project_path),
+    // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
+    // it; the advisory's own CweIDs name that flaw, in `cwe` only.
+    taxonomy: dependencyTaxonomy(asArray(getProp(raw, 'CweIDs'))),
   };
   if (description !== undefined) input.message = description;
   // Trivy "snippet" surrogate: enough package metadata to make the
@@ -185,6 +190,7 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
     subcategory: 'secret',
     title: getString(raw, 'Title') ?? ruleId,
     file_path: toRelativeIfPossible(target, ctx.project_path),
+    taxonomy: { cwe: [SECRET_CWE] },
   };
   if (lineStart !== undefined) input.line_start = lineStart;
   if (lineEnd !== undefined) input.line_end = lineEnd;

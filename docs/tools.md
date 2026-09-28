@@ -135,12 +135,12 @@ Compliance scan of a project. (1) Trivy license scan: Findings for risky license
 
 ### `compliance_evidence`
 
-Generate a Markdown evidence document from one project's accumulated state (project\_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.
+Generate a Markdown evidence document from one project's accumulated state (project\_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for per-category evidence: a category counts as covered only when, for every source language of the project, a scanner that ran ok has enough rules for it; partial categories are listed apart (NIST CSF via dev-guardian's own OWASP mapping). Read-only.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `framework` | one of "gdpr", "soc2", "iso27001", "generic" | no | — | Which framework to label the evidence under. Default: generic. |
+| `framework` | one of "gdpr", "soc2", "iso27001", "owasp-top10-2025", "nist-csf-2.0", "generic" | no | — | Which framework to label the evidence under. owasp-top10-2025 and nist-csf-2.0 give per-category evidence from the open findings and the scanners that ran. Default: generic. |
 
 ### `create_fix_pr`
 
@@ -365,7 +365,7 @@ Compare one project's latest scan against its baseline of the same scan type (or
 
 ### `report_export`
 
-Write a report in one of four formats: markdown (default — handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content\_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). Local file only — no external services, no web fonts.
+Write a report in one of four formats: markdown (default — handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content\_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per source language of the project. Local file only — no external services, no web fonts.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

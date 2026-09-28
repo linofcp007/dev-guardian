@@ -13,7 +13,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
+import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, SECRET_CWE, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
     name: TRIVY_TOOL_NAME,
@@ -69,6 +69,9 @@ function mapVulnerability(raw, target, ctx) {
         title,
         fix_available: fixed !== undefined && fixed.length > 0,
         file_path: toRelativeIfPossible(target, ctx.project_path),
+        // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
+        // it; the advisory's own CweIDs name that flaw, in `cwe` only.
+        taxonomy: dependencyTaxonomy(asArray(getProp(raw, 'CweIDs'))),
     };
     if (description !== undefined)
         input.message = description;
@@ -171,6 +174,7 @@ function mapSecret(raw, target, ctx) {
         subcategory: 'secret',
         title: getString(raw, 'Title') ?? ruleId,
         file_path: toRelativeIfPossible(target, ctx.project_path),
+        taxonomy: { cwe: [SECRET_CWE] },
     };
     if (lineStart !== undefined)
         input.line_start = lineStart;

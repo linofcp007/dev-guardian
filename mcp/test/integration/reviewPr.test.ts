@@ -516,6 +516,45 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(res.tools_run.find((t) => t.name === 'trivy')?.status).toBe('ok');
   });
 
+  // OWASP coverage reads whether the registry ran from the scan row; a
+  // review row that did not say claimed the registry's categories even
+  // under local_only (frameworks/coverage.ts#registryRan).
+  it.each([true, false])('records local_only=%s on the scan row', async (localOnly) => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'a = 2\n');
+    await commitAll(dir);
+    const { r, p } = await review(dir, { base_ref: 'main', ...(localOnly ? { local_only: true } : {}) });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    expect(p.storage.scans.getById(res.scan_id)?.meta?.['local_only']).toBe(localOnly);
+  });
+
+  // M-b: the languages of the tree the review scanned — the head's own tree
+  // when it is not checked out — recorded for OWASP coverage.
+  it('records the languages of the reviewed head, not of the working tree', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'lib.rs', 'fn f() {}\n');
+    await commitAll(dir);
+    await git(dir, 'checkout', '-q', 'main');
+    const { r, p } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const meta = p.storage.scans.getById((r as unknown as ReviewResult).scan_id)?.meta;
+    expect(meta?.['project_languages']).toMatchObject({ languages: ['python', 'rust'] });
+  });
+
+  // A head that is an ancestor of the base changes no file and is not
+  // checked out: the working tree's languages are not the head's.
+  it('records no languages for a head it never checked out', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'lib.rs', 'fn f() {}\n');
+    await commitAll(dir);
+    const { r, p } = await review(dir, { base_ref: 'feature', head_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const meta = p.storage.scans.getById((r as unknown as ReviewResult).scan_id)?.meta;
+    expect(meta?.['scanned_tree']).toBe('head_checkout');
+    expect(meta?.['project_languages']).toMatchObject({ languages: null });
+  });
+
   it('an empty pull request runs no scanner and says why', async () => {
     const dir = await repo('main', { 'a.py': 'a = 1\n' });
     const { r } = await review(dir, { base_ref: 'main' });

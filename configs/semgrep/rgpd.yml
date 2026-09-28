@@ -356,6 +356,26 @@
 # `semgrepPacks.test.ts` apanha isto em todos os packs. Os acentos minusculos
 # sao todos seguros, e `Ã À Â É Ê Ó Ô Õ Ú Ç` tambem.
 
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+#
+# Dados pessoais num log são CWE-532 (o Base exato: informação sensível
+# escrita num log), o que a OWASP arruma em A09. Um tracker ou um embed
+# carregado antes do consentimento é CWE-359, cuja própria definição fala de
+# informação pessoal exposta sem o consentimento da pessoa, e a OWASP
+# arruma-o em A01 — a categoria da finding é a oficial. Isso não faz deste
+# pack um teste de controlo de acessos: o cálculo de cobertura
+# (`frameworks/coverage.ts`) conta as regras por linguagem de código, e as
+# quatro regras `generic` sobre templates não contam para nenhuma.
+
 rules:
   # ---------------------------------------------------------------------------
   # DADOS PESSOAIS EM LOGS
@@ -449,6 +469,11 @@ rules:
   # `child({...})` do pino, que carimba o valor em todas as linhas seguintes
   # — e bunyan.
   - id: rgpd-pii-in-log-js
+    metadata:
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
     languages: [javascript, typescript]
     severity: WARNING
     message: >-
@@ -534,6 +559,11 @@ rules:
   # O `$NAME` do PHP inclui o `$` no texto, por isso o regex do nome abre com
   # `^\$` em vez de `^`; o corpo é o mesmo.
   - id: rgpd-pii-in-log-php
+    metadata:
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
     languages: [php]
     severity: WARNING
     message: >-
@@ -628,6 +658,11 @@ rules:
   # carimba o valor em todas as linhas seguintes), e o `print()` — que num
   # contentor vai direto para o agregador de logs.
   - id: rgpd-pii-in-log-py
+    metadata:
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
     languages: [python]
     severity: WARNING
     message: >-
@@ -737,6 +772,11 @@ rules:
   # template estruturado (`"Login {Email}"`) é uma string e nao conta; o
   # argumento a seguir é que conta.
   - id: rgpd-pii-in-log-cs
+    metadata:
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      owasp:
+        - "A09:2025 - Security Logging and Alerting Failures"
     languages: [csharp]
     severity: WARNING
     message: >-
@@ -919,6 +959,11 @@ rules:
   # comentarios HTML e `//`: uma declaração comentada nao declara nada, e
   # tambem esta em hits/.
   - id: rgpd-tracker-ga4-without-consent
+    metadata:
+      cwe:
+        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
+      owasp:
+        - "A01:2025 - Broken Access Control"
     languages: [generic]
     severity: WARNING
     paths:
@@ -959,6 +1004,11 @@ rules:
   # comentarios — um revoke dentro de `<!-- -->` nao revoga nada (T8 da
   # revisao, em hits/).
   - id: rgpd-tracker-meta-pixel-without-consent
+    metadata:
+      cwe:
+        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
+      owasp:
+        - "A01:2025 - Broken Access Control"
     languages: [generic]
     severity: WARNING
     paths:
@@ -992,6 +1042,11 @@ rules:
   # corpo dela, e dentro do template literal quando vem num `<Script>` do
   # Next.js — é por isso que os guardas casam o bloco inteiro.
   - id: rgpd-tracker-hotjar-without-consent
+    metadata:
+      cwe:
+        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
+      owasp:
+        - "A01:2025 - Broken Access Control"
     languages: [generic]
     severity: WARNING
     paths:
@@ -1027,6 +1082,11 @@ rules:
   # aplicam a um iframe: JSX, bloco (um iframe inserido por JS dentro do
   # callback) e template.
   - id: rgpd-youtube-embed-without-nocookie
+    metadata:
+      cwe:
+        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
+      owasp:
+        - "A01:2025 - Broken Access Control"
     languages: [generic]
     severity: WARNING
     paths:

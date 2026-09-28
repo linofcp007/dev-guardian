@@ -27,6 +27,7 @@
  * files changed". The resolved commit ids are what the scan is keyed and
  * cached by, so a moved branch is a new review, not a stale hit.
  */
+import { PROJECT_LANGUAGES_META_KEY, resolveProjectLanguagesAsync, } from '../frameworks/projectLanguages.js';
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
@@ -92,6 +93,7 @@ const reviewPr = makeScanTool({
         const headIsCheckedOut = (await resolveCommit(ctx.projectPath, 'HEAD')) === head;
         let tree = null;
         let cleanupNote = null;
+        let projectLanguages = null;
         try {
             let scanRoot = ctx.projectPath;
             let unavailable = null;
@@ -105,6 +107,17 @@ const reviewPr = makeScanTool({
                 }
             }
             const where = headIsCheckedOut ? 'the working tree' : `head ${head.slice(0, 12)}`;
+            // The languages of the tree this review reads — the head's own when it
+            // is not checked out — listed before that tree is removed below. A
+            // head that is not checked out and changes no file was never
+            // materialised: the working tree is not the head, so nothing is
+            // recorded rather than the wrong tree's languages.
+            projectLanguages =
+                unavailable !== null
+                    ? { languages: null, source: `could not be determined (${unavailable})` }
+                    : !headIsCheckedOut && tree === null
+                        ? { languages: null, source: `not recorded: head ${head.slice(0, 12)} was not checked out (no file changed)` }
+                        : await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot });
             if (unavailable !== null) {
                 // gitleaks reads commits, not files, and still runs below.
                 out.tools_run.push({ name: 'semgrep', status: 'failed', reason: unavailable });
@@ -164,6 +177,11 @@ const reviewPr = makeScanTool({
                 head_sha: head,
                 scanned_tree: headIsCheckedOut ? 'working_tree' : 'head_checkout',
                 changed_files: changed.length,
+                // Whether the Semgrep registry ran — OWASP coverage
+                // (`frameworks/coverage.ts`) claims registry categories only when
+                // the row says `false`, as scan_sast's rows always have.
+                local_only: input.local_only === true,
+                ...(projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {}),
                 ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
             },
         };
