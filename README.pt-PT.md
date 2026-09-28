@@ -10,7 +10,7 @@ Trilingue: as skills e os comandos respondem em inglês, português ou espanhol,
 
 - **13 skills** e **10 comandos** slash para o Claude Code / Cowork (abaixo).
 - Um **servidor MCP** com **57 ferramentas** e **18 recursos**, em TypeScript sobre `node:sqlite`, entregue já compilado — referência completa em [docs/tools.md](docs/tools.md) (em inglês).
-- **142 regras Semgrep em 10 packs** escritas para este projeto: classes de bugs para sete linguagens, um pack RGPD e um pack de inventário de rotas para nove linguagens — ver [docs/rule-packs.md](docs/rule-packs.md).
+- **150 regras Semgrep em 11 packs** escritas para este projeto: classes de bugs para sete linguagens, um pack RGPD, um pack de inventário de rotas para nove linguagens e um pack para aplicações com LLM (saída do modelo em eval/shell/SQL, código remoto ao carregar um modelo, superfície de injeção de prompt, chamadas sem limite de tokens) que o `scan_sast` corre — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de proteção** que bloqueiam comandos de shell catastróficos, verificam pacotes no momento da instalação e avisam quando um segredo é escrito num ficheiro — ver [docs/hooks.md](docs/hooks.md).
 - Uma **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuração de hosts, um resumo no terminal e um dashboard HTML.
 

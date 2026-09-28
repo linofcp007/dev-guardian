@@ -261,6 +261,7 @@ export const PACK_CONSUMERS: Readonly<Record<string, string>> = {
   'bugfix-php.yml': '`bug_hunt`',
   'bugfix-py.yml': '`bug_hunt`',
   'bugfix-rs.yml': '`bug_hunt`',
+  'llm.yml': '`scan_sast` (and so `security_scan_full` and `review_pr`), on every native Semgrep run',
   'rgpd.yml': '`compliance_check`',
   'routes.yml': '`map_attack_surface` (and so `scan_dast` and `validate_finding`)',
 };
