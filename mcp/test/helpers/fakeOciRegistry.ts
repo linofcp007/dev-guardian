@@ -54,7 +54,7 @@ export const UNTRUSTED_CERT_PEM = [
 ].join('\n');
 
 /** The artifact kinds a failure can be injected into. */
-export type FaultTarget = 'manifest' | 'sig' | 'att' | 'sbom' | 'referrers' | 'referrer-manifest';
+export type FaultTarget = 'manifest' | 'sig' | 'att' | 'sbom' | 'referrers' | 'referrer-manifest' | 'referrer-blob';
 
 export interface FakeImageOptions {
   /**
@@ -84,7 +84,18 @@ export interface FakeImageOptions {
    * cosign v3 signature, `https://slsa.dev/provenance/v1` for provenance).
    */
   referrerBundles?: readonly string[];
-  /** HTTP status to answer instead, per artifact kind (500, 429, …). */
+  /**
+   * REAL Sigstore bundles (their JSON, as `cosign download signature` prints
+   * one) attached as OCI referrers — they parse, so cosign returns them; they
+   * were signed for another image, so `verify` rejects them. The annotation
+   * names the DSSE payload's predicate type, as cosign's own push does.
+   */
+  realBundles?: readonly string[];
+  /**
+   * HTTP status to answer instead, per artifact kind (500, 429, …).
+   * `referrer-blob`: the layer of every bundle referrer — what `tree` never
+   * fetches and cosign's `GetBundles` skips in silence when it fails.
+   */
   faults?: Partial<Record<FaultTarget, number>>;
 }
 
@@ -210,9 +221,20 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
     putManifest({ schemaVersion: 2, mediaType: OCI_MANIFEST, config: descriptor(OCI_CONFIG, emptyConfig), layers }, [`sha256-${hex}.att`], 'att');
   }
 
-  for (const predicateType of opts.referrerBundles ?? []) {
-    const layer = json({ mediaType: BUNDLE, note: `not a real bundle (${predicateType})` });
-    blob(layer);
+  const bundleBlobs = new Set<string>();
+  const bundles: Array<{ layer: Buffer; predicateType: string }> = [
+    ...(opts.referrerBundles ?? []).map((predicateType) => ({
+      layer: json({ mediaType: BUNDLE, note: `not a real bundle (${predicateType})` }),
+      predicateType,
+    })),
+    ...(opts.realBundles ?? []).map((text) => {
+      const parsed = JSON.parse(text) as { dsseEnvelope?: { payload?: string } };
+      const statement = JSON.parse(Buffer.from(parsed.dsseEnvelope?.payload ?? '', 'base64').toString('utf8')) as { predicateType?: string };
+      return { layer: Buffer.from(text.trim()), predicateType: statement.predicateType ?? 'unknown' };
+    }),
+  ];
+  for (const { layer, predicateType } of bundles) {
+    bundleBlobs.add(blob(layer));
     const annotations = { 'dev.sigstore.bundle.content': 'dsse-envelope', 'dev.sigstore.bundle.predicateType': predicateType };
     const stored = putManifest(
       {
@@ -268,6 +290,10 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
       return 200;
     }
     if (what === 'blobs') {
+      if (faults['referrer-blob'] !== undefined && bundleBlobs.has(ref ?? '')) {
+        fail(res, faults['referrer-blob'], 'injected referrer-blob failure');
+        return faults['referrer-blob'];
+      }
       const body = blobs.get(ref ?? '');
       if (body === undefined) {
         fail(res, 404, 'blob unknown');

@@ -21,13 +21,17 @@ version bump.
   low, `image-no-provenance` info), and `image_signature` says an existing signature's signer was NOT
   verified. cosign swallows some registry errors, so every "absent" and every rejection is confirmed by
   a call that fails loudly; a registry error is `unknown`, never absent. cosign missing, older than
-  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network or registry
-  failure withholds a verdict: a junk, unparseable or non-Sigstore artifact anyone can attach is no
-  signature, and a signature that does not verify is a rejection. A rejection is re-measured only by a
-  verification against the same signer (`ToolRun.signer`), and a rejection for another signer is a new
-  finding. An unanchored signer regexp is warned about. One registry fault cosign cannot see (a
-  referrers API answering with the wrong Content-Type) makes a signed image read unsigned — see
-  `SECURITY.md`. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
+  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network, registry or
+  Sigstore-service failure withholds a verdict — a Rekor answer only as a 5xx, a 429 or a network
+  failure (Rekor answers 400 for a signature that does not verify: a rejection). A junk, unparseable or
+  non-Sigstore artifact anyone can attach is no signature, and a signature that does not verify is a
+  rejection; echoed identities never decide either way. A referrer whose manifest or bundle the registry
+  fails to serve — which cosign skips in silence — is read from cosign's `-d` request log and reported
+  unknown, never unsigned or rejected. A rejection is re-measured only by a verification against the same
+  signer (`ToolRun.signer`), and a rejection for another signer is a new finding. An unanchored signer
+  regexp is warned about. One registry fault no request reveals (a referrers API answering with the
+  wrong Content-Type) makes a signed image read unsigned — see `SECURITY.md`. New bookkeeping names
+  `cosign-verify`, `cosign-tree`, `cosign`.
 - `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in

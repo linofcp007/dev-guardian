@@ -17,9 +17,10 @@
  * The existence cases need nothing but the fake registry on 127.0.0.1.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   detectImageSupplyChain,
@@ -29,6 +30,7 @@ import {
 } from '../../src/runners/cosignCheck.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { startFakeRegistry, UNTRUSTED_CERT_PEM, type FakeImageOptions } from '../helpers/fakeOciRegistry.js';
+import { startFakeRekor } from '../helpers/fakeRekor.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'guardian-cosign-e2e-'));
@@ -66,6 +68,14 @@ if (NOT_READY === null && !TUF_READY && REQUIRED) {
 
 const SIGN = 'https://sigstore.dev/cosign/sign/v1';
 const SLSA_V1 = 'https://slsa.dev/provenance/v1';
+/**
+ * A real v3 signing bundle, as `cosign download signature` printed it for
+ * ghcr.io/sigstore/cosign/cosign:v3.1.3 (2026-09-28): public, parseable, and
+ * signed for that image — so here it parses and never verifies.
+ */
+const REAL_BUNDLE = readFileSync(fileURLToPath(new URL('../fixtures/cosign/signing-bundle.json', import.meta.url)), 'utf8');
+/** A blob answering 500 costs go-containerregistry's retries on every call that fetches it. */
+const E2E_TIMEOUT_SLOW = 240_000;
 
 async function withRegistry<T>(opts: FakeImageOptions, fn: (reg: Awaited<ReturnType<typeof startFakeRegistry>>) => Promise<T>): Promise<T> {
   const reg = await startFakeRegistry(opts);
@@ -170,6 +180,38 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
+  // Round 3, I3: a REAL signing bundle, its blob served, failing, or gone.
+  it('I3: a real signing bundle served: present', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE] }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary.signature).toBe('present_unverified');
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(false);
+    });
+  }, E2E_TIMEOUT);
+
+  it('I3: its blob answers 500 — cosign returns nothing and says nothing; the trace shows the 500: unknown, never "unsigned"', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 500 } }, async (reg) => {
+      const dl = await raw(['download', 'signature', reg.image]);
+      expect(dl.stderr).toMatch(/no signatures associated/);
+
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('failed');
+      expect(c.summary.signature).toBe('unknown');
+      expect(c.summary.provenance).toBe('unknown');
+      expect(c.run.reason).toMatch(/500/);
+      expect(c.findings).toEqual([]);
+    });
+  }, E2E_TIMEOUT_SLOW);
+
+  it('I3: its blob answers 404 — listed but unreadable is no signature: "unsigned"', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 404 } }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('ok');
+      expect(c.summary.signature).toBe('absent');
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(true);
+    });
+  }, E2E_TIMEOUT);
+
   // A KNOWN blind spot, pinned so a cosign / go-containerregistry that fixes
   // it shows up here: a referrers answer whose Content-Type is not exactly
   // the OCI index type is read as "no referrers API", the tag fallback finds
@@ -242,12 +284,57 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
       });
     }, E2E_TIMEOUT);
 
-    it('a legacy signature whose certificate Fulcio never issued is never a pass: rejected, or — if Rekor cannot be reached — withheld as a network failure', async () => {
-      await withRegistry({ legacySignature: UNTRUSTED_CERT_PEM }, async (reg) => {
+    // Round 3, I1 — deterministic: a legacy signature with a parseable
+    // certificate sends cosign to Rekor's search, here a fake Rekor
+    // (COSIGN_REKOR_URL; the argv dev-guardian builds is unchanged). cosign
+    // frames every Rekor error `searching log query:`, a 400 included — and
+    // Rekor answers 400 when the signature does not verify.
+    it.each([
+      ['400 (Rekor rejects the signature)', { status: 400, body: { code: 400, message: 'verifying signature: invalid signature when validating ASN.1 encoded signature' } }, 'rejected'],
+      ['200 [] (not in the transparency log)', { status: 200, body: [] }, 'rejected'],
+      ['422 (any other 4xx)', { status: 422, body: { code: 422, message: 'unprocessable' } }, 'rejected'],
+      ['503 (the service is down)', { status: 503, body: { code: 503, message: 'unavailable' } }, 'unknown'],
+      ['429 (rate limited)', { status: 429, body: { code: 429, message: 'slow down' } }, 'unknown'],
+    ] as const)('I1: Rekor answering %s → %s', async (_name, answer, expected) => {
+      const rekor = await startFakeRekor(answer);
+      try {
+        await withRegistry({ legacySignature: UNTRUSTED_CERT_PEM }, async (reg) => {
+          const c = await verifyImage(reg.image, policy, { ...ctx, env: { ...ENV, COSIGN_REKOR_URL: rekor.url } });
+          expect(rekor.requests.length, 'cosign searched the fake Rekor').toBeGreaterThan(0);
+          expect(c.summary.signature).toBe(expected);
+          if (expected === 'rejected') expect(c.findings.map((f) => f.severity)).toEqual(['high']);
+          else expect(c.findings).toEqual([]);
+        });
+      } finally {
+        await rekor.close();
+      }
+    }, E2E_TIMEOUT);
+
+    // Round 3, I3: a REAL (parseable) signing bundle — signed for another
+    // image — attached as a referrer, its blob served or not.
+    it('I3: the bundle served — cosign verify reads it and rejects it (it signs another digest): REJECTED', async () => {
+      await withRegistry({ realBundles: [REAL_BUNDLE] }, async (reg) => {
         const c = await verifyImage(reg.image, policy, ctx);
-        expect(['rejected', 'unknown']).toContain(c.summary.signature);
-        if (c.summary.signature === 'unknown') expect(c.run.reason).toMatch(/searching log query|giving up after|dial tcp|tls: /);
-        else expect(c.findings.map((f) => f.severity)).toEqual(['high']);
+        expect(c.summary.signature).toBe('rejected');
+        expect(c.findings.map((f) => f.severity)).toEqual(['high']);
+      });
+    }, E2E_TIMEOUT);
+
+    it('I3: its blob answers 500 — verify says "no signatures found" twice, the trace shows the 500: NO verdict', async () => {
+      await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 500 } }, async (reg) => {
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(c.run.status).toBe('failed');
+        expect(c.run.reason).toMatch(/the registry failed to serve what cosign tree lists/);
+        expect(c.run.reason).toMatch(/500/);
+        expect(c.findings).toEqual([]);
+      });
+    }, E2E_TIMEOUT_SLOW);
+
+    it('I3: its blob answers 404 — listed but could not be read: REJECTED', async () => {
+      await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 404 } }, async (reg) => {
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(c.summary.signature).toBe('rejected');
+        expect(c.findings[0]?.message).toMatch(/could not be read or parsed/);
       });
     }, E2E_TIMEOUT);
 

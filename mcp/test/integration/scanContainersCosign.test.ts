@@ -105,6 +105,29 @@ function bundleLine(predicateType: string): string {
     dsseEnvelope: { payload: Buffer.from(statement).toString('base64'), payloadType: 'application/vnd.in-toto+json', signatures: [] },
   });
 }
+/**
+ * A `cosign … -d` trace (go-containerregistry's request log, as cosign 3.1.3
+ * prints it): each digest fetched with the answer given — a status, or a
+ * transport error.
+ */
+function traceOf(answers: Array<[string, number | string]>): string {
+  const T = '2026/09/28 23:03:02';
+  return answers
+    .flatMap(([digest, answer]) => {
+      const url = `https://ghcr.io/v2/org/app/${digest.startsWith('sha256:') ? 'blobs' : 'manifests'}/${digest.replace(/^m:/, '')}`;
+      return typeof answer === 'number'
+        ? [`${T} --> GET ${url}`, `${T} <-- ${answer} ${url} (1ms)`, `HTTP/1.1 ${answer}`, '']
+        : [`${T} --> GET ${url}`, `${T} <-- ${answer} GET ${url} (2ms)`, ''];
+    })
+    .join('\n');
+}
+/** Every digest a tree listing names (referrer manifests and their layers). */
+function listedDigests(treeStdout: string): Array<[string, number]> {
+  const out: Array<[string, number]> = [];
+  for (const m of treeStdout.matchAll(/artifacts via OCI referrer: \S+@(sha256:[0-9a-f]{64})/g)) if (m[1] !== undefined) out.push([`m:${m[1]}`, 200]);
+  for (const m of treeStdout.matchAll(/🍒 (sha256:[0-9a-f]{64})/gu)) if (m[1] !== undefined) out.push([m[1], 200]);
+  return out;
+}
 const NO_SIGNATURES = exit(1, `Error: ${PINNED}: no signatures associated\n`);
 const SIG_500 = exit(1, `Error: ${PINNED}: remote image: GET https://ghcr.io/v2/org/app/manifests/sha256-41e1.sig: UNKNOWN: injected\n`);
 const NO_V1 = exit(1, "Error: no attestations with predicate type 'https://slsa.dev/provenance/v1' found\n");
@@ -130,6 +153,11 @@ interface Answers {
   v02?: ProcessRunResult;
   /** One answer, or one per call in order (the last repeats) — verify may be re-run once. */
   verify?: ProcessRunResult | ProcessRunResult[];
+  /**
+   * What the registry answered in a traced (`-d`) download, per digest
+   * (`m:` for a manifest). Default: every digest the tree answer lists, served.
+   */
+  trace?: Array<[string, number | string]>;
 }
 
 /** Fake cosign: answers by subcommand; Trivy and everything else succeed with no output. */
@@ -147,9 +175,17 @@ function fakeCosign(answers: Answers): void {
     if (args[0] === 'triangulate') return answers.triangulate ?? TRIANGULATED;
     if (args[0] === 'tree') return answers.tree ?? out(TREE_NONE);
     if (args[0] === 'verify') return (Array.isArray(answers.verify) ? undefined : answers.verify) ?? VERIFIED_SIGNATURE;
-    if (args[0] === 'download' && args[1] === 'signature') return answers.signature ?? NO_SIGNATURES;
-    if (args[0] === 'download' && args.includes('--predicate-type=https://slsa.dev/provenance/v1')) return answers.v1 ?? NO_V1;
-    if (args[0] === 'download') return answers.v02 ?? NO_V02;
+    if (args[0] === 'download') {
+      const base =
+        args[1] === 'signature'
+          ? (answers.signature ?? NO_SIGNATURES)
+          : args.includes('--predicate-type=https://slsa.dev/provenance/v1')
+            ? (answers.v1 ?? NO_V1)
+            : (answers.v02 ?? NO_V02);
+      if (!args.includes('-d')) return base;
+      const trace = traceOf(answers.trace ?? listedDigests(answers.tree?.stdout ?? ''));
+      return { ...base, stderr: `${trace}\n${base.stderr}` };
+    }
     throw new Error(`unexpected cosign call: ${args.join(' ')}`);
   });
 }
@@ -360,6 +396,32 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
     expect(r.image_signature?.note).toContain('https://slsa.dev/provenance/v1');
   });
 
+  // Round 3, I3: cosign skips in silence a referrer it cannot fetch — a
+  // listed bundle the registry failed to serve is never "absent".
+  it('I3: a listed signing bundle whose blob answered 500 — signature unknown (named), no "unsigned" finding', async () => {
+    fakeCosign({
+      tree: out(TREE_SIGN_BUNDLE),
+      trace: [['m:sha256:7d0f35c4822c49b5dd8e8fc6810e6edaa602febe7ac7469b2306b30dfed0c19d', 200], ['sha256:2c7c785bf5657d810a98b5a27d3f2ae49069fb0adc732b836d1f0b1b7e87c9ad', 500]],
+    });
+    const r = await scan({});
+    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/signature unknown \(the registry failed to serve/);
+    expect(run?.reason).toMatch(/500/);
+    expect(r.image_signature).toMatchObject({ signature: 'unknown', provenance: 'unknown' });
+    expect(cosignFindings(r)).toEqual([]);
+  });
+
+  it('I3: the same bundle answered 404 — listed but unreadable is no signature: "unsigned" stands', async () => {
+    fakeCosign({
+      tree: out(TREE_SIGN_BUNDLE),
+      trace: [['m:sha256:7d0f35c4822c49b5dd8e8fc6810e6edaa602febe7ac7469b2306b30dfed0c19d', 200], ['sha256:2c7c785bf5657d810a98b5a27d3f2ae49069fb0adc732b836d1f0b1b7e87c9ad', 404]],
+    });
+    const r = await scan({});
+    expect(r.image_signature).toMatchObject({ signature: 'absent', provenance: 'absent' });
+    expect(cosignFindings(r).map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
+  });
+
   // Review round 2, N1: anyone who can push can attach a referrer. A listing
   // is not a signature: it counts only when cosign parses it as a Sigstore bundle.
   it.each([
@@ -369,8 +431,8 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   ])('N1: %s is no signature — "unsigned" (and no provenance) stands', async (_name, type) => {
     const listing = [
       `📦 Supply Chain Security Related artifacts for an image: ${PINNED}`,
-      `└── 🔗 ${type} artifacts via OCI referrer: ghcr.io/org/app@sha256:bc9e5912af702e3d84909a74d1a659ca6000000000000000000000000000000`,
-      '   └── 🍒 sha256:cccc',
+      `└── 🔗 ${type} artifacts via OCI referrer: ghcr.io/org/app@sha256:bc9e5912af702e3d84909a74d1a659ca60000000000000000000000000000000`,
+      '   └── 🍒 sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       '',
     ].join('\n');
     fakeCosign({ tree: out(listing) });
@@ -457,6 +519,39 @@ describe('scan_containers + cosign: with a signer (real verification)', () => {
     expect(cosignFindings(r).map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
     expect(cosignFindings(r)[0]?.message).toContain('https://sigstore.dev/cosign/sign/v1');
     expect(r.image_signature?.signature).toBe('rejected');
+  });
+
+  // Round 3, I3: "no signatures found" twice, with a signing bundle listed —
+  // the registry's own answer for that bundle, from cosign's -d trace, decides.
+  const BUNDLE_ART = 'm:sha256:7d0f35c4822c49b5dd8e8fc6810e6edaa602febe7ac7469b2306b30dfed0c19d';
+  const BUNDLE_BLOB = 'sha256:2c7c785bf5657d810a98b5a27d3f2ae49069fb0adc732b836d1f0b1b7e87c9ad';
+  it.each([
+    ['its blob answered 500', 500],
+    ['its blob answered 429', 429],
+    ['the connection dropped mid-blob', 'read tcp 10.0.0.2:5->1.2.3.4:443: read: connection reset by peer'],
+  ])('I3: the listed bundle %s — NO verdict, never a HIGH', async (_name, blobAnswer) => {
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), tree: out(TREE_SIGN_BUNDLE), trace: [[BUNDLE_ART, 200], [BUNDLE_BLOB, blobAnswer]] });
+    const r = await scan(signer);
+    const run = r.tools_run.find((t) => t.name === 'cosign-verify');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/the registry failed to serve what cosign tree lists/);
+    expect(cosignFindings(r)).toEqual([]);
+    expect(r.image_signature?.signature).toBe('unknown');
+  });
+
+  it('I3: the listed bundle answered 404 — listed but could not be read: REJECTED', async () => {
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), tree: out(TREE_SIGN_BUNDLE), trace: [[BUNDLE_ART, 200], [BUNDLE_BLOB, 404]] });
+    const r = await scan(signer);
+    expect(cosignFindings(r).map((f) => f.severity)).toEqual(['high']);
+    expect(cosignFindings(r)[0]?.message).toMatch(/could not be read or parsed/);
+  });
+
+  it('I3: a bundle whose manifest the trace never shows fetched cannot be probed — no verdict', async () => {
+    const other = 'm:sha256:1111111111111111111111111111111111111111111111111111111111111111';
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), tree: out(TREE_SIGN_BUNDLE), trace: [[other, 200]] });
+    const r = await scan(signer);
+    expect(r.tools_run.find((t) => t.name === 'cosign-verify')?.reason).toMatch(/could not be probed/);
+    expect(cosignFindings(r)).toEqual([]);
   });
 
   it('a re-run that verifies (the first answer came from a failed referrers call) is a verification', async () => {

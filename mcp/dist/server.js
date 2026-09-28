@@ -47391,26 +47391,105 @@ function parseCosignTree(stdout, stderr) {
     signature: false,
     legacyAttestations: false,
     referrerTypes: [],
+    referrers: [],
     fetchErrors: stderr.split(/\r?\n/).filter((l) => TREE_FETCH_ERROR.test(l.trim()))
   };
   let recognised = false;
+  let current = null;
   for (const line of lines) {
     if (TREE_NONE.test(line) || TREE_SBOMS.test(line)) {
       recognised = true;
+      current = null;
     } else if (TREE_SIGNATURES.test(line)) {
       recognised = true;
       listing.signature = true;
+      current = null;
     } else if (TREE_ATTESTATIONS.test(line)) {
       recognised = true;
       listing.legacyAttestations = true;
-    } else {
-      const type = TREE_REFERRER.exec(line)?.[1];
-      if (type === void 0) continue;
+      current = null;
+    } else if (TREE_REFERRER.test(line)) {
+      const m = TREE_REFERRER_FULL.exec(line);
+      const type = TREE_REFERRER.exec(line)?.[1] ?? "";
       recognised = true;
       listing.referrerTypes.push(type);
+      current = { type, digest: m?.[1] ?? "", layers: [] };
+      listing.referrers.push(current);
+    } else {
+      const layer = TREE_LAYER.exec(line)?.[1];
+      if (layer !== void 0 && current !== null) current.layers.push(layer);
     }
   }
   return recognised ? listing : null;
+}
+var TREE_REFERRER_FULL = /artifacts via OCI referrer: \S+@(sha256:[0-9a-f]{64})\s*$/;
+var TREE_LAYER = /🍒 (sha256:[0-9a-f]{64})\s*$/u;
+var TRACE_ANSWER = /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} <-- (.+)$/;
+var TRACE_REQUEST = /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} --> /;
+var TRACE_STATUS = /^(\d{3}) (\S+)/;
+var TRACE_TRANSPORT_ERROR = /^(.+?) (?:GET|HEAD|POST|PUT|PATCH|DELETE) (\S+) \(/;
+var DIGEST_HEX = /(?:sha256[:/](?:[0-9a-f]{2}\/)?)([0-9a-f]{64})/;
+function parseRegistryTrace(stderr) {
+  const lines = stderr.split(/\r?\n/);
+  if (!lines.some((l) => TRACE_REQUEST.test(l))) return null;
+  const answers = [];
+  for (const line of lines) {
+    const body = TRACE_ANSWER.exec(line)?.[1];
+    if (body === void 0) continue;
+    const status = TRACE_STATUS.exec(body);
+    if (status?.[1] !== void 0 && status[2] !== void 0) {
+      answers.push({ hex: DIGEST_HEX.exec(status[2])?.[1] ?? null, status: Number(status[1]), detail: `${status[1]} ${status[2].replace(/\?.*$/, "")}` });
+      continue;
+    }
+    const err = TRACE_TRANSPORT_ERROR.exec(body);
+    if (err?.[1] !== void 0 && err[2] !== void 0) {
+      answers.push({ hex: DIGEST_HEX.exec(err[2])?.[1] ?? null, status: null, detail: `${err[1]} (${err[2].replace(/\?.*$/, "")})` });
+    }
+  }
+  const out = /* @__PURE__ */ new Map();
+  for (let i2 = 0; i2 < answers.length; i2++) {
+    const a2 = answers[i2];
+    if (a2 === void 0 || a2.hex === null) continue;
+    let final = a2;
+    for (let j = i2; final.status !== null && final.status >= 300 && final.status < 400; ) {
+      j += 1;
+      const next = answers[j];
+      if (next === void 0) break;
+      final = next;
+    }
+    const outcome = final.status !== null && final.status >= 200 && final.status < 300 ? "served" : final.status === 404 ? "missing" : "failed";
+    out.set(a2.hex, { outcome, detail: escapeUnsafe(clip2(final.detail)) });
+  }
+  return out;
+}
+function referrerFaults(tree, trace) {
+  if (tree.referrers.length === 0) return null;
+  const failed = [];
+  const unprobed = [];
+  const answerFor2 = (digest) => {
+    const hex = DIGEST_HEX.exec(digest)?.[1];
+    return hex === void 0 || trace === null ? void 0 : trace.get(hex);
+  };
+  for (const ref of tree.referrers) {
+    const manifest = answerFor2(ref.digest);
+    if (manifest === void 0) {
+      unprobed.push(ref.digest || ref.type);
+      continue;
+    }
+    if (manifest.outcome === "failed") {
+      failed.push(`${ref.type} referrer ${ref.digest}: the registry answered ${manifest.detail}`);
+      continue;
+    }
+    if (manifest.outcome === "served") {
+      for (const layer of ref.layers) {
+        const answer = answerFor2(layer);
+        if (answer?.outcome === "failed") failed.push(`${ref.type} referrer ${ref.digest}: its bundle ${layer} \u2014 the registry answered ${answer.detail}`);
+      }
+    }
+  }
+  if (failed.length > 0) return `the registry failed to serve what cosign tree lists \u2014 ${failed.join("; ")}`;
+  if (unprobed.length > 0) return `${unprobed.length} referrer(s) cosign tree lists could not be probed (not fetched in cosign's trace)`;
+  return null;
 }
 function signatureFromTree(tree) {
   if (tree.signature) return "present";
@@ -47423,7 +47502,7 @@ function treeListsAnything(tree) {
 function classifySignatureDownload(r) {
   const none = { state: "unknown", attestationTypes: [] };
   if (r.outcome === "failed") {
-    return /no signatures associated/.test(r.stderr) ? { state: "absent", attestationTypes: [] } : none;
+    return /^Error: .*no signatures associated/m.test(r.stderr) ? { state: "absent", attestationTypes: [] } : none;
   }
   if (r.outcome !== "completed" && r.outcome !== "output_too_large") return none;
   let signature = false;
@@ -47470,7 +47549,7 @@ function dssePredicateType(envelope) {
 function classifyAttestationDownload(r) {
   if (r.outcome === "output_too_large") return "present";
   if (r.outcome === "completed") return r.stdout.trim().length > 0 ? "present" : "unknown";
-  if (r.outcome === "failed" && /no attestations with predicate type/.test(r.stderr)) return "absent";
+  if (r.outcome === "failed" && /^Error: .*no attestations with predicate type/m.test(r.stderr)) return "absent";
   return "unknown";
 }
 var IDENTITY_MISMATCH = /none of the expected identities matched|no matching CertificateIdentity found|expected (?:SAN|issuer) value/;
@@ -47492,21 +47571,49 @@ var NETWORK = new RegExp(
     "server misbehaving",
     "network is unreachable",
     "proxyconnect",
+    // go-retryablehttp giving up — it retries only a 5xx, a 429 or a network failure.
     "giving up after \\d+ attempt",
     "server gave HTTP response to HTTPS client",
+    // A body that stopped arriving (round 3, M1): HTTP/2 stream resets and
+    // GOAWAY, a connection closed mid-read (Windows: wsarecv / wsasend).
+    "stream error",
+    "INTERNAL_ERROR",
+    "http2: ",
+    "GOAWAY",
+    "wsarecv",
+    "wsasend",
+    "forcibly closed",
+    "broken pipe",
+    "connection aborted",
     // Go's url.Error: `Post "<url>": <cause>` (the URL is an echo, removed first).
     '\\b(?:Get|Post|Head|Put|Patch|Delete) "\u2026": '
   ].join("|")
 );
 var REGISTRY = /\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (?:[A-Z][A-Z_]+\b|unexpected status code)|unexpected status code \d{3}|remote image: |image tag not found|getting referrers|Error fetching /;
-var SIGSTORE_SERVICE = /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|searching log query|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+var SIGSTORE_SERVICE = /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+var SERVICE_STATUS = /\]\[(?:5\d\d|429)\]|\bstatus (?:5\d\d|429):/;
 function stripEchoes(stderr) {
-  return stderr.replace(/got subjects \[[^\n]*/g, "got subjects [\u2026]").replace(/"(?:[^"\\\n]|\\.)*"/g, '"\u2026"').replace(/`[^`\n]*`/g, "`\u2026`");
+  return stderr.replace(/(?:none of the expected identities matched|no matching CertificateIdentity found|failed to verify certificate identity)[^\n]*/g, "<identity mismatch>").replace(/\bexpected [^\n]*?\bvalue\b[^\n]*/g, "<expected value>").replace(/\bgot "[^\n]*/g, "<got value>").replace(/got subjects \[[^\n]*/g, "got subjects [\u2026]").replace(/"[^"\n]*"/g, '"\u2026"').replace(/`[^`\n]*`/g, "`\u2026`");
 }
 function withheld(stderr) {
   const own = stripEchoes(stderr);
-  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own);
+  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own) || SERVICE_STATUS.test(own);
 }
+function errorBlock(stderr) {
+  const lines = stderr.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith("Error: "));
+  if (start < 0) return null;
+  const parts = [];
+  for (let i2 = start; i2 < lines.length; i2++) {
+    const line = lines[i2] ?? "";
+    if (i2 > start && (line.startsWith("error during command execution:") || line.startsWith("Error: "))) break;
+    const text = (i2 === start ? line.slice("Error: ".length) : line).trim();
+    if (text.length > 0) parts.push(text);
+  }
+  const joined = parts.join(" | ");
+  return joined.length > 800 ? `${joined.slice(0, 799)}\u2026` : joined;
+}
+var NETWORKISH = /timeout|timed out|connection|network|dial|\bEOF\b|reset|refused|unavailable|temporar|stream error|GOAWAY|TLS|rate limit/i;
 function classifyVerify(r) {
   if (r.outcome === "completed") return { verdict: "verified", ...verifiedPayloads(r.stdout) };
   if (r.outcome !== "failed") return { verdict: "error", detail: `cosign verify ${r.outcome.replace(/_/g, " ")}` };
@@ -47516,16 +47623,10 @@ function classifyVerify(r) {
   if (r.exitCode === 10) return { verdict: "no_signature_claimed", detail };
   if (BAD_REGEXP.test(r.stderr)) return { verdict: "error", detail: `a signer regexp cosign cannot compile \u2014 ${detail}` };
   if (r.exitCode === 11 || withheld(r.stderr)) return { verdict: "error", detail };
-  if (IDENTITY_MISMATCH.test(r.stderr)) {
-    const line = r.stderr.split(/\r?\n/).find((l) => IDENTITY_MISMATCH.test(l)) ?? detail;
-    return {
-      verdict: "rejected",
-      reason: "no_matching_signature",
-      detail: escapeUnsafe(clip2(line.replace(/^Error:\s*/, "").replace(/^no matching (?:signatures|attestations):\s*/, "").trim()))
-    };
-  }
-  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: "rejected", reason: "no_certificate", detail };
-  return { verdict: "rejected", reason: "invalid_signature", detail };
+  const all = escapeUnsafe(errorBlock(r.stderr) ?? detail);
+  if (IDENTITY_MISMATCH.test(r.stderr)) return { verdict: "rejected", reason: "no_matching_signature", detail: all };
+  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: "rejected", reason: "no_certificate", detail: all };
+  return { verdict: "rejected", reason: "invalid_signature", detail: all };
 }
 function verifiedPayloads(stdout) {
   const types = [];
@@ -47587,6 +47688,7 @@ function firstError(stderr) {
     const line = raw.trim();
     if (line.startsWith("Error: ")) return clip2(line.slice("Error: ".length));
   }
+  if (TRACE_REQUEST.test(stderr.split(/\r?\n/).find((l) => TRACE_REQUEST.test(l)) ?? "")) return null;
   const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0 && !l.startsWith('Command "triangulate" is deprecated'));
   return first === void 0 ? null : clip2(first);
 }
@@ -47597,15 +47699,19 @@ var UNVERIFIED_NOTE = "A signature exists, but its signer was NOT verified: anyo
 function skippedSummary(image, reason) {
   return { image, checked: null, check: "skipped", signature: "unknown", provenance: "unknown", note: `Not checked: ${reason}.` };
 }
-async function cosign(args, ctx) {
+var TRACED_CAP_BYTES = 32 * 1024 * 1024;
+async function cosign(args, ctx, traced = false) {
+  const [sub, ...rest] = args;
+  const withTrace = traced && sub !== void 0 ? [sub, ...sub === "download" && rest[0] !== void 0 ? [rest[0], "-d", ...rest.slice(1)] : ["-d", ...rest]] : args;
   return runProcess({
     command: "cosign",
-    args,
+    args: withTrace,
     cwd: ctx.cwd,
     env: ctx.env,
     timeoutMs: COSIGN_TIMEOUT_MS,
+    ...traced ? { stdoutCapBytes: TRACED_CAP_BYTES } : {},
     ...ctx.signal !== void 0 ? { signal: ctx.signal } : {},
-    ...ctx.onLog !== void 0 ? { onLog: ctx.onLog } : {}
+    ...ctx.onLog !== void 0 && !traced ? { onLog: ctx.onLog } : {}
   });
 }
 async function cosignReadiness(ctx) {
@@ -47678,14 +47784,14 @@ async function settleNoSignature(ref, policy, claim, ctx) {
   if (!treeListsAnything(tree)) {
     if (aborted3(ctx)) return { v: { verdict: "error", detail: "cancelled" }, cancelled: true };
     const dl = await cosign(["download", "signature", ref], ctx);
-    const answer = classifySignatureDownload(dl);
-    if (answer.state === "absent") {
+    const answer2 = classifySignatureDownload(dl);
+    if (answer2.state === "absent") {
       return {
         v: { verdict: "rejected", reason: "no_signature", detail: `${claim} \u2014 nothing is attached to this digest (cosign tree lists nothing, and the .sig tag holds none)` },
         cancelled: false
       };
     }
-    if (answer.state === "unknown") {
+    if (answer2.state === "unknown") {
       return {
         v: { verdict: "error", detail: `cosign verify said "${claim}", which could not be confirmed: cosign download signature did not answer \u2014 ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}` },
         cancelled: dl.outcome === "cancelled"
@@ -47696,11 +47802,33 @@ async function settleNoSignature(ref, policy, claim, ctx) {
   const again = await cosign(verifyArgs(ref, policy), ctx);
   const v = classifyVerify(again);
   if (v.verdict !== "no_signature_claimed") return { v, cancelled: again.outcome === "cancelled" };
+  if (aborted3(ctx)) return { v: { verdict: "error", detail: "cancelled" }, cancelled: true };
+  const probe2 = await cosign(["download", "signature", ref], ctx, true);
+  const answer = classifySignatureDownload(probe2);
+  if (answer.state === "present" || answer.state === "attestation_only") {
+    return {
+      v: {
+        verdict: "error",
+        detail: `cosign verify found no signature twice, but cosign download signature now returns ${answer.state === "present" ? "one" : "a signed attestation"} \u2014 the registry answered differently; not a verdict`
+      },
+      cancelled: false
+    };
+  }
+  const fault = referrerFaults(tree, parseRegistryTrace(probe2.stderr));
+  if (fault !== null) {
+    return { v: { verdict: "error", detail: `cosign verify said "${claim}", but ${fault} \u2014 not a verdict` }, cancelled: probe2.outcome === "cancelled" };
+  }
+  if (answer.state === "unknown" && tree.signature) {
+    return {
+      v: { verdict: "error", detail: `cosign verify said "${claim}", and the .sig tag cosign tree lists could not be read \u2014 ${escapeUnsafe(firstError(probe2.stderr) ?? probe2.outcome)}` },
+      cancelled: probe2.outcome === "cancelled"
+    };
+  }
   return {
     v: {
       verdict: "rejected",
       reason: "no_signature",
-      detail: `cosign tree lists ${describeListed(tree)} for this digest, but cosign verify found no signature it can use \u2014 twice, while the registry answered. An artifact cosign cannot parse as a Sigstore signature, or that is not one, is no signature: anyone who can push to the repository can attach one`
+      detail: `cosign tree lists ${describeListed(tree)} for this digest, but it could not be read or parsed as a Sigstore signature \u2014 the registry served each one (or answered 404), and cosign verify found no signature it can use, twice. An artifact cosign cannot read or parse as a Sigstore signature, or that is not one, is no signature: anyone who can push to the repository can attach one`
     },
     cancelled: false
   };
@@ -47766,7 +47894,7 @@ async function verifyImage(image, policy, ctx) {
     category: "security",
     subcategory: "supply-chain",
     title: titles[v.reason],
-    message: `cosign verify rejected ${pinned.checked ?? image} for ${who}: ${v.detail}. Nothing shows this image was built and signed by the identity you expect \u2014 do not deploy it until it verifies (or correct signer_identity / signer_issuer if the image is legitimately signed by another workflow).`,
+    message: `cosign verify rejected ${pinned.checked ?? image} for ${who}: ${v.detail}. Nothing shows this image was built and signed by the identity you expect \u2014 do not deploy it until it verifies (or correct signer_identity / signer_issuer if the image is legitimately signed by another workflow).` + (NETWORKISH.test(v.detail) ? " The detail above names what reads like a network or service error, which cosign did not frame as one: re-run the scan before acting on this finding." : ""),
     file_path: image,
     // The signer is part of what this finding says: a rejection for another
     // signer is another finding, never this one unchanged.
@@ -47809,12 +47937,19 @@ async function detectImageSupplyChain(image, ctx) {
     signatureWhy = "cancelled";
     cancelled = true;
   } else {
-    const dl = await cosign(["download", "signature", pinned.ref], ctx);
+    const dl = await cosign(["download", "signature", pinned.ref], ctx, true);
     const answer = classifySignatureDownload(dl);
     signature = answer.state;
     attestationTypes = answer.attestationTypes;
     if (dl.outcome === "cancelled") cancelled = true;
     if (answer.state === "unknown") signatureWhy = `cosign download signature did not answer \u2014 ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}`;
+    if (signature !== "present" && signature !== "unknown") {
+      const fault = referrerFaults(tree, parseRegistryTrace(dl.stderr));
+      if (fault !== null) {
+        signature = "unknown";
+        signatureWhy = fault;
+      }
+    }
   }
   let provenance = "unknown";
   let provenanceWhy;
@@ -47825,14 +47960,21 @@ async function detectImageSupplyChain(image, ctx) {
         cancelled = true;
         break;
       }
-      const r = await cosign(["download", "attestation", `--predicate-type=${type}`, pinned.ref], ctx);
+      const r = await cosign(["download", "attestation", `--predicate-type=${type}`, pinned.ref], ctx, true);
       if (r.outcome === "cancelled") {
         cancelled = true;
         break;
       }
-      const answer = classifyAttestationDownload(r);
-      answers.push(answer);
+      let answer = classifyAttestationDownload(r);
       if (answer === "unknown") provenanceWhy = `cosign download attestation did not answer \u2014 ${escapeUnsafe(firstError(r.stderr) ?? r.outcome)}`;
+      if (answer === "absent") {
+        const fault = referrerFaults(tree, parseRegistryTrace(r.stderr));
+        if (fault !== null) {
+          answer = "unknown";
+          provenanceWhy = fault;
+        }
+      }
+      answers.push(answer);
       if (answer === "present") break;
     }
     provenance = answers.includes("present") ? "present" : answers.length === PROVENANCE_PREDICATE_TYPES.length && answers.every((a2) => a2 === "absent") ? "absent" : "unknown";

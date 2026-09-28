@@ -18,6 +18,8 @@ import {
   classifyTriangulate,
   classifyVerify,
   parseCosignTree,
+  parseRegistryTrace,
+  referrerFaults,
   readinessFromProbe,
   signatureFromTree,
   treeListsAnything,
@@ -365,5 +367,188 @@ describe('unanchoredSignerRegexps (review M3)', () => {
       unanchoredSignerRegexps({ identityRegexp: '^https://github\\.com/org/app/\\.github/workflows/release\\.yml@refs/heads/main$', issuerRegexp: '^https://token\\.actions\\.githubusercontent\\.com\\z' }),
     ).toEqual([]);
     expect(unanchoredSignerRegexps({ identity: 'a@b', issuer: 'https://x' })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review round 3
+// ---------------------------------------------------------------------------
+
+const failedWith = (exitCode: number, stderr: string): ProcessRunResult => ({
+  outcome: 'failed',
+  exitCode,
+  stdout: '',
+  stderr,
+  truncated: false,
+});
+
+describe('classifyVerify — a Rekor answer is a verdict unless it is a 5xx, a 429 or a network failure (round 3, I1)', () => {
+  it.each([
+    [
+      'Rekor 400 (it rejects a signature that does not verify against its key) — measured with cosign 3.1.3 + a fake Rekor',
+      'Error: no matching signatures: searching log query: [POST /api/v1/log/entries/retrieve][400] searchLogQueryBadRequest {"code":400,"message":"verifying signature: invalid signature when validating ASN.1 encoded signature"}\n',
+    ],
+    ['Rekor 200 [] — measured', 'Error: no matching signatures: signature not found in transparency log\n'],
+    ['any other Rekor 4xx', 'Error: no matching signatures: searching log query: [POST /api/v1/log/entries/retrieve][422] searchLogQueryUnprocessableEntity {"code":422,"message":"x"}\n'],
+  ])('%s: REJECTED', (_name, stderr) => {
+    expect(classifyVerify(failedWith(12, stderr))).toMatchObject({ verdict: 'rejected', reason: 'invalid_signature' });
+  });
+
+  it.each([
+    ['Rekor 503 through its retries — measured', 'Error: no matching signatures: searching log query: Post "http://localhost:56362/api/v1/log/entries/retrieve": giving up after 4 attempt(s): status 503: {"code":503,"message":"unavailable"}\n'],
+    ['Rekor 429 through its retries — measured', 'Error: no matching signatures: searching log query: Post "http://localhost:56371/api/v1/log/entries/retrieve": giving up after 4 attempt(s): status 429: {"code":429,"message":"slow down"}\n'],
+    ['Rekor 500 without retries', 'Error: no matching signatures: searching log query: [POST /api/v1/log/entries/retrieve][500] searchLogQueryDefault {"code":500,"message":"x"}\n'],
+    ['Rekor unreachable', 'Error: no matching signatures: searching log query: Post "https://rekor.sigstore.dev/api/v1/log/entries/retrieve": dial tcp: lookup rekor.sigstore.dev: no such host\n'],
+  ])('%s: withheld', (_name, stderr) => {
+    expect(classifyVerify(failedWith(12, stderr)).verdict).toBe('error');
+  });
+});
+
+describe('classifyVerify — an echoed identity cannot smuggle a network failure past the strip (round 3, I2)', () => {
+  // sigstore-go prints `expected %s value "%s", got "%s"` UNESCAPED: a quote
+  // in a git ref or a workflow file name breaks any quote pairing.
+  it.each([
+    ['a git ref holding quotes', 'https://github.com/evil/x/.github/workflows/r.yml@refs/heads/a"proxyconnect"b'],
+    ['a workflow file named with quotes', 'https://github.com/evil/x/.github/workflows/a" dial tcp ".yml@refs/heads/main'],
+    ['an i/o timeout between quotes', 'https://github.com/evil/x/.github/workflows/r.yml@refs/heads/"i/o timeout"'],
+  ])('%s in a v3 bundle SAN: rejected', (_name, san) => {
+    const stderr =
+      'Error: no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' +
+      `expected SAN value "https://github.com/org/app/.github/workflows/release.yml@refs/heads/main", got "${san}"\n`;
+    expect(classifyVerify(failedWith(1, stderr))).toMatchObject({ verdict: 'rejected', reason: 'no_matching_signature' });
+  });
+
+  it('the same in a legacy subject list: rejected', () => {
+    const stderr =
+      'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects ' +
+      '[https://github.com/evil/x/.github/workflows/r.yml@refs/heads/a"proxyconnect"b] with issuer https://token.actions.githubusercontent.com\n';
+    expect(classifyVerify(failedWith(12, stderr))).toMatchObject({ verdict: 'rejected', reason: 'no_matching_signature' });
+  });
+
+  it('an EXPECTED identity (the user\'s own text) with quotes cannot either', () => {
+    const stderr =
+      'Error: no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' +
+      'expected SAN value to match regex "^https://github.com/org/"dial tcp"/", got "keyless@projectsigstore.iam.gserviceaccount.com"\n';
+    expect(classifyVerify(failedWith(1, stderr)).verdict).toBe('rejected');
+  });
+});
+
+describe('classifyVerify — body-read failures and the full error list (round 3, M1)', () => {
+  it.each([
+    ['an HTTP/2 stream error', 'Error: no matching signatures: fetching bundle: stream error: stream ID 5; INTERNAL_ERROR; received from peer\n'],
+    ['an HTTP/2 GOAWAY', 'Error: no matching signatures: fetching bundle: http2: server sent GOAWAY and closed the connection; LastStreamID=7, ErrCode=NO_ERROR\n'],
+    ['a connection closed mid-body (Windows)', 'Error: no matching signatures: fetching payload: read tcp 10.0.0.2:50000->140.82.1.1:443: wsarecv: An existing connection was forcibly closed by the remote host.\n'],
+    ['a broken pipe', 'Error: no matching signatures: write tcp 10.0.0.2:50000->140.82.1.1:443: write: broken pipe\n'],
+  ])('%s: withheld', (_name, stderr) => {
+    expect(classifyVerify(failedWith(12, stderr)).verdict).toBe('error');
+  });
+
+  it('exit 12 names every signature error it folded, not only the first line (bounded)', () => {
+    const stderr =
+      'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects [https://github.com/a/b/.github/workflows/c.yml@refs/heads/main] with issuer https://token.actions.githubusercontent.com\n' +
+      ' empty key\n' +
+      'error during command execution: …\n';
+    const r = classifyVerify(failedWith(12, stderr));
+    expect(r.verdict).toBe('rejected');
+    const detail = r.verdict === 'rejected' ? r.detail : '';
+    expect(detail).toContain('got subjects');
+    expect(detail).toContain('empty key');
+    expect(detail.length).toBeLessThanOrEqual(900);
+  });
+});
+
+/** Lines as cosign 3.1.3's `-d` trace prints them (go-containerregistry's logger), measured 2026-09-28. */
+const T = '2026/09/28 23:03:02';
+const IMG = 'sha256:793a57cec5ee88d1c38575cefc16cc65ae89457c508bc2359621099b2caf5021';
+const ART = 'sha256:4894c92a3136586fe332ca198e4abf12498875c546273821726b624107e1311f';
+const LAYER = 'sha256:fe36ea8e8f1231cc1967b305b49ed981156f7dfa3648f836ae1950debfb8655e';
+const traceOf = (...answers: Array<[string, number | string]>): string =>
+  answers
+    .flatMap(([url, answer]) =>
+      typeof answer === 'number'
+        ? [`${T} --> GET ${url}`, `${T} <-- ${answer} ${url} (1ms)`, 'HTTP/1.1 ' + String(answer), '']
+        : [`${T} --> GET ${url}`, `${T} <-- ${answer} GET ${url} (3ms)`, ''],
+    )
+    .join('\n');
+
+describe('parseRegistryTrace — what the registry answered, from cosign -d (round 3, I3)', () => {
+  it('the last answer for each digest wins; 2xx served, 404 missing, 5xx/429/transport failed', () => {
+    const trace = traceOf(
+      [`http://h/v2/app/referrers/${IMG}`, 200],
+      [`http://h/v2/app/manifests/${ART}`, 200],
+      [`http://h/v2/app/blobs/${LAYER}`, 500],
+      [`http://h/v2/app/blobs/${LAYER}`, 500],
+    );
+    const t = parseRegistryTrace(trace);
+    expect(t?.get(ART.slice(7))?.outcome).toBe('served');
+    expect(t?.get(LAYER.slice(7))).toMatchObject({ outcome: 'failed' });
+    expect(parseRegistryTrace(traceOf([`http://h/v2/app/blobs/${LAYER}`, 404]))?.get(LAYER.slice(7))?.outcome).toBe('missing');
+    expect(parseRegistryTrace(traceOf([`http://h/v2/app/blobs/${LAYER}`, 429]))?.get(LAYER.slice(7))?.outcome).toBe('failed');
+    expect(parseRegistryTrace(traceOf([`http://h/v2/app/blobs/${LAYER}`, 'read tcp 1.2.3.4:5->6.7.8.9:443: read: connection reset by peer']))?.get(LAYER.slice(7))?.outcome).toBe('failed');
+  });
+
+  it('a redirect (a registry handing a blob to its CDN — ghcr.io does) is followed to the answer after it', () => {
+    const cdn = `https://pkg-containers.githubusercontent.com/ghcrblobs01/blobs/${LAYER}?se=x&sig=y`;
+    expect(parseRegistryTrace(traceOf([`https://ghcr.io/v2/o/a/blobs/${LAYER}`, 307], [cdn, 200]))?.get(LAYER.slice(7))?.outcome).toBe('served');
+    expect(parseRegistryTrace(traceOf([`https://ghcr.io/v2/o/a/blobs/${LAYER}`, 307], ['https://cdn.example/x/data', 503]))?.get(LAYER.slice(7))?.outcome).toBe('failed');
+  });
+
+  it('only a line that STARTS with the log timestamp counts — a line inside a dumped body never does', () => {
+    const forged = `{"annotations":{"x":"y"},\n"${T} <-- 500 http://h/v2/app/blobs/${LAYER} (1ms)":1}`;
+    const trace = [traceOf([`http://h/v2/app/blobs/${LAYER}`, 200]), forged].join('\n');
+    expect(parseRegistryTrace(trace)?.get(LAYER.slice(7))?.outcome).toBe('served');
+  });
+
+  it('no trace at all: null — nothing could be probed', () => {
+    expect(parseRegistryTrace('Error: localhost:1/app:1: no signatures associated\n')).toBeNull();
+  });
+});
+
+describe('referrerFaults — a referrer tree lists but cosign did not return is never "absent" on its own (round 3, I3)', () => {
+  const tree = parseCosignTree(
+    [
+      '📦 Supply Chain Security Related artifacts for an image: localhost:1/app@' + IMG,
+      `└── 🔗 https://sigstore.dev/cosign/sign/v1 artifacts via OCI referrer: localhost:1/app@${ART}`,
+      `   └── 🍒 ${LAYER}`,
+      '',
+    ].join('\n'),
+    '',
+  );
+
+  it('tree gives each referrer its digest and its layers', () => {
+    expect(tree?.referrers).toEqual([{ type: 'https://sigstore.dev/cosign/sign/v1', digest: ART, layers: [LAYER] }]);
+  });
+
+  it.each([
+    ['its bundle blob answered 500', traceOf([`http://h/v2/app/manifests/${ART}`, 200], [`http://h/v2/app/blobs/${LAYER}`, 500]), /500/],
+    ['its manifest answered 503', traceOf([`http://h/v2/app/manifests/${ART}`, 503]), /503/],
+    ['it was never fetched', traceOf([`http://h/v2/app/referrers/${IMG}`, 200]), /could not be probed/],
+    ['there is no trace', '', /could not be probed/],
+  ])('%s: a fault, named', (_name, stderr, why) => {
+    if (tree === null) throw new Error('listing not parsed');
+    const f = referrerFaults(tree, parseRegistryTrace(stderr));
+    expect(f).not.toBeNull();
+    expect(f ?? '').toMatch(why);
+  });
+
+  it.each([
+    ['served (so it did not parse as a Sigstore bundle)', traceOf([`http://h/v2/app/manifests/${ART}`, 200], [`http://h/v2/app/blobs/${LAYER}`, 200])],
+    ['its blob answered 404 (listed but cannot be read)', traceOf([`http://h/v2/app/manifests/${ART}`, 200], [`http://h/v2/app/blobs/${LAYER}`, 404])],
+    ['its manifest answered 404', traceOf([`http://h/v2/app/manifests/${ART}`, 404])],
+    // cosign read the manifest, saw no Sigstore bundle, and never asked for
+    // the layer (measured: an artifact typed https://spdx.dev/Document).
+    ['its manifest served and its layer never fetched', traceOf([`http://h/v2/app/manifests/${ART}`, 200])],
+  ])('%s: no fault — the registry answered', (_name, stderr) => {
+    if (tree === null) throw new Error('listing not parsed');
+    expect(referrerFaults(tree, parseRegistryTrace(stderr))).toBeNull();
+  });
+});
+
+describe('the absence messages count only in cosign\'s own Error: framing (round 3)', () => {
+  it('a registry body echoing "no signatures associated" in a trace is not an absence', () => {
+    const stderr = `${T} <-- 500 http://h/v2/app/blobs/${LAYER} (1ms)\n{"errors":[{"message":"no signatures associated"}]}\nError: remote image: GET http://h/v2/app/blobs/${LAYER}: UNKNOWN\n`;
+    expect(classifySignatureDownload(failedWith(1, stderr)).state).toBe('unknown');
+    const att = `{"message":"no attestations with predicate type 'x' found"}\nError: remote image: GET http://h/x: UNKNOWN\n`;
+    expect(classifyAttestationDownload(failedWith(1, att))).toBe('unknown');
   });
 });

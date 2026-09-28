@@ -28,11 +28,17 @@
  * answered. The test for that reads cosign's own error framing (`dial tcp`,
  * `GET https://…: TOOMANYREQUESTS`, `setting up clients and keys`, …) after
  * every value cosign echoes back — the expected identity (the user's text),
- * the certificate's subjects (the signer's) — has been removed, so an
- * identity such as `…/org/timeout-svc/…` cannot pass for a timeout. An
- * unparseable bundle, an invalid signature, a missing certificate or key:
- * rejected. A regexp cosign cannot compile, or a cosign that crashed without
- * its `Error:` framing, is an error — that is not a verdict on the image.
+ * the certificate's subjects (the signer's) — has been removed: every
+ * identity-mismatch line from its framing to its end (sigstore-go prints the
+ * values unescaped, so quotes cannot be paired), then quoted strings. An
+ * identity such as `…/org/timeout-svc/…` or a ref `a"proxyconnect"b` cannot
+ * pass for a network failure. Rekor is a verdict too: cosign frames EVERY
+ * Rekor error `searching log query:`, and Rekor answers 400 for a signature
+ * that does not verify — only a 5xx, a 429 or a network failure there
+ * withholds. An unparseable bundle, an invalid signature, a missing
+ * certificate or key: rejected. A regexp cosign cannot compile, or a cosign
+ * that crashed without its `Error:` framing, is an error — that is not a
+ * verdict on the image.
  *
  * ---- What cosign cannot be taken at its word on (measured, v3.1.3) ----
  *
@@ -66,17 +72,36 @@
  * is attached is no signature it can use. An exit 12 with a registry error
  * folded in is withheld.
  *
- * ---- A registry failure cosign cannot see ----
+ * ---- Two registry failures cosign does not report ----
  *
- * go-containerregistry (remote/referrers.go, v0.21.7) reads a referrers
- * answer whose Content-Type is not exactly the OCI index type (`…; charset=
- * utf-8`), an HTML 200, or a 400 / 406 as "this registry has no referrers
- * API", falls back to the tag schema, finds nothing, and reports nothing —
- * no error anywhere. A registry answering that way makes a signed image read
- * unsigned: detect says absent, verify says "no signatures found" (a high
- * finding). Measured with the fake registry (`; charset=utf-8`: `tree` lists
- * nothing, exit 0). Neither cosign nor dev-guardian can tell that apart from
- * an unsigned image; SECURITY.md and the tool's description say so.
+ * 1. A referrer cosign cannot fetch (round 3, I3). `GetBundles` skips, in
+ *    silence, any referrer whose manifest or bundle blob the registry fails
+ *    to serve — and `tree` never fetches a blob. Measured with a real
+ *    signing bundle whose blob answers 500: `download signature` says "no
+ *    signatures associated", `verify` "no signatures found". So the
+ *    downloads that decide an absence run with `-d`, and the registry's own
+ *    answer for every referrer `tree` lists is read from cosign's request log
+ *    ({@link parseRegistryTrace}, {@link referrerFaults}): a 5xx, a 429, a
+ *    refusal or a transport error there — or a referrer never fetched — makes
+ *    the answer unknown, never "absent", never a rejection. A 404, or a
+ *    manifest cosign read and judged no bundle, is the registry answering:
+ *    listed but unreadable, no signature.
+ * 2. A referrers API cosign cannot see. go-containerregistry
+ *    (remote/referrers.go, v0.21.7) reads a referrers answer whose
+ *    Content-Type is not exactly the OCI index type (`…; charset=utf-8`), an
+ *    HTML 200, or a 400 / 406 as "this registry has no referrers API", falls
+ *    back to the tag schema, finds nothing, and reports nothing — no error
+ *    anywhere, no request that failed. A registry answering that way makes a
+ *    signed image read unsigned: detect says absent, verify says "no
+ *    signatures found" (a high finding). Measured with the fake registry
+ *    (`; charset=utf-8`: `tree` lists nothing, exit 0). Neither cosign nor
+ *    dev-guardian can tell that apart from an unsigned image; SECURITY.md
+ *    and the tool's description say so.
+ *
+ * The trace is read only for status lines that START with the logger's
+ * timestamp: a line inside a dumped manifest body cannot, as long as the
+ * registry holds JSON manifests. A registry that serves non-JSON manifests
+ * could forge one — and could as easily fail the blob for real.
  *
  * ---- The image cosign checks ----
  *
@@ -234,6 +259,12 @@ export interface CosignTreeListing {
    * listing alone cannot tell a Sigstore bundle from anything else.
    */
   referrerTypes: string[];
+  /**
+   * Each OCI referrer with its manifest digest and its layers' digests (the
+   * `🍒` lines under it) — what a `-d` trace is read against to learn whether
+   * the registry served them ({@link referrerFaults}).
+   */
+  referrers: Array<{ type: string; digest: string; layers: string[] }>;
   /** Referrers cosign reported it could not fetch: the listing is incomplete. */
   fetchErrors: string[];
 }
@@ -267,26 +298,150 @@ export function parseCosignTree(stdout: string, stderr: string): CosignTreeListi
     signature: false,
     legacyAttestations: false,
     referrerTypes: [],
+    referrers: [],
     fetchErrors: stderr.split(/\r?\n/).filter((l) => TREE_FETCH_ERROR.test(l.trim())),
   };
   let recognised = false;
+  // The referrer the `🍒` lines below belong to, or null under a legacy tag.
+  let current: { type: string; digest: string; layers: string[] } | null = null;
   for (const line of lines) {
     if (TREE_NONE.test(line) || TREE_SBOMS.test(line)) {
       recognised = true;
+      current = null;
     } else if (TREE_SIGNATURES.test(line)) {
       recognised = true;
       listing.signature = true;
+      current = null;
     } else if (TREE_ATTESTATIONS.test(line)) {
       recognised = true;
       listing.legacyAttestations = true;
-    } else {
-      const type = TREE_REFERRER.exec(line)?.[1];
-      if (type === undefined) continue;
+      current = null;
+    } else if (TREE_REFERRER.test(line)) {
+      const m = TREE_REFERRER_FULL.exec(line);
+      const type = TREE_REFERRER.exec(line)?.[1] ?? '';
       recognised = true;
       listing.referrerTypes.push(type);
+      current = { type, digest: m?.[1] ?? '', layers: [] };
+      listing.referrers.push(current);
+    } else {
+      const layer = TREE_LAYER.exec(line)?.[1];
+      if (layer !== undefined && current !== null) current.layers.push(layer);
     }
   }
   return recognised ? listing : null;
+}
+
+const TREE_REFERRER_FULL = /artifacts via OCI referrer: \S+@(sha256:[0-9a-f]{64})\s*$/;
+const TREE_LAYER = /🍒 (sha256:[0-9a-f]{64})\s*$/u;
+
+// ---------------------------------------------------------------------------
+// The registry's own answers: cosign's `-d` trace (round 3, I3)
+// ---------------------------------------------------------------------------
+
+export type FetchOutcome = 'served' | 'missing' | 'failed';
+
+/** go-containerregistry's logger: every request and answer, one line each, at the START of a line. */
+const TRACE_ANSWER = /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} <-- (.+)$/;
+const TRACE_REQUEST = /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} --> /;
+const TRACE_STATUS = /^(\d{3}) (\S+)/;
+const TRACE_TRANSPORT_ERROR = /^(.+?) (?:GET|HEAD|POST|PUT|PATCH|DELETE) (\S+) \(/;
+const DIGEST_HEX = /(?:sha256[:/](?:[0-9a-f]{2}\/)?)([0-9a-f]{64})/;
+
+/**
+ * The registry's final answer for every manifest or blob digest a `cosign
+ * … -d` trace fetched, keyed by the digest's hex: `served` (2xx), `missing`
+ * (404), `failed` (5xx, 429, any other refusal, a transport error). A 3xx
+ * is followed to the next answer — registries hand blobs to a CDN (ghcr.io
+ * does, measured). The last answer for a digest wins (go-containerregistry
+ * retries). Only lines that START with the logger's timestamp count, so a
+ * line inside a dumped manifest body — which a registry holding JSON
+ * manifests cannot start with a timestamp — never does. Null when there is
+ * no trace at all: nothing could be probed.
+ */
+export function parseRegistryTrace(stderr: string): Map<string, { outcome: FetchOutcome; detail: string }> | null {
+  const lines = stderr.split(/\r?\n/);
+  if (!lines.some((l) => TRACE_REQUEST.test(l))) return null;
+  const answers: Array<{ hex: string | null; status: number | null; detail: string }> = [];
+  for (const line of lines) {
+    const body = TRACE_ANSWER.exec(line)?.[1];
+    if (body === undefined) continue;
+    const status = TRACE_STATUS.exec(body);
+    if (status?.[1] !== undefined && status[2] !== undefined) {
+      answers.push({ hex: DIGEST_HEX.exec(status[2])?.[1] ?? null, status: Number(status[1]), detail: `${status[1]} ${status[2].replace(/\?.*$/, '')}` });
+      continue;
+    }
+    const err = TRACE_TRANSPORT_ERROR.exec(body);
+    if (err?.[1] !== undefined && err[2] !== undefined) {
+      answers.push({ hex: DIGEST_HEX.exec(err[2])?.[1] ?? null, status: null, detail: `${err[1]} (${err[2].replace(/\?.*$/, '')})` });
+    }
+  }
+  const out = new Map<string, { outcome: FetchOutcome; detail: string }>();
+  for (let i = 0; i < answers.length; i++) {
+    const a = answers[i];
+    if (a === undefined || a.hex === null) continue;
+    // Follow redirects: the answer that decides is the first non-3xx after it.
+    let final = a;
+    for (let j = i; final.status !== null && final.status >= 300 && final.status < 400; ) {
+      j += 1;
+      const next = answers[j];
+      if (next === undefined) break;
+      final = next;
+    }
+    const outcome: FetchOutcome =
+      final.status !== null && final.status >= 200 && final.status < 300
+        ? 'served'
+        : final.status === 404
+          ? 'missing'
+          : 'failed';
+    out.set(a.hex, { outcome, detail: escapeUnsafe(clip(final.detail)) });
+  }
+  return out;
+}
+
+/**
+ * Why the referrers `tree` listed may hold a signature cosign could not read
+ * — a manifest or blob the registry failed to serve (5xx, 429, any refusal
+ * but 404, a transport error), or one the trace never shows being fetched —
+ * or null when the registry answered for every one of them (served, or 404):
+ * whatever cosign did not return then is not a Sigstore bundle it can use.
+ * cosign's `GetBundles` skips a referrer it cannot fetch in silence, so
+ * without this a registry failure reads as "no signature" (round 3, I3).
+ */
+export function referrerFaults(
+  tree: CosignTreeListing,
+  trace: Map<string, { outcome: FetchOutcome; detail: string }> | null,
+): string | null {
+  if (tree.referrers.length === 0) return null;
+  const failed: string[] = [];
+  const unprobed: string[] = [];
+  const answerFor = (digest: string): { outcome: FetchOutcome; detail: string } | undefined => {
+    const hex = DIGEST_HEX.exec(digest)?.[1];
+    return hex === undefined || trace === null ? undefined : trace.get(hex);
+  };
+  for (const ref of tree.referrers) {
+    const manifest = answerFor(ref.digest);
+    if (manifest === undefined) {
+      unprobed.push(ref.digest || ref.type);
+      continue;
+    }
+    if (manifest.outcome === 'failed') {
+      failed.push(`${ref.type} referrer ${ref.digest}: the registry answered ${manifest.detail}`);
+      continue;
+    }
+    // Served manifest: cosign reads it and fetches the layer only for a
+    // Sigstore bundle — a layer never asked for is one cosign judged no
+    // bundle (measured: an artifact typed https://spdx.dev/Document), which
+    // is an answer, not a fault. A layer asked for and not served is.
+    if (manifest.outcome === 'served') {
+      for (const layer of ref.layers) {
+        const answer = answerFor(layer);
+        if (answer?.outcome === 'failed') failed.push(`${ref.type} referrer ${ref.digest}: its bundle ${layer} — the registry answered ${answer.detail}`);
+      }
+    }
+  }
+  if (failed.length > 0) return `the registry failed to serve what cosign tree lists — ${failed.join('; ')}`;
+  if (unprobed.length > 0) return `${unprobed.length} referrer(s) cosign tree lists could not be probed (not fetched in cosign's trace)`;
+  return null;
 }
 
 /**
@@ -328,7 +483,7 @@ export interface SignatureDownload {
 export function classifySignatureDownload(r: ProcessRunResult): SignatureDownload {
   const none: SignatureDownload = { state: 'unknown', attestationTypes: [] };
   if (r.outcome === 'failed') {
-    return /no signatures associated/.test(r.stderr) ? { state: 'absent', attestationTypes: [] } : none;
+    return /^Error: .*no signatures associated/m.test(r.stderr) ? { state: 'absent', attestationTypes: [] } : none;
   }
   if (r.outcome !== 'completed' && r.outcome !== 'output_too_large') return none;
   let signature = false;
@@ -385,7 +540,7 @@ function dssePredicateType(envelope: unknown): string | null {
 export function classifyAttestationDownload(r: ProcessRunResult): Presence {
   if (r.outcome === 'output_too_large') return 'present';
   if (r.outcome === 'completed') return r.stdout.trim().length > 0 ? 'present' : 'unknown';
-  if (r.outcome === 'failed' && /no attestations with predicate type/.test(r.stderr)) return 'absent';
+  if (r.outcome === 'failed' && /^Error: .*no attestations with predicate type/m.test(r.stderr)) return 'absent';
   return 'unknown';
 }
 
@@ -423,36 +578,87 @@ const NETWORK = new RegExp(
     'server misbehaving',
     'network is unreachable',
     'proxyconnect',
+    // go-retryablehttp giving up — it retries only a 5xx, a 429 or a network failure.
     'giving up after \\d+ attempt',
     'server gave HTTP response to HTTPS client',
+    // A body that stopped arriving (round 3, M1): HTTP/2 stream resets and
+    // GOAWAY, a connection closed mid-read (Windows: wsarecv / wsasend).
+    'stream error',
+    'INTERNAL_ERROR',
+    'http2: ',
+    'GOAWAY',
+    'wsarecv',
+    'wsasend',
+    'forcibly closed',
+    'broken pipe',
+    'connection aborted',
     // Go's url.Error: `Post "<url>": <cause>` (the URL is an echo, removed first).
     '\\b(?:Get|Post|Head|Put|Patch|Delete) "…": ',
   ].join('|'),
 );
 /** A registry answering with an error, as go-containerregistry and cosign frame it. */
 const REGISTRY = /\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (?:[A-Z][A-Z_]+\b|unexpected status code)|unexpected status code \d{3}|remote image: |image tag not found|getting referrers|Error fetching /;
-/** Sigstore's services (TUF, Rekor) not answering. */
+/**
+ * Sigstore's services (TUF) not answering. NOT Rekor's `searching log
+ * query:` — cosign frames EVERY Rekor client error that way, a 400 included,
+ * and Rekor answers 400 when a signature does not verify against its key
+ * (round 3, I1): a Rekor answer withholds the verdict only as a 5xx or a 429
+ * ({@link SERVICE_STATUS}) or a network failure ({@link NETWORK}).
+ */
 const SIGSTORE_SERVICE =
-  /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|searching log query|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+  /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+/** A service answering 5xx or 429: go-swagger's `[POST /path][503]`, go-retryablehttp's `status 503:`. */
+const SERVICE_STATUS = /\]\[(?:5\d\d|429)\]|\bstatus (?:5\d\d|429):/;
 
 /**
- * cosign's stderr with every value it echoes removed: double- and
- * backtick-quoted strings (the expected identity or regexp, the certificate's
- * SAN and issuer, URLs) and the legacy subject list — from `got subjects [`
- * to the end of its line, since a branch name may itself hold a `]`.
+ * cosign's stderr with every value it echoes removed, so nothing a user or a
+ * signer chose can look like a network failure:
+ *
+ *   - every identity-mismatch framing, from its start to the END OF ITS LINE
+ *     — sigstore-go prints `expected %s value "%s", got "%s"` unescaped, so
+ *     a quote in a git ref (`refs/heads/a"proxyconnect"b`) or a workflow
+ *     file name breaks any quote pairing (round 3, I2); an identity mismatch
+ *     is itself a rejection cause, so nothing on that line can withhold one;
+ *   - the legacy subject list, from `got subjects [` to the end of its line;
+ *   - then double- and backtick-quoted strings (URLs, bodies, regexps).
  */
 function stripEchoes(stderr: string): string {
   return stderr
+    .replace(/(?:none of the expected identities matched|no matching CertificateIdentity found|failed to verify certificate identity)[^\n]*/g, '<identity mismatch>')
+    .replace(/\bexpected [^\n]*?\bvalue\b[^\n]*/g, '<expected value>')
+    .replace(/\bgot "[^\n]*/g, '<got value>')
     .replace(/got subjects \[[^\n]*/g, 'got subjects […]')
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, '"…"')
+    .replace(/"[^"\n]*"/g, '"…"')
     .replace(/`[^`\n]*`/g, '`…`');
 }
 
 /** A network, registry or Sigstore-service failure in cosign's own framing — the question was not answered. */
 function withheld(stderr: string): boolean {
   const own = stripEchoes(stderr);
-  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own);
+  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own) || SERVICE_STATUS.test(own);
 }
+
+/**
+ * Every error cosign folded into its `Error:` block — one per signature or
+ * bundle for exit 12 — joined and bounded, for a finding's detail.
+ */
+function errorBlock(stderr: string): string | null {
+  const lines = stderr.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith('Error: '));
+  if (start < 0) return null;
+  const parts: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (i > start && (line.startsWith('error during command execution:') || line.startsWith('Error: '))) break;
+    const text = (i === start ? line.slice('Error: '.length) : line).trim();
+    if (text.length > 0) parts.push(text);
+  }
+  const joined = parts.join(' | ');
+  return joined.length > 800 ? `${joined.slice(0, 799)}…` : joined;
+}
+
+/** Words a network failure is described with — for the re-run advice on a rejection, never to decide one. */
+const NETWORKISH = /timeout|timed out|connection|network|dial|\bEOF\b|reset|refused|unavailable|temporar|stream error|GOAWAY|TLS|rate limit/i;
 
 /** How a `cosign verify` ended — see the module comment for the rule. */
 export function classifyVerify(r: ProcessRunResult): VerifyVerdict {
@@ -464,16 +670,11 @@ export function classifyVerify(r: ProcessRunResult): VerifyVerdict {
   if (r.exitCode === 10) return { verdict: 'no_signature_claimed', detail };
   if (BAD_REGEXP.test(r.stderr)) return { verdict: 'error', detail: `a signer regexp cosign cannot compile — ${detail}` };
   if (r.exitCode === 11 || withheld(r.stderr)) return { verdict: 'error', detail };
-  if (IDENTITY_MISMATCH.test(r.stderr)) {
-    const line = r.stderr.split(/\r?\n/).find((l) => IDENTITY_MISMATCH.test(l)) ?? detail;
-    return {
-      verdict: 'rejected',
-      reason: 'no_matching_signature',
-      detail: escapeUnsafe(clip(line.replace(/^Error:\s*/, '').replace(/^no matching (?:signatures|attestations):\s*/, '').trim())),
-    };
-  }
-  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: 'rejected', reason: 'no_certificate', detail };
-  return { verdict: 'rejected', reason: 'invalid_signature', detail };
+  // A rejection names every error cosign folded in (one per signature), bounded.
+  const all = escapeUnsafe(errorBlock(r.stderr) ?? detail);
+  if (IDENTITY_MISMATCH.test(r.stderr)) return { verdict: 'rejected', reason: 'no_matching_signature', detail: all };
+  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: 'rejected', reason: 'no_certificate', detail: all };
+  return { verdict: 'rejected', reason: 'invalid_signature', detail: all };
 }
 
 /** What `cosign verify` accepted (`critical.type` of each payload) and over which digest. */
@@ -564,6 +765,8 @@ function firstError(stderr: string): string | null {
     const line = raw.trim();
     if (line.startsWith('Error: ')) return clip(line.slice('Error: '.length));
   }
+  // A `-d` trace is not an error message, and holds headers and bodies: never quote a line of it.
+  if (TRACE_REQUEST.test(stderr.split(/\r?\n/).find((l) => TRACE_REQUEST.test(l)) ?? '')) return null;
   const first = stderr
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -619,15 +822,29 @@ export function skippedSummary(image: string, reason: string): ImageSignatureSum
   return { image, checked: null, check: 'skipped', signature: 'unknown', provenance: 'unknown', note: `Not checked: ${reason}.` };
 }
 
-async function cosign(args: string[], ctx: CosignRunContext): Promise<ProcessRunResult> {
+/** stdout cap for a traced call: runProcess caps stderr at a tenth of it — 3.2 MB of trace. */
+const TRACED_CAP_BYTES = 32 * 1024 * 1024;
+
+/**
+ * One cosign call. `traced`: with `-d` (go-containerregistry's request log on
+ * stderr, read by {@link parseRegistryTrace}) — its stderr is never forwarded
+ * as progress (it holds headers and manifest bodies; credentials are
+ * `<redacted>` by go-containerregistry, but nothing of it belongs in a
+ * notification), and it gets a larger cap. A trace cut at the cap reads as
+ * "could not be probed", never as absent.
+ */
+async function cosign(args: string[], ctx: CosignRunContext, traced = false): Promise<ProcessRunResult> {
+  const [sub, ...rest] = args;
+  const withTrace = traced && sub !== undefined ? [sub, ...(sub === 'download' && rest[0] !== undefined ? [rest[0], '-d', ...rest.slice(1)] : ['-d', ...rest])] : args;
   return runProcess({
     command: 'cosign',
-    args,
+    args: withTrace,
     cwd: ctx.cwd,
     env: ctx.env,
     timeoutMs: COSIGN_TIMEOUT_MS,
+    ...(traced ? { stdoutCapBytes: TRACED_CAP_BYTES } : {}),
     ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    ...(ctx.onLog !== undefined ? { onLog: ctx.onLog } : {}),
+    ...(ctx.onLog !== undefined && !traced ? { onLog: ctx.onLog } : {}),
   });
 }
 
@@ -762,14 +979,42 @@ async function settleNoSignature(ref: string, policy: SignerPolicy, claim: strin
   const again = await cosign(verifyArgs(ref, policy), ctx);
   const v = classifyVerify(again);
   if (v.verdict !== 'no_signature_claimed') return { v, cancelled: again.outcome === 'cancelled' };
+
+  // "No signatures found" twice, with something attached. cosign skips in
+  // silence a referrer it cannot fetch, so before calling that a rejection,
+  // ask the registry — through cosign's own trace of the same fetches —
+  // whether it served what tree lists (round 3, I3).
+  if (aborted(ctx)) return { v: { verdict: 'error', detail: 'cancelled' }, cancelled: true };
+  const probe = await cosign(['download', 'signature', ref], ctx, true);
+  const answer = classifySignatureDownload(probe);
+  if (answer.state === 'present' || answer.state === 'attestation_only') {
+    return {
+      v: {
+        verdict: 'error',
+        detail: `cosign verify found no signature twice, but cosign download signature now returns ${answer.state === 'present' ? 'one' : 'a signed attestation'} — the registry answered differently; not a verdict`,
+      },
+      cancelled: false,
+    };
+  }
+  const fault = referrerFaults(tree, parseRegistryTrace(probe.stderr));
+  if (fault !== null) {
+    return { v: { verdict: 'error', detail: `cosign verify said "${claim}", but ${fault} — not a verdict` }, cancelled: probe.outcome === 'cancelled' };
+  }
+  if (answer.state === 'unknown' && tree.signature) {
+    return {
+      v: { verdict: 'error', detail: `cosign verify said "${claim}", and the .sig tag cosign tree lists could not be read — ${escapeUnsafe(firstError(probe.stderr) ?? probe.outcome)}` },
+      cancelled: probe.outcome === 'cancelled',
+    };
+  }
   return {
     v: {
       verdict: 'rejected',
       reason: 'no_signature',
       detail:
-        `cosign tree lists ${describeListed(tree)} for this digest, but cosign verify found no signature it can ` +
-        'use — twice, while the registry answered. An artifact cosign cannot parse as a Sigstore signature, or ' +
-        'that is not one, is no signature: anyone who can push to the repository can attach one',
+        `cosign tree lists ${describeListed(tree)} for this digest, but it could not be read or parsed as a ` +
+        'Sigstore signature — the registry served each one (or answered 404), and cosign verify found no ' +
+        'signature it can use, twice. An artifact cosign cannot read or parse as a Sigstore signature, or that ' +
+        'is not one, is no signature: anyone who can push to the repository can attach one',
     },
     cancelled: false,
   };
@@ -846,7 +1091,11 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
     message:
       `cosign verify rejected ${pinned.checked ?? image} for ${who}: ${v.detail}. Nothing shows this image was built ` +
       'and signed by the identity you expect — do not deploy it until it verifies (or correct signer_identity / ' +
-      'signer_issuer if the image is legitimately signed by another workflow).',
+      'signer_issuer if the image is legitimately signed by another workflow).' +
+      (NETWORKISH.test(v.detail)
+        ? ' The detail above names what reads like a network or service error, which cosign did not frame as one: ' +
+          're-run the scan before acting on this finding.'
+        : ''),
     file_path: image,
     // The signer is part of what this finding says: a rejection for another
     // signer is another finding, never this one unchanged.
@@ -893,12 +1142,21 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
     signatureWhy = 'cancelled';
     cancelled = true;
   } else {
-    const dl = await cosign(['download', 'signature', pinned.ref], ctx);
+    const dl = await cosign(['download', 'signature', pinned.ref], ctx, true);
     const answer = classifySignatureDownload(dl);
     signature = answer.state;
     attestationTypes = answer.attestationTypes;
     if (dl.outcome === 'cancelled') cancelled = true;
     if (answer.state === 'unknown') signatureWhy = `cosign download signature did not answer — ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}`;
+    // A referrer tree lists that the registry failed to serve may be the
+    // signature: never "absent", never merely "attestation only" (round 3, I3).
+    if (signature !== 'present' && signature !== 'unknown') {
+      const fault = referrerFaults(tree, parseRegistryTrace(dl.stderr));
+      if (fault !== null) {
+        signature = 'unknown';
+        signatureWhy = fault;
+      }
+    }
   }
 
   // Provenance: only what `download attestation` returns (a parsed bundle or a legacy .att).
@@ -911,14 +1169,23 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         cancelled = true;
         break;
       }
-      const r = await cosign(['download', 'attestation', `--predicate-type=${type}`, pinned.ref], ctx);
+      const r = await cosign(['download', 'attestation', `--predicate-type=${type}`, pinned.ref], ctx, true);
       if (r.outcome === 'cancelled') {
         cancelled = true;
         break;
       }
-      const answer = classifyAttestationDownload(r);
-      answers.push(answer);
+      let answer = classifyAttestationDownload(r);
       if (answer === 'unknown') provenanceWhy = `cosign download attestation did not answer — ${escapeUnsafe(firstError(r.stderr) ?? r.outcome)}`;
+      // The same silence as for signatures: a provenance bundle the registry
+      // failed to serve is not "no provenance".
+      if (answer === 'absent') {
+        const fault = referrerFaults(tree, parseRegistryTrace(r.stderr));
+        if (fault !== null) {
+          answer = 'unknown';
+          provenanceWhy = fault;
+        }
+      }
+      answers.push(answer);
       if (answer === 'present') break;
     }
     provenance = answers.includes('present')
