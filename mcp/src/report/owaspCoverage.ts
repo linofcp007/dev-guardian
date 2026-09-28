@@ -27,8 +27,10 @@ export function taxonomyCell(f: Pick<Finding, 'cwe' | 'owasp'>): string {
 
 export const COVERAGE_RULE =
   'A category counts as tested only when, for every source language of the project, a scanner that ran ' +
-  'fully ok has at least three rules for it in that language (or does not depend on the language). ' +
-  '"not tested" is not a clean result: nothing looked. A finding can map to more than one category; a ' +
+  'fully ok has at least three rules for it in that language. A scanner that sees only a slice of a ' +
+  'category, whatever the language — gitleaks (hard-coded credentials) for A07, Trivy and the dependency ' +
+  'auditors (known-vulnerable components, not build and distribution integrity) for A03 — makes it partial ' +
+  'at most. "not tested" is not a clean result: nothing looked. A finding can map to more than one category; a ' +
   'vulnerable dependency counts under A03 only — the CWEs of the flaw inside it are listed, not counted.';
 
 const STATUS_LABEL: Record<OwaspCategoryCoverage['status'], string> = {

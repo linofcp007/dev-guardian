@@ -18,6 +18,7 @@ version bump.
 - `compliance_evidence` frameworks `owasp-top10-2025` and `nist-csf-2.0`, with per-category evidence; the OWASP → CSF 2.0 mapping is dev-guardian's own and says so.
 - Dashboard: `findings.by_owasp`, `owasp_unmapped` and `coverage.owasp`; the status line lists the categories not tested.
 - An OWASP category counts as tested only when, for every source language of the project (detect_stack snapshot, else file extensions), a scanner that ran fully ok has at least three rules for it in that language; one or two is "thin" (partial), a language with none is partial, nothing at all is "not tested" — never clean. Rule counts per (category, language) are recorded with their measurement date: the registry's p/default, Bandit 1.9.4, and our own packs (recounted by test).
+- A scanner that sees one slice of a category whatever the language never makes it tested on its own: gitleaks is partial for A07 ("hard-coded credentials only"), Trivy and the npm/pip-audit/dotnet auditors are partial for A03 ("known-vulnerable dependencies only; build and distribution integrity not assessed").
 - A multi-pass scanner is incomplete when any of its passes failed or is listed missing (`gitleaks` beside `gitleaks-working-tree`, the npm/pip-audit/dotnet auditors). `review_pr` records `local_only` on its scan row. `report_export` on an `audit_executive` row reads its sub-scans. `compliance_evidence` lists partial categories apart from the evidenced ones.
 
 ## [3.0.0] - 2026-09-28

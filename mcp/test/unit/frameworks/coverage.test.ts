@@ -117,9 +117,11 @@ describe('owaspCoverage — per (category, language)', () => {
     expect(statusOf(cov)['A04:2025']).toBe('tested'); // 11 rules
   });
 
-  it('a project with no source language: only language-agnostic detectors count', () => {
+  it('a project with no source language: only language-agnostic detectors count — and a narrow one only in part', () => {
     const cov = owaspCoverage([SAST(), run('secrets', [{ name: 'gitleaks', status: 'ok' }])], [], langs());
-    expect(tested(cov)).toEqual(['A07:2025']);
+    expect(tested(cov)).toEqual([]);
+    expect(statusOf(cov)['A07:2025']).toBe('partial');
+    expect(cat(cov, 'A07:2025').reasons.join(' ')).toMatch(/hard-coded credentials only/);
     expect(statusOf(cov)['A05:2025']).toBe('not_tested');
   });
 
@@ -168,7 +170,41 @@ describe('owaspCoverage — per (category, language)', () => {
       [],
       langs('javascript'),
     );
-    expect(tested(cov)).toEqual(['A03:2025']);
+    expect(tested(cov)).toEqual([]);
+    expect(statusOf(cov)['A03:2025']).toBe('partial');
+    expect(statusOf(cov)['A05:2025']).toBe('not_tested');
+  });
+});
+
+describe('owaspCoverage — a narrow language-agnostic detector never tests a category on its own', () => {
+  it('gitleaks alone leaves A07 partial, its scope named; the registry with >= 3 rules per language tests it', () => {
+    const secrets = run('secrets', [{ name: 'gitleaks', status: 'ok' }]);
+    const alone = owaspCoverage([secrets], [], langs('javascript'));
+    expect(statusOf(alone)['A07:2025']).toBe('partial');
+    expect(cat(alone, 'A07:2025').reasons.join(' ')).toMatch(/gitleaks \(scan_secrets\): hard-coded credentials only/);
+    expect(cat(alone, 'A07:2025').languages).toEqual([{ language: 'javascript', coverage: 'narrow' }]);
+    // JavaScript has 9 registry A07 rules: the rule-based detector meets the bar.
+    expect(statusOf(owaspCoverage([secrets, SAST()], [], langs('javascript')))['A07:2025']).toBe('tested');
+    // Kotlin has 2: thin, and gitleaks cannot make up the difference.
+    expect(statusOf(owaspCoverage([secrets, SAST()], [], langs('kotlin')))['A07:2025']).toBe('partial');
+  });
+
+  it.each([
+    ['trivy', 'deps'],
+    ['npm', 'deps_audit'],
+  ])('%s alone leaves A03 partial: known-vulnerable dependencies only', (tool, type) => {
+    const cov = owaspCoverage([run(type, [{ name: tool, status: 'ok' }])], [], langs('javascript'));
+    expect(statusOf(cov)['A03:2025']).toBe('partial');
+    expect(cat(cov, 'A03:2025').reasons.join(' ')).toMatch(
+      /known-vulnerable dependencies only; build and distribution integrity not assessed/,
+    );
+  });
+
+  it('every language-agnostic or database detector names its narrow scope', () => {
+    for (const d of OWASP_DETECTORS) {
+      const kinds = Object.values(d.reach).map((r) => r?.kind);
+      if (kinds.some((k) => k === 'any-language' || k === 'languages')) expect(d.narrow, d.id).toBeDefined();
+    }
   });
 });
 
@@ -199,7 +235,9 @@ describe('owaspCoverage — a multi-pass detector is incomplete when another of 
       [],
       langs(),
     );
-    expect(statusOf(cov)['A07:2025']).toBe('tested');
+    // Partial for gitleaks' narrow scope alone — no "failed", no "missing".
+    expect(statusOf(cov)['A07:2025']).toBe('partial');
+    expect(cat(cov, 'A07:2025').reasons).toEqual(['gitleaks (scan_secrets): hard-coded credentials only']);
   });
 
   it('deps_audit: trivy failed, npm ok, pip-audit failed → A03 partial', () => {
@@ -218,13 +256,14 @@ describe('owaspCoverage — a multi-pass detector is incomplete when another of 
     expect(cat(cov, 'A03:2025').reasons.join(' ')).toMatch(/pip-audit failed/);
   });
 
-  it('npm audit alone covers the JavaScript dependencies of a JavaScript project', () => {
+  it('npm audit reaches the JavaScript dependencies of a JavaScript project — narrowly', () => {
     const cov = owaspCoverage(
       [run('deps_audit', [{ name: 'trivy', status: 'failed', reason: 'x' }, { name: 'npm', status: 'ok' }])],
       [],
       js,
     );
-    expect(statusOf(cov)['A03:2025']).toBe('tested');
+    expect(statusOf(cov)['A03:2025']).toBe('partial');
+    expect(cat(cov, 'A03:2025').languages).toEqual([{ language: 'javascript', coverage: 'narrow' }]);
     // …and nothing of a Python project's.
     const py = owaspCoverage(
       [run('deps_audit', [{ name: 'trivy', status: 'failed', reason: 'x' }, { name: 'npm', status: 'ok' }])],
@@ -234,8 +273,10 @@ describe('owaspCoverage — a multi-pass detector is incomplete when another of 
     expect(statusOf(py)['A03:2025']).toBe('not_tested');
   });
 
-  it('Trivy is language-agnostic for A03; a per-ecosystem gap makes it partial', () => {
-    expect(statusOf(owaspCoverage([run('deps', [{ name: 'trivy', status: 'ok' }])], [], langs('rust')))['A03:2025']).toBe('tested');
+  it('Trivy is language-agnostic for A03 (narrowly); a per-ecosystem gap is an incomplete run', () => {
+    const rust = owaspCoverage([run('deps', [{ name: 'trivy', status: 'ok' }])], [], langs('rust'));
+    expect(statusOf(rust)['A03:2025']).toBe('partial');
+    expect(rust.categories.find((c) => c.id === 'A03:2025')?.languages).toEqual([{ language: 'rust', coverage: 'narrow' }]);
     const gap = owaspCoverage([run('deps', [{ name: 'trivy', status: 'ok' }], { missing_tools: ['trivy:npm'] })], [], js);
     expect(statusOf(gap)['A03:2025']).toBe('partial');
     expect(cat(gap, 'A03:2025').reasons.join(' ')).toMatch(/trivy:npm/);

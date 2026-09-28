@@ -58027,6 +58027,8 @@ var RGPD_RULES = {
   "A09:2025": rules({ csharp: 1, javascript: 1, php: 1, python: 1, typescript: 1 })
 };
 var DEPENDENCY_AUDITORS = ["npm", "pip-audit", "dotnet"];
+var CREDENTIALS_ONLY = "hard-coded credentials only";
+var DEPENDENCIES_ONLY = "known-vulnerable dependencies only; build and distribution integrity not assessed";
 var OWASP_DETECTORS = [
   {
     id: "semgrep-registry",
@@ -58073,7 +58075,7 @@ var OWASP_DETECTORS = [
     runs: ["trivy"],
     scanTypes: ["deps", "deps_audit", "security_full"],
     reach: { "A03:2025": { kind: "any-language" } },
-    scope: "known-vulnerable dependencies (CWE-1395)",
+    narrow: DEPENDENCIES_ONLY,
     basis: "Language-agnostic for A03: it reads every lock file it supports; a root manifest it produced no result for is recorded as a `trivy:<ecosystem>` gap, which makes the run incomplete. compliance_check's Trivy pass is license-only and is not counted.",
     measured: "Trivy behaviour as recorded by scan_deps/deps_audit, 2026-09-28"
   },
@@ -58083,7 +58085,7 @@ var OWASP_DETECTORS = [
     runs: ["trivy-image"],
     scanTypes: ["containers"],
     reach: { "A03:2025": { kind: "any-language" } },
-    scope: "the image's packages",
+    narrow: DEPENDENCIES_ONLY,
     basis: "The same vulnerability pass over an image, language-agnostic for A03.",
     measured: "2026-09-28"
   },
@@ -58094,7 +58096,7 @@ var OWASP_DETECTORS = [
     family: DEPENDENCY_AUDITORS,
     scanTypes: ["deps_audit", "deps"],
     reach: { "A03:2025": { kind: "languages", languages: ["javascript", "typescript"] } },
-    scope: "known-vulnerable npm packages",
+    narrow: DEPENDENCIES_ONLY,
     basis: "The npm advisory database, complete for the project's npm dependencies \u2014 JavaScript and TypeScript only.",
     measured: "2026-09-28"
   },
@@ -58105,7 +58107,7 @@ var OWASP_DETECTORS = [
     family: DEPENDENCY_AUDITORS,
     scanTypes: ["deps_audit", "deps"],
     reach: { "A03:2025": { kind: "languages", languages: ["python"] } },
-    scope: "known-vulnerable Python packages",
+    narrow: DEPENDENCIES_ONLY,
     basis: "The PyPI advisory database (OSV), for Python requirements only.",
     measured: "2026-09-28"
   },
@@ -58116,7 +58118,7 @@ var OWASP_DETECTORS = [
     family: DEPENDENCY_AUDITORS,
     scanTypes: ["deps_audit", "deps"],
     reach: { "A03:2025": { kind: "languages", languages: ["csharp"] } },
-    scope: "known-vulnerable NuGet packages",
+    narrow: DEPENDENCIES_ONLY,
     basis: "The NuGet advisory data, for .NET projects only.",
     measured: "2026-09-28"
   },
@@ -58126,7 +58128,7 @@ var OWASP_DETECTORS = [
     runs: ["gitleaks", "gitleaks-working-tree"],
     scanTypes: ["secrets", "security_full", "wordpress", "review_pr"],
     reach: { "A07:2025": { kind: "any-language" } },
-    scope: "hard-coded credentials (CWE-798) only",
+    narrow: CREDENTIALS_ONLY,
     basis: "Language-agnostic for A07: its secret patterns match any file. Every finding is a hard-coded credential, one weakness of A07 among many.",
     measured: "2026-09-28"
   }
@@ -58186,16 +58188,21 @@ function hint(d, reach, languages) {
     if (entries2.length === 0) return null;
     summary = entries2.map(([l, n2]) => `${l} ${n2}${n2 < MIN_RULES ? " (thin)" : ""}`).join(", ");
   }
-  return `${d.label}: ${summary}${d.scope !== void 0 ? ` \u2014 ${d.scope}` : ""}`;
+  const scope = d.narrow ?? d.scope;
+  return `${d.label}: ${summary}${scope !== void 0 ? ` \u2014 ${scope}` : ""}`;
 }
 function judge2(contributions, languages) {
   const agnostic = contributions.filter((c3) => c3.reach.kind === "any-language");
   const complete = (c3) => c3.entry.partial === void 0;
+  const narrow = (c3) => c3.detector.narrow !== void 0;
   const incompleteLines = (list2) => [...new Set(list2.filter((c3) => !complete(c3)).map((c3) => `${c3.detector.label} incomplete: ${c3.entry.partial ?? ""}`))];
+  const narrowLines = (list2) => [...new Set(list2.filter(narrow).map((c3) => `${c3.detector.label}: ${c3.detector.narrow ?? ""}`))];
   if (languages === null || languages.length === 0) {
     const why = languages === null ? "project languages could not be determined" : "no source language detected in the project";
     const specific = contributions.filter((c3) => c3.reach.kind !== "any-language");
-    if (agnostic.some(complete)) return { status: "tested", perLanguage: [], reasons: [], used: agnostic };
+    if (agnostic.some((c3) => complete(c3) && !narrow(c3))) return { status: "tested", perLanguage: [], reasons: [], used: agnostic };
+    const narrowOk = agnostic.filter(complete);
+    if (narrowOk.length > 0) return { status: "partial", perLanguage: [], reasons: narrowLines(narrowOk), used: agnostic };
     if (agnostic.length > 0) return { status: "partial", perLanguage: [], reasons: incompleteLines(agnostic), used: agnostic };
     if (languages === null && specific.length > 0) {
       return { status: "partial", perLanguage: [], reasons: [`${why}: a rule-based claim cannot be checked`], used: specific };
@@ -58208,15 +58215,17 @@ function judge2(contributions, languages) {
   for (const lang of languages) {
     const reaching = contributions.filter((c3) => rulesIn(c3.reach, lang) > 0);
     for (const c3 of reaching) used.add(c3);
-    const full = reaching.filter((c3) => complete(c3) && rulesIn(c3.reach, lang) >= MIN_RULES);
+    const full = reaching.filter((c3) => complete(c3) && !narrow(c3) && rulesIn(c3.reach, lang) >= MIN_RULES);
     if (full.length > 0) {
       perLanguage.push({ language: lang, coverage: "full" });
       continue;
     }
-    const thin = reaching.filter(complete);
-    if (thin.length > 0) {
-      perLanguage.push({ language: lang, coverage: "thin" });
+    const thin = reaching.filter((c3) => complete(c3) && !narrow(c3));
+    const narrowOk = reaching.filter((c3) => complete(c3) && narrow(c3));
+    if (thin.length > 0 || narrowOk.length > 0) {
+      perLanguage.push({ language: lang, coverage: thin.length > 0 ? "thin" : "narrow" });
       for (const c3 of thin) reasons.push(`thin: ${rulesIn(c3.reach, lang)} rule(s) for ${lang} (${c3.detector.label})`);
+      reasons.push(...narrowLines(narrowOk));
       continue;
     }
     if (reaching.length > 0) {
@@ -58658,7 +58667,7 @@ function taxonomyCell(f) {
   const parts = [...f.cwe ?? [], ...f.owasp ?? []];
   return parts.length > 0 ? parts.join(" \xB7 ") : "\u2014";
 }
-var COVERAGE_RULE = 'A category counts as tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it in that language (or does not depend on the language). "not tested" is not a clean result: nothing looked. A finding can map to more than one category; a vulnerable dependency counts under A03 only \u2014 the CWEs of the flaw inside it are listed, not counted.';
+var COVERAGE_RULE = 'A category counts as tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it in that language. A scanner that sees only a slice of a category, whatever the language \u2014 gitleaks (hard-coded credentials) for A07, Trivy and the dependency auditors (known-vulnerable components, not build and distribution integrity) for A03 \u2014 makes it partial at most. "not tested" is not a clean result: nothing looked. A finding can map to more than one category; a vulnerable dependency counts under A03 only \u2014 the CWEs of the flaw inside it are listed, not counted.';
 var STATUS_LABEL = {
   tested: "tested",
   partial: "partial",

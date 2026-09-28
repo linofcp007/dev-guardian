@@ -14,10 +14,18 @@
  *     rules in that language (or is language-agnostic for it, or is a
  *     vulnerability database complete for that language's packages);
  *   - `partial` — some language has only 1–2 rules ("thin"), some language
- *     has none (the covered and uncovered languages are named), or the only
- *     run that reached it was incomplete;
+ *     has none (the covered and uncovered languages are named), the only
+ *     run that reached it was incomplete, or the only detector that reached
+ *     it is NARROW;
  *   - `not_tested` — no detector that ran reaches the category in any of
  *     the project's languages. Zero findings there are not a clean result.
+ *
+ * A narrow detector sees one slice of a category, whatever the language:
+ * gitleaks finds hard-coded credentials, one weakness of A07; Trivy and the
+ * dependency auditors find known-vulnerable components, not the build and
+ * distribution integrity the rest of A03 is about. It never makes a
+ * category `tested` on its own — at most `partial`, with its scope named. A
+ * rule-based detector meeting the bar above still can.
  *
  * The project's languages come from `frameworks/projectLanguages.ts`. With
  * none detected, only language-agnostic detectors can test anything; with
@@ -113,6 +121,9 @@ const RGPD_RULES = {
     'A09:2025': rules({ csharp: 1, javascript: 1, php: 1, python: 1, typescript: 1 }),
 };
 const DEPENDENCY_AUDITORS = ['npm', 'pip-audit', 'dotnet'];
+/** The narrow scopes (see the module comment): named in every table that shows them. */
+const CREDENTIALS_ONLY = 'hard-coded credentials only';
+const DEPENDENCIES_ONLY = 'known-vulnerable dependencies only; build and distribution integrity not assessed';
 export const OWASP_DETECTORS = [
     {
         id: 'semgrep-registry',
@@ -161,7 +172,7 @@ export const OWASP_DETECTORS = [
         runs: ['trivy'],
         scanTypes: ['deps', 'deps_audit', 'security_full'],
         reach: { 'A03:2025': { kind: 'any-language' } },
-        scope: 'known-vulnerable dependencies (CWE-1395)',
+        narrow: DEPENDENCIES_ONLY,
         basis: 'Language-agnostic for A03: it reads every lock file it supports; a root manifest it produced no result for ' +
             "is recorded as a `trivy:<ecosystem>` gap, which makes the run incomplete. compliance_check's Trivy pass is " +
             'license-only and is not counted.',
@@ -173,7 +184,7 @@ export const OWASP_DETECTORS = [
         runs: ['trivy-image'],
         scanTypes: ['containers'],
         reach: { 'A03:2025': { kind: 'any-language' } },
-        scope: "the image's packages",
+        narrow: DEPENDENCIES_ONLY,
         basis: 'The same vulnerability pass over an image, language-agnostic for A03.',
         measured: '2026-09-28',
     },
@@ -184,7 +195,7 @@ export const OWASP_DETECTORS = [
         family: DEPENDENCY_AUDITORS,
         scanTypes: ['deps_audit', 'deps'],
         reach: { 'A03:2025': { kind: 'languages', languages: ['javascript', 'typescript'] } },
-        scope: 'known-vulnerable npm packages',
+        narrow: DEPENDENCIES_ONLY,
         basis: "The npm advisory database, complete for the project's npm dependencies — JavaScript and TypeScript only.",
         measured: '2026-09-28',
     },
@@ -195,7 +206,7 @@ export const OWASP_DETECTORS = [
         family: DEPENDENCY_AUDITORS,
         scanTypes: ['deps_audit', 'deps'],
         reach: { 'A03:2025': { kind: 'languages', languages: ['python'] } },
-        scope: 'known-vulnerable Python packages',
+        narrow: DEPENDENCIES_ONLY,
         basis: 'The PyPI advisory database (OSV), for Python requirements only.',
         measured: '2026-09-28',
     },
@@ -206,7 +217,7 @@ export const OWASP_DETECTORS = [
         family: DEPENDENCY_AUDITORS,
         scanTypes: ['deps_audit', 'deps'],
         reach: { 'A03:2025': { kind: 'languages', languages: ['csharp'] } },
-        scope: 'known-vulnerable NuGet packages',
+        narrow: DEPENDENCIES_ONLY,
         basis: 'The NuGet advisory data, for .NET projects only.',
         measured: '2026-09-28',
     },
@@ -216,7 +227,7 @@ export const OWASP_DETECTORS = [
         runs: ['gitleaks', 'gitleaks-working-tree'],
         scanTypes: ['secrets', 'security_full', 'wordpress', 'review_pr'],
         reach: { 'A07:2025': { kind: 'any-language' } },
-        scope: 'hard-coded credentials (CWE-798) only',
+        narrow: CREDENTIALS_ONLY,
         basis: 'Language-agnostic for A07: its secret patterns match any file. Every finding is a hard-coded credential, ' +
             'one weakness of A07 among many.',
         measured: '2026-09-28',
@@ -323,18 +334,25 @@ function hint(d, reach, languages) {
             return null;
         summary = entries.map(([l, n]) => `${l} ${n}${n < MIN_RULES ? ' (thin)' : ''}`).join(', ');
     }
-    return `${d.label}: ${summary}${d.scope !== undefined ? ` — ${d.scope}` : ''}`;
+    const scope = d.narrow ?? d.scope;
+    return `${d.label}: ${summary}${scope !== undefined ? ` — ${scope}` : ''}`;
 }
 function judge(contributions, languages) {
     const agnostic = contributions.filter((c) => c.reach.kind === 'any-language');
     const complete = (c) => c.entry.partial === undefined;
+    const narrow = (c) => c.detector.narrow !== undefined;
     const incompleteLines = (list) => [...new Set(list.filter((c) => !complete(c)).map((c) => `${c.detector.label} incomplete: ${c.entry.partial ?? ''}`))];
-    // No language to judge per: only a language-agnostic detector can test.
+    const narrowLines = (list) => [...new Set(list.filter(narrow).map((c) => `${c.detector.label}: ${c.detector.narrow ?? ''}`))];
+    // No language to judge per: only a language-agnostic detector can test —
+    // and a narrow one only in part.
     if (languages === null || languages.length === 0) {
         const why = languages === null ? 'project languages could not be determined' : 'no source language detected in the project';
         const specific = contributions.filter((c) => c.reach.kind !== 'any-language');
-        if (agnostic.some(complete))
+        if (agnostic.some((c) => complete(c) && !narrow(c)))
             return { status: 'tested', perLanguage: [], reasons: [], used: agnostic };
+        const narrowOk = agnostic.filter(complete);
+        if (narrowOk.length > 0)
+            return { status: 'partial', perLanguage: [], reasons: narrowLines(narrowOk), used: agnostic };
         if (agnostic.length > 0)
             return { status: 'partial', perLanguage: [], reasons: incompleteLines(agnostic), used: agnostic };
         if (languages === null && specific.length > 0) {
@@ -349,16 +367,18 @@ function judge(contributions, languages) {
         const reaching = contributions.filter((c) => rulesIn(c.reach, lang) > 0);
         for (const c of reaching)
             used.add(c);
-        const full = reaching.filter((c) => complete(c) && rulesIn(c.reach, lang) >= MIN_RULES);
+        const full = reaching.filter((c) => complete(c) && !narrow(c) && rulesIn(c.reach, lang) >= MIN_RULES);
         if (full.length > 0) {
             perLanguage.push({ language: lang, coverage: 'full' });
             continue;
         }
-        const thin = reaching.filter(complete);
-        if (thin.length > 0) {
-            perLanguage.push({ language: lang, coverage: 'thin' });
+        const thin = reaching.filter((c) => complete(c) && !narrow(c));
+        const narrowOk = reaching.filter((c) => complete(c) && narrow(c));
+        if (thin.length > 0 || narrowOk.length > 0) {
+            perLanguage.push({ language: lang, coverage: thin.length > 0 ? 'thin' : 'narrow' });
             for (const c of thin)
                 reasons.push(`thin: ${rulesIn(c.reach, lang)} rule(s) for ${lang} (${c.detector.label})`);
+            reasons.push(...narrowLines(narrowOk));
             continue;
         }
         if (reaching.length > 0) {

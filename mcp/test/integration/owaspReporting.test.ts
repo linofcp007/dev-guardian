@@ -244,7 +244,8 @@ describe('report_export', () => {
       },
     });
     const md = await exportScan(plugin, project, 'P1', 'markdown');
-    expect(md).toMatch(/\| A03:2025 Software Supply Chain Failures \| tested \| trivy \(deps\) \|/);
+    expect(md).toMatch(/\| A03:2025 Software Supply Chain Failures \| partial \| trivy \(deps\) \|/);
+    expect(md).toMatch(/A03:2025 partial: [^\n]*known-vulnerable dependencies only; build and distribution integrity not assessed/);
     // local_only: the registry did not run, so injection was not tested.
     expect(md).toMatch(/\| A05:2025 Injection \| NOT TESTED \|/);
   });
@@ -272,8 +273,9 @@ describe('report_export', () => {
     });
     const md = await exportScan(plugin, project, 'AUD', 'markdown');
     expect(md).toMatch(/\| A05:2025 Injection \| tested \| semgrep \(sast\) \|/);
-    // Every run that looked is named — the registry's one thin A03 rule too.
-    expect(md).toMatch(/\| A03:2025 Software Supply Chain Failures \| tested \| semgrep \(sast\), trivy \(deps_audit\), npm \(deps_audit\) \|/);
+    // Every run that looked is named — the registry's one thin A03 rule too —
+    // and none of them assesses build or distribution integrity.
+    expect(md).toMatch(/\| A03:2025 Software Supply Chain Failures \| partial \| semgrep \(sast\), trivy \(deps_audit\), npm \(deps_audit\) \|/);
   });
 });
 

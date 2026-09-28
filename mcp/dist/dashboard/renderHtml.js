@@ -233,7 +233,7 @@ function owaspSection(findings, coverage) {
         : ` Judged for: ${langs.languages === null ? 'unknown languages' : langs.languages.length === 0 ? 'no source language' : langs.languages.join(', ')} (${langs.source}).`;
     return `<section>
   <h2>OWASP Top 10:2025</h2>
-  <p class="pdk-meta">${escapeHtml(`A category is tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it — "not tested" is not clean.${langText}`)}${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? '' : 's'} carry no OWASP 2025 category.` : ''}</p>
+  <p class="pdk-meta">${escapeHtml(`A category is tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it; a scanner that sees only a slice of it (secrets, vulnerable dependencies) makes it partial at most — "not tested" is not clean.${langText}`)}${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? '' : 's'} carry no OWASP 2025 category.` : ''}</p>
   <table><thead><tr><th>Category</th><th>Coverage</th><th>Open findings</th></tr></thead><tbody>${rows}</tbody></table>
 </section>`;
 }
