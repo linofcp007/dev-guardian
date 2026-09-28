@@ -40,6 +40,7 @@
  * filter used to match fingerprints only, so a finding suppressed by
  * identity after a line shift came back as "resolved".
  */
+import { coverageRunsOf, owaspCoverage } from '../frameworks/coverage.js';
 import { findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor } from '../history/runCompare.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
@@ -69,9 +70,12 @@ export function buildSnapshot(storage, projectPath, now) {
     // and that has to reach coverage or it renders as a clean "0 CVEs".
     const cveSourceScan = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
     const cveGap = currentScan !== null && cveSourceScan === null;
-    const coverage = buildCoverage(open, cveGap);
     const openFindings = open.findings;
-    const findings = buildFindingsSummary(openFindings, truncation);
+    // OWASP 2025: which categories the scans behind these numbers could and
+    // did test, over the same bookkeeping `buildCoverage` reads.
+    const owasp = owaspCoverage(coverageRunsOf(open.bookkeeping, open.scans), openFindings);
+    const coverage = buildCoverage(open, cveGap, owasp);
+    const findings = buildFindingsSummary(openFindings, truncation, owasp);
     const cveItems = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
     const cves = buildCveSummary(cveItems);
     const allSuppressions = storage.suppressions.listAll();
@@ -140,7 +144,7 @@ function toScanSummary(scan, now) {
  * gitleaks it was missing when a newer scan_secrets measured secrets. Names
  * de-duplicated in first-seen order.
  */
-function buildCoverage(open, cveGap) {
+function buildCoverage(open, cveGap, owasp) {
     const toolsRun = [];
     const missingTools = [];
     const partialTools = [];
@@ -181,6 +185,7 @@ function buildCoverage(open, cveGap) {
         missing_tools: missingTools,
         partial_tools: partialTools,
         omitted_categories: omittedCategories,
+        owasp: owasp.categories.map((c) => ({ id: c.id, title: c.title, status: c.status, findings: c.findings })),
     };
 }
 /**
@@ -211,7 +216,7 @@ function omittedCategoriesFor(missingTools, cveGap) {
         add(TOOL_CATEGORIES.trivy ?? 'trivy');
     return result;
 }
-function buildFindingsSummary(openFindings, truncation) {
+function buildFindingsSummary(openFindings, truncation, owasp) {
     const items = openFindings.slice(0, FINDINGS_CAP);
     if (items.length < openFindings.length) {
         truncation.push({
@@ -232,6 +237,8 @@ function buildFindingsSummary(openFindings, truncation) {
         by_severity: groupBySeverity(openFindings),
         by_category: groupBy(openFindings, (f) => f.category),
         by_tool: groupBy(openFindings, (f) => f.tool),
+        by_owasp: Object.fromEntries(owasp.categories.filter((c) => c.findings > 0).map((c) => [c.id, c.findings])),
+        owasp_unmapped: owasp.findings_unmapped,
         hotspots: rankFiles(openFindings, openFindings.length).hotspots,
         items,
     };

@@ -15,6 +15,7 @@
  */
 
 import type { Finding, Severity } from '../types.js';
+import { sarifTaxonomyTags } from '../frameworks/taxonomy.js';
 import { resolveVersion } from '../platform/version.js';
 
 export interface SarifOptions {
@@ -39,6 +40,8 @@ interface SarifRule {
   shortDescription?: { text: string };
   fullDescription?: { text: string };
   defaultConfiguration?: { level: SarifLevel };
+  /** `tags`: the CWE/OWASP 2025 tags of every finding of the rule (union). */
+  properties?: { tags: string[] };
 }
 
 type SarifLevel = 'error' | 'warning' | 'note' | 'none';
@@ -55,10 +58,18 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
       rule.defaultConfiguration = { level: levelFor(f.severity) };
       rulesById.set(id, rule);
     }
+    // A rule is tagged with every CWE/OWASP 2025 tag any of its findings
+    // carries — `external/cwe/cwe-89` is what GitHub code scanning reads.
+    const tags = sarifTaxonomyTags(f);
+    const rule = rulesById.get(id);
+    if (tags.length > 0 && rule !== undefined) {
+      rule.properties = { tags: [...new Set([...(rule.properties?.tags ?? []), ...tags])].sort() };
+    }
   }
 
   const results = findings.map((f) => {
     const ruleId = f.rule_id ?? `${f.tool}/${f.category}`;
+    const tags = sarifTaxonomyTags(f);
     const result: Record<string, unknown> = {
       ruleId,
       level: levelFor(f.severity),
@@ -68,6 +79,7 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
         category: f.category,
         ...(f.subcategory ? { subcategory: f.subcategory } : {}),
         ...(f.fingerprint ? { fingerprint: f.fingerprint } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
       },
     };
     if (f.file_path) {

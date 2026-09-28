@@ -102,3 +102,41 @@ describe('toSarif — region pairing', () => {
     expect(region.endLine).toBeUndefined();
   });
 });
+
+describe('toSarif — CWE and OWASP Top 10:2025 tags', () => {
+  interface Doc {
+    runs: Array<{
+      tool: { driver: { rules: Array<{ id: string; properties?: { tags?: string[] } }> } };
+      results: Array<{ ruleId: string; properties: { tags?: string[] } }>;
+    }>;
+  }
+  const parse = (findings: Finding[]): Doc => JSON.parse(toSarif(findings)) as Doc;
+
+  // GitHub code scanning reads `external/cwe/cwe-<n>` off the rule; the
+  // OWASP tag follows the same lower-case, dash-separated convention.
+  it('tags the result and its rule with external/cwe/cwe-<n> and owasp-2025-a<nn>', () => {
+    const doc = parse([finding({ rule_id: 'sqli', cwe: ['CWE-89'], owasp: ['A05:2025'] })]);
+    const run = doc.runs[0];
+    expect(run?.results[0]?.properties.tags).toEqual(['external/cwe/cwe-89', 'owasp-2025-a05']);
+    expect(run?.tool.driver.rules[0]?.properties?.tags).toEqual(['external/cwe/cwe-89', 'owasp-2025-a05']);
+  });
+
+  it("a rule's tags are the union of its findings' tags", () => {
+    const doc = parse([
+      finding({ fingerprint: 'a', rule_id: 'r', cwe: ['CWE-79'], owasp: ['A05:2025'] }),
+      finding({ fingerprint: 'b', rule_id: 'r', cwe: ['CWE-1395', 'CWE-79'], owasp: ['A03:2025', 'A05:2025'] }),
+    ]);
+    expect(doc.runs[0]?.tool.driver.rules[0]?.properties?.tags).toEqual([
+      'external/cwe/cwe-1395',
+      'external/cwe/cwe-79',
+      'owasp-2025-a03',
+      'owasp-2025-a05',
+    ]);
+  });
+
+  it('a finding without a taxonomy gets no tags at all — never an empty guess', () => {
+    const doc = parse([finding({ rule_id: 'r' })]);
+    expect(doc.runs[0]?.results[0]?.properties).not.toHaveProperty('tags');
+    expect(doc.runs[0]?.tool.driver.rules[0]).not.toHaveProperty('properties');
+  });
+});

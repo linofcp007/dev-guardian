@@ -94,6 +94,8 @@ export function renderStatus(snapshot: DashboardSnapshot, opts: { color: boolean
   lines.push(renderOpenLine(snapshot.findings, color));
   const cvesLine = renderCvesLine(snapshot.cves, color);
   if (cvesLine !== null) lines.push(cvesLine);
+  const owaspLine = renderOwaspLine(snapshot.findings, snapshot.coverage);
+  if (owaspLine !== null) lines.push(owaspLine);
   lines.push('');
 
   lines.push(renderSincePrevious(snapshot.deltas.since_previous, scan.scan_type, color));
@@ -255,6 +257,29 @@ function renderCvesLine(cves: CveSummary, color: boolean): string | null {
  * does not narrow it here too. Threading the narrowed value through avoids
  * re-deriving it with a fallback that could paper over a real gap.
  */
+/**
+ * OWASP 2025: the categories holding open findings, the unmapped count, and
+ * — always, when there are any — the categories NOT tested, so a category
+ * missing from the counts is never read as clean. Omitted only for a
+ * snapshot with no OWASP coverage at all (a hand-built one).
+ */
+function renderOwaspLine(findings: FindingsSummary, coverage: CoverageState): string | null {
+  const entries = coverage.owasp ?? [];
+  if (entries.length === 0) return null;
+  const short = (id: string): string => id.slice(0, 3);
+  const counts = entries
+    .filter((e) => (findings.by_owasp?.[e.id] ?? 0) > 0)
+    .map((e) => `${short(e.id)} ${findings.by_owasp?.[e.id] ?? 0}`);
+  const unmapped = findings.owasp_unmapped ?? 0;
+  if (unmapped > 0) counts.push(`${unmapped} unmapped`);
+  const parts = [counts.length > 0 ? counts.join(' · ') : 'no open finding in any category'];
+  const notTested = entries.filter((e) => e.status === 'not_tested').map((e) => short(e.id));
+  const partial = entries.filter((e) => e.status === 'partial').map((e) => short(e.id));
+  if (notTested.length > 0) parts.push(`not tested: ${notTested.join(' ')}`);
+  if (partial.length > 0) parts.push(`partial: ${partial.join(' ')}`);
+  return `  OWASP 2025   ${parts.join('   ')}`;
+}
+
 function renderSincePrevious(delta: FindingDelta | null, scanType: string, color: boolean): string {
   if (delta === null) {
     return `  SINCE LAST SCAN     no previous ${scanType} scan to compare`;

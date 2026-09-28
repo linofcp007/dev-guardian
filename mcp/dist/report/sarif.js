@@ -13,6 +13,7 @@
  * from any argument — fixed for the life of the process, and overridable
  * per call via `opts.toolVersion` for a caller (e.g. a test) that needs to.
  */
+import { sarifTaxonomyTags } from '../frameworks/taxonomy.js';
 import { resolveVersion } from '../platform/version.js';
 // Resolved once per process, at module load — same "read once, reuse many
 // times" shape `server.ts` already applies to its own `SERVER_VERSION`, and
@@ -33,9 +34,17 @@ export function toSarif(findings, opts = {}) {
             rule.defaultConfiguration = { level: levelFor(f.severity) };
             rulesById.set(id, rule);
         }
+        // A rule is tagged with every CWE/OWASP 2025 tag any of its findings
+        // carries — `external/cwe/cwe-89` is what GitHub code scanning reads.
+        const tags = sarifTaxonomyTags(f);
+        const rule = rulesById.get(id);
+        if (tags.length > 0 && rule !== undefined) {
+            rule.properties = { tags: [...new Set([...(rule.properties?.tags ?? []), ...tags])].sort() };
+        }
     }
     const results = findings.map((f) => {
         const ruleId = f.rule_id ?? `${f.tool}/${f.category}`;
+        const tags = sarifTaxonomyTags(f);
         const result = {
             ruleId,
             level: levelFor(f.severity),
@@ -45,6 +54,7 @@ export function toSarif(findings, opts = {}) {
                 category: f.category,
                 ...(f.subcategory ? { subcategory: f.subcategory } : {}),
                 ...(f.fingerprint ? { fingerprint: f.fingerprint } : {}),
+                ...(tags.length > 0 ? { tags } : {}),
             },
         };
         if (f.file_path) {

@@ -42650,6 +42650,18 @@ function classifyTaxonomy(input) {
   if (categories.size > 0) out.owasp = OWASP_2025_IDS.filter((id) => categories.has(id));
   return out;
 }
+function sarifTaxonomyTags(f) {
+  const tags = [];
+  for (const c3 of f.cwe ?? []) {
+    const cwe = normalizeCwe(c3);
+    if (cwe !== null) tags.push(`external/cwe/${cwe.toLowerCase()}`);
+  }
+  for (const id of f.owasp ?? []) {
+    const m = /^A(\d{2}):2025$/.exec(id);
+    if (m !== null && m[1] !== void 0) tags.push(`owasp-2025-a${m[1]}`);
+  }
+  return [...new Set(tags)].sort();
+}
 
 // src/runners/scannerParsers/index.ts
 function toPosixPath(p) {
@@ -57872,6 +57884,161 @@ async function handler21(input, ctx) {
 import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join48 } from "node:path";
 
+// src/frameworks/coverage.ts
+function registryRan(run) {
+  if (run.meta?.["local_only"] === true) return false;
+  return !(run.scan_type === "security_full" && Array.isArray(run.meta?.["child_scans"]));
+}
+var OWASP_DETECTORS = [
+  {
+    id: "semgrep-registry",
+    label: "Semgrep registry rules (scan_sast without local_only)",
+    runs: ["semgrep"],
+    scanTypes: ["sast", "security_full", "review_pr"],
+    applies: registryRan,
+    categories: ["A01:2025", "A02:2025", "A04:2025", "A05:2025", "A06:2025", "A07:2025", "A08:2025"],
+    basis: "Measured on the registry ruleset p/default (1074 rules, fetched 2026-09-28), counting rules whose CWEs OWASP maps to each category: A01 136, A02 55, A04 218, A05 310, A06 68, A07 92, A08 74 \u2014 each across eight or more languages. Not claimed: A03 (3 rules), A09 (6, Python and HCL only), A10 (4). scan_sast runs --config=auto, which selects registry rulesets by language; p/default is the measured proxy."
+  },
+  {
+    id: "bandit",
+    label: "Bandit (scan_sast, Python)",
+    runs: ["bandit"],
+    scanTypes: ["sast", "security_full", "review_pr"],
+    categories: ["A01:2025", "A04:2025", "A05:2025", "A07:2025", "A08:2025", "A10:2025"],
+    basis: "Bandit 1.9.4's own CWE assignments (bandit/core/issue.py, counted over its plugins and blacklists): A01 path traversal, temp files, permissions (8 checks); A04 weak crypto, cleartext, randomness (22); A05 command, SQL and code injection, input validation (38); A07 certificate validation, hard-coded password (4); A08 deserialization, download without integrity check (5); A10 improper check of exceptional conditions (3). Python code only."
+  },
+  {
+    id: "bugfix-packs",
+    label: "bug_hunt packs (configs/semgrep/bugfix-*.yml)",
+    runs: ["semgrep"],
+    scanTypes: ["bugs"],
+    categories: ["A10:2025"],
+    basis: "The packs' own cwe/owasp metadata: every bugfix pack except bugfix-rs carries A10 rules (empty catch, unchecked return, null dereference, uncaught exception). A06 appears only in bugfix-js and bugfix-py (CWE-362) and is not claimed."
+  },
+  {
+    id: "rgpd-pack",
+    label: "RGPD pack (compliance_check, configs/semgrep/rgpd.yml)",
+    runs: ["semgrep-rgpd"],
+    scanTypes: ["compliance"],
+    categories: ["A01:2025", "A09:2025"],
+    basis: "The pack's own metadata: personal data in logs (CWE-532, A09) in JS/TS, PHP, Python and C#, and personal data exposed to third parties without consent (CWE-359, A01) in every rule."
+  },
+  {
+    id: "trivy-vulnerabilities",
+    label: "Trivy vulnerability pass (scan_deps, deps_audit)",
+    runs: ["trivy"],
+    scanTypes: ["deps", "deps_audit", "security_full"],
+    categories: ["A03:2025"],
+    basis: "Every known-vulnerable dependency it reports is CWE-1395 (Dependency on Vulnerable Third-Party Component), which OWASP maps to A03. compliance_check's Trivy pass is license-only and is not counted."
+  },
+  {
+    id: "trivy-image",
+    label: "Trivy image pass (scan_containers with an image)",
+    runs: ["trivy-image"],
+    scanTypes: ["containers"],
+    categories: ["A03:2025"],
+    basis: "The same vulnerability pass over an image (CWE-1395, A03)."
+  },
+  {
+    id: "dependency-auditors",
+    label: "npm audit, pip-audit, dotnet list package --vulnerable (deps_audit)",
+    runs: ["npm", "pip-audit", "dotnet"],
+    // 2.0.x deps_audit rows carry scan type 'deps' (types.ts `isDepsAuditScan`).
+    scanTypes: ["deps_audit", "deps"],
+    categories: ["A03:2025"],
+    basis: "Each reports known-vulnerable dependencies (CWE-1395, A03)."
+  },
+  {
+    id: "gitleaks",
+    label: "gitleaks (scan_secrets)",
+    runs: ["gitleaks", "gitleaks-working-tree"],
+    scanTypes: ["secrets", "security_full", "wordpress", "review_pr"],
+    categories: ["A07:2025"],
+    basis: "Every secret it reports is a hard-coded credential (CWE-798), which OWASP maps to A07."
+  }
+];
+function partialReason(run, t) {
+  const reasons = [];
+  if (run.scan_type === "review_pr") reasons.push("a diff review looks only at changed files");
+  const scope = run.meta?.["scope"];
+  if (scope !== void 0 && scope !== null) reasons.push("the scan was scoped to part of the project");
+  const gaps = run.missing_tools.filter((m) => m === t.name || m.startsWith(`${t.name}:`));
+  if (gaps.length > 0) reasons.push(`also listed missing (${gaps.join(", ")})`);
+  if ((t.partially_parsed?.length ?? 0) > 0) reasons.push("some files were only partly parsed");
+  if ((t.failed_rules?.length ?? 0) > 0) reasons.push("some rules did not load");
+  return reasons.length > 0 ? reasons.join("; ") : void 0;
+}
+function owaspCoverage(runs, findings) {
+  const testedBy = /* @__PURE__ */ new Map();
+  for (const run of runs) {
+    for (const t of run.tools_run) {
+      if (t.status !== "ok") continue;
+      for (const d of OWASP_DETECTORS) {
+        if (!d.runs.includes(t.name)) continue;
+        if (!d.scanTypes.includes(run.scan_type)) continue;
+        if (d.applies !== void 0 && !d.applies(run)) continue;
+        const partial3 = partialReason(run, t);
+        const entry = { scan_id: run.scan_id, scan_type: run.scan_type, tool: t.name, detector: d.id };
+        if (partial3 !== void 0) entry.partial = partial3;
+        for (const id of d.categories) {
+          const list2 = testedBy.get(id) ?? [];
+          if (!list2.some((e) => e.scan_id === entry.scan_id && e.tool === entry.tool && e.detector === entry.detector)) {
+            list2.push(entry);
+          }
+          testedBy.set(id, list2);
+        }
+      }
+    }
+  }
+  const counts = /* @__PURE__ */ new Map();
+  let unmapped = 0;
+  for (const f of findings) {
+    const ids2 = f.owasp ?? [];
+    if (ids2.length === 0) {
+      unmapped += 1;
+      continue;
+    }
+    for (const id of new Set(ids2)) {
+      const known = OWASP_TOP10_2025.find((c3) => c3.id === id);
+      if (known !== void 0) counts.set(known.id, (counts.get(known.id) ?? 0) + 1);
+    }
+  }
+  return {
+    categories: OWASP_TOP10_2025.map((c3) => {
+      const by = testedBy.get(c3.id) ?? [];
+      const status = by.some((e) => e.partial === void 0) ? "tested" : by.length > 0 ? "partial" : "not_tested";
+      return {
+        id: c3.id,
+        title: c3.title,
+        url: c3.url,
+        status,
+        tested_by: by,
+        findings: counts.get(c3.id) ?? 0,
+        could_be_tested_by: OWASP_DETECTORS.filter((d) => d.categories.includes(c3.id)).map((d) => d.label)
+      };
+    }),
+    findings_total: findings.length,
+    findings_unmapped: unmapped
+  };
+}
+function coverageRunsOf(bookkeeping, scans) {
+  const byId = new Map(scans.map((s) => [s.scan_id, s]));
+  const out = [];
+  for (const view of bookkeeping) {
+    const scan2 = byId.get(view.scan_id);
+    if (scan2 === void 0) continue;
+    const r = {
+      scan_id: view.scan_id,
+      scan_type: scan2.scan_type,
+      tools_run: view.tools_run,
+      missing_tools: view.missing_tools
+    };
+    if (scan2.meta !== void 0) r.meta = scan2.meta;
+    out.push(r);
+  }
+  return out;
+}
+
 // src/report/htmlTheme.ts
 var SHARED = { "--accent": "#00AAFF", "--brand-blue": "#11689B" };
 var DARK = {
@@ -58165,6 +58332,74 @@ function markdownToSafeHtml(md) {
   return out.join("\n");
 }
 
+// src/report/owaspCoverage.ts
+function taxonomyCell(f) {
+  const parts = [...f.cwe ?? [], ...f.owasp ?? []];
+  return parts.length > 0 ? parts.join(" \xB7 ") : "\u2014";
+}
+var COVERAGE_RULE = 'A category counts as tested only when a scanner able to detect it ran ok in the scans this document covers. "not tested" is not a clean result: nothing looked. A finding can map to more than one category.';
+var STATUS_LABEL = {
+  tested: "tested",
+  partial: "partial",
+  not_tested: "NOT TESTED"
+};
+function statusLabel(c3) {
+  return STATUS_LABEL[c3.status];
+}
+function testedByText(by) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const e of by) {
+    const text = `${e.tool} (${e.scan_type})`;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out.length > 0 ? out.join(", ") : "\u2014";
+}
+function partialReasons(c3) {
+  return [...new Set(c3.tested_by.map((e) => e.partial).filter((r) => r !== void 0))];
+}
+function unmappedSentence(cov, noun) {
+  return `${cov.findings_unmapped} of ${cov.findings_total} ${noun} carry no OWASP 2025 category (no CWE from their scanner, a CWE outside the Top 10, or stored before dev-guardian recorded one).`;
+}
+function owaspCoverageMarkdown(cov) {
+  const lines = [];
+  lines.push("## OWASP Top 10:2025 coverage");
+  lines.push("");
+  lines.push(`_${COVERAGE_RULE} Categories and CWE mapping: https://owasp.org/Top10/2025/_`);
+  lines.push("");
+  lines.push("| Category | Coverage | Tested by | Findings |");
+  lines.push("| --- | --- | --- | --- |");
+  for (const c3 of cov.categories) {
+    lines.push(`| ${c3.id} ${c3.title} | ${statusLabel(c3)} | ${testedByText(c3.tested_by)} | ${c3.findings} |`);
+  }
+  lines.push("");
+  for (const c3 of cov.categories) {
+    if (c3.status === "partial") lines.push(`- ${c3.id} partial: ${partialReasons(c3).join("; ")}.`);
+  }
+  const untested = cov.categories.filter((c3) => c3.status === "not_tested");
+  for (const c3 of untested) lines.push(`- ${c3.id} would be tested by: ${c3.could_be_tested_by.join("; ")}.`);
+  if (cov.findings_total > 0) lines.push(`- ${unmappedSentence(cov, "findings")}`);
+  return lines;
+}
+function owaspCoverageHtml(cov) {
+  const rows = cov.categories.map((c3) => {
+    const why = c3.status === "partial" ? `<br><small>${escapeHtml(partialReasons(c3).join("; "))}</small>` : c3.status === "not_tested" ? `<br><small>would be tested by: ${escapeHtml(c3.could_be_tested_by.join("; "))}</small>` : "";
+    return `<tr>
+  <td><a href="${escapeHtml(c3.url)}" target="_blank" rel="noopener">${escapeHtml(c3.id)}</a> ${escapeHtml(c3.title)}</td>
+  <td>${c3.status === "not_tested" ? "<strong>NOT TESTED</strong>" : escapeHtml(statusLabel(c3))}${why}</td>
+  <td>${escapeHtml(testedByText(c3.tested_by))}</td>
+  <td>${c3.findings}</td>
+</tr>`;
+  }).join("");
+  const unmapped = cov.findings_total > 0 ? `<p>${escapeHtml(unmappedSentence(cov, "findings"))}</p>` : "";
+  return `<h2>OWASP Top 10:2025 coverage</h2>
+<p class="pdk-meta">${escapeHtml(COVERAGE_RULE)}</p>
+<table><thead><tr><th>Category</th><th>Coverage</th><th>Tested by</th><th>Findings</th></tr></thead><tbody>${rows}</tbody></table>
+` + unmapped;
+}
+
 // src/report/sarif.ts
 var DEFAULT_TOOL_VERSION = resolveVersion();
 function toSarif(findings, opts = {}) {
@@ -58172,16 +58407,22 @@ function toSarif(findings, opts = {}) {
   for (const f of findings) {
     const id = f.rule_id ?? `${f.tool}/${f.category}`;
     if (!rulesById.has(id)) {
-      const rule = { id };
-      rule.name = f.subcategory ?? f.category;
-      rule.shortDescription = { text: f.title };
-      if (f.message) rule.fullDescription = { text: f.message };
-      rule.defaultConfiguration = { level: levelFor(f.severity) };
-      rulesById.set(id, rule);
+      const rule2 = { id };
+      rule2.name = f.subcategory ?? f.category;
+      rule2.shortDescription = { text: f.title };
+      if (f.message) rule2.fullDescription = { text: f.message };
+      rule2.defaultConfiguration = { level: levelFor(f.severity) };
+      rulesById.set(id, rule2);
+    }
+    const tags = sarifTaxonomyTags(f);
+    const rule = rulesById.get(id);
+    if (tags.length > 0 && rule !== void 0) {
+      rule.properties = { tags: [.../* @__PURE__ */ new Set([...rule.properties?.tags ?? [], ...tags])].sort() };
     }
   }
   const results = findings.map((f) => {
     const ruleId = f.rule_id ?? `${f.tool}/${f.category}`;
+    const tags = sarifTaxonomyTags(f);
     const result = {
       ruleId,
       level: levelFor(f.severity),
@@ -58190,7 +58431,8 @@ function toSarif(findings, opts = {}) {
         severity: f.severity,
         category: f.category,
         ...f.subcategory ? { subcategory: f.subcategory } : {},
-        ...f.fingerprint ? { fingerprint: f.fingerprint } : {}
+        ...f.fingerprint ? { fingerprint: f.fingerprint } : {},
+        ...tags.length > 0 ? { tags } : {}
       }
     };
     if (f.file_path) {
@@ -58263,7 +58505,7 @@ var inputSchema12 = {
 var tool25 = {
   name: "report_export",
   title: "Export a report (branded HTML / SARIF / Markdown / JSON)",
-  description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). Local file only \u2014 no external services, no web fonts.",
+  description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested. Local file only \u2014 no external services, no web fonts.",
   inputSchema: inputSchema12,
   handler: async (input, ctx) => handler22(input, ctx)
 };
@@ -58313,7 +58555,8 @@ async function handler22(input, ctx) {
   if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
   const findings = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
-  const { content, fileName } = renderReport(format2, scan2, findings, cves, lang);
+  const owasp = owaspCoverage(coverageRunsOfScan(ctx, scan2), findings);
+  const { content, fileName } = renderReport(format2, scan2, findings, cves, lang, owasp);
   const outDir = join48(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
   mkdirSync8(outDir, { recursive: true });
   const outFile = join48(outDir, fileName);
@@ -58330,23 +58573,42 @@ async function handler22(input, ctx) {
     ...(latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}
   };
 }
-function renderReport(format2, scan2, findings, cves, lang) {
+function coverageRunsOfScan(ctx, scan2) {
+  const asRun = (s) => ({
+    scan_id: s.scan_id,
+    scan_type: s.scan_type,
+    tools_run: s.tools_run,
+    missing_tools: s.missing_tools,
+    ...s.meta !== void 0 ? { meta: s.meta } : {}
+  });
+  if (!isOrchestratedFullScan(scan2)) return [asRun(scan2)];
+  const children = scan2.meta?.["child_scans"];
+  const runs = [];
+  for (const child of Array.isArray(children) ? children : []) {
+    const id = child !== null && typeof child === "object" ? child.scan_id : void 0;
+    if (typeof id !== "string") continue;
+    const row = ctx.storage.scans.getById(id);
+    if (row !== null && row.status === "completed") runs.push(asRun(row));
+  }
+  return runs;
+}
+function renderReport(format2, scan2, findings, cves, lang, owasp) {
   switch (format2) {
     case "sarif":
       return { content: toSarif(findings), fileName: "report.sarif" };
     case "json":
       return {
-        content: JSON.stringify({ scan: scan2, findings, cves }, null, 2),
+        content: JSON.stringify({ scan: scan2, findings, cves, owasp_2025: owasp }, null, 2),
         fileName: "report.json"
       };
     case "markdown":
-      return { content: renderMarkdown(scan2, findings, cves), fileName: "report.md" };
+      return { content: renderMarkdown(scan2, findings, cves, owasp), fileName: "report.md" };
     case "html":
     default:
-      return { content: renderHtml(scan2, findings, cves, lang), fileName: "report.html" };
+      return { content: renderHtml(scan2, findings, cves, lang, owasp), fileName: "report.html" };
   }
 }
-function renderMarkdown(scan2, findings, cves) {
+function renderMarkdown(scan2, findings, cves, owasp) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines = [];
@@ -58367,15 +58629,17 @@ function renderMarkdown(scan2, findings, cves) {
   if (findings.length === 0) {
     lines.push("_No findings._");
   } else {
-    lines.push("| Sev | Tool | Rule | Title | Location |");
-    lines.push("| --- | --- | --- | --- | --- |");
+    lines.push("| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |");
+    lines.push("| --- | --- | --- | --- | --- | --- |");
     for (const f of [...findings].sort((a2, b) => severityOrder(b.severity) - severityOrder(a2.severity))) {
       const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ""}\`` : "";
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ""}\` | ${mdEscape(f.title)} | ${loc} |`
+        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ""}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`
       );
     }
   }
+  lines.push("");
+  lines.push(...owaspCoverageMarkdown(owasp));
   if (cves.length > 0) {
     lines.push("");
     lines.push(`## Active CVEs (${cves.length})`);
@@ -58402,7 +58666,7 @@ var SCAN_TITLE = {
   pt: "Relat\xF3rio de Seguran\xE7a",
   es: "Informe de Seguridad"
 };
-function renderHtml(scan2, findings, cves, lang) {
+function renderHtml(scan2, findings, cves, lang, owasp) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const meta = `<div class="pdk-meta">
@@ -58422,10 +58686,11 @@ function renderHtml(scan2, findings, cves, lang) {
   <td><code>${escapeHtml(f.rule_id ?? "")}</code></td>
   <td>${escapeHtml(f.title)}</td>
   <td><code>${escapeHtml(f.file_path ?? "")}${f.line_start ? `:${f.line_start}` : ""}</code></td>
+  <td>${escapeHtml(taxonomyCell(f))}</td>
 </tr>`
   ).join("");
   const findingsSection = `<h2>Findings (${findings.length})</h2>
-` + (findings.length === 0 ? '<p class="pdk-empty">No findings.</p>' : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th></tr></thead><tbody>${findingRows}</tbody></table>`);
+` + (findings.length === 0 ? '<p class="pdk-empty">No findings.</p>' : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th><th>CWE / OWASP 2025</th></tr></thead><tbody>${findingRows}</tbody></table>`);
   const cveRows = cves.map(
     (c3) => `<tr>
   <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c3.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c3.cve_id)}</a></td>
@@ -58440,7 +58705,7 @@ function renderHtml(scan2, findings, cves, lang) {
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
     subtitle: `${scan2.scan_type} \xB7 ${scan2.started_at} \xB7 ${scan2.status}`,
-    sections: [meta, sevSection, findingsSection, cveSection],
+    sections: [meta, sevSection, findingsSection, owaspCoverageHtml(owasp), cveSection],
     lang
   });
 }
@@ -58454,15 +58719,71 @@ function failDomain17(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
+// src/frameworks/nistCsf2.ts
+var CSF_CATEGORIES = [
+  { id: "GV.OC", function: "GV", title: "Organizational Context" },
+  { id: "GV.RM", function: "GV", title: "Risk Management Strategy" },
+  { id: "GV.RR", function: "GV", title: "Roles, Responsibilities, and Authorities" },
+  { id: "GV.PO", function: "GV", title: "Policy" },
+  { id: "GV.OV", function: "GV", title: "Oversight" },
+  { id: "GV.SC", function: "GV", title: "Cybersecurity Supply Chain Risk Management" },
+  { id: "ID.AM", function: "ID", title: "Asset Management" },
+  { id: "ID.RA", function: "ID", title: "Risk Assessment" },
+  { id: "ID.IM", function: "ID", title: "Improvement" },
+  { id: "PR.AA", function: "PR", title: "Identity Management, Authentication, and Access Control" },
+  { id: "PR.AT", function: "PR", title: "Awareness and Training" },
+  { id: "PR.DS", function: "PR", title: "Data Security" },
+  { id: "PR.PS", function: "PR", title: "Platform Security" },
+  { id: "PR.IR", function: "PR", title: "Technology Infrastructure Resilience" },
+  { id: "DE.CM", function: "DE", title: "Continuous Monitoring" },
+  { id: "DE.AE", function: "DE", title: "Adverse Event Analysis" },
+  { id: "RS.MA", function: "RS", title: "Incident Management" },
+  { id: "RS.AN", function: "RS", title: "Incident Analysis" },
+  { id: "RS.CO", function: "RS", title: "Incident Response Reporting and Communication" },
+  { id: "RS.MI", function: "RS", title: "Incident Mitigation" },
+  { id: "RC.RP", function: "RC", title: "Incident Recovery Plan Execution" },
+  { id: "RC.CO", function: "RC", title: "Incident Recovery Communication" }
+];
+var RISK_ASSESSMENT = { category: "ID.RA", subcategories: ["ID.RA-01"] };
+var OWASP_TO_CSF = {
+  "A01:2025": [RISK_ASSESSMENT, { category: "PR.AA", subcategories: ["PR.AA-05"] }, { category: "PR.DS", subcategories: ["PR.DS-01"] }],
+  "A02:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-01"] }],
+  "A03:2025": [
+    { category: "ID.RA", subcategories: ["ID.RA-01", "ID.RA-09"] },
+    { category: "GV.SC", subcategories: ["GV.SC-07"] },
+    { category: "PR.PS", subcategories: ["PR.PS-02"] }
+  ],
+  "A04:2025": [RISK_ASSESSMENT, { category: "PR.DS", subcategories: ["PR.DS-01", "PR.DS-02"] }],
+  "A05:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-06"] }, { category: "PR.DS", subcategories: ["PR.DS-10"] }],
+  "A06:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-06"] }],
+  "A07:2025": [RISK_ASSESSMENT, { category: "PR.AA", subcategories: ["PR.AA-01", "PR.AA-03"] }],
+  "A08:2025": [
+    { category: "ID.RA", subcategories: ["ID.RA-01", "ID.RA-09"] },
+    { category: "PR.DS", subcategories: ["PR.DS-01"] }
+  ],
+  "A09:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-04"] }, { category: "DE.CM", subcategories: ["DE.CM-09"] }],
+  "A10:2025": [RISK_ASSESSMENT, { category: "PR.IR", subcategories: ["PR.IR-03"] }, { category: "PR.PS", subcategories: ["PR.PS-06"] }]
+};
+function owaspForCsfCategory(category) {
+  const out = [];
+  for (const [owasp, refs] of Object.entries(OWASP_TO_CSF)) {
+    for (const r of refs) if (r.category === category) out.push({ owasp, subcategories: r.subcategories });
+  }
+  return out;
+}
+
 // src/tools/complianceEvidence.ts
+var FRAMEWORKS = ["gdpr", "soc2", "iso27001", "owasp-top10-2025", "nist-csf-2.0", "generic"];
 var inputSchema13 = {
   project_path: ProjectPath,
-  framework: external_exports.enum(["gdpr", "soc2", "iso27001", "generic"]).optional().describe("Which framework to label the evidence under. Default: generic.")
+  framework: external_exports.enum(FRAMEWORKS).optional().describe(
+    "Which framework to label the evidence under. owasp-top10-2025 and nist-csf-2.0 give per-category evidence from the open findings and the scanners that ran. Default: generic."
+  )
 };
 var tool26 = {
   name: "compliance_evidence",
   title: "Compliance evidence pack (Markdown)",
-  description: "Generate a Markdown evidence document from one project's accumulated state (project_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.",
+  description: "Generate a Markdown evidence document from one project's accumulated state (project_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for per-category evidence: a category counts as covered only when a scanner able to detect it ran ok (NIST CSF via dev-guardian's own OWASP mapping). Read-only.",
   inputSchema: inputSchema13,
   handler: async (input, ctx) => handler23(input, ctx)
 };
@@ -58482,6 +58803,14 @@ async function handler23(input, ctx) {
   const sbom = findLatestUsable(storage, projectPath, ["sbom"]).scan;
   const baseline = storage.baselines.getActiveForProject(projectPath);
   const suppressions = storage.suppressions.listActive().filter((s) => s.project_path === void 0 || s.project_path === projectPath);
+  let owasp = null;
+  if (framework === "owasp-top10-2025" || framework === "nist-csf-2.0") {
+    const open = openSetForProject(storage, projectPath);
+    owasp = {
+      coverage: owaspCoverage(coverageRunsOf(open.bookkeeping, open.scans), open.findings),
+      findings: open.findings
+    };
+  }
   const md = build({
     framework,
     project_path: projectPath,
@@ -58491,6 +58820,7 @@ async function handler23(input, ctx) {
     sbom,
     baseline,
     suppressionsCount: suppressions.length,
+    owasp,
     ctx
   });
   return {
@@ -58508,7 +58838,9 @@ function complianceMeta(compliance) {
 var FRAMEWORK_LABEL = {
   gdpr: "GDPR",
   soc2: "SOC 2",
-  iso27001: "ISO 27001"
+  iso27001: "ISO 27001",
+  "owasp-top10-2025": "OWASP Top 10:2025",
+  "nist-csf-2.0": "NIST CSF 2.0"
 };
 function frameworkControls(framework, args) {
   const meta = complianceMeta(args.compliance);
@@ -58554,6 +58886,10 @@ function frameworkControls(framework, args) {
           note: hasLicenses ? 'license posture \u2014 see "Latest compliance scan" above' : "no `compliance_check` scan on file \u2014 license posture was never measured"
         }
       ];
+    case "owasp-top10-2025":
+      return owaspControls(args.owasp);
+    case "nist-csf-2.0":
+      return csfControls(args.owasp);
     case "iso27001":
       return [
         {
@@ -58576,6 +58912,95 @@ function frameworkControls(framework, args) {
         }
       ];
   }
+}
+function openFindings(n2) {
+  return `${n2} open finding${n2 === 1 ? "" : "s"}`;
+}
+function owaspControls(owasp) {
+  if (owasp === null) return [];
+  return owasp.coverage.categories.map((c3) => {
+    const found = openFindings(c3.findings);
+    if (c3.status === "not_tested") {
+      return {
+        id: c3.id,
+        description: c3.title,
+        evidenced: false,
+        note: `no scanner able to detect it ran ok in the scans behind this document \u2014 run: ${c3.could_be_tested_by.join("; ")}` + (c3.findings > 0 ? ` (${found} from other scanners)` : "")
+      };
+    }
+    const tested = `tested by ${testedByScans(c3)}`;
+    return {
+      id: c3.id,
+      description: c3.title,
+      evidenced: true,
+      note: c3.status === "partial" ? `PARTIAL \u2014 ${tested}, but ${partialReasons(c3).join("; ")}; ${found}` : `${tested}; ${found}`
+    };
+  });
+}
+function testedByScans(c3) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const e of c3.tested_by) {
+    const text = `${e.tool} (${e.scan_type}, scan ${e.scan_id.slice(0, 8)})`;
+    if (!seen.has(text)) {
+      seen.add(text);
+      out.push(text);
+    }
+  }
+  return out.length > 0 ? out.join(", ") : testedByText(c3.tested_by);
+}
+function csfControls(owasp) {
+  if (owasp === null) return [];
+  const byId = new Map(owasp.coverage.categories.map((c3) => [c3.id, c3]));
+  return CSF_CATEGORIES.map((csf) => {
+    const mapped = owaspForCsfCategory(csf.id);
+    if (mapped.length === 0) {
+      return {
+        id: csf.id,
+        description: csf.title,
+        evidenced: false,
+        note: "an organisational outcome no code scan evidences \u2014 not assessable by dev-guardian"
+      };
+    }
+    const tested = mapped.filter((m) => (byId.get(m.owasp)?.status ?? "not_tested") !== "not_tested");
+    const subcategories = [...new Set(tested.flatMap((m) => m.subcategories))].sort();
+    const testedIds = new Set(tested.map((m) => m.owasp));
+    const findings = owasp.findings.filter((f) => (f.owasp ?? []).some((id) => testedIds.has(id))).length;
+    if (tested.length === 0) {
+      return {
+        id: csf.id,
+        description: csf.title,
+        evidenced: false,
+        note: `none of the OWASP categories mapped here was tested: ${mapped.map((m) => m.owasp).join(", ")}`
+      };
+    }
+    const via = tested.map((m) => `${m.owasp} (${byId.get(m.owasp)?.status === "partial" ? "partial" : "tested"})`);
+    const untested = mapped.filter((m) => !tested.includes(m)).map((m) => m.owasp);
+    return {
+      id: csf.id,
+      description: csf.title,
+      evidenced: true,
+      note: `via ${via.join(", ")} \u2014 subcategories ${subcategories.join(", ")}; ${findings} open finding${findings === 1 ? "" : "s"} in those categories` + (untested.length > 0 ? `; not tested here: ${untested.join(", ")}` : "")
+    };
+  });
+}
+function frameworkPreamble(framework, evidence) {
+  const owasp = evidence?.coverage ?? null;
+  if (framework !== "owasp-top10-2025" && framework !== "nist-csf-2.0") return [];
+  const out = [];
+  out.push(`${COVERAGE_RULE} Source of the categories and their CWEs: https://owasp.org/Top10/2025/.`);
+  if (framework === "nist-csf-2.0") {
+    out.push("");
+    out.push(
+      "CSF 2.0 function and category ids are NIST's (CSWP 29, https://nvlpubs.nist.gov/nistpubs/CSWP/NIST.CSWP.29.pdf). Which OWASP categories evidence which CSF category is dev-guardian's own mapping \u2014 neither NIST nor OWASP publishes one. A CSF category counts as evidenced only through an OWASP category a capable scanner tested."
+    );
+  }
+  if (owasp !== null && owasp.findings_total > 0) {
+    out.push("");
+    out.push(unmappedSentence(owasp, "open findings"));
+  }
+  out.push("");
+  return out;
 }
 function build(args) {
   const out = [];
@@ -58648,10 +59073,11 @@ function build(args) {
   out.push("## Frameworks");
   if (args.framework === "generic") {
     out.push(
-      "No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping."
+      "No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping, or `owasp-top10-2025|nist-csf-2.0` for per-category evidence."
     );
   } else {
     const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+    out.push(...frameworkPreamble(args.framework, args.owasp));
     const controls = frameworkControls(args.framework, args);
     const evidenced = controls.filter((c3) => c3.evidenced);
     const notCovered = controls.filter((c3) => !c3.evidenced);
@@ -61208,7 +61634,7 @@ async function handler32(input, ctx) {
   const wpVuln = findLatest(ctx, keys, "wp_vuln_check", FINDING_SCAN);
   const wpVulnSource = findLatest(ctx, installKeys, "wp_vuln_check_source", FINDING_SCAN);
   const wpCodeScan = findLatest(ctx, installKeys, "wordpress", FINDING_SCAN);
-  const open = openFindings(ctx, keys).filter(
+  const open = openFindings2(ctx, keys).filter(
     (f) => f.tool === "wpscan" || f.tool === "phpcs" || f.category === "security"
   );
   const cvesFromLive = wpVuln ? ctx.storage.cves.listActive(wpVuln.scan_id) : [];
@@ -61262,7 +61688,7 @@ var FINDING_SCAN = {};
 function findLatest(ctx, keys, type, opts) {
   return latestUnderKeys(ctx.storage, keys, [type], opts);
 }
-function openFindings(ctx, keys) {
+function openFindings2(ctx, keys) {
   const out = [];
   for (const key of new Set(keys)) {
     const seen = indexFindings(out);

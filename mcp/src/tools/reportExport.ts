@@ -11,13 +11,22 @@
  *     CVE tables for a scan_id.
  *   - narrative mode (`content_markdown`): wraps stakeholder Markdown in the same
  *     branded shell — used by `/guardian-report`. scan_id is ignored here.
+ *
+ * Scan mode also states each finding's CWE / OWASP Top 10:2025 category and
+ * an "OWASP Top 10:2025 coverage" table (`frameworks/coverage.ts`): a
+ * category is tested only when a scanner able to detect it ran ok in THIS
+ * scan — for an orchestrated security_full, in its child scans, whose rows
+ * record what the parent's merged bookkeeping does not (whether scan_sast
+ * ran `local_only`).
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
 import { latestStateScan } from '../history/openSet.js';
+import { isOrchestratedFullScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import {
@@ -28,6 +37,7 @@ import {
   severityBar,
   severityChip,
 } from '../report/htmlTheme.js';
+import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
 import {
@@ -82,7 +92,9 @@ const tool: ToolModule = {
     'Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), ' +
     'sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass ' +
     'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
-    'format=html). Local file only — no external services, no web fonts.',
+    'format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: ' +
+    'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested. ' +
+    'Local file only — no external services, no web fonts.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -165,7 +177,8 @@ async function handler(
     ? ctx.storage.cves.listActive(scanId)
     : [];
 
-  const { content, fileName } = renderReport(format, scan, findings, cves, lang);
+  const owasp = owaspCoverage(coverageRunsOfScan(ctx, scan), findings);
+  const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, fileName);
@@ -186,30 +199,57 @@ async function handler(
 
 type ScanRecordT = NonNullable<ReturnType<PluginContext['storage']['scans']['getById']>>;
 
+/**
+ * The bookkeeping this report's coverage rests on: the scan itself, or — for
+ * an orchestrated security_full — each child scan it names that still
+ * exists. A child that is gone contributes nothing, so its categories read
+ * "not tested" rather than borrowing the parent's merged bookkeeping.
+ */
+function coverageRunsOfScan(ctx: PluginContext, scan: ScanRecordT): CoverageRun[] {
+  const asRun = (s: ScanRecordT): CoverageRun => ({
+    scan_id: s.scan_id,
+    scan_type: s.scan_type,
+    tools_run: s.tools_run,
+    missing_tools: s.missing_tools,
+    ...(s.meta !== undefined ? { meta: s.meta } : {}),
+  });
+  if (!isOrchestratedFullScan(scan)) return [asRun(scan)];
+  const children = scan.meta?.['child_scans'];
+  const runs: CoverageRun[] = [];
+  for (const child of Array.isArray(children) ? (children as unknown[]) : []) {
+    const id = child !== null && typeof child === 'object' ? (child as { scan_id?: unknown }).scan_id : undefined;
+    if (typeof id !== 'string') continue;
+    const row = ctx.storage.scans.getById(id);
+    if (row !== null && row.status === 'completed') runs.push(asRun(row));
+  }
+  return runs;
+}
+
 function renderReport(
   format: 'html' | 'sarif' | 'markdown' | 'json',
   scan: ScanRecordT,
   findings: Finding[],
   cves: Cve[],
   lang: Lang,
+  owasp: OwaspCoverage,
 ): { content: string; fileName: string } {
   switch (format) {
     case 'sarif':
       return { content: toSarif(findings), fileName: 'report.sarif' };
     case 'json':
       return {
-        content: JSON.stringify({ scan, findings, cves }, null, 2),
+        content: JSON.stringify({ scan, findings, cves, owasp_2025: owasp }, null, 2),
         fileName: 'report.json',
       };
     case 'markdown':
-      return { content: renderMarkdown(scan, findings, cves), fileName: 'report.md' };
+      return { content: renderMarkdown(scan, findings, cves, owasp), fileName: 'report.md' };
     case 'html':
     default:
-      return { content: renderHtml(scan, findings, cves, lang), fileName: 'report.html' };
+      return { content: renderHtml(scan, findings, cves, lang, owasp), fileName: 'report.html' };
   }
 }
 
-function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[]): string {
+function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owasp: OwaspCoverage): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines: string[] = [];
@@ -230,15 +270,17 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[]): st
   if (findings.length === 0) {
     lines.push('_No findings._');
   } else {
-    lines.push('| Sev | Tool | Rule | Title | Location |');
-    lines.push('| --- | --- | --- | --- | --- |');
+    lines.push('| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
     for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
       const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '';
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} |`,
+        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`,
       );
     }
   }
+  lines.push('');
+  lines.push(...owaspCoverageMarkdown(owasp));
   if (cves.length > 0) {
     lines.push('');
     lines.push(`## Active CVEs (${cves.length})`);
@@ -269,7 +311,7 @@ const SCAN_TITLE: Record<Lang, string> = {
   es: 'Informe de Seguridad',
 };
 
-function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang): string {
+function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang, owasp: OwaspCoverage): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
 
@@ -295,6 +337,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   <td><code>${escapeHtml(f.rule_id ?? '')}</code></td>
   <td>${escapeHtml(f.title)}</td>
   <td><code>${escapeHtml(f.file_path ?? '')}${f.line_start ? `:${f.line_start}` : ''}</code></td>
+  <td>${escapeHtml(taxonomyCell(f))}</td>
 </tr>`,
     )
     .join('');
@@ -302,7 +345,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
     `<h2>Findings (${findings.length})</h2>\n` +
     (findings.length === 0
       ? '<p class="pdk-empty">No findings.</p>'
-      : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th></tr></thead><tbody>${findingRows}</tbody></table>`);
+      : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th><th>CWE / OWASP 2025</th></tr></thead><tbody>${findingRows}</tbody></table>`);
 
   const cveRows = cves
     .map(
@@ -324,7 +367,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
     subtitle: `${scan.scan_type} · ${scan.started_at} · ${scan.status}`,
-    sections: [meta, sevSection, findingsSection, cveSection],
+    sections: [meta, sevSection, findingsSection, owaspCoverageHtml(owasp), cveSection],
     lang,
   });
 }

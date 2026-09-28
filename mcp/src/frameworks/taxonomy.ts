@@ -84,3 +84,21 @@ export function classifyTaxonomy(input: { cwe?: unknown; owasp?: unknown }): Fin
   if (categories.size > 0) out.owasp = OWASP_2025_IDS.filter((id) => categories.has(id));
   return out;
 }
+
+/**
+ * SARIF `properties.tags` for a finding: `external/cwe/cwe-89` (the form
+ * GitHub code scanning reads off a rule) and `owasp-2025-a05`. Empty when
+ * the finding's taxonomy is unknown.
+ */
+export function sarifTaxonomyTags(f: { cwe?: readonly string[]; owasp?: readonly string[] }): string[] {
+  const tags: string[] = [];
+  for (const c of f.cwe ?? []) {
+    const cwe = normalizeCwe(c);
+    if (cwe !== null) tags.push(`external/cwe/${cwe.toLowerCase()}`);
+  }
+  for (const id of f.owasp ?? []) {
+    const m = /^A(\d{2}):2025$/.exec(id);
+    if (m !== null && m[1] !== undefined) tags.push(`owasp-2025-a${m[1]}`);
+  }
+  return [...new Set(tags)].sort();
+}
