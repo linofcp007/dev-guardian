@@ -100,8 +100,8 @@ Vulnerabilidades conhecidas não são o único risco — packages maliciosos tam
 
 `export_vex { project_path: "<project>" }` escreve um documento OpenVEX (ou CycloneDX com `format: "cyclonedx"`) em `.guardian/reports/vex-*/`, uma declaração por vulnerabilidade (CVE, ou o id GHSA/PYSEC próprio, com os aliases que o scanner deu) e versão do package, do scan de dependências mais recente. Nunca inventa um estado:
 
-- `not_affected` só quando o utilizador o declarou: `suppress_finding` com `vex_status: "not_affected"` e uma `justification` OpenVEX (por exemplo `vulnerable_code_not_in_execute_path`), mais um `impact_statement` opcional. Pergunta sempre a justificação — não a escolhas tu;
-- `affected` quando um ficheiro que uma rota alcança importa o package e carrega a versão vulnerável;
+- `not_affected` só quando o utilizador o declarou: `suppress_finding` com `vex_status: "not_affected"` e uma `justification` OpenVEX (por exemplo `vulnerable_code_not_in_execute_path`), mais um `impact_statement` opcional. Pergunta sempre a justificação — não a escolhas tu. Tem de estar em **todas** as cópias da vulnerabilidade: se a resposta trouxer `warning` e `vex.other_open_findings`, mostra-as ao utilizador. Com `vex.exportable: false` (finding sem versão de package, como um template nuclei) a supressão fica registada mas não entra no documento;
+- `affected` quando um ficheiro que uma rota alcança importa o package e carrega a versão vulnerável, num snapshot da mesma árvore que o scan de dependências;
 - `under_investigation` no resto; `fixed` nunca.
 
 Corre antes `generate_sbom` (dá os purls) e `map_attack_surface` (dá a alcançabilidade), e mostra ao utilizador a lista `unknowns` — é o que o documento não sabe.

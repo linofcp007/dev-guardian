@@ -8,6 +8,10 @@ version bump.
 
 ## [Unreleased]
 
+**BREAKING**, in short (detailed below): `validate_finding`'s
+`summary.counts_by_verdict`, a 2.0.0 field, is keyed by provider —
+`counts_by_verdict.reachable` is now `counts_by_verdict.static.reachable`.
+
 ### Added
 
 - `map_attack_surface` persists the import specifiers it cannot resolve to a project file — the
@@ -27,10 +31,10 @@ version bump.
   importer counts, and a route-reached one reads `reachable` only when the project's manifests
   (requirement files at any depth, `requirements/*.txt`, `*-requirements.txt`, `Pipfile.lock`,
   `poetry.lock`, `uv.lock`) pin the package at that one version — another pin is `unknown`, named.
-  It runs by default beside `static`. The verdict set gains `imported`; `summary.counts_by_verdict` is
-  now keyed by provider (`{ static: {…}, dependency: {…} }` — a flat count counted a dependency
-  finding twice), and `summary.coverage_gaps` says each kind of gap once, with how many findings it
-  concerns. `ValidationsRepo.getByFingerprint` takes the provider explicitly.
+  It runs by default beside `static`. The verdict set gains `imported`. `summary.coverage_gaps` says
+  each kind of gap once, with how many findings it concerns, and names the vulnerability findings
+  that carry no package version — "not exportable to VEX (no package coordinates)".
+  `ValidationsRepo.getByFingerprint` takes the provider explicitly.
 - `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /
   Track, the CISA SSVC Guide's Table 9): Exploitation from KEV (EPSS ≥ 0.1 approximates a public
   PoC; below it `poc` is assumed, since nothing dev-guardian has shows that no PoC exists),
@@ -41,30 +45,42 @@ version bump.
 - `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
   optional `impact_statement`, for a finding with a vulnerability id of its own — CVE, GHSA, PYSEC, …
   (migration 014; existing suppressions state nothing in VEX terms). The reply names those ids
-  (`vex.vulnerability_ids`).
+  (`vex.vulnerability_ids`), says whether `export_vex` can publish it (`vex.exportable`: not for a
+  finding with no package version), and names the other open findings of the same vulnerability
+  (`vex.other_open_findings`, with a `warning`): `not_affected` needs a justification on every copy.
 - Dependency findings record the other ids their scanner gives for the same vulnerability
   (`vuln_aliases`: Trivy `VendorIDs`, pip-audit's OSV aliases, npm audit's GHSA and CVE ids, WPScan's
   further CVEs; migration 014). Not part of the fingerprint.
+- **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
+  statement per vulnerability and package version of the latest usable dependency scan — named by
+  its CVE or its own GHSA/PYSEC id, with its aliases (OpenVEX `aliases`, CycloneDX `references`).
+  A finding joins the CVE row its rule id names, else the first of its aliases a row names; two rows
+  are never one statement, and no statement lists as an alias an id that names another one.
+  `not_affected` only from a VEX suppression on every copy (the notes name a copy without one; the
+  copies' impact statements are joined), `affected` when the dependency provider finds that version
+  reachable on a snapshot of the scanned tree, otherwise `under_investigation`; `fixed` is never
+  guessed. Packages are named by purl (the SBOM's, else built from ecosystem, name and version — a
+  `.jar` target's `group:artifact` as a Maven purl), never two statuses for one package; the product
+  by the SBOM's purl only when that SBOM describes the same tree (`generate_sbom` now records its
+  tree). Written under `.guardian/reports/vex-*`; `unknowns` names what was missing, and nothing is
+  written when no vulnerability was measured.
 
 ### Changed
 
+- **BREAKING:** `validate_finding`'s `summary.counts_by_verdict` is keyed by provider
+  (`{ static: {…}, dependency: {…} }`). One flat count counted a dependency finding twice, once per
+  provider, and mixed two questions.
 - A finding is tied to a vulnerability only by its own ids — its rule id and the aliases its scanner
-  recorded — never by an id its title or description mentions. This changes the KEV/EPSS weighting
-  of `prioritize_findings` and `create_fix_pr`: a finding whose text mentions a KEV-listed or
-  high-EPSS CVE no longer inherits that CVE's boost (measured on real Trivy output: CVE-2026-4800's
-  lodash advisory mentions CVE-2021-23337). Scores change only where a boost was inherited that way.
+  recorded — never by an id its title or description mentions (CVE-2026-4800's lodash advisory
+  mentions CVE-2021-23337). The KEV/EPSS weighting of `prioritize_findings` moves both ways.
+  Measured on an npm + Gradle + PyPI project, 43 of its 227 scores change:
+  - 13 findings lose a boost inherited from a CVE their text mentions (CVE-2019-16335: 701 → 695);
+  - pip-audit findings gain one from their own aliases: 48 of them are now tied to a CVE, and
+    `uncorrelated` goes from 50 to 3 (PYSEC-2026-628: 410 → 497).
+
+  `create_fix_pr` breaks its severity ties by KEV/EPSS the same way, so its order shifts with them.
   A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding
   counts as `uncorrelated` until the next scan.
-- **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
-  statement per vulnerability and package version of the latest usable dependency scan — named by
-  its CVE or its own GHSA/PYSEC id, with its aliases (OpenVEX `aliases`, CycloneDX `references`),
-  and tied to findings by those ids only. `not_affected` only from a VEX suppression on every copy,
-  `affected` when the dependency provider finds that version reachable, otherwise
-  `under_investigation`; `fixed` is never guessed. Packages are named by purl (the SBOM's, else built
-  from ecosystem, name and version), never two statuses for one; the product by the SBOM's purl only
-  when that SBOM describes the same tree (`generate_sbom` now records its tree). Written under
-  `.guardian/reports/vex-*`; `unknowns` names what was missing, and nothing is written when no
-  vulnerability was measured.
 
 ## [3.0.0] - 2026-09-28
 
