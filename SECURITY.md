@@ -90,27 +90,49 @@ their respective projects.
   named in its `servers` argument — their `command` and `args`, as the host
   would launch them — **only for the server names the caller lists
   explicitly**: there is no wildcard and no default, and a name no config
-  declares is skipped. Each runs with a **minimal environment** (the MCP
-  SDK's default allowlist — `PATH`, `HOME` / `USERPROFILE` and a few more,
-  plus the variables Windows adds to every process — **plus the entry's own
-  `env`**), never this server's full environment, and a `${VAR}` placeholder
-  is passed literally rather than filled from it; its working directory is
-  the project. The audit sends `initialize` and the list methods only and
-  **never calls `tools/call`**; it **contacts remote (http/sse) servers only
-  with `allow_remote: true`**; and it **kills the server's process tree
+  declares is skipped. A name selects entries exactly: `<source>::<name>`
+  picks one; a bare name whose entries launch different servers is refused
+  with the qualified names to choose from; another project's entries in
+  Claude Code's global config are never started. Each runs with a **minimal
+  environment** (the MCP SDK's default allowlist — `PATH`, `HOME` /
+  `USERPROFILE` and a few more, plus the variables Windows adds to every
+  process — **plus the entry's own `env`**), never this server's full
+  environment, and a `${VAR}` placeholder is passed literally rather than
+  filled from it; its working directory is the project. The audit sends
+  `initialize` and the list methods only and **never calls `tools/call`**;
+  it **contacts a remote server only with `allow_remote: true`** — an entry
+  is remote when it has a URL, when its command is on a UNC or device path
+  (starting it would send the user's credentials to that host over SMB), or
+  when its command line names an `http(s)`/`ws(s)` URL or a UNC path
+  (`mcp-remote` and other proxies); and it **kills the server's process tree
   afterwards** (the process group on POSIX, `taskkill /T` on Windows),
-  whether the server answered or not. What a started server does while it
-  runs — its own network requests included — is that server's code: run the
-  audit only for servers you would let the host start.
+  whether the server answered or not. On Windows the command is resolved
+  with asynchronous look-ups over the local `PATH` entries only, so a
+  network path never blocks the server. Each server has a time budget, an
+  inbound budget (32 MiB, 10 000 messages, 8 MiB per message) and a
+  1000-item cap per list, and the whole audit a budget
+  (`GUARDIAN_MCP_AUDIT_BUDGET_MS`); cancelling the call stops launching.
+  What a started server does while it runs — its own network requests
+  included — is that server's code: run the audit only for servers you would
+  let the host start.
+- **A clean `audit_mcp_tools` result covers only what the server chose to
+  show this client.** The audit names itself honestly (`dev-guardian-audit`,
+  no client capabilities, a minimal environment), so a server can recognise
+  it and serve it definitions other than those it serves the host. Pins help
+  (a definition that changes later, or a tool that vanishes and returns
+  changed, is reported), but no audit from outside the host can prove what
+  the host is shown.
 - **Agent configs are read the way the hooks read theirs.** `audit_agent_config`
   and `audit_mcp_tools` read every MCP host config — the user-level ones
-  included — through the hooks' hardened reader: links below the project (or
-  the home directory) are walked first and a link to a network or device path
-  is refused unopened, then the file is opened non-blocking and only a regular
-  file of at most 256 KiB is read. A FIFO, a device, a directory or a network
-  link in a config's place can no longer hang either tool; a config that is
-  there and was not read is named in `sources_unreadable`, is a failed pass in
-  `tools_run`, and lowers coverage — never read as "no servers declared".
+  included, and Claude Code's from `CLAUDE_CONFIG_DIR` when that is set —
+  through the hooks' hardened reader: links below the project (or the home
+  directory) are walked first and a link to a network or device path is
+  refused unopened, then the file is opened non-blocking and only a regular
+  file within its cap (256 KiB; 16 MiB for Claude Code's `.claude.json`) is
+  read. A FIFO, a device, a directory or a network link in a config's place
+  can no longer hang either tool; a config that is there and was not read is
+  named in `sources_unreadable`, is a failed pass in `tools_run`, and lowers
+  coverage — never read as "no servers declared".
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -136,7 +158,7 @@ project's own build and test commands.
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check_source` ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
 | The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_rest_audit`, the CLI's DAST health check | per call |
 | The URL you name | `scan_skill` given an HTTP(S) or git URL | per call |
-| A remote MCP server you name | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
+| A remote MCP server you name — a URL entry, a UNC command, or the URL a proxy on the command line talks to | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
 
 ### Requests the scanners and tools dev-guardian runs make
 

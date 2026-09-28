@@ -264,12 +264,20 @@ Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
    nomeado com um ambiente mínimo (mais o `env` da própria entrada), envia
    `initialize` e os pedidos de listagem de tools, prompts e resources,
    **nunca chama `tools/call`**, e mata a árvore de processos no fim.
-   Servidores remotos (http/sse) só com `allow_remote: true`, que o
-   utilizador tem de pedir.
+   Servidores remotos só com `allow_remote: true`, que o utilizador tem de
+   pedir — remoto é uma entrada com URL, um comando num caminho de rede, ou
+   uma linha de comando que nomeia um URL (`mcp-remote` e outros proxies).
+   Se vários ficheiros declaram o mesmo nome com comandos diferentes, a tool
+   recusa e lista os nomes qualificados (`.mcp.json::github`): pergunta ao
+   utilizador qual quer e passa esse.
 3. Lê `coverage` e `servers[].status` antes dos findings: um servidor
-   `skipped` (não declarado, remoto sem `allow_remote`) ou `failed` (não
-   arrancou, não respondeu em `timeout_ms`) não foi auditado — não é um
-   resultado limpo.
+   `skipped` (não declarado, ambíguo, remoto sem `allow_remote`, cancelado,
+   sem orçamento), `failed` (não arrancou, não respondeu em `timeout_ms`) ou
+   `partial` (uma listagem cortada por um limite) não foi auditado por
+   inteiro — não é um resultado limpo. E mesmo um resultado limpo cobre só o
+   que o servidor quis mostrar a esta auditoria: ela identifica-se como
+   `dev-guardian-audit`, e um servidor pode reconhecê-la e mostrar outra
+   coisa ao anfitrião. Diz isso ao utilizador.
 4. Os findings dizem em que tool e em que campo (descrição, `inputSchema`,
    …) está o problema: instruções ao modelo, Unicode escondido, pedidos para
    ler chaves ou configurações, para esconder algo do utilizador, para enviar
@@ -277,11 +285,11 @@ Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
    (*shadowing*). `mcp-tool-definition-changed` (high) é um *rug pull*: a
    mesma tool com outra definição (título, descrição, esquemas de entrada ou
    de saída, anotações) desde a auditoria anterior — reportado uma vez, e a
-   nova definição passa a ser a referência. Prompts, resources e templates
-   também ficam registados (`mcp-prompt-definition-changed` e afins, medium). Uma referência a
-   ficheiros de credenciais num servidor cujo trabalho é precisamente esse
-   (um gestor de segredos, um auditor de configuração) é esperada: diz isso
-   ao utilizador em vez de a apresentar como ataque.
+   nova definição passa a ser a referência; uma tool que desaparece e volta
+   diferente também conta. As `instructions` do servidor (que vão para o
+   system prompt) contam como uma tool (`mcp-server-instructions-changed`,
+   high). Prompts, resources e templates também ficam registados
+   (`mcp-prompt-definition-changed` e afins, medium).
 
 ## Quando não correr scans completos
 
