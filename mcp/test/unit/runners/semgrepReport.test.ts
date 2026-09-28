@@ -186,3 +186,70 @@ describe('describePartialParse', () => {
     );
   });
 });
+
+/**
+ * Fix round 2: the judge tells "a rule did not compile" from "semgrep did
+ * not run". Both are `failed` to a caller that reads the verdict alone; a
+ * run whose only errors are rules that did not load (and per-file problems)
+ * also names those rules, so bug_hunt can record Semgrep as run, with a
+ * narrower gap, instead of coverage none and "install semgrep".
+ */
+describe('checkSemgrepReport: rules that did not load while the others ran', () => {
+  // The 1.176.1 shape, measured: a local rule file with one bad pattern —
+  // exit 2, the good rule's result reported, the file scanned.
+  const PREFIX = 'C.Users.dev..claude.plugins.cache.dev-guardian.2.0.0.configs.semgrep';
+  const RULE_ERROR = {
+    code: 2,
+    level: 'error',
+    type: 'Rule parse error',
+    rule_id: `${PREFIX}.broken-rule`,
+    message:
+      `Rule parse error in rule ${PREFIX}.broken-rule:\n Invalid pattern for JavaScript: Stdlib.Parsing.Parse_error\n` +
+      '----- pattern -----\nfoo((((\n----- end pattern -----\n',
+  };
+  const WARNING = { code: 3, level: 'warn', type: ['PartialParsing', []], message: 'Syntax error at line wp/a.php:3', path: 'wp/a.php' };
+  const strip = (id: string): string => (id.startsWith(`${PREFIX}.`) ? id.slice(PREFIX.length + 1) : id);
+
+  it('names each rule by its stored id and what is wrong with it; the verdict stays failed', () => {
+    const r = checkSemgrepReport({
+      raw: report({ errors: [RULE_ERROR, RULE_ERROR], paths: { scanned: ['app.js'] } }),
+      exitCode: 2,
+      outcome: 'failed',
+      targets: 1,
+      ruleIdOf: strip,
+    });
+    expect(r.verdict).toBe('failed');
+    expect(r.ok).toBe(false);
+    expect(r.rules_not_loaded).toEqual([{ rule_id: 'broken-rule', message: 'Invalid pattern for JavaScript: Stdlib.Parsing.Parse_error' }]);
+    expect(r.partial).toBeUndefined();
+  });
+
+  it('keeps the per-file problems beside it, project-relative', () => {
+    const r = checkSemgrepReport({
+      raw: report({ errors: [RULE_ERROR, { ...WARNING, path: '/p/wp/a.php' }], paths: { scanned: ['app.js', 'wp/a.php'] } }),
+      exitCode: 2,
+      outcome: 'failed',
+      targets: 1,
+      projectPath: '/p',
+    });
+    expect(r.rules_not_loaded?.map((x) => x.rule_id)).toEqual([`${PREFIX}.broken-rule`]);
+    expect(r.partial?.map((p) => p.file)).toEqual(['wp/a.php']);
+  });
+
+  it.each([
+    ['a rule error that names no rule', { errors: [{ type: 'Rule parse error', level: 'error', message: 'bad' }] }, 2],
+    ['beside a config error', { errors: [RULE_ERROR, { type: 'SemgrepError', level: 'error', message: 'Invalid YAML file' }] }, 2],
+    ['beside an error that is not tied to a file', { errors: [RULE_ERROR, { type: 'Timeout', level: 'error', message: 'x' }] }, 2],
+    ['on a run that scanned nothing', { errors: [RULE_ERROR], paths: { scanned: [] } }, 2],
+    ['on exit 7 (the whole config did not load)', { errors: [RULE_ERROR] }, 7],
+  ])('never on %s — that is semgrep failing', (_label, over, exitCode) => {
+    const r = checkSemgrepReport({ raw: report(over), exitCode, outcome: 'failed', targets: 1 });
+    expect(r.verdict).toBe('failed');
+    expect(r.rules_not_loaded).toBeUndefined();
+  });
+
+  it('never on a run that did not finish', () => {
+    const r = checkSemgrepReport({ raw: report({ errors: [RULE_ERROR] }), exitCode: 2, outcome: 'timed_out', targets: 1 });
+    expect(r.rules_not_loaded).toBeUndefined();
+  });
+});

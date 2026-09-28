@@ -43715,6 +43715,7 @@ var MAX_ERROR_TEXT = 300;
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
   const { raw, exitCode, outcome, targets, projectPath } = args;
+  const relative25 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
   if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
     return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
@@ -43743,17 +43744,21 @@ function checkSemgrepReport(args) {
   if (exitClean && scanned > 0 && errors.length > 0) {
     const partial3 = perFileErrors(errorEntries);
     if (partial3 !== null) {
+      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: relative25(partial3) };
+    }
+  }
+  const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
+  if ((exitClean || exitCode === 2) && scanned > 0) {
+    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+    if (ruleGap !== null) {
       return {
-        ok: false,
-        verdict: "partial",
-        scanned,
-        errors: errors.length,
-        reason,
-        partial: partial3.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }))
+        ...failed,
+        rules_not_loaded: ruleGap.rules,
+        ...ruleGap.files.length > 0 ? { partial: relative25(ruleGap.files) } : {}
       };
     }
   }
-  return { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
+  return failed;
 }
 function describePartialParse(partial3, consequence) {
   const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
@@ -43768,19 +43773,47 @@ function describeErrors(errors) {
     return `${type}: ${message3.split(/\r?\n/)[0] ?? message3}`;
   });
 }
+function errorType(entry) {
+  const rawType = getProp(entry, "type");
+  return typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
+}
+function perFileError(entry) {
+  const type = errorType(entry);
+  if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+  const file = targetFileOf(entry, getProp(entry, "type"));
+  if (file === null || /\.ya?ml$/i.test(file)) return null;
+  const message3 = getString(entry, "message") ?? type;
+  return { file, type, message: message3.split(/\r?\n/)[0] ?? message3 };
+}
+function pushOnce(out, p) {
+  if (!out.some((q) => q.file === p.file && q.type === p.type)) out.push(p);
+}
 function perFileErrors(errors) {
   const out = [];
   for (const entry of errors) {
-    const rawType = getProp(entry, "type");
-    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
-    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
-    const file = targetFileOf(entry, rawType);
-    if (file === null || /\.ya?ml$/i.test(file)) return null;
-    if (out.some((p) => p.file === file && p.type === type)) continue;
-    const message3 = getString(entry, "message") ?? type;
-    out.push({ file, type, message: message3.split(/\r?\n/)[0] ?? message3 });
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(out, p);
   }
   return out.length > 0 ? out : null;
+}
+function rulesNotLoaded(errors, ruleIdOf) {
+  const rules = [];
+  const files = [];
+  for (const entry of errors) {
+    const type = errorType(entry);
+    const ruleId = getString(entry, "rule_id");
+    if (type !== null && /rule/i.test(type) && ruleId !== void 0 && ruleId.length > 0) {
+      const lines = (getString(entry, "message") ?? type).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+      const id = ruleIdOf(ruleId);
+      if (!rules.some((r) => r.rule_id === id)) rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
+      continue;
+    }
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(files, p);
+  }
+  return rules.length > 0 ? { rules, files } : null;
 }
 function targetFileOf(entry, rawType) {
   const path6 = getString(entry, "path");
@@ -47281,11 +47314,11 @@ async function invokeBugHunt(input, ctx) {
       onLog: ctx.onLog
     });
   };
-  const reportGap = (failures2) => {
+  const reportGap = (failures2, retryReason) => {
     tools_run.push({
       name: "semgrep",
       status: "failed",
-      reason: `no configured pack could be scanned (${describeConfigFailures(failures2)})`
+      reason: `no configured pack could be scanned (${describeConfigFailures(failures2)})` + (retryReason !== void 0 ? `; the retry: ${retryReason}` : "")
     });
     missing_tools.push("semgrep");
     return {
@@ -47301,39 +47334,11 @@ async function invokeBugHunt(input, ctx) {
   const failures = findConfigDownloadFailures(raw);
   if (failures.length === 0) {
     if (raw) parser_inputs.push({ parser: categoryParser, input: raw });
-    const check2 = checkSemgrepReport({
-      raw,
-      exitCode: result.exitCode,
-      outcome: result.outcome,
-      targets: 1,
-      projectPath: ctx.projectPath
-    });
-    if (check2.verdict === "ok") {
-      tools_run.push({ name: "semgrep", status: "ok" });
-    } else if (check2.verdict === "partial" && check2.partial !== void 0) {
-      tools_run.push({
-        name: "semgrep",
-        status: "ok",
-        reason: describePartialParse(check2.partial, "bugs in the unparsed spans may be missing"),
-        partially_parsed: check2.partial
-      });
-      missing_tools.push("semgrep");
-    } else if (check2.verdict === "scanned_nothing") {
-      tools_run.push({
-        name: "semgrep",
-        status: "skipped",
-        reason: "semgrep scanned 0 files \u2014 nothing here is a language its packs cover, or the packs loaded nothing"
-      });
-      missing_tools.push("semgrep");
-    } else {
-      tools_run.push({
-        name: "semgrep",
-        status: "failed",
-        reason: describeRawErrors(raw) ?? check2.reason ?? "semgrep failed"
-      });
-    }
+    const judged2 = judgeBugHuntRun(raw, result, ctx, configuredPacks);
+    tools_run.push(judged2.toolRun);
+    if (judged2.missing) missing_tools.push("semgrep");
     return {
-      outcome: check2.verdict === "failed" && !wasAnythingScanned(raw) ? result.outcome : "completed",
+      outcome: judged2.toolRun.status === "failed" && !wasAnythingScanned(raw) ? result.outcome : "completed",
       tools_run,
       missing_tools,
       parser_inputs,
@@ -47362,15 +47367,15 @@ async function invokeBugHunt(input, ctx) {
   }
   const retryRaw = readJsonSafe(outFile);
   const retryFailures = findConfigDownloadFailures(retryRaw);
-  const retryOk = retryFailures.length === 0 && (retry2.outcome === "completed" || retry2.exitCode === 1);
-  if (!retryOk) {
+  if (retryFailures.length > 0) {
     return reportGap([...failures, ...retryFailures]);
   }
+  const judged = judgeBugHuntRun(retryRaw, retry2, ctx, survivors);
+  if (judged.toolRun.status !== "ok") return reportGap(failures, judged.toolRun.reason);
   if (retryRaw) parser_inputs.push({ parser: categoryParser, input: retryRaw });
   tools_run.push({
-    name: "semgrep",
-    status: "ok",
-    reason: `ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`
+    ...judged.toolRun,
+    reason: [`ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`, judged.toolRun.reason].filter((x) => x !== void 0).join("; ")
   });
   missing_tools.push("semgrep");
   return {
@@ -47379,6 +47384,57 @@ async function invokeBugHunt(input, ctx) {
     missing_tools,
     parser_inputs,
     report_paths: [reportDir]
+  };
+}
+function judgeBugHuntRun(raw, run, ctx, packs) {
+  const check2 = checkSemgrepReport({
+    raw,
+    exitCode: run.exitCode,
+    outcome: run.outcome,
+    targets: 1,
+    projectPath: ctx.projectPath,
+    ruleIdOf: localRuleIdNormalizer(packs, ctx.rulesProjectPath)
+  });
+  if (check2.verdict === "ok") return { toolRun: { name: "semgrep", status: "ok" }, missing: false };
+  if (check2.verdict === "partial" && check2.partial !== void 0) {
+    return {
+      toolRun: {
+        name: "semgrep",
+        status: "ok",
+        reason: describePartialParse(check2.partial, "bugs in the unparsed spans may be missing"),
+        partially_parsed: check2.partial
+      },
+      missing: true
+    };
+  }
+  if (check2.verdict === "scanned_nothing") {
+    return {
+      toolRun: {
+        name: "semgrep",
+        status: "skipped",
+        reason: "semgrep scanned 0 files \u2014 nothing here is a language its packs cover, or the packs loaded nothing"
+      },
+      missing: true
+    };
+  }
+  const notLoaded = check2.rules_not_loaded;
+  if (notLoaded !== void 0 && notLoaded.length > 0) {
+    const named = notLoaded.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
+    const toolRun = {
+      name: "semgrep",
+      status: "ok",
+      reason: [
+        `${notLoaded.length} rule(s) did not load: ${named}. Semgrep ran every other rule over ${check2.scanned} file(s) and their findings are kept; fix or remove the rule and re-run`,
+        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "bugs in the unparsed spans may be missing")] : []
+      ].join("; "),
+      failed_rules: notLoaded
+    };
+    if (check2.partial !== void 0) toolRun.partially_parsed = check2.partial;
+    return { toolRun, missing: true };
+  }
+  return {
+    toolRun: { name: "semgrep", status: "failed", reason: describeRawErrors(raw) ?? check2.reason ?? "semgrep failed" },
+    missing: false
   };
 }
 async function invokeBugHuntOnScope(args) {

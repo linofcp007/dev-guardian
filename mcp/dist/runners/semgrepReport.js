@@ -58,6 +58,7 @@ const MAX_ERROR_TEXT = 300;
 const CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 export function checkSemgrepReport(args) {
     const { raw, exitCode, outcome, targets, projectPath } = args;
+    const relative = (list) => list.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
     if (outcome === 'cancelled' || outcome === 'timed_out' || outcome === 'output_too_large') {
         return { ok: false, verdict: 'failed', scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
     }
@@ -89,17 +90,21 @@ export function checkSemgrepReport(args) {
     if (exitClean && scanned > 0 && errors.length > 0) {
         const partial = perFileErrors(errorEntries);
         if (partial !== null) {
+            return { ok: false, verdict: 'partial', scanned, errors: errors.length, reason, partial: relative(partial) };
+        }
+    }
+    const failed = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
+    if ((exitClean || exitCode === 2) && scanned > 0) {
+        const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+        if (ruleGap !== null) {
             return {
-                ok: false,
-                verdict: 'partial',
-                scanned,
-                errors: errors.length,
-                reason,
-                partial: partial.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })),
+                ...failed,
+                rules_not_loaded: ruleGap.rules,
+                ...(ruleGap.files.length > 0 ? { partial: relative(ruleGap.files) } : {}),
             };
         }
     }
-    return { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
+    return failed;
 }
 /**
  * The reason a `partial` run carries: `partial: N file(s) only partly parsed
@@ -119,32 +124,75 @@ function describeErrors(errors) {
         return `${type}: ${message.split(/\r?\n/)[0] ?? message}`;
     });
 }
+/** An `errors[]` entry's type name (`type` may be a string or `[name, …]`), or null. */
+function errorType(entry) {
+    const rawType = getProp(entry, 'type');
+    return typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
+}
 /**
- * Every `errors[]` entry as a per-file problem, or null when any one of them
- * is not: a config/rule error type, no target file named, or the file named
- * is a YAML file (it cannot be told from a rule pack by its name). The file
- * comes from the entry's `path`, else its first span, else the location list
- * inside a `["PartialParsing", [...]]` type. The message is its first line.
- * One entry per (file, type): Semgrep repeats an error per rule or per span,
- * and a file is one file however many times it was reported; its types all
- * stay, because the gate accepts parse types only (`ci/gate.ts`).
+ * One `errors[]` entry as a per-file problem, or null when it is not: a
+ * config/rule error type, no target file named, or the file named is a YAML
+ * file (it cannot be told from a rule pack by its name). The file comes from
+ * the entry's `path`, else its first span, else the location list inside a
+ * `["PartialParsing", [...]]` type. The message is its first line.
  */
+function perFileError(entry) {
+    const type = errorType(entry);
+    if (type === null || CONFIG_ERROR_TYPE.test(type))
+        return null;
+    const file = targetFileOf(entry, getProp(entry, 'type'));
+    if (file === null || /\.ya?ml$/i.test(file))
+        return null;
+    const message = getString(entry, 'message') ?? type;
+    return { file, type, message: message.split(/\r?\n/)[0] ?? message };
+}
+/**
+ * Semgrep repeats an error per rule or per span, and a file is one file
+ * however many times it was reported: one entry per (file, type). Its types
+ * all stay, because the gate accepts parse types only (`ci/gate.ts`).
+ */
+function pushOnce(out, p) {
+    if (!out.some((q) => q.file === p.file && q.type === p.type))
+        out.push(p);
+}
+/** Every `errors[]` entry as a per-file problem ({@link perFileError}), or null when any one is not. */
 function perFileErrors(errors) {
     const out = [];
     for (const entry of errors) {
-        const rawType = getProp(entry, 'type');
-        const type = typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
-        if (type === null || CONFIG_ERROR_TYPE.test(type))
+        const p = perFileError(entry);
+        if (p === null)
             return null;
-        const file = targetFileOf(entry, rawType);
-        if (file === null || /\.ya?ml$/i.test(file))
-            return null;
-        if (out.some((p) => p.file === file && p.type === type))
-            continue;
-        const message = getString(entry, 'message') ?? type;
-        out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
+        pushOnce(out, p);
     }
     return out.length > 0 ? out : null;
+}
+/**
+ * The rules that did not load and the per-file problems beside them, when
+ * that is every `errors[]` entry and at least one is a rule — else null. A
+ * rule entry is an error type naming a rule (`Rule parse error`) with the
+ * `rule_id` it concerns, stored as `ruleIdOf` names it; its message is the
+ * line that says what is wrong (Semgrep's second: the first repeats the
+ * id), clipped.
+ */
+function rulesNotLoaded(errors, ruleIdOf) {
+    const rules = [];
+    const files = [];
+    for (const entry of errors) {
+        const type = errorType(entry);
+        const ruleId = getString(entry, 'rule_id');
+        if (type !== null && /rule/i.test(type) && ruleId !== undefined && ruleId.length > 0) {
+            const lines = (getString(entry, 'message') ?? type).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+            const id = ruleIdOf(ruleId);
+            if (!rules.some((r) => r.rule_id === id))
+                rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
+            continue;
+        }
+        const p = perFileError(entry);
+        if (p === null)
+            return null;
+        pushOnce(files, p);
+    }
+    return rules.length > 0 ? { rules, files } : null;
 }
 function targetFileOf(entry, rawType) {
     const path = getString(entry, 'path');

@@ -1042,9 +1042,15 @@ keeps working (migrations 004–011 are additive).
   errors stay `failed`. Whole-project `bug_hunt` and `scan_wordpress`
   (`semgrep-wp`), which judged Semgrep by its exit code alone, use it too: a
   partly parsed file or a run that scanned nothing no longer reads `ok` at
-  coverage full (a single broken rule in `bug_hunt` is now `failed`, its
-  reason naming the rule; `scan_wordpress` with no `.php` file is not
-  applicable). A comparison
+  coverage full (`scan_wordpress` with no `.php` file is not applicable).
+  A `bug_hunt` rule that did not load while the other rules ran is a
+  narrower gap, not a failed Semgrep: the judge names such rules
+  (`rules_not_loaded`: a rule error with its `rule_id`), and `bug_hunt`
+  records Semgrep `ok` and missing with them in `tools_run[].failed_rules`
+  and a reason naming each — never coverage none and "NO scanner ran …
+  Install semgrep" for a Semgrep that ran, and never a row the open set
+  skips; an earlier finding of that rule stays open as not re-measured. Its
+  retry after a dead registry pack is judged the same way. A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
   Semgrep finding in a partly parsed file as not measured by that run —
   never resolved, never new — and names it `semgrep (partly parsed: …)`;

@@ -64,10 +64,29 @@ export interface SemgrepReportCheck {
   /** Why the run does not count, when `ok` is false. */
   reason?: string;
   /**
-   * `partial` only: every file Semgrep could read only in part, one entry
-   * per `errors[]` entry, project-relative when `projectPath` was given.
+   * `partial`: every file Semgrep could read only in part, one entry per
+   * (file, error type), project-relative when `projectPath` was given. Also
+   * on a `failed` verdict that carries `rules_not_loaded`, for the per-file
+   * errors beside the rule errors.
    */
   partial?: PartialParse[];
+  /**
+   * `failed` only, when all that went wrong is that some RULES did not load
+   * while the others ran: a settled exit 0, 1 or 2 that scanned files, where
+   * every `errors[]` entry is either a rule error naming its `rule_id`
+   * (`Rule parse error`, measured on 1.176.1: exit 2, the other rules still
+   * run and `paths.scanned` is filled) or a per-file problem (in `partial`).
+   * Semgrep is installed and scanned — not "semgrep missing". The verdict
+   * stays `failed`, so a caller that reads nothing else is unchanged;
+   * bug_hunt records it as a narrower gap (`ToolRun.failed_rules`).
+   */
+  rules_not_loaded?: RuleNotLoaded[];
+}
+
+/** A rule a Semgrep run did not load, by its stored id, and Semgrep's reason. */
+export interface RuleNotLoaded {
+  rule_id: string;
+  message: string;
 }
 
 /** Longest error text carried into a reason. */
@@ -89,8 +108,16 @@ export function checkSemgrepReport(args: {
   targets: number;
   /** Names a `partial` verdict's files relative to it. */
   projectPath?: string;
+  /**
+   * The stored id of a rule Semgrep names in `errors[]` — the parser's own
+   * (`runners/semgrepRuleIds.ts#localRuleIdNormalizer`), so a rule that did
+   * not load is named as its findings are. Identity when omitted.
+   */
+  ruleIdOf?: (checkId: string) => string;
 }): SemgrepReportCheck {
   const { raw, exitCode, outcome, targets, projectPath } = args;
+  const relative = (list: readonly PartialParse[]): PartialParse[] =>
+    list.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
   if (outcome === 'cancelled' || outcome === 'timed_out' || outcome === 'output_too_large') {
     return { ok: false, verdict: 'failed', scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
@@ -121,17 +148,21 @@ export function checkSemgrepReport(args: {
   if (exitClean && scanned > 0 && errors.length > 0) {
     const partial = perFileErrors(errorEntries);
     if (partial !== null) {
+      return { ok: false, verdict: 'partial', scanned, errors: errors.length, reason, partial: relative(partial) };
+    }
+  }
+  const failed: SemgrepReportCheck = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
+  if ((exitClean || exitCode === 2) && scanned > 0) {
+    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+    if (ruleGap !== null) {
       return {
-        ok: false,
-        verdict: 'partial',
-        scanned,
-        errors: errors.length,
-        reason,
-        partial: partial.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })),
+        ...failed,
+        rules_not_loaded: ruleGap.rules,
+        ...(ruleGap.files.length > 0 ? { partial: relative(ruleGap.files) } : {}),
       };
     }
   }
-  return { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
+  return failed;
 }
 
 /**
@@ -154,30 +185,76 @@ function describeErrors(errors: readonly unknown[]): string[] {
   });
 }
 
+/** An `errors[]` entry's type name (`type` may be a string or `[name, …]`), or null. */
+function errorType(entry: unknown): string | null {
+  const rawType = getProp(entry, 'type');
+  return typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
+}
+
 /**
- * Every `errors[]` entry as a per-file problem, or null when any one of them
- * is not: a config/rule error type, no target file named, or the file named
- * is a YAML file (it cannot be told from a rule pack by its name). The file
- * comes from the entry's `path`, else its first span, else the location list
- * inside a `["PartialParsing", [...]]` type. The message is its first line.
- * One entry per (file, type): Semgrep repeats an error per rule or per span,
- * and a file is one file however many times it was reported; its types all
- * stay, because the gate accepts parse types only (`ci/gate.ts`).
+ * One `errors[]` entry as a per-file problem, or null when it is not: a
+ * config/rule error type, no target file named, or the file named is a YAML
+ * file (it cannot be told from a rule pack by its name). The file comes from
+ * the entry's `path`, else its first span, else the location list inside a
+ * `["PartialParsing", [...]]` type. The message is its first line.
  */
+function perFileError(entry: unknown): PartialParse | null {
+  const type = errorType(entry);
+  if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+  const file = targetFileOf(entry, getProp(entry, 'type'));
+  if (file === null || /\.ya?ml$/i.test(file)) return null;
+  const message = getString(entry, 'message') ?? type;
+  return { file, type, message: message.split(/\r?\n/)[0] ?? message };
+}
+
+/**
+ * Semgrep repeats an error per rule or per span, and a file is one file
+ * however many times it was reported: one entry per (file, type). Its types
+ * all stay, because the gate accepts parse types only (`ci/gate.ts`).
+ */
+function pushOnce(out: PartialParse[], p: PartialParse): void {
+  if (!out.some((q) => q.file === p.file && q.type === p.type)) out.push(p);
+}
+
+/** Every `errors[]` entry as a per-file problem ({@link perFileError}), or null when any one is not. */
 function perFileErrors(errors: readonly unknown[]): PartialParse[] | null {
   const out: PartialParse[] = [];
   for (const entry of errors) {
-    const rawType = getProp(entry, 'type');
-    const type =
-      typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
-    if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
-    const file = targetFileOf(entry, rawType);
-    if (file === null || /\.ya?ml$/i.test(file)) return null;
-    if (out.some((p) => p.file === file && p.type === type)) continue;
-    const message = getString(entry, 'message') ?? type;
-    out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(out, p);
   }
   return out.length > 0 ? out : null;
+}
+
+/**
+ * The rules that did not load and the per-file problems beside them, when
+ * that is every `errors[]` entry and at least one is a rule — else null. A
+ * rule entry is an error type naming a rule (`Rule parse error`) with the
+ * `rule_id` it concerns, stored as `ruleIdOf` names it; its message is the
+ * line that says what is wrong (Semgrep's second: the first repeats the
+ * id), clipped.
+ */
+function rulesNotLoaded(
+  errors: readonly unknown[],
+  ruleIdOf: (checkId: string) => string,
+): { rules: RuleNotLoaded[]; files: PartialParse[] } | null {
+  const rules: RuleNotLoaded[] = [];
+  const files: PartialParse[] = [];
+  for (const entry of errors) {
+    const type = errorType(entry);
+    const ruleId = getString(entry, 'rule_id');
+    if (type !== null && /rule/i.test(type) && ruleId !== undefined && ruleId.length > 0) {
+      const lines = (getString(entry, 'message') ?? type).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+      const id = ruleIdOf(ruleId);
+      if (!rules.some((r) => r.rule_id === id)) rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
+      continue;
+    }
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(files, p);
+  }
+  return rules.length > 0 ? { rules, files } : null;
 }
 
 function targetFileOf(entry: unknown, rawType: unknown): string | null {
