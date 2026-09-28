@@ -39192,9 +39192,10 @@ var FindingsRepo = class {
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw, identity, content_key
+        snippet, fix_available, fix_applied, raw, identity, content_key,
+        cwe, owasp
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.identityForFingerprintStmt = db.prepare(`
       SELECT f.identity AS identity FROM findings f
@@ -39309,7 +39310,9 @@ var FindingsRepo = class {
           boolToInt(f.fix_applied),
           f.raw === void 0 ? null : JSON.stringify(f.raw),
           f.identity ?? null,
-          f.content_key ?? null
+          f.content_key ?? null,
+          taxonomyColumn(f.cwe),
+          taxonomyColumn(f.owasp)
         );
         inserted += info.changes;
       }
@@ -39472,7 +39475,28 @@ function rowToFinding(row) {
   if (row.snippet !== null) finding4.snippet = row.snippet;
   if (row.identity !== null) finding4.identity = row.identity;
   if (row.content_key !== null) finding4.content_key = row.content_key;
+  const cwe = readTaxonomyColumn(row.cwe, STORED_CWE);
+  if (cwe !== null) finding4.cwe = cwe;
+  const owasp = readTaxonomyColumn(row.owasp, STORED_OWASP);
+  if (owasp !== null) finding4.owasp = owasp;
   return finding4;
+}
+function taxonomyColumn(values) {
+  return values === void 0 || values.length === 0 ? null : JSON.stringify(values);
+}
+var STORED_CWE = /^CWE-[1-9]\d*$/;
+var STORED_OWASP = /^A(0[1-9]|10):2025$/;
+function readTaxonomyColumn(stored, shape) {
+  if (stored === null) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const kept = parsed.filter((v) => typeof v === "string" && shape.test(v));
+  return kept.length > 0 ? kept : null;
 }
 
 // src/storage/runtimeMetaRepo.ts
@@ -42230,6 +42254,403 @@ function firstLine2(text) {
 import { existsSync as existsSync12, readdirSync as readdirSync9, readFileSync as readFileSync14 } from "node:fs";
 import { dirname as dirname9, join as join17 } from "node:path";
 
+// src/frameworks/owaspTop10_2025.ts
+var OWASP_2025_IDS = [
+  "A01:2025",
+  "A02:2025",
+  "A03:2025",
+  "A04:2025",
+  "A05:2025",
+  "A06:2025",
+  "A07:2025",
+  "A08:2025",
+  "A09:2025",
+  "A10:2025"
+];
+var PAGE = "https://owasp.org/Top10/2025";
+var OWASP_TOP10_2025 = [
+  {
+    id: "A01:2025",
+    title: "Broken Access Control",
+    url: `${PAGE}/A01_2025-Broken_Access_Control/`,
+    cwes: [
+      22,
+      23,
+      36,
+      59,
+      61,
+      65,
+      200,
+      201,
+      219,
+      276,
+      281,
+      282,
+      283,
+      284,
+      285,
+      352,
+      359,
+      377,
+      379,
+      402,
+      424,
+      425,
+      441,
+      497,
+      538,
+      540,
+      548,
+      552,
+      566,
+      601,
+      615,
+      639,
+      668,
+      732,
+      749,
+      862,
+      863,
+      918,
+      922,
+      1275
+    ]
+  },
+  {
+    id: "A02:2025",
+    title: "Security Misconfiguration",
+    url: `${PAGE}/A02_2025-Security_Misconfiguration/`,
+    cwes: [
+      5,
+      11,
+      13,
+      15,
+      16,
+      260,
+      315,
+      489,
+      526,
+      547,
+      611,
+      614,
+      776,
+      942,
+      1004,
+      1174
+    ]
+  },
+  {
+    id: "A03:2025",
+    title: "Software Supply Chain Failures",
+    url: `${PAGE}/A03_2025-Software_Supply_Chain_Failures/`,
+    cwes: [447, 1035, 1104, 1329, 1357, 1395]
+  },
+  {
+    id: "A04:2025",
+    title: "Cryptographic Failures",
+    url: `${PAGE}/A04_2025-Cryptographic_Failures/`,
+    cwes: [
+      261,
+      296,
+      319,
+      320,
+      321,
+      322,
+      323,
+      324,
+      325,
+      326,
+      327,
+      328,
+      329,
+      330,
+      331,
+      332,
+      334,
+      335,
+      336,
+      337,
+      338,
+      340,
+      342,
+      347,
+      523,
+      757,
+      759,
+      760,
+      780,
+      916,
+      1240,
+      1241
+    ]
+  },
+  {
+    id: "A05:2025",
+    title: "Injection",
+    url: `${PAGE}/A05_2025-Injection/`,
+    cwes: [
+      20,
+      74,
+      76,
+      77,
+      78,
+      79,
+      80,
+      83,
+      86,
+      88,
+      89,
+      90,
+      91,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      103,
+      104,
+      112,
+      113,
+      114,
+      115,
+      116,
+      129,
+      159,
+      470,
+      493,
+      500,
+      564,
+      610,
+      643,
+      644,
+      917
+    ]
+  },
+  {
+    id: "A06:2025",
+    title: "Insecure Design",
+    url: `${PAGE}/A06_2025-Insecure_Design/`,
+    cwes: [
+      73,
+      183,
+      256,
+      266,
+      269,
+      286,
+      311,
+      312,
+      313,
+      316,
+      362,
+      382,
+      419,
+      434,
+      436,
+      444,
+      451,
+      454,
+      472,
+      501,
+      522,
+      525,
+      539,
+      598,
+      602,
+      628,
+      642,
+      646,
+      653,
+      656,
+      657,
+      676,
+      693,
+      799,
+      807,
+      841,
+      1021,
+      1022,
+      1125
+    ]
+  },
+  {
+    id: "A07:2025",
+    title: "Authentication Failures",
+    url: `${PAGE}/A07_2025-Authentication_Failures/`,
+    cwes: [
+      258,
+      259,
+      287,
+      288,
+      289,
+      290,
+      291,
+      293,
+      294,
+      295,
+      297,
+      298,
+      299,
+      300,
+      302,
+      303,
+      304,
+      305,
+      306,
+      307,
+      308,
+      309,
+      346,
+      350,
+      384,
+      521,
+      613,
+      620,
+      640,
+      798,
+      940,
+      941,
+      1390,
+      1391,
+      1392,
+      1393
+    ]
+  },
+  {
+    id: "A08:2025",
+    title: "Software or Data Integrity Failures",
+    url: `${PAGE}/A08_2025-Software_or_Data_Integrity_Failures/`,
+    cwes: [
+      345,
+      353,
+      426,
+      427,
+      494,
+      502,
+      506,
+      509,
+      565,
+      784,
+      829,
+      830,
+      915,
+      926
+    ]
+  },
+  {
+    id: "A09:2025",
+    // The index page's spelling; the category page's heading writes "&".
+    title: "Security Logging and Alerting Failures",
+    url: `${PAGE}/A09_2025-Security_Logging_and_Alerting_Failures/`,
+    cwes: [117, 221, 223, 532, 778]
+  },
+  {
+    id: "A10:2025",
+    title: "Mishandling of Exceptional Conditions",
+    url: `${PAGE}/A10_2025-Mishandling_of_Exceptional_Conditions/`,
+    cwes: [
+      209,
+      215,
+      234,
+      235,
+      248,
+      252,
+      274,
+      280,
+      369,
+      390,
+      391,
+      394,
+      396,
+      397,
+      460,
+      476,
+      478,
+      484,
+      550,
+      636,
+      703,
+      754,
+      755,
+      756
+    ]
+  }
+];
+var BY_ID = new Map(OWASP_TOP10_2025.map((c3) => [c3.id, c3]));
+var CATEGORY_OF_CWE = new Map(
+  OWASP_TOP10_2025.flatMap((c3) => c3.cwes.map((n2) => [n2, c3.id]))
+);
+function isOwasp2025Id(value) {
+  return typeof value === "string" && BY_ID.has(value);
+}
+function owasp2025Category(id) {
+  const found = BY_ID.get(id);
+  return found ?? { id, title: id, url: `${PAGE}/`, cwes: [] };
+}
+function owaspCategoryOfCwe(cwe) {
+  const m = /^CWE-(\d+)$/.exec(cwe);
+  if (m === null || m[1] === void 0) return null;
+  return CATEGORY_OF_CWE.get(Number.parseInt(m[1], 10)) ?? null;
+}
+var TITLE_NOISE = /* @__PURE__ */ new Set(["and", "or", "of", "the"]);
+function titleWords(title) {
+  return title.toLowerCase().replace(/&/g, " ").split(/[^a-z]+/).filter((w) => w.length > 0 && !TITLE_NOISE.has(w)).join(" ");
+}
+function parseOwasp2025Label(raw) {
+  if (typeof raw !== "string") return null;
+  const m = /^\s*A(\d{2})\s*:\s*2025\b\s*(?:[-–—:]\s*)?(.*)$/i.exec(raw);
+  if (m === null || m[1] === void 0) return null;
+  const id = `A${m[1]}:2025`;
+  if (!isOwasp2025Id(id)) return null;
+  const title = (m[2] ?? "").trim();
+  if (title.length > 0 && titleWords(title) !== titleWords(owasp2025Category(id).title)) return null;
+  return id;
+}
+
+// src/frameworks/taxonomy.ts
+function normalizeCwe(raw) {
+  let digits;
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw <= 0) return null;
+    digits = String(raw);
+  } else if (typeof raw === "string") {
+    const m = /^\s*(?:CWE\s*[-_ ]?\s*)?(\d+)\b/i.exec(raw);
+    if (m === null || m[1] === void 0) return null;
+    if (!/^\s*CWE/i.test(raw) && raw.trim() !== m[1]) return null;
+    digits = m[1];
+  } else {
+    return null;
+  }
+  const n2 = Number.parseInt(digits, 10);
+  return Number.isSafeInteger(n2) && n2 > 0 ? `CWE-${n2}` : null;
+}
+function asList(value) {
+  if (Array.isArray(value)) return value;
+  return value === void 0 || value === null ? [] : [value];
+}
+function cweNumber(cwe) {
+  return Number.parseInt(cwe.slice(4), 10);
+}
+function classifyTaxonomy(input) {
+  const cwes = [
+    ...new Set(asList(input.cwe).map(normalizeCwe).filter((c3) => c3 !== null))
+  ].sort((a2, b) => cweNumber(a2) - cweNumber(b));
+  const categories = /* @__PURE__ */ new Set();
+  for (const label of asList(input.owasp)) {
+    const id = parseOwasp2025Label(label);
+    if (id !== null) categories.add(id);
+  }
+  for (const cwe of cwes) {
+    const id = owaspCategoryOfCwe(cwe);
+    if (id !== null) categories.add(id);
+  }
+  const out = {};
+  if (cwes.length > 0) out.cwe = cwes;
+  if (categories.size > 0) out.owasp = OWASP_2025_IDS.filter((id) => categories.has(id));
+  return out;
+}
+
 // src/runners/scannerParsers/index.ts
 function toPosixPath(p) {
   if (!p) return p;
@@ -42277,8 +42698,15 @@ function makeFinding(input) {
   if (input.line_start !== void 0) finding4.line_start = input.line_start;
   if (input.line_end !== void 0) finding4.line_end = input.line_end;
   if (snippet !== void 0) finding4.snippet = snippet;
+  if (input.taxonomy !== void 0) {
+    const { cwe, owasp } = classifyTaxonomy(input.taxonomy);
+    if (cwe !== void 0) finding4.cwe = cwe;
+    if (owasp !== void 0) finding4.owasp = owasp;
+  }
   return finding4;
 }
+var DEPENDENCY_CWE = "CWE-1395";
+var SECRET_CWE = "CWE-798";
 function normalizeSeverity(raw) {
   if (!raw) return "medium";
   const normalized = raw.toString().trim().toLowerCase();
@@ -42383,7 +42811,10 @@ function mapVulnerability(raw, target, ctx) {
     subcategory: "cve",
     title,
     fix_available: fixed !== void 0 && fixed.length > 0,
-    file_path: toRelativeIfPossible(target, ctx.project_path)
+    file_path: toRelativeIfPossible(target, ctx.project_path),
+    // A vulnerable dependency is CWE-1395 whatever the flaw inside it; the
+    // advisory's own CweIDs name that flaw.
+    taxonomy: { cwe: [DEPENDENCY_CWE, ...asArray(getProp(raw, "CweIDs"))] }
   };
   if (description !== void 0) input.message = description;
   input.snippet = `${pkg}@${installed ?? ""}->${fixed ?? ""}`;
@@ -42463,7 +42894,8 @@ function mapSecret(raw, target, ctx) {
     category: "security",
     subcategory: "secret",
     title: getString(raw, "Title") ?? ruleId,
-    file_path: toRelativeIfPossible(target, ctx.project_path)
+    file_path: toRelativeIfPossible(target, ctx.project_path),
+    taxonomy: { cwe: [SECRET_CWE] }
   };
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
@@ -44270,7 +44702,9 @@ function mapResult(raw, ctx) {
     subcategory: testName,
     title: issueText ?? `Bandit ${testId}: ${testName ?? "issue"}`,
     file_path: toRelativeIfPossible(file, ctx.project_path),
-    fix_available: false
+    fix_available: false,
+    // `issue_cwe` is `{id, link}`, or `{}` when Bandit assigns none.
+    taxonomy: { cwe: getProp(getProp(raw, "issue_cwe"), "id") }
   };
   if (message3 !== void 0) input.message = message3;
   if (lineStart !== void 0) input.line_start = lineStart;
@@ -44492,7 +44926,8 @@ function mapResult3(raw, ctx) {
     category,
     title: shortenTitle(message3, checkId),
     fix_available: fixAvailable,
-    file_path: relativePath(filePath, ctx.project_path)
+    file_path: relativePath(filePath, ctx.project_path),
+    taxonomy: { cwe: getProp(metadata, "cwe"), owasp: getProp(metadata, "owasp") }
   };
   if (message3 !== void 0) input.message = message3;
   if (subcategory !== void 0) input.subcategory = subcategory;
@@ -45364,7 +45799,8 @@ function mapItem(raw, ctx) {
     subcategory: "secret",
     title: description ?? `Possible secret matching rule '${ruleId}'`,
     file_path: toRelativeIfPossible(file, ctx.project_path),
-    fix_available: false
+    fix_available: false,
+    taxonomy: { cwe: [SECRET_CWE] }
   };
   if (lineStart !== void 0) input.line_start = lineStart;
   if (lineEnd !== void 0) input.line_end = lineEnd;
@@ -49154,7 +49590,8 @@ function mapPackage(raw, projectPath, framework, ctx) {
       title: `Vulnerable NuGet package '${id}'${resolved ? ` ${resolved}` : ""} (${framework})`,
       fix_available: false,
       file_path: relPath,
-      snippet: `${id}@${resolved ?? ""}`
+      snippet: `${id}@${resolved ?? ""}`,
+      taxonomy: { cwe: [DEPENDENCY_CWE] }
     };
     if (url !== void 0) findingInput.message = url;
     out.push(makeFinding(findingInput));
@@ -49220,7 +49657,8 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
     title: title ?? `Vulnerability in ${pkg ?? "a dependency"}`,
     file_path: "package.json",
     fix_available: fixAvailable,
-    snippet: `${pkg ?? ""}@${range ?? ""}`
+    snippet: `${pkg ?? ""}@${range ?? ""}`,
+    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, "cwe"))] }
   };
   const message3 = composeMessage(pkg, range, url);
   if (message3) input.message = message3;
@@ -49247,7 +49685,8 @@ function mapV1Advisory(adv, seen) {
     title: title ?? `Vulnerability in ${pkg}`,
     file_path: "package.json",
     fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
-    snippet: `${pkg ?? ""}@${range ?? ""}`
+    snippet: `${pkg ?? ""}@${range ?? ""}`,
+    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, "cwe"))] }
   };
   const message3 = composeMessage(pkg, range, url ?? recommendation2);
   if (message3) input.message = message3;
@@ -49270,6 +49709,9 @@ function composeMessage(pkg, range, tail) {
   if (range) parts.push(`vulnerable: ${range}`);
   if (tail) parts.push(tail);
   return parts.length > 0 ? parts.join(" \xB7 ") : void 0;
+}
+function cweList(value) {
+  return typeof value === "string" ? [value] : asArray(value);
 }
 
 // src/deps/versionCompare.ts
@@ -49375,7 +49817,8 @@ var pipAuditParser = {
           title: `${id} in ${name}${version2 ? ` ${version2}` : ""}`,
           fix_available: fixVersions.length > 0,
           file_path: filePath,
-          snippet: `${name}@${version2 ?? ""}`
+          snippet: `${name}@${version2 ?? ""}`,
+          taxonomy: { cwe: [DEPENDENCY_CWE] }
         };
         if (description !== void 0) findingInput.message = description;
         findings.push(makeFinding(findingInput));
@@ -50632,7 +51075,7 @@ function describeMeasurementGaps(from, to, gaps) {
 }
 
 // src/history/openSet.ts
-var PAGE = 25;
+var PAGE2 = 25;
 var SKIPPED_SAMPLE = 5;
 function findLatestUsable(storage, projectPath, types, opts = {}) {
   const r = search(storage, projectPath, types, opts);
@@ -50641,9 +51084,9 @@ function findLatestUsable(storage, projectPath, types, opts = {}) {
 function search(storage, projectPath, types, opts) {
   const skipCoverageNone = opts.skipCoverageNone ?? true;
   const hits = [];
-  for (let offset = 0; ; offset += PAGE) {
+  for (let offset = 0; ; offset += PAGE2) {
     const page = storage.scans.listCompletedOfTypes(projectPath, types, {
-      limit: PAGE,
+      limit: PAGE2,
       offset,
       ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
       ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
@@ -50660,7 +51103,7 @@ function search(storage, projectPath, types, opts) {
       }
       return { scan: scan2, coverage: judged, hits };
     }
-    if (page.length < PAGE) return { scan: null, coverage: null, hits };
+    if (page.length < PAGE2) return { scan: null, coverage: null, hits };
   }
 }
 function latestStateScan(storage, projectPath, scanType, opts = {}) {
@@ -50779,7 +51222,7 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
   let walked = 0;
   let before = source.scan_id;
   while (walked < CARRY_WALK_LIMIT) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE, beforeScanId: before });
+    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE2, beforeScanId: before });
     const last = page[page.length - 1];
     if (last !== void 0) before = last.scan_id;
     for (const scan2 of page) {
@@ -50797,7 +51240,7 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
       index.push(holder);
       if (!stillCarry.check()) return out;
     }
-    if (page.length < PAGE) break;
+    if (page.length < PAGE2) break;
   }
   return out;
 }

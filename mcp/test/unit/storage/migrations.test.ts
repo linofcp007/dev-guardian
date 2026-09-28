@@ -421,4 +421,38 @@ describe('migrations runner', () => {
     };
     expect(row.project_path).toBe('/main');
   });
+
+  it('upgrades a version-11 database in place: stored findings read as taxonomy-unknown (013)', () => {
+    // A 3.0.0 database: findings have no cwe/owasp columns. After the
+    // upgrade they exist, the old rows hold NULL in both, and a reader sees
+    // neither field — unknown, never a category — while a new row written
+    // through the repo keeps what it was given.
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 11)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '11')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('s1', 'sast', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, rule_id, severity, category, title, file_path, line_start)
+       VALUES ('fp-old', 's1', 'semgrep', 'javascript.lang.security.audit.sqli', 'high', 'security', 't', 'a.js', 3)`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const columns = (db.prepare(`PRAGMA table_info(findings)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(columns).toEqual(expect.arrayContaining(['cwe', 'owasp']));
+    expect(db.prepare(`SELECT cwe, owasp FROM findings WHERE fingerprint = 'fp-old'`).get()).toEqual({ cwe: null, owasp: null });
+
+    const storage = new Storage(db);
+    const [old] = storage.findings.listByScan('s1');
+    expect(old?.fingerprint).toBe('fp-old');
+    expect(old).not.toHaveProperty('cwe');
+    expect(old).not.toHaveProperty('owasp');
+  });
 });

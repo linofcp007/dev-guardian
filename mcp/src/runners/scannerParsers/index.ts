@@ -18,6 +18,7 @@
  */
 
 import { computeFingerprint } from '../../fingerprint/findingFingerprint.js';
+import { classifyTaxonomy } from '../../frameworks/taxonomy.js';
 import type { Category, Finding, Severity } from '../../types.js';
 
 export interface ParserContext {
@@ -103,6 +104,13 @@ export function clampSnippet(snippet: string | undefined): string | undefined {
  * Constructor for a Finding that auto-computes the fingerprint and applies
  * the defaults required by the strict `Finding` type. Parsers should always
  * go through this helper rather than building findings by hand.
+ *
+ * `taxonomy` is what the scanner said about the weakness — CWEs and OWASP
+ * labels, as strings or lists, raw (`frameworks/taxonomy.ts`
+ * `classifyTaxonomy` normalises them and derives the 2025 categories). It
+ * sets `cwe`/`owasp` and is deliberately NOT part of the fingerprint: a
+ * scanner that starts naming a CWE must not turn a stored finding into a new
+ * one.
  */
 export function makeFinding(input: {
   tool: string;
@@ -117,6 +125,7 @@ export function makeFinding(input: {
   line_end?: number;
   snippet?: string;
   fix_available?: boolean;
+  taxonomy?: { cwe?: unknown; owasp?: unknown };
 }): Finding {
   const snippet = clampSnippet(input.snippet);
   const fingerprintInput: Parameters<typeof computeFingerprint>[0] = {
@@ -145,8 +154,22 @@ export function makeFinding(input: {
   if (input.line_start !== undefined) finding.line_start = input.line_start;
   if (input.line_end !== undefined) finding.line_end = input.line_end;
   if (snippet !== undefined) finding.snippet = snippet;
+  if (input.taxonomy !== undefined) {
+    const { cwe, owasp } = classifyTaxonomy(input.taxonomy);
+    if (cwe !== undefined) finding.cwe = cwe;
+    if (owasp !== undefined) finding.owasp = owasp;
+  }
   return finding;
 }
+
+/**
+ * The weakness every finding of a class is by definition, whatever its
+ * scanner calls it: a known-vulnerable dependency is CWE-1395 (Dependency on
+ * Vulnerable Third-Party Component), a committed secret CWE-798 (Use of
+ * Hard-coded Credentials). OWASP Top 10:2025 maps them to A03 and A07.
+ */
+export const DEPENDENCY_CWE = 'CWE-1395';
+export const SECRET_CWE = 'CWE-798';
 
 /**
  * Standard scanner severity strings → canonical `Severity`. Scanners differ

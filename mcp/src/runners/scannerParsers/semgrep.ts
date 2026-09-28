@@ -12,6 +12,10 @@
  *   - line range:  start.line .. end.line
  *   - snippet:     extra.lines, clamped to 1 KB by `makeFinding`
  *   - fix_available: true when `extra.fix` (autofix string) exists
+ *   - cwe / owasp: extra.metadata.cwe and extra.metadata.owasp, each a string
+ *                  or a list (the registry writes lists; `getString` used to
+ *                  drop them) — see `frameworks/taxonomy.ts`. Only 2025
+ *                  OWASP labels count; a 2017/2021 one is never renumbered.
  */
 
 import type { Category, Finding, Severity } from '../../types.js';
@@ -104,6 +108,7 @@ function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
     title: shortenTitle(message, checkId),
     fix_available: fixAvailable,
     file_path: relativePath(filePath, ctx.project_path),
+    taxonomy: { cwe: getProp(metadata, 'cwe'), owasp: getProp(metadata, 'owasp') },
   };
   if (message !== undefined) input.message = message;
   if (subcategory !== undefined) input.subcategory = subcategory;

@@ -16,7 +16,7 @@
  * already populates the CVE table across stacks — npm audit's value here is
  * the GitHub-advisory coverage that turns into counted Findings.
  */
-import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
+import { asArray, DEPENDENCY_CWE, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
 export const NPM_AUDIT_TOOL_NAME = 'npm-audit';
 export const npmAuditParser = {
     name: NPM_AUDIT_TOOL_NAME,
@@ -83,6 +83,7 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
         file_path: 'package.json',
         fix_available: fixAvailable,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
+        taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, 'cwe'))] },
     };
     const message = composeMessage(pkg, range, url);
     if (message)
@@ -113,6 +114,7 @@ function mapV1Advisory(adv, seen) {
         file_path: 'package.json',
         fix_available: recommendation ? /upgrad|updat/i.test(recommendation) : false,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
+        taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, 'cwe'))] },
     };
     const message = composeMessage(pkg, range, url ?? recommendation);
     if (message)
@@ -139,5 +141,9 @@ function composeMessage(pkg, range, tail) {
     if (tail)
         parts.push(tail);
     return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+/** An advisory's `cwe`: a list in npm 7+ (`via[].cwe`), one string in npm 6. */
+function cweList(value) {
+    return typeof value === 'string' ? [value] : asArray(value);
 }
 //# sourceMappingURL=npmAudit.js.map

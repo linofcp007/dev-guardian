@@ -51,6 +51,8 @@ function mapResult(raw, ctx) {
         title: issueText ?? `Bandit ${testId}: ${testName ?? 'issue'}`,
         file_path: toRelativeIfPossible(file, ctx.project_path),
         fix_available: false,
+        // `issue_cwe` is `{id, link}`, or `{}` when Bandit assigns none.
+        taxonomy: { cwe: getProp(getProp(raw, 'issue_cwe'), 'id') },
     };
     if (message !== undefined)
         input.message = message;

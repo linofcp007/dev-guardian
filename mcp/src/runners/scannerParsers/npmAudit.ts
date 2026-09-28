@@ -20,6 +20,7 @@
 import type { Finding } from '../../types.js';
 import {
   asArray,
+  DEPENDENCY_CWE,
   getNumber,
   getProp,
   getString,
@@ -104,6 +105,7 @@ function mapV2Advisory(
     file_path: 'package.json',
     fix_available: fixAvailable,
     snippet: `${pkg ?? ''}@${range ?? ''}`,
+    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, 'cwe'))] },
   };
   const message = composeMessage(pkg, range, url);
   if (message) input.message = message;
@@ -138,6 +140,7 @@ function mapV1Advisory(
     file_path: 'package.json',
     fix_available: recommendation ? /upgrad|updat/i.test(recommendation) : false,
     snippet: `${pkg ?? ''}@${range ?? ''}`,
+    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, 'cwe'))] },
   };
   const message = composeMessage(pkg, range, url ?? recommendation);
   if (message) input.message = message;
@@ -167,4 +170,9 @@ function composeMessage(
   if (range) parts.push(`vulnerable: ${range}`);
   if (tail) parts.push(tail);
   return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
+/** An advisory's `cwe`: a list in npm 7+ (`via[].cwe`), one string in npm 6. */
+function cweList(value: unknown): unknown[] {
+  return typeof value === 'string' ? [value] : asArray(value);
 }

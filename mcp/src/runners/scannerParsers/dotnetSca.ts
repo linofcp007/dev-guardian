@@ -36,6 +36,7 @@
 import type { Finding } from '../../types.js';
 import {
   asArray,
+  DEPENDENCY_CWE,
   getProp,
   getString,
   makeFinding,
@@ -100,6 +101,7 @@ function mapPackage(
       fix_available: false,
       file_path: relPath,
       snippet: `${id}@${resolved ?? ''}`,
+      taxonomy: { cwe: [DEPENDENCY_CWE] },
     };
     if (url !== undefined) findingInput.message = url;
     out.push(makeFinding(findingInput));
