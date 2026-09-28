@@ -96,6 +96,15 @@ const TREE_PROVENANCE_ONLY = [
   '   └── 🍒 sha256:a12d4c69500caf250c79e1e56ccc984f4972d42be5b611551eef7ac172748702',
   '',
 ].join('\n');
+/** One `download signature` line for a v3 bundle (the shape measured on ghcr.io, 2026-09-28). */
+function bundleLine(predicateType: string): string {
+  const statement = JSON.stringify({ _type: 'https://in-toto.io/Statement/v1', subject: [], predicateType, predicate: {} });
+  return JSON.stringify({
+    mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+    verificationMaterial: {},
+    dsseEnvelope: { payload: Buffer.from(statement).toString('base64'), payloadType: 'application/vnd.in-toto+json', signatures: [] },
+  });
+}
 const NO_SIGNATURES = exit(1, `Error: ${PINNED}: no signatures associated\n`);
 const SIG_500 = exit(1, `Error: ${PINNED}: remote image: GET https://ghcr.io/v2/org/app/manifests/sha256-41e1.sig: UNKNOWN: injected\n`);
 const NO_V1 = exit(1, "Error: no attestations with predicate type 'https://slsa.dev/provenance/v1' found\n");
@@ -119,18 +128,25 @@ interface Answers {
   signature?: ProcessRunResult;
   v1?: ProcessRunResult;
   v02?: ProcessRunResult;
-  verify?: ProcessRunResult;
+  /** One answer, or one per call in order (the last repeats) — verify may be re-run once. */
+  verify?: ProcessRunResult | ProcessRunResult[];
 }
 
 /** Fake cosign: answers by subcommand; Trivy and everything else succeed with no output. */
 function fakeCosign(answers: Answers): void {
+  let verifies = 0;
   vi.mocked(runProcess).mockImplementation(async (opts: ProcessRunOptions) => {
     if (opts.command !== 'cosign') return ok;
     const args = opts.args ?? [];
+    if (args[0] === 'verify' && Array.isArray(answers.verify)) {
+      const answer = answers.verify[Math.min(verifies, answers.verify.length - 1)];
+      verifies += 1;
+      return answer ?? VERIFIED_SIGNATURE;
+    }
     if (args[0] === 'version') return answers.version ?? VERSION('3.1.3');
     if (args[0] === 'triangulate') return answers.triangulate ?? TRIANGULATED;
     if (args[0] === 'tree') return answers.tree ?? out(TREE_NONE);
-    if (args[0] === 'verify') return answers.verify ?? VERIFIED_SIGNATURE;
+    if (args[0] === 'verify') return (Array.isArray(answers.verify) ? undefined : answers.verify) ?? VERIFIED_SIGNATURE;
     if (args[0] === 'download' && args[1] === 'signature') return answers.signature ?? NO_SIGNATURES;
     if (args[0] === 'download' && args.includes('--predicate-type=https://slsa.dev/provenance/v1')) return answers.v1 ?? NO_V1;
     if (args[0] === 'download') return answers.v02 ?? NO_V02;
@@ -247,6 +263,15 @@ describe('scan_containers + cosign: when the check cannot run', () => {
     expect(cosignCalls().map((c) => c[0])).toEqual(['version', 'triangulate']);
     expect(cosignFindings(r)).toEqual([]);
   });
+
+  it('review round 2: a rate-limited registry is worded as rate limiting, never "never pushed"', async () => {
+    fakeCosign({ triangulate: exit(1, 'Error: GET https://index.docker.io/v2/library/alpine/manifests/3.20: TOOMANYREQUESTS: pull rate limit\n') });
+    const r = await scan({ image: 'alpine:3.20' });
+    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/rate-limit/);
+    expect(run?.reason).not.toMatch(/never pushed/);
+  });
 });
 
 describe('scan_containers + cosign: the digest cosign checked (review M1)', () => {
@@ -267,6 +292,7 @@ describe('scan_containers + cosign: the digest cosign checked (review M1)', () =
     const r = await scan({});
     expect(r.image_signature?.checked).toBeNull();
     expect(r.image_signature?.note).toMatch(/not pinned/);
+    expect(r.image_signature?.note.match(/not pinned/g)).toHaveLength(1);
     expect(cosignCalls().slice(2).every((c) => c.at(-1) === IMAGE)).toBe(true);
   });
 });
@@ -324,13 +350,33 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   });
 
   it('review M2: signed provenance with no `cosign sign` — no "unsigned" finding; the answer says exactly what is there', async () => {
-    fakeCosign({ tree: out(TREE_PROVENANCE_ONLY) });
+    const bundle = out(`${bundleLine('https://slsa.dev/provenance/v1')}\n`);
+    fakeCosign({ tree: out(TREE_PROVENANCE_ONLY), signature: bundle, v1: bundle });
     const r = await scan({});
     expect(cosignFindings(r)).toEqual([]);
     expect(r.image_signature).toMatchObject({ signature: 'attestation_only_unverified', provenance: 'present_unverified' });
     expect(r.image_signature?.note).toMatch(/no `cosign sign` signature/i);
     expect(r.image_signature?.note).toMatch(/cosign verify accepts/);
     expect(r.image_signature?.note).toContain('https://slsa.dev/provenance/v1');
+  });
+
+  // Review round 2, N1: anyone who can push can attach a referrer. A listing
+  // is not a signature: it counts only when cosign parses it as a Sigstore bundle.
+  it.each([
+    ['a non-Sigstore artifact typed like a predicate (https://spdx.dev/Document)', 'https://spdx.dev/Document'],
+    ['a "signing bundle" cosign cannot parse', 'https://sigstore.dev/cosign/sign/v1'],
+    ['a "provenance bundle" cosign cannot parse', 'https://slsa.dev/provenance/v1'],
+  ])('N1: %s is no signature — "unsigned" (and no provenance) stands', async (_name, type) => {
+    const listing = [
+      `📦 Supply Chain Security Related artifacts for an image: ${PINNED}`,
+      `└── 🔗 ${type} artifacts via OCI referrer: ghcr.io/org/app@sha256:bc9e5912af702e3d84909a74d1a659ca6000000000000000000000000000000`,
+      '   └── 🍒 sha256:cccc',
+      '',
+    ].join('\n');
+    fakeCosign({ tree: out(listing) });
+    const r = await scan({});
+    expect(r.image_signature).toMatchObject({ signature: 'absent', provenance: 'absent' });
+    expect(cosignFindings(r).map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
   });
 
   it('`cosign tree` failing is a failed check with no finding — absence was never established', async () => {
@@ -404,14 +450,58 @@ describe('scan_containers + cosign: with a signer (real verification)', () => {
     expect(cosignFindings(r)).toEqual([]);
   });
 
-  it('review I2: "no signatures found" while tree lists a signing bundle (the referrers call failed for verify) — failed, not rejected', async () => {
+  it('N1: "no signatures found" twice while tree lists a signing bundle (the referrers call worked) — REJECTED: an unusable bundle is no signature', async () => {
     fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), tree: out(TREE_SIGN_BUNDLE) });
     const r = await scan(signer);
-    const run = r.tools_run.find((t) => t.name === 'cosign-verify');
-    expect(run?.status).toBe('failed');
-    expect(run?.reason).toMatch(/cosign tree lists/);
+    expect(cosignCalls().filter((c) => c[0] === 'verify')).toHaveLength(2);
+    expect(cosignFindings(r).map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
+    expect(cosignFindings(r)[0]?.message).toContain('https://sigstore.dev/cosign/sign/v1');
+    expect(r.image_signature?.signature).toBe('rejected');
+  });
+
+  it('a re-run that verifies (the first answer came from a failed referrers call) is a verification', async () => {
+    fakeCosign({ verify: [exit(10, 'Error: no signatures found\n'), VERIFIED_SIGNATURE], tree: out(TREE_SIGN_BUNDLE) });
+    const r = await scan(signer);
+    expect(r.image_signature?.signature).toBe('verified');
     expect(cosignFindings(r)).toEqual([]);
-    expect(r.image_signature?.signature).toBe('unknown');
+  });
+
+  it.each([
+    ['a junk signature with no certificate or key ("empty key", measured)', 'Error: no matching signatures: empty key\n'],
+    ['a certificate Fulcio never issued', 'Error: no matching signatures: x509: certificate signed by unknown authority\n'],
+    [
+      'an identity containing "timeout" in the echo',
+      'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects [https://github.com/org/timeout-svc/.github/workflows/r.yml@refs/heads/main] with issuer https://token.actions.githubusercontent.com\n',
+    ],
+  ])('N1: %s is REJECTED — a HIGH finding, not "no verdict"', async (_name, stderr) => {
+    fakeCosign({ verify: exit(12, stderr) });
+    const r = await scan(signer);
+    expect(r.tools_run.find((t) => t.name === 'cosign-verify')?.status).toBe('ok');
+    expect(cosignFindings(r).map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
+  });
+
+  it('review round 2: a rejection for another signer is a NEW finding, not the old one unchanged (the identity holds the signer)', async () => {
+    const project = makeTempDir('containers-cosign-identity-');
+    const ctx = plugin(project);
+    fakeCosign({ verify: MISMATCH_12 });
+    const a = await scan(
+      { signer_identity: 'https://github.com/org/app/.github/workflows/A.yml@refs/heads/main', signer_issuer: signer.signer_issuer },
+      ctx,
+      project,
+    );
+    vi.mocked(runProcess).mockReset();
+    fakeCosign({ verify: MISMATCH_12 });
+    const b = await scan(
+      { signer_identity: 'https://github.com/org/app/.github/workflows/B.yml@refs/heads/main', signer_issuer: signer.signer_issuer },
+      ctx,
+      project,
+    );
+    const d = (await tool('diff_scans').handler({ project_path: project, from_scan_id: a.scan_id, to_scan_id: b.scan_id }, ctx)) as {
+      ok: boolean;
+      summary: { new: number; resolved: number; not_remeasured: number };
+    };
+    expect(d.ok).toBe(true);
+    expect(d.summary).toMatchObject({ new: 1, resolved: 0, not_remeasured: 1 });
   });
 
   it('review I2: "no signatures found" that the loud calls cannot confirm (tree fails / .sig fails) — failed', async () => {
@@ -512,6 +602,41 @@ describe('scan_containers + cosign: the signer arguments are checked before anyt
       expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['app\u200b:1', 'app:1\u200d', 'app\u2060:1', 'app:1\ufeff'])(
+    'review round 2: refuses image %j — a zero-width character hides in every reason and note',
+    async (image) => {
+      fakeCosign({});
+      const project = makeTempDir('containers-cosign-');
+      const r = (await tool().handler({ project_path: project, image }, plugin(project))) as Scan | Refused;
+      expect(r.ok).toBe(false);
+      expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    },
+  );
+
+  it('review round 2: refuses a zero-width character in a signer value', async () => {
+    fakeCosign({});
+    const project = makeTempDir('containers-cosign-');
+    const r = (await tool().handler(
+      { project_path: project, image: IMAGE, signer_identity: 'a@b\u200b.example', signer_issuer: 'https://x' },
+      plugin(project),
+    )) as Scan | Refused;
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toMatch(/control character/);
+  });
+
+  it('review round 2: the refusal names the character as \\uXXXX — it never echoes a bidi override or a line separator raw', async () => {
+    for (const bad of ['\u202e', '\u2028', '\u0085', '\u200b']) {
+      const project = makeTempDir('containers-cosign-');
+      const handler = tool().handler;
+      const r = (await handler({ project_path: project, image: `app${bad}:1` }, plugin(project))) as Scan | Refused;
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.message).not.toContain(bad);
+        expect(r.error.message).toContain(`\\u${bad.charCodeAt(0).toString(16).padStart(4, '0')}`);
+      }
+    }
+  });
 
   it('refuses a signer without an image — there is nothing to verify', async () => {
     fakeCosign({});

@@ -13391,7 +13391,7 @@ var init_merge_streams = __esm({
         throw new TypeError(`Expected a readable stream, got: \`${typeof stream}\`.`);
       }
     };
-    endWhenStreamsDone = async ({ passThroughStream, stream, streams, ended, aborted: aborted3, onFinished, unpipeEvent }) => {
+    endWhenStreamsDone = async ({ passThroughStream, stream, streams, ended, aborted: aborted4, onFinished, unpipeEvent }) => {
       updateMaxListeners(passThroughStream, PASSTHROUGH_LISTENERS_PER_STREAM);
       const controller = new AbortController();
       try {
@@ -13402,14 +13402,14 @@ var init_merge_streams = __esm({
             stream,
             streams,
             ended,
-            aborted: aborted3,
+            aborted: aborted4,
             controller
           }),
           onInputStreamUnpipe({
             stream,
             streams,
             ended,
-            aborted: aborted3,
+            aborted: aborted4,
             unpipeEvent,
             controller
           })
@@ -13418,8 +13418,8 @@ var init_merge_streams = __esm({
         controller.abort();
         updateMaxListeners(passThroughStream, -PASSTHROUGH_LISTENERS_PER_STREAM);
       }
-      if (streams.size > 0 && streams.size === ended.size + aborted3.size) {
-        if (ended.size === 0 && aborted3.size > 0) {
+      if (streams.size > 0 && streams.size === ended.size + aborted4.size) {
+        if (ended.size === 0 && aborted4.size > 0) {
           abortStream(passThroughStream);
         } else {
           endStream(passThroughStream);
@@ -13438,7 +13438,7 @@ var init_merge_streams = __esm({
         }
       }
     };
-    onInputStreamEnd = async ({ passThroughStream, stream, streams, ended, aborted: aborted3, controller: { signal } }) => {
+    onInputStreamEnd = async ({ passThroughStream, stream, streams, ended, aborted: aborted4, controller: { signal } }) => {
       try {
         await finished2(stream, {
           signal,
@@ -13454,20 +13454,20 @@ var init_merge_streams = __esm({
           return;
         }
         if (isAbortError(error2)) {
-          aborted3.add(stream);
+          aborted4.add(stream);
         } else {
           errorStream(passThroughStream, error2);
         }
       }
     };
-    onInputStreamUnpipe = async ({ stream, streams, ended, aborted: aborted3, unpipeEvent, controller: { signal } }) => {
+    onInputStreamUnpipe = async ({ stream, streams, ended, aborted: aborted4, unpipeEvent, controller: { signal } }) => {
       await once7(stream, unpipeEvent, { signal });
       if (!stream.readable) {
         return once7(signal, "abort", { signal });
       }
       streams.delete(stream);
       ended.delete(stream);
-      aborted3.delete(stream);
+      aborted4.delete(stream);
     };
     endStream = (stream) => {
       if (stream.writable) {
@@ -21212,16 +21212,16 @@ var require_lexer = __commonJS({
        *
        * @returns A generator of lexical tokens
        */
-      *lex(source, incomplete2 = false) {
+      *lex(source, incomplete = false) {
         if (source) {
           if (typeof source !== "string")
             throw TypeError("source is not a string");
           this.buffer = this.buffer ? this.buffer + source : source;
           this.lineEndPos = null;
         }
-        this.atEnd = !incomplete2;
+        this.atEnd = !incomplete;
         let next = this.next ?? "stream";
-        while (next && (incomplete2 || this.hasChars(1)))
+        while (next && (incomplete || this.hasChars(1)))
           next = yield* this.parseNext(next);
       }
       atLineEnd() {
@@ -21912,12 +21912,12 @@ var require_parser = __commonJS({
        *
        * @returns A generator of tokens representing each directive, document, and other structure.
        */
-      *parse(source, incomplete2 = false) {
+      *parse(source, incomplete = false) {
         if (this.onNewLine && this.offset === 0)
           this.onNewLine(0);
-        for (const lexeme of this.lexer.lex(source, incomplete2))
+        for (const lexeme of this.lexer.lex(source, incomplete))
           yield* this.next(lexeme);
-        if (!incomplete2)
+        if (!incomplete)
           yield* this.end();
       }
       /**
@@ -46656,12 +46656,12 @@ function packagesView(packages, findings, scanId) {
       found.add(name);
     }
   }
-  const withheld = findings.length - visible.length;
+  const withheld2 = findings.length - visible.length;
   const notFound = packages.filter((p) => !found.has(p.toLowerCase()));
   const notes = [];
-  if (withheld > 0) {
+  if (withheld2 > 0) {
     notes.push(
-      `packages ${JSON.stringify(packages)} withheld ${withheld} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
+      `packages ${JSON.stringify(packages)} withheld ${withheld2} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
     );
   }
   if (notFound.length > 0) {
@@ -46671,7 +46671,7 @@ function packagesView(packages, findings, scanId) {
   }
   return {
     visible,
-    disclosure: { package_filter: { packages: [...packages], withheld, not_found: notFound } },
+    disclosure: { package_filter: { packages: [...packages], withheld: withheld2, not_found: notFound } },
     warning: notes.length > 0 ? notes.join(" ") : null
   };
 }
@@ -47317,6 +47317,11 @@ var COSIGN_VERIFY_TOOL_NAME = "cosign-verify";
 var COSIGN_TREE_TOOL_NAME = "cosign-tree";
 var COSIGN_TIMEOUT_MS = 18e4;
 var COSIGN_MIN_VERSION = "3.0.0";
+var UNSAFE_CHAR_CLASS = "\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200d\\u2028\\u2029\\u202a-\\u202e\\u2060\\u2066-\\u2069\\ufeff";
+var UNSAFE_CHARS = new RegExp(`[${UNSAFE_CHAR_CLASS}]`);
+function escapeUnsafe(text) {
+  return text.replace(new RegExp(`[${UNSAFE_CHAR_CLASS}]`, "g"), (c3) => `\\u${c3.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 function readinessFromProbe(r) {
   if (r.outcome !== "completed") {
     return { ok: false, status: "failed", reason: `\`cosign version\` did not complete: ${firstError(r.stderr) ?? r.outcome.replace(/_/g, " ")}` };
@@ -47335,28 +47340,42 @@ ${r.stderr}`);
   return { ok: true, version: version2 };
 }
 var DIGEST_REF = /^(\S+)@(sha256:[0-9a-f]{64})$/;
+var REGISTRY_ONLY_NOTE = "cosign reads the image and its signatures from the registry, never from the local Docker daemon: an image built locally and never pushed cannot be checked (push it, or scan the pushed reference).";
 function classifyTriangulate(r) {
   if (r.outcome === "completed") {
     const m = DIGEST_REF.exec(r.stdout.trim());
     if (m?.[2] !== void 0) return { kind: "digest", ref: m[0], digest: m[2] };
-    return { kind: "error", detail: "cosign triangulate printed no digest reference" };
+    const detail2 = "cosign triangulate printed no digest reference";
+    return { kind: "error", detail: detail2, cause: "other", why: `cosign could not resolve the image (${detail2})` };
   }
   if (/unknown command "triangulate"/.test(r.stderr)) {
-    return {
-      kind: "tag_only",
-      reason: "this cosign has no `triangulate` (removed in cosign 4), so the digest was not pinned: each call resolved the tag itself"
-    };
+    return { kind: "tag_only", reason: "this cosign has no `triangulate` (removed in cosign 4), so each call resolved the tag itself" };
   }
-  return { kind: "error", detail: firstError(r.stderr) ?? `cosign triangulate ${r.outcome.replace(/_/g, " ")}` };
+  const detail = escapeUnsafe(firstError(r.stderr) ?? `cosign triangulate ${r.outcome.replace(/_/g, " ")}`);
+  const cause = triangulateCause(r);
+  const why = {
+    not_found: `the registry has no such image or tag (${detail}). ${REGISTRY_ONLY_NOTE}`,
+    denied: `the registry refused access (${detail}) \u2014 cosign reads registry credentials from the Docker config (docker login), and a registry such as Docker Hub gives the same answer for a repository that does not exist, so an image never pushed looks like this too. ${REGISTRY_ONLY_NOTE}`,
+    rate_limited: `the registry is rate-limiting requests (${detail}) \u2014 try again later, or log in (docker login) for a higher limit`,
+    unreachable: `the registry could not be reached (${detail})`,
+    registry_error: `the registry failed (${detail}) \u2014 try again later`,
+    other: `cosign could not resolve the image (${detail})`
+  };
+  return { kind: "error", detail, cause, why: why[cause] };
 }
-var SIGNATURE_TYPES = /* @__PURE__ */ new Set([
-  "https://sigstore.dev/cosign/sign/v1",
-  "application/vnd.dev.cosign.artifact.sig.v1+json"
-]);
-var VERIFIED_SIGNATURE_TYPES = /* @__PURE__ */ new Set(["cosign container image signature", "https://sigstore.dev/cosign/sign/v1"]);
-var PROVENANCE_TYPE = /^https:\/\/slsa\.dev\/provenance\//;
-var PREDICATE_TYPE = /^https?:\/\//;
-var BUNDLE_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
+function triangulateCause(r) {
+  if (r.outcome !== "failed") return "other";
+  const s = r.stderr;
+  if (/TOOMANYREQUESTS|\b429\b|rate limit/i.test(s)) return "rate_limited";
+  if (/MANIFEST_UNKNOWN|NAME_UNKNOWN|NOT_FOUND|\b404\b/.test(s)) return "not_found";
+  if (/UNAUTHORIZED|DENIED|\b401\b|\b403\b/.test(s)) return "denied";
+  if (NETWORK.test(stripEchoes(s))) return "unreachable";
+  if (/: UNKNOWN\b|UNAVAILABLE|unexpected status code 5\d\d|\b50[0-9]\b/.test(s)) return "registry_error";
+  return "other";
+}
+var SIGN_PREDICATE = "https://sigstore.dev/cosign/sign/v1";
+var VERIFIED_SIGNATURE_TYPES = /* @__PURE__ */ new Set(["cosign container image signature", SIGN_PREDICATE]);
+var BUNDLE_MEDIA_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
 var PROVENANCE_PREDICATE_TYPES = ["https://slsa.dev/provenance/v1", "https://slsa.dev/provenance/v0.2"];
 var TREE_HEADER = /Supply Chain Security Related artifacts for an image:/;
 var TREE_NONE = /No Supply Chain Security Related Artifacts found for image/;
@@ -47372,13 +47391,11 @@ function parseCosignTree(stdout, stderr) {
     signature: false,
     legacyAttestations: false,
     referrerTypes: [],
-    attestationBundleTypes: [],
-    ambiguousBundles: false,
     fetchErrors: stderr.split(/\r?\n/).filter((l) => TREE_FETCH_ERROR.test(l.trim()))
   };
   let recognised = false;
   for (const line of lines) {
-    if (TREE_NONE.test(line)) {
+    if (TREE_NONE.test(line) || TREE_SBOMS.test(line)) {
       recognised = true;
     } else if (TREE_SIGNATURES.test(line)) {
       recognised = true;
@@ -47386,37 +47403,69 @@ function parseCosignTree(stdout, stderr) {
     } else if (TREE_ATTESTATIONS.test(line)) {
       recognised = true;
       listing.legacyAttestations = true;
-    } else if (TREE_SBOMS.test(line)) {
-      recognised = true;
     } else {
       const type = TREE_REFERRER.exec(line)?.[1];
       if (type === void 0) continue;
       recognised = true;
       listing.referrerTypes.push(type);
-      if (SIGNATURE_TYPES.has(type)) listing.signature = true;
-      else if (BUNDLE_TYPE.test(type)) listing.ambiguousBundles = true;
-      else if (PREDICATE_TYPE.test(type) && !listing.attestationBundleTypes.includes(type)) listing.attestationBundleTypes.push(type);
     }
   }
   return recognised ? listing : null;
 }
-function incomplete(tree) {
-  return tree.fetchErrors.length > 0 || tree.ambiguousBundles;
-}
 function signatureFromTree(tree) {
   if (tree.signature) return "present";
-  if (incomplete(tree)) return "unknown";
-  if (tree.attestationBundleTypes.length > 0) return "attestation_only";
+  if (tree.fetchErrors.length > 0) return "unknown";
   return "confirm";
 }
-function provenanceFromTree(tree) {
-  return tree.referrerTypes.some((t) => PROVENANCE_TYPE.test(t)) ? "present" : "confirm";
+function treeListsAnything(tree) {
+  return tree.signature || tree.referrerTypes.length > 0;
 }
 function classifySignatureDownload(r) {
-  if (r.outcome === "output_too_large") return "present";
-  if (r.outcome === "completed") return r.stdout.trim().length > 0 ? "present" : "unknown";
-  if (r.outcome === "failed" && /no signatures associated/.test(r.stderr)) return "absent";
-  return "unknown";
+  const none = { state: "unknown", attestationTypes: [] };
+  if (r.outcome === "failed") {
+    return /no signatures associated/.test(r.stderr) ? { state: "absent", attestationTypes: [] } : none;
+  }
+  if (r.outcome !== "completed" && r.outcome !== "output_too_large") return none;
+  let signature = false;
+  let recognised = false;
+  const types = [];
+  for (const line of r.stdout.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    let item;
+    try {
+      item = JSON.parse(line);
+    } catch {
+      if (r.outcome === "output_too_large") continue;
+      return none;
+    }
+    if (!isRecord5(item)) return none;
+    if (typeof item["Base64Signature"] === "string") {
+      signature = true;
+      recognised = true;
+      continue;
+    }
+    if (typeof item["mediaType"] !== "string" || !BUNDLE_MEDIA_TYPE.test(item["mediaType"])) continue;
+    recognised = true;
+    if (item["messageSignature"] !== void 0) {
+      signature = true;
+      continue;
+    }
+    const type = dssePredicateType(item["dsseEnvelope"]) ?? "a Sigstore bundle of unknown predicate type";
+    if (type === SIGN_PREDICATE) signature = true;
+    else if (!types.includes(type)) types.push(type);
+  }
+  if (signature) return { state: "present", attestationTypes: types };
+  if (recognised && types.length > 0) return { state: "attestation_only", attestationTypes: types };
+  return none;
+}
+function dssePredicateType(envelope) {
+  if (!isRecord5(envelope) || typeof envelope["payload"] !== "string") return null;
+  try {
+    const statement = JSON.parse(Buffer.from(envelope["payload"], "base64").toString("utf8"));
+    return isRecord5(statement) && typeof statement["predicateType"] === "string" ? statement["predicateType"] : null;
+  } catch {
+    return null;
+  }
 }
 function classifyAttestationDownload(r) {
   if (r.outcome === "output_too_large") return "present";
@@ -47425,48 +47474,58 @@ function classifyAttestationDownload(r) {
   return "unknown";
 }
 var IDENTITY_MISMATCH = /none of the expected identities matched|no matching CertificateIdentity found|expected (?:SAN|issuer) value/;
-var SIGNATURE_VERDICT = new RegExp(
+var NO_KEY_MATERIAL = /no certificate found on signature|empty key/;
+var BAD_REGEXP = /error parsing regexp/;
+var NETWORK = new RegExp(
   [
-    IDENTITY_MISMATCH.source,
-    "no certificate found on signature",
-    "transparency log certificate does not match",
-    "failed to verify log inclusion",
-    "invalid signature",
-    "signature verification failed",
-    "failed to verify signature"
+    "dial tcp",
+    ": no such host",
+    "i/o timeout",
+    "connection reset by peer",
+    "connection refused",
+    "TLS handshake timeout",
+    "tls: ",
+    "context deadline exceeded",
+    "Client\\.Timeout exceeded",
+    "unexpected EOF",
+    ": EOF\\b",
+    "server misbehaving",
+    "network is unreachable",
+    "proxyconnect",
+    "giving up after \\d+ attempt",
+    "server gave HTTP response to HTTPS client",
+    // Go's url.Error: `Post "<url>": <cause>` (the URL is an echo, removed first).
+    '\\b(?:Get|Post|Head|Put|Patch|Delete) "\u2026": '
   ].join("|")
 );
-var TRANSIENT = /dial tcp|i\/o timeout|timeout|deadline exceeded|connection (?:reset|refused)|\bEOF\b|TLS handshake|TOOMANYREQUESTS|too many requests|UNKNOWN:|UNAVAILABLE|unexpected status|status code|no such host|temporar|rate limit|GET https?:|remote image|fetching |getting |setting up clients/i;
-var BAD_REGEXP = /error parsing regexp/;
-function foldedErrors(stderr) {
-  const lines = stderr.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.startsWith("Error: "));
-  if (start < 0) return [];
-  const block = [];
-  for (let i2 = start; i2 < lines.length; i2++) {
-    const line = lines[i2] ?? "";
-    if (i2 > start && (line.startsWith("error during command execution:") || line.startsWith("Error: "))) break;
-    const text = (i2 === start ? line.slice("Error: ".length) : line).replace(/^\s*no matching (?:signatures|attestations):\s*/, "").trim();
-    if (text.length > 0) block.push(text);
-  }
-  return block;
+var REGISTRY = /\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (?:[A-Z][A-Z_]+\b|unexpected status code)|unexpected status code \d{3}|remote image: |image tag not found|getting referrers|Error fetching /;
+var SIGSTORE_SERVICE = /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|searching log query|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+function stripEchoes(stderr) {
+  return stderr.replace(/got subjects \[[^\n]*/g, "got subjects [\u2026]").replace(/"(?:[^"\\\n]|\\.)*"/g, '"\u2026"').replace(/`[^`\n]*`/g, "`\u2026`");
+}
+function withheld(stderr) {
+  const own = stripEchoes(stderr);
+  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own);
 }
 function classifyVerify(r) {
   if (r.outcome === "completed") return { verdict: "verified", ...verifiedPayloads(r.stdout) };
   if (r.outcome !== "failed") return { verdict: "error", detail: `cosign verify ${r.outcome.replace(/_/g, " ")}` };
-  const detail = firstError(r.stderr) ?? `cosign verify exited ${r.exitCode ?? "(no exit code)"}`;
+  const framed = r.stderr.split(/\r?\n/).some((l) => l.startsWith("Error: "));
+  const detail = escapeUnsafe(firstError(r.stderr) ?? `cosign verify exited ${r.exitCode ?? "(no exit code)"}`);
+  if (!framed) return { verdict: "error", detail: `cosign verify ended without its error framing \u2014 ${detail}` };
   if (r.exitCode === 10) return { verdict: "no_signature_claimed", detail };
-  const folded = foldedErrors(r.stderr);
-  const judged = folded.length > 0 && !BAD_REGEXP.test(r.stderr) && folded.every((e) => SIGNATURE_VERDICT.test(e) && !TRANSIENT.test(e.replace(/got subjects \[[^\]]*\]/, "")));
-  if (!judged) return { verdict: "error", detail };
-  if (r.exitCode === 13 || folded.every((e) => /no certificate found on signature/.test(e))) {
-    return { verdict: "rejected", reason: "no_certificate", detail };
+  if (BAD_REGEXP.test(r.stderr)) return { verdict: "error", detail: `a signer regexp cosign cannot compile \u2014 ${detail}` };
+  if (r.exitCode === 11 || withheld(r.stderr)) return { verdict: "error", detail };
+  if (IDENTITY_MISMATCH.test(r.stderr)) {
+    const line = r.stderr.split(/\r?\n/).find((l) => IDENTITY_MISMATCH.test(l)) ?? detail;
+    return {
+      verdict: "rejected",
+      reason: "no_matching_signature",
+      detail: escapeUnsafe(clip2(line.replace(/^Error:\s*/, "").replace(/^no matching (?:signatures|attestations):\s*/, "").trim()))
+    };
   }
-  if ((r.exitCode === 12 || r.exitCode === 1) && folded.some((e) => IDENTITY_MISMATCH.test(e))) {
-    const mismatch = folded.find((e) => IDENTITY_MISMATCH.test(e)) ?? detail;
-    return { verdict: "rejected", reason: "no_matching_signature", detail: clip2(r.exitCode === 1 ? mismatch : detail) };
-  }
-  return { verdict: "error", detail };
+  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: "rejected", reason: "no_certificate", detail };
+  return { verdict: "rejected", reason: "invalid_signature", detail };
 }
 function verifiedPayloads(stdout) {
   const types = [];
@@ -47535,7 +47594,6 @@ function clip2(text) {
   return text.length > 400 ? `${text.slice(0, 399)}\u2026` : text;
 }
 var UNVERIFIED_NOTE = "A signature exists, but its signer was NOT verified: anyone can sign an image. Pass signer_identity (or signer_identity_regexp) and signer_issuer (or signer_issuer_regexp) to verify who signed it.";
-var REGISTRY_ONLY_NOTE = "cosign reads the image and its signatures from the registry, never from the local Docker daemon: an image built locally and never pushed cannot be checked (push it, or scan the pushed reference).";
 function skippedSummary(image, reason) {
   return { image, checked: null, check: "skipped", signature: "unknown", provenance: "unknown", note: `Not checked: ${reason}.` };
 }
@@ -47570,9 +47628,8 @@ async function pin(image, pass2, ctx, extra) {
       scope: `The digest was not pinned: ${res.reason}. On a multi-arch index a signature on the per-platform images only reads as unsigned.`
     };
   }
-  const why = `cosign could not find it in its registry \u2014 ${res.detail}. ${REGISTRY_ONLY_NOTE}`;
+  const why = res.why;
   return {
-    // Each name spelled out: history/runNames.test.ts reads bookkeeping names from the source.
     run: pass2 === "cosign-verify" ? { name: "cosign-verify", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra } : { name: "cosign-tree", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra },
     findings: [],
     summary: {
@@ -47589,36 +47646,78 @@ async function pin(image, pass2, ctx, extra) {
 function isCheck(p) {
   return "run" in p;
 }
-async function signatureEvidence(ref, ctx) {
-  const treeRun = await cosign(["tree", ref], ctx);
-  const tree = treeRun.outcome === "completed" ? parseCosignTree(treeRun.stdout, treeRun.stderr) : null;
-  if (tree === null) {
-    const why = treeRun.outcome === "completed" ? "its output was not a listing this version of dev-guardian can read" : firstError(treeRun.stderr) ?? `cosign tree ${treeRun.outcome.replace(/_/g, " ")}`;
-    return { state: "unknown", attestationTypes: [], tree: null, treeWhy: why, why: `cosign tree did not complete \u2014 ${why}`, cancelled: treeRun.outcome === "cancelled" };
+function aborted3(ctx) {
+  return ctx.signal?.aborted === true;
+}
+async function readTree(ref, ctx) {
+  const r = await cosign(["tree", ref], ctx);
+  const tree = r.outcome === "completed" ? parseCosignTree(r.stdout, r.stderr) : null;
+  if (tree !== null) return { tree, cancelled: false };
+  const why = r.outcome === "completed" ? "its output was not a listing this version of dev-guardian can read" : escapeUnsafe(firstError(r.stderr) ?? `cosign tree ${r.outcome.replace(/_/g, " ")}`);
+  return { tree: null, why, cancelled: r.outcome === "cancelled" };
+}
+function describeListed(tree) {
+  const parts = [];
+  if (tree.signature) parts.push("a .sig tag");
+  if (tree.referrerTypes.length > 0) parts.push(`OCI referrers typed ${[...new Set(tree.referrerTypes)].join(", ")}`);
+  return parts.length > 0 ? parts.join(" and ") : "nothing";
+}
+async function settleNoSignature(ref, policy, claim, ctx) {
+  if (aborted3(ctx)) return { v: { verdict: "error", detail: "cancelled" }, cancelled: true };
+  const read2 = await readTree(ref, ctx);
+  if (read2.tree === null) {
+    return {
+      v: { verdict: "error", detail: `cosign verify said "${claim}", and cosign tree \u2014 which fails loudly when the registry does \u2014 did not complete: ${read2.why ?? "unknown"}` },
+      cancelled: read2.cancelled
+    };
   }
-  const fromTree = signatureFromTree(tree);
-  const base = { attestationTypes: tree.attestationBundleTypes, tree };
-  if (fromTree === "present" || fromTree === "attestation_only") return { ...base, state: fromTree, cancelled: false };
-  if (fromTree === "unknown") {
-    const why = tree.fetchErrors.length > 0 ? `cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)` : "cosign tree listed a Sigstore bundle of no known type";
-    return { ...base, state: "unknown", why, cancelled: false };
+  const tree = read2.tree;
+  if (tree.fetchErrors.length > 0) {
+    return { v: { verdict: "error", detail: `cosign verify said "${claim}", and cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)` }, cancelled: false };
   }
-  if (ctx.signal?.aborted === true) return { ...base, state: "unknown", why: "cancelled", cancelled: true };
-  const dl = await cosign(["download", "signature", ref], ctx);
-  const answer = classifySignatureDownload(dl);
-  if (answer === "unknown") {
-    return { ...base, state: "unknown", why: `cosign download signature did not answer \u2014 ${firstError(dl.stderr) ?? dl.outcome}`, cancelled: dl.outcome === "cancelled" };
+  if (!treeListsAnything(tree)) {
+    if (aborted3(ctx)) return { v: { verdict: "error", detail: "cancelled" }, cancelled: true };
+    const dl = await cosign(["download", "signature", ref], ctx);
+    const answer = classifySignatureDownload(dl);
+    if (answer.state === "absent") {
+      return {
+        v: { verdict: "rejected", reason: "no_signature", detail: `${claim} \u2014 nothing is attached to this digest (cosign tree lists nothing, and the .sig tag holds none)` },
+        cancelled: false
+      };
+    }
+    if (answer.state === "unknown") {
+      return {
+        v: { verdict: "error", detail: `cosign verify said "${claim}", which could not be confirmed: cosign download signature did not answer \u2014 ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}` },
+        cancelled: dl.outcome === "cancelled"
+      };
+    }
   }
-  return { ...base, state: answer, cancelled: false };
+  if (aborted3(ctx)) return { v: { verdict: "error", detail: "cancelled" }, cancelled: true };
+  const again = await cosign(verifyArgs(ref, policy), ctx);
+  const v = classifyVerify(again);
+  if (v.verdict !== "no_signature_claimed") return { v, cancelled: again.outcome === "cancelled" };
+  return {
+    v: {
+      verdict: "rejected",
+      reason: "no_signature",
+      detail: `cosign tree lists ${describeListed(tree)} for this digest, but cosign verify found no signature it can use \u2014 twice, while the registry answered. An artifact cosign cannot parse as a Sigstore signature, or that is not one, is no signature: anyone who can push to the repository can attach one`
+    },
+    cancelled: false
+  };
 }
 async function verifyImage(image, policy, ctx) {
   const signer = canonicalSignerPolicy(policy);
   const pinned = await pin(image, "cosign-verify", ctx, { signer });
   if (isCheck(pinned)) return pinned;
   const warnings = unanchoredSignerRegexps(policy);
-  const r = await cosign(verifyArgs(pinned.ref, policy), ctx);
-  let v = classifyVerify(r);
-  let cancelled = r.outcome === "cancelled";
+  const first = await cosign(verifyArgs(pinned.ref, policy), ctx);
+  let v = classifyVerify(first);
+  let cancelled = first.outcome === "cancelled";
+  if (v.verdict === "no_signature_claimed") {
+    const settled = await settleNoSignature(pinned.ref, policy, v.detail, ctx);
+    v = settled.v;
+    cancelled = cancelled || settled.cancelled;
+  }
   const who = describePolicy(policy);
   const run = (outcome, reason) => ({
     name: "cosign-verify",
@@ -47628,23 +47727,6 @@ async function verifyImage(image, policy, ctx) {
     signer
   });
   const note = (text) => [text, pinned.scope, ...warnings].join(" ");
-  if (v.verdict === "no_signature_claimed") {
-    const claim = v.detail;
-    const evidence = await signatureEvidence(pinned.ref, ctx);
-    cancelled = cancelled || evidence.cancelled;
-    if (evidence.state === "absent") {
-      v = { verdict: "rejected", reason: "no_signature", detail: claim };
-    } else if (evidence.state === "unknown") {
-      v = { verdict: "error", detail: `cosign verify said "${claim}", which could not be confirmed: ${evidence.why ?? "unknown"}` };
-    } else {
-      const t = evidence.tree;
-      const seen = t !== null && t.referrerTypes.length > 0 ? `cosign tree lists ${t.referrerTypes.join(", ")}` : t?.signature === true ? "cosign tree lists a .sig signature" : "cosign download signature returns one";
-      v = {
-        verdict: "error",
-        detail: `cosign verify said "${claim}", but ${seen} \u2014 the registry answered the calls differently (a failed referrers call makes verify fall back to legacy signatures, and so does a bundle it cannot parse); not a verdict`
-      };
-    }
-  }
   if (v.verdict === "verified") {
     const imageSignature = v.types.some((t) => VERIFIED_SIGNATURE_TYPES.has(t));
     const accepted = v.types.length === 0 ? "a signature" : imageSignature ? "an image signature" : `a signed attestation (${v.types.join(", ")}), not a \`cosign sign\` signature \u2014 cosign verify accepts any Sigstore bundle over the digest from that signer`;
@@ -47671,17 +47753,24 @@ async function verifyImage(image, policy, ctx) {
       cancelled
     };
   }
-  const title = v.reason === "no_signature" ? `Image ${image} has no signature to verify` : `Image ${image} is not signed by the expected signer`;
+  const titles = {
+    no_signature: `Image ${image} has no signature cosign can verify`,
+    no_matching_signature: `Image ${image} is not signed by the expected signer`,
+    no_certificate: `Image ${image}'s signature has no certificate to verify`,
+    invalid_signature: `Image ${image}'s signature does not verify`
+  };
   const finding4 = makeFinding({
     tool: COSIGN_VERIFY_TOOL_NAME,
     rule_id: "image-signature-not-verified",
     severity: "high",
     category: "security",
     subcategory: "supply-chain",
-    title,
+    title: titles[v.reason],
     message: `cosign verify rejected ${pinned.checked ?? image} for ${who}: ${v.detail}. Nothing shows this image was built and signed by the identity you expect \u2014 do not deploy it until it verifies (or correct signer_identity / signer_issuer if the image is legitimately signed by another workflow).`,
     file_path: image,
-    snippet: image,
+    // The signer is part of what this finding says: a rejection for another
+    // signer is another finding, never this one unchanged.
+    snippet: `${image} signer=${signer}`,
     fix_available: false
   });
   return {
@@ -47694,26 +47783,45 @@ async function verifyImage(image, policy, ctx) {
 async function detectImageSupplyChain(image, ctx) {
   const pinned = await pin(image, "cosign-tree", ctx, {});
   if (isCheck(pinned)) return pinned;
-  const sig = await signatureEvidence(pinned.ref, ctx);
-  const tree = sig.tree;
+  const read2 = await readTree(pinned.ref, ctx);
+  const tree = read2.tree;
   if (tree === null) {
-    const why = sig.treeWhy ?? "unknown";
+    const why = read2.why ?? "unknown";
     return {
       run: { name: "cosign-tree", status: "failed", reason: `image ${image} (${pinned.checked ?? "tag not pinned"}): cosign tree did not complete \u2014 ${why}`, target: image },
       findings: [],
       summary: { image, checked: pinned.checked, check: "detect", signature: "unknown", provenance: "unknown", note: `Not checked: cosign tree did not complete (${why}). ${pinned.scope}` },
-      cancelled: sig.cancelled
+      cancelled: read2.cancelled
     };
   }
-  let cancelled = sig.cancelled;
+  let cancelled = false;
+  let signature;
+  let attestationTypes = [];
+  let signatureWhy;
+  const fromTree = signatureFromTree(tree);
+  if (fromTree === "present") {
+    signature = "present";
+  } else if (fromTree === "unknown") {
+    signature = "unknown";
+    signatureWhy = `cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)`;
+  } else if (aborted3(ctx)) {
+    signature = "unknown";
+    signatureWhy = "cancelled";
+    cancelled = true;
+  } else {
+    const dl = await cosign(["download", "signature", pinned.ref], ctx);
+    const answer = classifySignatureDownload(dl);
+    signature = answer.state;
+    attestationTypes = answer.attestationTypes;
+    if (dl.outcome === "cancelled") cancelled = true;
+    if (answer.state === "unknown") signatureWhy = `cosign download signature did not answer \u2014 ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}`;
+  }
   let provenance = "unknown";
   let provenanceWhy;
-  if (provenanceFromTree(tree) === "present") {
-    provenance = "present";
-  } else if (!cancelled) {
+  if (!cancelled) {
     const answers = [];
     for (const type of PROVENANCE_PREDICATE_TYPES) {
-      if (ctx.signal?.aborted === true) {
+      if (aborted3(ctx)) {
         cancelled = true;
         break;
       }
@@ -47724,19 +47832,19 @@ async function detectImageSupplyChain(image, ctx) {
       }
       const answer = classifyAttestationDownload(r);
       answers.push(answer);
-      if (answer === "unknown") provenanceWhy = `cosign download attestation did not answer \u2014 ${firstError(r.stderr) ?? r.outcome}`;
+      if (answer === "unknown") provenanceWhy = `cosign download attestation did not answer \u2014 ${escapeUnsafe(firstError(r.stderr) ?? r.outcome)}`;
       if (answer === "present") break;
     }
     provenance = answers.includes("present") ? "present" : answers.length === PROVENANCE_PREDICATE_TYPES.length && answers.every((a2) => a2 === "absent") ? "absent" : "unknown";
-    if (provenance === "absent" && incomplete(tree)) {
+    if (provenance === "absent" && tree.fetchErrors.length > 0) {
       provenance = "unknown";
       provenanceWhy = "cosign tree could not list every referrer";
     }
-    if (cancelled && provenance === "unknown") provenanceWhy = "cancelled";
   }
-  const signature = sig.state;
+  if (cancelled && provenance === "unknown") provenanceWhy = "cancelled";
   const findings = [];
   if (signature === "absent") {
+    const listed = tree.referrerTypes.length > 0 ? ` What is attached (OCI referrers typed ${[...new Set(tree.referrerTypes)].join(", ")}) is no Sigstore bundle cosign can parse \u2014 anyone who can push to the repository can attach such an artifact.` : "";
     const legacyProvenance = provenance === "present" ? " A signed SLSA provenance attestation IS attached as a legacy .att tag, which `cosign verify-attestation` checks \u2014 `cosign verify` does not accept it as the image's signature." : " Nothing ties it to who built it.";
     findings.push(
       makeFinding({
@@ -47746,7 +47854,7 @@ async function detectImageSupplyChain(image, ctx) {
         category: "security",
         subcategory: "supply-chain",
         title: `Image ${image} has no Sigstore signature`,
-        message: `cosign found no signature for ${pinned.checked ?? image} \u2014 no .sig tag, no signing bundle and no signed attestation bundle attached as an OCI referrer, which is everything \`cosign verify\` accepts.${legacyProvenance} On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
+        message: `cosign found no signature for ${pinned.checked ?? image} \u2014 no .sig tag, and no signing or signed attestation bundle it can parse attached as an OCI referrer, which is everything \`cosign verify\` accepts.${listed}${legacyProvenance} On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
         file_path: image,
         snippet: image,
         fix_available: false
@@ -47762,7 +47870,7 @@ async function detectImageSupplyChain(image, ctx) {
         category: "security",
         subcategory: "supply-chain",
         title: `Image ${image} has no SLSA provenance attestation`,
-        message: `No signed SLSA provenance attestation (https://slsa.dev/provenance/v0.2 or v1) was found for ${pinned.checked ?? image}, as a legacy .att tag or an OCI referrer, so there is no signed record of the source and build that produced it. BuildKit's unsigned provenance inside an image index is not counted. Generate one where the image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).`,
+        message: `No signed SLSA provenance attestation (https://slsa.dev/provenance/v0.2 or v1) was found for ${pinned.checked ?? image}, as a legacy .att tag or a Sigstore bundle attached as an OCI referrer, so there is no signed record of the source and build that produced it. BuildKit's unsigned provenance inside an image index is not counted. Generate one where the image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).`,
         file_path: image,
         snippet: image,
         fix_available: false
@@ -47772,9 +47880,9 @@ async function detectImageSupplyChain(image, ctx) {
   const complete = signature !== "unknown" && provenance !== "unknown";
   const sigWords = {
     present: "signature present (signer NOT verified)",
-    attestation_only: `no \`cosign sign\` signature, but a signed attestation (${sig.attestationTypes.join(", ")}) (signer NOT verified)`,
+    attestation_only: `no \`cosign sign\` signature, but a signed attestation (${attestationTypes.join(", ")}) (signer NOT verified)`,
     absent: "signature absent",
-    unknown: `signature unknown (${sig.why ?? "not answered"})`
+    unknown: `signature unknown (${signatureWhy ?? "not answered"})`
   };
   const provWords = {
     present: "SLSA provenance present (signer NOT verified)",
@@ -47785,7 +47893,7 @@ async function detectImageSupplyChain(image, ctx) {
   if (signature === "present") notes.push(UNVERIFIED_NOTE);
   if (signature === "attestation_only") {
     notes.push(
-      `No \`cosign sign\` signature is attached, but a signed attestation is (${sig.attestationTypes.join(", ")}) \u2014 and cosign verify accepts a signed attestation over the digest as the image's signature, so a verification with its signer can pass. Its signer was NOT verified: pass signer_identity and signer_issuer.`
+      `No \`cosign sign\` signature is attached, but a signed attestation is (${attestationTypes.join(", ")}) \u2014 and cosign verify accepts a signed attestation over the digest as the image's signature, so a verification with its signer can pass. Its signer was NOT verified: pass signer_identity and signer_issuer.`
     );
   }
   if (provenance === "present" && signature !== "attestation_only") {
@@ -47871,13 +47979,12 @@ var cosignParser = {
     return { findings: input, cves: [] };
   }
 };
-var CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
-var IMAGE_REF = /^(?!-)[^\s\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+$/;
+var IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
 var SignerValue = external_exports.string().min(1).max(1024);
 var scanContainers = makeScanTool({
   name: "scan_containers",
   title: "Container scan (Dockerfile + image + compose)",
-  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or signer_issuer_regexp), a real cosign verify \u2014 a confirmed rejection is a high finding; without them, only whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and image_signature says an existing signature was NOT verified. A registry error is unknown, never absent. cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.",
+  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or signer_issuer_regexp), a real cosign verify \u2014 a confirmed rejection is a high finding; without them, only whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and image_signature says an existing signature was NOT verified. Only a network or registry failure withholds a verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry error cosign reports is unknown, never absent \u2014 one it cannot see (a referrers API with the wrong Content-Type) is not: see SECURITY.md. cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.",
   scan_type: "containers",
   category: "security",
   supportsAutoFix: false,
@@ -48095,10 +48202,10 @@ function signerPolicy(inp) {
 }
 function invalidInput(projectPath, inp) {
   if (inp.image !== void 0 && !IMAGE_REF.test(inp.image)) {
-    return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or control characters, or start with "-".`;
+    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, or start with "-".`;
   }
   if (inp.dockerfile_path !== void 0 && !isInside3(projectPath, inp.dockerfile_path)) {
-    return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
+    return `dockerfile_path ${escapeUnsafe(JSON.stringify(inp.dockerfile_path))} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
   }
   return invalidSigner(inp);
 }
@@ -48109,8 +48216,8 @@ function invalidSigner(inp) {
     return `${given.join(", ")} name(s) who must have signed an image, but no image was given \u2014 pass image.`;
   }
   for (const field2 of given) {
-    if (CONTROL_CHARS.test(inp[field2] ?? "")) {
-      return `${field2} contains a control character (or a Unicode line separator or bidi control); an identity, issuer or regexp never needs one.`;
+    if (UNSAFE_CHARS.test(inp[field2] ?? "")) {
+      return `${field2} contains a control character (or a zero-width, line-separator or bidi character); an identity, issuer or regexp never needs one.`;
     }
   }
   if (inp.signer_identity !== void 0 && inp.signer_identity_regexp !== void 0) {
@@ -48297,17 +48404,17 @@ function categoriesView(categories, findings, scanId) {
       withheldBySubcategory[key] = (withheldBySubcategory[key] ?? 0) + 1;
     }
   }
-  const withheld = findings.length - visible.length;
+  const withheld2 = findings.length - visible.length;
   return {
     visible,
     disclosure: {
       category_filter: {
         categories: [...categories],
-        withheld,
+        withheld: withheld2,
         withheld_by_subcategory: withheldBySubcategory
       }
     },
-    warning: withheld === 0 ? null : `categories ${JSON.stringify(categories)} withheld ${withheld} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
+    warning: withheld2 === 0 ? null : `categories ${JSON.stringify(categories)} withheld ${withheld2} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
   };
 }
 function recategoriseAsBug(f) {
@@ -49526,13 +49633,13 @@ function qualityCategoriesView(categories, findings, scanId) {
     if (categories.includes(category)) visible.push(f);
     else withheldByCategory[category] = (withheldByCategory[category] ?? 0) + 1;
   }
-  const withheld = findings.length - visible.length;
+  const withheld2 = findings.length - visible.length;
   return {
     visible,
     disclosure: {
-      category_filter: { categories: [...categories], withheld, withheld_by_category: withheldByCategory }
+      category_filter: { categories: [...categories], withheld: withheld2, withheld_by_category: withheldByCategory }
     },
-    warning: withheld === 0 ? null : `categories ${JSON.stringify(categories)} withheld ${withheld} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
+    warning: withheld2 === 0 ? null : `categories ${JSON.stringify(categories)} withheld ${withheld2} finding(s) from this response only; they are recorded in scan ${scanId}, and baselines and diffs against it include them.`
   };
 }
 
@@ -67489,12 +67596,12 @@ async function handler40(input, ctx, callMeta) {
   const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
   const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
   const wallClockMs = typeof inp.wall_clock_ms === "number" && inp.wall_clock_ms > 0 ? Math.floor(inp.wall_clock_ms) : DEFAULT_WALL_CLOCK_MS;
-  const aborted3 = () => callMeta?.signal?.aborted === true;
+  const aborted4 = () => callMeta?.signal?.aborted === true;
   const livenessOpts = { timeoutMs, concurrency: 1 };
   if (callMeta?.signal !== void 0) livenessOpts.signal = callMeta.signal;
   const liveness = await executeProbe(livenessRequest(target.origin), livenessOpts);
   if (liveness.outcome !== "completed") {
-    if (aborted3()) return fail("cancelled", "Scan was cancelled by the host.");
+    if (aborted4()) return fail("cancelled", "Scan was cancelled by the host.");
     return fail("target_not_found", livenessMessage(target, liveness, timeoutMs));
   }
   const scanId = randomUUID17();
@@ -67545,7 +67652,7 @@ async function handler40(input, ctx, callMeta) {
     return fail("cancelled", "Scan was cancelled by the host.");
   };
   const results = await executeProbes(plan.requests, probeOpts);
-  if (aborted3()) return cancel();
+  if (aborted4()) return cancel();
   const analyzeInput = {
     plan,
     // The full inventory alongside the probed subset, for the same reason the
@@ -67606,7 +67713,7 @@ async function handler40(input, ctx, callMeta) {
     // it is thirty requests, and thirty per-request timeouts after the
     // ceiling expired would put the total right back where it started.
     probeOpts,
-    aborted: () => aborted3() || deadline.hit()
+    aborted: () => aborted4() || deadline.hit()
   });
   if (burst.finding !== null) findings.push(burst.finding);
   const timedOut = deadline.hit();
@@ -67636,7 +67743,7 @@ async function handler40(input, ctx, callMeta) {
   findings.push(...nuclei.findings);
   if (nuclei.toolRun !== null) toolsRun.push(nuclei.toolRun);
   if (nuclei.missing) missingTools.push("nuclei");
-  if (aborted3()) return cancel();
+  if (aborted4()) return cancel();
   const ordered = [...findings].sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );

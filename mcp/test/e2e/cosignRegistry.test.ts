@@ -28,7 +28,7 @@ import {
   type CosignRunContext,
 } from '../../src/runners/cosignCheck.js';
 import { runProcess } from '../../src/runners/processRunner.js';
-import { startFakeRegistry, type FakeImageOptions } from '../helpers/fakeOciRegistry.js';
+import { startFakeRegistry, UNTRUSTED_CERT_PEM, type FakeImageOptions } from '../helpers/fakeOciRegistry.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'guardian-cosign-e2e-'));
@@ -50,13 +50,19 @@ async function cosignReady(): Promise<string | null> {
   return r.ok ? null : `cosign is not usable: ${r.reason}`;
 }
 
+const REQUIRED = process.env['GUARDIAN_REQUIRE_COSIGN'] === '1';
 const NOT_READY = await cosignReady();
-if (NOT_READY !== null && process.env['GUARDIAN_REQUIRE_COSIGN'] === '1') {
+if (NOT_READY !== null && REQUIRED) {
   throw new Error(`GUARDIAN_REQUIRE_COSIGN=1 but ${NOT_READY}`);
 }
 const TUF_READY =
   NOT_READY === null &&
   (await runProcess({ command: 'cosign', args: ['initialize'], cwd: scratch, env: ENV, timeoutMs: 120_000 })).outcome === 'completed';
+// Requiring cosign means requiring the verify cases too: they are the ones
+// that decide a HIGH finding.
+if (NOT_READY === null && !TUF_READY && REQUIRED) {
+  throw new Error("GUARDIAN_REQUIRE_COSIGN=1 but `cosign initialize` could not fetch Sigstore's TUF trust root (network?)");
+}
 
 const SIGN = 'https://sigstore.dev/cosign/sign/v1';
 const SLSA_V1 = 'https://slsa.dev/provenance/v1';
@@ -144,20 +150,42 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
-  it('a signing bundle as an OCI referrer: present', async () => {
-    await withRegistry({ referrerBundles: [SIGN] }, async (reg) => {
+  // Review round 2, N1: the fixture's bundles do not parse as Sigstore
+  // bundles (nothing here is signed for real), and an artifact typed like a
+  // predicate is not a bundle at all. Anyone who can push can attach either:
+  // neither is a signature, whatever `tree` lists.
+  it.each([
+    ['an ordinary artifact typed https://spdx.dev/Document', { otherReferrers: ['https://spdx.dev/Document'] }],
+    ['a "signing bundle" cosign cannot parse', { referrerBundles: [SIGN] }],
+    ['a "provenance bundle" cosign cannot parse', { referrerBundles: [SLSA_V1] }],
+  ] as const)('N1: %s is no signature — unsigned, and no provenance', async (_name, opts) => {
+    await withRegistry(opts, async (reg) => {
+      const tree = await raw(['tree', reg.image]);
+      expect(tree.stdout).toMatch(/artifacts via OCI referrer/);
+
       const c = await detectImageSupplyChain(reg.image, ctx);
-      expect(c.summary.signature).toBe('present_unverified');
-      expect(c.findings.map((f) => f.rule_id)).toEqual(['image-no-provenance']);
+      expect(c.run.status).toBe('ok');
+      expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent' });
+      expect(c.findings.map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
     });
   }, E2E_TIMEOUT);
 
-  it('only a signed provenance bundle (review M2): "attestation only", no "unsigned" finding', async () => {
-    await withRegistry({ referrerBundles: [SLSA_V1] }, async (reg) => {
-      const c = await detectImageSupplyChain(reg.image, ctx);
-      expect(c.findings).toEqual([]);
-      expect(c.summary).toMatchObject({ signature: 'attestation_only_unverified', provenance: 'present_unverified' });
-    });
+  // A KNOWN blind spot, pinned so a cosign / go-containerregistry that fixes
+  // it shows up here: a referrers answer whose Content-Type is not exactly
+  // the OCI index type is read as "no referrers API", the tag fallback finds
+  // nothing, and nothing is reported — no error anywhere. A signed image then
+  // reads unsigned; SECURITY.md says so. Asserted on cosign's raw output only:
+  // the check's own answer here is the false "absent" it cannot avoid.
+  it('KNOWN BLIND SPOT: a referrers API answering `…; charset=utf-8` hides every referrer — cosign tree lists nothing, exit 0', async () => {
+    await withRegistry(
+      { referrerBundles: [SIGN], referrersContentType: 'application/vnd.oci.image.index.v1+json; charset=utf-8' },
+      async (reg) => {
+        const tree = await raw(['tree', reg.image]);
+        expect(tree.exit).toBe(0);
+        expect(tree.stdout).toMatch(/No Supply Chain Security Related Artifacts found/);
+        expect(tree.stderr).not.toMatch(/Error/);
+      },
+    );
   }, E2E_TIMEOUT);
 
   it('an image the registry does not have: failed, and the reason says cosign reads the registry only', async () => {
@@ -192,18 +220,34 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
 
         const c = await verifyImage(reg.image, policy, ctx);
         expect(c.run.status).toBe('failed');
-        expect(c.run.reason).toMatch(/could not be confirmed/);
+        expect(c.run.reason).toMatch(/cosign tree — which fails loudly when the registry does — did not complete: getting referrers/);
         expect(c.findings).toEqual([]);
         expect(c.summary.signature).toBe('unknown');
       });
     }, E2E_TIMEOUT);
 
-    it('a signing bundle verify cannot parse: "no signatures found" while tree lists it — failed, NOT rejected', async () => {
-      await withRegistry({ referrerBundles: [SIGN] }, async (reg) => {
+    // Review round 2, N1: what anyone who can push can attach never turns a
+    // rejection into "no verdict".
+    it.each([
+      ['a "signing bundle" verify cannot parse', { referrerBundles: [SIGN] }, /cosign tree lists OCI referrers typed https:\/\/sigstore\.dev\/cosign\/sign\/v1/],
+      ['an ordinary artifact typed https://spdx.dev/Document', { otherReferrers: ['https://spdx.dev/Document'] }, /https:\/\/spdx\.dev\/Document/],
+      ['a legacy .sig holding a junk signature and no certificate (exit 12 "empty key")', { legacySignature: true }, /empty key/],
+    ] as const)('N1: %s — REJECTED, the high finding', async (_name, opts, detail) => {
+      await withRegistry(opts, async (reg) => {
         const c = await verifyImage(reg.image, policy, ctx);
-        expect(c.run.status).toBe('failed');
-        expect(c.run.reason).toMatch(/cosign tree lists https:\/\/sigstore\.dev\/cosign\/sign\/v1/);
-        expect(c.findings).toEqual([]);
+        expect(c.run).toMatchObject({ name: 'cosign-verify', status: 'ok' });
+        expect(c.findings.map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
+        expect(c.findings[0]?.message).toMatch(detail);
+        expect(c.summary.signature).toBe('rejected');
+      });
+    }, E2E_TIMEOUT);
+
+    it('a legacy signature whose certificate Fulcio never issued is never a pass: rejected, or — if Rekor cannot be reached — withheld as a network failure', async () => {
+      await withRegistry({ legacySignature: UNTRUSTED_CERT_PEM }, async (reg) => {
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(['rejected', 'unknown']).toContain(c.summary.signature);
+        if (c.summary.signature === 'unknown') expect(c.run.reason).toMatch(/searching log query|giving up after|dial tcp|tls: /);
+        else expect(c.findings.map((f) => f.severity)).toEqual(['high']);
       });
     }, E2E_TIMEOUT);
 

@@ -29,20 +29,61 @@ import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+/**
+ * A self-signed certificate Fulcio never issued (SAN: the org/app release
+ * workflow), for a legacy signature whose certificate cannot chain to
+ * Sigstore — an invalid signature. Public certificate only: its key was
+ * discarded when it was made (openssl, 2026-09-28).
+ */
+export const UNTRUSTED_CERT_PEM = [
+  '-----BEGIN CERTIFICATE-----',
+  'MIICMTCCAdigAwIBAgIUT/vx17UnInX+tufPJKKR/+eRqw4wCgYIKoZIzj0EAwIw',
+  'QzEiMCAGA1UECgwZZGV2LWd1YXJkaWFuIHRlc3QgZml4dHVyZTEdMBsGA1UEAwwU',
+  'bm90IGlzc3VlZCBieSBGdWxjaW8wHhcNMjYwOTI4MjA1NTQyWhcNMzYwOTI1MjA1',
+  'NTQyWjBDMSIwIAYDVQQKDBlkZXYtZ3VhcmRpYW4gdGVzdCBmaXh0dXJlMR0wGwYD',
+  'VQQDDBRub3QgaXNzdWVkIGJ5IEZ1bGNpbzBZMBMGByqGSM49AgEGCCqGSM49AwEH',
+  'A0IABAk2V3o26nYFVnWu5ZlZv3RBenmweP+iun/kUjTPg/AcYy46MrTjkidgcF4V',
+  'eiDTT7GJyWmgcYK1gQTyCWgZ4iGjgakwgaYwHQYDVR0OBBYEFH434d8msLLp42DK',
+  'SHDFDqPs72pvMB8GA1UdIwQYMBaAFH434d8msLLp42DKSHDFDqPs72pvMA8GA1Ud',
+  'EwEB/wQFMAMBAf8wUwYDVR0RBEwwSoZIaHR0cHM6Ly9naXRodWIuY29tL29yZy9h',
+  'cHAvLmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy9oZWFkcy9tYWlu',
+  'MAoGCCqGSM49BAMCA0cAMEQCIAsLdSJSLsSlvt5MPQ2qXdAQoCe8cspZshbsLUn1',
+  'ArD/AiB1KtYUuPXgIEGNdhoYjzoiCq5awj6RNVXI/uMQkIm6bQ==',
+  '-----END CERTIFICATE-----',
+  '',
+].join('\n');
+
 /** The artifact kinds a failure can be injected into. */
 export type FaultTarget = 'manifest' | 'sig' | 'att' | 'sbom' | 'referrers' | 'referrer-manifest';
 
 export interface FakeImageOptions {
-  /** A legacy `sha256-<hex>.sig` tag with one simple-signing layer. */
-  legacySignature?: boolean;
+  /**
+   * A legacy `sha256-<hex>.sig` tag with one simple-signing layer whose
+   * signature is junk. `true`: no certificate (cosign: "empty key"); a PEM
+   * string: that certificate attached (a certificate Fulcio never issued).
+   */
+  legacySignature?: boolean | string;
+  /**
+   * Referrers that are NOT Sigstore bundles: the `artifactType` of each —
+   * `https://spdx.dev/Document` looks like a predicate type in `cosign
+   * tree`, which prints a bundle's predicate type and any other artifact's
+   * type the same way.
+   */
+  otherReferrers?: readonly string[];
+  /**
+   * The Content-Type the referrers API answers with (default: exactly the
+   * OCI index type). go-containerregistry treats anything else as "no
+   * referrers API" and falls back to the tag schema — a blind spot.
+   */
+  referrersContentType?: string;
   /** Predicate types of the DSSE attestations in a legacy `.att` tag. */
-  legacyAttestations?: string[];
+  legacyAttestations?: readonly string[];
   /**
    * Sigstore bundles attached as OCI referrers: the predicate type each
    * bundle's annotation names (`https://sigstore.dev/cosign/sign/v1` for a
    * cosign v3 signature, `https://slsa.dev/provenance/v1` for provenance).
    */
-  referrerBundles?: string[];
+  referrerBundles?: readonly string[];
   /** HTTP status to answer instead, per artifact kind (500, 429, …). */
   faults?: Partial<Record<FaultTarget, number>>;
 }
@@ -121,22 +162,42 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
   const emptyConfig = Buffer.from('{}');
   blob(emptyConfig);
 
-  if (opts.legacySignature === true) {
+  if (opts.legacySignature !== undefined && opts.legacySignature !== false) {
     const payload = json({
       critical: { identity: { 'docker-reference': `${repo}` }, image: { 'docker-manifest-digest': image.digest }, type: 'cosign container image signature' },
       optional: null,
     });
     blob(payload);
+    const annotations: Record<string, string> = { 'dev.cosignproject.cosign/signature': 'bm90LWEtc2lnbmF0dXJl' };
+    if (typeof opts.legacySignature === 'string') annotations['dev.sigstore.cosign/certificate'] = opts.legacySignature;
     putManifest(
       {
         schemaVersion: 2,
         mediaType: OCI_MANIFEST,
         config: descriptor(OCI_CONFIG, emptyConfig),
-        layers: [descriptor(SIMPLE_SIGNING, payload, { annotations: { 'dev.cosignproject.cosign/signature': 'bm90LWEtc2lnbmF0dXJl' } })],
+        layers: [descriptor(SIMPLE_SIGNING, payload, { annotations })],
       },
       [`sha256-${hex}.sig`],
       'sig',
     );
+  }
+
+  for (const artifactType of opts.otherReferrers ?? []) {
+    const layer = json({ note: `an ordinary artifact of type ${artifactType}` });
+    blob(layer);
+    const stored = putManifest(
+      {
+        schemaVersion: 2,
+        mediaType: OCI_MANIFEST,
+        artifactType,
+        config: descriptor(OCI_EMPTY, emptyConfig),
+        layers: [descriptor('application/json', layer)],
+        subject: { mediaType: OCI_MANIFEST, digest: image.digest, size: image.body.length },
+      },
+      [],
+      'referrer-manifest',
+    );
+    referrers.push({ mediaType: OCI_MANIFEST, digest: stored.digest, size: stored.body.length, artifactType });
   }
 
   if (opts.legacyAttestations !== undefined && opts.legacyAttestations.length > 0) {
@@ -200,7 +261,7 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
       }
       const wanted = url.searchParams.get('artifactType');
       const list = ref === image.digest ? referrers.filter((r) => wanted === null || r['artifactType'] === wanted) : [];
-      const headers: Record<string, string> = { 'Content-Type': OCI_INDEX };
+      const headers: Record<string, string> = { 'Content-Type': opts.referrersContentType ?? OCI_INDEX };
       if (wanted !== null) headers['OCI-Filters-Applied'] = 'artifactType';
       res.writeHead(200, headers);
       res.end(head ? undefined : JSON.stringify({ schemaVersion: 2, mediaType: OCI_INDEX, manifests: list }));

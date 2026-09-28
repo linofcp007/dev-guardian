@@ -58,7 +58,10 @@ import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { checkCompose } from '../runners/composeChecks.js';
 import {
+  UNSAFE_CHARS,
+  UNSAFE_CHAR_CLASS,
   cosignReadiness,
+  escapeUnsafe,
   detectImageSupplyChain,
   skippedSummary,
   unanchoredSignerRegexps,
@@ -104,20 +107,13 @@ const cosignParser: ScannerParser = {
 };
 
 /**
- * Characters no image reference, identity, issuer or regexp has a reason to
- * hold, and that would reshape a reason, a note or a log line they flow
- * into: C0 controls (ESC included), DEL, C1 controls (U+0085 included), the
- * Unicode line and paragraph separators, and the bidi embedding / override /
- * isolate controls.
- */
-const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
-
-/**
  * An image reference: non-empty, no whitespace, not starting with `-`, and
- * none of {@link CONTROL_CHARS} — JavaScript's `\S` lets ESC and U+0085
- * through, and the reference now flows into cosign's reasons and notes.
+ * none of `UNSAFE_CHARS` (`runners/cosignCheck.ts`: control, zero-width,
+ * line-separator and bidi characters) — JavaScript's `\S` lets ESC, U+0085
+ * and the zero-width characters through, and the reference flows into
+ * cosign's reasons, notes and findings.
  */
-const IMAGE_REF = /^(?!-)[^\s\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+$/;
+const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
 
 /** A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character. */
 const SignerValue = z.string().min(1).max(1024);
@@ -135,7 +131,9 @@ const scanContainers = makeScanTool({
       'GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or ' +
       'signer_issuer_regexp), a real cosign verify — a confirmed rejection is a high finding; without them, only ' +
       'whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and ' +
-      'image_signature says an existing signature was NOT verified. A registry error is unknown, never absent. ' +
+      'image_signature says an existing signature was NOT verified. Only a network or registry failure withholds a ' +
+      'verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry error cosign reports is ' +
+      "unknown, never absent — one it cannot see (a referrers API with the wrong Content-Type) is not: see SECURITY.md. " +
       'cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.',
     scan_type: 'containers',
     category: 'security',
@@ -433,10 +431,10 @@ function signerPolicy(inp: ContainersInput): SignerPolicy | null {
 /** Why the input cannot be scanned, or null when it can. */
 function invalidInput(projectPath: string, inp: ContainersInput): string | null {
   if (inp.image !== undefined && !IMAGE_REF.test(inp.image)) {
-    return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or control characters, or start with "-".`;
+    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, or start with "-".`;
   }
   if (inp.dockerfile_path !== undefined && !isInside(projectPath, inp.dockerfile_path)) {
-    return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
+    return `dockerfile_path ${escapeUnsafe(JSON.stringify(inp.dockerfile_path))} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
   }
   return invalidSigner(inp);
 }
@@ -456,8 +454,8 @@ function invalidSigner(inp: ContainersInput): string | null {
   for (const field of given) {
     // A line break could smuggle a second line into a log or a report; no
     // identity, issuer or regexp has a reason to hold one.
-    if (CONTROL_CHARS.test(inp[field] ?? '')) {
-      return `${field} contains a control character (or a Unicode line separator or bidi control); an identity, issuer or regexp never needs one.`;
+    if (UNSAFE_CHARS.test(inp[field] ?? '')) {
+      return `${field} contains a control character (or a zero-width, line-separator or bidi character); an identity, issuer or regexp never needs one.`;
     }
   }
   if (inp.signer_identity !== undefined && inp.signer_identity_regexp !== undefined) {

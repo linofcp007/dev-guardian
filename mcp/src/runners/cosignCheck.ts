@@ -7,66 +7,89 @@
  *     `cosign verify` — the signature is checked against Sigstore's trust
  *     root and the certificate's identity against the one named. A rejection
  *     is a high finding (`cosign-verify` / `image-signature-not-verified`).
- *     The run records the signer (`ToolRun.signer`): a rejection for one
- *     signer is re-measured only by a verification for the same one.
+ *     The run records the signer (`ToolRun.signer`) and the finding's
+ *     identity holds it: a rejection for one signer is re-measured only by a
+ *     verification for the same one, and a rejection for another signer is a
+ *     new finding.
  *   - **detect** (no signer given): only whether a signature and a signed
  *     SLSA provenance attestation EXIST. Absence is a low (`image-unsigned`)
  *     or info (`image-no-provenance`) finding. A signature that exists is
  *     `present_unverified`: anyone can sign an image, so its existence says
  *     nothing about WHO signed it, and the answer says so.
  *
+ * ---- The verdict: only a network or registry failure withholds it ----
+ *
+ * Anyone who can push to the image's repository can attach anything to it:
+ * a `.sig` tag holding a junk signature, a "signing bundle" that does not
+ * parse, an ordinary artifact typed `https://spdx.dev/Document`. None of
+ * those is a signature, and none may turn a rejection into "no verdict" — so
+ * `cosign verify` failing is a REJECTION (a high finding) unless the failure
+ * is a network, registry or Sigstore-service failure: the question was not
+ * answered. The test for that reads cosign's own error framing (`dial tcp`,
+ * `GET https://…: TOOMANYREQUESTS`, `setting up clients and keys`, …) after
+ * every value cosign echoes back — the expected identity (the user's text),
+ * the certificate's subjects (the signer's) — has been removed, so an
+ * identity such as `…/org/timeout-svc/…` cannot pass for a timeout. An
+ * unparseable bundle, an invalid signature, a missing certificate or key:
+ * rejected. A regexp cosign cannot compile, or a cosign that crashed without
+ * its `Error:` framing, is an error — that is not a verdict on the image.
+ *
  * ---- What cosign cannot be taken at its word on (measured, v3.1.3) ----
  *
- * cosign swallows some registry failures and prints the same thing it
- * prints for "nothing there". Measured against the fake registry in
+ * cosign swallows some registry failures and prints what it prints for
+ * "nothing there". Measured against the fake registry in
  * `test/helpers/fakeOciRegistry.ts`, with a failure injected:
  *
  *   - `cosign tree` ignores any error but 404 on the legacy `.sig` / `.att`
- *     tags: a `.sig` answering 500 prints "No Supply Chain Security Related
- *     Artifacts found", exit 0, nothing on stderr (cli/tree.go, the
- *     `if err == nil` around each legacy fetch). Its referrers call fails
- *     loudly ("getting referrers", exit 1); a referrer it cannot fetch is a
- *     line on stderr and the listing goes on without it.
- *   - `cosign download signature` / `download attestation` try the bundles
- *     first and ignore a failure there (`if err == nil && len > 0`), then
- *     read the legacy tag — which fails loudly ("remote image: GET …").
+ *     tags (a `.sig` answering 500 prints "No Supply Chain Security Related
+ *     Artifacts found", exit 0). Its referrers call fails loudly ("getting
+ *     referrers", exit 1); a referrer it cannot fetch is a line on stderr.
+ *   - `cosign download signature` / `download attestation` read only the
+ *     referrers that parse as Sigstore bundles, skip the rest in silence
+ *     (`GetBundles`: "there may be non-Sigstore referrers"), then read the
+ *     legacy tag — which fails loudly ("remote image: GET …").
  *   - `cosign verify` falls back to legacy signatures when the referrers
- *     call fails, or when a bundle does not parse, and then says "no
- *     signatures found", exit 10 — for an image signed with a v3 bundle.
- *   - `cosign verify`'s exit 12 ("no matching signatures") joins ONE error
- *     per signature (pkg/cosign/verify.go, `strings.Join(…, "\n ")`), a
- *     transient failure on the expected signer's signature included.
+ *     call fails, or when no bundle parses, and says "no signatures found"
+ *     (exit 10) — also for an image signed with a v3 bundle.
+ *   - `cosign verify`'s exit 12 joins ONE error per signature, a transient
+ *     one included.
  *
- * So nothing here is "absent" or "rejected" on one call's word:
+ * So: detect's "absent" needs `tree` to list no `.sig` and `download
+ * signature` to say "no signatures associated" — and a referrer counts as a
+ * signature (or a signed attestation) only when `download signature` returns
+ * it as a Sigstore bundle, never on `tree`'s listing. Provenance is present
+ * only when `download attestation` returns it (a parsed bundle or a legacy
+ * `.att`), absent only when both v1 and v0.2 say none. verify's exit 10 is
+ * confirmed: `tree` (loud) must list nothing and the `.sig` tag hold none —
+ * or, when something is attached, verify is run once more, and "no
+ * signatures found" again while the registry answered is a rejection: what
+ * is attached is no signature it can use. An exit 12 with a registry error
+ * folded in is withheld.
  *
- *   - a signature is absent only when `tree` (loud on referrers) lists none
- *     AND `download signature` (loud on the `.sig` tag) says "no signatures
- *     associated"; provenance only when `tree` lists no SLSA referrer AND
- *     `download attestation` (loud on the `.att` tag) finds neither v1 nor
- *     v0.2;
- *   - verify's "no signatures found" is a rejection only when those same two
- *     calls agree there is none; exit 12, 13 or 1 only when every error it
- *     folded is a verdict about the signature (another identity or issuer,
- *     no certificate, a signature or log entry that does not verify) and
- *     none is a network or registry failure.
+ * ---- A registry failure cosign cannot see ----
  *
- * Everything else is `unknown` and the check `failed` — never a pass.
+ * go-containerregistry (remote/referrers.go, v0.21.7) reads a referrers
+ * answer whose Content-Type is not exactly the OCI index type (`…; charset=
+ * utf-8`), an HTML 200, or a 400 / 406 as "this registry has no referrers
+ * API", falls back to the tag schema, finds nothing, and reports nothing —
+ * no error anywhere. A registry answering that way makes a signed image read
+ * unsigned: detect says absent, verify says "no signatures found" (a high
+ * finding). Measured with the fake registry (`; charset=utf-8`: `tree` lists
+ * nothing, exit 0). Neither cosign nor dev-guardian can tell that apart from
+ * an unsigned image; SECURITY.md and the tool's description say so.
  *
  * ---- The image cosign checks ----
  *
  * `cosign triangulate --type digest` pins the tag to a digest first, and
- * every later call checks that digest: without it each call resolved the
- * tag on its own, and a tag that moved between two calls made them disagree
- * about two images. The response names the digest. Trivy resolves the tag
- * separately, and on a multi-arch index this is the index's digest — a
- * signature on the per-platform images only reads as absent; both are said.
- * `triangulate` is deprecated and goes in cosign 4: without it the checks
- * run on the tag, and the answer says the digest was not pinned.
+ * every later call checks that digest; the response names it. Trivy
+ * resolves the tag separately, and on a multi-arch index this is the index's
+ * digest — a signature on the per-platform images only reads as absent;
+ * both are said. `triangulate` goes in cosign 4: without it the checks run
+ * on the tag, and the answer says so.
  *
  * cosign older than 3.0 is not used at all: its `tree` does not list OCI
- * referrers unless asked (`--experimental-oci11`), and every v3 signature
- * and every GitHub build-provenance attestation is one — measured: cosign
- * 2.6.5 on a signed `ghcr.io/sigstore/cosign/cosign:v3.1.3` prints "No …
+ * referrers unless asked (`--experimental-oci11`) — measured: cosign 2.6.5
+ * on a signed `ghcr.io/sigstore/cosign/cosign:v3.1.3` prints "No …
  * Artifacts found", exit 0.
  */
 
@@ -85,6 +108,23 @@ export const COSIGN_TREE_TOOL_NAME = 'cosign-tree';
 export const COSIGN_TIMEOUT_MS = 180_000;
 /** The oldest cosign whose `tree` lists OCI referrers by default. */
 export const COSIGN_MIN_VERSION = '3.0.0';
+
+/**
+ * Characters no image reference, identity, issuer or regexp has a reason to
+ * hold, and that reshape any reason, note or log line they reach: C0
+ * controls (ESC included), DEL, C1 controls (U+0085 included), zero-width
+ * characters (U+200B–U+200D, U+2060, U+FEFF), the Unicode line and paragraph
+ * separators, and the bidi embedding / override / isolate controls. As a
+ * character-class body, for `scanContainers.ts`'s patterns too.
+ */
+export const UNSAFE_CHAR_CLASS =
+  '\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200d\\u2028\\u2029\\u202a-\\u202e\\u2060\\u2066-\\u2069\\ufeff';
+export const UNSAFE_CHARS = new RegExp(`[${UNSAFE_CHAR_CLASS}]`);
+
+/** `text` with every {@link UNSAFE_CHARS} character written as `\uXXXX` — never echoed raw. */
+export function escapeUnsafe(text: string): string {
+  return text.replace(new RegExp(`[${UNSAFE_CHAR_CLASS}]`, 'g'), (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
 
 /** The signer an image must be signed by: one identity form and one issuer form. */
 export interface SignerPolicy {
@@ -125,26 +165,55 @@ export function readinessFromProbe(r: ProcessRunResult): CosignReadiness {
 // The digest: `cosign triangulate --type digest`
 // ---------------------------------------------------------------------------
 
+export type TriangulateCause = 'not_found' | 'denied' | 'rate_limited' | 'unreachable' | 'registry_error' | 'other';
+
 export type Resolution =
   | { kind: 'digest'; ref: string; digest: string }
   | { kind: 'tag_only'; reason: string }
-  | { kind: 'error'; detail: string };
+  | { kind: 'error'; detail: string; cause: TriangulateCause; why: string };
 
 const DIGEST_REF = /^(\S+)@(sha256:[0-9a-f]{64})$/;
+
+/** Why an image cosign cannot find is often not a typo. */
+const REGISTRY_ONLY_NOTE =
+  'cosign reads the image and its signatures from the registry, never from the local Docker daemon: an image ' +
+  'built locally and never pushed cannot be checked (push it, or scan the pushed reference).';
 
 export function classifyTriangulate(r: ProcessRunResult): Resolution {
   if (r.outcome === 'completed') {
     const m = DIGEST_REF.exec(r.stdout.trim());
     if (m?.[2] !== undefined) return { kind: 'digest', ref: m[0], digest: m[2] };
-    return { kind: 'error', detail: 'cosign triangulate printed no digest reference' };
+    const detail = 'cosign triangulate printed no digest reference';
+    return { kind: 'error', detail, cause: 'other', why: `cosign could not resolve the image (${detail})` };
   }
   if (/unknown command "triangulate"/.test(r.stderr)) {
-    return {
-      kind: 'tag_only',
-      reason: 'this cosign has no `triangulate` (removed in cosign 4), so the digest was not pinned: each call resolved the tag itself',
-    };
+    return { kind: 'tag_only', reason: 'this cosign has no `triangulate` (removed in cosign 4), so each call resolved the tag itself' };
   }
-  return { kind: 'error', detail: firstError(r.stderr) ?? `cosign triangulate ${r.outcome.replace(/_/g, ' ')}` };
+  const detail = escapeUnsafe(firstError(r.stderr) ?? `cosign triangulate ${r.outcome.replace(/_/g, ' ')}`);
+  const cause = triangulateCause(r);
+  const why: Record<TriangulateCause, string> = {
+    not_found: `the registry has no such image or tag (${detail}). ${REGISTRY_ONLY_NOTE}`,
+    denied:
+      `the registry refused access (${detail}) — cosign reads registry credentials from the Docker config (docker ` +
+      'login), and a registry such as Docker Hub gives the same answer for a repository that does not exist, so an ' +
+      `image never pushed looks like this too. ${REGISTRY_ONLY_NOTE}`,
+    rate_limited: `the registry is rate-limiting requests (${detail}) — try again later, or log in (docker login) for a higher limit`,
+    unreachable: `the registry could not be reached (${detail})`,
+    registry_error: `the registry failed (${detail}) — try again later`,
+    other: `cosign could not resolve the image (${detail})`,
+  };
+  return { kind: 'error', detail, cause, why: why[cause] };
+}
+
+function triangulateCause(r: ProcessRunResult): TriangulateCause {
+  if (r.outcome !== 'failed') return 'other';
+  const s = r.stderr;
+  if (/TOOMANYREQUESTS|\b429\b|rate limit/i.test(s)) return 'rate_limited';
+  if (/MANIFEST_UNKNOWN|NAME_UNKNOWN|NOT_FOUND|\b404\b/.test(s)) return 'not_found';
+  if (/UNAUTHORIZED|DENIED|\b401\b|\b403\b/.test(s)) return 'denied';
+  if (NETWORK.test(stripEchoes(s))) return 'unreachable';
+  if (/: UNKNOWN\b|UNAVAILABLE|unexpected status code 5\d\d|\b50[0-9]\b/.test(s)) return 'registry_error';
+  return 'other';
 }
 
 // ---------------------------------------------------------------------------
@@ -155,32 +224,25 @@ export type Presence = 'present' | 'absent' | 'unknown';
 
 /** What `cosign tree` listed. */
 export interface CosignTreeListing {
-  /** A cosign image signature: a legacy `.sig` tag, or a signing bundle attached as an OCI referrer. */
+  /** A legacy `.sig` tag. */
   signature: boolean;
   /** Legacy `.att` attestations exist; the listing does not say of which predicate type. */
   legacyAttestations: boolean;
-  /** The type cosign printed for each OCI referrer (a bundle's predicate type when it has one). */
+  /**
+   * The type cosign printed for each OCI referrer — a bundle's predicate
+   * type when it carries one, any other artifact's own type otherwise: the
+   * listing alone cannot tell a Sigstore bundle from anything else.
+   */
   referrerTypes: string[];
-  /** Referrers that are signed attestation bundles (a predicate type other than a signature's). */
-  attestationBundleTypes: string[];
-  /** A Sigstore bundle cosign could not name a predicate type for: it could be a signature or provenance. */
-  ambiguousBundles: boolean;
   /** Referrers cosign reported it could not fetch: the listing is incomplete. */
   fetchErrors: string[];
 }
 
-/** Signing bundles and cosign's own OCI 1.1 signature artifacts. */
-const SIGNATURE_TYPES: ReadonlySet<string> = new Set([
-  'https://sigstore.dev/cosign/sign/v1',
-  'application/vnd.dev.cosign.artifact.sig.v1+json',
-]);
+/** The predicate type of a cosign v3 image signature. */
+const SIGN_PREDICATE = 'https://sigstore.dev/cosign/sign/v1';
 /** What `cosign verify` prints as `critical.type` for an image signature, legacy or v3. */
-const VERIFIED_SIGNATURE_TYPES: ReadonlySet<string> = new Set(['cosign container image signature', 'https://sigstore.dev/cosign/sign/v1']);
-/** SLSA provenance, any version (`https://slsa.dev/provenance/v0.2`, `…/v1`). */
-const PROVENANCE_TYPE = /^https:\/\/slsa\.dev\/provenance\//;
-/** `cosign tree` prints a bundle's predicate-type annotation, and predicate types are URIs. */
-const PREDICATE_TYPE = /^https?:\/\//;
-const BUNDLE_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
+const VERIFIED_SIGNATURE_TYPES: ReadonlySet<string> = new Set(['cosign container image signature', SIGN_PREDICATE]);
+const BUNDLE_MEDIA_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
 /** The predicate types `download attestation` is asked for, newest first. */
 export const PROVENANCE_PREDICATE_TYPES = ['https://slsa.dev/provenance/v1', 'https://slsa.dev/provenance/v0.2'] as const;
 
@@ -205,13 +267,11 @@ export function parseCosignTree(stdout: string, stderr: string): CosignTreeListi
     signature: false,
     legacyAttestations: false,
     referrerTypes: [],
-    attestationBundleTypes: [],
-    ambiguousBundles: false,
     fetchErrors: stderr.split(/\r?\n/).filter((l) => TREE_FETCH_ERROR.test(l.trim())),
   };
   let recognised = false;
   for (const line of lines) {
-    if (TREE_NONE.test(line)) {
+    if (TREE_NONE.test(line) || TREE_SBOMS.test(line)) {
       recognised = true;
     } else if (TREE_SIGNATURES.test(line)) {
       recognised = true;
@@ -219,61 +279,108 @@ export function parseCosignTree(stdout: string, stderr: string): CosignTreeListi
     } else if (TREE_ATTESTATIONS.test(line)) {
       recognised = true;
       listing.legacyAttestations = true;
-    } else if (TREE_SBOMS.test(line)) {
-      recognised = true;
     } else {
       const type = TREE_REFERRER.exec(line)?.[1];
       if (type === undefined) continue;
       recognised = true;
       listing.referrerTypes.push(type);
-      if (SIGNATURE_TYPES.has(type)) listing.signature = true;
-      else if (BUNDLE_TYPE.test(type)) listing.ambiguousBundles = true;
-      else if (PREDICATE_TYPE.test(type) && !listing.attestationBundleTypes.includes(type)) listing.attestationBundleTypes.push(type);
     }
   }
   return recognised ? listing : null;
 }
 
-/** An incomplete listing: a referrer cosign could not fetch, or a bundle it could not classify. */
-function incomplete(tree: CosignTreeListing): boolean {
-  return tree.fetchErrors.length > 0 || tree.ambiguousBundles;
-}
-
 /**
- * What the listing says about an image signature: `present`; `attestation_only`
- * (no `cosign sign`, but a signed attestation `cosign verify` would accept);
- * `unknown` (the listing is incomplete); or `confirm` — it lists none, which
- * `cosign tree` also prints when the `.sig` tag failed, so a loud call decides.
+ * What the listing alone says about an image signature: `present` (a legacy
+ * `.sig` tag); `unknown` (a referrer cosign could not fetch); or `confirm` —
+ * `download signature` decides, because `tree` also prints "nothing" when
+ * the `.sig` tag failed, and prints a referrer's type whether or not it is a
+ * Sigstore bundle.
  */
-export function signatureFromTree(tree: CosignTreeListing): 'present' | 'attestation_only' | 'unknown' | 'confirm' {
+export function signatureFromTree(tree: CosignTreeListing): 'present' | 'unknown' | 'confirm' {
   if (tree.signature) return 'present';
-  if (incomplete(tree)) return 'unknown';
-  if (tree.attestationBundleTypes.length > 0) return 'attestation_only';
+  if (tree.fetchErrors.length > 0) return 'unknown';
   return 'confirm';
 }
 
-/** `present` when a SLSA provenance referrer is listed; otherwise `confirm` (the `.att` tag and v0.2/v1 need reading). */
-export function provenanceFromTree(tree: CosignTreeListing): 'present' | 'confirm' {
-  return tree.referrerTypes.some((t) => PROVENANCE_TYPE.test(t)) ? 'present' : 'confirm';
+/** Whether anything at all is attached: a `.sig` tag or any referrer. */
+export function treeListsAnything(tree: CosignTreeListing): boolean {
+  return tree.signature || tree.referrerTypes.length > 0;
 }
 
 // ---------------------------------------------------------------------------
 // The loud calls: `download signature`, `download attestation`
 // ---------------------------------------------------------------------------
 
-/** `cosign download signature`: output is a signature; "no signatures associated" is none; anything else did not answer. */
-export function classifySignatureDownload(r: ProcessRunResult): Presence {
-  if (r.outcome === 'output_too_large') return 'present';
-  if (r.outcome === 'completed') return r.stdout.trim().length > 0 ? 'present' : 'unknown';
-  if (r.outcome === 'failed' && /no signatures associated/.test(r.stderr)) return 'absent';
-  return 'unknown';
+export interface SignatureDownload {
+  state: 'present' | 'attestation_only' | 'absent' | 'unknown';
+  /** The predicate types of the signed attestation bundles returned (for `attestation_only`). */
+  attestationTypes: string[];
+}
+
+/**
+ * `cosign download signature`: one JSON line per legacy signature, or per
+ * referrer cosign parsed as a Sigstore bundle — nothing else. A legacy
+ * signature, a message-signature bundle or a DSSE bundle whose predicate is
+ * `…/cosign/sign/v1` is an image signature; any other DSSE bundle is a
+ * signed attestation. "no signatures associated" is none; anything else did
+ * not answer.
+ */
+export function classifySignatureDownload(r: ProcessRunResult): SignatureDownload {
+  const none: SignatureDownload = { state: 'unknown', attestationTypes: [] };
+  if (r.outcome === 'failed') {
+    return /no signatures associated/.test(r.stderr) ? { state: 'absent', attestationTypes: [] } : none;
+  }
+  if (r.outcome !== 'completed' && r.outcome !== 'output_too_large') return none;
+  let signature = false;
+  let recognised = false;
+  const types: string[] = [];
+  for (const line of r.stdout.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    let item: unknown;
+    try {
+      item = JSON.parse(line);
+    } catch {
+      // A cut-off last line of an output past the cap; any other is not ours.
+      if (r.outcome === 'output_too_large') continue;
+      return none;
+    }
+    if (!isRecord(item)) return none;
+    if (typeof item['Base64Signature'] === 'string') {
+      signature = true;
+      recognised = true;
+      continue;
+    }
+    if (typeof item['mediaType'] !== 'string' || !BUNDLE_MEDIA_TYPE.test(item['mediaType'])) continue;
+    recognised = true;
+    if (item['messageSignature'] !== undefined) {
+      signature = true;
+      continue;
+    }
+    const type = dssePredicateType(item['dsseEnvelope']) ?? 'a Sigstore bundle of unknown predicate type';
+    if (type === SIGN_PREDICATE) signature = true;
+    else if (!types.includes(type)) types.push(type);
+  }
+  if (signature) return { state: 'present', attestationTypes: types };
+  if (recognised && types.length > 0) return { state: 'attestation_only', attestationTypes: types };
+  return none;
+}
+
+function dssePredicateType(envelope: unknown): string | null {
+  if (!isRecord(envelope) || typeof envelope['payload'] !== 'string') return null;
+  try {
+    const statement: unknown = JSON.parse(Buffer.from(envelope['payload'], 'base64').toString('utf8'));
+    return isRecord(statement) && typeof statement['predicateType'] === 'string' ? statement['predicateType'] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * One `cosign download attestation --predicate-type=<type>`. cosign prints
- * only attestations of that type, so any output — even past the stdout cap —
- * means one exists; its own "no attestations with predicate type" error means
- * none does. Anything else did not answer.
+ * only attestations of that type (parsed bundles, or the legacy `.att`), so
+ * any output — even past the stdout cap — means one exists; its own "no
+ * attestations with predicate type" error means none does. Anything else did
+ * not answer.
  */
 export function classifyAttestationDownload(r: ProcessRunResult): Presence {
   if (r.outcome === 'output_too_large') return 'present';
@@ -286,71 +393,87 @@ export function classifyAttestationDownload(r: ProcessRunResult): Presence {
 // `cosign verify`
 // ---------------------------------------------------------------------------
 
+export type RejectionReason = 'no_signature' | 'no_matching_signature' | 'no_certificate' | 'invalid_signature';
+
 export type VerifyVerdict =
   | { verdict: 'verified'; types: string[]; digest?: string }
   | { verdict: 'no_signature_claimed'; detail: string }
-  | { verdict: 'rejected'; reason: 'no_signature' | 'no_matching_signature' | 'no_certificate'; detail: string }
+  | { verdict: 'rejected'; reason: RejectionReason; detail: string }
   | { verdict: 'error'; detail: string };
 
 /** Another identity or issuer than the one asked for. */
 const IDENTITY_MISMATCH = /none of the expected identities matched|no matching CertificateIdentity found|expected (?:SAN|issuer) value/;
-/** A verdict about the signature itself — the same on every retry. */
-const SIGNATURE_VERDICT = new RegExp(
-  [
-    IDENTITY_MISMATCH.source,
-    'no certificate found on signature',
-    'transparency log certificate does not match',
-    'failed to verify log inclusion',
-    'invalid signature',
-    'signature verification failed',
-    'failed to verify signature',
-  ].join('|'),
-);
-/** A network, registry or Sigstore-service failure — the question was not answered. */
-const TRANSIENT = /dial tcp|i\/o timeout|timeout|deadline exceeded|connection (?:reset|refused)|\bEOF\b|TLS handshake|TOOMANYREQUESTS|too many requests|UNKNOWN:|UNAVAILABLE|unexpected status|status code|no such host|temporar|rate limit|GET https?:|remote image|fetching |getting |setting up clients/i;
+const NO_KEY_MATERIAL = /no certificate found on signature|empty key/;
 const BAD_REGEXP = /error parsing regexp/;
 
+/** Go's network errors, as net/http and the dialer frame them. Case-sensitive on purpose. */
+const NETWORK = new RegExp(
+  [
+    'dial tcp',
+    ': no such host',
+    'i/o timeout',
+    'connection reset by peer',
+    'connection refused',
+    'TLS handshake timeout',
+    'tls: ',
+    'context deadline exceeded',
+    'Client\\.Timeout exceeded',
+    'unexpected EOF',
+    ': EOF\\b',
+    'server misbehaving',
+    'network is unreachable',
+    'proxyconnect',
+    'giving up after \\d+ attempt',
+    'server gave HTTP response to HTTPS client',
+    // Go's url.Error: `Post "<url>": <cause>` (the URL is an echo, removed first).
+    '\\b(?:Get|Post|Head|Put|Patch|Delete) "…": ',
+  ].join('|'),
+);
+/** A registry answering with an error, as go-containerregistry and cosign frame it. */
+const REGISTRY = /\b(?:GET|HEAD|POST|PUT|PATCH|DELETE) https?:\/\/\S+: (?:[A-Z][A-Z_]+\b|unexpected status code)|unexpected status code \d{3}|remote image: |image tag not found|getting referrers|Error fetching /;
+/** Sigstore's services (TUF, Rekor) not answering. */
+const SIGSTORE_SERVICE =
+  /setting up clients and keys|getting rekor public keys|getting ctlog public keys|updating local metadata and targets|error updating to TUF remote mirror|tuf refresh failed|failed to download [\w.]*root\.json|searching log query|getting trusted root|fetching trusted root|Could not fetch trusted_root/;
+
 /**
- * The errors cosign folded into one "no matching …" message: the lines of
- * its first `Error:` block, prefix removed — one per signature or bundle
- * (a multi-line error contributes several lines, each judged on its own).
+ * cosign's stderr with every value it echoes removed: double- and
+ * backtick-quoted strings (the expected identity or regexp, the certificate's
+ * SAN and issuer, URLs) and the legacy subject list — from `got subjects [`
+ * to the end of its line, since a branch name may itself hold a `]`.
  */
-function foldedErrors(stderr: string): string[] {
-  const lines = stderr.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.startsWith('Error: '));
-  if (start < 0) return [];
-  const block: string[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    if (i > start && (line.startsWith('error during command execution:') || line.startsWith('Error: '))) break;
-    const text = (i === start ? line.slice('Error: '.length) : line)
-      .replace(/^\s*no matching (?:signatures|attestations):\s*/, '')
-      .trim();
-    if (text.length > 0) block.push(text);
-  }
-  return block;
+function stripEchoes(stderr: string): string {
+  return stderr
+    .replace(/got subjects \[[^\n]*/g, 'got subjects […]')
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '"…"')
+    .replace(/`[^`\n]*`/g, '`…`');
 }
 
-/** How a `cosign verify` ended — see the module comment for what each exit can hide. */
+/** A network, registry or Sigstore-service failure in cosign's own framing — the question was not answered. */
+function withheld(stderr: string): boolean {
+  const own = stripEchoes(stderr);
+  return NETWORK.test(own) || REGISTRY.test(own) || SIGSTORE_SERVICE.test(own);
+}
+
+/** How a `cosign verify` ended — see the module comment for the rule. */
 export function classifyVerify(r: ProcessRunResult): VerifyVerdict {
   if (r.outcome === 'completed') return { verdict: 'verified', ...verifiedPayloads(r.stdout) };
   if (r.outcome !== 'failed') return { verdict: 'error', detail: `cosign verify ${r.outcome.replace(/_/g, ' ')}` };
-  const detail = firstError(r.stderr) ?? `cosign verify exited ${r.exitCode ?? '(no exit code)'}`;
+  const framed = r.stderr.split(/\r?\n/).some((l) => l.startsWith('Error: '));
+  const detail = escapeUnsafe(firstError(r.stderr) ?? `cosign verify exited ${r.exitCode ?? '(no exit code)'}`);
+  if (!framed) return { verdict: 'error', detail: `cosign verify ended without its error framing — ${detail}` };
   if (r.exitCode === 10) return { verdict: 'no_signature_claimed', detail };
-  const folded = foldedErrors(r.stderr);
-  const judged =
-    folded.length > 0 &&
-    !BAD_REGEXP.test(r.stderr) &&
-    folded.every((e) => SIGNATURE_VERDICT.test(e) && !TRANSIENT.test(e.replace(/got subjects \[[^\]]*\]/, '')));
-  if (!judged) return { verdict: 'error', detail };
-  if (r.exitCode === 13 || folded.every((e) => /no certificate found on signature/.test(e))) {
-    return { verdict: 'rejected', reason: 'no_certificate', detail };
+  if (BAD_REGEXP.test(r.stderr)) return { verdict: 'error', detail: `a signer regexp cosign cannot compile — ${detail}` };
+  if (r.exitCode === 11 || withheld(r.stderr)) return { verdict: 'error', detail };
+  if (IDENTITY_MISMATCH.test(r.stderr)) {
+    const line = r.stderr.split(/\r?\n/).find((l) => IDENTITY_MISMATCH.test(l)) ?? detail;
+    return {
+      verdict: 'rejected',
+      reason: 'no_matching_signature',
+      detail: escapeUnsafe(clip(line.replace(/^Error:\s*/, '').replace(/^no matching (?:signatures|attestations):\s*/, '').trim())),
+    };
   }
-  if ((r.exitCode === 12 || r.exitCode === 1) && folded.some((e) => IDENTITY_MISMATCH.test(e))) {
-    const mismatch = folded.find((e) => IDENTITY_MISMATCH.test(e)) ?? detail;
-    return { verdict: 'rejected', reason: 'no_matching_signature', detail: clip(r.exitCode === 1 ? mismatch : detail) };
-  }
-  return { verdict: 'error', detail };
+  if (NO_KEY_MATERIAL.test(r.stderr)) return { verdict: 'rejected', reason: 'no_certificate', detail };
+  return { verdict: 'rejected', reason: 'invalid_signature', detail };
 }
 
 /** What `cosign verify` accepted (`critical.type` of each payload) and over which digest. */
@@ -398,9 +521,9 @@ export function verifyArgs(ref: string, policy: SignerPolicy): string[] {
 
 /**
  * The signer, one spelling per policy: JSON of the fields given, in a fixed
- * order. Recorded as `ToolRun.signer` and part of a verification's target —
- * JSON, not `key=value` joined by a separator, so no value can forge the
- * boundary between two fields.
+ * order. Recorded as `ToolRun.signer`, part of a verification's target and
+ * of its finding's identity — JSON, not `key=value` joined by a separator, so
+ * no value can forge the boundary between two fields.
  */
 export function canonicalSignerPolicy(policy: SignerPolicy): string {
   const out: Record<string, string> = {};
@@ -491,11 +614,6 @@ export const UNVERIFIED_NOTE =
   'A signature exists, but its signer was NOT verified: anyone can sign an image. Pass signer_identity ' +
   '(or signer_identity_regexp) and signer_issuer (or signer_issuer_regexp) to verify who signed it.';
 
-/** Why an image cosign cannot find is often not a typo. */
-const REGISTRY_ONLY_NOTE =
-  'cosign reads the image and its signatures from the registry, never from the local Docker daemon: an image ' +
-  'built locally and never pushed cannot be checked (push it, or scan the pushed reference).';
-
 /** The response's summary when cosign did not run at all. */
 export function skippedSummary(image: string, reason: string): ImageSignatureSummary {
   return { image, checked: null, check: 'skipped', signature: 'unknown', provenance: 'unknown', note: `Not checked: ${reason}.` };
@@ -527,8 +645,8 @@ interface Pinned {
 
 /**
  * Pins `image` to a digest (`triangulate`), or explains why it could not:
- * the tag-only fallback, or — when the registry has no such image — the
- * failed check, returned as such.
+ * the tag-only fallback, or — when the registry did not answer — the failed
+ * check, returned as such, worded by its cause.
  */
 async function pin(image: string, pass: 'cosign-verify' | 'cosign-tree', ctx: CosignRunContext, extra: Partial<ToolRun>): Promise<Pinned | CosignImageCheck> {
   const r = await cosign(['triangulate', '--type', 'digest', image], ctx);
@@ -550,9 +668,9 @@ async function pin(image: string, pass: 'cosign-verify' | 'cosign-tree', ctx: Co
       scope: `The digest was not pinned: ${res.reason}. On a multi-arch index a signature on the per-platform images only reads as unsigned.`,
     };
   }
-  const why = `cosign could not find it in its registry — ${res.detail}. ${REGISTRY_ONLY_NOTE}`;
+  const why = res.why;
+  // Each name spelled out: history/runNames.test.ts reads bookkeeping names from the source.
   return {
-    // Each name spelled out: history/runNames.test.ts reads bookkeeping names from the source.
     run:
       pass === 'cosign-verify'
         ? { name: 'cosign-verify', status: 'failed', reason: `image ${image}: ${why}`, target: image, ...extra }
@@ -574,41 +692,87 @@ function isCheck(p: Pinned | CosignImageCheck): p is CosignImageCheck {
   return 'run' in p;
 }
 
-/** The two loud answers about an image signature — see the module comment. */
-interface SignatureEvidence {
-  state: 'present' | 'attestation_only' | 'absent' | 'unknown';
-  /** What was listed, for the notes. */
-  attestationTypes: string[];
-  /** Why the state is unknown, when it is. */
+/** Whether the call was cancelled — asked afresh before each cosign, never started after one. */
+function aborted(ctx: CosignRunContext): boolean {
+  return ctx.signal?.aborted === true;
+}
+
+interface TreeRead {
+  tree: CosignTreeListing | null;
+  /** Why there is no listing, when there is none. */
   why?: string;
   cancelled: boolean;
 }
 
-/** `cosign tree` then, when it lists nothing, `cosign download signature`. */
-async function signatureEvidence(ref: string, ctx: CosignRunContext): Promise<SignatureEvidence & { tree: CosignTreeListing | null; treeWhy?: string }> {
-  const treeRun = await cosign(['tree', ref], ctx);
-  const tree = treeRun.outcome === 'completed' ? parseCosignTree(treeRun.stdout, treeRun.stderr) : null;
-  if (tree === null) {
-    const why =
-      treeRun.outcome === 'completed'
-        ? 'its output was not a listing this version of dev-guardian can read'
-        : (firstError(treeRun.stderr) ?? `cosign tree ${treeRun.outcome.replace(/_/g, ' ')}`);
-    return { state: 'unknown', attestationTypes: [], tree: null, treeWhy: why, why: `cosign tree did not complete — ${why}`, cancelled: treeRun.outcome === 'cancelled' };
+async function readTree(ref: string, ctx: CosignRunContext): Promise<TreeRead> {
+  const r = await cosign(['tree', ref], ctx);
+  const tree = r.outcome === 'completed' ? parseCosignTree(r.stdout, r.stderr) : null;
+  if (tree !== null) return { tree, cancelled: false };
+  const why =
+    r.outcome === 'completed'
+      ? 'its output was not a listing this version of dev-guardian can read'
+      : escapeUnsafe(firstError(r.stderr) ?? `cosign tree ${r.outcome.replace(/_/g, ' ')}`);
+  return { tree: null, why, cancelled: r.outcome === 'cancelled' };
+}
+
+/** What `tree` listed, in words, for a rejection's detail. */
+function describeListed(tree: CosignTreeListing): string {
+  const parts: string[] = [];
+  if (tree.signature) parts.push('a .sig tag');
+  if (tree.referrerTypes.length > 0) parts.push(`OCI referrers typed ${[...new Set(tree.referrerTypes)].join(', ')}`);
+  return parts.length > 0 ? parts.join(' and ') : 'nothing';
+}
+
+/**
+ * verify's "no signatures found" (exit 10), settled: a rejection only when
+ * the loud calls say nothing usable is there — see the module comment.
+ */
+async function settleNoSignature(ref: string, policy: SignerPolicy, claim: string, ctx: CosignRunContext): Promise<{ v: VerifyVerdict; cancelled: boolean }> {
+  if (aborted(ctx)) return { v: { verdict: 'error', detail: 'cancelled' }, cancelled: true };
+  const read = await readTree(ref, ctx);
+  if (read.tree === null) {
+    return {
+      v: { verdict: 'error', detail: `cosign verify said "${claim}", and cosign tree — which fails loudly when the registry does — did not complete: ${read.why ?? 'unknown'}` },
+      cancelled: read.cancelled,
+    };
   }
-  const fromTree = signatureFromTree(tree);
-  const base = { attestationTypes: tree.attestationBundleTypes, tree };
-  if (fromTree === 'present' || fromTree === 'attestation_only') return { ...base, state: fromTree, cancelled: false };
-  if (fromTree === 'unknown') {
-    const why = tree.fetchErrors.length > 0 ? `cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)` : 'cosign tree listed a Sigstore bundle of no known type';
-    return { ...base, state: 'unknown', why, cancelled: false };
+  const tree = read.tree;
+  if (tree.fetchErrors.length > 0) {
+    return { v: { verdict: 'error', detail: `cosign verify said "${claim}", and cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)` }, cancelled: false };
   }
-  if (ctx.signal?.aborted === true) return { ...base, state: 'unknown', why: 'cancelled', cancelled: true };
-  const dl = await cosign(['download', 'signature', ref], ctx);
-  const answer = classifySignatureDownload(dl);
-  if (answer === 'unknown') {
-    return { ...base, state: 'unknown', why: `cosign download signature did not answer — ${firstError(dl.stderr) ?? dl.outcome}`, cancelled: dl.outcome === 'cancelled' };
+  if (!treeListsAnything(tree)) {
+    if (aborted(ctx)) return { v: { verdict: 'error', detail: 'cancelled' }, cancelled: true };
+    const dl = await cosign(['download', 'signature', ref], ctx);
+    const answer = classifySignatureDownload(dl);
+    if (answer.state === 'absent') {
+      return {
+        v: { verdict: 'rejected', reason: 'no_signature', detail: `${claim} — nothing is attached to this digest (cosign tree lists nothing, and the .sig tag holds none)` },
+        cancelled: false,
+      };
+    }
+    if (answer.state === 'unknown') {
+      return {
+        v: { verdict: 'error', detail: `cosign verify said "${claim}", which could not be confirmed: cosign download signature did not answer — ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}` },
+        cancelled: dl.outcome === 'cancelled',
+      };
+    }
+    // A signature appeared between the calls: ask verify again, below.
   }
-  return { ...base, state: answer, cancelled: false };
+  if (aborted(ctx)) return { v: { verdict: 'error', detail: 'cancelled' }, cancelled: true };
+  const again = await cosign(verifyArgs(ref, policy), ctx);
+  const v = classifyVerify(again);
+  if (v.verdict !== 'no_signature_claimed') return { v, cancelled: again.outcome === 'cancelled' };
+  return {
+    v: {
+      verdict: 'rejected',
+      reason: 'no_signature',
+      detail:
+        `cosign tree lists ${describeListed(tree)} for this digest, but cosign verify found no signature it can ` +
+        'use — twice, while the registry answered. An artifact cosign cannot parse as a Sigstore signature, or ' +
+        'that is not one, is no signature: anyone who can push to the repository can attach one',
+    },
+    cancelled: false,
+  };
 }
 
 /** `cosign verify` of `image` against `policy`. */
@@ -617,9 +781,14 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
   const pinned = await pin(image, 'cosign-verify', ctx, { signer });
   if (isCheck(pinned)) return pinned;
   const warnings = unanchoredSignerRegexps(policy);
-  const r = await cosign(verifyArgs(pinned.ref, policy), ctx);
-  let v = classifyVerify(r);
-  let cancelled = r.outcome === 'cancelled';
+  const first = await cosign(verifyArgs(pinned.ref, policy), ctx);
+  let v = classifyVerify(first);
+  let cancelled = first.outcome === 'cancelled';
+  if (v.verdict === 'no_signature_claimed') {
+    const settled = await settleNoSignature(pinned.ref, policy, v.detail, ctx);
+    v = settled.v;
+    cancelled = cancelled || settled.cancelled;
+  }
   const who = describePolicy(policy);
   const run = (outcome: 'ok' | 'failed', reason: string): ToolRun => ({
     name: 'cosign-verify',
@@ -629,32 +798,6 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
     signer,
   });
   const note = (text: string): string => [text, pinned.scope, ...warnings].join(' ');
-
-  // "no signatures found" is a rejection only when the loud calls agree.
-  if (v.verdict === 'no_signature_claimed') {
-    const claim = v.detail;
-    const evidence = await signatureEvidence(pinned.ref, ctx);
-    cancelled = cancelled || evidence.cancelled;
-    if (evidence.state === 'absent') {
-      v = { verdict: 'rejected', reason: 'no_signature', detail: claim };
-    } else if (evidence.state === 'unknown') {
-      v = { verdict: 'error', detail: `cosign verify said "${claim}", which could not be confirmed: ${evidence.why ?? 'unknown'}` };
-    } else {
-      const t = evidence.tree;
-      const seen =
-        t !== null && t.referrerTypes.length > 0
-          ? `cosign tree lists ${t.referrerTypes.join(', ')}`
-          : t?.signature === true
-            ? 'cosign tree lists a .sig signature'
-            : 'cosign download signature returns one';
-      v = {
-        verdict: 'error',
-        detail:
-          `cosign verify said "${claim}", but ${seen} — the registry answered the calls differently (a failed ` +
-          'referrers call makes verify fall back to legacy signatures, and so does a bundle it cannot parse); not a verdict',
-      };
-    }
-  }
 
   if (v.verdict === 'verified') {
     const imageSignature = v.types.some((t) => VERIFIED_SIGNATURE_TYPES.has(t));
@@ -687,21 +830,27 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
       cancelled,
     };
   }
-  const title =
-    v.reason === 'no_signature' ? `Image ${image} has no signature to verify` : `Image ${image} is not signed by the expected signer`;
+  const titles: Record<RejectionReason, string> = {
+    no_signature: `Image ${image} has no signature cosign can verify`,
+    no_matching_signature: `Image ${image} is not signed by the expected signer`,
+    no_certificate: `Image ${image}'s signature has no certificate to verify`,
+    invalid_signature: `Image ${image}'s signature does not verify`,
+  };
   const finding = makeFinding({
     tool: COSIGN_VERIFY_TOOL_NAME,
     rule_id: 'image-signature-not-verified',
     severity: 'high',
     category: 'security',
     subcategory: 'supply-chain',
-    title,
+    title: titles[v.reason],
     message:
       `cosign verify rejected ${pinned.checked ?? image} for ${who}: ${v.detail}. Nothing shows this image was built ` +
       'and signed by the identity you expect — do not deploy it until it verifies (or correct signer_identity / ' +
       'signer_issuer if the image is legitimately signed by another workflow).',
     file_path: image,
-    snippet: image,
+    // The signer is part of what this finding says: a rejection for another
+    // signer is another finding, never this one unchanged.
+    snippet: `${image} signer=${signer}`,
     fix_available: false,
   });
   return {
@@ -716,27 +865,49 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
 export async function detectImageSupplyChain(image: string, ctx: CosignRunContext): Promise<CosignImageCheck> {
   const pinned = await pin(image, 'cosign-tree', ctx, {});
   if (isCheck(pinned)) return pinned;
-  const sig = await signatureEvidence(pinned.ref, ctx);
-  const tree = sig.tree;
+  const read = await readTree(pinned.ref, ctx);
+  const tree = read.tree;
   if (tree === null) {
-    const why = sig.treeWhy ?? 'unknown';
+    const why = read.why ?? 'unknown';
     return {
       run: { name: 'cosign-tree', status: 'failed', reason: `image ${image} (${pinned.checked ?? 'tag not pinned'}): cosign tree did not complete — ${why}`, target: image },
       findings: [],
       summary: { image, checked: pinned.checked, check: 'detect', signature: 'unknown', provenance: 'unknown', note: `Not checked: cosign tree did not complete (${why}). ${pinned.scope}` },
-      cancelled: sig.cancelled,
+      cancelled: read.cancelled,
     };
   }
 
-  let cancelled = sig.cancelled;
+  let cancelled = false;
+  // The signature: a listed .sig tag, or what `download signature` returns.
+  let signature: SignatureDownload['state'];
+  let attestationTypes: string[] = [];
+  let signatureWhy: string | undefined;
+  const fromTree = signatureFromTree(tree);
+  if (fromTree === 'present') {
+    signature = 'present';
+  } else if (fromTree === 'unknown') {
+    signature = 'unknown';
+    signatureWhy = `cosign tree could not fetch ${tree.fetchErrors.length} referrer(s)`;
+  } else if (aborted(ctx)) {
+    signature = 'unknown';
+    signatureWhy = 'cancelled';
+    cancelled = true;
+  } else {
+    const dl = await cosign(['download', 'signature', pinned.ref], ctx);
+    const answer = classifySignatureDownload(dl);
+    signature = answer.state;
+    attestationTypes = answer.attestationTypes;
+    if (dl.outcome === 'cancelled') cancelled = true;
+    if (answer.state === 'unknown') signatureWhy = `cosign download signature did not answer — ${escapeUnsafe(firstError(dl.stderr) ?? dl.outcome)}`;
+  }
+
+  // Provenance: only what `download attestation` returns (a parsed bundle or a legacy .att).
   let provenance: Presence = 'unknown';
   let provenanceWhy: string | undefined;
-  if (provenanceFromTree(tree) === 'present') {
-    provenance = 'present';
-  } else if (!cancelled) {
+  if (!cancelled) {
     const answers: Presence[] = [];
     for (const type of PROVENANCE_PREDICATE_TYPES) {
-      if (ctx.signal?.aborted === true) {
+      if (aborted(ctx)) {
         cancelled = true;
         break;
       }
@@ -747,7 +918,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
       }
       const answer = classifyAttestationDownload(r);
       answers.push(answer);
-      if (answer === 'unknown') provenanceWhy = `cosign download attestation did not answer — ${firstError(r.stderr) ?? r.outcome}`;
+      if (answer === 'unknown') provenanceWhy = `cosign download attestation did not answer — ${escapeUnsafe(firstError(r.stderr) ?? r.outcome)}`;
       if (answer === 'present') break;
     }
     provenance = answers.includes('present')
@@ -755,17 +926,19 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
       : answers.length === PROVENANCE_PREDICATE_TYPES.length && answers.every((a) => a === 'absent')
         ? 'absent'
         : 'unknown';
-    // What the tree could not vouch for stays unknown whatever the download said.
-    if (provenance === 'absent' && incomplete(tree)) {
+    if (provenance === 'absent' && tree.fetchErrors.length > 0) {
       provenance = 'unknown';
       provenanceWhy = 'cosign tree could not list every referrer';
     }
-    if (cancelled && provenance === 'unknown') provenanceWhy = 'cancelled';
   }
+  if (cancelled && provenance === 'unknown') provenanceWhy = 'cancelled';
 
-  const signature = sig.state;
   const findings: Finding[] = [];
   if (signature === 'absent') {
+    const listed =
+      tree.referrerTypes.length > 0
+        ? ` What is attached (OCI referrers typed ${[...new Set(tree.referrerTypes)].join(', ')}) is no Sigstore bundle cosign can parse — anyone who can push to the repository can attach such an artifact.`
+        : '';
     const legacyProvenance =
       provenance === 'present'
         ? ' A signed SLSA provenance attestation IS attached as a legacy .att tag, which `cosign verify-attestation` checks — `cosign verify` does not accept it as the image\'s signature.'
@@ -779,8 +952,8 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         subcategory: 'supply-chain',
         title: `Image ${image} has no Sigstore signature`,
         message:
-          `cosign found no signature for ${pinned.checked ?? image} — no .sig tag, no signing bundle and no signed ` +
-          `attestation bundle attached as an OCI referrer, which is everything \`cosign verify\` accepts.${legacyProvenance} ` +
+          `cosign found no signature for ${pinned.checked ?? image} — no .sig tag, and no signing or signed ` +
+          `attestation bundle it can parse attached as an OCI referrer, which is everything \`cosign verify\` accepts.${listed}${legacyProvenance} ` +
           'On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it ' +
           'in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers ' +
           'with signer_identity and signer_issuer.',
@@ -801,9 +974,9 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         title: `Image ${image} has no SLSA provenance attestation`,
         message:
           `No signed SLSA provenance attestation (https://slsa.dev/provenance/v0.2 or v1) was found for ${pinned.checked ?? image}, ` +
-          'as a legacy .att tag or an OCI referrer, so there is no signed record of the source and build that ' +
-          "produced it. BuildKit's unsigned provenance inside an image index is not counted. Generate one where the " +
-          'image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).',
+          'as a legacy .att tag or a Sigstore bundle attached as an OCI referrer, so there is no signed record of the ' +
+          "source and build that produced it. BuildKit's unsigned provenance inside an image index is not counted. " +
+          'Generate one where the image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).',
         file_path: image,
         snippet: image,
         fix_available: false,
@@ -812,11 +985,11 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
   }
 
   const complete = signature !== 'unknown' && provenance !== 'unknown';
-  const sigWords: Record<SignatureEvidence['state'], string> = {
+  const sigWords: Record<SignatureDownload['state'], string> = {
     present: 'signature present (signer NOT verified)',
-    attestation_only: `no \`cosign sign\` signature, but a signed attestation (${sig.attestationTypes.join(', ')}) (signer NOT verified)`,
+    attestation_only: `no \`cosign sign\` signature, but a signed attestation (${attestationTypes.join(', ')}) (signer NOT verified)`,
     absent: 'signature absent',
-    unknown: `signature unknown (${sig.why ?? 'not answered'})`,
+    unknown: `signature unknown (${signatureWhy ?? 'not answered'})`,
   };
   const provWords: Record<Presence, string> = {
     present: 'SLSA provenance present (signer NOT verified)',
@@ -827,7 +1000,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
   if (signature === 'present') notes.push(UNVERIFIED_NOTE);
   if (signature === 'attestation_only') {
     notes.push(
-      `No \`cosign sign\` signature is attached, but a signed attestation is (${sig.attestationTypes.join(', ')}) — and ` +
+      `No \`cosign sign\` signature is attached, but a signed attestation is (${attestationTypes.join(', ')}) — and ` +
         'cosign verify accepts a signed attestation over the digest as the image\'s signature, so a verification ' +
         'with its signer can pass. Its signer was NOT verified: pass signer_identity and signer_issuer.',
     );

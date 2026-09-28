@@ -18,9 +18,9 @@ import {
   classifyTriangulate,
   classifyVerify,
   parseCosignTree,
-  provenanceFromTree,
   readinessFromProbe,
   signatureFromTree,
+  treeListsAnything,
   unanchoredSignerRegexps,
   verifyArgs,
 } from '../../../src/runners/cosignCheck.js';
@@ -104,19 +104,27 @@ describe('classifyTriangulate — which digest every later call checks', () => {
     });
   });
 
-  it('a cosign without `triangulate` (removed in v4) checks the tag, and says so', () => {
+  it('a cosign without `triangulate` (removed in v4) checks the tag, and says so — once', () => {
     const r = failed(1, 'Error: unknown command "triangulate" for "cosign"\n');
-    expect(classifyTriangulate(r)).toMatchObject({ kind: 'tag_only' });
+    const c = classifyTriangulate(r);
+    expect(c).toMatchObject({ kind: 'tag_only' });
+    expect(c.kind === 'tag_only' ? c.reason : '').not.toMatch(/not pinned/);
   });
 
-  it('an image its registry does not have — never pushed, or a typo — is an error with the reason', () => {
-    const r = failed(
-      1,
-      'Error: GET https://index.docker.io/v2/library/myapp-never-pushed/manifests/dev: UNAUTHORIZED: authentication required\n',
-    );
-    const c = classifyTriangulate(r);
-    expect(c.kind).toBe('error');
-    expect(c.kind === 'error' ? c.detail : '').toMatch(/UNAUTHORIZED/);
+  // Review round 2: every failure used to be worded "never pushed", a 429 included.
+  it.each([
+    ['a tag the registry does not have (404)', 'Error: GET http://localhost:5000/v2/app/manifests/2: MANIFEST_UNKNOWN: manifest unknown\n', 'not_found', /never pushed/],
+    ['Docker Hub refusing an unknown repository (401 — the same answer as missing credentials)', 'Error: GET https://index.docker.io/v2/library/myapp-never-pushed/manifests/dev: UNAUTHORIZED: authentication required\n', 'denied', /credentials.*never pushed|never pushed.*credentials/],
+    ['rate limiting (429)', 'Error: GET https://index.docker.io/v2/library/alpine/manifests/3.20: TOOMANYREQUESTS: You have reached your pull rate limit\n', 'rate_limited', /rate-limit/],
+    ['an unreachable registry', 'Error: Get "https://no-such-registry.invalid/v2/": dial tcp: lookup no-such-registry.invalid: no such host\n', 'unreachable', /could not be reached/],
+    ['a registry failing (5xx)', 'Error: GET http://localhost:5000/v2/app/manifests/1: UNKNOWN: injected manifest failure\n', 'registry_error', /registry failed/],
+  ])('%s: an error worded by its cause', (_name, stderr, cause, wording) => {
+    const c = classifyTriangulate(failed(1, stderr));
+    expect(c).toMatchObject({ kind: 'error', cause });
+    expect(c.kind === 'error' ? c.why : '').toMatch(wording);
+    if (cause === 'rate_limited' || cause === 'unreachable' || cause === 'registry_error') {
+      expect(c.kind === 'error' ? c.why : '').not.toMatch(/never pushed/);
+    }
   });
 });
 
@@ -125,29 +133,26 @@ describe('parseCosignTree', () => {
     const tree = parseCosignTree(TREE_LEGACY, '');
     expect(tree).toMatchObject({ signature: true, legacyAttestations: true, referrerTypes: [], fetchErrors: [] });
     expect(tree === null ? null : signatureFromTree(tree)).toBe('present');
-    // The .att tag may or may not hold provenance: it has to be downloaded.
-    expect(tree === null ? null : provenanceFromTree(tree)).toBe('confirm');
+    expect(tree === null ? null : treeListsAnything(tree)).toBe(true);
   });
 
-  it('"nothing found" is NOT absence yet: cosign tree swallows a failing .sig / .att — both need a loud call', () => {
+  it('"nothing found" is NOT absence yet: cosign tree swallows a failing .sig / .att — a loud call decides', () => {
     const tree = parseCosignTree(TREE_NONE, '');
     expect(tree).not.toBeNull();
     expect(tree === null ? null : signatureFromTree(tree)).toBe('confirm');
-    expect(tree === null ? null : provenanceFromTree(tree)).toBe('confirm');
+    expect(tree === null ? null : treeListsAnything(tree)).toBe(false);
   });
 
-  it("counts cosign v3's signing bundle attached as an OCI referrer as a signature", () => {
-    const tree = parseCosignTree(TREE_REFERRER_SIGNATURE, '');
-    expect(tree?.referrerTypes).toEqual(['https://sigstore.dev/cosign/sign/v1', 'https://sigstore.dev/cosign/sign/v1']);
-    expect(tree === null ? null : signatureFromTree(tree)).toBe('present');
-    expect(tree === null ? null : provenanceFromTree(tree)).toBe('confirm');
-  });
-
-  it('a signed provenance bundle with no `cosign sign` is "attestation only" — cosign verify accepts it as a signature', () => {
-    const tree = parseCosignTree(TREE_REFERRER_PROVENANCE, '');
-    expect(tree?.attestationBundleTypes).toEqual(['https://slsa.dev/provenance/v1']);
-    expect(tree === null ? null : provenanceFromTree(tree)).toBe('present');
-    expect(tree === null ? null : signatureFromTree(tree)).toBe('attestation_only');
+  it('a referrer is NOT a signature on the listing alone — anyone who can push can attach one; the bundle has to parse', () => {
+    for (const listing of [TREE_REFERRER_SIGNATURE, TREE_REFERRER_PROVENANCE]) {
+      const tree = parseCosignTree(listing, '');
+      expect(tree === null ? null : signatureFromTree(tree)).toBe('confirm');
+      expect(tree === null ? null : treeListsAnything(tree)).toBe(true);
+    }
+    expect(parseCosignTree(TREE_REFERRER_SIGNATURE, '')?.referrerTypes).toEqual([
+      'https://sigstore.dev/cosign/sign/v1',
+      'https://sigstore.dev/cosign/sign/v1',
+    ]);
   });
 
   it('a referrer cosign could not fetch makes an absence unknown (measured: exit 0, "No … found", error on stderr)', () => {
@@ -155,16 +160,6 @@ describe('parseCosignTree', () => {
       'Error fetching artifact localhost:51571/app@sha256:7762f2536179d5c9d909d39289a760f47d909f7b47647642c72f71067ff9026a: GET http://localhost:51571/v2/app/manifests/sha256:7762f2536179d5c9d909d39289a760f47d909f7b47647642c72f71067ff9026a: UNKNOWN: injected referrer-manifest failure\n';
     const tree = parseCosignTree(TREE_NONE, stderr);
     expect(tree?.fetchErrors).toHaveLength(1);
-    expect(tree === null ? null : signatureFromTree(tree)).toBe('unknown');
-  });
-
-  it('a sigstore bundle whose predicate type cosign did not name could be either: unknown, not absent', () => {
-    const stdout =
-      '📦 Supply Chain Security Related artifacts for an image: registry.example/app:1\n' +
-      '└── 🔗 application/vnd.dev.sigstore.bundle.v0.3+json artifacts via OCI referrer: registry.example/app@sha256:bbbb\n' +
-      '   └── 🍒 sha256:cccc\n';
-    const tree = parseCosignTree(stdout, '');
-    expect(tree?.ambiguousBundles).toBe(true);
     expect(tree === null ? null : signatureFromTree(tree)).toBe('unknown');
   });
 
@@ -177,22 +172,49 @@ describe('parseCosignTree', () => {
   });
 });
 
-describe('classifySignatureDownload — the loud half of "no signature"', () => {
-  it('output: present', () => {
-    expect(classifySignatureDownload(result({ stdout: '{"Base64Signature":"bm90"}\n' }))).toBe('present');
+/** One `download signature` line for a v3 bundle (the shape measured on ghcr.io, 2026-09-28). */
+function bundleLine(predicateType: string): string {
+  const statement = JSON.stringify({ _type: 'https://in-toto.io/Statement/v1', subject: [], predicateType, predicate: {} });
+  return JSON.stringify({
+    mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+    verificationMaterial: { certificate: { rawBytes: 'TUlJ' } },
+    dsseEnvelope: { payload: Buffer.from(statement).toString('base64'), payloadType: 'application/vnd.in-toto+json', signatures: [{ sig: 'TUVZ' }] },
+  });
+}
+const LEGACY_LINE = '{"Base64Signature":"MEUCIBaf","Payload":"eyJjcml0aWNhbCI6e319","Cert":{"Raw":"MIIH"},"Chain":null,"Bundle":null,"RFC3161Timestamp":null}';
+
+describe('classifySignatureDownload — the loud half of "no signature", and what each signature IS', () => {
+  it('a legacy signature: present', () => {
+    expect(classifySignatureDownload(result({ stdout: `${LEGACY_LINE}\n` }))).toEqual({ state: 'present', attestationTypes: [] });
   });
 
-  it('"no signatures associated": absent', () => {
-    expect(
-      classifySignatureDownload(failed(1, 'Error: localhost:54697/app:1: no signatures associated\nerror during command execution: …\n')),
-    ).toBe('absent');
+  it('a v3 signing bundle (DSSE, predicate type https://sigstore.dev/cosign/sign/v1): present', () => {
+    expect(classifySignatureDownload(result({ stdout: `${bundleLine('https://sigstore.dev/cosign/sign/v1')}\n` })).state).toBe('present');
   });
 
-  it('a .sig tag the registry fails on is loud here (it is silent in tree): unknown', () => {
-    const stderr =
-      'Error: localhost:54713/app:1: remote image: GET http://localhost:54713/v2/app/manifests/sha256-793a57cec5ee88d1c38575cefc16cc65ae89457c508bc2359621099b2caf5021.sig: UNKNOWN: injected sig failure\n';
-    expect(classifySignatureDownload(failed(1, stderr))).toBe('unknown');
-    expect(classifySignatureDownload(result({ outcome: 'timed_out', exitCode: null }))).toBe('unknown');
+  it('a message-signature bundle: present', () => {
+    const line = JSON.stringify({ mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', verificationMaterial: {}, messageSignature: { signature: 'TUVZ' } });
+    expect(classifySignatureDownload(result({ stdout: `${line}\n` })).state).toBe('present');
+  });
+
+  it('only signed attestation bundles (a Sigstore bundle media type, parsed by cosign): attestation only, with their types', () => {
+    expect(classifySignatureDownload(result({ stdout: `${bundleLine('https://slsa.dev/provenance/v1')}\n` }))).toEqual({
+      state: 'attestation_only',
+      attestationTypes: ['https://slsa.dev/provenance/v1'],
+    });
+  });
+
+  it('"no signatures associated": absent — whatever tree listed was no bundle cosign could parse', () => {
+    expect(classifySignatureDownload(failed(1, 'Error: localhost:54697/app:1: no signatures associated\n')).state).toBe('absent');
+  });
+
+  it.each([
+    ['a .sig tag the registry fails on (silent in tree, loud here)', failed(1, 'Error: localhost:54713/app:1: remote image: GET http://localhost:54713/v2/app/manifests/sha256-793a.sig: UNKNOWN: injected sig failure\n')],
+    ['a timeout', result({ outcome: 'timed_out', exitCode: null })],
+    ['output that is not JSON lines', result({ stdout: 'something else\n' })],
+    ['exit 0 with nothing', result({ stdout: '' })],
+  ])('%s: unknown', (_name, r) => {
+    expect(classifySignatureDownload(r).state).toBe('unknown');
   });
 });
 
@@ -215,10 +237,10 @@ describe('classifyAttestationDownload', () => {
   });
 });
 
-describe('classifyVerify', () => {
+describe('classifyVerify — only a network or registry failure withholds the verdict (review round 2, N1)', () => {
   it('exit 0: verified, with what cosign accepted and over which digest', () => {
     const stdout =
-      '[{"critical":{"identity":{"docker-reference":"ghcr.io/actions/actions-runner:latest"},"image":{"docker-manifest-digest":"sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"},"type":"https://slsa.dev/provenance/v1"},"optional":{}}]\n';
+      '\n[{"critical":{"identity":{"docker-reference":"ghcr.io/actions/actions-runner:latest"},"image":{"docker-manifest-digest":"sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"},"type":"https://slsa.dev/provenance/v1"},"optional":{}}]\n';
     expect(classifyVerify(result({ stdout }))).toEqual({
       verdict: 'verified',
       types: ['https://slsa.dev/provenance/v1'],
@@ -227,8 +249,10 @@ describe('classifyVerify', () => {
   });
 
   it('exit 10 ("no signatures found") is only a CLAIM — cosign also says it when the referrers call failed', () => {
-    const r = classifyVerify(failed(10, 'Error: no signatures found\nerror during command execution: no signatures found\n'));
-    expect(r).toEqual({ verdict: 'no_signature_claimed', detail: 'no signatures found' });
+    expect(classifyVerify(failed(10, 'Error: no signatures found\nerror during command execution: no signatures found\n'))).toEqual({
+      verdict: 'no_signature_claimed',
+      detail: 'no signatures found',
+    });
   });
 
   it('exit 12 naming another signer: rejected, naming who did sign', () => {
@@ -241,38 +265,57 @@ describe('classifyVerify', () => {
     expect(r.verdict === 'rejected' ? r.detail : '').toContain('got subjects [https://github.com/chainguard-images/');
   });
 
-  it('exit 12 folds one error per signature — a transient one beside a mismatch is NOT a rejection', () => {
-    const stderr =
-      'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects [https://github.com/other/x/.github/workflows/y.yml@refs/heads/main] with issuer https://token.actions.githubusercontent.com\n' +
-      ' fetching payload: GET https://ghcr.io/v2/org/app/blobs/sha256:abcd: TOOMANYREQUESTS: rate limit exceeded\n' +
-      'error during command execution: no matching signatures: …\n';
-    expect(classifyVerify(failed(12, stderr)).verdict).toBe('error');
+  it.each([
+    ['a junk signature with no certificate or key (measured: "empty key")', 12, 'Error: no matching signatures: empty key\n', 'no_certificate'],
+    ['a key-signed signature (no certificate)', 12, 'Error: no matching signatures: no certificate found on signature\n', 'no_certificate'],
+    ['exit 13', 13, 'Error: no certificate found on signature\n', 'no_certificate'],
+    ['an invalid signature', 12, 'Error: no matching signatures: invalid signature when validating ASN.1 encoded signature\n', 'invalid_signature'],
+    ['a certificate Fulcio never issued', 12, 'Error: no matching signatures: x509: certificate signed by unknown authority\n', 'invalid_signature'],
+    ["a bundle that does not verify (the v3 path's exit 1)", 1, 'Error: no matching attestations: failed to verify log inclusion: transparency log certificate does not match\n', 'invalid_signature'],
+  ])('%s: REJECTED — only a network or registry failure withholds a verdict', (_name, exitCode, stderr, reason) => {
+    expect(classifyVerify(failed(exitCode, stderr))).toMatchObject({ verdict: 'rejected', reason });
   });
 
-  it('exit 12 whose only error is not an identity verdict (measured: a signature with no key or certificate) is an error', () => {
-    expect(classifyVerify(failed(12, 'Error: no matching signatures: empty key\nerror during command execution: …\n')).verdict).toBe('error');
-  });
-
-  it("exit 1 with a v3 bundle's identity mismatch is a rejection — including the bundle that failed its log-inclusion check", () => {
+  // The expected identity and the certificate's are echoed back — the user's
+  // and the attacker's text. Neither may decide whether a failure was transient.
+  it.each([
+    ['org/app', 'https://github.com/org/app/.github/workflows/release.yml@refs/heads/main'],
+    ['org/timeout-svc', 'https://github.com/org/timeout-svc/.github/workflows/release.yml@refs/heads/main'],
+    ['org/eof-parser', 'https://github.com/org/eof-parser/.github/workflows/release.yml@refs/heads/main'],
+    ['a value with "dial tcp" and "i/o timeout" in it', 'https://github.com/org/x/.github/workflows/y.yml@refs/heads/dial tcp i/o timeout'],
+  ])('a v3 bundle mismatch for %s is rejected whatever the echoed identity says', (_name, identity) => {
     const stderr =
-      'Error: no matching attestations: failed to verify log inclusion: transparency log certificate does not match\n' +
-      'failed to verify certificate identity: no matching CertificateIdentity found, last error: expected issuer value ' +
-      '"https://token.actions.githubusercontent.com", got "https://accounts.google.com"\n' +
-      'error during command execution: no matching attestations: …\n';
+      'Error: no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' +
+      `expected SAN value "${identity}", got "keyless@projectsigstore.iam.gserviceaccount.com"\n` +
+      'error during command execution: …\n';
     expect(classifyVerify(failed(1, stderr))).toMatchObject({ verdict: 'rejected', reason: 'no_matching_signature' });
   });
 
-  it('exit 13 (a key-signed signature holds no certificate): rejected', () => {
-    expect(classifyVerify(failed(13, 'Error: no certificate found on signature\n'))).toMatchObject({ verdict: 'rejected', reason: 'no_certificate' });
+  it('a regexp holding "fetching " in the echo is still a rejection', () => {
+    const stderr =
+      'Error: no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' +
+      'expected SAN value to match regex "^https://github.com/org/fetching x/", got "keyless@projectsigstore.iam.gserviceaccount.com"\n';
+    expect(classifyVerify(failed(1, stderr))).toMatchObject({ verdict: 'rejected' });
+  });
+
+  it("a legacy subject list with a ']' inside a branch name is stripped whole", () => {
+    const stderr =
+      'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects ' +
+      '[https://github.com/evil/x/.github/workflows/y.yml@refs/heads/a]b dial tcp i/o timeout] with issuer https://token.actions.githubusercontent.com\n';
+    expect(classifyVerify(failed(12, stderr))).toMatchObject({ verdict: 'rejected', reason: 'no_matching_signature' });
   });
 
   it.each([
-    ['a regexp cosign cannot compile (also prefixed "no matching attestations")', 1, 'Error: no matching attestations: error parsing regexp: missing closing ): `(`\n'],
+    ['a rate-limited registry, folded beside a mismatch', 12, 'Error: no matching signatures: none of the expected identities matched what was in the certificate, got subjects [https://github.com/other/x/.github/workflows/y.yml@refs/heads/main] with issuer https://token.actions.githubusercontent.com\n fetching payload: GET https://ghcr.io/v2/org/app/blobs/sha256:abcd: TOOMANYREQUESTS: rate limit exceeded\n'],
+    ['an online Rekor lookup that failed (measured)', 12, 'Error: no matching signatures: searching log query: Post "https://rekor.sigstore.dev/api/v1/log/entries/retrieve": giving up after 4 attempt(s): Post "https://rekor.sigstore.dev/api/v1/log/entries/retrieve": http: server gave HTTP response to HTTPS client\n'],
     ['an unreachable registry', 1, 'Error: Get "https://no-such-registry.invalid/v2/": dial tcp: lookup no-such-registry.invalid: no such host\n'],
     ['a .sig tag the registry fails on', 1, 'Error: GET http://localhost:54713/v2/app/manifests/sha256-793a.sig: UNKNOWN: injected sig failure\n'],
     ['no network to Sigstore (TUF)', 1, 'Error: setting up clients and keys: getting rekor public keys: updating local metadata and targets\n'],
+    ['a connection reset', 12, 'Error: no matching signatures: fetching bundle: read tcp 10.0.0.2:50000->140.82.1.1:443: read: connection reset by peer\n'],
     ['a tag that does not exist (exit 11)', 11, 'Error: image tag not found: GET https://index.docker.io/v2/library/alpine/manifests/x: MANIFEST_UNKNOWN\n'],
-  ])('%s is an error — the check did not complete — never a rejection', (_name, exitCode, stderr) => {
+    ['a regexp cosign cannot compile (a configuration error, not a verdict on the image)', 1, 'Error: no matching attestations: error parsing regexp: missing closing ): `(`\n'],
+    ['no cosign error framing at all (a crash)', 2, 'panic: runtime error: invalid memory address or nil pointer dereference\n'],
+  ])('%s: withheld (error)', (_name, exitCode, stderr) => {
     expect(classifyVerify(failed(exitCode, stderr)).verdict).toBe('error');
   });
 

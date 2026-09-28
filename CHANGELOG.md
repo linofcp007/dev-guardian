@@ -21,9 +21,13 @@ version bump.
   low, `image-no-provenance` info), and `image_signature` says an existing signature's signer was NOT
   verified. cosign swallows some registry errors, so every "absent" and every rejection is confirmed by
   a call that fails loudly; a registry error is `unknown`, never absent. cosign missing, older than
-  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. A rejection is re-measured only by
-  a verification against the same signer (`ToolRun.signer`). An unanchored signer regexp is warned
-  about. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
+  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network or registry
+  failure withholds a verdict: a junk, unparseable or non-Sigstore artifact anyone can attach is no
+  signature, and a signature that does not verify is a rejection. A rejection is re-measured only by a
+  verification against the same signer (`ToolRun.signer`), and a rejection for another signer is a new
+  finding. An unanchored signer regexp is warned about. One registry fault cosign cannot see (a
+  referrers API answering with the wrong Content-Type) makes a signed image read unsigned — see
+  `SECURITY.md`. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
 - `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in
