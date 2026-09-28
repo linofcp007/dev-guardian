@@ -218,7 +218,7 @@ check — run the guardrail detectors (same engine as the hooks)
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
   --powershell         With --bash: also read it with PowerShell's quoting, as
                         the hook does for the PowerShell tool
-  --min high|medium   Minimum secret confidence to report (default: medium)
+  --min high|medium    Minimum secret confidence to report (default: medium)
   --json               Machine-readable output
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
              2 = usage error (no --file/--bash given) or the --file path does

@@ -149,6 +149,17 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     });
 
+    // Fix round 4 (C1): a comment's apostrophe hid the next line from both
+    // readings, and the hook answered with no decision.
+    it.each([
+      ['Bash', "# clean the user's build dir\nrm -rf /"],
+      ['PowerShell', "# don't\nRemove-Item C:\\Users -Recurse -Force"],
+      ['PowerShell', "git commit -m @'\nFix the user's bug\n'@\nRemove-Item C:\\Users -Recurse -Force"],
+    ])('denies a delete after a comment or here-string with an apostrophe (%s tool)', (tool, command) => {
+      const r = runHook(preToolUse(tool, { command }, projectDir), { cwd: projectDir, homeDir });
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+
     it('`check --bash … --powershell` gives the PowerShell tool its verdict; without it, the POSIX one', () => {
       const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
       const command = 'Remove-Item "C:\\Users\\" -Recurse -Force';

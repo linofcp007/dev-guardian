@@ -96,7 +96,7 @@
  *
  * Pure functions. No I/O. No dependencies.
  */
-import { powershellAsPosix } from './powershellText.js';
+import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 /**
  * The pattern-matched rules.
  *
@@ -584,6 +584,16 @@ export function splitShell(command) {
             i += 2;
             continue;
         }
+        // A `#` that starts a word comments out the rest of the line, in a POSIX
+        // shell and in PowerShell alike. Read as code, the apostrophe in `# clean
+        // the user's build dir` opened a quote that ran to the end of the command
+        // and hid every line after it — `rm -rf /` included (fix round 4, C1).
+        // Heredoc bodies never reach here (`skipHeredocBodies`).
+        if (ch === '#' && !hasWord) {
+            while (i < command.length && command.charAt(i) !== '\n' && command.charAt(i) !== '\r')
+                i += 1;
+            continue;
+        }
         if (ch === "'" || ch === '"') {
             const scanned = scanQuote(command, i);
             buf += scanned.inner;
@@ -733,14 +743,21 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function resolveCommand(words) {
     let i = 0;
     let elevated = false;
-    let guard = 0;
-    while (i < words.length && guard < 32) {
-        guard += 1;
+    // No hop cap: every pass consumes at least one word, so this is linear —
+    // and a cap of 32 made `nice` x40 + `rm -rf /` a silent ok (fix round 4).
+    while (i < words.length) {
         const word = words[i];
         if (word === undefined)
             break;
         if (ASSIGNMENT.test(word.value)) {
             i += 1;
+            continue;
+        }
+        // A redirection may come before the command name: `2>/dev/null rm -rf /`
+        // runs `rm` (fix round 4). Its target, when it is the next word, goes too.
+        const redirect = parseRedirect(word);
+        if (redirect !== null && /^(?:\d*|&)$/.test(redirect.prefix)) {
+            i += redirect.inline === '' ? 2 : 1;
             continue;
         }
         const name = basename(word.value);
@@ -850,7 +867,8 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * is merely risky. Covers both `rm`/`Remove-Item`/`ri` (dash flags: GNU-style
  * clusters like `-rf`/`-fo`, `--recursive`/`--force`, and PowerShell's
  * whole-word `-Recurse`/`-Force`) and `rd`/`rmdir`/`del`/`erase` (cmd.exe-
- * style slash flags: `/s` recurse, `/q` quiet-force).
+ * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
+ * aliases in PowerShell, its dash flags too).
  */
 function assessRecursiveDelete(words, start) {
     const head = words[start];
@@ -866,52 +884,54 @@ function assessRecursiveDelete(words, start) {
     let noPreserve = false;
     const targets = [];
     for (const word of words.slice(start + 1)) {
-        const token = word.value;
-        if (dashStyle) {
-            if (token === '--no-preserve-root')
-                noPreserve = true;
-            else if (token === '--recursive')
-                recursive = true;
-            else if (token === '--force')
-                force = true;
-            else if (token.startsWith('--'))
-                continue;
-            else if (token.startsWith('-')) {
-                const flags = token.slice(1);
-                const lower = flags.toLowerCase();
-                // PowerShell's whole-word parameter names first — `-Recurse`,
-                // `-Force`, and their common abbreviations. Checked before the
-                // GNU-cluster heuristic below because that heuristic (does the flag
-                // text contain the letter r/f anywhere?) is right for a *cluster* of
-                // single-letter flags like `-rf`/`-fo`, where every character really
-                // is its own flag, and wrong for a whole parameter name — `-Filter`
-                // or `-Confirm` both contain an 'f', and would otherwise read as
-                // `-Force` by accident.
-                if (lower === 'recurse' || lower === 'rec')
-                    recursive = true;
-                else if (lower === 'force' || lower === 'fo')
-                    force = true;
-                else if (flags.length <= 3) {
-                    if (/r/i.test(flags))
-                        recursive = true;
-                    if (/f/i.test(flags))
-                        force = true;
-                }
-            }
-            else
-                targets.push(token);
-        }
-        else {
+        // PowerShell takes an en or em dash for a parameter's `-` (fix round 4).
+        const token = word.value.replace(/^[\u2013\u2014\u2015]/, '-');
+        if (slashStyle && token.startsWith('/')) {
             const lower = token.toLowerCase();
             if (lower === '/s')
                 recursive = true;
             else if (lower === '/q')
                 force = true;
-            else if (token.startsWith('/'))
-                continue;
-            else
-                targets.push(token);
+            continue;
         }
+        // Dash flags: `rm`'s and `Remove-Item`'s — and, since `rd`, `rmdir`, `del`
+        // and `erase` are Remove-Item aliases in PowerShell, theirs too:
+        // `rmdir C:\Users -Recurse -Force` was ok (fix round 4).
+        if (token === '--no-preserve-root')
+            noPreserve = true;
+        else if (token === '--recursive')
+            recursive = true;
+        else if (token === '--force')
+            force = true;
+        else if (token.startsWith('--'))
+            continue;
+        else if (token.startsWith('-') && token.length > 1) {
+            // A PowerShell switch may be given a value: `-Recurse:$true` is on,
+            // `-Recurse:$false` off.
+            const [flags = '', value] = token.slice(1).split(':', 2);
+            const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
+            const lower = flags.toLowerCase();
+            // PowerShell's whole-word parameter names first — `-Recurse`,
+            // `-Force`, and their common abbreviations. Checked before the
+            // GNU-cluster heuristic below because that heuristic (does the flag
+            // text contain the letter r/f anywhere?) is right for a *cluster* of
+            // single-letter flags like `-rf`/`-fo`, where every character really
+            // is its own flag, and wrong for a whole parameter name — `-Filter`
+            // or `-Confirm` both contain an 'f', and would otherwise read as
+            // `-Force` by accident.
+            if (lower === 'recurse' || lower === 'rec')
+                recursive ||= on;
+            else if (lower === 'force' || lower === 'fo')
+                force ||= on;
+            else if (value === undefined && flags.length <= 3) {
+                if (/r/i.test(flags))
+                    recursive = true;
+                if (/f/i.test(flags))
+                    force = true;
+            }
+        }
+        else
+            targets.push(token);
     }
     if (!((recursive && force) || noPreserve))
         return null;
@@ -1786,7 +1806,8 @@ function effectsOf(name, args, cwd, depth = 0) {
             const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
             if (dest !== undefined) {
                 e.dirs.push(at(dest));
-                e.writes.push(at(dest), ...files.map((f) => at(intoDir(dest, f))));
+                e.writes.push(at(dest));
+                pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
             }
             return e;
         }
@@ -1795,7 +1816,8 @@ function effectsOf(name, args, cwd, depth = 0) {
             const dest = paths.pop();
             if (dest === undefined || paths.length === 0)
                 return e;
-            e.writes.push(at(dest), ...paths.map((s) => at(intoDir(dest, s))));
+            e.writes.push(at(dest));
+            pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
             if (args.some((a) => a === '--recursive' || a === '--archive' || /^-[a-zA-Z]*[ra]/.test(a)))
                 e.dirs.push(at(dest));
             return e;
@@ -1866,7 +1888,9 @@ function interpreterName(word) {
  */
 function interpreterIndex(words, start) {
     let i = start;
-    for (let hops = 0; hops < 4 && i < words.length; hops += 1) {
+    // No hop cap: every hop moves `i` forward, so this is linear — and a cap of
+    // four made five `npx -y` in front of `node -e …` a silent ok (fix round 4).
+    while (i < words.length) {
         const name = interpreterName(words[i]?.value ?? '');
         // `bun x` launches before `bun` interprets; global flags may come first
         // (`pnpm --silent dlx`, `npm --yes exec`).
@@ -2166,14 +2190,18 @@ function quoteTracker(text) {
         return quote === '';
     };
 }
-/** How far past its `(` a call's arguments are read — a path, not a file's content. */
+/**
+ * How far past its `(` a call's arguments are read — a path, not a file's
+ * content. This is what keeps `dotNetEffects` linear, so every call is judged
+ * (a cap of 256 calls let 256 harmless ones hide the write after them — fix
+ * round 4); arguments that run past it are noted, never a silent ok.
+ */
 const MAX_CALL_ARGS = 512;
-/** Calls judged per text: a command with more is built to be slow, not to write a file. */
-const MAX_DOTNET_CALLS = 256;
 /**
  * The first two argument texts of a call whose `(` ends just before `from`:
  * split on depth-0 commas, up to the matching `)` — the most any call judged
- * here needs — and never more than {@link MAX_CALL_ARGS} characters on.
+ * here needs — and never more than {@link MAX_CALL_ARGS} characters on
+ * (`cut` when the text went on past that without closing the call).
  */
 function callArgs(text, from) {
     const args = [];
@@ -2181,6 +2209,7 @@ function callArgs(text, from) {
     let cur = '';
     let quote = '';
     const end = Math.min(text.length, from + MAX_CALL_ARGS);
+    let closed = false;
     for (let i = from; i < end; i += 1) {
         const ch = text.charAt(i);
         if (quote !== '') {
@@ -2194,8 +2223,10 @@ function callArgs(text, from) {
             cur += ch;
             continue;
         }
-        if (ch === ')' && depth === 0)
+        if (ch === ')' && depth === 0) {
+            closed = true;
             break;
+        }
         if (ch === '(')
             depth += 1;
         if (ch === ')')
@@ -2204,13 +2235,13 @@ function callArgs(text, from) {
             args.push(cur.trim());
             cur = '';
             if (args.length === 2)
-                return args;
+                return { args, cut: false };
             continue;
         }
         cur += ch;
     }
     args.push(cur.trim());
-    return args;
+    return { args, cut: !closed && end < text.length };
 }
 /** A call argument as a path: a quoted string's content, or the last string literal inside an expression. */
 function argPath(arg) {
@@ -2228,20 +2259,20 @@ const DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*:
  * second, `Delete` removes, `CreateSymbolicLink` links. A call inside a quoted
  * span is data, not code; the arguments are resolved from `cwd`.
  */
-function dotNetEffects(text, cwd) {
+function dotNetEffects(text, cwd, notes) {
     const e = noEffects();
     if (!text.includes('::'))
         return e;
     const unquotedAt = quoteTracker(text);
-    let calls = 0;
     for (const m of text.matchAll(DOTNET_CALL)) {
-        if ((calls += 1) > MAX_DOTNET_CALLS)
-            break;
         if (!unquotedAt(m.index))
             continue;
         const kind = (m[1] ?? '').toLowerCase();
         const method = (m[2] ?? '').toLowerCase();
-        const paths = callArgs(text, m.index + m[0].length).map((a) => resolveFrom(cwd, argPath(a)));
+        const call = callArgs(text, m.index + m[0].length);
+        if (call.cut && notes !== undefined)
+            notes.calls = true;
+        const paths = call.args.map((a) => resolveFrom(cwd, argPath(a)));
         const [first, second] = paths;
         if (first === undefined)
             continue;
@@ -2409,6 +2440,9 @@ function isBareRemoteFetch(script) {
     return /^(?:curl|wget)\b/i.test(unwrapped);
 }
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'su', 'pwsh', 'powershell']);
+function shellScript(text) {
+    return { text, powershell: false };
+}
 const DASH_C = /^-[A-Za-z]*c$/;
 /**
  * Scripts this command hands to a shell — `sh -c '…'`, `bash -lc '…'`,
@@ -2416,6 +2450,9 @@ const DASH_C = /^-[A-Za-z]*c$/;
  * and PowerShell's `-Command …` / `-EncodedCommand …` (`pwsh`, `powershell`).
  * Masking quoted spans would otherwise make those bodies unmatchable, which
  * *is* the right call for `echo 'git push --force'` and the wrong one here.
+ * `powershell` marks PowerShell program text, which is also read with
+ * PowerShell's quoting (fix round 4: `pwsh -Command 'Remove-Item "C:\Users\"
+ * -Recurse -Force'` read POSIX-only was ok).
  */
 function nestedScripts(words, start) {
     const head = words[start];
@@ -2425,9 +2462,9 @@ function nestedScripts(words, start) {
         for (let i = start + 1; i < words.length; i += 1) {
             const v = words[i]?.value ?? '';
             if (v === '-c' || v === '--call')
-                return words[i + 1] === undefined ? [] : [words[i + 1]?.value ?? ''];
+                return words[i + 1] === undefined ? [] : [shellScript(words[i + 1]?.value ?? '')];
             if (v.startsWith('--call='))
-                return [v.slice('--call='.length)];
+                return [shellScript(v.slice('--call='.length))];
             if (v === '--')
                 break;
         }
@@ -2438,7 +2475,7 @@ function nestedScripts(words, start) {
             .map((w) => w.value)
             .join(' ')
             .trim();
-        return script.length > 0 ? [script] : [];
+        return script.length > 0 ? [shellScript(script)] : [];
     }
     let sawShell = false;
     for (let i = start; i < words.length; i += 1) {
@@ -2447,14 +2484,16 @@ function nestedScripts(words, start) {
             continue;
         const name = commandName(word.value);
         if (!word.quoted && (name === 'pwsh' || name === 'powershell')) {
-            return powershellCommand(words.slice(i + 1).map((w) => w.value), name).filter((s) => s.trim().length > 0);
+            return powershellCommand(words.slice(i + 1).map((w) => w.value), name)
+                .filter((s) => s.trim().length > 0)
+                .map((text) => ({ text, powershell: true }));
         }
         // A running flag, not a re-slice of the words before every `-…c` word:
         // that was quadratic (`-c -c -c …`, `find -exec`, `git -c`, `python
         // -c`: 64 KB took 15 s — fix round 3, I-2).
         if (!word.quoted && DASH_C.test(word.value) && sawShell) {
             const script = words[i + 1];
-            return script === undefined ? [] : [script.value];
+            return script === undefined ? [] : [shellScript(script.value)];
         }
         if (SHELLS.has(basename(word.value)))
             sawShell = true;
@@ -2541,7 +2580,7 @@ function collect(command, depth, out, scope) {
     }
     // `[IO.File]::WriteAllText(…)`: the `(` that opens its arguments is a
     // statement boundary to `splitShell`, so it is judged on the command text.
-    pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd), scope));
+    pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd, scope.notes), scope));
     for (const statement of statements) {
         // The total time budget: a hook that outlives Claude Code's 15 s timeout
         // lets the command run unassessed, so what is left is reported instead.
@@ -2584,7 +2623,7 @@ function collect(command, depth, out, scope) {
             if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined))
                 scope.notes.depth = true;
             if (depth < MAX_NESTING) {
-                for (const script of scripts) {
+                for (const { text: script, powershell } of scripts) {
                     // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
                     // script IS a download, executed without ever spelling `| sh`.
                     // Recursing alone would not catch this: the extracted script is
@@ -2599,6 +2638,9 @@ function collect(command, depth, out, scope) {
                         });
                     }
                     collect(script, depth + 1, out, { ...scope });
+                    const asPowerShell = powershell ? powershellAsPosix(script) : script;
+                    if (asPowerShell !== script)
+                        collect(asPowerShell, depth + 1, out, { ...scope });
                 }
                 // Every command of a `cmd /c` line gets the full assessment, like a
                 // top-level statement: deletes, pattern rules, nested shells (fix
@@ -2639,7 +2681,8 @@ const MAX_STATEMENT_LENGTH = 16 * 1024;
 const MAX_COMMAND_LENGTH = 512 * 1024;
 /**
  * The assessment's time budget. The hook has 15 s in all; measured, a 512 KB
- * command of the worst shapes (`<(<(…`, `$($(…`) takes about 1.5 s, so this
+ * command of the worst shapes (`<(<(…`, `$($(…`) takes up to about 2 s per
+ * reading on a loaded machine (the PowerShell tool reads twice), so this
  * only backs the caps up on a machine far slower or busier than expected.
  */
 const DEFAULT_BUDGET_MS = 2500;
@@ -2650,6 +2693,7 @@ function partialRule(notes) {
         ...(notes.command ? ['over 512 KB'] : []),
         ...(notes.budget ? ['assessment time budget exhausted'] : []),
         ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
+        ...(notes.calls ? [`an [IO.File] call's arguments over ${MAX_CALL_ARGS} characters`] : []),
         ...(notes.failed ? ['the assessment failed'] : []),
     ];
     return causes.length === 0
@@ -2677,43 +2721,52 @@ export function assessBashCommand(command, opts = {}) {
         return { level: 'ok', reasons: [], rules: [] };
     const now = opts.now ?? (() => performance.now());
     const deadline = now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
+    // The 512 KB cap is on what was written, never on a respelling of it: a
+    // respelled `'` is four characters (fix round 4).
+    const cut = whole.length > MAX_COMMAND_LENGTH;
+    const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
     if (opts.shell !== 'powershell')
-        return assessReading(whole, now, deadline);
+        return assessReadings([text], cut, now, deadline);
     // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
     // closing quote and swallows the rest of the command, with no warning.
     // PowerShell's own reading goes first, so the one budget is never spent on
     // the POSIX reading before the reading that matches what will run; a block
-    // needs no second reading.
-    const asPowerShell = powershellAsPosix(whole);
-    const ps = assessReading(asPowerShell, now, deadline);
-    if (asPowerShell === whole || ps.level === 'block')
-        return ps;
-    const posix = assessReading(whole, now, deadline);
-    return LEVEL_RANK[posix.level] > LEVEL_RANK[ps.level] ? posix : ps;
+    // needs no second reading. The POSIX reading sees here-strings and block
+    // comments for what they are: nothing else can be meant by them.
+    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline);
 }
-/** One reading of the command, assessed. */
-function assessReading(whole, now, deadline) {
+/**
+ * The readings of one command, assessed into one verdict: every rule any
+ * reading matched, and one partial note for all of them — so on a tie no
+ * reading's reasons are dropped. A reading after one that blocked is skipped.
+ */
+function assessReadings(readings, cut, now, deadline) {
     const notes = {
         statement: false,
-        command: whole.length > MAX_COMMAND_LENGTH,
+        command: cut,
         budget: false,
         depth: false,
         loosens: undefined,
         failed: false,
+        calls: false,
         deadline,
         now,
     };
-    const cmd = notes.command ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
     const matched = [];
-    // An exception here used to escape to the hook, which then answered with
-    // no decision at all — and the command ran unassessed (fix round 3, I-1:
-    // 125 000 operands overflowed the stack). Whatever throws now, the answer
-    // is at least a warning, and a block found before it still blocks.
-    try {
-        collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
-    }
-    catch {
-        notes.failed = true;
+    for (const [n, cmd] of readings.entries()) {
+        if (n > 0 && (cmd === readings[n - 1] || matched.some((m) => m.level === 'block')))
+            continue;
+        notes.loosens = undefined;
+        // An exception here used to escape to the hook, which then answered with
+        // no decision at all — and the command ran unassessed (fix round 3, I-1:
+        // 125 000 operands overflowed the stack). Whatever throws now, the answer
+        // is at least a warning, and a block found before it still blocks.
+        try {
+            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+        }
+        catch {
+            notes.failed = true;
+        }
     }
     const partial = partialRule(notes);
     if (partial !== null)

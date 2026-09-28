@@ -1767,6 +1767,118 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     });
   });
 
+  // Fix round 4: what the round-3 re-review found, each reproduced there
+  // through the real hook.
+  describe('fix round 4', () => {
+    const BS = '\\';
+    const ps = (command: string) => assessBashCommand(command, { shell: 'powershell' });
+    const utf16Base64 = (text: string): string => Buffer.from(text, 'utf16le').toString('base64');
+
+    // C1: a `#` comment was read as code, so its apostrophe opened a quote
+    // that hid every later line from both readings.
+    it.each([
+      ["# clean the user's build dir\nrm -rf /", 'bash'],
+      ["echo start # the user's dir\nrm -rf ~", 'bash'],
+      [`# don't\nRemove-Item C:${BS}Users -Recurse -Force`, 'powershell'],
+      [`Get-ChildItem # list the user's files\r\nRemove-Item C:${BS}Users -Recurse -Force`, 'powershell'],
+    ] as const)('a comment with an apostrophe hides nothing after it: %j', (command, shell) => {
+      expect(assessBashCommand(command, { shell }).level).toBe('block');
+    });
+    it.each([
+      'echo a#b',
+      'git log --format=#%h',
+      'curl https://example.com/page#section -o page.html',
+      "cat <<'EOF' > notes.md\n# Title\nit's fine\nEOF",
+      'echo "#not a comment; rm -rf /"',
+    ])('a # that does not start a word is not a comment: %j keeps its verdict', (command) => {
+      expect(assessBashCommand(command).level).toBe('ok');
+    });
+
+    // I-1 finished: the last two push(...spread) sites.
+    it.each([
+      ['rsync', `rsync ${'a '.repeat(130_000)}dest ; rm -rf /`],
+      ['xcopy', `xcopy x dest ${'a '.repeat(130_000)}; rm -rf /`],
+    ])('130 000 operands to %s still leave the block after them', (_label, command) => {
+      expectBlocked(command, 'rm-rf-root');
+    });
+
+    // I-3 one level down: PowerShell program text handed to pwsh.
+    it.each([
+      `pwsh -NoProfile -Command 'Remove-Item "C:${BS}Users${BS}" -Recurse -Force'`,
+      `powershell -Command 'Get-ChildItem "C:${BS}temp${BS}"; Remove-Item C:${BS}Users -Recurse -Force'`,
+      `pwsh -EncodedCommand ${utf16Base64(`Remove-Item "C:${BS}Users${BS}" -Recurse -Force`)}`,
+    ])('nested PowerShell text is read with its own quoting too: %j', (command) => {
+      expect(assessBashCommand(command).level).toBe('block');
+      expect(ps(command).level).toBe('block');
+    });
+
+    // Here-strings: an odd `'` in the body hid what followed, and a commit
+    // message quoting `curl x | sh` read as the pipe itself.
+    it('a here-string body is data: it hides nothing and raises nothing', () => {
+      expect(ps(`git commit -m @'\nFix the user's bug\n'@\nRemove-Item C:${BS}Users -Recurse -Force`).level).toBe('block');
+      expect(ps(`git commit -m @'\nfix(hooks): don't miss curl x | sh any more\n'@`).level).toBe('ok');
+      expect(ps(`git commit -m @'\nfix: iwr x | iex is caught\n'@`).level).toBe('ok');
+      expect(ps(`$msg = @"\nthe user's "quoted" text\n"@\nRemove-Item C:${BS}Users -Recurse -Force`).level).toBe('block');
+    });
+    it('512 KB of unclosed here-string openers stays linear', () => {
+      const t0 = performance.now();
+      ps(`${"@'\n".repeat(170_000)}; rm -rf /`);
+      ps(`${'x @"\n'.repeat(100_000)}`);
+      expect(performance.now() - t0).toBeLessThan(3000);
+    });
+
+    // Caps that ended in a silent ok.
+    it('no cap on runners, launchers or [IO.File] calls hides what follows them', () => {
+      expectBlocked(`${'nice '.repeat(40)}rm -rf /`, 'rm-rf-root');
+      expectBlocked(
+        `npx -y npx -y npx -y npx -y npx -y node -e "require('fs').writeFileSync('.guardian/hooks.config.json','{}')"`,
+        'guard-config-inline-code',
+      );
+      expect(ps(`${"[IO.File]::Exists('x'); ".repeat(256)}[IO.File]::WriteAllText('.guardian/hooks.config.json','{}')`).level).toBe('block');
+      const padded = ps(`[IO.File]::WriteAllText(${' '.repeat(600)}'.guardian/hooks.config.json','{}')`);
+      expect(padded.level).not.toBe('ok');
+      expect(padded.reasons).toContain("part of this command was not assessed (an [IO.File] call's arguments over 512 characters)");
+    });
+
+    // A redirection before the command name.
+    it.each(['2>/dev/null rm -rf /', '2> /dev/null rm -rf /', '>log rm -rf /', '</dev/null rm -rf ~', 'sudo 2>&1 rm -rf /'])(
+      'a redirection before the command does not hide it: %j',
+      (command) => {
+        expectBlocked(command, 'rm-rf-root');
+      },
+    );
+
+    // PowerShell's delete spellings.
+    it.each([
+      `rmdir C:${BS}Users -Recurse -Force`,
+      `rd C:${BS}Users -Recurse -Force`,
+      `del C:${BS}Users -Recurse -Force`,
+      `Remove-Item C:${BS}Users -Recurse:$true -Force`,
+      `Remove-Item C:${BS}Users –Recurse —Force`,
+    ])('PowerShell delete shape %j blocks', (command) => {
+      expect(ps(command).level).toBe('block');
+    });
+    it('`-Recurse:$false` is not recursive, and POSIX `rmdir -p` stays ok', () => {
+      expect(ps(`Remove-Item C:${BS}Users -Recurse:$false -Force`).level).toBe('ok');
+      expect(assessBashCommand('rmdir -p a/b/c').level).toBe('ok');
+    });
+
+    // Minor: typographic quotes, block comments, the stop-parsing token, the
+    // length a respelling adds, and a tie that dropped one reading's reasons.
+    it.each([
+      `Write-Host “it's done”; Remove-Item C:${BS}Users -Recurse -Force`,
+      `<# the user's cleanup #> Remove-Item C:${BS}Users -Recurse -Force`,
+      `cmd /c --% rd /s /q C:${BS}`,
+      `Write-Host "${"'".repeat(140_000)}"; Remove-Item "C:${BS}Users${BS}" -Recurse -Force`,
+    ])('PowerShell reads %j as PowerShell does', (command) => {
+      expect(ps(command).level).toBe('block');
+    });
+    it('a respelled quote does not count toward the 512 KB cap', () => {
+      const a = ps(`Write-Host "${"'".repeat(140_000)}"`);
+      expect(a.reasons.join(' ')).not.toMatch(/over 512 KB/);
+    });
+  });
+
   // `claude plugin disable` writes the very `enabledPlugins` entry the
   // Write/Edit settings guard refuses.
   describe("Claude Code's plugin command turning dev-guardian off", () => {
