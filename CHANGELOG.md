@@ -36,6 +36,12 @@ version bump.
   `attest` is refused; GitLab and Bitbucket refuse `--attest`. A malformed template section marker
   (`# {{#attest}}`, `# {{ #ATTEST }}`) makes `ci-init` throw.
 
+### Fixed
+
+- `ci-init github`: `actions/setup-node` no longer caches dependencies (`package-manager-cache:
+  false`) — with a release-like `--branch` (`release/v2`) zizmor raised a cache-poisoning error on the
+  generated workflow, with or without `--attest`.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

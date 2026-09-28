@@ -154,6 +154,12 @@ jobs:
         uses: actions/setup-node@{{SETUP_NODE_SHA}} # {{SETUP_NODE_VERSION}}
         with:
           node-version: '22'
+          # No dependency cache: setup-node caches npm automatically when
+          # package.json names it, and a cache a pull request can write is
+          # restored on a push to --branch — zizmor's cache-poisoning finding
+          # on a release branch. Nothing here needs the scanned project's
+          # dependencies cached; dev-guardian's own install is `npm ci`.
+          package-manager-cache: false
 
       - name: Detect a .NET project (root .csproj/.fsproj/.sln/.slnx — same set scan_sast's own hasRootDotnetSignal checks)
         id: dotnet_probe

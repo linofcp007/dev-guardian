@@ -946,6 +946,45 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   });
 
+  // Part E review, round 2: a release-like --branch made zizmor raise a
+  // cache-poisoning error on actions/setup-node (its automatic npm cache),
+  // with or without --attest — the linter matrix now holds those renderings.
+  const MATRIX: readonly (readonly string[])[] = [
+    ['--branch', 'release/v2'],
+    ['--branch', 'release/v2', '--attest'],
+    ['--branch', 'releases/2026.09'],
+  ];
+
+  describe.skipIf(!ZIZMOR_INSTALLED)('zizmor on the release-branch renderings', () => {
+    it.each(MATRIX.map((flags) => [flags.join(' '), flags] as const))('zero findings with %s', (_label, flags) => {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
+      expect(r.status).toBe(0);
+      const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
+      expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+    });
+  });
+
+  describe.skipIf(!ACTIONLINT_INSTALLED)('actionlint on the release-branch renderings', () => {
+    it.each(MATRIX.map((flags) => [flags.join(' '), flags] as const))('zero errors with %s', (_label, flags) => {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
+      expect(r.status).toBe(0);
+      const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+    });
+  });
+
+  it('no rendering lets setup-node cache dependencies (a poisoned cache would reach a release branch)', () => {
+    for (const flags of [[], ['--attest'], ...MATRIX]) {
+      const { doc } = renderGithub([...flags]);
+      const setup = doc.jobs['scan']?.steps.find((s) => s.uses?.startsWith('actions/setup-node@'));
+      expect(setup?.with?.['package-manager-cache'], flags.join(' ')).toBe(false);
+      expect(setup?.with?.['cache'], flags.join(' ')).toBeUndefined();
+    }
+  });
+
   it.skipIf(!ZIZMOR_INSTALLED)('zizmor accepts the --attest workflow with zero findings', () => {
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
