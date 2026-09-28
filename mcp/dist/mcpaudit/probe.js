@@ -30,7 +30,10 @@
  * repeated cursor ends a list. Reaching any of those, or a transport budget
  * or failure AFTER some listing was received, is `partial` — what was
  * received is analysed, and the reason names what stopped it. The same
- * failure before any listing arrived is `failed`. Neither is a pass.
+ * failure before any listing arrived is `failed`. A list method answering
+ * an error is `partial` too, and the other lists are still read; only
+ * MethodNotFound (-32601) is silent, since a server need not implement
+ * every list. None of these is a pass.
  *
  * The listing is read with a permissive schema, not the SDK's: definitions
  * that do not validate are what this audit is for, and a strict parse would
@@ -129,18 +132,42 @@ export async function probeServer(entry, opts) {
     let received = false;
     let advertised = { tools: false, prompts: false, resources: false };
     let phase = 'start';
+    /** The session itself is gone — every later request would fail too. */
+    const sessionDead = (e) => signal.aborted ||
+        (stdio?.closeReason ?? null) !== null ||
+        (stdio?.exit ?? null) !== null ||
+        (e instanceof McpError && (e.code === ErrorCode.ConnectionClosed || e.code === ErrorCode.RequestTimeout));
+    /**
+     * One list method, every page. Fix round 4 (the product's rule): only
+     * MethodNotFound (-32601) is silent — a server need not implement every
+     * list. Any other error answered by a live session makes the server
+     * PARTIAL, with the reason, and the other lists are still read; the first
+     * cut kept a -32603 on templates as a warning, and the server read ok.
+     */
     const list = async (key) => {
         phase = LIST_METHOD[key];
         const method = LIST_METHOD[key];
-        const result = await listAll(key, (cursor) => {
-            const params = cursor === undefined ? {} : { cursor };
-            return client.request({ method, params }, PAGE, requestOptions()).then((page) => {
-                received = true;
-                return page;
-            });
-        }, listing[key]);
-        if (result !== null)
-            stops.push(result);
+        try {
+            const result = await listAll(key, (cursor) => {
+                const params = cursor === undefined ? {} : { cursor };
+                return client.request({ method, params }, PAGE, requestOptions()).then((page) => {
+                    received = true;
+                    return page;
+                });
+            }, listing[key]);
+            if (result !== null)
+                stops.push(result);
+        }
+        catch (e) {
+            if (sessionDead(e))
+                throw e;
+            if (e instanceof McpError && e.code === ErrorCode.MethodNotFound) {
+                warnings.push(`${method} is not implemented by the server (MethodNotFound)`);
+                return;
+            }
+            received = true; // the session answered: what was listed so far is real
+            stops.push(`${method} failed: ${messageOf(e).slice(0, 200)}`);
+        }
     };
     try {
         phase = 'initialize';
@@ -159,18 +186,9 @@ export async function probeServer(entry, opts) {
             await list('prompts');
         if (advertised.resources) {
             await list('resources');
-            // Templates carry descriptions the model reads too. Many servers that
-            // serve resources do not implement this method: that is no failure.
-            try {
-                await list('resourceTemplates');
-            }
-            catch (e) {
-                if (signal.aborted || (stdio?.closeReason ?? null) !== null || (stdio?.exit ?? null) !== null)
-                    throw e;
-                if (!(e instanceof McpError && e.code === ErrorCode.MethodNotFound)) {
-                    warnings.push(`resources/templates/list failed, templates were not read: ${messageOf(e).slice(0, 200)}`);
-                }
-            }
+            // Templates carry descriptions the model reads too; many servers that
+            // serve resources do not implement the method (MethodNotFound, silent).
+            await list('resourceTemplates');
         }
         const info = client.getServerVersion();
         const instructions = client.getInstructions();

@@ -57,6 +57,9 @@ version bump.
   read unchanged), and a duplicate tool name is a high `mcp-tool-duplicate-name`; pin lists and
   everything stored in the scan are escaped (a tool name carrying tag characters came back raw); a
   qualified and a bare name reaching the same launch start it once.
+- A list method answering an error other than MethodNotFound (-32601) makes the server partial, with
+  the reason, for every list method (reproduced: -32603 on `resources/templates/list` read ok, coverage
+  full); -32601 stays silent.
 - `allow_remote` now also gates `mcp-remote`-style proxies (an `http(s)`/`ws(s)` URL on the command
   line), UNC commands and UNC arguments. A name selects entries exactly: `<source>::<name>` picks one;
   a bare name whose entries launch different servers is refused with the qualified names; another

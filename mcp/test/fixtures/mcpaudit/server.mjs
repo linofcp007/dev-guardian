@@ -29,6 +29,8 @@
 //               transport budget, over the analysed-string count.
 //   longstring  one tool whose description is ~200 KB, with an instruction
 //               only past the first 64 KiB.
+//   listerror   like poisoned, but each method named in the LIST_ERRORS env
+//               JSON ({"prompts/list": -32603, …}) answers that error code.
 //
 // Every mode that starts writes probe-<mode>[-<MARK>].json in its working
 // directory: the environment it was given and its cwd (MARK, from the
@@ -108,7 +110,8 @@ if (mode === 'hang') {
       const instructions = mode === 'mutable' ? readIf(process.env.INSTR_FILE) : 'A test server.';
       reply({
         protocolVersion: msg.params?.protocolVersion ?? '2025-06-18',
-        capabilities: mode === 'poisoned' ? { tools: {}, prompts: {}, resources: {} } : { tools: {} },
+        capabilities:
+          mode === 'poisoned' || mode === 'listerror' ? { tools: {}, prompts: {}, resources: {} } : { tools: {} },
         serverInfo: { name: `fixture-${mode}`, version: '1.0.0' },
         ...(instructions === undefined ? {} : { instructions }),
       });
@@ -124,6 +127,11 @@ if (mode === 'hang') {
       return;
     }
     if (mode === 'flood') return; // never answers anything else
+    const listErrors = mode === 'listerror' ? JSON.parse(process.env.LIST_ERRORS ?? '{}') : {};
+    if (typeof listErrors[msg.method] === 'number') {
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: listErrors[msg.method], message: `${msg.method} broke` } });
+      return;
+    }
     switch (msg.method) {
       case 'tools/list':
         if (mode === 'mutable') {

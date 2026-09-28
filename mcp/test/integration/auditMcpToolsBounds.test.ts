@@ -304,6 +304,28 @@ describe('I3 and M1: budgets, and saying which one stopped the listing', () => {
     expect(r.servers[0]?.reason).toMatch(/repeated cursor/i);
   });
 
+  // Fix round 4 (reproduced): -32603 on resources/templates/list read ok,
+  // coverage full, missing_tools empty. Only MethodNotFound is silent.
+  it.each(['tools/list', 'prompts/list', 'resources/list', 'resources/templates/list'])(
+    'makes the server partial when %s answers an error other than MethodNotFound',
+    async (method) => {
+      const dir = project({ e: stdio('listerror', { env: { LIST_ERRORS: JSON.stringify({ [method]: -32603 }) } }) });
+      const r = await audit({ project_path: dir, servers: ['e'], timeout_ms: 60_000 });
+      expect(r.servers[0]?.status).toBe('partial');
+      expect(r.servers[0]?.reason).toContain(method);
+      expect(r.coverage).toBe('partial');
+      expect(r.missing_tools).toContain('mcp-tool-audit:.mcp.json::e');
+    },
+  );
+
+  it('stays silent when a list method is MethodNotFound (-32601)', async () => {
+    const errors = { 'prompts/list': -32601, 'resources/templates/list': -32601 };
+    const dir = project({ e: stdio('listerror', { env: { LIST_ERRORS: JSON.stringify(errors) } }) });
+    const r = await audit({ project_path: dir, servers: ['e'], timeout_ms: 60_000 });
+    expect(r.servers[0]?.status).toBe('ok');
+    expect(r.coverage).toBe('full');
+  });
+
   it('fails a server whose single message exceeds the per-message cap, and names the cap', async () => {
     const dir = project({ big: stdio('bigline') });
     const r = await audit({ project_path: dir, servers: ['big'], timeout_ms: 60_000 });

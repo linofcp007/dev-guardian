@@ -74991,17 +74991,32 @@ async function probeServer(entry, opts) {
   let received = false;
   let advertised = { tools: false, prompts: false, resources: false };
   let phase = "start";
+  const sessionDead = (e) => signal.aborted || (stdio?.closeReason ?? null) !== null || (stdio?.exit ?? null) !== null || e instanceof McpError && (e.code === ErrorCode.ConnectionClosed || e.code === ErrorCode.RequestTimeout);
   const list2 = async (key) => {
     phase = LIST_METHOD[key];
     const method = LIST_METHOD[key];
-    const result = await listAll(key, (cursor) => {
-      const params = cursor === void 0 ? {} : { cursor };
-      return client.request({ method, params }, PAGE2, requestOptions()).then((page) => {
-        received = true;
-        return page;
-      });
-    }, listing[key]);
-    if (result !== null) stops.push(result);
+    try {
+      const result = await listAll(
+        key,
+        (cursor) => {
+          const params = cursor === void 0 ? {} : { cursor };
+          return client.request({ method, params }, PAGE2, requestOptions()).then((page) => {
+            received = true;
+            return page;
+          });
+        },
+        listing[key]
+      );
+      if (result !== null) stops.push(result);
+    } catch (e) {
+      if (sessionDead(e)) throw e;
+      if (e instanceof McpError && e.code === ErrorCode.MethodNotFound) {
+        warnings.push(`${method} is not implemented by the server (MethodNotFound)`);
+        return;
+      }
+      received = true;
+      stops.push(`${method} failed: ${messageOf(e).slice(0, 200)}`);
+    }
   };
   try {
     phase = "initialize";
@@ -75017,14 +75032,7 @@ async function probeServer(entry, opts) {
     if (advertised.prompts) await list2("prompts");
     if (advertised.resources) {
       await list2("resources");
-      try {
-        await list2("resourceTemplates");
-      } catch (e) {
-        if (signal.aborted || (stdio?.closeReason ?? null) !== null || (stdio?.exit ?? null) !== null) throw e;
-        if (!(e instanceof McpError && e.code === ErrorCode.MethodNotFound)) {
-          warnings.push(`resources/templates/list failed, templates were not read: ${messageOf(e).slice(0, 200)}`);
-        }
-      }
+      await list2("resourceTemplates");
     }
     const info = client.getServerVersion();
     const instructions = client.getInstructions();
