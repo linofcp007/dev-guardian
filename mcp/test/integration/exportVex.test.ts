@@ -81,6 +81,11 @@ function seedDepsScan(treeHash = 'tree-1'): void {
 
 /** A snapshot whose route file imports lodash (and nothing imports minimist). */
 function seedSurface(treeHash = 'tree-1'): number {
+  // The project's code loads the vulnerable lodash 4.17.20 (and minimist 1.2.5).
+  writeFileSync(join(projectPath, 'package-lock.json'), JSON.stringify({
+    lockfileVersion: 3,
+    packages: { 'node_modules/lodash': { version: '4.17.20' }, 'node_modules/minimist': { version: '1.2.5' } },
+  }));
   return ctx.storage.surface.insert({
     project_path: projectPath,
     tree_hash: treeHash,

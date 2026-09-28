@@ -79,7 +79,13 @@ function inputs(over: Partial<VexInputs> = {}): VexInputs {
 
 function dependencyFor(externalFile: string) {
   const snap = snapshot(externalFile);
-  return prepareDependencyIndex({ snapshot: snap, graph: buildImportGraph(snap.imports), projectPath: PROJECT });
+  return prepareDependencyIndex({
+    snapshot: snap,
+    graph: buildImportGraph(snap.imports),
+    projectPath: PROJECT,
+    // The code loads exactly the version the finding is about.
+    npmResolver: () => ({ version: '4.17.20', source: 'package-lock.json' }),
+  });
 }
 
 function vexSuppression(over: Partial<Suppression> = {}): Suppression {

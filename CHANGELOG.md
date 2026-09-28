@@ -18,8 +18,11 @@ version bump.
 - Surface snapshots are kept to the newest 10 per project; the table grew with every run.
   `guardian://surface/{id}` of a pruned snapshot answers `{ snapshot: null }`.
 - `validate_finding` implements its `dependency` provider: a dependency CVE (npm; PyPI through a
-  table of known distribution-to-module names) reads `reachable` when a file a route reaches imports
-  the package, `imported` when only other files do, and `unknown` otherwise — never `unreachable`.
+  table of distributions whose module name is known and unique) reads `reachable` when a file a route
+  reaches imports the package, `imported` when only other files do, and `unknown` otherwise — never
+  `unreachable`. Only files under the finding's manifest directory count, and for npm only a file
+  that loads exactly the vulnerable version (Node's lookup, read from `package-lock.json` or the
+  installed `node_modules`); when that cannot be read, the answer is at most `imported`.
   It runs by default beside `static`; `summary` gains `counts_by_provider`, and `counts_by_verdict`
   the new `imported` verdict.
 - `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /

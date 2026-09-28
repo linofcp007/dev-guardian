@@ -819,6 +819,10 @@ describe('validate_finding — the dependency provider', () => {
   }
 
   it('runs by default beside static, and answers reachable for a package a routed file imports', async () => {
+    // The lockfile says the code loads exactly the vulnerable lodash 4.17.20.
+    writeFileSync(join(projectPath, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3, packages: { 'node_modules/lodash': { version: '4.17.20' } },
+    }));
     seedSnapshot({
       external_imports: externalImports([{ file: 'src/db.ts', specifier: 'lodash', language: 'typescript' }]),
     });

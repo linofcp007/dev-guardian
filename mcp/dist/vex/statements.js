@@ -61,7 +61,7 @@ function statementFor(cve, inputs, active) {
         : '';
     const assessment = inputs.dependency === null
         ? null
-        : assessDependency(subject ?? { package_name: cve.package_name, ecosystem }, inputs.dependency);
+        : assessDependency(subject ?? { package_name: cve.package_name, ecosystem, version: installed, manifest: null }, inputs.dependency);
     if (assessment?.verdict === 'reachable') {
         return {
             ...base,

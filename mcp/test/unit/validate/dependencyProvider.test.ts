@@ -13,9 +13,12 @@ import {
   assessDependency,
   dependencySubjectOf,
   ecosystemOfManifest,
+  PYPI_AMBIGUOUS,
+  PYPI_MODULES,
   prepareDependencyIndex,
   validateDependencies,
   type DependencySubject,
+  type NpmResolver,
 } from '../../../src/validate/dependencyProvider.js';
 import { buildImportGraph } from '../../../src/validate/importGraph.js';
 import { MAX_FILES_PER_PACKAGE, externalImports } from '../../../src/surface/moduleEdges.js';
@@ -56,18 +59,41 @@ function snapshotOf(over: Partial<AttackSurfaceSnapshot> = {}): AttackSurfaceSna
   };
 }
 
-function assess(subject: DependencySubject, over: Partial<AttackSurfaceSnapshot> = {}) {
+/**
+ * A stand-in for the lockfile/node_modules lookup (validate/npmResolve.ts):
+ * every package resolves to the version the finding is about unless
+ * `resolved` says otherwise for a (directory, name).
+ */
+function resolverOf(resolved: Record<string, string | null> = {}): NpmResolver {
+  return (fromDir, _rootDir, name) => {
+    const key = `${fromDir}|${name}`;
+    const hit = key in resolved ? resolved[key] : name in resolved ? resolved[name] : undefined;
+    if (hit === null) return null;
+    return { version: hit ?? '1.0.0', source: 'package-lock.json' };
+  };
+}
+
+function assess(
+  subject: DependencySubject,
+  over: Partial<AttackSurfaceSnapshot> = {},
+  npmResolver: NpmResolver | null = resolverOf(),
+) {
   const snapshot = snapshotOf(over);
   const index = prepareDependencyIndex({
     snapshot,
     graph: buildImportGraph(snapshot.imports),
     projectPath: PROJECT,
+    ...(npmResolver === null ? {} : { npmResolver }),
   });
   return assessDependency(subject, index);
 }
 
-const npm = (name: string): DependencySubject => ({ package_name: name, ecosystem: 'npm' });
-const pypi = (name: string): DependencySubject => ({ package_name: name, ecosystem: 'pypi' });
+const npm = (name: string, over: Partial<DependencySubject> = {}): DependencySubject => ({
+  package_name: name, ecosystem: 'npm', version: '1.0.0', manifest: 'package-lock.json', ...over,
+});
+const pypi = (name: string, over: Partial<DependencySubject> = {}): DependencySubject => ({
+  package_name: name, ecosystem: 'pypi', version: '1.0.0', manifest: 'requirements.txt', ...over,
+});
 
 describe('assessDependency — npm', () => {
   it('reads reachable when a file a route reaches imports the package, naming the route and the hops', () => {
@@ -138,7 +164,7 @@ describe('assessDependency — absence is never evidence', () => {
   });
 
   it('answers unknown for an ecosystem it cannot match, naming it', () => {
-    const a = assess({ package_name: 'github.com/gin-gonic/gin', ecosystem: 'golang' }, {
+    const a = assess({ package_name: 'github.com/gin-gonic/gin', ecosystem: 'golang', version: 'v1.9.0', manifest: 'go.mod' }, {
       external_imports: externalImports([ext('main.go', 'github.com/gin-gonic/gin', 'go')]),
     });
     expect(a.verdict).toBe('unknown');
@@ -146,7 +172,7 @@ describe('assessDependency — absence is never evidence', () => {
   });
 
   it('answers unknown when the ecosystem could not be determined', () => {
-    const a = assess({ package_name: 'lodash', ecosystem: null }, {
+    const a = assess({ package_name: 'lodash', ecosystem: null, version: '4.17.20', manifest: null }, {
       external_imports: externalImports([ext('src/db.ts', 'lodash')]),
     });
     expect(a.verdict).toBe('unknown');
@@ -156,9 +182,125 @@ describe('assessDependency — absence is never evidence', () => {
   it('says the graph was cut when an importer is not shown reachable from a truncated graph', () => {
     const snapshot = snapshotOf({ external_imports: externalImports([ext('src/cli.ts', 'lodash')]) });
     const graph = { ...buildImportGraph(snapshot.imports), truncated: true };
-    const a = assessDependency(npm('lodash'), prepareDependencyIndex({ snapshot, graph, projectPath: PROJECT }));
+    const a = assessDependency(npm('lodash'), prepareDependencyIndex({ snapshot, graph, projectPath: PROJECT, npmResolver: resolverOf() }));
     expect(a.verdict).toBe('imported');
     expect(a.coverage_gaps.join(' | ')).toMatch(/truncated/);
+  });
+});
+
+describe('assessDependency — which copy the project’s code loads (review I1)', () => {
+  it('counts only importers under the directory of the finding’s manifest (a monorepo)', () => {
+    // packages/api has lodash 4.17.21 and a route importing it; the CVE is in
+    // packages/tool's lodash 4.17.20, which no code imports. Reproduced with
+    // real Trivy + Semgrep: it read `reachable`, citing packages/api.
+    const a = assess(npm('lodash', { version: '4.17.20', manifest: 'packages/tool/package-lock.json' }), {
+      routes: [route({ file: `${PROJECT}/packages/api/src/app.js`, language: 'javascript' })],
+      external_imports: externalImports([ext('packages/api/src/app.js', 'lodash', 'javascript')]),
+    });
+    expect(a.verdict).toBe('unknown');
+    expect(a.importing_files).toEqual([]);
+    expect(a.coverage_gaps.join(' | ')).toMatch(/outside .*packages\/tool/);
+  });
+
+  it('never reads reachable when the code resolves another version than the vulnerable one (a nested copy)', () => {
+    // node_modules/lodash is 4.17.21; the vulnerable 4.17.20 lives at
+    // node_modules/x/node_modules/lodash and is loaded only through x.
+    const a = assess(
+      npm('lodash', { version: '4.17.20' }),
+      { external_imports: externalImports([ext('src/db.ts', 'lodash')]) },
+      resolverOf({ lodash: '4.17.21' }),
+    );
+    expect(a.verdict).toBe('unknown');
+    expect(a.coverage_gaps.join(' | ')).toMatch(/resolves .*4\.17\.21.*not the vulnerable 4\.17\.20/);
+  });
+
+  it('reads reachable when a routed file resolves exactly the vulnerable version, per importing directory', () => {
+    const a = assess(
+      npm('lodash', { version: '4.17.20' }),
+      {
+        imports: [{ file: 'src/routes.ts', module_file: 'src/db.ts' }],
+        external_imports: externalImports([ext('src/db.ts', 'lodash'), ext('tools/cli.ts', 'lodash')]),
+      },
+      resolverOf({ 'src|lodash': '4.17.20', 'tools|lodash': '4.17.21' }),
+    );
+    expect(a.verdict).toBe('reachable');
+    expect(a.importing_files).toEqual(['src/db.ts']);
+    expect(a.evidence[0]?.detail).toMatch(/src\/db\.ts .*4\.17\.20/);
+  });
+
+  it('claims no more than imported when the installed version could not be read', () => {
+    const a = assess(
+      npm('lodash', { version: '4.17.20' }),
+      { external_imports: externalImports([ext('src/db.ts', 'lodash')]) },
+      resolverOf({ lodash: null }),
+    );
+    expect(a.verdict).toBe('imported');
+    expect(a.coverage_gaps.join(' | ')).toMatch(/could not be read/);
+  });
+
+  it('claims no more than imported for a vulnerable range (npm audit), not an installed version', () => {
+    const a = assess(npm('lodash', { version: null }), {
+      external_imports: externalImports([ext('src/db.ts', 'lodash')]),
+    });
+    expect(a.verdict).toBe('imported');
+    expect(a.coverage_gaps.join(' | ')).toMatch(/range/);
+  });
+
+  it('claims no more than imported with no resolver at all', () => {
+    const a = assess(npm('lodash'), { external_imports: externalImports([ext('src/db.ts', 'lodash')]) }, null);
+    expect(a.verdict).toBe('imported');
+  });
+
+  it('ignores imports from inside node_modules', () => {
+    const a = assess(npm('lodash'), {
+      external_imports: externalImports([ext('node_modules/x/index.js', 'lodash', 'javascript')]),
+    });
+    expect(a.verdict).toBe('unknown');
+  });
+});
+
+describe('the PyPI table (review M10)', () => {
+  it('maps every module to exactly one distribution', () => {
+    const owners = new Map<string, string[]>();
+    for (const [dist, modules] of Object.entries(PYPI_MODULES)) {
+      for (const module of modules) owners.set(module, [...(owners.get(module) ?? []), dist]);
+    }
+    expect([...owners].filter(([, dists]) => dists.length > 1)).toEqual([]);
+  });
+
+  it('has no module another known distribution also installs', () => {
+    const modules = new Set(Object.values(PYPI_MODULES).flat());
+    for (const clash of ['multipart', 'bson', 'attr', 'jwt', 'jose', 'Crypto', 'dns', 'psycopg2', 'cv2']) {
+      expect(modules.has(clash), clash).toBe(false);
+    }
+  });
+
+  it('answers unknown for a distribution whose module is ambiguous, naming the other distribution', () => {
+    const a = assess(pypi('PyJWT'), {
+      routes: [route({ file: `${PROJECT}/app/views.py`, language: 'python' })],
+      external_imports: externalImports([ext('app/views.py', 'jwt', 'python')]),
+    });
+    expect(a.verdict).toBe('unknown');
+    expect(a.coverage_gaps.join(' | ')).toMatch(/'jwt' distribution/);
+    expect(Object.keys(PYPI_AMBIGUOUS)).toContain('pyjwt');
+  });
+
+  it('matches python-multipart only through python_multipart, and pymongo never through bson', () => {
+    const routes = [route({ file: `${PROJECT}/app/views.py`, language: 'python' })];
+    expect(assess(pypi('python-multipart'), { routes, external_imports: externalImports([ext('app/views.py', 'multipart', 'python')]) }).verdict)
+      .toBe('unknown');
+    expect(assess(pypi('python-multipart'), { routes, external_imports: externalImports([ext('app/views.py', 'python_multipart', 'python')]) }).verdict)
+      .toBe('reachable');
+    expect(assess(pypi('pymongo'), { routes, external_imports: externalImports([ext('app/views.py', 'bson', 'python')]) }).verdict)
+      .toBe('unknown');
+  });
+
+  it('scopes a PyPI package to its requirements file’s directory too', () => {
+    const a = assess(pypi('pyyaml', { manifest: 'services/a/requirements.txt' }), {
+      routes: [route({ file: `${PROJECT}/services/b/views.py`, language: 'python' })],
+      external_imports: externalImports([ext('services/b/views.py', 'yaml', 'python')]),
+    });
+    expect(a.verdict).toBe('unknown');
   });
 });
 
@@ -225,28 +367,30 @@ function finding(over: Partial<Finding> = {}): Finding {
 
 describe('dependencySubjectOf', () => {
   it('reads the package from the snippet and the ecosystem from the manifest Trivy named', () => {
-    expect(dependencySubjectOf(finding())).toEqual({ package_name: 'lodash', ecosystem: 'npm' });
+    expect(dependencySubjectOf(finding()))
+      .toEqual({ package_name: 'lodash', ecosystem: 'npm', version: '4.17.20', manifest: 'package-lock.json' });
     expect(dependencySubjectOf(finding({ file_path: 'api/requirements.txt', snippet: 'PyYAML@5.3->5.4' })))
-      .toEqual({ package_name: 'PyYAML', ecosystem: 'pypi' });
+      .toEqual({ package_name: 'PyYAML', ecosystem: 'pypi', version: '5.3', manifest: 'api/requirements.txt' });
     expect(dependencySubjectOf(finding({ file_path: 'go.sum', snippet: 'golang.org/x/net@v0.1.0->v0.7.0' })))
-      .toEqual({ package_name: 'golang.org/x/net', ecosystem: 'golang' });
+      .toEqual({ package_name: 'golang.org/x/net', ecosystem: 'golang', version: 'v0.1.0', manifest: 'go.sum' });
   });
 
   it('keeps a scoped npm name whole', () => {
     expect(dependencySubjectOf(finding({ snippet: '@babel/traverse@7.22.0->7.23.2' })))
-      .toEqual({ package_name: '@babel/traverse', ecosystem: 'npm' });
+      .toEqual({ package_name: '@babel/traverse', ecosystem: 'npm', version: '7.22.0', manifest: 'package-lock.json' });
   });
 
   it('knows the ecosystem of npm-audit and pip-audit by the tool', () => {
     expect(dependencySubjectOf(finding({ tool: 'npm-audit', subcategory: 'dependency', snippet: 'lodash@<4.17.21' })))
-      .toEqual({ package_name: 'lodash', ecosystem: 'npm' });
+      // A vulnerable RANGE, not the installed version: no version at all.
+      .toEqual({ package_name: 'lodash', ecosystem: 'npm', version: null, manifest: 'package-lock.json' });
     expect(dependencySubjectOf(finding({ tool: 'pip-audit', subcategory: 'dependency', file_path: 'x', snippet: 'jinja2@2.10' })))
-      .toEqual({ package_name: 'jinja2', ecosystem: 'pypi' });
+      .toEqual({ package_name: 'jinja2', ecosystem: 'pypi', version: '2.10', manifest: null });
   });
 
   it('leaves the ecosystem unknown for a target that is not a manifest (an image)', () => {
     expect(dependencySubjectOf(finding({ file_path: 'alpine:3.18 (alpine 3.18.4)', snippet: 'openssl@3.1.2->3.1.4' })))
-      .toEqual({ package_name: 'openssl', ecosystem: null });
+      .toEqual({ package_name: 'openssl', ecosystem: null, version: '3.1.2', manifest: null });
   });
 
   it('is null for a finding that is not about a dependency', () => {
@@ -281,6 +425,7 @@ describe('validateDependencies', () => {
       ],
       computedAt: '2026-09-28T00:00:00.000Z',
       projectPath: PROJECT,
+      npmResolver: resolverOf({ lodash: '4.17.20' }),
     });
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({

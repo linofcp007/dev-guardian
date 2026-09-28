@@ -8,6 +8,8 @@
  * finding correlated to a CVE this test does NOT seed degrades to
  * `unavailable` rather than reaching the real network.
  */
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { resolveProjectPath } from '../../../src/platform/projectPath.js';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
@@ -230,6 +232,11 @@ function npmCve(fingerprint: string, cve: string, pkg: string, severity: 'critic
 
 /** A snapshot whose one route file imports `pkg`. */
 function seedSurface(storage: Storage, pkg: string): number {
+  // The lockfile says the project's code loads exactly the vulnerable
+  // version (npmCve's 1.0.0) — what lets the dependency provider say reachable.
+  writeFileSync(join(P, 'package-lock.json'), JSON.stringify({
+    lockfileVersion: 3, packages: { [`node_modules/${pkg}`]: { version: '1.0.0' } },
+  }));
   return storage.surface.insert({
     project_path: P,
     tree_hash: 't',

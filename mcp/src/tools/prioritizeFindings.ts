@@ -61,6 +61,7 @@ import { ProjectPath } from '../schemas.js';
 import type { Category, Finding, Severity, ToolResult } from '../types.js';
 import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
+import { makeNpmResolver } from '../validate/npmResolve.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 /** Added once when ANY of a finding's correlated CVEs is CISA KEV-listed —
@@ -284,6 +285,7 @@ function ssvcAssessor(
           snapshot: surface.snapshot,
           graph: buildImportGraph(surface.snapshot.imports),
           projectPath,
+          npmResolver: makeNpmResolver(projectPath),
         });
   return {
     mission,

@@ -114,7 +114,7 @@ function statementFor(cve: Cve, inputs: VexInputs, active: readonly Suppression[
     inputs.dependency === null
       ? null
       : assessDependency(
-          subject ?? { package_name: cve.package_name, ecosystem },
+          subject ?? { package_name: cve.package_name, ecosystem, version: installed, manifest: null },
           inputs.dependency,
         );
 

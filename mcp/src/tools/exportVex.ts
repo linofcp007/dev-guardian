@@ -41,6 +41,7 @@ import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type ScanRecord, type ToolResult } from '../types.js';
 import { prepareDependencyIndex, type DependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
+import { makeNpmResolver } from '../validate/npmResolve.js';
 import { renderCycloneDxVex, renderOpenVex } from '../vex/render.js';
 import { parseSbomInventory, type SbomInventory } from '../vex/sbom.js';
 import { buildVexStatements, type VexStatement } from '../vex/statements.js';
@@ -328,6 +329,7 @@ function readSurface(
       snapshot: persisted.snapshot,
       graph: buildImportGraph(persisted.snapshot.imports),
       projectPath,
+      npmResolver: makeNpmResolver(projectPath),
     }),
   };
 }
