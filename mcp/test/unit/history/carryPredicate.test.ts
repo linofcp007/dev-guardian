@@ -7,10 +7,16 @@
  * scan's `openGapFor` names a gap; the read the carry makes by tool
  * (`toolsOfKey`) never misses such a finding; and the fold stays one
  * constraint on a long chain, and closes when no file is in every one.
+ *
+ * Fix round 3 indexes the chain once per key and reads each holder's scope
+ * through the scans able to look at its targets (`ChainIndex`), carrying
+ * one fold per kind of holder across a GROWING chain — so the property is
+ * also checked the way the walk uses it: one index, many holders, the chain
+ * growing between them.
  */
 
 import { describe, expect, it } from 'vitest';
-import { chainScope, openGapFor, scopeAdmits, type Bookkeeping } from '../../../src/history/runCompare.js';
+import { ChainIndex, chainScope, openGapFor, scopeAdmits, type Bookkeeping } from '../../../src/history/runCompare.js';
 import { findingKey, toolsOfKey } from '../../../src/history/runNames.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
@@ -29,7 +35,7 @@ function prng(seed: number): () => number {
 const NAMES = ['semgrep', 'bandit', 'trivy', 'trivy-image', 'trivy-dockerfile', 'nuclei', 'guardian-dast', 'gitleaks', 'mystery-tool'];
 const FILES = ['wp/a.php', 'src/b.js', 'app.py', 'registry/app:1 (alpine)'];
 const RULES = ['r1', 'r2', 'r3'];
-const IMAGES = ['nginx', 'nginx:latest', 'docker.io/library/nginx:latest', 'registry/app:1'];
+const IMAGES = ['nginx', 'nginx:latest', 'docker.io/library/nginx:latest', 'registry/app:1', 'registry/app:2', 'ghcr.io/o/x@sha256:ab'];
 
 function pick<T>(r: () => number, xs: readonly T[]): T {
   const x = xs[Math.floor(r() * xs.length)];
@@ -120,10 +126,66 @@ describe('carry-forward: the per-key scope and the per-finding verdict agree', (
     // a.php in both: still open, one constraint however long the chain.
     const same = Array.from({ length: 500 }, () => partial('wp/a.php', 'src/b.js'));
     const open = chainScope(holder, same, 'semgrep');
-    expect(open).toEqual({ kind: 'open', constraints: [{ files: new Set(['wp/a.php', 'src/b.js']), rules: new Set() }] });
+    expect(open).toEqual({ kind: 'open', admit: { all: false, files: new Set(['wp/a.php', 'src/b.js']), rules: new Set(), pairs: new Map() } });
     expect(scopeAdmits(open, 'wp/a.php', 'r1')).toBe(true);
     // Two scans that partly parsed different files: no finding is in both.
     expect(chainScope(holder, [partial('wp/a.php'), partial('src/b.js')], 'semgrep')).toEqual({ kind: 'never' });
     expect([partial('wp/a.php'), partial('src/b.js')].every((asked) => openGapFor(holder, asked, f) !== null)).toBe(false);
+  });
+
+  it('a partial parse AND a different rule not loaded in every newer scan stays bounded, and closes (M-4)', () => {
+    const holder: Bookkeeping = { tools_run: [{ name: 'semgrep', status: 'ok' }], missing_tools: [] };
+    const gap = (i: number): Bookkeeping => ({
+      tools_run: [
+        {
+          name: 'semgrep',
+          status: 'ok',
+          partially_parsed: [{ file: `f${i}.php`, type: 'PartialParsing', message: 'x' }],
+          failed_rules: [{ rule_id: `r${i}`, message: 'x' }],
+        },
+      ],
+      missing_tools: ['semgrep'],
+    });
+    const f = (file: string, rule: string): Finding => ({ fingerprint: 'fp', tool: 'semgrep', severity: 'high', category: 'security', title: 't', file_path: file, rule_id: rule, fix_available: false });
+    const two = [gap(0), gap(1)];
+    // (f0 or r0) and (f1 or r1): exactly the two crossed pairs.
+    for (const [file, rule, open] of [['f0.php', 'r1', true], ['f1.php', 'r0', true], ['f0.php', 'r0', false], ['f9.php', 'r9', false]] as const) {
+      expect(scopeAdmits(chainScope(holder, two, 'semgrep'), file, rule)).toBe(open);
+      expect(two.every((asked) => openGapFor(holder, asked, f(file, rule)) !== null)).toBe(open);
+    }
+    const index = new ChainIndex();
+    const t0 = performance.now();
+    for (let i = 0; i < 5000; i++) index.push(gap(i));
+    expect(index.scope(holder, 'semgrep')).toEqual({ kind: 'never' });
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it('one index, a growing chain, many holders: the scope still agrees with every newer scan\'s verdict', () => {
+    const r = prng(31337);
+    let carried = 0;
+    let checks = 0;
+    for (let history = 0; history < 400; history++) {
+      const books = Array.from({ length: 2 + Math.floor(r() * 12) }, () => randomBook(r));
+      const index = new ChainIndex();
+      const chain: Bookkeeping[] = [];
+      for (const holder of books) {
+        if (chain.length > 0) {
+          for (let k = 0; k < 6; k++) {
+            const f = randomFinding(r);
+            const byVerdict = chain.every((asked) => openGapFor(holder, asked, f) !== null);
+            const byScope = scopeAdmits(index.scope(holder, findingKey(f)), f.file_path?.replace(/\\/g, '/'), f.rule_id);
+            checks += 1;
+            if (byScope !== byVerdict) {
+              throw new Error(`disagree in history ${history}: ${JSON.stringify({ holder, chain, f, byScope, byVerdict })}`);
+            }
+            if (byVerdict) carried += 1;
+          }
+        }
+        index.push(holder);
+        chain.push(holder);
+      }
+    }
+    expect(checks).toBeGreaterThan(10_000);
+    expect(carried).toBeGreaterThan(500);
   });
 });

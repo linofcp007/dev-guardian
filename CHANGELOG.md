@@ -1005,7 +1005,10 @@ keeps working (migrations 004–011 are additive).
   stale gaps), as reduced coverage when the scanner ran on another target;
   `sources` stay newest first. The walk is linear in the history it covers:
   250 scans x 1000 findings with a gap in every scan took 10-15.5 s, now
-  under 0.3 s (200 x 300: 4.2 s, now 0.06 s).
+  under 0.3 s (200 x 300: 4.2 s, now 0.06 s); 2000 scans each over its own
+  image took 19 s, now 0.33 s (5000, half of them Dockerfile-only: 63 s, now
+  0.44 s); a partly parsed file and a different rule not loaded in every scan
+  no longer grow the carry's conditions (5000 scans: 1.3 s, now 0.02 s).
 - **A bug_hunt or RGPD finding changed identity with every plugin update.**
   Semgrep names a rule from a local file by that file's directory, dotted —
   the whole absolute path when it does not run from under it

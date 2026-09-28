@@ -49730,82 +49730,191 @@ function openGapFor(holder, asked, f) {
   if (answer.byTarget) return answer.notRun;
   return onRequestPassOf(holder, findingKey(f));
 }
-var NEVER3 = { kind: "never" };
-var ALWAYS = { kind: "always" };
-function keyScope(holder, asked, key) {
-  if (isEmptyBook(asked)) return NEVER3;
-  const verdict = keyVerdict(asked, key);
-  if (verdict === "unmeasured") return ALWAYS;
-  if (verdict === "not_run") return onRequestPassOf(holder, key) !== null ? ALWAYS : NEVER3;
-  if (targetNotRunForKey(holder, asked, key) !== null) return ALWAYS;
-  const narrow = narrowGapsOf(asked, key);
-  return narrow.files.size === 0 && narrow.rules.size === 0 ? NEVER3 : { kind: "some", files: narrow.files, rules: narrow.rules };
+var ADMIT_ALL = { all: true };
+var NEVER_SCOPE = { kind: "never" };
+function meetAdmit(s, c3) {
+  if (s.all) return { all: false, files: new Set(c3.files), rules: new Set(c3.rules), pairs: /* @__PURE__ */ new Map() };
+  const files = new Set([...s.files].filter((f) => c3.files.has(f)));
+  const rules = new Set([...s.rules].filter((r) => c3.rules.has(r)));
+  const pairs = /* @__PURE__ */ new Map();
+  const add = (f, r) => {
+    if (files.has(f) || rules.has(r)) return;
+    let set2 = pairs.get(f);
+    if (set2 === void 0) {
+      set2 = /* @__PURE__ */ new Set();
+      pairs.set(f, set2);
+    }
+    set2.add(r);
+  };
+  for (const [f, rs] of s.pairs) for (const r of rs) if (c3.files.has(f) || c3.rules.has(r)) add(f, r);
+  for (const f of s.files) if (!c3.files.has(f)) for (const r of c3.rules) add(f, r);
+  for (const r of s.rules) if (!c3.rules.has(r)) for (const f of c3.files) add(f, r);
+  return { all: false, files, rules, pairs };
 }
-function meet(into, next) {
-  if (into === void 0) return new Set(next);
-  for (const x of into) if (!next.has(x)) into.delete(x);
-  return into;
-}
-var ChainScopeFold = class {
-  constructor(holder) {
-    this.holder = holder;
-  }
-  holder;
-  perKey = /* @__PURE__ */ new Map();
-  scope(chain, key) {
-    let state = this.perKey.get(key);
-    if (state === void 0) {
-      state = { len: 0, never: false, mixed: [], mixedSigs: /* @__PURE__ */ new Set(), fileMeet: void 0, ruleMeet: void 0, snapshot: null };
-      this.perKey.set(key, state);
-    }
-    for (; state.len < chain.length && !state.never; state.len += 1) {
-      const asked = chain[state.len];
-      if (asked === void 0) break;
-      const scope = keyScope(this.holder, asked, key);
-      if (scope.kind === "always") continue;
-      state.snapshot = null;
-      if (scope.kind === "never") {
-        state.never = true;
-        break;
-      }
-      if (scope.rules.size === 0) {
-        state.fileMeet = meet(state.fileMeet, scope.files);
-      } else if (scope.files.size === 0) {
-        state.ruleMeet = meet(state.ruleMeet, scope.rules);
-      } else {
-        const sig = JSON.stringify([[...scope.files].sort(), [...scope.rules].sort()]);
-        if (!state.mixedSigs.has(sig)) {
-          state.mixedSigs.add(sig);
-          state.mixed.push({ files: scope.files, rules: scope.rules });
-        }
-      }
-      if (state.fileMeet?.size === 0 || state.ruleMeet?.size === 0) state.never = true;
-    }
-    if (state.snapshot === null) {
-      const none = /* @__PURE__ */ new Set();
-      state.snapshot = state.never ? { kind: "never" } : {
-        kind: "open",
-        constraints: [
-          ...state.fileMeet !== void 0 ? [{ files: new Set(state.fileMeet), rules: none }] : [],
-          ...state.ruleMeet !== void 0 ? [{ files: none, rules: new Set(state.ruleMeet) }] : [],
-          ...state.mixed
-        ]
-      };
-    }
-    return state.snapshot;
-  }
-};
-function holderSignature(holder) {
-  return JSON.stringify(
-    holder.tools_run.filter((r) => r.status === "ok").map((r) => [r.name, targetOf(r).ref ?? ""]).sort((a2, b) => a2.join("\0") < b.join("\0") ? -1 : 1)
-  );
+function admitsNothing(s) {
+  return !s.all && s.files.size === 0 && s.rules.size === 0 && s.pairs.size === 0;
 }
 function scopeAdmits(scope, file, rule) {
   if (scope.kind === "never") return false;
-  return scope.constraints.every(
-    (c3) => file !== void 0 && c3.files.has(file) || rule !== void 0 && c3.rules.has(rule)
-  );
+  const a2 = scope.admit;
+  if (a2.all) return true;
+  if (file !== void 0 && a2.files.has(file)) return true;
+  if (rule !== void 0 && a2.rules.has(rule)) return true;
+  return file !== void 0 && rule !== void 0 && (a2.pairs.get(file)?.has(rule) ?? false);
 }
+function admitLookup(admit) {
+  const files = new Set(admit.files);
+  const rules = new Set(admit.rules);
+  for (const [f, rs] of admit.pairs) {
+    files.add(f);
+    for (const r of rs) rules.add(r);
+  }
+  return { files: [...files], rules: [...rules] };
+}
+var NO_INDEXES = [];
+function pushTo(map, key, i2) {
+  const list2 = map.get(key);
+  if (list2 === void 0) map.set(key, [i2]);
+  else list2.push(i2);
+}
+function coversTarget(c3, t) {
+  if (t.pass === PROJECT_FILES) return c3.project;
+  if (t.ref === void 0) return c3.any.has(t.pass);
+  return c3.legacy.has(t.pass) || c3.images.has(`${t.pass}\0${t.ref}`);
+}
+var ChainIndex = class {
+  chain = [];
+  byKey = /* @__PURE__ */ new Map();
+  push(book) {
+    this.chain.push(book);
+  }
+  get length() {
+    return this.chain.length;
+  }
+  /** The chain's `i`-th scan, newest first. */
+  bookAt(i2) {
+    return this.chain[i2];
+  }
+  /** `holder` for one key, as {@link scopeOfClass} takes it. */
+  classOf(holder, key) {
+    const onRequest = onRequestPassOf(holder, key) !== null;
+    const seen = /* @__PURE__ */ new Map();
+    for (const run of holder.tools_run) {
+      if (!measuresKeyOk(run, key)) continue;
+      const t = targetOf(run);
+      seen.set(`${t.pass}\0${t.ref ?? ""}\0${t.ref === void 0 ? "legacy" : "ref"}`, t);
+    }
+    const targets = [...seen.values()];
+    const signature = JSON.stringify([onRequest, [...seen.keys()].sort()]);
+    return { signature, onRequest, targets };
+  }
+  /** {@link ChainScope} of `holder`'s findings under `key`, over the chain as it is now. */
+  scope(holder, key) {
+    return this.scopeOfClass(this.classOf(holder, key), key);
+  }
+  scopeOfClass(cls, key) {
+    const idx = this.indexed(key);
+    const L = this.chain.length;
+    if (idx.firstEmpty < L || !cls.onRequest && idx.firstNotRun < L) return NEVER_SCOPE;
+    let state = idx.classes.get(cls.signature);
+    if (state === void 0) {
+      state = { admit: ADMIT_ALL, closed: false, a: 0, b: 0, snapshot: null };
+      idx.classes.set(cls.signature, state);
+    }
+    this.advance(idx, cls, state, L);
+    if (state.closed) return NEVER_SCOPE;
+    if (state.snapshot === null) state.snapshot = { kind: "open", admit: state.admit };
+    return state.snapshot;
+  }
+  /** The class's driver: one or two ascending lists that hold every scan able to look at all its targets. */
+  driverOf(idx, cls) {
+    const image = cls.targets.find((t) => t.pass !== PROJECT_FILES && t.ref !== void 0);
+    if (image !== void 0) {
+      return [idx.byImage.get(`${image.pass}\0${image.ref ?? ""}`) ?? NO_INDEXES, idx.legacy.get(image.pass) ?? NO_INDEXES];
+    }
+    const legacyImage = cls.targets.find((t) => t.pass !== PROJECT_FILES);
+    if (legacyImage !== void 0) return [idx.anyOf.get(legacyImage.pass) ?? NO_INDEXES, NO_INDEXES];
+    if (cls.targets.length > 0) return [idx.project, NO_INDEXES];
+    return [idx.measured, NO_INDEXES];
+  }
+  advance(idx, cls, state, L) {
+    while (!state.closed) {
+      const [listA, listB] = this.driverOf(idx, cls);
+      const ia = listA[state.a];
+      const ib = listB[state.b];
+      const na2 = ia !== void 0 && ia < L ? ia : void 0;
+      const nb = ib !== void 0 && ib < L ? ib : void 0;
+      if (na2 === void 0 && nb === void 0) return;
+      const i2 = na2 === void 0 ? nb ?? 0 : nb === void 0 ? na2 : Math.min(na2, nb);
+      if (na2 === i2) state.a += 1;
+      if (nb === i2) state.b += 1;
+      const c3 = idx.at.get(i2);
+      if (c3 === void 0 || !cls.targets.every((t) => coversTarget(c3, t))) continue;
+      state.snapshot = null;
+      if (c3.narrow === null) {
+        state.closed = true;
+        return;
+      }
+      state.admit = meetAdmit(state.admit, c3.narrow);
+      if (admitsNothing(state.admit)) state.closed = true;
+    }
+  }
+  /** The key's index, caught up with the chain. */
+  indexed(key) {
+    let idx = this.byKey.get(key);
+    if (idx === void 0) {
+      idx = {
+        len: 0,
+        firstEmpty: Infinity,
+        firstNotRun: Infinity,
+        at: /* @__PURE__ */ new Map(),
+        measured: [],
+        project: [],
+        byImage: /* @__PURE__ */ new Map(),
+        legacy: /* @__PURE__ */ new Map(),
+        anyOf: /* @__PURE__ */ new Map(),
+        classes: /* @__PURE__ */ new Map()
+      };
+      this.byKey.set(key, idx);
+    }
+    for (; idx.len < this.chain.length; idx.len += 1) {
+      const i2 = idx.len;
+      const asked = this.chain[i2];
+      if (asked === void 0) break;
+      if (isEmptyBook(asked)) {
+        idx.firstEmpty = Math.min(idx.firstEmpty, i2);
+        continue;
+      }
+      const verdict = keyVerdict(asked, key);
+      if (verdict === "unmeasured") continue;
+      if (verdict === "not_run") {
+        idx.firstNotRun = Math.min(idx.firstNotRun, i2);
+        continue;
+      }
+      const c3 = { project: false, images: /* @__PURE__ */ new Set(), legacy: /* @__PURE__ */ new Set(), any: /* @__PURE__ */ new Set(), narrow: null };
+      for (const run of asked.tools_run) {
+        if (!measuresKeyOk(run, key)) continue;
+        const t = targetOf(run);
+        if (t.pass === PROJECT_FILES) {
+          c3.project = true;
+          continue;
+        }
+        c3.any.add(t.pass);
+        if (t.ref === void 0) c3.legacy.add(t.pass);
+        else c3.images.add(`${t.pass}\0${t.ref}`);
+      }
+      const narrow = narrowGapsOf(asked, key);
+      if (narrow.files.size > 0 || narrow.rules.size > 0) c3.narrow = narrow;
+      idx.at.set(i2, c3);
+      idx.measured.push(i2);
+      if (c3.project) idx.project.push(i2);
+      for (const img of c3.images) pushTo(idx.byImage, img, i2);
+      for (const pass2 of c3.legacy) pushTo(idx.legacy, pass2, i2);
+      for (const pass2 of c3.any) pushTo(idx.anyOf, pass2, i2);
+    }
+    return idx;
+  }
+};
 var UNKNOWN_FINDING_KEY = "\0unknown";
 function producedKeys(holder) {
   const keys = /* @__PURE__ */ new Set();
@@ -49822,9 +49931,8 @@ function producedKeys(holder) {
   return [...keys];
 }
 var StillCarry = class {
-  fold;
-  keys;
-  constructor(names, anyEmpty) {
+  constructor(index, names, anyEmpty) {
+    this.index = index;
     const widest = {
       tools_run: names.map((name) => ({ name, status: "ok", target: "\0any image no scan recorded" })),
       missing_tools: []
@@ -49834,20 +49942,21 @@ var StillCarry = class {
       for (const key of KNOWN_FINDING_KEYS) keys.add(key);
       keys.add(UNKNOWN_FINDING_KEY);
     }
-    this.fold = new ChainScopeFold(widest);
-    this.keys = [...keys];
+    this.classes = [...keys].map((key) => ({ key, cls: index.classOf(widest, key) }));
   }
-  /** How much of the growing chain `check` has looked at for an empty book. */
+  index;
+  classes;
+  /** How much of the chain `check` has looked at for an empty book. */
   seen = 0;
   sawEmpty = false;
-  check(chain) {
-    if (chain.length === 0) return true;
-    for (; this.seen < chain.length && !this.sawEmpty; this.seen += 1) {
-      const book = chain[this.seen];
+  check() {
+    if (this.index.length === 0) return true;
+    for (; this.seen < this.index.length && !this.sawEmpty; this.seen += 1) {
+      const book = this.index.bookAt(this.seen);
       if (book !== void 0 && isEmptyBook(book)) this.sawEmpty = true;
     }
     if (this.sawEmpty) return false;
-    return this.keys.some((key) => this.fold.scope(chain, key).kind !== "never");
+    return this.classes.some(({ key, cls }) => this.index.scopeOfClass(cls, key).kind !== "never");
   }
 };
 function isNarrowGapName(name) {
@@ -50225,30 +50334,20 @@ function slotSources(storage, projectPath, slot) {
 }
 var CARRY_WALK_LIMIT = 5e3;
 function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
-  const chain = [slotView(source, slot)];
+  const index = new ChainIndex();
+  index.push(slotView(source, slot));
   const history = storage.scans.runNamesOfType(projectPath, slot);
-  const stillCarry = new StillCarry(history.names, history.anyEmpty);
-  const folds = /* @__PURE__ */ new Map();
-  const foldFor = (holder) => {
-    const sig = holderSignature(holder);
-    let fold = folds.get(sig);
-    if (fold === void 0) {
-      fold = new ChainScopeFold(holder);
-      folds.set(sig, fold);
-    }
-    return fold;
-  };
+  const stillCarry = new StillCarry(index, history.names, history.anyEmpty);
   const known = new KnownFindings();
   for (const f of sourceRows) if (findingInSlot(source, f, slot) && !isSuppressed(f)) known.add(f);
   const out = [];
-  if (!stillCarry.check(chain)) return out;
+  if (!stillCarry.check()) return out;
   let walked = 0;
-  for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
-      limit: PAGE,
-      offset,
-      beforeScanId: source.scan_id
-    });
+  let before = source.scan_id;
+  while (walked < CARRY_WALK_LIMIT) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE, beforeScanId: before });
+    const last = page[page.length - 1];
+    if (last !== void 0) before = last.scan_id;
     for (const scan2 of page) {
       if (walked >= CARRY_WALK_LIMIT) break;
       if (isScopedScan(scan2)) continue;
@@ -50256,13 +50355,13 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
       if (coverage === null || coverage === "none") continue;
       walked += 1;
       const holder = slotView(scan2, slot);
-      const carried = carriedFrom({ storage, scan: scan2, slot, holder, chain, fold: foldFor(holder), isSuppressed, known });
+      const carried = carriedFrom({ storage, scan: scan2, slot, holder, index, isSuppressed, known });
       if (carried.length > 0) {
         out.push({ slot, scan: scan2, coverage, findings: carried });
         for (const { finding: finding4 } of carried) known.add(finding4);
       }
-      chain.push(holder);
-      if (!stillCarry.check(chain)) return out;
+      index.push(holder);
+      if (!stillCarry.check()) return out;
     }
     if (page.length < PAGE) break;
   }
@@ -50281,12 +50380,12 @@ var KnownFindings = class {
   }
 };
 function carriedFrom(args) {
-  const { storage, scan: scan2, slot, holder, chain, fold, isSuppressed, known } = args;
+  const { storage, scan: scan2, slot, holder, index, isSuppressed, known } = args;
   const scopes = /* @__PURE__ */ new Map();
   const scopeOf = (key) => {
     let scope = scopes.get(key);
     if (scope === void 0) {
-      scope = fold.scope(chain, key);
+      scope = index.scope(holder, key);
       scopes.set(key, scope);
     }
     return scope;
@@ -50300,8 +50399,7 @@ function carriedFrom(args) {
     const scope = scopeOf(key);
     if (scope.kind === "never") continue;
     anyOpen = true;
-    const first = scope.constraints[0];
-    if (first === void 0) {
+    if (scope.admit.all) {
       if (key === UNKNOWN_FINDING_KEY) {
         everything = true;
         break;
@@ -50309,8 +50407,9 @@ function carriedFrom(args) {
       for (const tool48 of toolsOfKey(key)) tools.add(tool48);
       continue;
     }
-    for (const f of first.files) files.add(f);
-    for (const r of first.rules) rules.add(r);
+    const lookup = admitLookup(scope.admit);
+    for (const f of lookup.files) files.add(f);
+    for (const r of lookup.rules) rules.add(r);
   }
   if (!anyOpen) return [];
   const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
@@ -50318,7 +50417,7 @@ function carriedFrom(args) {
     { tools: [...tools], files: [...files], rules: [...rules] },
     (keys) => known.holds(keys)
   );
-  const newest = chain[0];
+  const newest = index.bookAt(0);
   const labels = /* @__PURE__ */ new Map();
   const carried = [];
   for (const finding4 of rows) {

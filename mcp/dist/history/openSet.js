@@ -65,8 +65,8 @@
  *   - a carry makes the set's coverage `partial`, and the carried scan's
  *     bookkeeping speaks only for the gaps it was carried for.
  * Which findings can be carried is decided per key from bookkeeping alone
- * (`runCompare.ts#ChainScopeFold`), so an older scan's rows are read only
- * for a key still open, and the walk is linear in the history it covers.
+ * (`runCompare.ts#ChainIndex`), so an older scan's rows are read only for a
+ * key still open, and the walk is linear in the history it covers.
  *
  * Every lookup is a project- and type-scoped SQL query, paged only past the
  * rows it skips; nothing here searches a fixed window of recent scans.
@@ -74,7 +74,7 @@
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
-import { ChainScopeFold, holderSignature, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
+import { admitLookup, ChainIndex, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
 import { findingKey, toolsOfKey } from './runNames.js';
 import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, slotView, sourceTypesOf, } from './scanRoles.js';
 /** Rows fetched per query while looking past skipped scans. */
@@ -304,10 +304,12 @@ const CARRY_WALK_LIMIT = 5000;
  * Linear in the history it walks, never history x findings x chain (fix
  * round 2: the first version checked every finding against the whole chain
  * of newer scans — 4.2 s for 200 scans x 300 findings with one file partly
- * parsed in every scan, 14 s for 250 x 1000):
- *   - per key, the chain's scope is folded once per scan (`ChainScopeFold`),
- *     stops at the first newer scan that measured the key, and a finding's
- *     fate is read off it (`scopeAdmits`); the per-finding verdict
+ * parsed in every scan, 14 s for 250 x 1000; fix round 3: holders that each
+ * scanned their own image re-folded the whole chain each — 21 s for 2000):
+ *   - per key, the newer scans are indexed once (`ChainIndex`), and a
+ *     holder's scope is read through the scans able to look at its targets —
+ *     one fold per kind of holder, carried on as the chain grows; a
+ *     finding's fate is read off it (`scopeAdmits`); the per-finding verdict
  *     (`openGapFor`) is asked once per (key, file, rule), for the label;
  *   - an older scan's findings are read only for a key that could still be
  *     open, and then only that key's tools, or the files and rules its
@@ -319,34 +321,26 @@ const CARRY_WALK_LIMIT = 5000;
  *     finding every newer one left open (`StillCarry`).
  */
 function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
-    const chain = [slotView(source, slot)];
+    const index = new ChainIndex();
+    index.push(slotView(source, slot));
     const history = storage.scans.runNamesOfType(projectPath, slot);
-    const stillCarry = new StillCarry(history.names, history.anyEmpty);
-    // One incremental fold per kind of holder (`holderSignature`).
-    const folds = new Map();
-    const foldFor = (holder) => {
-        const sig = holderSignature(holder);
-        let fold = folds.get(sig);
-        if (fold === undefined) {
-            fold = new ChainScopeFold(holder);
-            folds.set(sig, fold);
-        }
-        return fold;
-    };
+    const stillCarry = new StillCarry(index, history.names, history.anyEmpty);
     const known = new KnownFindings();
     for (const f of sourceRows)
         if (findingInSlot(source, f, slot) && !isSuppressed(f))
             known.add(f);
     const out = [];
-    if (!stillCarry.check(chain))
+    if (!stillCarry.check())
         return out;
     let walked = 0;
-    for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
-        const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
-            limit: PAGE,
-            offset,
-            beforeScanId: source.scan_id,
-        });
+    // Keyset pages (strictly older than the last scan seen), never OFFSET:
+    // an offset re-reads every row it skips, which is quadratic in the walk.
+    let before = source.scan_id;
+    while (walked < CARRY_WALK_LIMIT) {
+        const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE, beforeScanId: before });
+        const last = page[page.length - 1];
+        if (last !== undefined)
+            before = last.scan_id;
         for (const scan of page) {
             if (walked >= CARRY_WALK_LIMIT)
                 break;
@@ -359,14 +353,14 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
                 continue;
             walked += 1;
             const holder = slotView(scan, slot);
-            const carried = carriedFrom({ storage, scan, slot, holder, chain, fold: foldFor(holder), isSuppressed, known });
+            const carried = carriedFrom({ storage, scan, slot, holder, index, isSuppressed, known });
             if (carried.length > 0) {
                 out.push({ slot, scan, coverage, findings: carried });
                 for (const { finding } of carried)
                     known.add(finding);
             }
-            chain.push(holder);
-            if (!stillCarry.check(chain))
+            index.push(holder);
+            if (!stillCarry.check())
                 return out;
         }
         if (page.length < PAGE)
@@ -396,22 +390,22 @@ class KnownFindings {
             : this.bare.has(keys.fingerprint);
     }
 }
-/** The findings of `scan` (bookkeeping `holder`) that every scan of `chain` left open. */
+/** The findings of `scan` (bookkeeping `holder`) that every scan of the chain `index` holds left open. */
 function carriedFrom(args) {
-    const { storage, scan, slot, holder, chain, fold, isSuppressed, known } = args;
+    const { storage, scan, slot, holder, index, isSuppressed, known } = args;
     const scopes = new Map();
     const scopeOf = (key) => {
         let scope = scopes.get(key);
         if (scope === undefined) {
-            scope = fold.scope(chain, key);
+            scope = index.scope(holder, key);
             scopes.set(key, scope);
         }
         return scope;
     };
     // What to read: nothing, when no key could stay open; a key open key-wide,
     // by the tools whose findings carry it (`toolsOfKey`) — every row only for
-    // a key no tool name stands for; else only the files and rules the first
-    // constraint of each open key names (every admitted finding is inside it).
+    // a key no tool name stands for; else only the files and rules its scope
+    // names (`admitLookup`: every admitted finding is in one of them).
     // Reading every row of every older scan whenever one key stayed open took
     // 2.4 s for 250 scans x 1000 findings under a Semgrep that kept failing
     // beside an ok Bandit (fix round 2).
@@ -425,8 +419,7 @@ function carriedFrom(args) {
         if (scope.kind === 'never')
             continue;
         anyOpen = true;
-        const first = scope.constraints[0];
-        if (first === undefined) {
+        if (scope.admit.all) {
             if (key === UNKNOWN_FINDING_KEY) {
                 everything = true;
                 break;
@@ -435,9 +428,10 @@ function carriedFrom(args) {
                 tools.add(tool);
             continue;
         }
-        for (const f of first.files)
+        const lookup = admitLookup(scope.admit);
+        for (const f of lookup.files)
             files.add(f);
-        for (const r of first.rules)
+        for (const r of lookup.rules)
             rules.add(r);
     }
     if (!anyOpen)
@@ -445,7 +439,7 @@ function carriedFrom(args) {
     const rows = everything
         ? storage.findings.listByScan(scan.scan_id).filter((f) => !known.holds(f))
         : storage.findings.listByScanMatching(scan.scan_id, { tools: [...tools], files: [...files], rules: [...rules] }, (keys) => known.holds(keys));
-    const newest = chain[0];
+    const newest = index.bookAt(0);
     const labels = new Map();
     const carried = [];
     for (const finding of rows) {

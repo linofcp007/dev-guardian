@@ -429,3 +429,64 @@ describe('open set, round 2: the carry stays cheap', () => {
     });
   });
 });
+
+/**
+ * Fix round 3 (I-1): every scan over its own image made every holder a new
+ * kind of holder, and the fold re-read the whole chain for each — 2000 scans
+ * took 21 s (review measurement). The chain is now indexed once per key and
+ * a holder's scope read through the scans that looked at its image.
+ */
+describe('open set, round 3: scans each over their own image stay linear', () => {
+  const BUDGET_MS = 2000;
+  const CVES = 20;
+  const cves = (scan: number): SeedFinding[] =>
+    Array.from({ length: CVES }, (_, i) => ({
+      fp: `${scan}-${i}`.padEnd(64, 'i'),
+      identity: `id-cve-${i}`,
+      tool: 'trivy',
+      rule_id: `CVE-2099-${i}`,
+      subcategory: 'cve',
+      file: `reg/app:${scan} (alpine 3.19)`,
+    }));
+  const timed = (s: ReturnType<typeof freshPlugin>, p: string) => {
+    const t0 = performance.now();
+    const set = openSetForProject(s.storage, p);
+    return { set, ms: performance.now() - t0 };
+  };
+
+  it('2000 scans, each image its own, the same 20 CVEs: 20 findings, from the newest scan, within budget', () => {
+    const s = freshPlugin();
+    const p = projectDir('carry-r3-images-');
+    for (let n = 0; n < 2000; n++) {
+      seedScan(s, {
+        id: `img${String(n).padStart(4, '0')}`, type: 'containers', project: p,
+        tools_run: [{ name: 'trivy-image', status: 'ok', target: `reg/app:${n}` }],
+        findings: cves(n),
+      });
+    }
+    const { set, ms } = timed(s, p);
+    expect(set.findings).toHaveLength(CVES);
+    expect(set.findings.every((f) => f.scan_id === 'img1999' && f.not_remeasured === undefined)).toBe(true);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('older half each over its own image, newest half Dockerfile-only (2000 scans): the newest image scan\'s CVEs carried, within budget', () => {
+    const s = freshPlugin();
+    const p = projectDir('carry-r3-mixed-');
+    for (let n = 0; n < 2000; n++) {
+      const image = n < 1000;
+      seedScan(s, {
+        id: `mix${String(n).padStart(4, '0')}`, type: 'containers', project: p,
+        tools_run: image
+          ? [{ name: 'trivy-image', status: 'ok', target: `reg/app:${n}` }]
+          : [{ name: 'trivy-dockerfile', status: 'ok' }],
+        findings: image ? cves(n) : [],
+      });
+    }
+    const { set, ms } = timed(s, p);
+    expect(set.findings).toHaveLength(CVES);
+    expect(set.findings.every((f) => f.scan_id === 'mix0999' && f.not_remeasured === true)).toBe(true);
+    expect(set.sources.find((x) => x.scan_id === 'mix0999')?.carried_for).toEqual(['trivy-image (reg/app:999)']);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+});

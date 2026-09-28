@@ -305,124 +305,260 @@ export function openGapFor(holder, asked, f) {
         return answer.notRun;
     return onRequestPassOf(holder, findingKey(f));
 }
-const NEVER = { kind: 'never' };
-const ALWAYS = { kind: 'always' };
-export function keyScope(holder, asked, key) {
-    if (isEmptyBook(asked))
-        return NEVER;
-    const verdict = keyVerdict(asked, key);
-    if (verdict === 'unmeasured')
-        return ALWAYS;
-    if (verdict === 'not_run')
-        return onRequestPassOf(holder, key) !== null ? ALWAYS : NEVER;
-    if (targetNotRunForKey(holder, asked, key) !== null)
-        return ALWAYS;
-    const narrow = narrowGapsOf(asked, key);
-    return narrow.files.size === 0 && narrow.rules.size === 0
-        ? NEVER
-        : { kind: 'some', files: narrow.files, rules: narrow.rules };
-}
-export function chainScope(holder, chain, key) {
-    return new ChainScopeFold(holder).scope(chain, key);
-}
-function meet(into, next) {
-    if (into === undefined)
-        return new Set(next);
-    for (const x of into)
-        if (!next.has(x))
-            into.delete(x);
-    return into;
-}
-/**
- * {@link chainScope} folded incrementally, for a chain that only ever grows
- * at its end (the open set's walk back through history): each key folds each
- * newer scan once, and stays `never` once one closed it. One fold serves
- * every holder with the same {@link holderSignature} — the only part of a
- * holder `keyScope` reads — so a walk over N scans costs N folds per key,
- * never N².
- *
- * The conjunction is kept small: files-only constraints (partly parsed
- * files) fold into their intersection, rules-only ones (rules that did not
- * load) into theirs, so "a.php partly parsed in every scan" stays one
- * constraint however long the chain; and an empty intersection is `never` —
- * no finding is in a file each of two scans only partly parsed when they
- * name different files — which stops the walk there instead of carrying an
- * ever-longer list nothing satisfies. `scopeAdmits` gives the same answer
- * for the folded form as for the list it replaces (the carry-predicate
- * property test holds both against `openGapFor`).
- */
-export class ChainScopeFold {
-    holder;
-    perKey = new Map();
-    constructor(holder) {
-        this.holder = holder;
-    }
-    scope(chain, key) {
-        let state = this.perKey.get(key);
-        if (state === undefined) {
-            state = { len: 0, never: false, mixed: [], mixedSigs: new Set(), fileMeet: undefined, ruleMeet: undefined, snapshot: null };
-            this.perKey.set(key, state);
+const ADMIT_ALL = { all: true };
+const NEVER_SCOPE = { kind: 'never' };
+function meetAdmit(s, c) {
+    if (s.all)
+        return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+    const files = new Set([...s.files].filter((f) => c.files.has(f)));
+    const rules = new Set([...s.rules].filter((r) => c.rules.has(r)));
+    const pairs = new Map();
+    const add = (f, r) => {
+        if (files.has(f) || rules.has(r))
+            return;
+        let set = pairs.get(f);
+        if (set === undefined) {
+            set = new Set();
+            pairs.set(f, set);
         }
-        for (; state.len < chain.length && !state.never; state.len += 1) {
-            const asked = chain[state.len];
-            if (asked === undefined)
-                break;
-            const scope = keyScope(this.holder, asked, key);
-            if (scope.kind === 'always')
-                continue;
-            state.snapshot = null;
-            if (scope.kind === 'never') {
-                state.never = true;
-                break;
-            }
-            if (scope.rules.size === 0) {
-                state.fileMeet = meet(state.fileMeet, scope.files);
-            }
-            else if (scope.files.size === 0) {
-                state.ruleMeet = meet(state.ruleMeet, scope.rules);
-            }
-            else {
-                const sig = JSON.stringify([[...scope.files].sort(), [...scope.rules].sort()]);
-                if (!state.mixedSigs.has(sig)) {
-                    state.mixedSigs.add(sig);
-                    state.mixed.push({ files: scope.files, rules: scope.rules });
-                }
-            }
-            // A finding has one file and one rule: an empty meet admits none.
-            if (state.fileMeet?.size === 0 || state.ruleMeet?.size === 0)
-                state.never = true;
-        }
-        if (state.snapshot === null) {
-            const none = new Set();
-            state.snapshot = state.never
-                ? { kind: 'never' }
-                : {
-                    kind: 'open',
-                    constraints: [
-                        ...(state.fileMeet !== undefined ? [{ files: new Set(state.fileMeet), rules: none }] : []),
-                        ...(state.ruleMeet !== undefined ? [{ files: none, rules: new Set(state.ruleMeet) }] : []),
-                        ...state.mixed,
-                    ],
-                };
-        }
-        return state.snapshot;
-    }
+        set.add(r);
+    };
+    for (const [f, rs] of s.pairs)
+        for (const r of rs)
+            if (c.files.has(f) || c.rules.has(r))
+                add(f, r);
+    for (const f of s.files)
+        if (!c.files.has(f))
+            for (const r of c.rules)
+                add(f, r);
+    for (const r of s.rules)
+        if (!c.rules.has(r))
+            for (const f of c.files)
+                add(f, r);
+    return { all: false, files, rules, pairs };
 }
-/**
- * What `keyScope` reads of a holder: its ok runs, by name and target. Two
- * holders with the same signature get the same scope from any chain.
- */
-export function holderSignature(holder) {
-    return JSON.stringify(holder.tools_run
-        .filter((r) => r.status === 'ok')
-        .map((r) => [r.name, targetOf(r).ref ?? ''])
-        .sort((a, b) => (a.join('\0') < b.join('\0') ? -1 : 1)));
+function admitsNothing(s) {
+    return !s.all && s.files.size === 0 && s.rules.size === 0 && s.pairs.size === 0;
 }
 /** Whether a finding in `file` of `rule` is inside `scope`. */
 export function scopeAdmits(scope, file, rule) {
     if (scope.kind === 'never')
         return false;
-    return scope.constraints.every((c) => (file !== undefined && c.files.has(file)) || (rule !== undefined && c.rules.has(rule)));
+    const a = scope.admit;
+    if (a.all)
+        return true;
+    if (file !== undefined && a.files.has(file))
+        return true;
+    if (rule !== undefined && a.rules.has(rule))
+        return true;
+    return file !== undefined && rule !== undefined && (a.pairs.get(file)?.has(rule) ?? false);
+}
+/** The files and rules a finding admitted by `admit` can have — what the carry reads rows by. */
+export function admitLookup(admit) {
+    const files = new Set(admit.files);
+    const rules = new Set(admit.rules);
+    for (const [f, rs] of admit.pairs) {
+        files.add(f);
+        for (const r of rs)
+            rules.add(r);
+    }
+    return { files: [...files], rules: [...rules] };
+}
+const NO_INDEXES = [];
+function pushTo(map, key, i) {
+    const list = map.get(key);
+    if (list === undefined)
+        map.set(key, [i]);
+    else
+        list.push(i);
+}
+function coversTarget(c, t) {
+    if (t.pass === PROJECT_FILES)
+        return c.project;
+    if (t.ref === undefined)
+        return c.any.has(t.pass);
+    return c.legacy.has(t.pass) || c.images.has(`${t.pass}\0${t.ref}`);
+}
+/**
+ * The chain of newer scans the open set's carry-forward walks back past,
+ * indexed per key so that a holder's scope is read in time linear in the
+ * scans that could change it — never by re-folding the whole chain per
+ * holder, which was quadratic whenever holders differed (fix round 3, I-1:
+ * 2000 image scans each over its own image, 21 s).
+ *
+ * For one key a holder is its {@link HolderClass}; two holders of one class
+ * get one scope, folded once and carried on as the chain grows. A scope is
+ * `never` once the chain holds a scan with no bookkeeping, a `not_run` (for
+ * a holder without an on-request pass), or a `measured` scan that looked at
+ * every one of the holder's targets and has no narrower gap; else it is the
+ * {@link Admit} of the narrower gaps of the `measured` scans that did look
+ * at them all. Those scans are found through the class's rarest target —
+ * the scans that looked at its image, else its image pass, else the
+ * project's files — so a holder whose image no newer scan looked at costs
+ * nothing, however long the chain. The carry-predicate property test holds
+ * {@link scopeAdmits} over this equal to {@link openGapFor} against every
+ * scan of the chain, for one holder and for a growing chain shared by many.
+ */
+export class ChainIndex {
+    chain = [];
+    byKey = new Map();
+    push(book) {
+        this.chain.push(book);
+    }
+    get length() {
+        return this.chain.length;
+    }
+    /** The chain's `i`-th scan, newest first. */
+    bookAt(i) {
+        return this.chain[i];
+    }
+    /** `holder` for one key, as {@link scopeOfClass} takes it. */
+    classOf(holder, key) {
+        const onRequest = onRequestPassOf(holder, key) !== null;
+        const seen = new Map();
+        for (const run of holder.tools_run) {
+            if (!measuresKeyOk(run, key))
+                continue;
+            const t = targetOf(run);
+            seen.set(`${t.pass}\0${t.ref ?? ''}\0${t.ref === undefined ? 'legacy' : 'ref'}`, t);
+        }
+        const targets = [...seen.values()];
+        const signature = JSON.stringify([onRequest, [...seen.keys()].sort()]);
+        return { signature, onRequest, targets };
+    }
+    /** {@link ChainScope} of `holder`'s findings under `key`, over the chain as it is now. */
+    scope(holder, key) {
+        return this.scopeOfClass(this.classOf(holder, key), key);
+    }
+    scopeOfClass(cls, key) {
+        const idx = this.indexed(key);
+        const L = this.chain.length;
+        if (idx.firstEmpty < L || (!cls.onRequest && idx.firstNotRun < L))
+            return NEVER_SCOPE;
+        let state = idx.classes.get(cls.signature);
+        if (state === undefined) {
+            state = { admit: ADMIT_ALL, closed: false, a: 0, b: 0, snapshot: null };
+            idx.classes.set(cls.signature, state);
+        }
+        this.advance(idx, cls, state, L);
+        if (state.closed)
+            return NEVER_SCOPE;
+        if (state.snapshot === null)
+            state.snapshot = { kind: 'open', admit: state.admit };
+        return state.snapshot;
+    }
+    /** The class's driver: one or two ascending lists that hold every scan able to look at all its targets. */
+    driverOf(idx, cls) {
+        const image = cls.targets.find((t) => t.pass !== PROJECT_FILES && t.ref !== undefined);
+        if (image !== undefined) {
+            return [idx.byImage.get(`${image.pass}\0${image.ref ?? ''}`) ?? NO_INDEXES, idx.legacy.get(image.pass) ?? NO_INDEXES];
+        }
+        const legacyImage = cls.targets.find((t) => t.pass !== PROJECT_FILES);
+        if (legacyImage !== undefined)
+            return [idx.anyOf.get(legacyImage.pass) ?? NO_INDEXES, NO_INDEXES];
+        if (cls.targets.length > 0)
+            return [idx.project, NO_INDEXES];
+        return [idx.measured, NO_INDEXES];
+    }
+    advance(idx, cls, state, L) {
+        while (!state.closed) {
+            const [listA, listB] = this.driverOf(idx, cls);
+            const ia = listA[state.a];
+            const ib = listB[state.b];
+            const na = ia !== undefined && ia < L ? ia : undefined;
+            const nb = ib !== undefined && ib < L ? ib : undefined;
+            if (na === undefined && nb === undefined)
+                return;
+            const i = na === undefined ? (nb ?? 0) : nb === undefined ? na : Math.min(na, nb);
+            if (na === i)
+                state.a += 1;
+            if (nb === i)
+                state.b += 1;
+            const c = idx.at.get(i);
+            if (c === undefined || !cls.targets.every((t) => coversTarget(c, t)))
+                continue;
+            state.snapshot = null;
+            if (c.narrow === null) {
+                state.closed = true;
+                return;
+            }
+            state.admit = meetAdmit(state.admit, c.narrow);
+            if (admitsNothing(state.admit))
+                state.closed = true;
+        }
+    }
+    /** The key's index, caught up with the chain. */
+    indexed(key) {
+        let idx = this.byKey.get(key);
+        if (idx === undefined) {
+            idx = {
+                len: 0,
+                firstEmpty: Infinity,
+                firstNotRun: Infinity,
+                at: new Map(),
+                measured: [],
+                project: [],
+                byImage: new Map(),
+                legacy: new Map(),
+                anyOf: new Map(),
+                classes: new Map(),
+            };
+            this.byKey.set(key, idx);
+        }
+        for (; idx.len < this.chain.length; idx.len += 1) {
+            const i = idx.len;
+            const asked = this.chain[i];
+            if (asked === undefined)
+                break;
+            if (isEmptyBook(asked)) {
+                idx.firstEmpty = Math.min(idx.firstEmpty, i);
+                continue;
+            }
+            const verdict = keyVerdict(asked, key);
+            if (verdict === 'unmeasured')
+                continue;
+            if (verdict === 'not_run') {
+                idx.firstNotRun = Math.min(idx.firstNotRun, i);
+                continue;
+            }
+            const c = { project: false, images: new Set(), legacy: new Set(), any: new Set(), narrow: null };
+            for (const run of asked.tools_run) {
+                if (!measuresKeyOk(run, key))
+                    continue;
+                const t = targetOf(run);
+                if (t.pass === PROJECT_FILES) {
+                    c.project = true;
+                    continue;
+                }
+                c.any.add(t.pass);
+                if (t.ref === undefined)
+                    c.legacy.add(t.pass);
+                else
+                    c.images.add(`${t.pass}\0${t.ref}`);
+            }
+            const narrow = narrowGapsOf(asked, key);
+            if (narrow.files.size > 0 || narrow.rules.size > 0)
+                c.narrow = narrow;
+            idx.at.set(i, c);
+            idx.measured.push(i);
+            if (c.project)
+                idx.project.push(i);
+            for (const img of c.images)
+                pushTo(idx.byImage, img, i);
+            for (const pass of c.legacy)
+                pushTo(idx.legacy, pass, i);
+            for (const pass of c.any)
+                pushTo(idx.anyOf, pass, i);
+        }
+        return idx;
+    }
+}
+/** {@link ChainIndex} over a fixed chain, for one holder and key. */
+export function chainScope(holder, chain, key) {
+    const index = new ChainIndex();
+    for (const book of chain)
+        index.push(book);
+    return index.scope(holder, key);
 }
 /** A key no bookkeeping name measures — a finding tool the table does not know. */
 export const UNKNOWN_FINDING_KEY = '\0unknown';
@@ -452,19 +588,22 @@ export function producedKeys(holder) {
     return [...keys];
 }
 /**
- * Whether any scan OLDER than a growing `chain` could still have a finding
- * every scan of it leaves open, whatever that scan ran: {@link chainScope}
- * for the widest holder the slot's history allows — every pass name the
- * slot's scans ever recorded (`names`), each ok, each over a target no scan
- * recorded — over every key it could produce, folded incrementally. When
- * even that holder has nothing left open the carry-forward walk stops.
- * `anyEmpty`: some scan of the slot has no bookkeeping, and could have
- * produced anything.
+ * Whether any scan OLDER than the chain could still have a finding every
+ * scan of it leaves open, whatever that scan ran: {@link ChainIndex}'s
+ * scope for the widest holder the slot's history allows — every pass name
+ * the slot's scans ever recorded (`names`), each ok, each over a target no
+ * scan recorded — over every key it could produce. When even that holder
+ * has nothing left open the carry-forward walk stops. `anyEmpty`: some scan
+ * of the slot has no bookkeeping, and could have produced anything.
  */
 export class StillCarry {
-    fold;
-    keys;
-    constructor(names, anyEmpty) {
+    index;
+    classes;
+    /** How much of the chain `check` has looked at for an empty book. */
+    seen = 0;
+    sawEmpty = false;
+    constructor(index, names, anyEmpty) {
+        this.index = index;
         const widest = {
             tools_run: names.map((name) => ({ name, status: 'ok', target: '\0any image no scan recorded' })),
             missing_tools: [],
@@ -475,24 +614,20 @@ export class StillCarry {
                 keys.add(key);
             keys.add(UNKNOWN_FINDING_KEY);
         }
-        this.fold = new ChainScopeFold(widest);
-        this.keys = [...keys];
+        this.classes = [...keys].map((key) => ({ key, cls: index.classOf(widest, key) }));
     }
-    /** How much of the growing chain `check` has looked at for an empty book. */
-    seen = 0;
-    sawEmpty = false;
-    check(chain) {
-        if (chain.length === 0)
+    check() {
+        if (this.index.length === 0)
             return true;
         // A scan with no bookkeeping measured everything: nothing older is carried past it.
-        for (; this.seen < chain.length && !this.sawEmpty; this.seen += 1) {
-            const book = chain[this.seen];
+        for (; this.seen < this.index.length && !this.sawEmpty; this.seen += 1) {
+            const book = this.index.bookAt(this.seen);
             if (book !== undefined && isEmptyBook(book))
                 this.sawEmpty = true;
         }
         if (this.sawEmpty)
             return false;
-        return this.keys.some((key) => this.fold.scope(chain, key).kind !== 'never');
+        return this.classes.some(({ key, cls }) => this.index.scopeOfClass(cls, key).kind !== 'never');
     }
 }
 /** Whether a gap name is a narrower gap inside a run that measured ({@link narrowGapNames}). */
