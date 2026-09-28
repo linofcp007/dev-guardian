@@ -597,7 +597,7 @@ export function splitShell(command: string): ShellSplit {
    * `)` that closed a word — or after a closing backtick — a `#` continues the
    * word and is no comment: `echo $(date)#x; rm -rf /` runs `rm` (fix round 5).
    */
-  const parens: Array<'word' | 'group'> = [];
+  const parens: Array<'word' | 'group' | 'case'> = [];
   let closedWord = false;
   let inBacktick = false;
   /**
@@ -619,6 +619,12 @@ export function splitShell(command: string): ShellSplit {
     // it. Kept, it read as a command called `do`, and every loop, `if` and
     // brace-group body went unassessed (final review I13).
     const reserved = hasWord && !bufQuoted && words.length === 0 && COMPOUND_RESERVED.has(buf);
+    // `case … esac` patterns end in a bare `)`: inside `$(…)` they must not
+    // close the substitution (fix round 6).
+    if (hasWord && !bufQuoted && words.length === 0) {
+      if (buf === 'case') parens.push('case');
+      else if (buf === 'esac' && parens[parens.length - 1] === 'case') parens.pop();
+    }
     // A `{` also opens a body after a function header (`function f { … }`) and
     // after the `time` runner (`time { … }`, `time -p { … }`). The header is not
     // a command, so it goes with the brace; `time` stays, a runner the command
@@ -762,7 +768,12 @@ export function splitShell(command: string): ShellSplit {
     // its own command, so the boundary is a statement boundary.
     if (ch === '(' || ch === ')' || ch === '`') {
       if (ch === '(') parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? 'word' : 'group');
-      else if (ch === ')') closedWord = parens.pop() === 'word';
+      // A `case` pattern's `)` has no `(` of its own (fix round 6); an `esac`
+      // right before this `)` has closed its `case` already.
+      else if (ch === ')') {
+        if (buf === 'esac' && !bufQuoted && words.length === 0 && parens[parens.length - 1] === 'case') parens.pop();
+        closedWord = parens[parens.length - 1] === 'case' ? false : parens.pop() === 'word';
+      }
       else {
         closedWord = inBacktick;
         inBacktick = !inBacktick;
@@ -989,6 +1000,9 @@ function isCatastrophicTarget(raw: string): boolean {
   return false;
 }
 
+/** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
+const PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
+
 /** `rm`/PowerShell's `Remove-Item` (and its `ri` alias) — dash-style flags. */
 const DASH_DELETE_HEADS = new Set(['rm', 'ri', 'remove-item']);
 /** cmd.exe-style delete commands, also reachable from PowerShell — slash flags. */
@@ -1034,16 +1048,23 @@ function assessRecursiveDelete(words: ShellWord[], start: number): MatchedRule |
     else if (token === '--force') force = true;
     else if (token.startsWith('--')) continue;
     else if (token.startsWith('-') && token.length > 1) {
-      // A PowerShell switch may be given a value: `-Recurse:$true` is on,
-      // `-Recurse:$false` — or `-Recurse: $false`, the value a word on — off.
-      const [flags = '', inline] = token.slice(1).split(':', 2);
-      let value = inline;
-      if (value === '') {
+      // A PowerShell parameter may be given its value after a colon, split at
+      // the FIRST colon only (`-Path:C:\Users` is `C:\Users` — fix round 6).
+      const colon = token.indexOf(':');
+      const flags = colon < 0 ? token.slice(1) : token.slice(1, colon);
+      let value = colon < 0 ? undefined : token.slice(colon + 1);
+      const lower = flags.toLowerCase();
+      const isSwitch = lower === 'recurse' || lower === 'rec' || lower === 'force' || lower === 'fo';
+      // A switch's value may also be the next word (`-Recurse: $false`); any
+      // other parameter's next word stays where it is — `-Path: C:\Users`
+      // names the target (fix round 6).
+      if (value === '' && isSwitch) {
         value = rest[k + 1]?.value ?? '';
         k += 1;
       }
+      if (value !== undefined && value !== '' && PS_PATH_PARAM.test(lower)) targets.push(value);
+      // `-Recurse:$true` is on, `-Recurse:$false` off.
       const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
-      const lower = flags.toLowerCase();
       // PowerShell's whole-word parameter names first — `-Recurse`,
       // `-Force`, and their common abbreviations. Checked before the
       // GNU-cluster heuristic below because that heuristic (does the flag

@@ -1951,6 +1951,21 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     it.each(['<<<x rm -rf /', '{fd}>x rm -rf /'])('the leading redirection %j does not hide the command', (command) => {
       expectBlocked(command, 'rm-rf-root');
     });
+    // Fix round 6: the round-5 re-review.
+    it.each([
+      `Remove-Item -Path: C:${BS}Users -Recurse -Force`,
+      `Remove-Item -LiteralPath: C:${BS}Users -Recurse -Force`,
+      `Remove-Item -Path:C:${BS}Users -Recurse -Force`,
+      `Remove-Item -LP:C:${BS}Users -Recurse -Force`,
+    ])('a path parameter given with a colon still names the target: %j', (command) => {
+      expect(ps(command).level).toBe('block');
+    });
+    it('a case pattern inside $(…) does not close the substitution', () => {
+      expectBlocked('echo $(case x in a) echo hi;; esac)#x; rm -rf /', 'rm-rf-root');
+      expectBlocked('case $1 in a) rm -rf / ;; esac', 'rm-rf-root');
+      expect(assessBashCommand('case $1 in (a) echo hi ;; esac # the user\'s note').level).toBe('ok');
+    });
+
     it('nested PowerShell text read at every level stays inside the budget', () => {
       const t0 = performance.now();
       const nested = `pwsh -c "pwsh -c 'pwsh -c ${'Get-Item x; '.repeat(40_000)}'"`;
