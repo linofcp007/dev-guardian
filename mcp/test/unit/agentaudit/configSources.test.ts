@@ -63,17 +63,17 @@ describe('readConfigSources — real disk I/O', () => {
     });
   });
 
-  it('reports an unreadable path (a directory where a file is expected) as a parse error, not a crash', () => {
+  // A directory where the file should be EXISTS and was not read: refused as
+  // not a regular file (it used to read as "missing" — as if nothing were there).
+  it('refuses a directory where a file is expected: it exists and was not read', () => {
     const dir = makeTempDir('agentaudit-cfg-');
-    // No permission trick (chmod is unreliable for the owner on POSIX and
-    // near-meaningless on Windows, doubly so running as Administrator): a
-    // directory at the expected file path makes readFileSync throw EISDIR
-    // on every platform, which exercises the same catch branch.
     mkdirSync(join(dir, '.mcp.json'));
     expect(() => readConfigSources(dir, false)).not.toThrow();
     const [mcpJson] = readConfigSources(dir, false);
-    expect(mcpJson?.exists).toBe(false);
-    expect(mcpJson?.parseError).toContain('could not read');
+    expect(mcpJson?.exists).toBe(true);
+    expect(mcpJson?.refusal).toBe('not-a-regular-file');
+    expect(mcpJson?.parseError).toContain('not a regular file');
+    expect(mcpJson?.json).toBeUndefined();
   });
 
   it('reports a file over the size cap as a gap rather than reading it', () => {

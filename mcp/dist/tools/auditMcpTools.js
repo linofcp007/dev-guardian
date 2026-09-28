@@ -152,11 +152,24 @@ async function runAudit(ctx, run, callMeta) {
     const reports = [];
     const probed = [];
     const clientVersion = resolveVersion();
+    // A config that exists and was not read may declare any of the names: the
+    // audit did not see it, so it is a failed pass, never "no servers there".
+    for (const u of collected.sourcesUnreadable) {
+        const runName = `${MCP_AUDIT_TOOL_NAME}:${u.source}`;
+        toolsRun.push({ name: runName, status: 'failed', reason: `config not read: ${u.reason}` });
+        missingTools.push(runName);
+    }
+    const unreadableNote = collected.sourcesUnreadable.length === 0
+        ? ''
+        : `; these config sources exist and could not be read: ${collected.sourcesUnreadable
+            .map((u) => `${u.source} (${u.reason})`)
+            .join(', ')}`;
     for (const name of names) {
         const entries = collected.entries.filter((e) => e.name === name);
         if (entries.length === 0) {
             const runName = `${MCP_AUDIT_TOOL_NAME}:${name}`;
             const reason = `not declared in any config source read (${collected.sourcesRead.join(', ') || 'none found'})` +
+                unreadableNote +
                 (includeUserConfig ? '' : '; user-level configs were not read (include_user_config)');
             toolsRun.push({ name: runName, status: 'skipped', reason });
             missingTools.push(runName);
@@ -278,6 +291,7 @@ async function runAudit(ctx, run, callMeta) {
             timeout_ms: timeoutMs,
             servers: reports,
             sources_read: collected.sourcesRead,
+            sources_unreadable: collected.sourcesUnreadable,
         },
     });
     return {
@@ -292,6 +306,7 @@ async function runAudit(ctx, run, callMeta) {
         tools_run: toolsRun,
         missing_tools: missingTools,
         sources_read: collected.sourcesRead,
+        sources_unreadable: collected.sourcesUnreadable,
         warnings,
     };
 }

@@ -22,7 +22,8 @@ import { readConfigSources } from '../agentaudit/configSources.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
-import type { Finding, FindingsCountBySeverity, ToolResult } from '../types.js';
+import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
+import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
@@ -111,17 +112,29 @@ async function handler(
     ctx.storage.findings.bulkInsert(result.findings.map((f) => ({ ...f, scan_id: scanId })));
   }
   ctx.storage.agentAudit.upsertHashes(projectPath, result.entryHashes);
+
+  // A config that exists and was not read (refused by the reader, too large,
+  // not valid JSON) was not audited: one failed pass per such file, in
+  // missing_tools, so the scan's coverage is partial rather than clean.
+  const toolsRun: ToolRun[] = [{ name: 'agent-audit', status: 'ok' }];
+  const missingTools: string[] = [];
+  for (const u of result.sourcesUnreadable) {
+    const unreadName = `agent-audit:${u.source}`;
+    toolsRun.push({ name: unreadName, status: 'failed', reason: u.reason });
+    missingTools.push(unreadName);
+  }
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: 'completed',
-    tools_run: [{ name: 'agent-audit', status: 'ok' }],
-    missing_tools: [],
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     meta: {
       include_user_config: includeUserConfig,
       mcp_servers_found: result.mcpServersFound,
       entries_changed: result.entriesChanged,
       sources_read: result.sourcesRead,
       sources_missing: result.sourcesMissing,
+      sources_unreadable: result.sourcesUnreadable,
     },
   });
 
@@ -137,6 +150,8 @@ async function handler(
     entries_changed_since_previous_audit: result.entriesChanged,
     sources_read: result.sourcesRead,
     sources_missing: result.sourcesMissing,
+    sources_unreadable: result.sourcesUnreadable,
+    coverage: computeCoverage(toolsRun, missingTools),
     warnings: result.warnings,
   };
 }

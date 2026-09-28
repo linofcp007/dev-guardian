@@ -169,6 +169,8 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/depsAudit.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
   'tools/scanIac.ts:spec.name': "runWorkflowScanner's own WorkflowScannerSpec.name — the caller only ever passes the literals 'zizmor' or 'actionlint'",
   'tools/scanIac.ts:run.toolRun.name': "the missing_tools push for a workflow scanner runWorkflowScanner reported missing — copies that same run's own toolRun.name ('zizmor'/'actionlint')",
+  'tools/auditAgentConfig.ts:unreadName':
+    '`agent-audit:<source label>` — a failed pass of the agent-audit base (a config that exists and was not read), which runNameEntry falls back to',
   'tools/auditMcpTools.ts:runName':
     "`${MCP_AUDIT_TOOL_NAME}:<server>` — a pass of the MCP_AUDIT_TOOL_NAME base, which runNameEntry falls back to",
   'tools/auditMcpTools.ts:name':

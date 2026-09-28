@@ -51,8 +51,8 @@ function expandNestedProjectSources(source) {
 /**
  * Every MCP server entry the read sources declare — shared by
  * `audit_agent_config` (static checks) and `audit_mcp_tools` (which starts
- * only the entries the caller names). A source that could not be parsed is a
- * warning, and so is an `mcpServers` given as a path to another file (a
+ * only the entries the caller names). A source that exists and could not be
+ * read or parsed is a named warning and an entry of `sourcesUnreadable`, and so is an `mcpServers` given as a path to another file (a
  * plugin's `plugin.json` may do that): nothing here follows it, and saying
  * nothing would read as "no servers there".
  */
@@ -60,10 +60,12 @@ export function collectMcpEntries(sources) {
     const warnings = [];
     const sourcesRead = [];
     const sourcesMissing = [];
+    const sourcesUnreadable = [];
     const allSources = [];
     for (const source of sources) {
         if (source.parseError !== undefined) {
             warnings.push(`${source.label}: ${source.parseError}`);
+            sourcesUnreadable.push({ source: source.label, reason: source.parseError });
             continue;
         }
         if (!source.exists) {
@@ -82,7 +84,7 @@ export function collectMcpEntries(sources) {
     const entries = [];
     for (const source of allSources)
         entries.push(...extractMcpServers(source));
-    return { sources: allSources, entries, warnings, sourcesRead, sourcesMissing };
+    return { sources: allSources, entries, warnings, sourcesRead, sourcesMissing, sourcesUnreadable };
 }
 /** The `mcpServers` value when it is a string (a path to another file), else null. */
 function mcpServersPath(source) {
@@ -96,7 +98,7 @@ function mcpServersPath(source) {
 }
 export function analyzeAgentConfig(sources, previousHashes) {
     const collected = collectMcpEntries(sources);
-    const { warnings, sourcesRead, sourcesMissing, entries } = collected;
+    const { warnings, sourcesRead, sourcesMissing, sourcesUnreadable, entries } = collected;
     const findings = [];
     for (const source of collected.sources) {
         findings.push(...checkWildcardPermissions(source));
@@ -138,6 +140,7 @@ export function analyzeAgentConfig(sources, previousHashes) {
         entriesChanged,
         sourcesRead,
         sourcesMissing,
+        sourcesUnreadable,
     };
 }
 //# sourceMappingURL=analyze.js.map

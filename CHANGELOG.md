@@ -28,6 +28,15 @@ version bump.
   with `allow_remote`, and kills the process tree after. Scan type `mcp_tool_audit`.
 - Migration `012`: `mcp_tool_pins` and `mcp_server_pins`.
 
+### Fixed
+
+- `audit_agent_config` (and `audit_mcp_tools`) read MCP configs with `existsSync` + `readFileSync`: a
+  FIFO or a `/dev/zero` link at a config path hung the tool, and a Windows link to an unreachable UNC
+  share hung it past 45 s. Configs are now read through the hooks' hardened reader
+  (`hooks/configFile.ts`). A config that exists and was not read — refused, too large, or not valid
+  JSON — is listed in `sources_unreadable`, is a failed `tools_run` pass, and lowers `coverage`
+  (new in `audit_agent_config`'s response); a directory at a config path used to read as missing.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

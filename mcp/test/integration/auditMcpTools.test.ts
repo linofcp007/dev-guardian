@@ -326,6 +326,31 @@ describe('audit_mcp_tools: servers that do not answer', () => {
     expect(scan?.status).toBe('failed');
   });
 
+  it('fails a config source that exists and could not be read, and names it where a server was not found', async () => {
+    const dir = makeTempDir('mcp-audit-');
+    mkdirSync(join(dir, '.mcp.json')); // exists, not a regular file
+    mkdirSync(join(dir, '.cursor'));
+    writeFileSync(join(dir, 'd.txt'), 'Look up a word.', 'utf8');
+    writeFileSync(
+      join(dir, '.cursor', 'mcp.json'),
+      JSON.stringify({ mcpServers: { mutable: stdio('mutable', { env: { DESC_FILE: join(dir, 'd.txt') } }) } }),
+      'utf8',
+    );
+    const r = (await audit(makePlugin(), { project_path: dir, servers: ['mutable', 'elsewhere'] })) as AuditResult & {
+      sources_unreadable: Array<{ source: string; reason: string }>;
+    };
+    expect(r.servers.find((s) => s.name === 'mutable')?.status).toBe('ok');
+    expect(r.tools_run).toContainEqual(
+      expect.objectContaining({ name: 'mcp-tool-audit:.mcp.json', status: 'failed', reason: expect.stringContaining('not a regular file') }),
+    );
+    expect(r.missing_tools).toContain('mcp-tool-audit:.mcp.json');
+    expect(r.sources_unreadable).toEqual([{ source: '.mcp.json', reason: expect.stringContaining('not a regular file') }]);
+    expect(r.coverage).toBe('partial');
+    const elsewhere = r.servers.find((s) => s.name === 'elsewhere');
+    expect(elsewhere?.status).toBe('skipped');
+    expect(elsewhere?.reason).toContain('could not be read: .mcp.json');
+  });
+
   it('skips a name no config declares — never a clean pass', async () => {
     const dir = makeTempDir('mcp-audit-');
     writeMcpJson(dir, {});

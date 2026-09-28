@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative25, options, skipNormalization) {
+    function resolveComponent(base, relative26, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse8(serialize2(base, options), options);
-        relative25 = parse8(serialize2(relative25, options), options);
+        relative26 = parse8(serialize2(relative26, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative25.scheme) {
-        target.scheme = relative25.scheme;
-        target.userinfo = relative25.userinfo;
-        target.host = relative25.host;
-        target.port = relative25.port;
-        target.path = removeDotSegments(relative25.path || "");
-        target.query = relative25.query;
+      if (!options.tolerant && relative26.scheme) {
+        target.scheme = relative26.scheme;
+        target.userinfo = relative26.userinfo;
+        target.host = relative26.host;
+        target.port = relative26.port;
+        target.path = removeDotSegments(relative26.path || "");
+        target.query = relative26.query;
       } else {
-        if (relative25.userinfo !== void 0 || relative25.host !== void 0 || relative25.port !== void 0) {
-          target.userinfo = relative25.userinfo;
-          target.host = relative25.host;
-          target.port = relative25.port;
-          target.path = removeDotSegments(relative25.path || "");
-          target.query = relative25.query;
+        if (relative26.userinfo !== void 0 || relative26.host !== void 0 || relative26.port !== void 0) {
+          target.userinfo = relative26.userinfo;
+          target.host = relative26.host;
+          target.port = relative26.port;
+          target.path = removeDotSegments(relative26.path || "");
+          target.query = relative26.query;
         } else {
-          if (!relative25.path) {
+          if (!relative26.path) {
             target.path = base.path;
-            if (relative25.query !== void 0) {
-              target.query = relative25.query;
+            if (relative26.query !== void 0) {
+              target.query = relative26.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative25.path[0] === "/") {
-              target.path = removeDotSegments(relative25.path);
+            if (relative26.path[0] === "/") {
+              target.path = removeDotSegments(relative26.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative25.path;
+                target.path = "/" + relative26.path;
               } else if (!base.path) {
-                target.path = relative25.path;
+                target.path = relative26.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative25.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative26.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative25.query;
+            target.query = relative26.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative25.fragment;
+      target.fragment = relative26.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -44246,7 +44246,7 @@ var MAX_ERROR_TEXT = 300;
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
   const { raw, exitCode, outcome, targets, projectPath } = args;
-  const relative25 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
+  const relative26 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
   if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
     return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
@@ -44275,7 +44275,7 @@ function checkSemgrepReport(args) {
   if (exitClean && scanned > 0 && errors.length > 0) {
     const partial3 = perFileErrors(errorEntries);
     if (partial3 !== null) {
-      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: relative25(partial3) };
+      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: relative26(partial3) };
     }
   }
   const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
@@ -44288,7 +44288,7 @@ function checkSemgrepReport(args) {
       return {
         ...someRan,
         rules_not_loaded: ruleGap.rules,
-        ...ruleGap.files.length > 0 ? { partial: relative25(ruleGap.files) } : {}
+        ...ruleGap.files.length > 0 ? { partial: relative26(ruleGap.files) } : {}
       };
     }
   }
@@ -70233,10 +70233,12 @@ function collectMcpEntries(sources) {
   const warnings = [];
   const sourcesRead = [];
   const sourcesMissing = [];
+  const sourcesUnreadable = [];
   const allSources = [];
   for (const source of sources) {
     if (source.parseError !== void 0) {
       warnings.push(`${source.label}: ${source.parseError}`);
+      sourcesUnreadable.push({ source: source.label, reason: source.parseError });
       continue;
     }
     if (!source.exists) {
@@ -70255,7 +70257,7 @@ function collectMcpEntries(sources) {
   }
   const entries2 = [];
   for (const source of allSources) entries2.push(...extractMcpServers(source));
-  return { sources: allSources, entries: entries2, warnings, sourcesRead, sourcesMissing };
+  return { sources: allSources, entries: entries2, warnings, sourcesRead, sourcesMissing, sourcesUnreadable };
 }
 function mcpServersPath(source) {
   if (source.mcpServersField === null) return null;
@@ -70266,7 +70268,7 @@ function mcpServersPath(source) {
 }
 function analyzeAgentConfig(sources, previousHashes) {
   const collected = collectMcpEntries(sources);
-  const { warnings, sourcesRead, sourcesMissing, entries: entries2 } = collected;
+  const { warnings, sourcesRead, sourcesMissing, sourcesUnreadable, entries: entries2 } = collected;
   const findings = [];
   for (const source of collected.sources) {
     findings.push(...checkWildcardPermissions(source));
@@ -70308,28 +70310,118 @@ function analyzeAgentConfig(sources, previousHashes) {
     entryHashes,
     entriesChanged,
     sourcesRead,
-    sourcesMissing
+    sourcesMissing,
+    sourcesUnreadable
   };
 }
 
 // src/agentaudit/configSources.ts
-import { existsSync as existsSync53, readFileSync as readFileSync40, statSync as statSync20 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join74 } from "node:path";
+import { dirname as dirname20, isAbsolute as isAbsolute14, join as join75, relative as relative24 } from "node:path";
+
+// src/hooks/configFile.ts
+import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync7, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
+import { isAbsolute as isAbsolute13, join as join73, parse as parse5, relative as relative23, resolve as resolve18 } from "node:path";
+var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
+var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
+var MAX_LINK_HOPS = 32;
+function isRemoteOrDeviceTarget(target) {
+  return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
+}
+function walkLinksUnder(under, path8) {
+  const rel2 = relative23(resolve18(under), resolve18(path8));
+  if (rel2 === "" || rel2.startsWith("..") || isAbsolute13(rel2)) return { ok: true };
+  let current = resolve18(under);
+  const queue = rel2.split(/[\\/]+/).filter((p) => p.length > 0);
+  let hops = 0;
+  for (let part = queue.shift(); part !== void 0; part = queue.shift()) {
+    if (part === ".") continue;
+    if (part === "..") {
+      current = resolve18(current, "..");
+      continue;
+    }
+    const next = join73(current, part);
+    let isLink;
+    try {
+      isLink = lstatSync7(next).isSymbolicLink();
+    } catch {
+      return { ok: true };
+    }
+    if (!isLink) {
+      current = next;
+      continue;
+    }
+    hops += 1;
+    if (hops > MAX_LINK_HOPS) return { ok: false, reason: "unreadable", at: next };
+    let target;
+    try {
+      target = readlinkSync2(next);
+    } catch {
+      return { ok: false, reason: "unreadable", at: next };
+    }
+    if (isRemoteOrDeviceTarget(target)) return { ok: false, reason: "remote-link", at: next };
+    const resolved = resolve18(current, target);
+    const root = parse5(resolved).root;
+    queue.unshift(...resolved.slice(root.length).split(/[\\/]+/).filter((p) => p.length > 0));
+    current = root;
+  }
+  return { ok: true };
+}
+function readText2(path8, maxBytes) {
+  let fd;
+  try {
+    fd = openSync2(path8, OPEN_FLAGS);
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
+    return { status: "refused", reason: "unreadable" };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
+    const buf = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n2 = readSync(fd, buf, total, buf.length - total, null);
+      if (n2 === 0) break;
+      total += n2;
+    }
+    if (total > maxBytes) return { status: "refused", reason: "too-large" };
+    let text = buf.subarray(0, total).toString("utf8");
+    if (text.charCodeAt(0) === 65279) text = text.slice(1);
+    return { status: "ok", text };
+  } catch {
+    return { status: "refused", reason: "unreadable" };
+  } finally {
+    try {
+      closeSync2(fd);
+    } catch {
+    }
+  }
+}
+function readSmallText(path8, maxBytes, under) {
+  if (under !== void 0) {
+    const walk4 = walkLinksUnder(under, path8);
+    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
+  }
+  return readText2(path8, maxBytes);
+}
 
 // src/hostsetup/mcpConfig.ts
-import { join as join73, resolve as resolve18 } from "node:path";
+import { join as join74, resolve as resolve19 } from "node:path";
 var SERVER_ID = "dev-guardian";
 function claudeDesktopConfigPath(env) {
   switch (env.os) {
     case "win32": {
-      const appData = env.appData ?? join73(env.home, "AppData", "Roaming");
-      return join73(appData, "Claude", "claude_desktop_config.json");
+      const appData = env.appData ?? join74(env.home, "AppData", "Roaming");
+      return join74(appData, "Claude", "claude_desktop_config.json");
     }
     case "darwin":
-      return join73(env.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+      return join74(env.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
     case "linux":
-      return join73(env.home, ".config", "Claude", "claude_desktop_config.json");
+      return join74(env.home, ".config", "Claude", "claude_desktop_config.json");
     default:
       return null;
   }
@@ -70338,15 +70430,15 @@ function resolveMcpConfigPath(host, scope, env) {
   const { projectPath, home } = env;
   switch (host) {
     case "cursor":
-      return scope === "global" ? join73(home, ".cursor", "mcp.json") : join73(projectPath, ".cursor", "mcp.json");
+      return scope === "global" ? join74(home, ".cursor", "mcp.json") : join74(projectPath, ".cursor", "mcp.json");
     case "gemini":
-      return scope === "global" ? join73(home, ".gemini", "settings.json") : join73(projectPath, ".gemini", "settings.json");
+      return scope === "global" ? join74(home, ".gemini", "settings.json") : join74(projectPath, ".gemini", "settings.json");
     case "codex":
-      return scope === "global" ? join73(home, ".codex", "config.toml") : join73(projectPath, ".codex", "config.toml");
+      return scope === "global" ? join74(home, ".codex", "config.toml") : join74(projectPath, ".codex", "config.toml");
     case "copilot":
-      return join73(projectPath, ".vscode", "mcp.json");
+      return join74(projectPath, ".vscode", "mcp.json");
     case "windsurf":
-      return join73(home, ".codeium", "windsurf", "mcp_config.json");
+      return join74(home, ".codeium", "windsurf", "mcp_config.json");
     case "claude-desktop":
       return claudeDesktopConfigPath(env);
     case "cline":
@@ -70446,36 +70538,36 @@ function parseJsonc(text) {
 
 // src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
-  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join74(p, ".mcp.json") },
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join75(p, ".mcp.json") },
   {
     label: ".claude/settings.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join74(p, ".claude", "settings.json")
+    resolve: (p) => join75(p, ".claude", "settings.json")
   },
   {
     label: ".claude/settings.local.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join74(p, ".claude", "settings.local.json")
+    resolve: (p) => join75(p, ".claude", "settings.local.json")
   },
   {
     label: ".cursor/mcp.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join74(p, ".cursor", "mcp.json")
+    resolve: (p) => join75(p, ".cursor", "mcp.json")
   },
   {
     label: ".vscode/mcp.json",
     kind: "project",
     mcpServersField: "servers",
-    resolve: (p) => join74(p, ".vscode", "mcp.json")
+    resolve: (p) => join75(p, ".vscode", "mcp.json")
   },
   {
     label: ".gemini/settings.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join74(p, ".gemini", "settings.json")
+    resolve: (p) => join75(p, ".gemini", "settings.json")
   },
   // A Claude Code plugin declares its own servers here, launched with
   // `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's root (this directory).
@@ -70483,7 +70575,7 @@ var PROJECT_DESCRIPTORS = [
     label: ".claude-plugin/plugin.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join74(p, ".claude-plugin", "plugin.json")
+    resolve: (p) => join75(p, ".claude-plugin", "plugin.json")
   }
 ];
 function hostPathEnv() {
@@ -70493,12 +70585,12 @@ function hostConfigPath(host) {
   return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
 }
 var USER_DESCRIPTORS = [
-  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join74(homedir3(), ".claude.json") },
+  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join75(homedir3(), ".claude.json") },
   {
     label: "~/.claude/settings.json",
     kind: "user",
     mcpServersField: null,
-    resolve: () => join74(homedir3(), ".claude", "settings.json")
+    resolve: () => join75(homedir3(), ".claude", "settings.json")
   },
   {
     label: "claude_desktop_config.json",
@@ -70522,6 +70614,21 @@ var MAX_CONFIG_BYTES = 256 * 1024;
 function readConfigSources(projectPath, includeUserConfig) {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne2(descriptor, projectPath));
 }
+var REFUSAL_MESSAGE = {
+  "not-a-regular-file": "not a regular file (a FIFO, a device, a directory or a pipe) and was not read",
+  "too-large": `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
+  unreadable: "could not be read (permissions, a link loop, or an I/O error)",
+  "remote-link": "reached through a link to a network or device path, and was not opened"
+};
+function isWithin(root, path8) {
+  const rel2 = relative24(root, path8);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
+}
+function walkRoot(kind, projectPath, path8) {
+  if (kind === "project") return projectPath;
+  const home = homedir3();
+  return isWithin(home, path8) ? home : dirname20(dirname20(path8));
+}
 function readOne2(descriptor, projectPath) {
   const absolutePath = descriptor.resolve(projectPath);
   const base = {
@@ -70530,26 +70637,13 @@ function readOne2(descriptor, projectPath) {
     absolutePath,
     mcpServersField: descriptor.mcpServersField
   };
-  if (!existsSync53(absolutePath)) return { ...base, exists: false };
-  let size;
-  try {
-    size = statSync20(absolutePath).size;
-  } catch (e) {
-    return { ...base, exists: false, parseError: `could not read: ${e.message}` };
+  if (absolutePath === "") return { ...base, exists: false };
+  const read2 = readSmallText(absolutePath, MAX_CONFIG_BYTES, walkRoot(descriptor.kind, projectPath, absolutePath));
+  if (read2.status === "absent") return { ...base, exists: false };
+  if (read2.status === "refused") {
+    return { ...base, exists: true, refusal: read2.reason, parseError: REFUSAL_MESSAGE[read2.reason] };
   }
-  if (size > MAX_CONFIG_BYTES) {
-    return {
-      ...base,
-      exists: true,
-      parseError: `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`
-    };
-  }
-  let raw;
-  try {
-    raw = readFileSync40(absolutePath, "utf8");
-  } catch (e) {
-    return { ...base, exists: false, parseError: `could not read: ${e.message}` };
-  }
+  const raw = read2.text;
   try {
     const json = parseJsonc(raw);
     return { ...base, exists: true, raw, json };
@@ -70603,17 +70697,25 @@ async function handler43(input, ctx) {
     ctx.storage.findings.bulkInsert(result.findings.map((f) => ({ ...f, scan_id: scanId })));
   }
   ctx.storage.agentAudit.upsertHashes(projectPath, result.entryHashes);
+  const toolsRun = [{ name: "agent-audit", status: "ok" }];
+  const missingTools = [];
+  for (const u2 of result.sourcesUnreadable) {
+    const unreadName = `agent-audit:${u2.source}`;
+    toolsRun.push({ name: unreadName, status: "failed", reason: u2.reason });
+    missingTools.push(unreadName);
+  }
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: "completed",
-    tools_run: [{ name: "agent-audit", status: "ok" }],
-    missing_tools: [],
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     meta: {
       include_user_config: includeUserConfig,
       mcp_servers_found: result.mcpServersFound,
       entries_changed: result.entriesChanged,
       sources_read: result.sourcesRead,
-      sources_missing: result.sourcesMissing
+      sources_missing: result.sourcesMissing,
+      sources_unreadable: result.sourcesUnreadable
     }
   });
   return {
@@ -70628,6 +70730,8 @@ async function handler43(input, ctx) {
     entries_changed_since_previous_audit: result.entriesChanged,
     sources_read: result.sourcesRead,
     sources_missing: result.sourcesMissing,
+    sources_unreadable: result.sourcesUnreadable,
+    coverage: computeCoverage(toolsRun, missingTools),
     warnings: result.warnings
   };
 }
@@ -74405,11 +74509,17 @@ async function runAudit(ctx, run, callMeta) {
   const reports = [];
   const probed = [];
   const clientVersion = resolveVersion();
+  for (const u2 of collected.sourcesUnreadable) {
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${u2.source}`;
+    toolsRun.push({ name: runName, status: "failed", reason: `config not read: ${u2.reason}` });
+    missingTools.push(runName);
+  }
+  const unreadableNote = collected.sourcesUnreadable.length === 0 ? "" : `; these config sources exist and could not be read: ${collected.sourcesUnreadable.map((u2) => `${u2.source} (${u2.reason})`).join(", ")}`;
   for (const name of names) {
     const entries2 = collected.entries.filter((e) => e.name === name);
     if (entries2.length === 0) {
       const runName = `${MCP_AUDIT_TOOL_NAME}:${name}`;
-      const reason = `not declared in any config source read (${collected.sourcesRead.join(", ") || "none found"})` + (includeUserConfig ? "" : "; user-level configs were not read (include_user_config)");
+      const reason = `not declared in any config source read (${collected.sourcesRead.join(", ") || "none found"})` + unreadableNote + (includeUserConfig ? "" : "; user-level configs were not read (include_user_config)");
       toolsRun.push({ name: runName, status: "skipped", reason });
       missingTools.push(runName);
       reports.push({ name, status: "skipped", reason, tools_count: 0, prompts_count: 0, resources_count: 0 });
@@ -74525,7 +74635,8 @@ async function runAudit(ctx, run, callMeta) {
       allow_remote: allowRemote,
       timeout_ms: timeoutMs,
       servers: reports,
-      sources_read: collected.sourcesRead
+      sources_read: collected.sourcesRead,
+      sources_unreadable: collected.sourcesUnreadable
     }
   });
   return {
@@ -74540,6 +74651,7 @@ async function runAudit(ctx, run, callMeta) {
     tools_run: toolsRun,
     missing_tools: missingTools,
     sources_read: collected.sourcesRead,
+    sources_unreadable: collected.sourcesUnreadable,
     warnings
   };
 }
@@ -74550,7 +74662,7 @@ function countBySeverity6(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
+import { existsSync as existsSync53, statSync as statSync20 } from "node:fs";
 import { resolve as resolve21 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -75442,8 +75554,8 @@ var ALLOW = {
 };
 
 // src/pkgvet/popular.ts
-import { readFileSync as readFileSync41 } from "node:fs";
-import { join as join75 } from "node:path";
+import { readFileSync as readFileSync40 } from "node:fs";
+import { join as join76 } from "node:path";
 
 // src/pkgvet/typosquat.ts
 function damerauLevenshtein(a2, b, max) {
@@ -75575,19 +75687,19 @@ function findTyposquatTarget(index, name, opts = {}) {
 
 // src/pkgvet/popular.ts
 function defaultPopularDir() {
-  return join75(resolveConfigsDir(), "popular-packages");
+  return join76(resolveConfigsDir(), "popular-packages");
 }
 function parsePopularList(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 var cache = /* @__PURE__ */ new Map();
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
-  const path8 = join75(dir, `${ecosystem}.txt`);
+  const path8 = join76(dir, `${ecosystem}.txt`);
   const hit = cache.get(path8);
   if (hit !== void 0) return hit;
   let index = null;
   try {
-    const names = parsePopularList(readFileSync41(path8, "utf8"));
+    const names = parsePopularList(readFileSync40(path8, "utf8"));
     index = names.length > 0 ? buildPopularIndex(ecosystem, names) : null;
   } catch {
     index = null;
@@ -75599,99 +75711,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync8, readdirSync as readdirSync26 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname20, isAbsolute as isAbsolute14, join as join77, parse as parse6, relative as relative24, resolve as resolve20 } from "node:path";
-
-// src/hooks/configFile.ts
-import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync7, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join76, parse as parse5, relative as relative23, resolve as resolve19 } from "node:path";
-var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
-var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
-var MAX_LINK_HOPS = 32;
-function isRemoteOrDeviceTarget(target) {
-  return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
-}
-function walkLinksUnder(under, path8) {
-  const rel2 = relative23(resolve19(under), resolve19(path8));
-  if (rel2 === "" || rel2.startsWith("..") || isAbsolute13(rel2)) return { ok: true };
-  let current = resolve19(under);
-  const queue = rel2.split(/[\\/]+/).filter((p) => p.length > 0);
-  let hops = 0;
-  for (let part = queue.shift(); part !== void 0; part = queue.shift()) {
-    if (part === ".") continue;
-    if (part === "..") {
-      current = resolve19(current, "..");
-      continue;
-    }
-    const next = join76(current, part);
-    let isLink;
-    try {
-      isLink = lstatSync7(next).isSymbolicLink();
-    } catch {
-      return { ok: true };
-    }
-    if (!isLink) {
-      current = next;
-      continue;
-    }
-    hops += 1;
-    if (hops > MAX_LINK_HOPS) return { ok: false, reason: "unreadable", at: next };
-    let target;
-    try {
-      target = readlinkSync2(next);
-    } catch {
-      return { ok: false, reason: "unreadable", at: next };
-    }
-    if (isRemoteOrDeviceTarget(target)) return { ok: false, reason: "remote-link", at: next };
-    const resolved = resolve19(current, target);
-    const root = parse5(resolved).root;
-    queue.unshift(...resolved.slice(root.length).split(/[\\/]+/).filter((p) => p.length > 0));
-    current = root;
-  }
-  return { ok: true };
-}
-function readText2(path8, maxBytes) {
-  let fd;
-  try {
-    fd = openSync2(path8, OPEN_FLAGS);
-  } catch (e) {
-    const code = e.code;
-    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
-    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
-    return { status: "refused", reason: "unreadable" };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
-    if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
-    const buf = Buffer.alloc(maxBytes + 1);
-    let total = 0;
-    while (total < buf.length) {
-      const n2 = readSync(fd, buf, total, buf.length - total, null);
-      if (n2 === 0) break;
-      total += n2;
-    }
-    if (total > maxBytes) return { status: "refused", reason: "too-large" };
-    let text = buf.subarray(0, total).toString("utf8");
-    if (text.charCodeAt(0) === 65279) text = text.slice(1);
-    return { status: "ok", text };
-  } catch {
-    return { status: "refused", reason: "unreadable" };
-  } finally {
-    try {
-      closeSync2(fd);
-    } catch {
-    }
-  }
-}
-function readSmallText(path8, maxBytes, under) {
-  if (under !== void 0) {
-    const walk4 = walkLinksUnder(under, path8);
-    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
-  }
-  return readText2(path8, maxBytes);
-}
-
-// src/pkgvet/privateRegistry.ts
+import { dirname as dirname21, isAbsolute as isAbsolute15, join as join77, parse as parse6, relative as relative25, resolve as resolve20 } from "node:path";
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -75706,10 +75726,10 @@ function isPublicRegistryUrl(ecosystem, url2) {
 }
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside4(dir, path8) {
-  const rel2 = relative24(dir, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
+  const rel2 = relative25(dir, path8);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute15(rel2);
 }
-function walkRoot(path8, ctx, under) {
+function walkRoot2(path8, ctx, under) {
   const abs = resolve20(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
@@ -75718,7 +75738,7 @@ function walkRoot(path8, ctx, under) {
   const home = resolve20(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside4(project, abs)) return project;
-  const dir = dirname20(abs);
+  const dir = dirname21(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside4(home, abs)) return home;
   return parse6(abs).root;
@@ -75733,7 +75753,7 @@ function takeUnread() {
   return unread;
 }
 function read(path8, ctx, under, what = "configuration") {
-  const r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path8, ctx, under));
+  const r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(path8, ctx, under));
   if (r.status === "refused") noteUnread(path8, what);
   return r.status === "ok" ? r.text : void 0;
 }
@@ -75746,7 +75766,7 @@ function present(path8) {
   }
 }
 function listDir(dir, ctx) {
-  const under = walkRoot(dir, ctx);
+  const under = walkRoot2(dir, ctx);
   if (under !== void 0 && !walkLinksUnder(under, dir).ok) {
     noteUnread(dir, "directory");
     return [];
@@ -75772,7 +75792,7 @@ function ancestors(ctx) {
     if (stops.some((s) => samePath2(s, dir))) break;
     out.push(dir);
     if (present(join77(dir, ".git"))) break;
-    const parent = dirname20(dir);
+    const parent = dirname21(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -75880,9 +75900,9 @@ function npmConfigFiles(ctx) {
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
-    for (let dir = dirname20(top), i2 = 0; i2 < 64; dir = dirname20(dir), i2 += 1) {
+    for (let dir = dirname21(top), i2 = 0; i2 < 64; dir = dirname21(dir), i2 += 1) {
       files.push({ path: join77(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
-      if (dirname20(dir) === dir) break;
+      if (dirname21(dir) === dir) break;
     }
   }
   const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
@@ -75899,7 +75919,7 @@ function npmConfigFiles(ctx) {
   );
   const globalConfig2 = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "npm") : dirname20(dirname20(ctx.nodeExecPath ?? process.execPath)));
+  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "npm") : dirname21(dirname21(ctx.nodeExecPath ?? process.execPath)));
   files.push({ path: join77(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
@@ -76134,7 +76154,7 @@ function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
   const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve20(dirname20(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve20(dirname21(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -76161,7 +76181,7 @@ function nugetRegistry(name, ctx) {
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
-      const parent = dirname20(dir);
+      const parent = dirname21(dir);
       if (parent === dir) break;
       dir = parent;
     }
@@ -77031,7 +77051,7 @@ async function handler45(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve21(inp.project_path);
-    if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
+    if (!existsSync53(projectDir) || !statSync20(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }

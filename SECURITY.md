@@ -102,6 +102,15 @@ their respective projects.
   whether the server answered or not. What a started server does while it
   runs — its own network requests included — is that server's code: run the
   audit only for servers you would let the host start.
+- **Agent configs are read the way the hooks read theirs.** `audit_agent_config`
+  and `audit_mcp_tools` read every MCP host config — the user-level ones
+  included — through the hooks' hardened reader: links below the project (or
+  the home directory) are walked first and a link to a network or device path
+  is refused unopened, then the file is opened non-blocking and only a regular
+  file of at most 256 KiB is read. A FIFO, a device, a directory or a network
+  link in a config's place can no longer hang either tool; a config that is
+  there and was not read is named in `sources_unreadable`, is a failed pass in
+  `tools_run`, and lowers coverage — never read as "no servers declared".
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).

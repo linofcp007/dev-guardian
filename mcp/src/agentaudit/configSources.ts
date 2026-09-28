@@ -17,11 +17,27 @@
  * strict `JSON.parse` reported the whole file unreadable the moment either
  * appeared. Strict JSON is valid JSONC, so this changes nothing for a file
  * that never had a comment in it.
+ *
+ * ## Reading a file someone else controls
+ *
+ * Every file goes through the hooks' hardened reader
+ * (`hooks/configFile.ts#readSmallText`), never `existsSync` + `readFileSync`:
+ * that pair hung on a FIFO at `.mcp.json` (for ever), on a link to
+ * `/dev/zero` (reading without end), and on a Windows link to
+ * `\\<unreachable host>\share` (measured: past a 45 s kill, four cases of
+ * four), which hung `audit_agent_config` and `audit_mcp_tools` with it. The
+ * reader first walks the path's components below the source's root (the
+ * project; the home directory for a user-level file) with `lstat` +
+ * `readlink` only and refuses a link to a network or device path unopened,
+ * then opens non-blocking and judges the DESCRIPTOR: only a regular file of
+ * at most {@link MAX_CONFIG_BYTES} is read. A file that is there and was not
+ * read is `exists: true` with its `refusal` and a `parseError` saying why —
+ * never "missing", which would read as "no servers declared there".
  */
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
+import { readSmallText, type RefusalReason } from '../hooks/configFile.js';
 import type { HostName } from '../hostsetup/hostSpecs.js';
 import { claudeDesktopConfigPath, resolveMcpConfigPath, type ResolveEnv } from '../hostsetup/mcpConfig.js';
 import { detectOs } from '../platform/osDetect.js';
@@ -49,8 +65,13 @@ export interface ConfigSource {
   exists: boolean;
   raw?: string;
   json?: unknown;
-  /** Set when the file exists but is not valid JSON. */
+  /**
+   * Set when the file exists and was not read, or was read and is not valid
+   * JSON(C): why, for a warning. Such a source counts as not read.
+   */
   parseError?: string;
+  /** Set when the reader refused the file unopened or unread (see the module doc). */
+  refusal?: RefusalReason;
 }
 
 const PROJECT_DESCRIPTORS: ConfigSourceDescriptor[] = [
@@ -145,16 +166,42 @@ export function configSourceDescriptors(includeUserConfig: boolean): ConfigSourc
 
 /**
  * Config files here are small, hand-edited JSON(C) — a legitimate one is at
- * most a few KB. Same shape as `specDiscover.ts`'s `MAX_SPEC_BYTES` /
- * `mapAttackSurface.ts`'s size cap: checked via `statSync` BEFORE reading,
- * so an oversized or adversarial file is reported as a gap rather than read
- * (and JSON.parse'd) in full.
+ * most a few KB. The reader judges the size on the opened descriptor and
+ * reads at most this plus one byte, so an oversized or adversarial file is
+ * reported as a gap rather than read (and parsed) in full.
  */
 export const MAX_CONFIG_BYTES = 256 * 1024;
 
 /** Reads and parses every applicable config source. Missing files are `exists: false`, never thrown. */
 export function readConfigSources(projectPath: string, includeUserConfig: boolean): ConfigSource[] {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne(descriptor, projectPath));
+}
+
+const REFUSAL_MESSAGE: Record<RefusalReason, string> = {
+  'not-a-regular-file': 'not a regular file (a FIFO, a device, a directory or a pipe) and was not read',
+  'too-large': `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
+  unreadable: 'could not be read (permissions, a link loop, or an I/O error)',
+  'remote-link': 'reached through a link to a network or device path, and was not opened',
+};
+
+function isWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * The directory below which the reader walks `path`'s links before opening
+ * it: the project for a project file, the home directory for a user file —
+ * or, for a user file outside the home directory (Claude Desktop under an
+ * `APPDATA` set elsewhere), the directory two levels up, so the host's own
+ * directory and the file are still walked. The root itself and its
+ * ancestors are not walked: that is the user's own layout (see
+ * `hooks/configFile.ts`).
+ */
+function walkRoot(kind: ConfigSourceKind, projectPath: string, path: string): string {
+  if (kind === 'project') return projectPath;
+  const home = homedir();
+  return isWithin(home, path) ? home : dirname(dirname(path));
 }
 
 function readOne(descriptor: ConfigSourceDescriptor, projectPath: string): ConfigSource {
@@ -165,28 +212,15 @@ function readOne(descriptor: ConfigSourceDescriptor, projectPath: string): Confi
     absolutePath,
     mcpServersField: descriptor.mcpServersField,
   };
-  if (!existsSync(absolutePath)) return { ...base, exists: false };
+  // '' is a host with no config location on this OS.
+  if (absolutePath === '') return { ...base, exists: false };
 
-  let size: number;
-  try {
-    size = statSync(absolutePath).size;
-  } catch (e) {
-    return { ...base, exists: false, parseError: `could not read: ${(e as Error).message}` };
+  const read = readSmallText(absolutePath, MAX_CONFIG_BYTES, walkRoot(descriptor.kind, projectPath, absolutePath));
+  if (read.status === 'absent') return { ...base, exists: false };
+  if (read.status === 'refused') {
+    return { ...base, exists: true, refusal: read.reason, parseError: REFUSAL_MESSAGE[read.reason] };
   }
-  if (size > MAX_CONFIG_BYTES) {
-    return {
-      ...base,
-      exists: true,
-      parseError: `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
-    };
-  }
-
-  let raw: string;
-  try {
-    raw = readFileSync(absolutePath, 'utf8');
-  } catch (e) {
-    return { ...base, exists: false, parseError: `could not read: ${(e as Error).message}` };
-  }
+  const raw = read.text;
   try {
     const json = parseJsonc(raw);
     return { ...base, exists: true, raw, json };

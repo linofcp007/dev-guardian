@@ -154,6 +154,30 @@ describe('analyzeAgentConfig', () => {
   });
 });
 
+describe('collectMcpEntries: a source that exists and was not read', () => {
+  it('is a named warning and an unreadable source — neither read nor missing, never "no servers"', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({ json: { mcpServers: { a: { command: 'node' } } } }),
+      {
+        label: '.cursor/mcp.json',
+        kind: 'project',
+        absolutePath: '/proj/.cursor/mcp.json',
+        mcpServersField: 'mcpServers',
+        exists: true,
+        refusal: 'remote-link',
+        parseError: 'reached through a link to a network or device path; not opened',
+      },
+    ];
+    const collected = collectMcpEntries(sources);
+    expect(collected.sourcesRead).toEqual(['.mcp.json']);
+    expect(collected.sourcesMissing).toEqual([]);
+    expect(collected.sourcesUnreadable).toEqual([
+      { source: '.cursor/mcp.json', reason: 'reached through a link to a network or device path; not opened' },
+    ]);
+    expect(collected.warnings.some((w) => w.startsWith('.cursor/mcp.json:'))).toBe(true);
+  });
+});
+
 describe('collectMcpEntries', () => {
   it('returns every entry across sources, nested ~/.claude.json projects included', () => {
     const sources: ConfigSource[] = [
