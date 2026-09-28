@@ -18,6 +18,9 @@
  *     loudly;
  *   - `cosign tree`'s referrers call fails loudly ("getting referrers").
  *
+ * (The check no longer runs `cosign tree` — round 4 — but the e2e tests
+ * still pin what it prints: the reasons it is not used.)
+ *
  * Nothing here is signed for real: a bundle's layer is not a verifiable
  * Sigstore bundle, and a legacy signature's base64 is not a signature. What
  * the fixture serves is enough for cosign to LIST and DOWNLOAD artifacts,
@@ -73,7 +76,8 @@ export interface FakeImageOptions {
   /**
    * The Content-Type the referrers API answers with (default: exactly the
    * OCI index type). go-containerregistry treats anything else as "no
-   * referrers API" and falls back to the tag schema — a blind spot.
+   * referrers API" and falls back to the tag schema, so cosign sees nothing —
+   * the index is still in its `-d` request log.
    */
   referrersContentType?: string;
   /** Predicate types of the DSSE attestations in a legacy `.att` tag. */
@@ -92,11 +96,30 @@ export interface FakeImageOptions {
    */
   realBundles?: readonly string[];
   /**
+   * OCI image INDEXES attached as referrers (a subject and an artifactType —
+   * OCI 1.1 allows it): the `artifactType` of each. `cosign tree` cannot
+   * fetch one as an image and prints an error line for it.
+   */
+  indexReferrers?: readonly string[];
+  /**
+   * No referrers API: `/referrers/…` answers 404, and the referrers live in
+   * the tag-schema fallback index `sha256-<hex>` — the ghcr.io shape
+   * (measured) and the one a client pushes itself.
+   */
+  noReferrersApi?: boolean;
+  /**
    * HTTP status to answer instead, per artifact kind (500, 429, …).
    * `referrer-blob`: the layer of every bundle referrer — what `tree` never
    * fetches and cosign's `GetBundles` skips in silence when it fails.
    */
   faults?: Partial<Record<FaultTarget, number>>;
+  /**
+   * Reset the connection mid-body on this many bundle-blob requests (then
+   * serve them): a 200 status line, headers, a few bytes, then the socket
+   * is destroyed — go-containerregistry logs the 200 and nothing else.
+   * `Infinity`: every time.
+   */
+  resetBundleBlobs?: number;
 }
 
 export interface FakeRegistry {
@@ -252,8 +275,23 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
     referrers.push({ mediaType: OCI_MANIFEST, digest: stored.digest, size: stored.body.length, artifactType: BUNDLE, annotations });
   }
 
+  for (const artifactType of opts.indexReferrers ?? []) {
+    const stored = putManifest(
+      { schemaVersion: 2, mediaType: OCI_INDEX, artifactType, manifests: [], subject: { mediaType: OCI_MANIFEST, digest: image.digest, size: image.body.length } },
+      [],
+      'referrer-manifest',
+    );
+    referrers.push({ mediaType: OCI_INDEX, digest: stored.digest, size: stored.body.length, artifactType });
+  }
+
+  // The tag-schema fallback: the referrers index stored as a manifest.
+  if (opts.noReferrersApi === true) {
+    putManifest({ schemaVersion: 2, mediaType: OCI_INDEX, manifests: referrers }, [`sha256-${hex}`], 'referrers');
+  }
+
   const requests: string[] = [];
   const faults = opts.faults ?? {};
+  let resetsLeft = opts.resetBundleBlobs ?? 0;
 
   const fail = (res: ServerResponse, status: number, message: string): void => {
     const code = ERROR_CODE[status] ?? 'UNKNOWN';
@@ -277,6 +315,10 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
     }
     const [, what, ref] = m;
     if (what === 'referrers') {
+      if (opts.noReferrersApi === true) {
+        fail(res, 404, 'referrers API not supported');
+        return 404;
+      }
       if (faults.referrers !== undefined) {
         fail(res, faults.referrers, 'injected referrers failure');
         return faults.referrers;
@@ -298,6 +340,13 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
       if (body === undefined) {
         fail(res, 404, 'blob unknown');
         return 404;
+      }
+      if (!head && resetsLeft > 0 && bundleBlobs.has(ref ?? '')) {
+        // A 200, a few bytes, then the connection dies mid-body.
+        resetsLeft -= 1;
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length), 'Docker-Content-Digest': ref ?? '' });
+        res.write(body.subarray(0, Math.min(16, body.length)), () => res.socket?.destroy());
+        return 200;
       }
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length), 'Docker-Content-Digest': ref ?? '' });
       res.end(head ? undefined : body);

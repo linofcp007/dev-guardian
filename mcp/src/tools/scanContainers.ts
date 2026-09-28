@@ -24,13 +24,15 @@
  *     digest the tag is pinned to first: with a signer identity and issuer,
  *     a real `cosign verify` (a confirmed rejection is a high finding);
  *     without them, only whether a signature and signed SLSA provenance
- *     exist (low / info findings when absent — confirmed by calls that fail
- *     loudly, since cosign swallows some registry errors), and the
- *     response's `image_signature` says a signature that exists was NOT
- *     verified. cosign absent, older than 3.0 or offline: `cosign` skipped,
- *     in `missing_tools` — the image's signature was not looked at, which is
- *     a gap, not a pass. An unanchored signer regexp is verified as asked,
- *     with a warning.
+ *     exist (low / info findings when absent — checked against the
+ *     registry's own referrers index and answers in cosign's request log,
+ *     since cosign swallows some registry errors), and the response's
+ *     `image_signature` says a signature that exists was NOT verified. All
+ *     of one image's cosign calls share one deadline, the tool's timeout.
+ *     cosign absent, older than 3.0 or offline: `cosign` skipped, in
+ *     `missing_tools` — the image's signature was not looked at, which is a
+ *     gap, not a pass. An unanchored signer regexp is verified as asked, with
+ *     a warning.
  *   - All of the above can fire in the same call; outputs land in
  *     `.guardian/reports/containers-<scan>/`.
  *
@@ -132,9 +134,9 @@ const scanContainers = makeScanTool({
       'signer_issuer_regexp), a real cosign verify — a confirmed rejection is a high finding; without them, only ' +
       'whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and ' +
       'image_signature says an existing signature was NOT verified. Only a network or registry failure withholds a ' +
-      'verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry error cosign reports is ' +
-      "unknown, never absent — one it cannot see (a referrers API with the wrong Content-Type) is not: see SECURITY.md. " +
-      'cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.',
+      'verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry failure, even one cosign ' +
+      'skips in silence, is unknown, never absent — except a referrers API answering with no index at all (400, ' +
+      '406, HTML): see SECURITY.md. cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.',
     scan_type: 'containers',
     category: 'security',
     supportsAutoFix: false,

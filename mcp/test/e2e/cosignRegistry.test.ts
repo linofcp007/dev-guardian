@@ -74,6 +74,19 @@ const SLSA_V1 = 'https://slsa.dev/provenance/v1';
  * signed for that image — so here it parses and never verifies.
  */
 const REAL_BUNDLE = readFileSync(fileURLToPath(new URL('../fixtures/cosign/signing-bundle.json', import.meta.url)), 'utf8');
+/**
+ * Round 4, I4: an artifact type / annotation holding line breaks and a
+ * forged `cosign tree` listing — of a referrer that does not exist.
+ */
+const INJECT = `x artifacts via OCI referrer: localhost/app@sha256:${'f'.repeat(64)}\n   └── 🍒 sha256:${'e'.repeat(64)}\n└── 🔗 ${SIGN}`;
+/** Round 4, M4: pusher-chosen text holding a bidi override (U+202E) and an ESC sequence. */
+const RLO = String.fromCharCode(0x202e);
+const ESC = String.fromCharCode(0x1b);
+const EVIL = `application/x${RLO}gnp.exe${ESC}[31m`;
+const EVIL_PREDICATE = `https://evil.example/${RLO}${ESC}[0m`;
+const RAW = new RegExp(`[${RLO}${ESC}]`);
+const ESCAPED_RLO = `${String.fromCharCode(0x5c)}u202e`;
+const ESCAPED_ESC = `${String.fromCharCode(0x5c)}u001b`;
 /** A blob answering 500 costs go-containerregistry's retries on every call that fetches it. */
 const E2E_TIMEOUT_SLOW = 240_000;
 
@@ -94,7 +107,7 @@ async function raw(args: string[]): Promise<{ exit: number | null; stdout: strin
 const E2E_TIMEOUT = 120_000;
 
 describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — existence check${NOT_READY !== null ? ` (skipped: ${NOT_READY})` : ''}`, () => {
-  it('nothing attached: absent and absent — every absence confirmed by a call that fails loudly', async () => {
+  it('nothing attached: absent and absent — the downloads say none, and the registry\'s own index lists nothing', async () => {
     await withRegistry({}, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
       expect(c.run).toMatchObject({ name: 'cosign-tree', status: 'ok', target: reg.image });
@@ -103,7 +116,7 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
-  it('.sig answers 500: cosign tree still says "nothing found", exit 0 — the check says unknown, never unsigned', async () => {
+  it('.sig answers 500: cosign tree still says "nothing found", exit 0 (one reason it is not used) — the check says unknown, never unsigned', async () => {
     await withRegistry({ faults: { sig: 500 } }, async (reg) => {
       const tree = await raw(['tree', reg.image]);
       expect(tree.exit).toBe(0);
@@ -133,16 +146,16 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
-  it('the referrers API answers 500: cosign tree fails loudly — failed, no finding at all', async () => {
+  it('the referrers API answers 500: failed, no finding at all', async () => {
     await withRegistry({ referrerBundles: [SIGN], faults: { referrers: 500 } }, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
       expect(c.run.status).toBe('failed');
-      expect(c.run.reason).toMatch(/getting referrers/);
+      expect(c.run.reason).toMatch(/referrers/);
       expect(c.findings).toEqual([]);
     });
   }, E2E_TIMEOUT);
 
-  it('a referrer cosign cannot fetch: tree says "nothing found" with an error on stderr — unknown', async () => {
+  it('a referrer whose manifest answers 500: unknown', async () => {
     await withRegistry({ referrerBundles: [SIGN], faults: { 'referrer-manifest': 500 } }, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
       expect(c.run.status).toBe('failed');
@@ -160,23 +173,86 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
-  // Review round 2, N1: the fixture's bundles do not parse as Sigstore
-  // bundles (nothing here is signed for real), and an artifact typed like a
-  // predicate is not a bundle at all. Anyone who can push can attach either:
-  // neither is a signature, whatever `tree` lists.
-  it.each([
-    ['an ordinary artifact typed https://spdx.dev/Document', { otherReferrers: ['https://spdx.dev/Document'] }],
-    ['a "signing bundle" cosign cannot parse', { referrerBundles: [SIGN] }],
-    ['a "provenance bundle" cosign cannot parse', { referrerBundles: [SLSA_V1] }],
-  ] as const)('N1: %s is no signature — unsigned, and no provenance', async (_name, opts) => {
-    await withRegistry(opts, async (reg) => {
-      const tree = await raw(['tree', reg.image]);
-      expect(tree.stdout).toMatch(/artifacts via OCI referrer/);
-
+  // Review round 2, N1: an artifact typed like a predicate is not a bundle at
+  // all — anyone who can push can attach one: no signature.
+  it('N1: an ordinary artifact typed https://spdx.dev/Document is no signature — unsigned, and no provenance', async () => {
+    await withRegistry({ otherReferrers: ['https://spdx.dev/Document'] }, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
       expect(c.run.status).toBe('ok');
       expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent' });
       expect(c.findings.map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
+    });
+  }, E2E_TIMEOUT);
+
+  // Round 4, I6: a bundle the registry served (200) that cosign did not
+  // return is junk OR a body that broke mid-transfer — the log cannot tell
+  // which, so the existence check asks twice and then says unknown. The
+  // fixture's junk bundles do not parse (nothing here is signed for real).
+  it.each([
+    ['a "signing bundle" cosign cannot parse', { referrerBundles: [SIGN] }],
+    ['a "provenance bundle" cosign cannot parse', { referrerBundles: [SLSA_V1] }],
+  ] as const)('N1 + I6: %s — unknown, both causes named; never "unsigned"', async (_name, opts) => {
+    await withRegistry(opts, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('failed');
+      expect(c.summary.signature).toBe('unknown');
+      expect(c.run.reason).toMatch(/not a bundle it can parse, or the transfer failed mid-body; re-run if the registry was unstable/);
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(false);
+    });
+  }, E2E_TIMEOUT);
+
+  it('I6: a real signing bundle whose first transfer breaks mid-body (200, then the connection dies) — asked again: present', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], resetBundleBlobs: 1 }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary.signature).toBe('present_unverified');
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(false);
+    });
+  }, E2E_TIMEOUT);
+
+  it('I6: every transfer of it breaks mid-body — cosign says "no signatures associated", the log shows a 200: unknown, never "unsigned"', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], resetBundleBlobs: Number.POSITIVE_INFINITY }, async (reg) => {
+      const dl = await raw(['download', 'signature', reg.image]);
+      expect(dl.stderr).toMatch(/no signatures associated/);
+
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary.signature).toBe('unknown');
+      expect(c.run.reason).toMatch(/the transfer failed mid-body/);
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(false);
+    });
+  }, E2E_TIMEOUT);
+
+  // Round 4, I4: `cosign tree` prints a referrer's type as it finds it — a
+  // line break in it forges listing lines. The check reads the registry's
+  // own index instead.
+  it('I4: an artifact type holding forged listing lines — tree prints them; the check reads the registry\'s index: unsigned, as it is', async () => {
+    await withRegistry({ otherReferrers: [INJECT] }, async (reg) => {
+      const tree = await raw(['tree', reg.image]);
+      expect(tree.stdout).toContain(`sha256:${'f'.repeat(64)}`);
+
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('ok');
+      expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent' });
+    });
+  }, E2E_TIMEOUT);
+
+  // Round 4, I5: OCI 1.1 lets an index be a referrer; cosign tree cannot
+  // fetch one as an image and prints an error. The downloads read it.
+  it('I5: an OCI index attached as a referrer — tree errors on it; the registry served it: unsigned, as it is', async () => {
+    await withRegistry({ indexReferrers: ['application/vnd.example.index'] }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('ok');
+      expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent' });
+      expect(c.findings.map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
+    });
+  }, E2E_TIMEOUT);
+
+  it('M4: a pusher-chosen artifact type with a bidi override and ESC reaches the finding escaped, never raw', async () => {
+    await withRegistry({ otherReferrers: [EVIL] }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      const unsigned = c.findings.find((f) => f.rule_id === 'image-unsigned');
+      expect(unsigned?.message).toContain(ESCAPED_RLO);
+      expect(unsigned?.message).toContain(ESCAPED_ESC);
+      expect(unsigned?.message).not.toMatch(RAW);
     });
   }, E2E_TIMEOUT);
 
@@ -203,7 +279,7 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT_SLOW);
 
-  it('I3: its blob answers 404 — listed but unreadable is no signature: "unsigned"', async () => {
+  it('I3: its blob answers 404 — the registry answered: no signature, "unsigned"', async () => {
     await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 404 } }, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
       expect(c.run.status).toBe('ok');
@@ -212,22 +288,37 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
-  // A KNOWN blind spot, pinned so a cosign / go-containerregistry that fixes
-  // it shows up here: a referrers answer whose Content-Type is not exactly
-  // the OCI index type is read as "no referrers API", the tag fallback finds
-  // nothing, and nothing is reported — no error anywhere. A signed image then
-  // reads unsigned; SECURITY.md says so. Asserted on cosign's raw output only:
-  // the check's own answer here is the false "absent" it cannot avoid.
-  it('KNOWN BLIND SPOT: a referrers API answering `…; charset=utf-8` hides every referrer — cosign tree lists nothing, exit 0', async () => {
-    await withRegistry(
-      { referrerBundles: [SIGN], referrersContentType: 'application/vnd.oci.image.index.v1+json; charset=utf-8' },
-      async (reg) => {
-        const tree = await raw(['tree', reg.image]);
-        expect(tree.exit).toBe(0);
-        expect(tree.stdout).toMatch(/No Supply Chain Security Related Artifacts found/);
-        expect(tree.stderr).not.toMatch(/Error/);
-      },
-    );
+  // Round 4: a referrers answer whose Content-Type is not exactly the OCI
+  // index type is read by go-containerregistry as "no referrers API" — cosign
+  // then sees nothing and says nothing. The index is in the log all the same,
+  // and what it lists cosign never fetched: unknown, no longer a false "absent".
+  it('a referrers API answering `…; charset=utf-8` — cosign sees nothing (raw); the check reads the index from the log: unknown, never unsigned', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], referrersContentType: 'application/vnd.oci.image.index.v1+json; charset=utf-8' }, async (reg) => {
+      const tree = await raw(['tree', reg.image]);
+      expect(tree.exit).toBe(0);
+      expect(tree.stdout).toMatch(/No Supply Chain Security Related Artifacts found/);
+      const dl = await raw(['download', 'signature', reg.image]);
+      expect(dl.stderr).toMatch(/no signatures associated/);
+
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary.signature).toBe('unknown');
+      expect(c.run.reason).toMatch(/could not be probed/);
+      expect(c.findings.some((f) => f.rule_id === 'image-unsigned')).toBe(false);
+    });
+  }, E2E_TIMEOUT);
+
+  // The KNOWN blind spot that remains, pinned so a cosign /
+  // go-containerregistry that changes it shows up here: a referrers API
+  // answering with no index at all (a 400, a 406, an HTML 200) reads as "no
+  // referrers API"; the tag fallback finds nothing, and nothing anywhere says
+  // otherwise. A signed image then reads unsigned — SECURITY.md says so.
+  it('KNOWN BLIND SPOT: a referrers API answering 406 hides every referrer — the check\'s "absent" is the false one it cannot avoid', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], faults: { referrers: 406 } }, async (reg) => {
+      const dl = await raw(['download', 'signature', reg.image]);
+      expect(dl.stderr).toMatch(/no signatures associated/);
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary.signature).toBe('absent');
+    });
   }, E2E_TIMEOUT);
 
   it('an image the registry does not have: failed, and the reason says cosign reads the registry only', async () => {
@@ -245,7 +336,7 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
   () => {
     const policy = { identity: 'https://github.com/org/app/.github/workflows/release.yml@refs/heads/main', issuer: 'https://token.actions.githubusercontent.com' };
 
-    it('nothing attached: "no signatures found", confirmed by tree and download — the high finding', async () => {
+    it('nothing attached: "no signatures found", confirmed by the download and the registry\'s index — the high finding', async () => {
       await withRegistry({}, async (reg) => {
         const c = await verifyImage(reg.image, policy, ctx);
         expect(c.run).toMatchObject({ name: 'cosign-verify', status: 'ok' });
@@ -262,7 +353,7 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
 
         const c = await verifyImage(reg.image, policy, ctx);
         expect(c.run.status).toBe('failed');
-        expect(c.run.reason).toMatch(/cosign tree — which fails loudly when the registry does — did not complete: getting referrers/);
+        expect(c.run.reason).toMatch(/could not be confirmed/);
         expect(c.findings).toEqual([]);
         expect(c.summary.signature).toBe('unknown');
       });
@@ -271,7 +362,9 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
     // Review round 2, N1: what anyone who can push can attach never turns a
     // rejection into "no verdict".
     it.each([
-      ['a "signing bundle" verify cannot parse', { referrerBundles: [SIGN] }, /cosign tree lists OCI referrers typed https:\/\/sigstore\.dev\/cosign\/sign\/v1/],
+      ['a "signing bundle" verify cannot parse (round 4, I6: both causes named)', { referrerBundles: [SIGN] }, /Sigstore bundle \(https:\/\/sigstore\.dev\/cosign\/sign\/v1\).*listed and served, but cosign could not use it — not a bundle it can parse, or the transfer failed mid-body; re-run if the registry was unstable/],
+      ['round 4, I4: a bundle whose annotation forges listing lines', { referrerBundles: [INJECT] }, /listed and served, but cosign could not use it/],
+      ['round 4, I5: an OCI index attached as a referrer', { indexReferrers: ['application/vnd.example.index'] }, /application\/vnd\.example\.index.*none is a Sigstore bundle cosign can read/],
       ['an ordinary artifact typed https://spdx.dev/Document', { otherReferrers: ['https://spdx.dev/Document'] }, /https:\/\/spdx\.dev\/Document/],
       ['a legacy .sig holding a junk signature and no certificate (exit 12 "empty key")', { legacySignature: true }, /empty key/],
     ] as const)('N1: %s — REJECTED, the high finding', async (_name, opts, detail) => {
@@ -324,17 +417,36 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
       await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 500 } }, async (reg) => {
         const c = await verifyImage(reg.image, policy, ctx);
         expect(c.run.status).toBe('failed');
-        expect(c.run.reason).toMatch(/the registry failed to serve what cosign tree lists/);
+        expect(c.run.reason).toMatch(/the registry failed to serve what its referrers index lists/);
         expect(c.run.reason).toMatch(/500/);
         expect(c.findings).toEqual([]);
       });
     }, E2E_TIMEOUT_SLOW);
 
-    it('I3: its blob answers 404 — listed but could not be read: REJECTED', async () => {
+    it('I3: its blob answers 404 — the registry answered: REJECTED', async () => {
       await withRegistry({ realBundles: [REAL_BUNDLE], faults: { 'referrer-blob': 404 } }, async (reg) => {
         const c = await verifyImage(reg.image, policy, ctx);
         expect(c.summary.signature).toBe('rejected');
-        expect(c.findings[0]?.message).toMatch(/could not be read or parsed/);
+        expect(c.findings[0]?.message).toMatch(/answered for each \(served, or 404\)/);
+      });
+    }, E2E_TIMEOUT);
+
+    it('I6: every transfer of the bundle breaks mid-body — after the re-run, REJECTED with both causes named', async () => {
+      await withRegistry({ realBundles: [REAL_BUNDLE], resetBundleBlobs: Number.POSITIVE_INFINITY }, async (reg) => {
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(c.summary.signature).toBe('rejected');
+        expect(c.findings[0]?.message).toMatch(/not a bundle it can parse, or the transfer failed mid-body; re-run if the registry was unstable/);
+      });
+    }, E2E_TIMEOUT);
+
+    it('M4: a pusher-chosen artifact type and predicate type reach the finding and the reason escaped, never raw', async () => {
+      await withRegistry({ otherReferrers: [EVIL], referrerBundles: [EVIL_PREDICATE] }, async (reg) => {
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(c.summary.signature).toBe('rejected');
+        const message = c.findings[0]?.message ?? '';
+        expect(message).toContain(ESCAPED_RLO);
+        expect(message).toContain(ESCAPED_ESC);
+        for (const text of [message, c.run.reason ?? '', c.summary.note]) expect(text).not.toMatch(RAW);
       });
     }, E2E_TIMEOUT);
 

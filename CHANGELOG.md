@@ -19,19 +19,25 @@ version bump.
   finding, and the answer says what cosign accepted (an image signature or a signed attestation).
   Without them: whether a signature and a signed SLSA provenance attestation exist (`image-unsigned`
   low, `image-no-provenance` info), and `image_signature` says an existing signature's signer was NOT
-  verified. cosign swallows some registry errors, so every "absent" and every rejection is confirmed by
-  a call that fails loudly; a registry error is `unknown`, never absent. cosign missing, older than
-  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network, registry or
+  verified. cosign swallows some registry errors, so every "absent" and every rejection is checked
+  against the registry's own answers: the downloads that decide one run with cosign's `-d` request log,
+  and what is attached is the referrers index the registry generated, read from that log (`cosign tree`
+  is not used — it prints a pusher's annotation as it finds it). A registry failure, even one cosign
+  skips in silence, or a log cut at its cap, is `unknown`, never absent. A bundle the registry served
+  that cosign did not return is junk or a transfer that broke mid-body: the existence check asks twice,
+  then says `unknown`; a verification rejects and names both causes. cosign missing, older than 3.0 or
+  `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network, registry or
   Sigstore-service failure withholds a verdict — a Rekor answer only as a 5xx, a 429 or a network
   failure (Rekor answers 400 for a signature that does not verify: a rejection). A junk, unparseable or
-  non-Sigstore artifact anyone can attach is no signature, and a signature that does not verify is a
-  rejection; echoed identities never decide either way. A referrer whose manifest or bundle the registry
-  fails to serve — which cosign skips in silence — is read from cosign's `-d` request log and reported
-  unknown, never unsigned or rejected. A rejection is re-measured only by a verification against the same
-  signer (`ToolRun.signer`), and a rejection for another signer is a new finding. An unanchored signer
-  regexp is warned about. One registry fault no request reveals (a referrers API answering with the
-  wrong Content-Type) makes a signed image read unsigned — see `SECURITY.md`. New bookkeeping names
-  `cosign-verify`, `cosign-tree`, `cosign`.
+  non-Sigstore artifact anyone can attach (an OCI index included) is no signature, and a signature that
+  does not verify is a rejection; echoed identities never decide either way. A rejection is re-measured
+  only by a verification against the same signer (`ToolRun.signer`), and a rejection for another signer
+  is a new finding. An unanchored signer regexp is warned about. All of one image's cosign calls share
+  one deadline (the tool's timeout, `GUARDIAN_SCAN_TIMEOUT_MS`); what it cuts is no verdict. Text a
+  pusher chose is escaped, and URL query strings are cut, in every reason, finding and log line. One
+  registry fault no request reveals (a referrers API answering with no index at all: 400, 406, HTML)
+  makes a signed image read unsigned — see `SECURITY.md`. New bookkeeping names `cosign-verify`,
+  `cosign-tree`, `cosign`.
 - `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in
