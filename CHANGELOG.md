@@ -19,6 +19,13 @@ version bump.
   attestation exist (`image-unsigned` low, `image-no-provenance` info), and `image_signature` says an
   existing signature's signer was NOT verified. cosign missing or `GUARDIAN_OFFLINE=1`: `cosign`
   skipped, in `missing_tools`. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
+- `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
+  `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
+  (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in
+  `configs/ci/pinned.json`). Only that job holds `id-token: write` and `attestations: write`; the
+  scan job keeps exactly its permissions (stated per job in this rendering, `permissions: {}` above). Verify with `gh attestation verify` (see
+  `docs/ci.md`). Command line only — a `.guardian/ci.json` declaring `attest` is refused; GitLab and
+  Bitbucket refuse `--attest`.
 
 ## [3.0.0] - 2026-09-28
 

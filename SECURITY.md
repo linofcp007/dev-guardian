@@ -135,6 +135,7 @@ project's own build and test commands.
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
 | Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, curl from GitHub releases) | `install_toolchain` | only when asked; `dry_run` prints the commands |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
+| Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 
 `map_attack_surface` itself sends nothing, but the Semgrep it runs does what
 the rows above say: its version check, and metrics when you are logged in. The

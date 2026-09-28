@@ -84,6 +84,26 @@
 #      `permissions:` because a PRIVATE repository's upload-sarif step
 #      needs it (public repos do not, but there is no cheaper way to cover
 #      both without branching the template on repo visibility).
+# {{#ATTEST}}
+#  10. (`ci-init --attest`) Step 8 writes the JSON report too — `--format
+#      json`, kept with `tee` so the log still shows it, under `pipefail`
+#      so the scan's own exit code still decides the step — and on a push
+#      the scan job keeps both reports as the `dev-guardian-reports`
+#      artifact. Anyone verifying downloads them from there.
+#  11. (`ci-init --attest`) A separate `attest` job signs a SLSA
+#      build-provenance attestation for the two reports with
+#      actions/attest-build-provenance (Sigstore keyless, stored in this
+#      repository's attestations). It is the ONLY job with `id-token:
+#      write` and `attestations: write`, and it holds nothing else: the
+#      scan job builds and scans the project, so it gets no signing
+#      capability of its own. Push only — a fork's pull request gets no
+#      OIDC token, and a pull request's reports are not what anyone
+#      verifies later. Artifact attestations need a public repository, or
+#      GitHub Enterprise Cloud for a private one; elsewhere this job fails,
+#      loudly. Verify a downloaded report with:
+#        gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \
+#          --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml
+# {{/ATTEST}}
 name: dev-guardian
 
 on:
@@ -91,14 +111,26 @@ on:
     branches: ["{{DEFAULT_BRANCH}}"]
   pull_request:
 
+# {{^ATTEST}}
 permissions:
   contents: read
   security-events: write
   actions: read
+# {{/ATTEST}}
+# {{#ATTEST}}
+# Nothing at the workflow level: each job states exactly what it holds.
+permissions: {}
+# {{/ATTEST}}
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # {{#ATTEST}}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    # {{/ATTEST}}
     steps:
       - name: Checkout
         uses: actions/checkout@{{CHECKOUT_SHA}} # {{CHECKOUT_VERSION}}
@@ -178,11 +210,22 @@ jobs:
 
       - name: dev-guardian scan
         run: |
+          # {{^ATTEST}}
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \
             --project . \
             --fail-on high \
             --format human \
             --sarif dev-guardian-results.sarif
+          # {{/ATTEST}}
+          # {{#ATTEST}}
+          set -euo pipefail
+          node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \
+            --project . \
+            --fail-on high \
+            --format json \
+            --sarif dev-guardian-results.sarif \
+            | tee dev-guardian-report.json
+          # {{/ATTEST}}
 
       - name: Upload SARIF to code scanning
         if: always()
@@ -190,3 +233,35 @@ jobs:
         uses: github/codeql-action/upload-sarif@{{UPLOAD_SARIF_SHA}} # {{UPLOAD_SARIF_VERSION}}
         with:
           sarif_file: dev-guardian-results.sarif
+      # {{#ATTEST}}
+
+      - name: Keep the reports for the attest job
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        uses: actions/upload-artifact@{{UPLOAD_ARTIFACT_SHA}} # {{UPLOAD_ARTIFACT_VERSION}}
+        with:
+          name: dev-guardian-reports
+          path: |
+            dev-guardian-report.json
+            dev-guardian-results.sarif
+          if-no-files-found: error
+
+  attest:
+    needs: scan
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - name: Fetch the reports the scan job kept
+        uses: actions/download-artifact@{{DOWNLOAD_ARTIFACT_SHA}} # {{DOWNLOAD_ARTIFACT_VERSION}}
+        with:
+          name: dev-guardian-reports
+
+      - name: Attest the reports' build provenance
+        uses: actions/attest-build-provenance@{{ATTEST_BUILD_PROVENANCE_SHA}} # {{ATTEST_BUILD_PROVENANCE_VERSION}}
+        with:
+          subject-path: |
+            dev-guardian-report.json
+            dev-guardian-results.sarif
+      # {{/ATTEST}}
