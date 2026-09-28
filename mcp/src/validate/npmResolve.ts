@@ -12,12 +12,15 @@
  * Only the directories from the importing file up to the manifest's are
  * searched: that is the install the finding is about.
  *
- * Null whenever it cannot be told: no lockfile and nothing installed, a
- * lockfile that is not JSON or is over {@link MAX_LOCKFILE_BYTES}, a package
- * the lockfile does not install where the code looks. The provider then
- * claims no more than `imported` — never `reachable` on a version it could
- * not read. yarn.lock and pnpm-lock.yaml are not read (neither records where
- * a package is installed); the installed tree answers for them when present.
+ * `version: null`, WITH THE REASON, whenever it cannot be told: no lockfile
+ * and nothing installed, a lockfile that is not JSON or is over
+ * {@link MAX_LOCKFILE_BYTES} (then the installed tree is NOT read in its
+ * place — it may be of another install), a package the lockfile does not
+ * install where the code looks. The provider then claims no more than
+ * `imported`, and quotes the reason — never `reachable` on a version it
+ * could not read. yarn.lock and pnpm-lock.yaml are not read (neither records
+ * where a package is installed); the installed tree answers for them when
+ * present.
  */
 
 import { readFileSync, statSync } from 'node:fs';
@@ -30,43 +33,69 @@ const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 const LOCKFILES = ['npm-shrinkwrap.json', 'package-lock.json'];
 
 interface LockView {
+  kind: 'lock';
   /** Project-relative label of the lockfile read. */
   file: string;
   /** Install path relative to the lockfile's directory → version. */
   versions: ReadonlyMap<string, string>;
 }
 
+/**
+ * What stands beside a manifest: a lockfile read, none at all (the installed
+ * tree then answers), or one present but unreadable — which answers nothing,
+ * and is never passed over for the installed tree (review of part C, M-f: it
+ * was, against this module's own contract).
+ */
+type LockState = LockView | { kind: 'none' } | { kind: 'unreadable'; file: string };
+
 export function makeNpmResolver(projectPath: string): NpmResolver {
-  const locks = new Map<string, LockView | null>();
-  const lockOf = (rootDir: string): LockView | null => {
-    if (!locks.has(rootDir)) locks.set(rootDir, readLock(projectPath, rootDir));
-    return locks.get(rootDir) ?? null;
+  const locks = new Map<string, LockState>();
+  const lockOf = (rootDir: string): LockState => {
+    const cached = locks.get(rootDir);
+    if (cached !== undefined) return cached;
+    const read = readLock(projectPath, rootDir);
+    locks.set(rootDir, read);
+    return read;
   };
 
   return (fromDir, rootDir, name) => {
     const lock = lockOf(rootDir);
+    if (lock.kind === 'unreadable') {
+      return { version: null, reason: `${lock.file} is not valid JSON (or larger than 64 MiB)` };
+    }
     let dir = fromDir;
     for (;;) {
       const rel = relativeTo(rootDir, dir);
-      if (rel === null) return null;
-      if (lock !== null) {
+      if (rel === null) {
+        return { version: null, reason: `'${fromDir || '.'}' is outside '${rootDir || '.'}', the manifest's directory` };
+      }
+      if (lock.kind === 'lock') {
         const version = lock.versions.get(`${rel === '' ? '' : `${rel}/`}node_modules/${name}`);
         if (version !== undefined) return { version, source: lock.file };
       } else {
         const installed = readInstalled(projectPath, dir, name);
         if (installed !== null) return installed;
       }
-      if (dir === rootDir) return null;
+      if (dir === rootDir) break;
       dir = parentOf(dir);
     }
+    return {
+      version: null,
+      reason:
+        lock.kind === 'lock'
+          ? `${lock.file} does not install '${name}' where ${fromDir || '.'} looks for it`
+          : `no package-lock.json or npm-shrinkwrap.json in '${rootDir || '.'}', and no installed node_modules/${name}`,
+    };
   };
 }
 
-function readLock(projectPath: string, rootDir: string): LockView | null {
+function readLock(projectPath: string, rootDir: string): LockState {
   for (const candidate of LOCKFILES) {
+    const file = rootDir === '' ? candidate : `${rootDir}/${candidate}`;
     const parsed = readJson(join(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
     if (parsed === undefined) continue;
-    if (parsed === null) return null; // present but unreadable: do not fall back to a lesser source
+    // Present but unreadable: never fall back to a lesser source.
+    if (parsed === null) return { kind: 'unreadable', file };
     const versions = new Map<string, string>();
     const packages = record(parsed['packages']);
     if (packages !== null) {
@@ -78,9 +107,9 @@ function readLock(projectPath: string, rootDir: string): LockView | null {
     } else {
       walkV1(record(parsed['dependencies']), '', versions);
     }
-    return { file: rootDir === '' ? candidate : `${rootDir}/${candidate}`, versions };
+    return { kind: 'lock', file, versions };
   }
-  return null;
+  return { kind: 'none' };
 }
 
 function walkV1(deps: Record<string, unknown> | null, prefix: string, out: Map<string, string>): void {

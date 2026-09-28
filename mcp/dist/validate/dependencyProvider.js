@@ -44,8 +44,14 @@
  *     resolves exactly the vulnerable version counts. When the version cannot
  *     be read (no `package-lock.json`, nothing installed, a finding that gives
  *     a vulnerable range rather than a version), the answer is at most
- *     `imported`, never `reachable`. A Python environment holds one version
- *     of a distribution, so PyPI needs no such check.
+ *     `imported`, never `reachable`.
+ *   - Python is different (review N1): an environment is not scoped to a
+ *     directory — `deploy/requirements.txt` is installed into the one
+ *     `app/web.py` runs in — and holds one version of a distribution. So
+ *     any importer counts, and the question is whether the project pins the
+ *     package only at the vulnerable version (`pypiPins.ts` reads every
+ *     manifest): another pin means an import may load it, and the answer is
+ *     `unknown`, naming that pin.
  *
  * Matching, per ecosystem:
  *
@@ -90,6 +96,7 @@ export function prepareDependencyIndex(input) {
         partiallyParsed: input.snapshot.partially_parsed?.length ?? 0,
         reachCache: new Map(),
         npmResolver: input.npmResolver,
+        pypiPins: input.pypiPins,
     };
 }
 const PREDATES_GAP = 'the surface snapshot was mapped before third-party imports were recorded (it has no ' +
@@ -105,9 +112,8 @@ const NO_MANIFEST_GAP = 'the finding names no manifest, so an import anywhere in
     'another install of the package than the one the finding is about';
 const RANGE_GAP = 'the finding gives a vulnerable version range, not the installed version, so whether the ' +
     'importing files load a vulnerable copy could not be told — no route is claimed to reach it';
-const UNVERIFIED_GAP = 'which version the importing files load could not be read (no package-lock.json or ' +
-    'npm-shrinkwrap.json beside the manifest, and no installed node_modules copy), so none is ' +
-    'claimed to reach the vulnerable one';
+const PINS_UNREAD_GAP = "whether another of the project's manifests pins a different version could not be read, so " +
+    'no route is claimed to reach the vulnerable one';
 export function assessDependency(subject, index) {
     const name = subject.package_name;
     if (index.external === undefined)
@@ -115,12 +121,16 @@ export function assessDependency(subject, index) {
     const matcher = matcherFor(subject);
     if ('gap' in matcher)
         return unknown([matcher.gap]);
-    const scopeDir = subject.manifest === null ? null : dirOf(subject.manifest);
-    const matching = index.external.entries.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !insideNodeModules(entry.file));
+    // npm installs per directory (node_modules), so only importers under the
+    // manifest's directory load its copy. A Python environment is not scoped
+    // to a directory (review of part C, N1): `deploy/requirements.txt` is
+    // installed into the environment `app/web.py` runs in.
+    const scopeDir = subject.ecosystem === 'npm' && subject.manifest !== null ? dirOf(subject.manifest) : null;
+    const matching = index.external.entries.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !outsideProjectCode(entry.file));
     const inScope = unique(matching.filter((e) => scopeDir === null || isUnder(e.file, scopeDir)).map((e) => e.file));
     const outOfScope = unique(matching.map((e) => e.file)).filter((f) => !inScope.includes(f));
     const gaps = [];
-    if (subject.manifest === null)
+    if (subject.ecosystem === 'npm' && subject.manifest === null)
         gaps.push(NO_MANIFEST_GAP);
     if (index.partiallyParsed > 0) {
         gaps.push(`${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an ` +
@@ -142,29 +152,63 @@ export function assessDependency(subject, index) {
                 ...gaps,
             ]);
         }
-        return unknown([NO_IMPORT_GAP, ...gaps]);
+        const ambiguous = ambiguousImportGap(subject, index.external.entries);
+        return unknown([ambiguous ?? NO_IMPORT_GAP, ...gaps]);
     }
     // Which of them load the vulnerable copy.
     const loads = [];
     const unverified = [];
     const others = new Map(); // resolved version → source
     if (subject.ecosystem === 'npm') {
+        const reasons = new Set();
         for (const file of inScope) {
-            const resolved = subject.version === null ? null : (index.npmResolver?.(dirOf(file), scopeDir ?? '', name) ?? null);
-            if (resolved === null)
+            if (subject.version === null) {
                 unverified.push(file);
-            else if (resolved.version === subject.version)
+                continue;
+            }
+            const resolved = index.npmResolver?.(dirOf(file), scopeDir ?? '', name) ?? {
+                version: null,
+                reason: 'no lockfile or installed tree was read',
+            };
+            if (resolved.version === null) {
+                unverified.push(file);
+                reasons.add(resolved.reason);
+            }
+            else if (resolved.version === subject.version) {
                 loads.push({ file, source: resolved.source });
-            else
+            }
+            else {
                 others.set(resolved.version, resolved.source);
+            }
         }
-        if (unverified.length > 0)
-            gaps.push(subject.version === null ? RANGE_GAP : UNVERIFIED_GAP);
+        if (subject.version === null && unverified.length > 0)
+            gaps.push(RANGE_GAP);
+        if (reasons.size > 0) {
+            gaps.push(`which version the importing files load could not be read: ${[...reasons].join('; ')} — so none ` +
+                'is claimed to reach the vulnerable one');
+        }
     }
     else {
-        // One environment, one version of a distribution.
-        for (const file of inScope)
-            loads.push({ file, source: null });
+        // PyPI: one environment, one version of a distribution — unless the
+        // project pins it at more than one version (review of part C, N1).
+        const pins = index.pypiPins?.(name) ?? null;
+        if (pins === null) {
+            unverified.push(...inScope);
+            gaps.push(PINS_UNREAD_GAP);
+        }
+        else {
+            const different = pins.filter((p) => subject.version === null || p.version !== subject.version);
+            if (different.length > 0) {
+                return unknown([
+                    `the project pins '${name}' at more than one version, so an import of it may load a different pin ` +
+                        `(${different.map((p) => `${p.manifest}: ${p.version}`).join(', ')}) than the vulnerable ` +
+                        `${subject.version ?? '?'}`,
+                    ...gaps,
+                ]);
+            }
+            for (const file of inScope)
+                loads.push({ file, source: null });
+        }
     }
     if (loads.length === 0 && unverified.length === 0) {
         const resolvedTo = [...others].map(([version, source]) => `${version} (${source})`).join(', ');
@@ -259,8 +303,30 @@ function dirOf(path) {
 function isUnder(file, dir) {
     return dir === '' || file.startsWith(`${dir}/`);
 }
-function insideNodeModules(file) {
-    return /(^|\/)node_modules\//.test(file);
+/** An installed package's own file, not the project's code: `node_modules`, a virtualenv. */
+function outsideProjectCode(file) {
+    return /(^|\/)(node_modules|site-packages|\.venv|venv)\//.test(file);
+}
+/**
+ * For a PyPI distribution none of whose unique modules is imported: an
+ * import of a module the table leaves out because another distribution
+ * also installs it (review of part C, M-g) is named as ambiguous, with the
+ * candidates — never "no project file imports the package".
+ */
+function ambiguousImportGap(subject, entries) {
+    if (subject.ecosystem !== 'pypi')
+        return null;
+    const shared = PYPI_SHARED_MODULES[normalizePypiName(subject.package_name)];
+    if (shared === undefined)
+        return null;
+    for (const [module, other] of Object.entries(shared)) {
+        const importer = entries.find((e) => e.language === 'python' && (e.specifier === module || e.specifier.startsWith(`${module}.`)) && !outsideProjectCode(e.file));
+        if (importer === undefined)
+            continue;
+        return (`the import name '${module}' is ambiguous: ${importer.file} imports it, and it is installed by ` +
+            `${subject.package_name} and by ${other} — which one is loaded cannot be told`);
+    }
+    return null;
 }
 const JS_LANGUAGES = new Set(['javascript', 'typescript']);
 const PYTHON_LANGUAGES = new Set(['python']);
@@ -379,6 +445,17 @@ export const PYPI_MODULES = {
     wheel: ['wheel'],
 };
 /**
+ * Modules a distribution in {@link PYPI_MODULES} also installs but that are
+ * left out of its entry because another distribution installs them too —
+ * named, with that other distribution, when they are the only import found
+ * (review of part C, M-g).
+ */
+export const PYPI_SHARED_MODULES = {
+    attrs: { attr: "the 'attr' distribution" },
+    pymongo: { bson: "the 'bson' distribution" },
+    'python-multipart': { multipart: "the 'multipart' distribution" },
+};
+/**
  * Distributions whose module another distribution also installs — checked
  * against PyPI on 2026-09-28 (each named distribution exists). An import of
  * the module does not say which one is loaded, so these answer `unknown`.
@@ -469,20 +546,30 @@ const MANIFEST_ECOSYSTEMS = {
     'mix.lock': 'hex',
     'pubspec.lock': 'pub',
 };
-/** Suffix rules for names that vary: `requirements-dev.txt`, `App.csproj`. */
+/**
+ * Rules for names that vary: `requirements-dev.txt`, `dev-requirements.txt`,
+ * `App.csproj`, and a Java archive Trivy scanned (`app.jar`, review M-e),
+ * whose packages Trivy names `group:artifact`.
+ */
 const MANIFEST_PATTERNS = [
     [/^requirements.*\.txt$/, 'pypi'],
+    [/-requirements\.txt$/, 'pypi'],
     [/\.(cs|fs|vb)proj$/, 'nuget'],
     [/\.sln$/, 'nuget'],
     [/\.deps\.json$/, 'nuget'],
     [/\.gemspec$/, 'gem'],
+    [/\.(jar|war|ear)$/, 'maven'],
 ];
 /** The ecosystem a lockfile or manifest path belongs to, or `null` for anything else. */
 export function ecosystemOfManifest(path) {
-    const base = (path.split(/[\\/]/).pop() ?? '').toLowerCase();
+    const posix = path.replace(/\\/g, '/').toLowerCase();
+    const base = posix.split('/').pop() ?? '';
     const exact = MANIFEST_ECOSYSTEMS[base];
     if (exact !== undefined)
         return exact;
+    // `requirements/base.txt`, `requirements/prod.txt`: pip's split layout.
+    if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix))
+        return 'pypi';
     for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
         if (pattern.test(base))
             return ecosystem;

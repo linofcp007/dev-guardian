@@ -861,6 +861,37 @@ describe('validate_finding — the dependency provider', () => {
     expect(JSON.stringify(r.summary.coverage_gaps).length).toBeLessThan(3000);
   });
 
+  it('reads a route-reached PyPI import reachable wherever the requirements file sits (review N1)', async () => {
+    // deploy/requirements.txt pins pyyaml==5.3; app/web.py declares a route
+    // and imports yaml. It read "imported only by files outside 'deploy' …
+    // another install's copy".
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(projectPath, 'deploy'), { recursive: true });
+    writeFileSync(join(projectPath, 'deploy', 'requirements.txt'), 'pyyaml==5.3\nflask==3.0.0\n');
+    const yamlCve = lodashCve({
+      fingerprint: 'cve-yaml', rule_id: 'CVE-2020-14343', title: 'PyYAML: incomplete fix',
+      file_path: 'deploy/requirements.txt', snippet: 'PyYAML@5.3->5.4',
+    });
+    seedSnapshot({
+      routes: [route({ file: join(projectPath, 'app', 'web.py'), framework: 'flask', language: 'python' })],
+      external_imports: externalImports([{ file: 'app/web.py', specifier: 'yaml', language: 'python' }]),
+    });
+    seedScan([yamlCve]);
+
+    const reachable = expectOk(await run({ providers: ['dependency'] }));
+    expect(only(reachable).verdict).toBe('reachable');
+    expect(JSON.stringify(only(reachable))).not.toMatch(/another install/);
+
+    // A second manifest pinning another version: the import may load either.
+    mkdirSync(join(projectPath, 'services', 'b'), { recursive: true });
+    writeFileSync(join(projectPath, 'services', 'b', 'requirements.txt'), 'PyYAML==6.0.1\n');
+    const ambiguous = expectOk(await run({ providers: ['dependency'] }));
+    expect(only(ambiguous).verdict).toBe('unknown');
+    expect(only(ambiguous).coverage_gaps.join(' | ')).toContain(
+      'may load a different pin (services/b/requirements.txt: 6.0.1)',
+    );
+  });
+
   it('runs alone when asked for alone', async () => {
     seedSnapshot({
       external_imports: externalImports([{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }]),

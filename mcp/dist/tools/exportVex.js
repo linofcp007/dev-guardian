@@ -43,6 +43,7 @@ import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { prepareDependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { renderCycloneDxVex, renderOpenVex } from '../vex/render.js';
 import { parseSbomInventory } from '../vex/sbom.js';
 import { buildVexStatements } from '../vex/statements.js';
@@ -274,6 +275,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
             graph: buildImportGraph(persisted.snapshot.imports),
             projectPath,
             npmResolver: makeNpmResolver(projectPath),
+            pypiPins: makePypiPinResolver(projectPath),
         }),
     };
 }

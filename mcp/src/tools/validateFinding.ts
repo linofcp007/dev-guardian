@@ -53,6 +53,7 @@ import type { DomainErrorCode, ToolResult } from '../types.js';
 import { validateDependencies } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
 import { IMPLEMENTED_PROVIDERS, type FindingValidation } from '../validate/types.js';
@@ -248,6 +249,7 @@ async function handler(
         computedAt,
         projectPath,
         npmResolver: makeNpmResolver(projectPath),
+        pypiPins: makePypiPinResolver(projectPath),
       }),
     );
   }

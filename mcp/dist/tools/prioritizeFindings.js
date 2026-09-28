@@ -46,6 +46,7 @@ import { ProjectPath } from '../schemas.js';
 import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { registerToolModule } from './index.js';
 /** Added once when ANY of a finding's correlated CVEs is CISA KEV-listed —
  *  between `security`'s category weight (200) and `critical`'s severity
@@ -225,6 +226,7 @@ function ssvcAssessor(ctx, projectPath, intel, missionWellbeing, scanTrees) {
             graph: buildImportGraph(surface.snapshot.imports),
             projectPath,
             npmResolver: makeNpmResolver(projectPath),
+            pypiPins: makePypiPinResolver(projectPath),
         });
     const assessor = {
         mission,

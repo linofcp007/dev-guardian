@@ -19,6 +19,7 @@ import {
   validateDependencies,
   type DependencySubject,
   type NpmResolver,
+  type PypiPinResolver,
 } from '../../../src/validate/dependencyProvider.js';
 import { buildImportGraph } from '../../../src/validate/importGraph.js';
 import { MAX_FILES_PER_PACKAGE, externalImports } from '../../../src/surface/moduleEdges.js';
@@ -68,7 +69,7 @@ function resolverOf(resolved: Record<string, string | null> = {}): NpmResolver {
   return (fromDir, _rootDir, name) => {
     const key = `${fromDir}|${name}`;
     const hit = key in resolved ? resolved[key] : name in resolved ? resolved[name] : undefined;
-    if (hit === null) return null;
+    if (hit === null) return { version: null, reason: 'package-lock.json is not valid JSON' };
     return { version: hit ?? '1.0.0', source: 'package-lock.json' };
   };
 }
@@ -77,6 +78,8 @@ function assess(
   subject: DependencySubject,
   over: Partial<AttackSurfaceSnapshot> = {},
   npmResolver: NpmResolver | null = resolverOf(),
+  // The pins the project's requirement files hold; by default none but the finding's own.
+  pypiPins: PypiPinResolver | null = () => [],
 ) {
   const snapshot = snapshotOf(over);
   const index = prepareDependencyIndex({
@@ -84,6 +87,7 @@ function assess(
     graph: buildImportGraph(snapshot.imports),
     projectPath: PROJECT,
     ...(npmResolver === null ? {} : { npmResolver }),
+    ...(pypiPins === null ? {} : { pypiPins }),
   });
   return assessDependency(subject, index);
 }
@@ -235,7 +239,8 @@ describe('assessDependency — which copy the project’s code loads (review I1)
       resolverOf({ lodash: null }),
     );
     expect(a.verdict).toBe('imported');
-    expect(a.coverage_gaps.join(' | ')).toMatch(/could not be read/);
+    // The resolver's own reason, not a guess at one (review M-f).
+    expect(a.coverage_gaps.join(' | ')).toContain('could not be read: package-lock.json is not valid JSON');
   });
 
   it('claims no more than imported for a vulnerable range (npm audit), not an installed version', () => {
@@ -295,12 +300,64 @@ describe('the PyPI table (review M10)', () => {
       .toBe('unknown');
   });
 
-  it('scopes a PyPI package to its requirements file’s directory too', () => {
-    const a = assess(pypi('pyyaml', { manifest: 'services/a/requirements.txt' }), {
-      routes: [route({ file: `${PROJECT}/services/b/views.py`, language: 'python' })],
-      external_imports: externalImports([ext('services/b/views.py', 'yaml', 'python')]),
-    });
+  it('names the candidates when the only import is of a module another distribution also installs (review M-g)', () => {
+    const routes = [route({ file: `${PROJECT}/app/views.py`, language: 'python' })];
+    for (const [dist, module, other] of [
+      ['attrs', 'attr', 'attr'], ['pymongo', 'bson', 'bson'], ['python-multipart', 'multipart', 'multipart'],
+    ] as const) {
+      const a = assess(pypi(dist), { routes, external_imports: externalImports([ext('app/views.py', module, 'python')]) });
+      expect(a.verdict, dist).toBe('unknown');
+      const gaps = a.coverage_gaps.join(' | ');
+      expect(gaps).toMatch(new RegExp(`import name '${module}' is ambiguous`));
+      expect(gaps).toMatch(new RegExp(`'${other}' distribution`));
+      expect(gaps).not.toMatch(/no project file imports the package/);
+    }
+  });
+});
+
+describe('assessDependency — a Python environment is not directory-scoped (review N1)', () => {
+  // deploy/requirements.txt pins pyyaml==5.3; app/web.py, which a Flask route
+  // declares, imports yaml. It read "imported only by files outside
+  // 'deploy' … another install's copy" — a not_affected-sounding reason
+  // for a package the route loads.
+  const routes = [route({ file: `${PROJECT}/app/web.py`, language: 'python' })];
+  const importsYaml = externalImports([ext('app/web.py', 'yaml', 'python')]);
+
+  it('reads reachable when the project pins only one version, wherever the requirements file sits', () => {
+    const a = assess(
+      pypi('pyyaml', { version: '5.3', manifest: 'deploy/requirements.txt' }),
+      { routes, external_imports: importsYaml },
+      resolverOf(),
+      () => [{ manifest: 'deploy/requirements.txt', version: '5.3' }],
+    );
+    expect(a.verdict).toBe('reachable');
+    expect(a.coverage_gaps.join(' | ')).not.toMatch(/another install/);
+  });
+
+  it('answers unknown, naming the other pin, when manifests pin different versions', () => {
+    const a = assess(
+      pypi('pyyaml', { version: '5.3', manifest: 'deploy/requirements.txt' }),
+      { routes, external_imports: importsYaml },
+      resolverOf(),
+      () => [
+        { manifest: 'deploy/requirements.txt', version: '5.3' },
+        { manifest: 'services/b/requirements.txt', version: '6.0.1' },
+      ],
+    );
     expect(a.verdict).toBe('unknown');
+    const gaps = a.coverage_gaps.join(' | ');
+    expect(gaps).toContain('may load a different pin (services/b/requirements.txt: 6.0.1)');
+    expect(gaps).not.toMatch(/another install/);
+  });
+
+  it('claims no more than imported when the project’s pins could not be read', () => {
+    const a = assess(
+      pypi('pyyaml', { version: '5.3', manifest: 'deploy/requirements.txt' }),
+      { routes, external_imports: importsYaml },
+      resolverOf(),
+      null,
+    );
+    expect(a.verdict).toBe('imported');
   });
 });
 
@@ -408,6 +465,27 @@ describe('ecosystemOfManifest', () => {
     expect(ecosystemOfManifest('Cargo.lock')).toBe('cargo');
     expect(ecosystemOfManifest('src/App/App.csproj')).toBe('nuget');
     expect(ecosystemOfManifest('README.md')).toBeNull();
+  });
+
+  it('recognises the requirement-file layouts pip users keep (review N1)', () => {
+    expect(ecosystemOfManifest('requirements/base.txt')).toBe('pypi');
+    expect(ecosystemOfManifest('api/requirements/prod.txt')).toBe('pypi');
+    expect(ecosystemOfManifest('dev-requirements.txt')).toBe('pypi');
+    expect(ecosystemOfManifest('deploy/requirements-prod.txt')).toBe('pypi');
+    expect(ecosystemOfManifest('docs/notes.txt')).toBeNull();
+  });
+
+  it('maps a Java archive Trivy scanned to maven (review M-e)', () => {
+    expect(ecosystemOfManifest('app/lib/service.jar')).toBe('maven');
+    expect(ecosystemOfManifest('target/app.war')).toBe('maven');
+  });
+});
+
+describe('dependencySubjectOf — a requirements/ file is a manifest', () => {
+  it('keeps requirements/base.txt as the manifest instead of claiming there is none', () => {
+    expect(dependencySubjectOf(finding({
+      tool: 'pip-audit', subcategory: 'dependency', file_path: 'requirements/base.txt', snippet: 'pyyaml@5.3',
+    }))).toEqual({ package_name: 'pyyaml', ecosystem: 'pypi', version: '5.3', manifest: 'requirements/base.txt' });
   });
 });
 

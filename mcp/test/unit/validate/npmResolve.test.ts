@@ -45,11 +45,13 @@ describe('makeNpmResolver — package-lock.json v2/v3', () => {
 
   it('handles a scoped name, and answers null for a package not installed where the code looks', () => {
     expect(resolve('src', '', '@babel/core')?.version).toBe('7.22.0');
-    expect(resolve('src', '', 'left-pad')).toBeNull();
+    expect(resolve('src', '', 'left-pad')).toEqual({
+      version: null, reason: "package-lock.json does not install 'left-pad' where src looks for it",
+    });
   });
 
   it('answers null for code outside the manifest’s directory', () => {
-    expect(resolve('src', 'packages/api', 'lodash')).toBeNull();
+    expect(resolve('src', 'packages/api', 'lodash')?.version).toBeNull();
   });
 });
 
@@ -62,7 +64,7 @@ describe('makeNpmResolver — lockfile v1, the installed tree, nothing', () => {
     });
     const resolve = makeNpmResolver(root);
     expect(resolve('legacy/lib', 'legacy', 'lodash')).toEqual({ version: '4.17.15', source: 'legacy/package-lock.json' });
-    expect(resolve('legacy/lib', 'legacy', 'minimist')).toBeNull();
+    expect(resolve('legacy/lib', 'legacy', 'minimist')?.version).toBeNull();
   });
 
   it('falls back to the installed package.json when there is no lockfile', () => {
@@ -73,11 +75,20 @@ describe('makeNpmResolver — lockfile v1, the installed tree, nothing', () => {
       .toEqual({ version: '4.17.11', source: 'app/node_modules/lodash/package.json' });
   });
 
-  it('answers null with neither, and for a lockfile that is not JSON', () => {
+  it('says why with neither a lockfile nor an installed copy', () => {
     const bare = makeTempDir('guardian-npm-resolve-bare-');
-    expect(makeNpmResolver(bare)('src', '', 'lodash')).toBeNull();
+    expect(makeNpmResolver(bare)('src', '', 'lodash')).toEqual({
+      version: null, reason: "no package-lock.json or npm-shrinkwrap.json in '.', and no installed node_modules/lodash",
+    });
+  });
+
+  it('never falls back to node_modules past a lockfile that is not JSON — its own contract (review M-f)', () => {
     const broken = makeTempDir('guardian-npm-resolve-broken-');
     write(broken, 'package-lock.json', '{ not json');
-    expect(makeNpmResolver(broken)('src', '', 'lodash')).toBeNull();
+    // An installed copy that says something else: it must not be read.
+    write(broken, 'node_modules/lodash/package.json', { name: 'lodash', version: '4.17.11' });
+    expect(makeNpmResolver(broken)('src', '', 'lodash')).toEqual({
+      version: null, reason: 'package-lock.json is not valid JSON (or larger than 64 MiB)',
+    });
   });
 });

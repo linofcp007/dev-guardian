@@ -20,9 +20,13 @@ version bump.
 - `validate_finding` implements its `dependency` provider: a dependency CVE (npm; PyPI through a
   table of distributions whose module name is known and unique) reads `reachable` when a file a route
   reaches imports the package, `imported` when only other files do, and `unknown` otherwise — never
-  `unreachable`. Only files under the finding's manifest directory count, and for npm only a file
-  that loads exactly the vulnerable version (Node's lookup, read from `package-lock.json` or the
-  installed `node_modules`); when that cannot be read, the answer is at most `imported`.
+  `unreachable`. For npm, only files under the finding's manifest directory count, and only one that
+  loads exactly the vulnerable version (Node's lookup, read from `package-lock.json` or the installed
+  `node_modules`; an unreadable lockfile is never passed over); when that cannot be read, the answer
+  is at most `imported`, with the reason. A Python environment is not scoped to a directory: any
+  importer counts, and a route-reached one reads `reachable` only when the project's manifests
+  (requirement files at any depth, `requirements/*.txt`, `*-requirements.txt`, `Pipfile.lock`,
+  `poetry.lock`, `uv.lock`) pin the package at that one version — another pin is `unknown`, named.
   It runs by default beside `static`. The verdict set gains `imported`; `summary.counts_by_verdict` is
   now keyed by provider (`{ static: {…}, dependency: {…} }` — a flat count counted a dependency
   finding twice), and `summary.coverage_gaps` says each kind of gap once, with how many findings it

@@ -50,6 +50,7 @@ import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { validateDependencies } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary } from '../validate/summary.js';
 import { IMPLEMENTED_PROVIDERS } from '../validate/types.js';
@@ -202,6 +203,7 @@ async function handler(input, ctx) {
             computedAt,
             projectPath,
             npmResolver: makeNpmResolver(projectPath),
+            pypiPins: makePypiPinResolver(projectPath),
         }));
     }
     ctx.storage.validations.upsert(projectPath, validations);
