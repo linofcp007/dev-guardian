@@ -32,6 +32,7 @@ const EXPECTED_TOOLS = [
   'dotnet_describe_setup',
   'dotnet_efcore_audit',
   'dotnet_target_framework_check',
+  'export_vex',
   'generate_sbom',
   'health_status',
   'init_project',
@@ -105,8 +106,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (57 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(57);
+  it('matches the counts documented in the README (58 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(58);
     expect(RESOURCES).toHaveLength(18);
   });
 });

@@ -9,7 +9,7 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 ## What's inside
 
 - **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
-- An **MCP server** with **57 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
+- An **MCP server** with **58 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
 - **142 Semgrep rules in 10 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, and a route-inventory pack for nine languages — see [docs/rule-packs.md](docs/rule-packs.md).
 - **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
 - A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
@@ -82,7 +82,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | --- | --- |
 | Security scans | `security_scan_full`, `scan_sast`, `scan_secrets`, `scan_deps`, `scan_containers`, `scan_iac`, `review_pr` |
 | Bugs and quality | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
-| Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
+| Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
 | Attack surface | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
 | Reports | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |

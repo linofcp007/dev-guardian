@@ -26,6 +26,12 @@ version bump.
 - `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
   optional `impact_statement`, for a finding that names a CVE (migration 014; existing suppressions
   state nothing in VEX terms).
+- **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
+  statement per CVE of the latest usable dependency scan — `not_affected` only from a VEX
+  suppression, `affected` when the dependency provider finds the package reachable, otherwise
+  `under_investigation`; `fixed` is never guessed. Product and package purls come from the newest
+  SBOM. Written under `.guardian/reports/vex-*`; `unknowns` names what was missing (no SBOM, no
+  surface snapshot, a partial scan), and nothing is written when no CVE was measured.
 
 ## [3.0.0] - 2026-09-28
 

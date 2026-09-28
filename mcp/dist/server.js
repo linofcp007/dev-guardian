@@ -2809,11 +2809,11 @@ var require_validate = __commonJS({
         jsonPointer = $data;
         data = names_1.default.rootData;
       } else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
+        const matches2 = RELATIVE_JSON_POINTER.exec($data);
+        if (!matches2)
           throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
+        const up = +matches2[1];
+        jsonPointer = matches2[2];
         if (jsonPointer === "#") {
           if (up >= dataLevel)
             throw new Error(errorMsg("property/index", up));
@@ -3700,11 +3700,11 @@ var require_schemes = __commonJS({
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
-      const matches = urnComponent.path.match(URN_REG);
-      if (matches && matches[0] === urnComponent.path) {
+      const matches2 = urnComponent.path.match(URN_REG);
+      if (matches2 && matches2[0] === urnComponent.path) {
         const scheme = options.scheme || urnComponent.scheme || "urn";
-        urnComponent.nid = matches[1].toLowerCase();
-        urnComponent.nss = matches[2];
+        urnComponent.nid = matches2[1].toLowerCase();
+        urnComponent.nss = matches2[2];
         const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
@@ -4018,8 +4018,8 @@ var require_fast_uri = __commonJS({
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
     var AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/;
     var AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/;
-    function getParseError(parsed, matches) {
-      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+    function getParseError(parsed, matches2) {
+      if (matches2[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
         return 'URI path must start with "/" when authority is present.';
       }
       if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
@@ -4041,9 +4041,9 @@ var require_fast_uri = __commonJS({
     function isIPLiteral(host) {
       return host[0] === "[" && host[host.length - 1] === "]";
     }
-    function hasMalformedComponentPercentEncoding(matches) {
-      const host = matches[4];
-      return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
+    function hasMalformedComponentPercentEncoding(matches2) {
+      const host = matches2[4];
+      return hasMalformedPercentEncoding(matches2[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches2[6]) || hasMalformedPercentEncoding(matches2[7]) || hasMalformedPercentEncoding(matches2[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
@@ -4100,15 +4100,15 @@ var require_fast_uri = __commonJS({
           }
         }
       }
-      const matches = uri.match(URI_PARSE);
-      if (matches) {
-        parsed.scheme = matches[1];
-        parsed.userinfo = matches[3];
-        parsed.host = matches[4];
-        parsed.port = parseInt(matches[5], 10);
-        parsed.path = matches[6] || "";
-        parsed.query = matches[7];
-        parsed.fragment = matches[8];
+      const matches2 = uri.match(URI_PARSE);
+      if (matches2) {
+        parsed.scheme = matches2[1];
+        parsed.userinfo = matches2[3];
+        parsed.host = matches2[4];
+        parsed.port = parseInt(matches2[5], 10);
+        parsed.path = matches2[6] || "";
+        parsed.query = matches2[7];
+        parsed.fragment = matches2[8];
         if (parsed.scheme !== void 0) {
           const decodedScheme = unescape(parsed.scheme);
           if (VALID_SCHEME.test(decodedScheme)) {
@@ -4118,14 +4118,14 @@ var require_fast_uri = __commonJS({
             malformedScheme = true;
           }
         }
-        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches);
+        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches2);
         if (malformedPercentEncoding) {
           parsed.error = parsed.error || "URI contains malformed percent-encoding.";
         }
         if (isNaN(parsed.port)) {
-          parsed.port = matches[5];
+          parsed.port = matches2[5];
         }
-        const parseError = getParseError(parsed, matches);
+        const parseError = getParseError(parsed, matches2);
         if (parseError !== void 0) {
           parsed.error = parsed.error || parseError;
           malformedAuthorityOrPort = true;
@@ -4640,7 +4640,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text, msg) => text + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -6975,12 +6975,12 @@ var require_formats = __commonJS({
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     function date3(str6) {
-      const matches = DATE.exec(str6);
-      if (!matches)
+      const matches2 = DATE.exec(str6);
+      if (!matches2)
         return false;
-      const year = +matches[1];
-      const month = +matches[2];
-      const day = +matches[3];
+      const year = +matches2[1];
+      const month = +matches2[2];
+      const day = +matches2[3];
       return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && isLeapYear(year) ? 29 : DAYS[month]);
     }
     function compareDate(d1, d2) {
@@ -6995,16 +6995,16 @@ var require_formats = __commonJS({
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
       return function time3(str6) {
-        const matches = TIME.exec(str6);
-        if (!matches)
+        const matches2 = TIME.exec(str6);
+        if (!matches2)
           return false;
-        const hr = +matches[1];
-        const min = +matches[2];
-        const sec = +matches[3];
-        const tz = matches[4];
-        const tzSign = matches[5] === "-" ? -1 : 1;
-        const tzH = +(matches[6] || 0);
-        const tzM = +(matches[7] || 0);
+        const hr = +matches2[1];
+        const min = +matches2[2];
+        const sec = +matches2[3];
+        const tz = matches2[4];
+        const tzSign = matches2[5] === "-" ? -1 : 1;
+        const tzH = +(matches2[6] || 0);
+        const tzM = +(matches2[7] || 0);
         if (tzH > 23 || tzM > 59 || strictTimeZone && !tz)
           return false;
         if (hr <= 23 && min <= 59 && sec < 60)
@@ -13704,16 +13704,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler45) => {
+    signalExitWrap = (handler46) => {
       return {
         onExit(cb, opts) {
-          return handler45.onExit(cb, opts);
+          return handler46.onExit(cb, opts);
         },
         load() {
-          return handler45.load();
+          return handler46.load();
         },
         unload() {
-          return handler45.unload();
+          return handler46.unload();
         }
       };
     };
@@ -16450,14 +16450,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text2, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text;
+        return text2;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text.length <= endStep)
-        return text;
+      if (text2.length <= endStep)
+        return text2;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -16474,14 +16474,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i2 = consumeMoreIndentedLines(text, i2, indent.length);
+        i2 = consumeMoreIndentedLines(text2, i2, indent.length);
         if (i2 !== -1)
           end = i2 + endStep;
       }
-      for (let ch; ch = text[i2 += 1]; ) {
+      for (let ch; ch = text2[i2 += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i2;
-          switch (text[i2 + 1]) {
+          switch (text2[i2 + 1]) {
             case "x":
               i2 += 3;
               break;
@@ -16498,12 +16498,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i2 = consumeMoreIndentedLines(text, i2, indent.length);
+            i2 = consumeMoreIndentedLines(text2, i2, indent.length);
           end = i2 + indent.length + endStep;
           split = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text[i2 + 1];
+            const next = text2[i2 + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split = i2;
           }
@@ -16515,12 +16515,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text[i2 += 1];
+                ch = text2[i2 += 1];
                 overflow = true;
               }
               const j = i2 > escEnd + 1 ? i2 - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text;
+                return text2;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -16535,39 +16535,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text;
+        return text2;
       if (onFold)
         onFold();
-      let res = text.slice(0, folds[0]);
+      let res = text2.slice(0, folds[0]);
       for (let i3 = 0; i3 < folds.length; ++i3) {
         const fold = folds[i3];
-        const end2 = folds[i3 + 1] || text.length;
+        const end2 = folds[i3 + 1] || text2.length;
         if (fold === 0)
           res = `
-${indent}${text.slice(0, end2)}`;
+${indent}${text2.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text[fold]}\\`;
+            res += `${text2[fold]}\\`;
           res += `
-${indent}${text.slice(fold + 1, end2)}`;
+${indent}${text2.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text, i2, indent) {
+    function consumeMoreIndentedLines(text2, i2, indent) {
       let end = i2;
       let start = i2 + 1;
-      let ch = text[start];
+      let ch = text2[start];
       while (ch === " " || ch === "	") {
         if (i2 < start + indent) {
-          ch = text[++i2];
+          ch = text2[++i2];
         } else {
           do {
-            ch = text[++i2];
+            ch = text2[++i2];
           } while (ch && ch !== "\n");
           end = i2;
           start = i2 + 1;
-          ch = text[start];
+          ch = text2[start];
         }
       }
       return end;
@@ -34643,25 +34643,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler45 of responseHandlers.values()) {
-      handler45(error2);
+    for (const handler46 of responseHandlers.values()) {
+      handler46(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler45 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler45 === void 0) {
+    const handler46 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler46 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler45(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler46(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler45 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler46 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler45 === void 0) {
+    if (handler46 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34725,7 +34725,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler45(request, fullExtra)).then(async (result) => {
+    }).then(() => handler46(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34774,8 +34774,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler45 = this._progressHandlers.get(messageId);
-    if (!handler45) {
+    const handler46 = this._progressHandlers.get(messageId);
+    if (!handler46) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34792,7 +34792,7 @@ var Protocol = class {
         return;
       }
     }
-    handler45(params);
+    handler46(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34807,8 +34807,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler45 = this._responseHandlers.get(messageId);
-    if (handler45 === void 0) {
+    const handler46 = this._responseHandlers.get(messageId);
+    if (handler46 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34829,10 +34829,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler45(response);
+      handler46(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler45(error2);
+      handler46(error2);
     }
   }
   get transport() {
@@ -35030,9 +35030,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler45 = this._responseHandlers.get(messageId);
-          if (handler45) {
-            handler45(response);
+          const handler46 = this._responseHandlers.get(messageId);
+          if (handler46) {
+            handler46(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -35169,12 +35169,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler45) {
+  setRequestHandler(requestSchema, handler46) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler45(parsed, extra));
+      return Promise.resolve(handler46(parsed, extra));
     });
   }
   /**
@@ -35196,11 +35196,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler45) {
+  setNotificationHandler(notificationSchema, handler46) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler45(parsed));
+      return Promise.resolve(handler46(parsed));
     });
   }
   /**
@@ -35750,7 +35750,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler45) {
+  setRequestHandler(requestSchema, handler46) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35769,7 +35769,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage5}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler45(request, extra));
+        const result = await Promise.resolve(handler46(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35787,7 +35787,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler45);
+    return super.setRequestHandler(requestSchema, handler46);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36360,13 +36360,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler45) {
+  registerToolTask(name, config2, handler46) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler45);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler46);
   }
 };
 
@@ -36424,24 +36424,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool48]) => tool48.enabled).map(([name, tool48]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool49]) => tool49.enabled).map(([name, tool49]) => {
         const toolDefinition = {
           name,
-          title: tool48.title,
-          description: tool48.description,
+          title: tool49.title,
+          description: tool49.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool48.inputSchema);
+            const obj = normalizeObjectSchema(tool49.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool48.annotations,
-          execution: tool48.execution,
-          _meta: tool48._meta
+          annotations: tool49.annotations,
+          execution: tool49.execution,
+          _meta: tool49._meta
         };
-        if (tool48.outputSchema) {
-          const obj = normalizeObjectSchema(tool48.outputSchema);
+        if (tool49.outputSchema) {
+          const obj = normalizeObjectSchema(tool49.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36454,16 +36454,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool48 = this._registeredTools[request.params.name];
-        if (!tool48) {
+        const tool49 = this._registeredTools[request.params.name];
+        if (!tool49) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool48.enabled) {
+        if (!tool49.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool48.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool48.handler;
+        const taskSupport = tool49.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool49.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36471,14 +36471,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool48, request, extra);
+          return await this.handleAutomaticTaskPolling(tool49, request, extra);
         }
-        const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool48, args, extra);
+        const args = await this.validateToolInput(tool49, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool49, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool48, result, request.params.name);
+        await this.validateToolOutput(tool49, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36511,12 +36511,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool48, args, toolName) {
-    if (!tool48.inputSchema) {
+  async validateToolInput(tool49, args, toolName) {
+    if (!tool49.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool48.inputSchema);
-    const schemaToParse = inputObj ?? tool48.inputSchema;
+    const inputObj = normalizeObjectSchema(tool49.inputSchema);
+    const schemaToParse = inputObj ?? tool49.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36528,8 +36528,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool48, result, toolName) {
-    if (!tool48.outputSchema) {
+  async validateToolOutput(tool49, result, toolName) {
+    if (!tool49.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36541,7 +36541,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool48.outputSchema);
+    const outputObj = normalizeObjectSchema(tool49.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36552,43 +36552,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool48, args, extra) {
-    const handler45 = tool48.handler;
-    const isTaskHandler = "createTask" in handler45;
+  async executeToolHandler(tool49, args, extra) {
+    const handler46 = tool49.handler;
+    const isTaskHandler = "createTask" in handler46;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool48.inputSchema) {
-        const typedHandler = handler45;
+      if (tool49.inputSchema) {
+        const typedHandler = handler46;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler45;
+        const typedHandler = handler46;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool48.inputSchema) {
-      const typedHandler = handler45;
+    if (tool49.inputSchema) {
+      const typedHandler = handler46;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler45;
+      const typedHandler = handler46;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool48, request, extra) {
+  async handleAutomaticTaskPolling(tool49, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
-    const handler45 = tool48.handler;
+    const args = await this.validateToolInput(tool49, request.params.arguments, request.params.name);
+    const handler46 = tool49.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler45.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler46.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler45.createTask(taskExtra))
+      await Promise.resolve(handler46.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36924,17 +36924,17 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, execution, _meta, handler45) {
+  _createRegisteredTool(name, title, description, inputSchema29, outputSchema, annotations, execution, _meta, handler46) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
       description,
-      inputSchema: getZodSchemaObject(inputSchema28),
+      inputSchema: getZodSchemaObject(inputSchema29),
       outputSchema: getZodSchemaObject(outputSchema),
       annotations,
       execution,
       _meta,
-      handler: handler45,
+      handler: handler46,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -36980,7 +36980,7 @@ var McpServer = class {
       throw new Error(`Tool ${name} is already registered`);
     }
     let description;
-    let inputSchema28;
+    let inputSchema29;
     let outputSchema;
     let annotations;
     if (typeof rest[0] === "string") {
@@ -36989,7 +36989,7 @@ var McpServer = class {
     if (rest.length > 1) {
       const firstArg = rest[0];
       if (isZodRawShapeCompat(firstArg)) {
-        inputSchema28 = rest.shift();
+        inputSchema29 = rest.shift();
         if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
           annotations = rest.shift();
         }
@@ -37001,7 +37001,7 @@ var McpServer = class {
       }
     }
     const callback = rest[0];
-    return this._createRegisteredTool(name, void 0, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+    return this._createRegisteredTool(name, void 0, description, inputSchema29, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
   }
   /**
    * Registers a tool with a config object and callback.
@@ -37010,8 +37010,8 @@ var McpServer = class {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
     }
-    const { title, description, inputSchema: inputSchema28, outputSchema, annotations, _meta } = config2;
-    return this._createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+    const { title, description, inputSchema: inputSchema29, outputSchema, annotations, _meta } = config2;
+    return this._createRegisteredTool(name, title, description, inputSchema29, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
   }
   prompt(name, ...rest) {
     if (this._registeredPrompts[name]) {
@@ -37346,9 +37346,9 @@ ${BASELINE_NEGATION}
     if (!hasNegation) missing.push(BASELINE_NEGATION);
     const body = withEndings.filter((_, i2) => !toDrop.has(i2));
     for (let last = body.pop(); last !== void 0; last = body.pop()) {
-      const text = last.text.replace(/\r+$/, "");
-      if (text === "") continue;
-      body.push({ text, eol: last.eol === "" ? eol : last.eol });
+      const text2 = last.text.replace(/\r+$/, "");
+      if (text2 === "") continue;
+      body.push({ text: text2, eol: last.eol === "" ? eol : last.eol });
       break;
     }
     const next = body.map((l) => l.text + l.eol).join("") + (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : "");
@@ -37491,9 +37491,9 @@ function defaultDeps() {
           // stderr — concat both to be safe.
         });
         if (result.exitCode !== 0) return null;
-        const text = (result.stdout || result.stderr || "").split(/\r?\n/)[0]?.trim() ?? "";
-        if (!/bash|gnu|version/i.test(text)) return null;
-        return text;
+        const text2 = (result.stdout || result.stderr || "").split(/\r?\n/)[0]?.trim() ?? "";
+        if (!/bash|gnu|version/i.test(text2)) return null;
+        return text2;
       } catch {
         return null;
       }
@@ -37596,8 +37596,8 @@ function assignIdentities(findings, opts = {}) {
   const linesOf = (readable2) => {
     if (readable2 !== currentPath) {
       currentPath = readable2;
-      const text = opts.readSource === void 0 ? null : opts.readSource(readable2);
-      currentLines = text === null ? null : text.split(/\r\n|\r|\n/);
+      const text2 = opts.readSource === void 0 ? null : opts.readSource(readable2);
+      currentLines = text2 === null ? null : text2.split(/\r\n|\r|\n/);
     }
     return currentLines;
   };
@@ -37775,8 +37775,8 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   }
   return "none";
 }
-function snippetText(tool48, snippet) {
-  if (tool48.toLowerCase() !== "bandit") return snippet;
+function snippetText(tool49, snippet) {
+  if (tool49.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
 }
 var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
@@ -37788,8 +37788,8 @@ function isHistoryLocator(f) {
   return f.tool.toLowerCase() === "gitleaks" && /;commit=[0-9a-f]{7,64}$/i.test(f.snippet ?? "");
 }
 function usableSnippet(snippet) {
-  const text = collapse(snippet);
-  return text !== "" && text.toLowerCase() !== REDACTED_SNIPPET;
+  const text2 = collapse(snippet);
+  return text2 !== "" && text2.toLowerCase() !== REDACTED_SNIPPET;
 }
 function sourceLines(lines, start, end) {
   if (!Number.isInteger(start) || start < 1) return null;
@@ -37798,8 +37798,8 @@ function sourceLines(lines, start, end) {
   const last = Math.min(Math.max(requestedEnd, start), lines.length);
   return lines.slice(start - 1, last).join("\n");
 }
-function collapse(text) {
-  return text.replace(/\s+/g, " ").trim();
+function collapse(text2) {
+  return text2.replace(/\s+/g, " ").trim();
 }
 function splitCoordinate(coordinate, allowBareName) {
   const at = coordinate.lastIndexOf("@");
@@ -37821,8 +37821,8 @@ function realOrResolved(p) {
 function compareStrings(a2, b) {
   return a2 < b ? -1 : a2 > b ? 1 : 0;
 }
-function sha2562(text) {
-  return createHash2("sha256").update(text).digest("hex");
+function sha2562(text2) {
+  return createHash2("sha256").update(text2).digest("hex");
 }
 
 // src/runners/semgrepRuleIds.ts
@@ -38376,7 +38376,7 @@ function pidIsAlive(pid) {
   }
 }
 function rowToRecord(row) {
-  const record4 = {
+  const record5 = {
     scan_id: row.id,
     scan_type: row.scan_type,
     project_path: row.project_path,
@@ -38388,14 +38388,14 @@ function rowToRecord(row) {
     missing_tools: parseJsonArray(row.missing_tools),
     report_paths: row.report_dir ? [row.report_dir] : []
   };
-  if (row.cached_from) record4.cached_from = row.cached_from;
+  if (row.cached_from) record5.cached_from = row.cached_from;
   if (row.meta && row.meta !== "{}") {
     try {
-      record4.meta = JSON.parse(row.meta);
+      record5.meta = JSON.parse(row.meta);
     } catch {
     }
   }
-  return record4;
+  return record5;
 }
 
 // src/storage/localRuleIds.ts
@@ -39680,8 +39680,8 @@ var SuppressionsRepo = class {
    * findings table on either key, since a suppression stores only the
    * finding's fingerprint/identity. Newest first.
    */
-  listActiveForRule(tool48, ruleId, limit, projectPath) {
-    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool48, ruleId, limit).map(rowToSuppression);
+  listActiveForRule(tool49, ruleId, limit, projectPath) {
+    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool49, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
@@ -40321,20 +40321,20 @@ function attachAllResources(server, ctx) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool48) {
-  if (TOOLS.some((t) => t.name === tool48.name)) {
-    throw new Error(`Tool '${tool48.name}' is already registered`);
+function registerToolModule(tool49) {
+  if (TOOLS.some((t) => t.name === tool49.name)) {
+    throw new Error(`Tool '${tool49.name}' is already registered`);
   }
-  TOOLS.push(tool48);
+  TOOLS.push(tool49);
 }
 function attachAllTools(server, ctx) {
-  for (const tool48 of TOOLS) {
+  for (const tool49 of TOOLS) {
     server.registerTool(
-      tool48.name,
+      tool49.name,
       {
-        ...tool48.title ? { title: tool48.title } : {},
-        description: tool48.description,
-        inputSchema: tool48.inputSchema
+        ...tool49.title ? { title: tool49.title } : {},
+        description: tool49.description,
+        inputSchema: tool49.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -40346,8 +40346,8 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool48.handler(input, ctx, callMeta);
-        return toCallToolResult(result, tool48.contentOnlyKeys ?? []);
+        const result = await tool49.handler(input, ctx, callMeta);
+        return toCallToolResult(result, tool49.contentOnlyKeys ?? []);
       }
     );
   }
@@ -40419,8 +40419,8 @@ async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS) {
     return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
   }
 }
-function splitNul(text) {
-  return text.split("\0").filter((s) => s.length > 0);
+function splitNul(text2) {
+  return text2.split("\0").filter((s) => s.length > 0);
 }
 async function repoState(cwd) {
   const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
@@ -40509,8 +40509,8 @@ async function materialiseCommit(cwd, sha) {
   }
   return { root, remove };
 }
-function firstLine(text) {
-  return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+function firstLine(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 
 // src/runners/semgrepConfigs.ts
@@ -40535,15 +40535,15 @@ var PATTERN_KEYS = [
   "join"
 ];
 function validateSemgrepRulesFile(path8) {
-  let text;
+  let text2;
   try {
-    text = readFileSync8(path8, "utf8");
+    text2 = readFileSync8(path8, "utf8");
   } catch {
     return { ok: false, reason: "unreadable" };
   }
   let doc;
   try {
-    doc = (0, import_yaml2.parse)(text);
+    doc = (0, import_yaml2.parse)(text2);
   } catch {
     return { ok: false, reason: "not valid YAML" };
   }
@@ -40762,15 +40762,15 @@ function inspectProjectSemgrepConfigs(projectPath) {
   return { usable, unusable };
 }
 function classify(path8) {
-  let text;
+  let text2;
   try {
-    text = readFileSync10(path8, "utf8");
+    text2 = readFileSync10(path8, "utf8");
   } catch {
     return { ok: false, reason: "unreadable" };
   }
   let doc;
   try {
-    doc = (0, import_yaml3.parse)(text);
+    doc = (0, import_yaml3.parse)(text2);
   } catch {
     return { ok: false, reason: "not valid YAML" };
   }
@@ -40930,10 +40930,10 @@ function buildProvenanceHeader(input) {
     ""
   ].join("\n");
 }
-function stripProvenanceHeader(text) {
-  const lines = text.split("\n");
+function stripProvenanceHeader(text2) {
+  const lines = text2.split("\n");
   const first = lines[0];
-  if (first === void 0 || !first.includes(PROVENANCE_MARKER)) return text;
+  if (first === void 0 || !first.includes(PROVENANCE_MARKER)) return text2;
   const limit = Math.min(lines.length, MAX_HEADER_LINES);
   for (let i2 = 0; i2 < limit; i2 += 1) {
     const line = lines[i2];
@@ -40943,17 +40943,17 @@ function stripProvenanceHeader(text) {
     if (lines[start] === "") start += 1;
     return lines.slice(start).join("\n");
   }
-  return text;
+  return text2;
 }
 
 // src/configdrift/hash.ts
-function canonicaliseConfig(text) {
-  const withoutBom = text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+function canonicaliseConfig(text2) {
+  const withoutBom = text2.charCodeAt(0) === 65279 ? text2.slice(1) : text2;
   const lf = withoutBom.replace(/\r\n?/g, "\n");
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
-function hashConfigText(text) {
-  return createHash5("sha256").update(canonicaliseConfig(text), "utf8").digest("hex");
+function hashConfigText(text2) {
+  return createHash5("sha256").update(canonicaliseConfig(text2), "utf8").digest("hex");
 }
 function hashConfigFile(path8) {
   try {
@@ -41178,9 +41178,9 @@ var GLOB_SYNTAX = /[*?[\]{}\\]/;
 var FNMATCH_SYNTAX = /[*?[\]]/;
 var MAX_NATIVE_ENTRIES = 200;
 var MAX_NATIVE_CHARS = 8e3;
-function compileIgnore(text) {
+function compileIgnore(text2) {
   const rules = [];
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (const rawLine of text2.split(/\r?\n/)) {
     const rule = parseLine(rawLine);
     if (rule !== null) rules.push(rule);
   }
@@ -41303,20 +41303,20 @@ function findClassEnd(pattern, start) {
   }
   return -1;
 }
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegExp(text2) {
+  return text2.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 async function loadProjectExclusions(projectPath) {
   const file = join13(projectPath, GUARDIAN_IGNORE_FILE);
-  let text;
+  let text2;
   try {
-    text = readFileSync12(file, "utf8");
+    text2 = readFileSync12(file, "utf8");
   } catch (e) {
     const code = typeof e === "object" && e !== null && "code" in e ? e.code : void 0;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
     return { file, error: e instanceof Error ? e.message : String(e) };
   }
-  const matcher = compileIgnore(text);
+  const matcher = compileIgnore(text2);
   const listed = await gitListFiles(projectPath);
   let semgrepAnchor;
   if (listed !== null) {
@@ -41327,7 +41327,7 @@ async function loadProjectExclusions(projectPath) {
   }
   return {
     file,
-    hash: createHash7("sha256").update(text).digest("hex"),
+    hash: createHash7("sha256").update(text2).digest("hex"),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
     ...classify3(listed ?? listProjectFiles(projectPath), matcher),
@@ -41570,8 +41570,8 @@ function expandGlob(root, pattern) {
   walk4(root);
   return out.sort();
 }
-function escapeRegExp2(text) {
-  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegExp2(text2) {
+  return text2.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 
 // src/platform/scope.ts
@@ -42115,8 +42115,8 @@ function filterFindings(items, min) {
 import { createHash as createHash9 } from "node:crypto";
 import { readFileSync as readFileSync13, readdirSync as readdirSync8, statSync as statSync7 } from "node:fs";
 import { join as join16, relative as relative6, sep as sep6 } from "node:path";
-function sha2563(text) {
-  return createHash9("sha256").update(text).digest("hex");
+function sha2563(text2) {
+  return createHash9("sha256").update(text2).digest("hex");
 }
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
@@ -42237,8 +42237,8 @@ async function isGitRepo(projectPath) {
     return false;
   }
 }
-function firstLine2(text) {
-  for (const line of text.split(/\r?\n/)) {
+function firstLine2(text2) {
+  for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length > 0) return trimmed;
   }
@@ -42591,13 +42591,13 @@ function npmLockFilesLockNothing(dir) {
   }
   const yarnLock = join17(dir, "yarn.lock");
   if (existsSync12(yarnLock)) {
-    let text;
+    let text2;
     try {
-      text = readFileSync14(yarnLock, "utf8");
+      text2 = readFileSync14(yarnLock, "utf8");
     } catch {
       return false;
     }
-    if (text.split(/\r?\n/).some((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))) return false;
+    if (text2.split(/\r?\n/).some((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))) return false;
   }
   return true;
 }
@@ -42611,17 +42611,17 @@ var EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
 var PY_DEPENDENCY_KEYS = /* @__PURE__ */ new Set(["dependencies", "optional-dependencies", "dev-dependencies"]);
 var PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
 function pythonManifestDeclaresNothing(path8) {
-  let text;
+  let text2;
   try {
-    text = readFileSync14(path8, "utf8").replace(/^﻿/, "");
+    text2 = readFileSync14(path8, "utf8").replace(/^﻿/, "");
   } catch {
     return false;
   }
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+  const lines = text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
   if (/\.txt$/i.test(path8)) return lines.length === 0;
-  if (/(^|[\\/])setup\.py$/i.test(path8)) return !/\b(install_requires|extras_require)\b/.test(text);
+  if (/(^|[\\/])setup\.py$/i.test(path8)) return !/\b(install_requires|extras_require)\b/.test(text2);
   if (/(^|[\\/])setup\.cfg$/i.test(path8)) {
-    return !/^\s*(install_requires|extras_require)\s*=/m.test(text) && !/^\s*\[options\.extras_require\]/m.test(text);
+    return !/^\s*(install_requires|extras_require)\s*=/m.test(text2) && !/^\s*\[options\.extras_require\]/m.test(text2);
   }
   let table = "";
   for (const line of lines) {
@@ -43266,8 +43266,8 @@ function configDriftAdvisory(plugin, projectPath) {
   }
 }
 function cachedResult(config2, input, plugin, scanId, warnings) {
-  const record4 = plugin.storage.scans.getById(scanId);
-  if (!record4) {
+  const record5 = plugin.storage.scans.getById(scanId);
+  if (!record5) {
     return failDomain("unknown_scan_id", `Cached scan ${scanId} could not be loaded.`);
   }
   const stored = plugin.storage.findings.listByScan(scanId);
@@ -43277,13 +43277,13 @@ function cachedResult(config2, input, plugin, scanId, warnings) {
   const top = topFindings(visible, 10);
   const floor = severityFloorNotice(view.visible, input.severity_min, scanId);
   const { coverage, warning: coverageWarning } = assessCoverage(
-    record4.scan_type,
-    record4.tools_run,
-    record4.missing_tools,
-    { manifestGaps: record4.meta?.["manifest_coverage_gaps"] }
+    record5.scan_type,
+    record5.tools_run,
+    record5.missing_tools,
+    { manifestGaps: record5.meta?.["manifest_coverage_gaps"] }
   );
   const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
-  const { meta, ...row } = record4;
+  const { meta, ...row } = record5;
   allWarnings.push(...scopeWarnings(meta?.["scope"]));
   const excludedNote = exclusionWarning(meta?.["exclusions"]);
   if (excludedNote !== null) allWarnings.push(excludedNote);
@@ -43296,7 +43296,7 @@ function cachedResult(config2, input, plugin, scanId, warnings) {
   }
   const result = {
     ...row,
-    duration_ms: durationMs(record4.started_at, record4.finished_at),
+    duration_ms: durationMs(record5.started_at, record5.finished_at),
     cached: true,
     cached_from: scanId,
     findings_count_by_severity: counts,
@@ -43405,22 +43405,22 @@ function readText(path8) {
   }
 }
 function solutionProjects(solution) {
-  const text = readText(solution);
+  const text2 = readText(solution);
   const out = [];
   const add = (written) => {
     if (PROJECT_EXTENSIONS.has(extname(written.trim()).toLowerCase())) out.push(resolveFromFile(solution, written));
   };
   if (solution.toLowerCase().endsWith(".slnx")) {
-    for (const m of text.matchAll(/<Project\b[^>]*\bPath\s*=\s*"([^"]+)"/gi)) if (m[1]) add(m[1]);
+    for (const m of text2.matchAll(/<Project\b[^>]*\bPath\s*=\s*"([^"]+)"/gi)) if (m[1]) add(m[1]);
   } else {
-    for (const m of text.matchAll(/^\s*Project\("[^"]*"\)\s*=\s*"[^"]*"\s*,\s*"([^"]+)"/gim)) if (m[1]) add(m[1]);
+    for (const m of text2.matchAll(/^\s*Project\("[^"]*"\)\s*=\s*"[^"]*"\s*,\s*"([^"]+)"/gim)) if (m[1]) add(m[1]);
   }
   return out;
 }
 function projectReferences(project) {
-  const text = readText(project);
+  const text2 = readText(project);
   const out = [];
-  for (const m of text.matchAll(/<ProjectReference\b[^>]*\bInclude\s*=\s*"([^"]+)"/gi)) {
+  for (const m of text2.matchAll(/<ProjectReference\b[^>]*\bInclude\s*=\s*"([^"]+)"/gi)) {
     if (m[1]) out.push(resolveFromFile(project, m[1]));
   }
   return out;
@@ -43713,15 +43713,15 @@ async function findOwnMsysProcesses(command, token) {
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
     const grep = (files) => execa(join20(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
-    let matches;
+    let matches2;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
-      matches = parseEnvironMatches(all.stdout);
+      matches2 = parseEnvironMatches(all.stdout);
     } else {
       const each = await Promise.all(roots.map((f) => grep([f])));
-      matches = new Set(each.flatMap((r) => [...parseEnvironMatches(r.stdout)]));
+      matches2 = new Set(each.flatMap((r) => [...parseEnvironMatches(r.stdout)]));
     }
-    return selectOwnMsysProcesses(snapshot, matches, self);
+    return selectOwnMsysProcesses(snapshot, matches2, self);
   } catch {
     return none;
   }
@@ -43999,12 +43999,12 @@ function ruleConfigError(errors) {
   let rules = 0;
   for (const entry of errors) {
     const type = errorType(entry) ?? "";
-    const text = (errorMessage(entry) ?? "").split(/\r?\n/)[0] ?? "";
+    const text2 = (errorMessage(entry) ?? "").split(/\r?\n/)[0] ?? "";
     if (/rule|language/i.test(type)) {
       rules += 1;
-      described.push(`${type}: ${text}`);
+      described.push(`${type}: ${text2}`);
     } else if (type === "SemgrepError") {
-      described.push(`${type}: ${text}`);
+      described.push(`${type}: ${text2}`);
     } else {
       return null;
     }
@@ -44066,8 +44066,8 @@ function targetFileOf(entry, rawType) {
   }
   return null;
 }
-function clip(text) {
-  return text.length > MAX_ERROR_TEXT ? `${text.slice(0, MAX_ERROR_TEXT - 1)}\u2026` : text;
+function clip(text2) {
+  return text2.length > MAX_ERROR_TEXT ? `${text2.slice(0, MAX_ERROR_TEXT - 1)}\u2026` : text2;
 }
 function pythonUtf8Env(env) {
   return { ...env ?? process.env, PYTHONUTF8: "1" };
@@ -45111,10 +45111,10 @@ function sweepStaleReportDirs(root = tmpdir4(), now = Date.now()) {
   }
   return removed;
 }
-function sanitizeGitleaksReport(text, keep) {
+function sanitizeGitleaksReport(text2, keep) {
   let root;
   try {
-    root = JSON.parse(text);
+    root = JSON.parse(text2);
   } catch {
     return null;
   }
@@ -45206,9 +45206,9 @@ function sanitizeGitleaksReport(text, keep) {
   });
   return { text: JSON.stringify(clean), secrets };
 }
-function replaceAll(text, needles) {
+function replaceAll(text2, needles) {
   const sorted = [...new Set(needles)].filter((n2) => n2.length > 0).sort((a2, b) => b.length - a2.length);
-  let out = text;
+  let out = text2;
   for (const n2 of sorted) if (out.includes(n2)) out = out.split(n2).join(REDACTED);
   return out;
 }
@@ -45220,34 +45220,34 @@ function addRange(ranges, start, end) {
   }
   ranges.push({ start: from, end });
 }
-function redactRanges(text, ranges) {
-  if (ranges.length === 0) return text;
+function redactRanges(text2, ranges) {
+  if (ranges.length === 0) return text2;
   let out = "";
   let pos = 0;
   for (const r of ranges) {
-    out += text.slice(pos, r.start) + REDACTED;
+    out += text2.slice(pos, r.start) + REDACTED;
     pos = r.end;
   }
-  return out + text.slice(pos);
+  return out + text2.slice(pos);
 }
 function makeScrubber(values) {
   const distinct = [...new Set(values)].filter((v) => v.length > 0);
   const [only] = distinct;
-  if (only === void 0) return (text) => text;
+  if (only === void 0) return (text2) => text2;
   return distinct.length === 1 ? makeValueScrubber(only) : makeTrieScrubber(distinct);
 }
 function makeValueScrubber(value) {
   const m = value.length;
   let border = null;
-  return (text) => {
-    const first = text.indexOf(value);
-    if (first === -1) return text;
-    if (text.indexOf(value, first + 1) === -1) return text.slice(0, first) + REDACTED + text.slice(first + m);
+  return (text2) => {
+    const first = text2.indexOf(value);
+    if (first === -1) return text2;
+    if (text2.indexOf(value, first + 1) === -1) return text2.slice(0, first) + REDACTED + text2.slice(first + m);
     border ??= prefixFunction(value);
     const ranges = [];
     let q = 0;
-    for (let i2 = first; i2 < text.length; i2++) {
-      const c3 = text.charCodeAt(i2);
+    for (let i2 = first; i2 < text2.length; i2++) {
+      const c3 = text2.charCodeAt(i2);
       while (q > 0 && value.charCodeAt(q) !== c3) q = border[q - 1] ?? 0;
       if (value.charCodeAt(q) === c3) q += 1;
       if (q === m) {
@@ -45255,7 +45255,7 @@ function makeValueScrubber(value) {
         q = border[m - 1] ?? 0;
       }
     }
-    return redactRanges(text, ranges);
+    return redactRanges(text2, ranges);
   };
 }
 function prefixFunction(s) {
@@ -45294,7 +45294,7 @@ function makeTrieScrubber(values) {
     }
     if (node !== 0) longest[node] = v.length;
   }
-  if (parent.length === 1) return (text) => text;
+  if (parent.length === 1) return (text2) => text2;
   const fail4 = parent.map(() => 0);
   const order = parent.map((_, n2) => n2).sort((a2, b) => at(depth, a2) - at(depth, b));
   for (const v of order) {
@@ -45307,11 +45307,11 @@ function makeTrieScrubber(values) {
     fail4[v] = target;
     if (at(longest, v) === 0) longest[v] = at(longest, target);
   }
-  return (text) => {
+  return (text2) => {
     const ranges = [];
     let node = 0;
-    for (let i2 = 0; i2 < text.length; i2++) {
-      const c3 = text.charCodeAt(i2);
+    for (let i2 = 0; i2 < text2.length; i2++) {
+      const c3 = text2.charCodeAt(i2);
       let next = edges.get(node * EDGE + c3);
       while (next === void 0 && node !== 0) {
         node = at(fail4, node);
@@ -45321,7 +45321,7 @@ function makeTrieScrubber(values) {
       const length = at(longest, node);
       if (length !== 0) addRange(ranges, i2 + 1 - length, i2 + 1);
     }
-    return redactRanges(text, ranges);
+    return redactRanges(text2, ranges);
   };
 }
 function spanOf(item) {
@@ -46380,7 +46380,7 @@ function summarize(checked) {
   const records = [];
   for (const { finding: finding4, check: check2 } of checked) {
     if (check2.verdict === "skipped") continue;
-    const record4 = {
+    const record5 = {
       fingerprint: finding4.fingerprint,
       rule_id: finding4.rule_id ?? "",
       provider: check2.provider,
@@ -46388,9 +46388,9 @@ function summarize(checked) {
       verified: check2.verdict,
       reason: check2.reason
     };
-    if (finding4.file_path !== void 0) record4.file_path = finding4.file_path;
-    if (finding4.line_start !== void 0) record4.line_start = finding4.line_start;
-    records.push(record4);
+    if (finding4.file_path !== void 0) record5.file_path = finding4.file_path;
+    if (finding4.line_start !== void 0) record5.line_start = finding4.line_start;
+    records.push(record5);
   }
   const summary = {
     verified: sent.length,
@@ -47078,8 +47078,8 @@ async function runChild(name, input, ctx, meta) {
     cves: [],
     cancelled
   });
-  const tool48 = TOOLS.find((t) => t.name === name);
-  if (!tool48) {
+  const tool49 = TOOLS.find((t) => t.name === name);
+  if (!tool49) {
     return empty({ tool: name, scan_id: null, status: "failed", error: "not registered" }, [
       { name, status: "failed", reason: `tool ${name} is not registered` }
     ], false);
@@ -47087,7 +47087,7 @@ async function runChild(name, input, ctx, meta) {
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
   let r;
   try {
-    r = await tool48.handler(input, ctx.plugin, meta);
+    r = await tool49.handler(input, ctx.plugin, meta);
   } catch (e) {
     if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
     const reason = e instanceof Error ? e.message : String(e);
@@ -47147,10 +47147,10 @@ import { isAbsolute as isAbsolute6, join as join28, relative as relative11, reso
 var import_yaml4 = __toESM(require_dist2(), 1);
 var COMPOSE_TOOL_NAME = "docker-compose";
 var CATEGORY = "security";
-function checkCompose(text, filePath) {
+function checkCompose(text2, filePath) {
   let doc;
   try {
-    doc = (0, import_yaml4.parse)(text);
+    doc = (0, import_yaml4.parse)(text2);
   } catch {
     return [];
   }
@@ -47294,8 +47294,8 @@ var COMPOSE_FILE_NAMES = ["docker-compose.yml", "compose.yml", "docker-compose.y
 var composeParser = {
   name: "docker-compose",
   parse(input) {
-    const { text, filePath } = input;
-    return { findings: checkCompose(text, filePath), cves: [] };
+    const { text: text2, filePath } = input;
+    return { findings: checkCompose(text2, filePath), cves: [] };
   }
 };
 var IMAGE_REF = /^(?!-)\S+$/;
@@ -47410,11 +47410,11 @@ var scanContainers = makeScanTool({
     }
     const composeFile = findComposeFile(ctx.projectPath);
     if (composeFile) {
-      const text = readComposeFileSafe(composeFile);
-      if (text !== null) {
+      const text2 = readComposeFileSafe(composeFile);
+      if (text2 !== null) {
         parser_inputs.push({
           parser: composeParser,
-          input: { text, filePath: relative11(ctx.projectPath, composeFile) }
+          input: { text: text2, filePath: relative11(ctx.projectPath, composeFile) }
         });
         tools_run.push({ name: "docker-compose", status: "ok" });
       } else {
@@ -48021,15 +48021,15 @@ var QUALITY_FIELDS = ["duplication_pct", "complexity"];
 function loadBudgets(projectPath) {
   const path8 = join30(projectPath, ".guardian", "budgets.yml");
   if (!existsSync20(path8)) return { kind: "none" };
-  let text;
+  let text2;
   try {
-    text = readFileSync19(path8, "utf8");
+    text2 = readFileSync19(path8, "utf8");
   } catch (e) {
     return { kind: "invalid", path: path8, error: `could not read the file: ${message2(e)}` };
   }
   let doc;
   try {
-    doc = (0, import_yaml5.parse)(text);
+    doc = (0, import_yaml5.parse)(text2);
   } catch (e) {
     return { kind: "invalid", path: path8, error: `invalid YAML: ${message2(e)}` };
   }
@@ -48840,8 +48840,8 @@ function localEslint(projectPath) {
 function isObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function firstLine3(text) {
-  return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+function firstLine3(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 function qualityCategoryOf(f) {
   const sub = f.subcategory;
@@ -49998,8 +49998,8 @@ function sourceTypesOf(slot) {
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
 }
-function runSlotOf(tool48) {
-  return SCRIPT_ERA_RUN_SLOTS[tool48] ?? "security_full";
+function runSlotOf(tool49) {
+  return SCRIPT_ERA_RUN_SLOTS[tool49] ?? "security_full";
 }
 function findingInSlot(scan2, finding4, slot) {
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
@@ -50857,7 +50857,7 @@ function carriedFrom(args) {
         everything = true;
         break;
       }
-      for (const tool48 of toolsOfKey(key)) tools.add(tool48);
+      for (const tool49 of toolsOfKey(key)) tools.add(tool49);
       continue;
     }
     const lookup = admitLookup(scope.admit);
@@ -51926,13 +51926,13 @@ function extractDependenciesArray(raw) {
   return raw.slice(start, i2 - 1);
 }
 function parseRunnerJson(ecosystem, label, stdout, failures) {
-  const text = typeof stdout === "string" ? stdout : "";
-  if (text.trim().length === 0) {
+  const text2 = typeof stdout === "string" ? stdout : "";
+  if (text2.trim().length === 0) {
     failures.push({ ecosystem, code: "no_output", reason: `${label} printed nothing` });
     return void 0;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(text2);
   } catch {
     failures.push({ ecosystem, code: "unparseable_output", reason: `${label} printed something that is not JSON` });
     return void 0;
@@ -51956,8 +51956,8 @@ async function runComposerOutdated(projectPath, cves) {
     };
   }
   const parsed = parseRunnerJson("composer", "composer outdated --locked --format=json", result.stdout, failures);
-  const record4 = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
-  const installed = record4?.["locked"] ?? record4?.["installed"];
+  const record5 = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
+  const installed = record5?.["locked"] ?? record5?.["installed"];
   if (!Array.isArray(installed)) {
     if (failures.length === 0) {
       failures.push({ ecosystem: "composer", code: "unparseable_output", reason: 'composer outdated --locked printed no "locked" list' });
@@ -52063,9 +52063,9 @@ async function runBundlerOutdated(projectPath, cves) {
     reject: false,
     timeout: 9e4
   });
-  const text = typeof result.stdout === "string" ? result.stdout : "";
+  const text2 = typeof result.stdout === "string" ? result.stdout : "";
   const out = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text2.split(/\r?\n/)) {
     const m = /^(\S+) \(newest ([^,]+), installed ([^,)]+)/.exec(line);
     if (!m) continue;
     const name = m[1] ?? "";
@@ -52134,8 +52134,8 @@ async function runDotnetOutdated(projectPath, cves) {
       reject: false,
       timeout: 9e4
     });
-    const text = typeof fallback.stdout === "string" ? fallback.stdout : "";
-    if (fallback.exitCode !== 0 || text.trim().length === 0) {
+    const text2 = typeof fallback.stdout === "string" ? fallback.stdout : "";
+    if (fallback.exitCode !== 0 || text2.trim().length === 0) {
       failures.push({
         ecosystem: "dotnet",
         target: rel2,
@@ -52144,7 +52144,7 @@ async function runDotnetOutdated(projectPath, cves) {
       });
       continue;
     }
-    steps.push(...parseDotnetText(text, cves));
+    steps.push(...parseDotnetText(text2, cves));
   }
   const seen = /* @__PURE__ */ new Set();
   const unique3 = steps.filter((s) => {
@@ -52189,9 +52189,9 @@ function parseDotnetJson(raw, cves) {
   }
   return out;
 }
-function parseDotnetText(text, cves) {
+function parseDotnetText(text2, cves) {
   const out = [];
-  for (const lineRaw of text.split(/\r?\n/)) {
+  for (const lineRaw of text2.split(/\r?\n/)) {
     const line = lineRaw.trim();
     if (!line.startsWith(">")) continue;
     const parts = line.replace(/^>\s*/, "").split(/\s+/);
@@ -52955,8 +52955,8 @@ function readRequirementsTxts(dir) {
   const texts = [];
   for (const e of entries2) {
     if (e.isFile() && /^requirements.*\.txt$/i.test(e.name)) {
-      const text = readTextSafe(join37(dir, e.name));
-      if (text !== null) texts.push(text);
+      const text2 = readTextSafe(join37(dir, e.name));
+      if (text2 !== null) texts.push(text2);
     }
   }
   return texts.join("\n");
@@ -52987,8 +52987,8 @@ function hasTopLevelPluginHeader(dir) {
 function firstTopLevelPluginHeaderText(dir) {
   for (const e of readDirSafe(dir)) {
     if (!e.isFile() || !e.name.toLowerCase().endsWith(".php")) continue;
-    const text = readTextSafe(join37(dir, e.name), 8192);
-    if (text !== null && /^\s*(?:\*|\/\/)?\s*Plugin Name:/im.test(text)) return text;
+    const text2 = readTextSafe(join37(dir, e.name), 8192);
+    if (text2 !== null && /^\s*(?:\*|\/\/)?\s*Plugin Name:/im.test(text2)) return text2;
   }
   return null;
 }
@@ -53002,8 +53002,8 @@ function detectKubernetes(dir) {
   if (existsSync26(join37(dir, "k8s")) || existsSync26(join37(dir, "kubernetes"))) return true;
   for (const e of readDirSafe(dir)) {
     if (!e.isFile() || !/\.ya?ml$/i.test(e.name)) continue;
-    const text = readTextSafe(join37(dir, e.name));
-    if (text !== null && /apiVersion:\s/.test(text)) return true;
+    const text2 = readTextSafe(join37(dir, e.name));
+    if (text2 !== null && /apiVersion:\s/.test(text2)) return true;
   }
   return false;
 }
@@ -53028,8 +53028,8 @@ function detectExistingTools(dir) {
 }
 function readTextSafe(path8, maxBytes) {
   try {
-    const text = readFileSync23(path8, "utf8");
-    return maxBytes !== void 0 && text.length > maxBytes ? text.slice(0, maxBytes) : text;
+    const text2 = readFileSync23(path8, "utf8");
+    return maxBytes !== void 0 && text2.length > maxBytes ? text2.slice(0, maxBytes) : text2;
   } catch {
     return null;
   }
@@ -54267,9 +54267,9 @@ function findingCveIds(finding4) {
   if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
     ids2.add(finding4.rule_id.toUpperCase());
   }
-  for (const text of [finding4.title, finding4.message]) {
-    if (text === void 0) continue;
-    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
+  for (const text2 of [finding4.title, finding4.message]) {
+    if (text2 === void 0) continue;
+    for (const match of text2.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
   }
   return [...ids2];
 }
@@ -55346,15 +55346,15 @@ function knownCompromise(toolName, version2) {
 
 // src/runners/toolProbe.ts
 var PROBE_TIMEOUT_MS = 3e4;
-function extractVersion(text) {
-  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text);
+function extractVersion(text2) {
+  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text2);
   if (line?.[1] !== void 0) return line[1];
-  const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text);
+  const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text2);
   return token?.[1] ?? null;
 }
-function highestDotnetSdk(text) {
+function highestDotnetSdk(text2) {
   let best = null;
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text2.split(/\r?\n/)) {
     const m = /^\s*(\d+\.\d+\.\d+)/.exec(line);
     const v = m?.[1];
     if (v === void 0) continue;
@@ -55383,16 +55383,16 @@ async function runVersionProbe(probe2, cwd) {
     }
     return { installed: false, version: "", error: error2 };
   }
-  const text = `${r.stdout}
+  const text2 = `${r.stdout}
 ${r.stderr}`;
   if (probe2.parse === "dotnet-sdks") {
     const sdk = highestDotnetSdk(r.stdout);
     return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
   }
-  return { installed: true, version: extractVersion(text) ?? (firstLine4(text) ?? "").slice(0, 80) };
+  return { installed: true, version: extractVersion(text2) ?? (firstLine4(text2) ?? "").slice(0, 80) };
 }
-function firstLine4(text) {
-  return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+function firstLine4(text2) {
+  return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 
 // src/tools/checkToolchain.ts
@@ -57208,8 +57208,8 @@ function validateMessage(stderr, stdout) {
 ${stdout}`.replace(ANSI2, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !/^(A new version of Semgrep|If Semgrep missed|See https:|Configuration is invalid)/.test(l));
   const start = lines.findIndex((l) => /^(semgrep error:|\[ERROR\])/i.test(l));
   const picked = (start >= 0 ? lines.slice(start, start + 3) : lines.slice(0, 3)).join(" ");
-  const text = picked.length > 0 ? picked : "semgrep refused the configuration";
-  return text.length > MAX_MESSAGE ? `${text.slice(0, MAX_MESSAGE - 1)}\u2026` : text;
+  const text2 = picked.length > 0 ? picked : "semgrep refused the configuration";
+  return text2.length > MAX_MESSAGE ? `${text2.slice(0, MAX_MESSAGE - 1)}\u2026` : text2;
 }
 async function validateOnce(files, cwd) {
   const run = await runProcess({
@@ -57377,18 +57377,18 @@ function collectExplicit(projectPath, paths) {
         rejected.push({ path: raw, reason: "a glob must be relative to the project" });
         continue;
       }
-      const matches = expandGlob(projectPath, raw).filter((p) => {
+      const matches2 = expandGlob(projectPath, raw).filter((p) => {
         try {
           return statSync12(p).isFile();
         } catch {
           return false;
         }
       });
-      if (matches.length === 0) {
+      if (matches2.length === 0) {
         rejected.push({ path: raw, reason: "matched no file" });
         continue;
       }
-      for (const match of matches) consider(match, registered, rejected);
+      for (const match of matches2) consider(match, registered, rejected);
       continue;
     }
     consider(resolve12(projectPath, raw), registered, rejected);
@@ -57669,9 +57669,9 @@ function inline(raw) {
     codes.push(`<code>${c3}</code>`);
     return `[[[CODE_${codes.length - 1}]]]`;
   });
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, url) => {
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text2, url) => {
     const safe = sanitizeUrl(url);
-    return safe ? `<a href="${safe}">${text}</a>` : text;
+    return safe ? `<a href="${safe}">${text2}</a>` : text2;
   });
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
@@ -58540,8 +58540,8 @@ async function ensureLabels(cwd, labels) {
   }
   return { applied, omitted };
 }
-function firstLine5(text) {
-  return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+function firstLine5(text2) {
+  return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 async function createIssue(cwd, title, body, labels) {
   const args = ["issue", "create", "--title", title, "--body", body];
@@ -59421,9 +59421,9 @@ function warnUnversioned(warnings, label, stableTag) {
   warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
 }
 function readCoreVersion(wpPath) {
-  const text = readTextSafe(join52(wpPath, "wp-includes", "version.php"));
-  if (text === null) return null;
-  const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text);
+  const text2 = readTextSafe(join52(wpPath, "wp-includes", "version.php"));
+  if (text2 === null) return null;
+  const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text2);
   return m?.[1] ?? null;
 }
 function inventoryPlugins(wpPath, warnings) {
@@ -59437,13 +59437,13 @@ function inventoryPlugins(wpPath, warnings) {
         warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header \u2014 skipped.`);
         continue;
       }
-      const text = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
+      const text2 = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
       const stableTag = readStableTag(join52(dir, "readme.txt"));
-      const headerVersion = extractHeader(text, "Version");
+      const headerVersion = extractHeader(text2, "Version");
       const version2 = headerVersion ?? usableVersion(stableTag);
       const component = {
         slug: entry.name,
-        name: extractHeader(text, "Plugin Name"),
+        name: extractHeader(text2, "Plugin Name"),
         version: version2,
         path: main2
       };
@@ -59452,13 +59452,13 @@ function inventoryPlugins(wpPath, warnings) {
       out.push(component);
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".php")) {
       const filePath = join52(pluginsDir, entry.name);
-      const text = readTextSafe(filePath, MAX_HEADER_BYTES);
-      if (text === null || !hasHeader(text, "Plugin Name")) continue;
-      const version2 = extractHeader(text, "Version");
+      const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
+      if (text2 === null || !hasHeader(text2, "Plugin Name")) continue;
+      const version2 = extractHeader(text2, "Version");
       if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, void 0);
       out.push({
         slug: entry.name.slice(0, -".php".length),
-        name: extractHeader(text, "Plugin Name"),
+        name: extractHeader(text2, "Plugin Name"),
         version: version2,
         path: filePath
       });
@@ -59472,16 +59472,16 @@ function inventoryThemes(wpPath, warnings) {
   for (const entry of readDirSafe(themesDir)) {
     if (!entry.isDirectory()) continue;
     const styleCssPath = join52(themesDir, entry.name, "style.css");
-    const text = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
-    if (text === null || !hasHeader(text, "Theme Name")) {
+    const text2 = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
+    if (text2 === null || !hasHeader(text2, "Theme Name")) {
       warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
       continue;
     }
-    const version2 = extractHeader(text, "Version");
+    const version2 = extractHeader(text2, "Version");
     if (version2 === null) warnUnversioned(warnings, `wp-content/themes/${entry.name}`, void 0);
     out.push({
       slug: entry.name,
-      name: extractHeader(text, "Theme Name"),
+      name: extractHeader(text2, "Theme Name"),
       version: version2,
       path: styleCssPath
     });
@@ -59495,21 +59495,21 @@ function inventoryMuPlugins(wpPath, warnings) {
   for (const entry of readDirSafe(muDir)) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".php")) continue;
     const filePath = join52(muDir, entry.name);
-    const text = readTextSafe(filePath, MAX_HEADER_BYTES);
-    if (text === null) continue;
-    if (hasHeader(text, "Plugin Name")) {
+    const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
+    if (text2 === null) continue;
+    if (hasHeader(text2, "Plugin Name")) {
       const slug = entry.name.slice(0, -".php".length);
-      const version2 = extractHeader(text, "Version");
+      const version2 = extractHeader(text2, "Version");
       if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${entry.name}`, void 0);
       out.push({
         slug,
-        name: extractHeader(text, "Plugin Name"),
+        name: extractHeader(text2, "Plugin Name"),
         version: version2,
         path: filePath
       });
       continue;
     }
-    for (const match of text.matchAll(MU_PLUGIN_LOADER_RE)) {
+    for (const match of text2.matchAll(MU_PLUGIN_LOADER_RE)) {
       const subDir = match[1];
       const subFile = match[2];
       if (subDir === void 0 || subFile === void 0) continue;
@@ -59535,26 +59535,26 @@ function findMainFile(dir, dirName, nameHeader) {
   const ordered = preferred ? [preferred, ...candidates2.filter((e) => e !== preferred)] : candidates2;
   for (const entry of ordered) {
     const path8 = join52(dir, entry.name);
-    const text = readTextSafe(path8, MAX_HEADER_BYTES);
-    if (text !== null && hasHeader(text, nameHeader)) return path8;
+    const text2 = readTextSafe(path8, MAX_HEADER_BYTES);
+    if (text2 !== null && hasHeader(text2, nameHeader)) return path8;
   }
   return null;
 }
 function readStableTag(readmePath) {
-  const text = readTextSafe(readmePath, MAX_README_BYTES);
-  if (text === null) return null;
-  const value = extractHeader(text, "Stable tag");
+  const text2 = readTextSafe(readmePath, MAX_README_BYTES);
+  if (text2 === null) return null;
+  const value = extractHeader(text2, "Stable tag");
   return value;
 }
 function usableVersion(stableTag) {
   if (stableTag === null) return null;
   return /^trunk$/i.test(stableTag) ? null : stableTag;
 }
-function hasHeader(text, name) {
-  return headerRegex(name).test(text);
+function hasHeader(text2, name) {
+  return headerRegex(name).test(text2);
 }
-function extractHeader(text, name) {
-  const m = headerRegex(name).exec(text);
+function extractHeader(text2, name) {
+  const m = headerRegex(name).exec(text2);
   if (!m) return null;
   const cleaned = (m[1] ?? "").trim().replace(/\*\/\s*$/, "").replace(/\?>\s*$/, "").trim();
   return cleaned.length > 0 ? cleaned : null;
@@ -59756,7 +59756,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
   const targets = allComponents(inventory).filter(
     (c3) => c3.version !== null
   );
-  const matches = [];
+  const matches2 = [];
   for (const vuln of Object.values(feed)) {
     for (const software of vuln.software) {
       const target = targets.find((t) => t.type === software.type && t.slug === software.slug);
@@ -59765,7 +59765,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
         (range) => versionInRange(target.version, range)
       );
       if (!inRange) continue;
-      matches.push({
+      matches2.push({
         vulnId: vuln.id,
         title: vuln.title,
         cve: vuln.cve ?? null,
@@ -59781,7 +59781,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
       });
     }
   }
-  return matches;
+  return matches2;
 }
 function severityOf2(cvss) {
   const rating = cvss?.rating?.toLowerCase();
@@ -60006,7 +60006,7 @@ registerToolModule(
       warnings.push(...inventory.warnings);
       const offline = ctx.scriptEnv["GUARDIAN_OFFLINE"] === "1";
       const apiKey = ctx.scriptEnv["WORDFENCE_API_KEY"];
-      let matches = [];
+      let matches2 = [];
       const coverage = assessComponentCoverage(inventory);
       const wf = await getWordfenceFeed({
         ...apiKey !== void 0 ? { apiKey } : {},
@@ -60015,7 +60015,7 @@ registerToolModule(
         signal: ctx.signal
       });
       if (wf.ok) {
-        matches = matchInventoryAgainstFeed(inventory, wf.feed);
+        matches2 = matchInventoryAgainstFeed(inventory, wf.feed);
         const entry = { name: "wordfence-feed", status: "ok" };
         if (wf.stale) {
           entry.reason = `serving a cached feed from ${wf.fetched_at}`;
@@ -60035,7 +60035,7 @@ registerToolModule(
           );
         }
         tools_run.push(entry);
-        for (const match of matches) {
+        for (const match of matches2) {
           const { finding: finding4, cve } = wordfenceMatchToFindingAndCve(match);
           findings.push(finding4);
           if (cve !== null) cves.push(cve);
@@ -60141,7 +60141,7 @@ registerToolModule(
           status: "ok",
           stale: wf.stale,
           fetched_at: wf.fetched_at,
-          matched_count: matches.length,
+          matched_count: matches2.length,
           components_checked: coverage.matchable,
           components_total: coverage.total
         } : { status: "unavailable", reason: wf.reason },
@@ -60692,8 +60692,8 @@ async function probe(fullUrl, _label, expectListing, timeoutMs) {
     let exposed = false;
     if (expectListing) {
       try {
-        const text = await res.text();
-        const parsed = JSON.parse(text);
+        const text2 = await res.text();
+        const parsed = JSON.parse(text2);
         const count2 = Array.isArray(parsed) ? parsed.length : 0;
         exposed = res.status === 200 && count2 > 0;
         detail = `status=${res.status}, items=${count2}`;
@@ -61587,19 +61587,19 @@ function buildImportGraph(records) {
   const files = /* @__PURE__ */ new Set();
   let edgeCount2 = 0;
   let truncated = false;
-  for (const record4 of records) {
-    files.add(record4.file);
-    files.add(record4.module_file);
-    const existing = edges.get(record4.file);
-    if (existing !== void 0 && existing.has(record4.module_file)) continue;
+  for (const record5 of records) {
+    files.add(record5.file);
+    files.add(record5.module_file);
+    const existing = edges.get(record5.file);
+    if (existing !== void 0 && existing.has(record5.module_file)) continue;
     if (edgeCount2 >= MAX_GRAPH_EDGES) {
       truncated = true;
       continue;
     }
     if (existing === void 0) {
-      edges.set(record4.file, /* @__PURE__ */ new Set([record4.module_file]));
+      edges.set(record5.file, /* @__PURE__ */ new Set([record5.module_file]));
     } else {
-      existing.add(record4.module_file);
+      existing.add(record5.module_file);
     }
     edgeCount2 += 1;
   }
@@ -62928,7 +62928,7 @@ var SKILL_RULES = [
   }
 ];
 function scanContent(content, isCode) {
-  const matches = [];
+  const matches2 = [];
   const lines = content.split(/\r?\n/);
   for (const rule of SKILL_RULES) {
     if (rule.target === "code" && !isCode) continue;
@@ -62938,7 +62938,7 @@ function scanContent(content, isCode) {
         const line = lines[i2] ?? "";
         pattern.lastIndex = 0;
         if (pattern.test(line)) {
-          matches.push({
+          matches2.push({
             rule,
             line: i2 + 1,
             snippet: line.trim().slice(0, 240)
@@ -62948,12 +62948,12 @@ function scanContent(content, isCode) {
       }
     }
   }
-  return dedupeByRuleLine(matches);
+  return dedupeByRuleLine(matches2);
 }
-function dedupeByRuleLine(matches) {
+function dedupeByRuleLine(matches2) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  for (const m of matches) {
+  for (const m of matches2) {
     const key = `${m.rule.id}:${m.line}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -64557,11 +64557,11 @@ function sliceSpan(raw, sources, buffers) {
   if (start === void 0 || end === void 0) return void 0;
   if (!Number.isInteger(start) || !Number.isInteger(end)) return void 0;
   if (start < 0 || end <= start) return void 0;
-  const text = sources.get(path8);
-  if (text === void 0) return void 0;
+  const text2 = sources.get(path8);
+  if (text2 === void 0) return void 0;
   let buffer = buffers.get(path8);
   if (buffer === void 0) {
-    buffer = Buffer.from(text, "utf8");
+    buffer = Buffer.from(text2, "utf8");
     buffers.set(path8, buffer);
   }
   if (end > buffer.length) return void 0;
@@ -64867,11 +64867,11 @@ var CLOSERS = { "(": ")", "[": "]", "{": "}" };
 function isQuote(ch) {
   return ch === "'" || ch === '"' || ch === "`";
 }
-function skipString(text, start) {
-  const quote = text[start];
+function skipString(text2, start) {
+  const quote = text2[start];
   let i2 = start + 1;
-  while (i2 < text.length) {
-    const ch = text[i2];
+  while (i2 < text2.length) {
+    const ch = text2[i2];
     if (ch === void 0) break;
     if (ch === "\\") {
       i2 += 2;
@@ -64880,7 +64880,7 @@ function skipString(text, start) {
     if (ch === quote) return i2 + 1;
     i2 += 1;
   }
-  return text.length;
+  return text2.length;
 }
 function findStringLiteral(span, from = 0) {
   let i2 = from;
@@ -65262,8 +65262,8 @@ function readCandidates(paths) {
       continue;
     }
     try {
-      const text = readFileSync35(path8, "utf8");
-      specs.push({ file: path8, text });
+      const text2 = readFileSync35(path8, "utf8");
+      specs.push({ file: path8, text: text2 });
     } catch {
       continue;
     }
@@ -65426,8 +65426,8 @@ var OPERATION_KEYS = [
   "head",
   "patch"
 ];
-function importSpec(file, text) {
-  const parsed = parseRoot(text);
+function importSpec(file, text2) {
+  const parsed = parseRoot(text2);
   if (parsed.kind === "parse_error") {
     return {
       routes: [],
@@ -65518,12 +65518,12 @@ function importSpec(file, text) {
     }
   };
 }
-function parseRoot(text) {
+function parseRoot(text2) {
   try {
-    return { kind: "ok", root: JSON.parse(text), lineFor: () => 0 };
+    return { kind: "ok", root: JSON.parse(text2), lineFor: () => 0 };
   } catch {
   }
-  const doc = (0, import_yaml7.parseDocument)(text);
+  const doc = (0, import_yaml7.parseDocument)(text2);
   if (doc.errors.length > 0) {
     return { kind: "parse_error", reason: doc.errors[0]?.message ?? "YAML parse error" };
   }
@@ -65535,7 +65535,7 @@ function parseRoot(text) {
       if (!(0, import_yaml7.isScalar)(key) || typeof key.value !== "string") continue;
       const range = key.range;
       if (range == null) continue;
-      lineByPath.set(key.value, text.slice(0, range[0]).split("\n").length);
+      lineByPath.set(key.value, text2.slice(0, range[0]).split("\n").length);
     }
   }
   try {
@@ -65839,9 +65839,9 @@ function readSources(parsed, projectPath) {
   for (const path8 of collectAllFiles(parsed)) {
     try {
       const buffer = readFileSync36(isAbsolute10(path8) ? path8 : join64(projectPath, path8));
-      const text = buffer.toString("utf8");
-      if (Buffer.byteLength(text, "utf8") !== buffer.length) continue;
-      sources.set(path8, text);
+      const text2 = buffer.toString("utf8");
+      if (Buffer.byteLength(text2, "utf8") !== buffer.length) continue;
+      sources.set(path8, text2);
     } catch {
     }
   }
@@ -65938,8 +65938,8 @@ function importSpecs(projectPath, specPaths2) {
   const specRoutes = [];
   const specFiles = [];
   let specsParsed = 0;
-  for (const { file, text } of discovery.specs) {
-    const { routes, report } = importSpec(file, text);
+  for (const { file, text: text2 } of discovery.specs) {
+    const { routes, report } = importSpec(file, text2);
     specRoutes.push(...routes);
     specFiles.push(report);
     if (report.status === "ok" || report.status === "no_paths") specsParsed += 1;
@@ -66014,11 +66014,11 @@ function extractImports(parsed, knownFiles) {
   if (!Array.isArray(results)) return [];
   const out = [];
   for (const raw of results) {
-    const record4 = raw;
-    if (record4.extra?.metadata?.guardian_kind !== "import") continue;
-    const symbol = stripQuotes4(record4.extra.metavars?.["$SYMBOL"]?.abstract_content);
-    const modulePath = stripQuotes4(record4.extra.metavars?.["$MODULE"]?.abstract_content);
-    const file = record4.path;
+    const record5 = raw;
+    if (record5.extra?.metadata?.guardian_kind !== "import") continue;
+    const symbol = stripQuotes4(record5.extra.metavars?.["$SYMBOL"]?.abstract_content);
+    const modulePath = stripQuotes4(record5.extra.metavars?.["$MODULE"]?.abstract_content);
+    const file = record5.path;
     if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
     out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
   }
@@ -66787,30 +66787,30 @@ function responsePart(result) {
 }
 function buildEvidence(finding4, origin, results) {
   const primary = results.find((r) => r.request.id === finding4.evidence_id);
-  const record4 = {
+  const record5 = {
     fingerprint: finding4.fingerprint,
     check: finding4.check,
     evidence_id: finding4.evidence_id,
     origin,
     exchanges: []
   };
-  if (finding4.rule_id !== void 0) record4.rule_id = finding4.rule_id;
+  if (finding4.rule_id !== void 0) record5.rule_id = finding4.rule_id;
   if (primary === void 0) {
-    record4.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
-    return record4;
+    record5.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
+    return record5;
   }
-  record4.exchanges.push(toExchange(primary));
+  record5.exchanges.push(toExchange(primary));
   for (const other of results) {
     if (other === primary) continue;
     if (other.request.method !== primary.request.method) continue;
     if (other.request.path !== primary.request.path) continue;
-    record4.exchanges.push(toExchange(other));
+    record5.exchanges.push(toExchange(other));
   }
-  return record4;
+  return record5;
 }
 function buildBurstEvidence(finding4, origin, burst, planned, observed) {
   const first = burst[0];
-  const record4 = {
+  const record5 = {
     fingerprint: finding4.fingerprint,
     check: finding4.check,
     evidence_id: finding4.evidence_id,
@@ -66823,24 +66823,24 @@ function buildBurstEvidence(finding4, origin, burst, planned, observed) {
       observed
     }
   };
-  if (finding4.rule_id !== void 0) record4.rule_id = finding4.rule_id;
-  if (first === void 0) record4.note = "The burst produced no results at all.";
-  return record4;
+  if (finding4.rule_id !== void 0) record5.rule_id = finding4.rule_id;
+  if (first === void 0) record5.note = "The burst produced no results at all.";
+  return record5;
 }
 function writeEvidenceFiles(dir, records, redact2) {
   const outcome = { written: /* @__PURE__ */ new Set(), capped: 0, failed: 0 };
-  for (const [index, record4] of records.entries()) {
+  for (const [index, record5] of records.entries()) {
     if (index >= MAX_EVIDENCE_FILES) {
       outcome.capped += 1;
       continue;
     }
     try {
       writeFileSync17(
-        join65(dir, `${record4.fingerprint}.json`),
-        redact2(JSON.stringify(record4, null, 2)),
+        join65(dir, `${record5.fingerprint}.json`),
+        redact2(JSON.stringify(record5, null, 2)),
         "utf8"
       );
-      outcome.written.add(record4.fingerprint);
+      outcome.written.add(record5.fingerprint);
     } catch {
       outcome.failed += 1;
     }
@@ -67098,7 +67098,7 @@ async function executeProbe(req, opts) {
       init.body = req.body;
     }
     const res = await fetch(req.url, init);
-    const text = await readCapped(res);
+    const text2 = await readCapped(res);
     const headers = {};
     res.headers.forEach((value, key) => {
       headers[key.toLowerCase()] = value;
@@ -67108,8 +67108,8 @@ async function executeProbe(req, opts) {
       outcome: "completed",
       status: res.status,
       headers,
-      body_prefix: text.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash11("sha256").update(text).digest("hex"),
+      body_prefix: text2.slice(0, BODY_PREFIX_BYTES),
+      body_hash: createHash11("sha256").update(text2).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -67800,14 +67800,14 @@ async function handler40(input, ctx, callMeta) {
     report_dir: evidenceDir,
     meta: redactObject(meta, redact2)
   });
-  const record4 = ctx.storage.scans.getById(scanId);
+  const record5 = ctx.storage.scans.getById(scanId);
   const payload = {
     scan_id: scanId,
     scan_type: "dast",
     project_path: projectPath,
     tree_hash: treeHash,
-    started_at: record4?.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
-    finished_at: record4?.finished_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    started_at: record5?.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    finished_at: record5?.finished_at ?? (/* @__PURE__ */ new Date()).toISOString(),
     status: "completed",
     tools_run: toolsRun,
     missing_tools: missingTools,
@@ -68350,9 +68350,9 @@ function editPipPin(worktreePath, step) {
   if (isAbsolute11(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep12}`) || isAbsolute11(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
-  let text;
+  let text2;
   try {
-    text = readFileSync37(target, "utf8");
+    text2 = readFileSync37(target, "utf8");
   } catch {
     return { ok: false, label, reason: `'${file}' is not in the committed tree` };
   }
@@ -68362,7 +68362,7 @@ function editPipPin(worktreePath, step) {
     "gim"
   );
   let count2 = 0;
-  const edited = text.replace(pin, (_m, lead, pkg, extras, op) => {
+  const edited = text2.replace(pin, (_m, lead, pkg, extras, op) => {
     count2 += 1;
     return `${lead}${pkg}${extras ?? ""}${op}${step.latest_version}`;
   });
@@ -68393,8 +68393,8 @@ function firstStderrLine(stderr) {
   }
   return "(no stderr output)";
 }
-function escapeRegExp3(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegExp3(text2) {
+  return text2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // src/fixpr/candidates.ts
@@ -68764,15 +68764,15 @@ function hasFailed(result) {
 function describeFailure3(result, label) {
   return preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
 }
-function preferredErrorLine(text) {
-  for (const line of text.split(/\r?\n/)) {
+function preferredErrorLine(text2) {
+  for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.startsWith("fatal:") || trimmed.startsWith("error:")) return trimmed;
   }
   return null;
 }
-function firstNonEmptyLine(text) {
-  for (const line of text.split(/\r?\n/)) {
+function firstNonEmptyLine(text2) {
+  for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length > 0) return trimmed;
   }
@@ -68813,9 +68813,9 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
         return { ok: false, reason: `the finding for rule '${target.rule_id}' names no file` };
       }
       files.add(target.file_path.replace(/\\/g, "/"));
-      const matches = rules.filter((r) => checkIdMatches(target.rule_id, r.file, r.id));
-      if (matches.length > 0) {
-        for (const m of matches) {
+      const matches2 = rules.filter((r) => checkIdMatches(target.rule_id, r.file, r.id));
+      if (matches2.length > 0) {
+        for (const m of matches2) {
           const picked = byFile.get(m.file) ?? /* @__PURE__ */ new Map();
           picked.set(m.id, m.rule);
           byFile.set(m.file, picked);
@@ -69136,9 +69136,9 @@ function hasFailed2(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
 }
 function headOf(stdout, stderr) {
-  const text = stdout.trim().length > 0 ? stdout : stderr;
-  if (text.trim().length === 0) return null;
-  return text.split(/\r?\n/).slice(0, OUTPUT_HEAD_LINES).join("\n");
+  const text2 = stdout.trim().length > 0 ? stdout : stderr;
+  if (text2.trim().length === 0) return null;
+  return text2.split(/\r?\n/).slice(0, OUTPUT_HEAD_LINES).join("\n");
 }
 
 // src/fixpr/worktree.ts
@@ -69266,15 +69266,15 @@ function parseWorktreeList(porcelain) {
 function describeFailure4(result, label) {
   return preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
 }
-function preferredErrorLine2(text) {
-  for (const line of text.split(/\r?\n/)) {
+function preferredErrorLine2(text2) {
+  for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.startsWith("fatal:") || trimmed.startsWith("error:")) return trimmed;
   }
   return null;
 }
-function firstNonEmptyLine2(text) {
-  for (const line of text.split(/\r?\n/)) {
+function firstNonEmptyLine2(text2) {
+  for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length > 0) return trimmed;
   }
@@ -70039,11 +70039,11 @@ function redact(secret) {
   return `${head}\u2026${tail} (${trimmed.length})`;
 }
 var MAX_LINE_LENGTH = 16 * 1024;
-function scanForSecrets(text, options = {}) {
-  if (!text) return [];
+function scanForSecrets(text2, options = {}) {
+  if (!text2) return [];
   const minRank = CONFIDENCE_RANK[options.minConfidence ?? "medium"];
   const allow = (options.allowlist ?? []).map((a2) => a2.toLowerCase()).filter(Boolean);
-  const lines = text.split(/\r?\n/);
+  const lines = text2.split(/\r?\n/);
   const hits = [];
   const seen = /* @__PURE__ */ new Set();
   for (let i2 = 0; i2 < lines.length; i2++) {
@@ -70531,17 +70531,17 @@ import { homedir as homedir3 } from "node:os";
 import { join as join73 } from "node:path";
 
 // src/agentaudit/jsonc.ts
-function stripComments(text) {
+function stripComments(text2) {
   let out = "";
   let i2 = 0;
-  const n2 = text.length;
+  const n2 = text2.length;
   let inString = false;
   while (i2 < n2) {
-    const ch = text[i2];
+    const ch = text2[i2];
     if (inString) {
       out += ch;
       if (ch === "\\" && i2 + 1 < n2) {
-        out += text[i2 + 1];
+        out += text2[i2 + 1];
         i2 += 2;
         continue;
       }
@@ -70555,14 +70555,14 @@ function stripComments(text) {
       i2 += 1;
       continue;
     }
-    if (ch === "/" && text[i2 + 1] === "/") {
+    if (ch === "/" && text2[i2 + 1] === "/") {
       i2 += 2;
-      while (i2 < n2 && text[i2] !== "\n") i2 += 1;
+      while (i2 < n2 && text2[i2] !== "\n") i2 += 1;
       continue;
     }
-    if (ch === "/" && text[i2 + 1] === "*") {
+    if (ch === "/" && text2[i2 + 1] === "*") {
       i2 += 2;
-      while (i2 < n2 && !(text[i2] === "*" && text[i2 + 1] === "/")) i2 += 1;
+      while (i2 < n2 && !(text2[i2] === "*" && text2[i2 + 1] === "/")) i2 += 1;
       i2 += 2;
       continue;
     }
@@ -70571,17 +70571,17 @@ function stripComments(text) {
   }
   return out;
 }
-function stripTrailingCommas(text) {
+function stripTrailingCommas(text2) {
   let out = "";
   let i2 = 0;
-  const n2 = text.length;
+  const n2 = text2.length;
   let inString = false;
   while (i2 < n2) {
-    const ch = text[i2];
+    const ch = text2[i2];
     if (inString) {
       out += ch;
       if (ch === "\\" && i2 + 1 < n2) {
-        out += text[i2 + 1];
+        out += text2[i2 + 1];
         i2 += 2;
         continue;
       }
@@ -70597,8 +70597,8 @@ function stripTrailingCommas(text) {
     }
     if (ch === ",") {
       let j = i2 + 1;
-      while (j < n2 && /\s/.test(text[j] ?? "")) j += 1;
-      const next = text[j];
+      while (j < n2 && /\s/.test(text2[j] ?? "")) j += 1;
+      const next = text2[j];
       if (next === "}" || next === "]") {
         i2 += 1;
         continue;
@@ -70609,11 +70609,11 @@ function stripTrailingCommas(text) {
   }
   return out;
 }
-function stripJsonc(text) {
-  return stripTrailingCommas(stripComments(text));
+function stripJsonc(text2) {
+  return stripTrailingCommas(stripComments(text2));
 }
-function parseJsonc(text) {
-  return JSON.parse(stripJsonc(text));
+function parseJsonc(text2) {
+  return JSON.parse(stripJsonc(text2));
 }
 
 // src/agentaudit/configSources.ts
@@ -70954,18 +70954,18 @@ var BASH_RULES = [
 function after(keyword, tail) {
   const kw = new RegExp(keyword.source, keyword.flags.replace(/[gy]/g, ""));
   const tl = new RegExp(tail.source, `${tail.flags.replace(/[gy]/g, "")}g`);
-  return (text) => {
-    const m = kw.exec(text);
+  return (text2) => {
+    const m = kw.exec(text2);
     if (m === null) return false;
     tl.lastIndex = m.index + m[0].length;
-    return tl.test(text);
+    return tl.test(text2);
   };
 }
 function anyOf(...tests) {
-  return (text) => tests.some((t) => t(text));
+  return (text2) => tests.some((t) => t(text2));
 }
-function processSubstitutionFetch(text) {
-  for (const line of text.split("\n")) {
+function processSubstitutionFetch(text2) {
+  for (const line of text2.split("\n")) {
     const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
     if (shell === null) continue;
     const shellEnd = shell.index + shell[0].length;
@@ -71035,26 +71035,26 @@ function parseNpm(raw) {
 }
 var PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
 function parsePython(raw, poetryAt) {
-  let text = raw.trim();
-  const semi = text.indexOf(";");
-  if (semi >= 0) text = text.slice(0, semi).trim();
-  if (/[$`]/.test(text)) return skip(raw, "not a literal package name (shell expansion)");
-  if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text)) return skip(raw, "direct URL reference \u2014 not looked up");
-  const bad = notAPackage(text);
+  let text2 = raw.trim();
+  const semi = text2.indexOf(";");
+  if (semi >= 0) text2 = text2.slice(0, semi).trim();
+  if (/[$`]/.test(text2)) return skip(raw, "not a literal package name (shell expansion)");
+  if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text2)) return skip(raw, "direct URL reference \u2014 not looked up");
+  const bad = notAPackage(text2);
   if (bad !== null) return skip(raw, bad);
-  if (/[\\/]/.test(text)) return skip(raw, "local path \u2014 not looked up");
-  let name = text;
+  if (/[\\/]/.test(text2)) return skip(raw, "local path \u2014 not looked up");
+  let name = text2;
   let range;
-  const at = text.indexOf("@");
-  if (at > 0 && (poetryAt || !PEP440_OP.test(text))) {
-    name = text.slice(0, at);
-    range = text.slice(at + 1).trim();
+  const at = text2.indexOf("@");
+  if (at > 0 && (poetryAt || !PEP440_OP.test(text2))) {
+    name = text2.slice(0, at);
+    range = text2.slice(at + 1).trim();
     if (range === "latest") range = void 0;
   } else {
-    const m = PEP440_OP.exec(text);
+    const m = PEP440_OP.exec(text2);
     if (m !== null) {
-      name = text.slice(0, m.index);
-      range = text.slice(m.index).replace(/\s+/g, "");
+      name = text2.slice(0, m.index);
+      range = text2.slice(m.index).replace(/\s+/g, "");
     }
   }
   name = name.replace(/\[[^\]]*\]/, "").replace(/\s*\(.*$/, "").trim();
@@ -71809,8 +71809,8 @@ function findTyposquatTarget(index, name, opts = {}) {
 function defaultPopularDir() {
   return join74(resolveConfigsDir(), "popular-packages");
 }
-function parsePopularList(text) {
-  return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+function parsePopularList(text2) {
+  return text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 var cache = /* @__PURE__ */ new Map();
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
@@ -71903,9 +71903,9 @@ function readText2(path8, maxBytes) {
       total += n2;
     }
     if (total > maxBytes) return { status: "refused", reason: "too-large" };
-    let text = buf.subarray(0, total).toString("utf8");
-    if (text.charCodeAt(0) === 65279) text = text.slice(1);
-    return { status: "ok", text };
+    let text2 = buf.subarray(0, total).toString("utf8");
+    if (text2.charCodeAt(0) === 65279) text2 = text2.slice(1);
+    return { status: "ok", text: text2 };
   } catch {
     return { status: "refused", reason: "unreadable" };
   } finally {
@@ -72024,9 +72024,9 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
-function fromNpmrc(text, scope) {
+function fromNpmrc(text2, scope) {
   let found;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text2.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("#") || line.startsWith(";")) continue;
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
@@ -72038,11 +72038,11 @@ function fromNpmrc(text, scope) {
   }
   return found;
 }
-function fromYarnrcYml(text, scope) {
+function fromYarnrcYml(text2, scope) {
   let global3;
   let inScopes = false;
   let currentScope;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text2.split(/\r?\n/)) {
     if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -72066,9 +72066,9 @@ function fromYarnrcYml(text, scope) {
   }
   return global3;
 }
-function fromYarnrc(text, scope) {
+function fromYarnrc(text2, scope) {
   let found;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text2.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
@@ -72077,10 +72077,10 @@ function fromYarnrc(text, scope) {
   }
   return found;
 }
-function fromBunfig(text, scope) {
+function fromBunfig(text2, scope) {
   let section = "";
   let found;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text2.split(/\r?\n/)) {
     const line = raw.trim();
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header !== null) {
@@ -72161,11 +72161,11 @@ function npmRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   let authSource;
   for (const { path: path8, parse: parse8 } of npmConfigFiles(ctx)) {
-    const text = read(path8, ctx);
-    if (text === void 0) continue;
-    const url = parse8(text, scope);
+    const text2 = read(path8, ctx);
+    if (text2 === void 0) continue;
+    const url = parse8(text2, scope);
     if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path8, url };
-    if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path8;
+    if (authSource === void 0 && NPM_AUTH.test(text2)) authSource = path8;
   }
   if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource };
   const local = npmWorkspacePackage(name, ctx);
@@ -72182,8 +72182,8 @@ function findManifest(root, file, match, ctx) {
     if (next === void 0) break;
     visited += 1;
     const manifest = join76(next.dir, file);
-    const text = read(manifest, ctx, root, "workspace manifest");
-    if (text !== void 0 && match(text)) return manifest;
+    const text2 = read(manifest, ctx, root, "workspace manifest");
+    if (text2 !== void 0 && match(text2)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
@@ -72209,9 +72209,9 @@ function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
     const isRoot = hasWorkspaces(read(join76(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join76(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
-    const hit = findManifest(dir, "package.json", (text) => {
+    const hit = findManifest(dir, "package.json", (text2) => {
       try {
-        return JSON.parse(text).name === name;
+        return JSON.parse(text2).name === name;
       } catch {
         return false;
       }
@@ -72225,13 +72225,13 @@ function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
     const path8 = join76(dir, "pyproject.toml");
-    const text = read(path8, ctx);
-    if (text === void 0) continue;
-    const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
+    const text2 = read(path8, ctx);
+    if (text2 === void 0) continue;
+    const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
     for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
       if (pep503(m[1] ?? "") === wanted) return path8;
     }
-    if (!/^\s*\[tool\.uv\.workspace\]/m.test(text)) continue;
+    if (!/^\s*\[tool\.uv\.workspace\]/m.test(text2)) continue;
     const hit = findManifest(dir, "pyproject.toml", (t) => {
       const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
       const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
@@ -72241,28 +72241,28 @@ function uvWorkspacePackage(name, ctx) {
   }
   return void 0;
 }
-function fromPipConf(text) {
-  for (const raw of text.split(/\r?\n/)) {
+function fromPipConf(text2) {
+  for (const raw of text2.split(/\r?\n/)) {
     const m = /^\s*(index[-_]url|extra[-_]index[-_]url|find[-_]links)\s*[=:]\s*(\S+)/i.exec(raw);
     if (m !== null && !isPublic("pypi", m[2] ?? "")) return m[2];
     if (/^\s*no[-_]index\s*[=:]\s*(?:true|1|yes|on)\s*$/i.test(raw)) return "no-index";
   }
   return void 0;
 }
-function fromPyproject(text) {
-  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text)) {
-    return /https?:\/\/[^"'\s]+/.exec(text.slice(text.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? "(configured)";
+function fromPyproject(text2) {
+  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text2)) {
+    return /https?:\/\/[^"'\s]+/.exec(text2.slice(text2.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? "(configured)";
   }
-  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text);
+  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2);
   if (uv !== null) {
     const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(uv[1] ?? "");
     if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
   }
   return void 0;
 }
-function fromUvToml(text) {
-  if (/^\s*\[\[\s*index\s*\]\]/m.test(text)) return /https?:\/\/[^"'\s]+/.exec(text)?.[0] ?? "(configured)";
-  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text);
+function fromUvToml(text2) {
+  if (/^\s*\[\[\s*index\s*\]\]/m.test(text2)) return /https?:\/\/[^"'\s]+/.exec(text2)?.[0] ?? "(configured)";
+  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text2);
   if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
   return void 0;
 }
@@ -72292,8 +72292,8 @@ function pypiRegistry(name, ctx) {
   const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join76(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
-    const text = read(path8, ctx);
-    const url = text === void 0 ? void 0 : fromPipConf(text);
+    const text2 = read(path8, ctx);
+    const url = text2 === void 0 ? void 0 : fromPipConf(text2);
     if (url !== void 0) return { kind: "registry", source: path8, url };
   }
   const uvConfs = [];
@@ -72301,8 +72301,8 @@ function pypiRegistry(name, ctx) {
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
   uvConfs.push(join76(xdg, "uv", "uv.toml"), join76(appdata, "uv", "uv.toml"), join76(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
-    const text = read(path8, ctx);
-    const url = text === void 0 ? void 0 : fromUvToml(text);
+    const text2 = read(path8, ctx);
+    const url = text2 === void 0 ? void 0 : fromUvToml(text2);
     if (url !== void 0) return { kind: "registry", source: path8, url };
   }
   for (const dir of ancestors(ctx)) {
@@ -72311,19 +72311,19 @@ function pypiRegistry(name, ctx) {
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
     const pyproject = join76(dir, "pyproject.toml");
-    const text = read(pyproject, ctx);
-    if (text === void 0) continue;
-    const url = fromPyproject(text);
+    const text2 = read(pyproject, ctx);
+    if (text2 === void 0) continue;
+    const url = fromPyproject(text2);
     if (url !== void 0) return { kind: "registry", source: pyproject, url };
     break;
   }
   const local = uvWorkspacePackage(name, ctx);
   return local === void 0 ? null : { kind: "workspace", source: local };
 }
-function hasRepositories(text) {
-  if (text === void 0) return false;
+function hasRepositories(text2) {
+  if (text2 === void 0) return false;
   try {
-    const doc = JSON.parse(text);
+    const doc = JSON.parse(text2);
     const r = doc.repositories;
     if (Array.isArray(r)) return r.length > 0;
     return r !== null && typeof r === "object" && Object.keys(r).length > 0;
@@ -72334,9 +72334,9 @@ function hasRepositories(text) {
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
     const path8 = join76(dir, "composer.json");
-    const text = read(path8, ctx);
-    if (text === void 0) continue;
-    if (hasRepositories(text)) return { kind: "registry", source: path8 };
+    const text2 = read(path8, ctx);
+    if (text2 === void 0) continue;
+    if (hasRepositories(text2)) return { kind: "registry", source: path8 };
     break;
   }
   const env = envOf(ctx);
@@ -72350,8 +72350,8 @@ function nugetConfigIn(dir, ctx) {
   const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
   return hit === void 0 ? void 0 : join76(dir, hit);
 }
-function customNugetSources(text) {
-  const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
+function customNugetSources(text2) {
+  const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text2)?.[1] ?? "";
   const out = [];
   for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
     const url = m[1] ?? "";
@@ -72420,9 +72420,9 @@ function nugetRegistry(name, ctx) {
     }
   }
   for (const path8 of files) {
-    const text = read(path8, ctx);
-    if (text === void 0) continue;
-    for (const url of customNugetSources(text)) {
+    const text2 = read(path8, ctx);
+    if (text2 === void 0) continue;
+    for (const url of customNugetSources(text2)) {
       if (machineWide.has(path8) && isLocalFolderSource(url) && !localFeedHas(url, path8, name, ctx)) continue;
       return { kind: "registry", source: path8, url };
     }
@@ -72692,8 +72692,8 @@ var lte = (x) => (v) => compareVersions2(v, x) <= 0;
 var eq = (x) => (v) => compareVersions2(v, x) === 0;
 var ANY = () => true;
 var WILD = /^[xX*]$/;
-function partial2(text) {
-  const t = text.trim().replace(/^[vV]/, "");
+function partial2(text2) {
+  const t = text2.trim().replace(/^[vV]/, "");
   if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
   const plus = t.indexOf("+");
   const noBuild = plus >= 0 ? t.slice(0, plus) : t;
@@ -72715,8 +72715,8 @@ function bump(nums) {
   next[last] = (next[last] ?? 0) + 1;
   return fmt(next);
 }
-function comparator(op, text, composerTilde) {
-  const p = partial2(text);
+function comparator(op, text2, composerTilde) {
+  const p = partial2(text2);
   if (p === null) return null;
   const { nums, pre } = p;
   const full = nums.length >= 3;
@@ -72761,13 +72761,13 @@ function semverishRange(range, composer) {
   const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
   const out = [];
   for (const alt of alternatives) {
-    let text = alt.trim();
-    if (composer) text = text.replace(/@[a-zA-Z]+$/, "").trim();
-    if (text === "" || text === "*" || WILD.test(text)) {
+    let text2 = alt.trim();
+    if (composer) text2 = text2.replace(/@[a-zA-Z]+$/, "").trim();
+    if (text2 === "" || text2 === "*" || WILD.test(text2)) {
       out.push([ANY]);
       continue;
     }
-    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text2);
     if (hyphen !== null) {
       const lo = comparator(">=", hyphen[1] ?? "", composer);
       const hiPartial = partial2(hyphen[2] ?? "");
@@ -72776,7 +72776,7 @@ function semverishRange(range, composer) {
       out.push([...lo, ...hi]);
       continue;
     }
-    const tokens = text.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
+    const tokens = text2.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
     const preds = [];
     for (const token of tokens) {
       if (token === "") continue;
@@ -73295,6 +73295,489 @@ async function handler44(input, _ctx, callMeta) {
   };
 }
 
+// src/tools/exportVex.ts
+import { randomUUID as randomUUID19 } from "node:crypto";
+import { existsSync as existsSync55, readFileSync as readFileSync42, writeFileSync as writeFileSync20 } from "node:fs";
+import { basename as basename9, join as join77 } from "node:path";
+
+// src/vex/render.ts
+var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
+function nvdUrl(vulnerability) {
+  return /^CVE-\d{4}-\d+$/i.test(vulnerability) ? `https://nvd.nist.gov/vuln/detail/${vulnerability.toUpperCase()}` : null;
+}
+function renderOpenVex(statements, meta) {
+  return {
+    "@context": OPENVEX_CONTEXT,
+    "@id": `urn:uuid:${meta.documentId}`,
+    author: meta.author,
+    timestamp: meta.timestamp,
+    version: 1,
+    tooling: `dev-guardian ${meta.toolVersion} (export_vex)`,
+    statements: statements.map((s) => openVexStatement(s, meta))
+  };
+}
+function openVexStatement(s, meta) {
+  const url = nvdUrl(s.vulnerability);
+  const product = {
+    "@id": meta.product.id,
+    identifiers: { purl: meta.product.id },
+    ...s.subcomponent_purls.length > 0 ? { subcomponents: s.subcomponent_purls.map((purl) => ({ "@id": purl, identifiers: { purl } })) } : {}
+  };
+  return {
+    vulnerability: { ...url !== null ? { "@id": url } : {}, name: s.vulnerability },
+    products: [product],
+    status: s.status,
+    ...s.justification !== void 0 ? { justification: s.justification } : {},
+    ...s.impact_statement !== void 0 ? { impact_statement: s.impact_statement } : {},
+    ...s.status === "affected" && s.action_statement !== void 0 ? { action_statement: s.action_statement } : {},
+    status_notes: s.status_notes
+  };
+}
+var CYCLONEDX_JUSTIFICATION = {
+  component_not_present: null,
+  vulnerable_code_not_present: "code_not_present",
+  vulnerable_code_not_in_execute_path: "code_not_reachable",
+  vulnerable_code_cannot_be_controlled_by_adversary: null,
+  inline_mitigations_already_exist: "protected_by_mitigating_control"
+};
+var PRODUCT_REF = "product";
+function renderCycloneDxVex(statements, meta) {
+  const components = /* @__PURE__ */ new Map();
+  const refOf = (s) => {
+    const purl = s.subcomponent_purls[0];
+    const ref = purl ?? `component:${s.package_name}@${s.installed_version ?? "unknown"}`;
+    if (!components.has(ref)) {
+      components.set(ref, {
+        type: "library",
+        "bom-ref": ref,
+        name: s.package_name,
+        ...s.installed_version !== null ? { version: s.installed_version } : {},
+        ...purl !== void 0 ? { purl } : {}
+      });
+    }
+    return ref;
+  };
+  const vulnerabilities = statements.map((s) => {
+    const url = nvdUrl(s.vulnerability);
+    return {
+      id: s.vulnerability,
+      ...url !== null ? { source: { name: "NVD", url } } : {},
+      analysis: cycloneDxAnalysis(s),
+      ...s.status === "affected" && s.action_statement !== void 0 ? { recommendation: s.action_statement } : {},
+      affects: [{ ref: refOf(s) }]
+    };
+  });
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    serialNumber: `urn:uuid:${meta.documentId}`,
+    version: 1,
+    metadata: {
+      timestamp: meta.timestamp,
+      tools: { components: [{ type: "application", name: "dev-guardian", version: meta.toolVersion }] },
+      component: {
+        type: "application",
+        "bom-ref": PRODUCT_REF,
+        name: meta.product.name,
+        ...meta.product.purl !== null ? { purl: meta.product.purl } : {}
+      }
+    },
+    components: [...components.values()],
+    vulnerabilities
+  };
+}
+function cycloneDxAnalysis(s) {
+  switch (s.status) {
+    case "not_affected": {
+      const justification = s.justification === void 0 ? null : CYCLONEDX_JUSTIFICATION[s.justification];
+      const label = s.justification === void 0 ? "" : ` OpenVEX justification: ${s.justification}.`;
+      const impact = s.impact_statement === void 0 ? "" : ` ${s.impact_statement}`;
+      return {
+        state: s.justification === "component_not_present" ? "false_positive" : "not_affected",
+        ...justification !== null ? { justification } : {},
+        detail: `${s.status_notes}${label}${impact}`
+      };
+    }
+    case "affected":
+      return {
+        state: "exploitable",
+        ...s.fixed_version !== null ? { response: ["update"] } : {},
+        detail: s.status_notes
+      };
+    case "under_investigation":
+      return { state: "in_triage", detail: s.status_notes };
+  }
+}
+
+// src/vex/sbom.ts
+function parseSbomInventory(raw) {
+  let root;
+  try {
+    root = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (root === null || typeof root !== "object") return null;
+  const doc = root;
+  if (Array.isArray(doc["components"]) || doc["bomFormat"] === "CycloneDX") return fromCycloneDx(doc);
+  if (Array.isArray(doc["packages"])) return fromSpdx(doc);
+  return null;
+}
+function fromCycloneDx(doc) {
+  const product = record4(record4(doc["metadata"])?.["component"]);
+  const components = (Array.isArray(doc["components"]) ? doc["components"] : []).flatMap((c3) => {
+    const component = record4(c3);
+    const name = text(component?.["name"]);
+    if (component === null || name === null) return [];
+    return [withOptional({ name }, text(component["version"]), text(component["purl"]))];
+  });
+  return {
+    product_purl: text(product?.["purl"]),
+    product_name: text(product?.["name"]),
+    components
+  };
+}
+function fromSpdx(doc) {
+  const described = new Set(
+    (Array.isArray(doc["documentDescribes"]) ? doc["documentDescribes"] : []).filter(
+      (id) => typeof id === "string"
+    )
+  );
+  let product = null;
+  const components = [];
+  for (const p of Array.isArray(doc["packages"]) ? doc["packages"] : []) {
+    const pkg = record4(p);
+    const name = text(pkg?.["name"]);
+    if (pkg === null || name === null) continue;
+    const purl = spdxPurl(pkg["externalRefs"]);
+    const id = text(pkg["SPDXID"]);
+    if (product === null && id !== null && described.has(id)) {
+      product = { name, purl };
+      continue;
+    }
+    components.push(withOptional({ name }, text(pkg["versionInfo"]), purl));
+  }
+  return { product_purl: product?.purl ?? null, product_name: product?.name ?? null, components };
+}
+function spdxPurl(refs) {
+  if (!Array.isArray(refs)) return null;
+  for (const ref of refs) {
+    const r = record4(ref);
+    if (r?.["referenceType"] === "purl") return text(r["referenceLocator"]);
+  }
+  return null;
+}
+function purlsFor(inventory, name, version2, ecosystem) {
+  const wanted = name.toLowerCase();
+  const matching = [
+    ...new Set(
+      inventory.components.filter((c3) => c3.name.toLowerCase() === wanted && (version2 === null || c3.version === version2)).flatMap((c3) => c3.purl === void 0 ? [] : [c3.purl])
+    )
+  ];
+  if (ecosystem !== null) {
+    return { purls: matching.filter((purl) => purlType(purl) === ecosystem), ambiguous: false };
+  }
+  const types = new Set(matching.map(purlType));
+  return types.size > 1 ? { purls: [], ambiguous: true } : { purls: matching, ambiguous: false };
+}
+function purlType(purl) {
+  return /^pkg:([^/]+)\//.exec(purl)?.[1]?.toLowerCase() ?? null;
+}
+function record4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function text(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function withOptional(base, version2, purl) {
+  return { ...base, ...version2 !== null ? { version: version2 } : {}, ...purl !== null ? { purl } : {} };
+}
+
+// src/vex/statements.ts
+function buildVexStatements(inputs) {
+  const active = inputs.suppressions.filter(
+    (s) => (s.expires_at === void 0 || Date.parse(s.expires_at) > inputs.now) && (s.project_path === void 0 || s.project_path === inputs.projectPath)
+  );
+  return inputs.cves.map((cve) => statementFor(cve, inputs, active));
+}
+function statementFor(cve, inputs, active) {
+  const installed = cve.installed_version ?? null;
+  const findings = findingsOf(cve, inputs.findings);
+  const subject = findings.map(dependencySubjectOf).find((s) => s !== null && s.ecosystem !== null) ?? null;
+  const ecosystem = subject?.ecosystem ?? sbomEcosystem(inputs.sbom, cve.package_name, installed);
+  const base = {
+    vulnerability: cve.cve_id,
+    package_name: cve.package_name,
+    installed_version: installed,
+    fixed_version: cve.fixed_version ?? null,
+    severity: cve.severity,
+    subcomponent_purls: inputs.sbom === null ? [] : purlsFor(inputs.sbom, cve.package_name, installed, ecosystem).purls
+  };
+  const label = `${cve.package_name}${installed === null ? "" : `@${installed}`}`;
+  const suppressions = findings.map((f) => active.find((s) => matches(s, f)));
+  const vex = suppressions.map((s) => s?.vex_status === "not_affected" ? s : void 0);
+  const first = vex[0];
+  if (first !== void 0 && vex.every((s) => s !== void 0) && first.vex_justification !== void 0) {
+    return {
+      ...base,
+      status: "not_affected",
+      justification: first.vex_justification,
+      ...first.vex_impact_statement !== void 0 ? { impact_statement: first.vex_impact_statement } : {},
+      status_notes: `${label}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`
+    };
+  }
+  const suppressedNote = suppressions.some((s) => s !== void 0) ? ` The finding is suppressed in dev-guardian without a VEX justification on every copy, so it is not exported as not_affected.` : "";
+  const assessment = inputs.dependency === null ? null : assessDependency(
+    subject ?? { package_name: cve.package_name, ecosystem },
+    inputs.dependency
+  );
+  if (assessment?.verdict === "reachable") {
+    return {
+      ...base,
+      status: "affected",
+      action_statement: cve.fixed_version !== void 0 ? `Upgrade ${cve.package_name}${installed === null ? "" : ` from ${installed}`} to ${cve.fixed_version} or later.` : `No fixed version of ${cve.package_name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
+      status_notes: `${label}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
+    };
+  }
+  return {
+    ...base,
+    status: "under_investigation",
+    status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
+  };
+}
+function whyNot(assessment) {
+  if (assessment === null) {
+    return "no attack-surface snapshot, so whether the package is imported was not checked (run map_attack_surface)";
+  }
+  if (assessment.verdict === "imported") {
+    return `imported by ${assessment.importing_files.slice(0, 5).join(", ")}, which no known HTTP route reaches through the import graph`;
+  }
+  return assessment.coverage_gaps[0] ?? "nothing showed the package in use";
+}
+function findingsOf(cve, findings) {
+  const id = cve.cve_id.toUpperCase();
+  const name = cve.package_name.toLowerCase();
+  const sameCve = findings.filter((f) => {
+    const coordinates = dependencyCoordinates(f);
+    if (coordinates === null || coordinates.name.toLowerCase() !== name) return false;
+    return findingCveIds(f).includes(id) || f.rule_id?.toUpperCase() === id;
+  });
+  const sameVersion = sameCve.filter((f) => dependencyCoordinates(f)?.version === cve.installed_version);
+  return sameVersion.length > 0 ? sameVersion : sameCve;
+}
+function matches(s, f) {
+  return s.finding_fingerprint === f.fingerprint || f.identity !== void 0 && s.finding_identity === f.identity;
+}
+function sbomEcosystem(sbom, name, version2) {
+  if (sbom === null) return null;
+  const { purls, ambiguous } = purlsFor(sbom, name, version2, null);
+  const first = purls[0];
+  return ambiguous || first === void 0 ? null : purlType(first);
+}
+
+// src/tools/exportVex.ts
+var SAMPLE_SIZE2 = 20;
+var DEFAULT_AUTHOR = "Unknown Author";
+var inputSchema28 = {
+  project_path: ProjectPath,
+  format: external_exports.enum(["openvex", "cyclonedx"]).optional().describe("openvex (OpenVEX 0.2.0 JSON, the default) or cyclonedx (a CycloneDX 1.6 BOM with vulnerabilities[].analysis)."),
+  author: external_exports.string().min(1).max(200).optional().describe(`OpenVEX author \u2014 the person or organisation making the statements. Default "${DEFAULT_AUTHOR}".`)
+};
+var tool48 = {
+  name: "export_vex",
+  title: "Export VEX (OpenVEX / CycloneDX)",
+  description: "Write a VEX document for project_path: one statement per CVE of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full). Status: not_affected ONLY from a suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding's dependency provider finds the package imported by a file an HTTP route reaches (latest map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is never guessed. The product and each vulnerable package are named by purl from the newest generate_sbom when there is one. Writes .guardian/reports/vex-*/vex.openvex.json (format openvex, default) or vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know \u2014 no SBOM, no surface snapshot, a partial dependency scan \u2014 and nothing is written when no CVE was measured. No network.",
+  inputSchema: inputSchema28,
+  handler: async (input, ctx) => handler45(input, ctx)
+};
+registerToolModule(tool48);
+var NO_STATEMENTS = { total: 0, not_affected: 0, affected: 0, under_investigation: 0 };
+async function handler45(input, ctx) {
+  const inp = input;
+  const format2 = inp.format ?? "openvex";
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+  }
+  const found = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
+  const depsScan = found.scan;
+  if (depsScan === null) {
+    return nothingWritten(format2, null, {
+      unknowns: [
+        "no usable dependency scan (scan_deps, deps_audit or security_scan_full) of this project: no CVE was measured" + (found.skipped.count > 0 ? `, and ${found.skipped.count} run(s) that scanned nothing were passed over` : "")
+      ],
+      note: "Nothing was written: there is no measured CVE to make a statement about. This is not a statement that the project has no vulnerabilities \u2014 run scan_deps (or deps_audit), then export_vex again."
+    });
+  }
+  const unknowns = [];
+  if (found.coverage === "partial") {
+    unknowns.push(
+      `the dependency scan ${depsScan.scan_id} has partial coverage (missing: ${depsScan.missing_tools.join(", ") || "see its tools_run"}): CVEs in what it did not scan are absent here`
+    );
+  }
+  if (found.skipped.count > 0) {
+    unknowns.push(
+      `${found.skipped.count} newer dependency scan(s) scanned nothing and were passed over; the CVEs are those of ${depsScan.scan_id} (${depsScan.started_at})`
+    );
+  }
+  const cves = ctx.storage.cves.listActive(depsScan.scan_id);
+  if (cves.length === 0) {
+    return nothingWritten(format2, depsScan, {
+      unknowns,
+      note: `Nothing was written: the dependency scan ${depsScan.scan_id} measured 0 CVEs, and a VEX document needs at least one statement.`
+    });
+  }
+  const sbom = readSbom(ctx, projectPath, unknowns);
+  const surface = readSurface(ctx, projectPath, depsScan, unknowns);
+  const statements = buildVexStatements({
+    cves,
+    findings: ctx.storage.findings.listByScan(depsScan.scan_id),
+    suppressions: ctx.storage.suppressions.listAll(),
+    projectPath,
+    now: Date.now(),
+    dependency: surface?.index ?? null,
+    sbom: sbom?.inventory ?? null
+  });
+  if (sbom !== null) {
+    const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
+    if (unnamed > 0) {
+      unknowns.push(
+        `${unnamed} statement(s) name a package version the SBOM does not list (or lists in more than one ecosystem), so they carry no subcomponent purl \u2014 the SBOM may predate the dependency scan`
+      );
+    }
+  }
+  const product = productOf(projectPath, sbom?.inventory ?? null);
+  if (product.source === "directory" && sbom !== null) {
+    unknowns.push("the SBOM names no product purl, so the product is identified by its directory name only");
+  }
+  const documentId = randomUUID19();
+  const meta = {
+    documentId,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    author: inp.author ?? DEFAULT_AUTHOR,
+    toolVersion: resolveVersion(),
+    product: { id: product.id, name: product.name, purl: product.source === "sbom" ? product.id : null }
+  };
+  const document = format2 === "openvex" ? renderOpenVex(statements, meta) : renderCycloneDxVex(statements, meta);
+  const dir = ensureReportDir(projectPath, documentId, "vex");
+  const filePath = join77(dir, format2 === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
+  writeFileSync20(filePath, `${JSON.stringify(document, null, 2)}
+`, "utf8");
+  return {
+    ok: true,
+    format: format2,
+    file_path: filePath,
+    statements: countStatements(statements),
+    deps_scan: describeScan(depsScan, found.coverage),
+    sbom: sbom === null ? null : { scan_id: sbom.scan.scan_id, file_path: sbom.filePath },
+    surface_snapshot: surface === null ? null : { id: surface.id, captured_at: surface.capturedAt, tree_hash: surface.treeHash },
+    product: { id: product.id, source: product.source },
+    author: meta.author,
+    unknowns,
+    statements_sample: statements.slice(0, SAMPLE_SIZE2).map((s) => ({
+      vulnerability: s.vulnerability,
+      package: s.package_name,
+      installed_version: s.installed_version,
+      status: s.status,
+      ...s.justification !== void 0 ? { justification: s.justification } : {}
+    })),
+    instructions_for_model: "Read `unknowns` before sharing the file: each names something the statements could not account for. under_investigation is not a clean bill of health. To state not_affected, use suppress_finding with vex_status and a justification; for affected, upgrade the package."
+  };
+}
+function nothingWritten(format2, depsScan, extra) {
+  return {
+    ok: true,
+    format: format2,
+    file_path: null,
+    statements: NO_STATEMENTS,
+    deps_scan: depsScan === null ? null : describeScan(depsScan, null),
+    sbom: null,
+    surface_snapshot: null,
+    product: null,
+    unknowns: extra.unknowns,
+    note: extra.note
+  };
+}
+function describeScan(scan2, coverage) {
+  return {
+    scan_id: scan2.scan_id,
+    scan_type: scan2.scan_type,
+    started_at: scan2.started_at,
+    tree_hash: scan2.tree_hash,
+    ...coverage !== null ? { coverage } : {}
+  };
+}
+function countStatements(statements) {
+  const counts = { ...NO_STATEMENTS, total: statements.length };
+  for (const s of statements) counts[s.status] += 1;
+  return counts;
+}
+function readSbom(ctx, projectPath, unknowns) {
+  const scan2 = ctx.storage.scans.listCompletedOfTypes(projectPath, ["sbom"], { limit: 1 })[0];
+  if (scan2 === void 0) {
+    unknowns.push(
+      "no SBOM for this project (run generate_sbom): the vulnerable packages carry no purl, and the product is identified by its directory name only"
+    );
+    return null;
+  }
+  const filePath = scan2.meta?.["file_path"];
+  if (typeof filePath !== "string" || !existsSync55(filePath)) {
+    unknowns.push(
+      `the newest SBOM (${scan2.scan_id}) has no file on disk any more (run generate_sbom again): no purls could be read`
+    );
+    return null;
+  }
+  let inventory = null;
+  try {
+    inventory = parseSbomInventory(readFileSync42(filePath, "utf8"));
+  } catch {
+    inventory = null;
+  }
+  if (inventory === null) {
+    unknowns.push(`the newest SBOM (${filePath}) could not be read as CycloneDX or SPDX JSON: no purls`);
+    return null;
+  }
+  return { scan: scan2, filePath, inventory };
+}
+function readSurface(ctx, projectPath, depsScan, unknowns) {
+  const persisted = ctx.storage.surface.getLatestForProject(projectPath);
+  if (persisted === null) {
+    unknowns.push(
+      "no attack-surface snapshot for this project (run map_attack_surface): whether each package is imported was not checked, so no statement is affected \u2014 they are under_investigation"
+    );
+    return null;
+  }
+  if (persisted.snapshot.external_imports === void 0) {
+    unknowns.push(
+      "the attack-surface snapshot was mapped before third-party imports were recorded \u2014 re-run map_attack_surface with force: true; until then no package reads as imported"
+    );
+  } else if (persisted.tree_hash !== depsScan.tree_hash) {
+    unknowns.push(
+      `the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the dependency scan (tree ${depsScan.tree_hash}): the imports may have changed since`
+    );
+  }
+  return {
+    id: persisted.id,
+    capturedAt: persisted.captured_at,
+    treeHash: persisted.tree_hash,
+    index: prepareDependencyIndex({
+      snapshot: persisted.snapshot,
+      graph: buildImportGraph(persisted.snapshot.imports),
+      projectPath
+    })
+  };
+}
+function productOf(projectPath, sbom) {
+  const directory = basename9(projectPath);
+  const productPurl = sbom?.product_purl ?? null;
+  if (productPurl !== null) {
+    return { id: productPurl, name: sbom?.product_name ?? directory, source: "sbom" };
+  }
+  return { id: `pkg:generic/${encodeURIComponent(directory)}`, name: sbom?.product_name ?? directory, source: "directory" };
+}
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -73327,21 +73810,21 @@ registerResourceModule({
     if (!scanId) {
       throw mcpInvalidParams("scan_id is required");
     }
-    const record4 = ctx.storage.scans.getById(scanId);
-    if (!record4) {
+    const record5 = ctx.storage.scans.getById(scanId);
+    if (!record5) {
       throw mcpInvalidParams(`unknown scan_id '${scanId}'`);
     }
     return { json: enrich(scanId, ctx) };
   }
 });
 function enrich(scanId, ctx) {
-  const record4 = ctx.storage.scans.getById(scanId);
-  if (!record4) return { last_run: null };
+  const record5 = ctx.storage.scans.getById(scanId);
+  if (!record5) return { last_run: null };
   const findings = ctx.storage.findings.listByScan(scanId);
   const counts = countBySeverity6(findings);
   const top = topFindings4(findings, 10);
   return {
-    ...record4,
+    ...record5,
     findings_count_by_severity: counts,
     top_findings: top.map(boundFinding)
   };
