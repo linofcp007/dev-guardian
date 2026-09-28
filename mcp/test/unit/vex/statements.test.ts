@@ -10,6 +10,7 @@
  *     a fix nobody measured is not a fix.
  */
 import { describe, expect, it } from 'vitest';
+import { externalImports } from '../../../src/surface/moduleEdges.js';
 import { buildVexStatements, type VexInputs } from '../../../src/vex/statements.js';
 import { parseSbomInventory } from '../../../src/vex/sbom.js';
 import { buildImportGraph } from '../../../src/validate/importGraph.js';
@@ -58,7 +59,7 @@ function snapshot(externalFile: string | null): AttackSurfaceSnapshot {
     env_vars: [], ports: [], webhooks: [], coverage: [], tools_run: [], missing_tools: [],
     spec_files: [], spec_diff: null,
     imports: [{ file: 'src/routes.ts', module_file: 'src/db.ts' }],
-    external_imports: externalFile === null ? [] : [{ file: externalFile, specifier: 'lodash', language: 'typescript' }],
+    external_imports: externalImports(externalFile === null ? [] : [{ file: externalFile, specifier: 'lodash', language: 'typescript' }]),
   };
 }
 

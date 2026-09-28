@@ -11,6 +11,7 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
+import { externalImports } from '../../src/surface/moduleEdges.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { Finding } from '../../src/types.js';
 import '../../src/tools/exportVex.js';
@@ -91,7 +92,7 @@ function seedSurface(treeHash = 'tree-1'): number {
       }],
       env_vars: [], ports: [], webhooks: [], coverage: [], tools_run: [], missing_tools: [],
       spec_files: [], spec_diff: null, imports: [],
-      external_imports: [{ file: 'src/app.ts', specifier: 'lodash', language: 'typescript' }],
+      external_imports: externalImports([{ file: 'src/app.ts', specifier: 'lodash', language: 'typescript' }]),
     },
   }).id;
 }

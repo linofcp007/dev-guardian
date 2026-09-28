@@ -53,6 +53,7 @@ import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { expandExternalImports } from '../../src/surface/moduleEdges.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
 import '../../src/tools/validateFinding.js';
@@ -403,7 +404,7 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       if (surface.snapshot_id === null) throw new Error('no snapshot persisted');
 
       // The real snapshot records the package imports, project-relative.
-      const external = ctx.storage.surface.getById(surface.snapshot_id)?.snapshot.external_imports ?? [];
+      const external = expandExternalImports(ctx.storage.surface.getById(surface.snapshot_id)?.snapshot.external_imports).entries;
       expect(external).toContainEqual({ file: 'node-express/server.js', specifier: 'express', language: 'javascript' });
       expect(external).toContainEqual({ file: 'py-flask/app.py', specifier: 'flask', language: 'python' });
 

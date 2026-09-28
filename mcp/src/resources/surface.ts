@@ -121,8 +121,12 @@ function boundSnapshot(s: AttackSurfaceSnapshot): {
     ports: list(s.ports).length,
     spec_files: list(s.spec_files).length,
     imports: list(imports).length,
+    // (file, package) pairs, capped lists included at their true count.
     // Null, not 0, for a snapshot mapped before they were recorded.
-    external_imports: external_imports === undefined ? null : list(external_imports).length,
+    external_imports:
+      external_imports === undefined
+        ? null
+        : list(external_imports.packages).reduce((sum, p) => sum + p.file_count, 0),
     ...(diff === null
       ? {}
       : {

@@ -11,9 +11,12 @@ version bump.
 ### Added
 
 - `map_attack_surface` persists the import specifiers it cannot resolve to a project file — the
-  third-party packages — as `external_imports` on the snapshot; they were only counted. A cached
-  snapshot without the field is recomputed rather than served, and `guardian://surface/latest`
-  counts them in `totals` rather than inlining them.
+  third-party packages — as `external_imports` on the snapshot; they were only counted. Stored
+  compactly (each path once, per package the indices of its files, capped at 1000 with the true
+  count), a cached snapshot without the field is recomputed rather than served, and
+  `guardian://surface/latest` counts them in `totals` rather than inlining them.
+- Surface snapshots are kept to the newest 10 per project; the table grew with every run.
+  `guardian://surface/{id}` of a pruned snapshot answers `{ snapshot: null }`.
 - `validate_finding` implements its `dependency` provider: a dependency CVE (npm; PyPI through a
   table of known distribution-to-module names) reads `reachable` when a file a route reaches imports
   the package, `imported` when only other files do, and `unknown` otherwise — never `unreachable`.

@@ -594,18 +594,19 @@ export interface AttackSurfaceSnapshot {
   imports: { file: string; module_file: string }[];
   /**
    * The imports that name a package rather than a project file — `express`,
-   * `lodash/merge`, `yaml`, `github.com/gin-gonic/gin` — one per (file,
-   * specifier), `file` project-relative POSIX like `imports`. Stdlib modules
-   * are here too; nothing tells them apart from a package by the text alone.
+   * `lodash/merge`, `yaml`, `github.com/gin-gonic/gin` — and which files
+   * import each, project-relative POSIX like `imports`. Stdlib modules are
+   * here too; nothing tells them apart from a package by the text alone.
    * Read by `validate_finding`'s dependency provider to decide whether a
    * vulnerable package is imported, and whether by a file a route reaches
    * (`surface/moduleEdges.ts#externalImports` says what is left out).
    *
-   * ABSENT (never `[]`) on every snapshot persisted before it was recorded:
-   * "this snapshot never looked" must not read as "nothing imports any
-   * package", so a reader checks `=== undefined` first.
+   * ABSENT on every snapshot persisted before it was recorded — "this
+   * snapshot never looked" must not read as "nothing imports any package",
+   * so a reader checks `=== undefined` first — and on one stored in an
+   * earlier shape of this field (`surfaceRepo.ts` drops it on read).
    */
-  external_imports?: { file: string; specifier: string; language: string }[];
+  external_imports?: ExternalImports;
   /**
    * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
    * syntax error confined to one file): the routes outside the unparsed span
@@ -615,6 +616,27 @@ export interface AttackSurfaceSnapshot {
    * snapshot persisted before this field existed.
    */
   partially_parsed?: PartialParse[];
+}
+
+/**
+ * `AttackSurfaceSnapshot.external_imports`, stored compactly: each importing
+ * path once in `files`, and per (specifier, language) the indices of the
+ * files that import it. The flat `{file, specifier, language}` list it
+ * replaced measured 783 KB of a 933 KB snapshot at 10.5k imports.
+ */
+export interface ExternalImports {
+  /** Project-relative POSIX files, each once, sorted — the index space of `packages[].files`. */
+  files: string[];
+  packages: ExternalImportEntry[];
+}
+
+export interface ExternalImportEntry {
+  specifier: string;
+  language: string;
+  /** Indices into `ExternalImports.files`, at most `MAX_FILES_PER_PACKAGE` (`surface/moduleEdges.ts`). */
+  files: number[];
+  /** How many files import it in all — more than `files.length` when the list was capped. */
+  file_count: number;
 }
 
 /** One file a Semgrep run could not fully parse, as `map_attack_surface` reports it. */

@@ -36,6 +36,7 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { externalImports } from '../../src/surface/moduleEdges.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { computeTreeHash } from '../../src/treeHash/computeTreeHash.js';
 import type {
@@ -819,7 +820,7 @@ describe('validate_finding — the dependency provider', () => {
 
   it('runs by default beside static, and answers reachable for a package a routed file imports', async () => {
     seedSnapshot({
-      external_imports: [{ file: 'src/db.ts', specifier: 'lodash', language: 'typescript' }],
+      external_imports: externalImports([{ file: 'src/db.ts', specifier: 'lodash', language: 'typescript' }]),
     });
     seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
 
@@ -841,7 +842,7 @@ describe('validate_finding — the dependency provider', () => {
 
   it('runs alone when asked for alone', async () => {
     seedSnapshot({
-      external_imports: [{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }],
+      external_imports: externalImports([{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }]),
     });
     seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
 

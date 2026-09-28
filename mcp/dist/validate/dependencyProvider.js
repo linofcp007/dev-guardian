@@ -53,12 +53,13 @@
  */
 import { isBuiltin } from 'node:module';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { expandExternalImports } from '../surface/moduleEdges.js';
 import { reachFrom } from './importGraph.js';
 import { groupRoutesByRelFile, hopWord, mostInformative, routeLabel } from './staticProvider.js';
 export function prepareDependencyIndex(input) {
     const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
     return {
-        external: input.snapshot.external_imports,
+        external: input.snapshot.external_imports === undefined ? undefined : expandExternalImports(input.snapshot.external_imports),
         graph: input.graph,
         roots: [...routesByFile.keys()],
         routesByFile,
@@ -79,7 +80,7 @@ export function assessDependency(subject, index) {
     if ('gap' in matcher)
         return unknown([matcher.gap]);
     const importing = [
-        ...new Set(index.external
+        ...new Set(index.external.entries
             .filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier))
             .map((entry) => entry.file)),
     ].sort();
@@ -89,6 +90,14 @@ export function assessDependency(subject, index) {
                 'import inside an unparsed span is missing',
         ]
         : [];
+    // The snapshot caps each package's file list (MAX_FILES_PER_PACKAGE): an
+    // unrecorded importer may be the one a route reaches.
+    const capped = index.external.truncated.filter((t) => matcher.languages.has(t.language) && matcher.matches(t.specifier));
+    if (capped.length > 0) {
+        parseGap.push('the snapshot records at most ' +
+            `${capped.map((t) => `${t.recorded} of the ${t.total} files importing '${t.specifier}'`).join(', ')}; ` +
+            'an unrecorded importer may be one a route reaches');
+    }
     if (importing.length === 0) {
         return unknown([
             `no project file imports '${name}' directly. That is absence of evidence, not of use: a ` +

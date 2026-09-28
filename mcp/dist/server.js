@@ -39727,6 +39727,7 @@ function isJustification(value) {
 }
 
 // src/storage/surfaceRepo.ts
+var SURFACE_SNAPSHOTS_KEPT = 10;
 var EMPTY_SNAPSHOT = {
   routes: [],
   env_vars: [],
@@ -39746,6 +39747,7 @@ var SurfaceRepo = class {
   getByIdStmt;
   findCacheStmt;
   listRecentStmt;
+  pruneStmt;
   constructor(db) {
     this.insertStmt = db.prepare(`
       INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json, cache_key)
@@ -39768,6 +39770,13 @@ var SurfaceRepo = class {
     this.listRecentStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT ?
     `);
+    this.pruneStmt = db.prepare(`
+      DELETE FROM surface_snapshots
+      WHERE project_path = ?
+        AND id NOT IN (
+          SELECT id FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT ?
+        )
+    `);
   }
   insert(input) {
     const capturedAt = nowIso();
@@ -39778,6 +39787,7 @@ var SurfaceRepo = class {
       JSON.stringify(input.snapshot),
       input.cache_key ?? null
     );
+    this.pruneStmt.run(input.project_path, input.project_path, SURFACE_SNAPSHOTS_KEPT);
     return {
       id: Number(info.lastInsertRowid),
       project_path: input.project_path,
@@ -39857,9 +39867,41 @@ function rowToSnapshot2(row) {
       // "know" every element already has it — otherwise it flags the fallback
       // below as dead code (TS2783), when the whole point is that it is live
       // for exactly the legacy rows that lack the field.
-      routes: storedRoutes.map((r) => ({ provenance: "code", ...r }))
+      routes: storedRoutes.map((r) => ({ provenance: "code", ...r })),
+      // Validated, never trusted: an earlier shape of this field (a flat
+      // list, written by a pre-release build) or a damaged one reads as
+      // absent — the snapshot is then recomputed rather than read as "no
+      // package is imported" — and an entry pointing at no file is dropped.
+      external_imports: readExternalImports(parsed["external_imports"])
     }
   };
+}
+function readExternalImports(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const record5 = value;
+  const rawFiles = record5["files"];
+  const rawPackages = record5["packages"];
+  if (!Array.isArray(rawFiles) || !Array.isArray(rawPackages)) return void 0;
+  const files = rawFiles.filter((f) => typeof f === "string");
+  if (files.length !== rawFiles.length) return void 0;
+  const packages = [];
+  for (const raw of rawPackages) {
+    if (raw === null || typeof raw !== "object") continue;
+    const p = raw;
+    const indices = p["files"];
+    const count2 = p["file_count"];
+    if (typeof p["specifier"] !== "string" || typeof p["language"] !== "string") continue;
+    if (!Array.isArray(indices) || typeof count2 !== "number") continue;
+    const valid = indices.every((i2) => Number.isInteger(i2) && typeof i2 === "number" && i2 >= 0 && i2 < files.length);
+    if (!valid) continue;
+    packages.push({
+      specifier: p["specifier"],
+      language: p["language"],
+      files: indices,
+      file_count: Math.max(count2, indices.length)
+    });
+  }
+  return { files, packages };
 }
 
 // src/storage/validationsRepo.ts
@@ -61653,6 +61695,415 @@ function missionWellbeingPoint(value) {
 // src/validate/dependencyProvider.ts
 import { isBuiltin } from "node:module";
 
+// src/surface/extract.ts
+var METHOD_NAMES = /* @__PURE__ */ new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "options",
+  "head",
+  "all",
+  "any"
+]);
+var EXTENSION_LANGUAGES = {
+  ts: "typescript",
+  tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  py: "python",
+  php: "php",
+  go: "go",
+  rs: "rust",
+  rb: "ruby",
+  java: "java",
+  cs: "csharp"
+};
+var ROUTE_PACK_EXTENSIONS = Object.keys(EXTENSION_LANGUAGES).map((ext) => `.${ext}`);
+function languageFromPath(file) {
+  const ext = file.split(".").pop()?.toLowerCase();
+  if (ext === void 0) return "unknown";
+  return EXTENSION_LANGUAGES[ext] ?? "unknown";
+}
+var CODE_TOKENS = /[$`'"]|::|->|=>|\|\||&&/;
+var CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
+var BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
+var HOST_CONFUSION_CHARS = /[@\\]/;
+function hasUnsafeLeadingShape(value) {
+  return value.startsWith(".") || value.startsWith("//");
+}
+function looksLikePathSyntax(value) {
+  if (value.trim().length === 0) return false;
+  if (/\s/.test(value)) return false;
+  if (CODE_TOKENS.test(value)) return false;
+  if (CALL_OR_INDEX.test(value)) return false;
+  if (value.includes("/")) return true;
+  return BARE_ROUTE.test(value);
+}
+function isLiteralPath(value) {
+  if (HOST_CONFUSION_CHARS.test(value)) return false;
+  if (hasUnsafeLeadingShape(value)) return false;
+  return looksLikePathSyntax(value);
+}
+function extractParams(path8) {
+  const params = [];
+  for (const match of path8.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
+    const name = match[1];
+    if (name !== void 0) params.push(name);
+  }
+  for (const match of path8.matchAll(/\{([^}]+)\}/g)) {
+    const inner = match[1];
+    if (inner === void 0) continue;
+    const name = inner.split(":").pop()?.trim();
+    if (name !== void 0 && name.length > 0) params.push(name);
+  }
+  for (const match of path8.matchAll(/<([^>]+)>/g)) {
+    const inner = match[1];
+    if (inner === void 0) continue;
+    const name = inner.split(":").pop()?.trim();
+    if (name !== void 0 && name.length > 0) params.push(name);
+  }
+  return [...new Set(params)];
+}
+function extractSurface(semgrepJson) {
+  const routes = [];
+  const mounts = [];
+  for (const raw of asArray2(prop(semgrepJson, "results"))) {
+    const extra = prop(raw, "extra");
+    const metadata = prop(extra, "metadata");
+    const kind = str(metadata, "guardian_kind");
+    const file = str(raw, "path");
+    const line = num(prop(raw, "start"), "line") ?? 0;
+    if (file === void 0) continue;
+    if (kind === "route") {
+      const route = toRoute(metadata, prop(extra, "metavars"), file, line);
+      if (route) routes.push(route);
+    } else if (kind === "mount") {
+      const mount = toMount(prop(extra, "metavars"), file, line);
+      if (mount) mounts.push(mount);
+    }
+  }
+  return { routes, mounts };
+}
+var INHERITED_PATH_KEY = "guardian_path";
+var INHERITED_PATH = "inherited";
+function toRoute(metadata, metavars, file, line) {
+  const namespace = stripQuotes(metavar(metavars, "$NS"));
+  const captured = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
+  const path8 = captured ?? (str(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? "" : void 0);
+  if (path8 === void 0) return null;
+  const literalPath = isLiteralPath(path8);
+  const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
+  const parseableForParams = looksLikePathSyntax(path8);
+  const route = {
+    method: normalizeMethod(metavar(metavars, "$METHOD") ?? str(metadata, "method")),
+    provenance: "code",
+    path_raw: path8,
+    path_resolved: path8,
+    path_partial: !usable,
+    file,
+    line,
+    framework: str(metadata, "framework") ?? "unknown",
+    language: languageFromPath(file),
+    auth_hint: normalizeAuth(str(metadata, "auth")),
+    // Gated on syntax alone, not on `usable`: for
+    // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
+    // say where the route is served, but `id` is knowable from the path, and
+    // emitting [] would assert "this route takes no parameters".
+    params: parseableForParams ? extractParams(path8) : [],
+    confidence: usable ? normalizeConfidence(str(metadata, "confidence")) : "low"
+  };
+  if (namespace !== void 0) route.namespace = namespace;
+  return route;
+}
+function stripQuotes(value) {
+  if (value === void 0) return void 0;
+  const quote = value[0];
+  if (quote === void 0 || !QUOTES.test(quote)) return value;
+  if (value.length < 2 || !value.endsWith(quote)) return value;
+  return value.slice(1, -1);
+}
+var QUOTES = /^['"`]$/;
+function toMount(metavars, file, line) {
+  const prefix = stripQuotes(metavar(metavars, "$PREFIX"));
+  const routerVar = metavar(metavars, "$ROUTER");
+  if (prefix === void 0 || routerVar === void 0) return null;
+  return { prefix, router_var: routerVar, file, line };
+}
+function normalizeMethod(raw) {
+  if (raw === void 0) return "ANY";
+  const lowered = raw.toLowerCase();
+  const unmapped = lowered.startsWith("map") ? lowered.slice(3) : lowered;
+  const verb = METHOD_NAMES.has(unmapped) ? unmapped : lowered;
+  if (!METHOD_NAMES.has(verb)) return "ANY";
+  if (verb === "all" || verb === "any") return "ANY";
+  return verb.toUpperCase();
+}
+function normalizeAuth(raw) {
+  if (raw === "required" || raw === "none") return raw;
+  return "unknown";
+}
+function normalizeConfidence(raw) {
+  if (raw === "high" || raw === "medium" || raw === "low") return raw;
+  return "low";
+}
+function prop(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str(value, key) {
+  const v = prop(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function num(value, key) {
+  const v = prop(value, key);
+  return typeof v === "number" ? v : void 0;
+}
+function asArray2(value) {
+  return Array.isArray(value) ? value : [];
+}
+function metavar(metavars, name) {
+  return str(prop(metavars, name), "abstract_content");
+}
+
+// src/surface/moduleEdges.ts
+var RESOLVABLE_LANGUAGES = /* @__PURE__ */ new Set([
+  "typescript",
+  "javascript",
+  "python",
+  "go",
+  "rust"
+]);
+function extractModuleEdges(results) {
+  const edges = [];
+  for (const raw of results) {
+    const extra = prop2(raw, "extra");
+    const metadata = prop2(extra, "metadata");
+    if (str2(metadata, "guardian_kind") !== "import") continue;
+    const file = str2(raw, "path");
+    if (file === void 0) continue;
+    const metavars = prop2(extra, "metavars");
+    const module = stripQuotes2(metavar2(metavars, "$MODULE"));
+    if (module === void 0) continue;
+    const symbol = stripQuotes2(metavar2(metavars, "$SYMBOL"));
+    const language = languageFromPath(file);
+    edges.push({ file, specifier: buildSpecifier(language, module, symbol), language });
+  }
+  return edges;
+}
+function buildSpecifier(language, module, symbol) {
+  if (language === "python") return module.replace(/ /g, ".");
+  if (language !== "rust" || symbol === void 0) return module;
+  return `${module.replace(/ /g, "::")}::${symbol}`;
+}
+function prop2(value, key) {
+  if (value === null || typeof value !== "object") return void 0;
+  return value[key];
+}
+function str2(value, key) {
+  const v = prop2(value, key);
+  return typeof v === "string" ? v : void 0;
+}
+function metavar2(metavars, name) {
+  return str2(prop2(metavars, name), "abstract_content");
+}
+function stripQuotes2(value) {
+  if (value === void 0) return void 0;
+  const quote = value[0];
+  if (quote === void 0 || !/^['"`]$/.test(quote)) return value;
+  if (value.length < 2 || !value.endsWith(quote)) return value;
+  return value.slice(1, -1);
+}
+function resolveModuleEdges(edges, projectFiles) {
+  const index = buildResolutionIndex(projectFiles);
+  const resolved = [];
+  const unresolved = [];
+  for (const edge of edges) {
+    const moduleFiles = RESOLVABLE_LANGUAGES.has(edge.language) ? resolveSpecifier(edge, index) : [];
+    if (moduleFiles.length === 0) {
+      unresolved.push(edge);
+      continue;
+    }
+    for (const moduleFile of moduleFiles) {
+      resolved.push({ file: edge.file, module_file: moduleFile });
+    }
+  }
+  return { resolved, unresolved };
+}
+function externalImports(unresolved) {
+  const byPackage = /* @__PURE__ */ new Map();
+  for (const edge of unresolved) {
+    if (!namesAPackage(edge)) continue;
+    const key = `${edge.specifier}\0${edge.language}`;
+    const entry = byPackage.get(key) ?? { specifier: edge.specifier, language: edge.language, files: /* @__PURE__ */ new Set() };
+    entry.files.add(edge.file);
+    byPackage.set(key, entry);
+  }
+  const packages = [...byPackage.values()].sort((a2, b) => codeUnitOrder(a2.specifier, b.specifier) || codeUnitOrder(a2.language, b.language)).map((p) => ({ ...p, kept: [...p.files].sort(codeUnitOrder).slice(0, MAX_FILES_PER_PACKAGE) }));
+  const files = [...new Set(packages.flatMap((p) => p.kept))].sort(codeUnitOrder);
+  const indexOf = new Map(files.map((file, index) => [file, index]));
+  return {
+    files,
+    packages: packages.map((p) => ({
+      specifier: p.specifier,
+      language: p.language,
+      files: p.kept.flatMap((file) => {
+        const index = indexOf.get(file);
+        return index === void 0 ? [] : [index];
+      }),
+      file_count: p.files.size
+    }))
+  };
+}
+var MAX_FILES_PER_PACKAGE = 1e3;
+function expandExternalImports(stored) {
+  const entries2 = [];
+  const truncated = [];
+  for (const p of stored?.packages ?? []) {
+    for (const index of p.files) {
+      const file = stored?.files[index];
+      if (file !== void 0) entries2.push({ file, specifier: p.specifier, language: p.language });
+    }
+    if (p.file_count > p.files.length) {
+      truncated.push({ specifier: p.specifier, language: p.language, recorded: p.files.length, total: p.file_count });
+    }
+  }
+  return { entries: entries2, truncated };
+}
+function namesAPackage(edge) {
+  const specifier = edge.specifier;
+  if (specifier.length === 0) return false;
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return false;
+  if (edge.language === "rust" && /^(crate|self|super)::/.test(specifier)) return false;
+  return true;
+}
+function codeUnitOrder(a2, b) {
+  return a2 < b ? -1 : a2 > b ? 1 : 0;
+}
+function resolveSpecifier(edge, index) {
+  switch (edge.language) {
+    case "typescript":
+    case "javascript":
+      return atMostOne(resolveJsTs(edge.file, edge.specifier, index.byPosixPath));
+    case "python":
+      return atMostOne(resolvePython(edge.specifier, index.byPosixPath));
+    case "go":
+      return resolveGo(edge.specifier, index.goPackages);
+    case "rust":
+      return atMostOne(resolveRust(edge.file, edge.specifier, index.byPosixPath));
+    default:
+      return [];
+  }
+}
+function atMostOne(hit) {
+  return hit === void 0 ? [] : [hit];
+}
+var JS_TS_SUFFIXES = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  "/index.ts",
+  "/index.tsx",
+  "/index.js",
+  "/index.jsx"
+];
+function resolveJsTs(importingFile, specifier, byPosixPath) {
+  if (!specifier.startsWith(".")) return void 0;
+  const base = stripJsTsExtension(joinAndNormalize(dirOf(importingFile), specifier));
+  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
+}
+function stripJsTsExtension(path8) {
+  return path8.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, "");
+}
+var PYTHON_SUFFIXES = [".py", "/__init__.py"];
+function resolvePython(specifier, byPosixPath) {
+  if (specifier.startsWith(".")) return void 0;
+  const base = specifier.split(".").join("/");
+  if (base.length === 0) return void 0;
+  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base}${suffix}`));
+}
+var RUST_SUFFIXES = [".rs", "/mod.rs"];
+function resolveRust(importingFile, specifier, byPosixPath) {
+  let root;
+  let tail;
+  if (specifier.startsWith("crate::")) {
+    root = "src";
+    tail = specifier.slice("crate::".length);
+  } else if (specifier.startsWith("self::")) {
+    root = dirOf(importingFile);
+    tail = specifier.slice("self::".length);
+  } else {
+    return void 0;
+  }
+  const segments = tail.split("::").filter((segment) => segment.length > 0);
+  for (let depth = segments.length; depth > 0; depth -= 1) {
+    const base = joinAndNormalize(root, segments.slice(0, depth).join("/"));
+    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base}${suffix}`));
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
+}
+function resolveGo(specifier, goPackages) {
+  let best = [];
+  let bestLength = -1;
+  for (const [dir, files] of goPackages) {
+    if (!specifier.endsWith(`/${dir}`)) continue;
+    if (dir.length > bestLength) {
+      best = files;
+      bestLength = dir.length;
+    }
+  }
+  return best;
+}
+function buildResolutionIndex(projectFiles) {
+  const byPosixPath = /* @__PURE__ */ new Map();
+  const goPackages = /* @__PURE__ */ new Map();
+  for (const file of projectFiles) {
+    const posix2 = toPosix2(file);
+    byPosixPath.set(posix2, file);
+    if (!posix2.endsWith(".go")) continue;
+    const dir = dirOf(posix2);
+    if (dir === "" || dir === "/") continue;
+    const existing = goPackages.get(dir);
+    if (existing === void 0) goPackages.set(dir, [file]);
+    else existing.push(file);
+  }
+  return { byPosixPath, goPackages };
+}
+function lookupCandidates(byPosixPath, candidates2) {
+  for (const candidate of candidates2) {
+    const hit = byPosixPath.get(candidate);
+    if (hit !== void 0) return hit;
+  }
+  return void 0;
+}
+function toPosix2(path8) {
+  return path8.replace(/\\/g, "/");
+}
+function dirOf(file) {
+  const posix2 = toPosix2(file);
+  const parts = posix2.split("/");
+  parts.pop();
+  const dir = parts.join("/");
+  return dir === "" && posix2.startsWith("/") ? "/" : dir;
+}
+function joinAndNormalize(dir, tail) {
+  const absolute = dir.startsWith("/");
+  const stack = [];
+  for (const part of `${dir}/${tail}`.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  return `${absolute ? "/" : ""}${stack.join("/")}`;
+}
+
 // src/validate/importGraph.ts
 var MAX_GRAPH_EDGES = 2e4;
 function buildImportGraph(records) {
@@ -61904,7 +62355,7 @@ function hopWord(hops) {
 function prepareDependencyIndex(input) {
   const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
   return {
-    external: input.snapshot.external_imports,
+    external: input.snapshot.external_imports === void 0 ? void 0 : expandExternalImports(input.snapshot.external_imports),
     graph: input.graph,
     roots: [...routesByFile.keys()],
     routesByFile,
@@ -61921,12 +62372,20 @@ function assessDependency(subject, index) {
   if ("gap" in matcher) return unknown2([matcher.gap]);
   const importing = [
     ...new Set(
-      index.external.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier)).map((entry) => entry.file)
+      index.external.entries.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier)).map((entry) => entry.file)
     )
   ].sort();
   const parseGap = index.partiallyParsed > 0 ? [
     `${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an import inside an unparsed span is missing`
   ] : [];
+  const capped = index.external.truncated.filter(
+    (t) => matcher.languages.has(t.language) && matcher.matches(t.specifier)
+  );
+  if (capped.length > 0) {
+    parseGap.push(
+      `the snapshot records at most ${capped.map((t) => `${t.recorded} of the ${t.total} files importing '${t.specifier}'`).join(", ")}; an unrecorded importer may be one a route reaches`
+    );
+  }
   if (importing.length === 0) {
     return unknown2([
       `no project file imports '${name}' directly. That is absence of evidence, not of use: a transitive dependency is never imported by the project itself, a dynamic import (import(expr), require(variable), importlib) matches no rule, and a package used through another package's re-export is invisible`,
@@ -64088,34 +64547,34 @@ import { isAbsolute as isAbsolute10, join as join64, resolve as resolve15 } from
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
-  const results = prop(semgrepJson, "results");
+  const results = prop3(semgrepJson, "results");
   if (!Array.isArray(results)) return [];
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const raw of results) {
-    const extra = prop(raw, "extra");
-    if (str(prop(extra, "metadata"), "guardian_kind") !== "env") continue;
-    const captured = str(prop(prop(extra, "metavars"), "$NAME"), "abstract_content");
-    const file = str(raw, "path");
+    const extra = prop3(raw, "extra");
+    if (str3(prop3(extra, "metadata"), "guardian_kind") !== "env") continue;
+    const captured = str3(prop3(prop3(extra, "metavars"), "$NAME"), "abstract_content");
+    const file = str3(raw, "path");
     if (captured === void 0 || file === void 0) continue;
     const name = captured.replace(/^['"`]|['"`]$/g, "");
     if (name.length === 0 || seen.has(name)) continue;
     seen.add(name);
-    const line = numProp(prop(raw, "start"), "line") ?? 0;
+    const line = numProp(prop3(raw, "start"), "line") ?? 0;
     out.push({ name, file, line });
   }
   return out;
 }
-function prop(value, key) {
+function prop3(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str(value, key) {
-  const v = prop(value, key);
+function str3(value, key) {
+  const v = prop3(value, key);
   return typeof v === "string" ? v : void 0;
 }
 function numProp(value, key) {
-  const v = prop(value, key);
+  const v = prop3(value, key);
   return typeof v === "number" ? v : void 0;
 }
 
@@ -64188,385 +64647,6 @@ function canonicalPath2(path8) {
   } catch {
     return void 0;
   }
-}
-
-// src/surface/extract.ts
-var METHOD_NAMES = /* @__PURE__ */ new Set([
-  "get",
-  "post",
-  "put",
-  "patch",
-  "delete",
-  "options",
-  "head",
-  "all",
-  "any"
-]);
-var EXTENSION_LANGUAGES = {
-  ts: "typescript",
-  tsx: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  py: "python",
-  php: "php",
-  go: "go",
-  rs: "rust",
-  rb: "ruby",
-  java: "java",
-  cs: "csharp"
-};
-var ROUTE_PACK_EXTENSIONS = Object.keys(EXTENSION_LANGUAGES).map((ext) => `.${ext}`);
-function languageFromPath(file) {
-  const ext = file.split(".").pop()?.toLowerCase();
-  if (ext === void 0) return "unknown";
-  return EXTENSION_LANGUAGES[ext] ?? "unknown";
-}
-var CODE_TOKENS = /[$`'"]|::|->|=>|\|\||&&/;
-var CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
-var BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
-var HOST_CONFUSION_CHARS = /[@\\]/;
-function hasUnsafeLeadingShape(value) {
-  return value.startsWith(".") || value.startsWith("//");
-}
-function looksLikePathSyntax(value) {
-  if (value.trim().length === 0) return false;
-  if (/\s/.test(value)) return false;
-  if (CODE_TOKENS.test(value)) return false;
-  if (CALL_OR_INDEX.test(value)) return false;
-  if (value.includes("/")) return true;
-  return BARE_ROUTE.test(value);
-}
-function isLiteralPath(value) {
-  if (HOST_CONFUSION_CHARS.test(value)) return false;
-  if (hasUnsafeLeadingShape(value)) return false;
-  return looksLikePathSyntax(value);
-}
-function extractParams(path8) {
-  const params = [];
-  for (const match of path8.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
-    const name = match[1];
-    if (name !== void 0) params.push(name);
-  }
-  for (const match of path8.matchAll(/\{([^}]+)\}/g)) {
-    const inner = match[1];
-    if (inner === void 0) continue;
-    const name = inner.split(":").pop()?.trim();
-    if (name !== void 0 && name.length > 0) params.push(name);
-  }
-  for (const match of path8.matchAll(/<([^>]+)>/g)) {
-    const inner = match[1];
-    if (inner === void 0) continue;
-    const name = inner.split(":").pop()?.trim();
-    if (name !== void 0 && name.length > 0) params.push(name);
-  }
-  return [...new Set(params)];
-}
-function extractSurface(semgrepJson) {
-  const routes = [];
-  const mounts = [];
-  for (const raw of asArray2(prop2(semgrepJson, "results"))) {
-    const extra = prop2(raw, "extra");
-    const metadata = prop2(extra, "metadata");
-    const kind = str2(metadata, "guardian_kind");
-    const file = str2(raw, "path");
-    const line = num(prop2(raw, "start"), "line") ?? 0;
-    if (file === void 0) continue;
-    if (kind === "route") {
-      const route = toRoute(metadata, prop2(extra, "metavars"), file, line);
-      if (route) routes.push(route);
-    } else if (kind === "mount") {
-      const mount = toMount(prop2(extra, "metavars"), file, line);
-      if (mount) mounts.push(mount);
-    }
-  }
-  return { routes, mounts };
-}
-var INHERITED_PATH_KEY = "guardian_path";
-var INHERITED_PATH = "inherited";
-function toRoute(metadata, metavars, file, line) {
-  const namespace = stripQuotes(metavar(metavars, "$NS"));
-  const captured = stripQuotes(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
-  const path8 = captured ?? (str2(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? "" : void 0);
-  if (path8 === void 0) return null;
-  const literalPath = isLiteralPath(path8);
-  const usable = literalPath && (namespace === void 0 || isLiteralPath(namespace));
-  const parseableForParams = looksLikePathSyntax(path8);
-  const route = {
-    method: normalizeMethod(metavar(metavars, "$METHOD") ?? str2(metadata, "method")),
-    provenance: "code",
-    path_raw: path8,
-    path_resolved: path8,
-    path_partial: !usable,
-    file,
-    line,
-    framework: str2(metadata, "framework") ?? "unknown",
-    language: languageFromPath(file),
-    auth_hint: normalizeAuth(str2(metadata, "auth")),
-    // Gated on syntax alone, not on `usable`: for
-    // `register_rest_route(self::NAMESPACE, '/items/(?P<id>\d+)')` we cannot
-    // say where the route is served, but `id` is knowable from the path, and
-    // emitting [] would assert "this route takes no parameters".
-    params: parseableForParams ? extractParams(path8) : [],
-    confidence: usable ? normalizeConfidence(str2(metadata, "confidence")) : "low"
-  };
-  if (namespace !== void 0) route.namespace = namespace;
-  return route;
-}
-function stripQuotes(value) {
-  if (value === void 0) return void 0;
-  const quote = value[0];
-  if (quote === void 0 || !QUOTES.test(quote)) return value;
-  if (value.length < 2 || !value.endsWith(quote)) return value;
-  return value.slice(1, -1);
-}
-var QUOTES = /^['"`]$/;
-function toMount(metavars, file, line) {
-  const prefix = stripQuotes(metavar(metavars, "$PREFIX"));
-  const routerVar = metavar(metavars, "$ROUTER");
-  if (prefix === void 0 || routerVar === void 0) return null;
-  return { prefix, router_var: routerVar, file, line };
-}
-function normalizeMethod(raw) {
-  if (raw === void 0) return "ANY";
-  const lowered = raw.toLowerCase();
-  const unmapped = lowered.startsWith("map") ? lowered.slice(3) : lowered;
-  const verb = METHOD_NAMES.has(unmapped) ? unmapped : lowered;
-  if (!METHOD_NAMES.has(verb)) return "ANY";
-  if (verb === "all" || verb === "any") return "ANY";
-  return verb.toUpperCase();
-}
-function normalizeAuth(raw) {
-  if (raw === "required" || raw === "none") return raw;
-  return "unknown";
-}
-function normalizeConfidence(raw) {
-  if (raw === "high" || raw === "medium" || raw === "low") return raw;
-  return "low";
-}
-function prop2(value, key) {
-  if (value === null || typeof value !== "object") return void 0;
-  return value[key];
-}
-function str2(value, key) {
-  const v = prop2(value, key);
-  return typeof v === "string" ? v : void 0;
-}
-function num(value, key) {
-  const v = prop2(value, key);
-  return typeof v === "number" ? v : void 0;
-}
-function asArray2(value) {
-  return Array.isArray(value) ? value : [];
-}
-function metavar(metavars, name) {
-  return str2(prop2(metavars, name), "abstract_content");
-}
-
-// src/surface/moduleEdges.ts
-var RESOLVABLE_LANGUAGES = /* @__PURE__ */ new Set([
-  "typescript",
-  "javascript",
-  "python",
-  "go",
-  "rust"
-]);
-function extractModuleEdges(results) {
-  const edges = [];
-  for (const raw of results) {
-    const extra = prop3(raw, "extra");
-    const metadata = prop3(extra, "metadata");
-    if (str3(metadata, "guardian_kind") !== "import") continue;
-    const file = str3(raw, "path");
-    if (file === void 0) continue;
-    const metavars = prop3(extra, "metavars");
-    const module = stripQuotes2(metavar2(metavars, "$MODULE"));
-    if (module === void 0) continue;
-    const symbol = stripQuotes2(metavar2(metavars, "$SYMBOL"));
-    const language = languageFromPath(file);
-    edges.push({ file, specifier: buildSpecifier(language, module, symbol), language });
-  }
-  return edges;
-}
-function buildSpecifier(language, module, symbol) {
-  if (language === "python") return module.replace(/ /g, ".");
-  if (language !== "rust" || symbol === void 0) return module;
-  return `${module.replace(/ /g, "::")}::${symbol}`;
-}
-function prop3(value, key) {
-  if (value === null || typeof value !== "object") return void 0;
-  return value[key];
-}
-function str3(value, key) {
-  const v = prop3(value, key);
-  return typeof v === "string" ? v : void 0;
-}
-function metavar2(metavars, name) {
-  return str3(prop3(metavars, name), "abstract_content");
-}
-function stripQuotes2(value) {
-  if (value === void 0) return void 0;
-  const quote = value[0];
-  if (quote === void 0 || !/^['"`]$/.test(quote)) return value;
-  if (value.length < 2 || !value.endsWith(quote)) return value;
-  return value.slice(1, -1);
-}
-function resolveModuleEdges(edges, projectFiles) {
-  const index = buildResolutionIndex(projectFiles);
-  const resolved = [];
-  const unresolved = [];
-  for (const edge of edges) {
-    const moduleFiles = RESOLVABLE_LANGUAGES.has(edge.language) ? resolveSpecifier(edge, index) : [];
-    if (moduleFiles.length === 0) {
-      unresolved.push(edge);
-      continue;
-    }
-    for (const moduleFile of moduleFiles) {
-      resolved.push({ file: edge.file, module_file: moduleFile });
-    }
-  }
-  return { resolved, unresolved };
-}
-function externalImports(unresolved) {
-  const byKey = /* @__PURE__ */ new Map();
-  for (const edge of unresolved) {
-    if (!namesAPackage(edge)) continue;
-    byKey.set(`${edge.file}\0${edge.specifier}`, edge);
-  }
-  return [...byKey.values()].sort(
-    (a2, b) => codeUnitOrder(a2.file, b.file) || codeUnitOrder(a2.specifier, b.specifier)
-  );
-}
-function namesAPackage(edge) {
-  const specifier = edge.specifier;
-  if (specifier.length === 0) return false;
-  if (specifier.startsWith(".") || specifier.startsWith("/")) return false;
-  if (edge.language === "rust" && /^(crate|self|super)::/.test(specifier)) return false;
-  return true;
-}
-function codeUnitOrder(a2, b) {
-  return a2 < b ? -1 : a2 > b ? 1 : 0;
-}
-function resolveSpecifier(edge, index) {
-  switch (edge.language) {
-    case "typescript":
-    case "javascript":
-      return atMostOne(resolveJsTs(edge.file, edge.specifier, index.byPosixPath));
-    case "python":
-      return atMostOne(resolvePython(edge.specifier, index.byPosixPath));
-    case "go":
-      return resolveGo(edge.specifier, index.goPackages);
-    case "rust":
-      return atMostOne(resolveRust(edge.file, edge.specifier, index.byPosixPath));
-    default:
-      return [];
-  }
-}
-function atMostOne(hit) {
-  return hit === void 0 ? [] : [hit];
-}
-var JS_TS_SUFFIXES = [
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  "/index.ts",
-  "/index.tsx",
-  "/index.js",
-  "/index.jsx"
-];
-function resolveJsTs(importingFile, specifier, byPosixPath) {
-  if (!specifier.startsWith(".")) return void 0;
-  const base = stripJsTsExtension(joinAndNormalize(dirOf(importingFile), specifier));
-  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
-}
-function stripJsTsExtension(path8) {
-  return path8.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, "");
-}
-var PYTHON_SUFFIXES = [".py", "/__init__.py"];
-function resolvePython(specifier, byPosixPath) {
-  if (specifier.startsWith(".")) return void 0;
-  const base = specifier.split(".").join("/");
-  if (base.length === 0) return void 0;
-  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base}${suffix}`));
-}
-var RUST_SUFFIXES = [".rs", "/mod.rs"];
-function resolveRust(importingFile, specifier, byPosixPath) {
-  let root;
-  let tail;
-  if (specifier.startsWith("crate::")) {
-    root = "src";
-    tail = specifier.slice("crate::".length);
-  } else if (specifier.startsWith("self::")) {
-    root = dirOf(importingFile);
-    tail = specifier.slice("self::".length);
-  } else {
-    return void 0;
-  }
-  const segments = tail.split("::").filter((segment) => segment.length > 0);
-  for (let depth = segments.length; depth > 0; depth -= 1) {
-    const base = joinAndNormalize(root, segments.slice(0, depth).join("/"));
-    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base}${suffix}`));
-    if (hit !== void 0) return hit;
-  }
-  return void 0;
-}
-function resolveGo(specifier, goPackages) {
-  let best = [];
-  let bestLength = -1;
-  for (const [dir, files] of goPackages) {
-    if (!specifier.endsWith(`/${dir}`)) continue;
-    if (dir.length > bestLength) {
-      best = files;
-      bestLength = dir.length;
-    }
-  }
-  return best;
-}
-function buildResolutionIndex(projectFiles) {
-  const byPosixPath = /* @__PURE__ */ new Map();
-  const goPackages = /* @__PURE__ */ new Map();
-  for (const file of projectFiles) {
-    const posix2 = toPosix2(file);
-    byPosixPath.set(posix2, file);
-    if (!posix2.endsWith(".go")) continue;
-    const dir = dirOf(posix2);
-    if (dir === "" || dir === "/") continue;
-    const existing = goPackages.get(dir);
-    if (existing === void 0) goPackages.set(dir, [file]);
-    else existing.push(file);
-  }
-  return { byPosixPath, goPackages };
-}
-function lookupCandidates(byPosixPath, candidates2) {
-  for (const candidate of candidates2) {
-    const hit = byPosixPath.get(candidate);
-    if (hit !== void 0) return hit;
-  }
-  return void 0;
-}
-function toPosix2(path8) {
-  return path8.replace(/\\/g, "/");
-}
-function dirOf(file) {
-  const posix2 = toPosix2(file);
-  const parts = posix2.split("/");
-  parts.pop();
-  const dir = parts.join("/");
-  return dir === "" && posix2.startsWith("/") ? "/" : dir;
-}
-function joinAndNormalize(dir, tail) {
-  const absolute = dir.startsWith("/");
-  const stack = [];
-  for (const part of `${dir}/${tail}`.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") stack.pop();
-    else stack.push(part);
-  }
-  return `${absolute ? "/" : ""}${stack.join("/")}`;
 }
 
 // src/surface/recoverMetavars.ts
@@ -74269,8 +74349,9 @@ function boundSnapshot(s) {
     ports: list2(s.ports).length,
     spec_files: list2(s.spec_files).length,
     imports: list2(imports).length,
+    // (file, package) pairs, capped lists included at their true count.
     // Null, not 0, for a snapshot mapped before they were recorded.
-    external_imports: external_imports === void 0 ? null : list2(external_imports).length,
+    external_imports: external_imports === void 0 ? null : list2(external_imports.packages).reduce((sum, p) => sum + p.file_count, 0),
     ...diff === null ? {} : {
       spec_diff: {
         matched: list2(diff.matched).length,

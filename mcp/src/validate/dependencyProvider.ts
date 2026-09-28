@@ -54,6 +54,7 @@
 
 import { isBuiltin } from 'node:module';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { expandExternalImports } from '../surface/moduleEdges.js';
 import { reachFrom, type ImportGraph, type ReachResult } from './importGraph.js';
 import { groupRoutesByRelFile, hopWord, mostInformative, routeLabel } from './staticProvider.js';
 import type { FindingValidation, ValidationEvidence } from './types.js';
@@ -77,7 +78,8 @@ export interface DependencyAssessment {
 
 /** What {@link assessDependency} reads, built once per batch. */
 export interface DependencyIndex {
-  external: AttackSurfaceSnapshot['external_imports'];
+  /** The snapshot's third-party imports, expanded; undefined when it never recorded them. */
+  external: ReturnType<typeof expandExternalImports> | undefined;
   graph: ImportGraph;
   roots: readonly string[];
   routesByFile: ReadonlyMap<string, RouteRecord[]>;
@@ -92,7 +94,8 @@ export function prepareDependencyIndex(input: {
 }): DependencyIndex {
   const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
   return {
-    external: input.snapshot.external_imports,
+    external:
+      input.snapshot.external_imports === undefined ? undefined : expandExternalImports(input.snapshot.external_imports),
     graph: input.graph,
     roots: [...routesByFile.keys()],
     routesByFile,
@@ -119,7 +122,7 @@ export function assessDependency(subject: DependencySubject, index: DependencyIn
 
   const importing = [
     ...new Set(
-      index.external
+      index.external.entries
         .filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier))
         .map((entry) => entry.file),
     ),
@@ -132,6 +135,18 @@ export function assessDependency(subject: DependencySubject, index: DependencyIn
             'import inside an unparsed span is missing',
         ]
       : [];
+  // The snapshot caps each package's file list (MAX_FILES_PER_PACKAGE): an
+  // unrecorded importer may be the one a route reaches.
+  const capped = index.external.truncated.filter(
+    (t) => matcher.languages.has(t.language) && matcher.matches(t.specifier),
+  );
+  if (capped.length > 0) {
+    parseGap.push(
+      'the snapshot records at most ' +
+        `${capped.map((t) => `${t.recorded} of the ${t.total} files importing '${t.specifier}'`).join(', ')}; ` +
+        'an unrecorded importer may be one a route reaches',
+    );
+  }
 
   if (importing.length === 0) {
     return unknown([

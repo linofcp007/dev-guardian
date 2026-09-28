@@ -18,6 +18,7 @@ import {
   type DependencySubject,
 } from '../../../src/validate/dependencyProvider.js';
 import { buildImportGraph } from '../../../src/validate/importGraph.js';
+import { MAX_FILES_PER_PACKAGE, externalImports } from '../../../src/surface/moduleEdges.js';
 import type { AttackSurfaceSnapshot, Finding, RouteRecord } from '../../../src/types.js';
 
 const PROJECT = '/proj';
@@ -31,7 +32,7 @@ function route(over: Partial<RouteRecord> = {}): RouteRecord {
   };
 }
 
-type External = NonNullable<AttackSurfaceSnapshot['external_imports']>[number];
+type External = { file: string; specifier: string; language: string };
 
 function ext(file: string, specifier: string, language = 'typescript'): External {
   return { file, specifier, language };
@@ -50,7 +51,7 @@ function snapshotOf(over: Partial<AttackSurfaceSnapshot> = {}): AttackSurfaceSna
     spec_diff: null,
     // routes.ts -> db.ts; cli.ts is imported by nothing a route reaches.
     imports: [{ file: 'src/routes.ts', module_file: 'src/db.ts' }],
-    external_imports: [],
+    external_imports: externalImports([]),
     ...over,
   };
 }
@@ -70,7 +71,7 @@ const pypi = (name: string): DependencySubject => ({ package_name: name, ecosyst
 
 describe('assessDependency — npm', () => {
   it('reads reachable when a file a route reaches imports the package, naming the route and the hops', () => {
-    const a = assess(npm('lodash'), { external_imports: [ext('src/db.ts', 'lodash')] });
+    const a = assess(npm('lodash'), { external_imports: externalImports([ext('src/db.ts', 'lodash')]) });
     expect(a.verdict).toBe('reachable');
     expect(a.importing_files).toEqual(['src/db.ts']);
     const details = a.evidence.map((e) => e.detail).join(' | ');
@@ -80,25 +81,25 @@ describe('assessDependency — npm', () => {
   });
 
   it('reads reachable at 0 hops when the route file itself imports it', () => {
-    const a = assess(npm('express'), { external_imports: [ext('src/routes.ts', 'express')] });
+    const a = assess(npm('express'), { external_imports: externalImports([ext('src/routes.ts', 'express')]) });
     expect(a.verdict).toBe('reachable');
     expect(a.evidence.map((e) => e.detail).join(' | ')).toMatch(/0 hops/);
   });
 
   it('reads imported when only a file no route reaches imports it', () => {
-    const a = assess(npm('lodash'), { external_imports: [ext('src/cli.ts', 'lodash')] });
+    const a = assess(npm('lodash'), { external_imports: externalImports([ext('src/cli.ts', 'lodash')]) });
     expect(a.verdict).toBe('imported');
     expect(a.importing_files).toEqual(['src/cli.ts']);
   });
 
   it('matches a subpath and a scoped name, and nothing that merely starts with the name', () => {
-    expect(assess(npm('lodash'), { external_imports: [ext('src/db.ts', 'lodash/merge')] }).verdict)
+    expect(assess(npm('lodash'), { external_imports: externalImports([ext('src/db.ts', 'lodash/merge')]) }).verdict)
       .toBe('reachable');
-    expect(assess(npm('@babel/core'), { external_imports: [ext('src/db.ts', '@babel/core')] }).verdict)
+    expect(assess(npm('@babel/core'), { external_imports: externalImports([ext('src/db.ts', '@babel/core')]) }).verdict)
       .toBe('reachable');
-    expect(assess(npm('lodash'), { external_imports: [ext('src/db.ts', 'lodash-es')] }).verdict)
+    expect(assess(npm('lodash'), { external_imports: externalImports([ext('src/db.ts', 'lodash-es')]) }).verdict)
       .toBe('unknown');
-    expect(assess(npm('@babel/core'), { external_imports: [ext('src/db.ts', '@babel/core-js')] }).verdict)
+    expect(assess(npm('@babel/core'), { external_imports: externalImports([ext('src/db.ts', '@babel/core-js')]) }).verdict)
       .toBe('unknown');
   });
 
@@ -106,23 +107,23 @@ describe('assessDependency — npm', () => {
     // Node resolves a core module name before node_modules, so
     // `require('punycode')` is the built-in even with the npm package
     // installed; `punycode/` is how code reaches the package.
-    expect(assess(npm('punycode'), { external_imports: [ext('src/db.ts', 'punycode')] }).verdict)
+    expect(assess(npm('punycode'), { external_imports: externalImports([ext('src/db.ts', 'punycode')]) }).verdict)
       .toBe('unknown');
-    expect(assess(npm('punycode'), { external_imports: [ext('src/db.ts', 'node:punycode')] }).verdict)
+    expect(assess(npm('punycode'), { external_imports: externalImports([ext('src/db.ts', 'node:punycode')]) }).verdict)
       .toBe('unknown');
-    expect(assess(npm('punycode'), { external_imports: [ext('src/db.ts', 'punycode/')] }).verdict)
+    expect(assess(npm('punycode'), { external_imports: externalImports([ext('src/db.ts', 'punycode/')]) }).verdict)
       .toBe('reachable');
   });
 
   it('only counts JavaScript/TypeScript imports for an npm package', () => {
-    const a = assess(npm('requests'), { external_imports: [ext('app/views.py', 'requests', 'python')] });
+    const a = assess(npm('requests'), { external_imports: externalImports([ext('app/views.py', 'requests', 'python')]) });
     expect(a.verdict).toBe('unknown');
   });
 });
 
 describe('assessDependency — absence is never evidence', () => {
   it('answers unknown, never unreachable, when no file imports the package', () => {
-    const a = assess(npm('minimist'), { external_imports: [ext('src/db.ts', 'lodash')] });
+    const a = assess(npm('minimist'), { external_imports: externalImports([ext('src/db.ts', 'lodash')]) });
     expect(a.verdict).toBe('unknown');
     expect(a.evidence).toEqual([]);
     const gaps = a.coverage_gaps.join(' | ');
@@ -138,7 +139,7 @@ describe('assessDependency — absence is never evidence', () => {
 
   it('answers unknown for an ecosystem it cannot match, naming it', () => {
     const a = assess({ package_name: 'github.com/gin-gonic/gin', ecosystem: 'golang' }, {
-      external_imports: [ext('main.go', 'github.com/gin-gonic/gin', 'go')],
+      external_imports: externalImports([ext('main.go', 'github.com/gin-gonic/gin', 'go')]),
     });
     expect(a.verdict).toBe('unknown');
     expect(a.coverage_gaps.join(' | ')).toMatch(/golang/);
@@ -146,14 +147,14 @@ describe('assessDependency — absence is never evidence', () => {
 
   it('answers unknown when the ecosystem could not be determined', () => {
     const a = assess({ package_name: 'lodash', ecosystem: null }, {
-      external_imports: [ext('src/db.ts', 'lodash')],
+      external_imports: externalImports([ext('src/db.ts', 'lodash')]),
     });
     expect(a.verdict).toBe('unknown');
     expect(a.coverage_gaps.join(' | ')).toMatch(/ecosystem/);
   });
 
   it('says the graph was cut when an importer is not shown reachable from a truncated graph', () => {
-    const snapshot = snapshotOf({ external_imports: [ext('src/cli.ts', 'lodash')] });
+    const snapshot = snapshotOf({ external_imports: externalImports([ext('src/cli.ts', 'lodash')]) });
     const graph = { ...buildImportGraph(snapshot.imports), truncated: true };
     const a = assessDependency(npm('lodash'), prepareDependencyIndex({ snapshot, graph, projectPath: PROJECT }));
     expect(a.verdict).toBe('imported');
@@ -161,26 +162,36 @@ describe('assessDependency — absence is never evidence', () => {
   });
 });
 
+describe('assessDependency — a capped importer list', () => {
+  it('says an unrecorded importer may be the reachable one when the package list was capped', () => {
+    const many = Array.from({ length: MAX_FILES_PER_PACKAGE + 1 }, (_, i) =>
+      ext(`tools/t${String(i).padStart(5, '0')}.ts`, 'lodash'));
+    const a = assess(npm('lodash'), { external_imports: externalImports(many) });
+    expect(a.verdict).toBe('imported');
+    expect(a.coverage_gaps.join(' | ')).toMatch(new RegExp(`${MAX_FILES_PER_PACKAGE} of the ${MAX_FILES_PER_PACKAGE + 1} files`));
+  });
+});
+
 describe('assessDependency — PyPI', () => {
   it('matches a distribution through its known module name', () => {
     const a = assess(pypi('PyYAML'), {
       routes: [route({ file: `${PROJECT}/app/views.py`, language: 'python' })],
-      external_imports: [ext('app/views.py', 'yaml', 'python')],
+      external_imports: externalImports([ext('app/views.py', 'yaml', 'python')]),
     });
     expect(a.verdict).toBe('reachable');
   });
 
   it('matches a submodule of the known module, and not a module that merely starts with it', () => {
     const routes = [route({ file: `${PROJECT}/app/views.py`, language: 'python' })];
-    expect(assess(pypi('pyyaml'), { routes, external_imports: [ext('app/views.py', 'yaml.constructor', 'python')] }).verdict)
+    expect(assess(pypi('pyyaml'), { routes, external_imports: externalImports([ext('app/views.py', 'yaml.constructor', 'python')]) }).verdict)
       .toBe('reachable');
-    expect(assess(pypi('pyyaml'), { routes, external_imports: [ext('app/views.py', 'yamllint', 'python')] }).verdict)
+    expect(assess(pypi('pyyaml'), { routes, external_imports: externalImports([ext('app/views.py', 'yamllint', 'python')]) }).verdict)
       .toBe('unknown');
   });
 
   it('normalises the distribution name the way PyPI does', () => {
     const routes = [route({ file: `${PROJECT}/app/views.py`, language: 'python' })];
-    expect(assess(pypi('Python_DateUtil'), { routes, external_imports: [ext('app/views.py', 'dateutil.parser', 'python')] }).verdict)
+    expect(assess(pypi('Python_DateUtil'), { routes, external_imports: externalImports([ext('app/views.py', 'dateutil.parser', 'python')]) }).verdict)
       .toBe('reachable');
   });
 
@@ -189,7 +200,7 @@ describe('assessDependency — PyPI', () => {
     // (PyYAML -> yaml, Pillow -> PIL). Guessing "same name" would claim an
     // import on a coincidence, so an unmapped one is unknown.
     const a = assess(pypi('some-obscure-dist'), {
-      external_imports: [ext('app/views.py', 'some_obscure_dist', 'python')],
+      external_imports: externalImports([ext('app/views.py', 'some_obscure_dist', 'python')]),
     });
     expect(a.verdict).toBe('unknown');
     expect(a.coverage_gaps.join(' | ')).toMatch(/mapping/);
@@ -258,7 +269,7 @@ describe('ecosystemOfManifest', () => {
 
 describe('validateDependencies', () => {
   it('returns one dependency-provider verdict per dependency finding, and none for the rest', () => {
-    const snapshot = snapshotOf({ external_imports: [ext('src/db.ts', 'lodash')] });
+    const snapshot = snapshotOf({ external_imports: externalImports([ext('src/db.ts', 'lodash')]) });
     const out = validateDependencies({
       snapshot,
       snapshotId: 9,

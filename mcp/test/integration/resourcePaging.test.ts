@@ -29,6 +29,7 @@ import { attachAllResources } from '../../src/resources/index.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import { attachAllTools } from '../../src/tools/index.js';
+import { externalImports } from '../../src/surface/moduleEdges.js';
 import type { RouteRecord } from '../../src/types.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import { freshPlugin, projectDir, seedScan } from '../helpers/historySeed.js';
@@ -188,15 +189,15 @@ describe('guardian://surface/latest is bounded and says what it left out', () =>
       snapshot: {
         routes: [route(1)], env_vars: [], ports: [], webhooks: [], coverage: [], tools_run: [],
         missing_tools: [], spec_files: [], spec_diff: null, imports: [],
-        external_imports: Array.from({ length: 5000 }, (_, i) => ({
+        external_imports: externalImports(Array.from({ length: 5000 }, (_, i) => ({
           file: `src/f${i}.ts`, specifier: `pkg-${i}`, language: 'typescript',
-        })),
+        }))),
       },
     });
     vi.spyOn(process, 'cwd').mockReturnValue(project);
     const client = await connect(s.plugin);
     const { json, text } = await readJson(client, 'guardian://surface/latest');
-    const snapshot = json['snapshot'] as { external_imports?: unknown[] };
+    const snapshot = json['snapshot'] as { external_imports?: unknown };
     expect(snapshot.external_imports).toBeUndefined();
     expect(json['totals']).toEqual(expect.objectContaining({ external_imports: 5000 }));
     expect(text.length).toBeLessThan(100_000);

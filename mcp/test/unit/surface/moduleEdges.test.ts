@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_FILES_PER_PACKAGE,
+  expandExternalImports,
   externalImports,
   extractModuleEdges,
   resolveModuleEdges,
@@ -328,19 +330,45 @@ describe('externalImports', () => {
       edge('src/main.rs', 'actix_web::web', 'rust'),
       edge('Order.java', 'com.example.Service', 'java'),
     ];
-    expect(externalImports(unresolved)).toEqual([
-      edge('Order.java', 'com.example.Service', 'java'),
-      edge('app/views.py', 'yaml', 'python'),
+    expect(expandExternalImports(externalImports(unresolved)).entries).toEqual([
       edge('src/app.ts', '@babel/core', 'typescript'),
+      edge('src/main.rs', 'actix_web::web', 'rust'),
+      edge('Order.java', 'com.example.Service', 'java'),
       edge('src/app.ts', 'express', 'typescript'),
       edge('src/app.ts', 'lodash/merge', 'javascript'),
-      edge('src/main.rs', 'actix_web::web', 'rust'),
+      edge('app/views.py', 'yaml', 'python'),
     ]);
   });
 
   it('records each (file, specifier) once, however many times the file imports it', () => {
     const twice = [edge('src/a.ts', 'react', 'typescript'), edge('src/a.ts', 'react', 'typescript')];
-    expect(externalImports(twice)).toEqual([edge('src/a.ts', 'react', 'typescript')]);
+    expect(externalImports(twice)).toEqual({
+      files: ['src/a.ts'],
+      packages: [{ specifier: 'react', language: 'typescript', files: [0], file_count: 1 }],
+    });
+  });
+
+  it('stores each path once however many packages it imports — specifier → file indices', () => {
+    // 10.5k import records measured 783 KB of a 933 KB snapshot as one
+    // {file, specifier, language} object per record.
+    const edges = ['react', 'lodash', 'zod'].flatMap((pkg) =>
+      Array.from({ length: 200 }, (_, i) => edge(`src/components/deeply/nested/component-${i}.tsx`, pkg, 'typescript')),
+    );
+    const stored = externalImports(edges);
+    expect(stored.files).toHaveLength(200);
+    expect(stored.packages.map((p) => [p.specifier, p.file_count])).toEqual([['lodash', 200], ['react', 200], ['zod', 200]]);
+    const naive = JSON.stringify(edges).length;
+    expect(JSON.stringify(stored).length).toBeLessThan(naive / 4);
+  });
+
+  it(`caps the files recorded per package at ${MAX_FILES_PER_PACKAGE}, keeping the true count`, () => {
+    const many = Array.from({ length: MAX_FILES_PER_PACKAGE + 5 }, (_, i) => edge(`src/f${String(i).padStart(5, '0')}.ts`, 'react', 'typescript'));
+    const stored = externalImports(many);
+    expect(stored.packages[0]?.files).toHaveLength(MAX_FILES_PER_PACKAGE);
+    expect(stored.packages[0]?.file_count).toBe(MAX_FILES_PER_PACKAGE + 5);
+    expect(expandExternalImports(stored).truncated).toEqual([
+      { specifier: 'react', language: 'typescript', recorded: MAX_FILES_PER_PACKAGE, total: MAX_FILES_PER_PACKAGE + 5 },
+    ]);
   });
 });
 

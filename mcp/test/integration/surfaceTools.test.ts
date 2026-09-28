@@ -1566,11 +1566,15 @@ describe('map_attack_surface', () => {
     );
     const snapshot = ctx.storage.surface.getById(result.snapshot_id)?.snapshot;
 
-    expect(snapshot?.external_imports).toEqual([
-      { file: 'api/server.ts', specifier: 'express', language: 'typescript' },
-      { file: 'api/server.ts', specifier: 'lodash/merge', language: 'typescript' },
-      { file: 'pyapp/views.py', specifier: 'yaml.urls', language: 'python' },
-    ]);
+    // Stored compactly: each importing path once, packages pointing at it.
+    expect(snapshot?.external_imports).toEqual({
+      files: ['api/server.ts', 'pyapp/views.py'],
+      packages: [
+        { specifier: 'express', language: 'typescript', files: [0], file_count: 1 },
+        { specifier: 'lodash/merge', language: 'typescript', files: [0], file_count: 1 },
+        { specifier: 'yaml.urls', language: 'python', files: [1], file_count: 1 },
+      ],
+    });
   });
 
   it('does not reuse a cached snapshot captured before external imports were recorded', async () => {
@@ -1602,7 +1606,7 @@ describe('map_attack_surface', () => {
 
     expect(second.snapshot_id).not.toBe(first.snapshot_id);
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
-    expect(ctx.storage.surface.getById(second.snapshot_id)?.snapshot.external_imports).toEqual([]);
+    expect(ctx.storage.surface.getById(second.snapshot_id)?.snapshot.external_imports).toEqual({ files: [], packages: [] });
   });
 });
 
