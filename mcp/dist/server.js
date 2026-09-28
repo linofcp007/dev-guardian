@@ -74124,7 +74124,7 @@ var SURFACE_ITEM_CAP = 200;
 registerResourceModule({
   name: "guardian-surface-latest",
   uri: "guardian://surface/latest",
-  description: `Latest attack-surface snapshot of the server's working-directory project, from \`map_attack_surface\`: routes (code- and spec-provenance) with resolved path, method, params and auth hint, env vars, declared ports, per-language coverage, spec_files and the spec_diff (matched, code_only, spec_only, unmatchable). Each list is capped at ${SURFACE_ITEM_CAP} entries \u2014 \`totals\` has the true counts, \`truncated\` names what was cut, and guardian://surface/{snapshot_id} returns the whole snapshot. Import edges are counted, not inlined. Returns \`{ snapshot: null }\` when none exists yet.`,
+  description: `Latest attack-surface snapshot of the server's working-directory project, from \`map_attack_surface\`: routes (code- and spec-provenance) with resolved path, method, params and auth hint, env vars, declared ports, per-language coverage, spec_files and the spec_diff (matched, code_only, spec_only, unmatchable). Each list is capped at ${SURFACE_ITEM_CAP} entries \u2014 \`totals\` has the true counts, \`truncated\` names what was cut, and guardian://surface/{snapshot_id} returns the whole snapshot. Import edges and third-party imports are counted, not inlined. Returns \`{ snapshot: null }\` when none exists yet.`,
   handler: async (_uri, _params, ctx) => {
     const latest = ctx.storage.surface.getLatestForProject(serverProjectPath());
     if (!latest) return { json: { snapshot: null } };
@@ -74169,7 +74169,7 @@ function boundSnapshot(s) {
     if (all.length > SURFACE_ITEM_CAP) truncated.push(name);
     return all.slice(0, SURFACE_ITEM_CAP);
   };
-  const { imports, spec_diff, ...rest } = s;
+  const { imports, external_imports, spec_diff, ...rest } = s;
   const diff = spec_diff ?? null;
   const snapshot = {
     ...rest,
@@ -74193,6 +74193,8 @@ function boundSnapshot(s) {
     ports: list2(s.ports).length,
     spec_files: list2(s.spec_files).length,
     imports: list2(imports).length,
+    // Null, not 0, for a snapshot mapped before they were recorded.
+    external_imports: external_imports === void 0 ? null : list2(external_imports).length,
     ...diff === null ? {} : {
       spec_diff: {
         matched: list2(diff.matched).length,

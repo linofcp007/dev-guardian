@@ -179,6 +179,29 @@ describe('guardian://surface/latest is bounded and says what it left out', () =>
     expect(text.length).toBeLessThan(100_000);
   });
 
+  it('counts the third-party imports rather than inlining them, like the import edges', async () => {
+    const s = freshPlugin();
+    const project = projectDir('surface-ext-');
+    s.storage.surface.insert({
+      project_path: project,
+      tree_hash: 'h',
+      snapshot: {
+        routes: [route(1)], env_vars: [], ports: [], webhooks: [], coverage: [], tools_run: [],
+        missing_tools: [], spec_files: [], spec_diff: null, imports: [],
+        external_imports: Array.from({ length: 5000 }, (_, i) => ({
+          file: `src/f${i}.ts`, specifier: `pkg-${i}`, language: 'typescript',
+        })),
+      },
+    });
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    const client = await connect(s.plugin);
+    const { json, text } = await readJson(client, 'guardian://surface/latest');
+    const snapshot = json['snapshot'] as { external_imports?: unknown[] };
+    expect(snapshot.external_imports).toBeUndefined();
+    expect(json['totals']).toEqual(expect.objectContaining({ external_imports: 5000 }));
+    expect(text.length).toBeLessThan(100_000);
+  });
+
   it("does not answer with another project's snapshot", async () => {
     const s = freshPlugin();
     const mine = projectDir('surface-a-');

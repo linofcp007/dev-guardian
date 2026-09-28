@@ -34,8 +34,8 @@ registerResourceModule({
     'and auth hint, env vars, declared ports, per-language coverage, spec_files and the spec_diff ' +
     `(matched, code_only, spec_only, unmatchable). Each list is capped at ${SURFACE_ITEM_CAP} ` +
     'entries — `totals` has the true counts, `truncated` names what was cut, and ' +
-    'guardian://surface/{snapshot_id} returns the whole snapshot. Import edges are counted, not ' +
-    'inlined. Returns `{ snapshot: null }` when none exists yet.',
+    'guardian://surface/{snapshot_id} returns the whole snapshot. Import edges and third-party ' +
+    'imports are counted, not inlined. Returns `{ snapshot: null }` when none exists yet.',
   handler: async (_uri, _params, ctx) => {
     const latest = ctx.storage.surface.getLatestForProject(serverProjectPath());
     if (!latest) return { json: { snapshot: null } };
@@ -92,7 +92,9 @@ function boundSnapshot(s: AttackSurfaceSnapshot): {
     return all.slice(0, SURFACE_ITEM_CAP);
   };
 
-  const { imports, spec_diff, ...rest } = s;
+  // Both import lists are counted, never inlined: a project of any size has
+  // thousands of them, and the dependency provider reads them from storage.
+  const { imports, external_imports, spec_diff, ...rest } = s;
   const diff = spec_diff ?? null;
   const snapshot: Record<string, unknown> = {
     ...rest,
@@ -119,6 +121,8 @@ function boundSnapshot(s: AttackSurfaceSnapshot): {
     ports: list(s.ports).length,
     spec_files: list(s.spec_files).length,
     imports: list(imports).length,
+    // Null, not 0, for a snapshot mapped before they were recorded.
+    external_imports: external_imports === undefined ? null : list(external_imports).length,
     ...(diff === null
       ? {}
       : {
