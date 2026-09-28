@@ -71,6 +71,8 @@ export const SCAN_TYPES = [
   'dast',
   // Agent workspace / host-config audit
   'agent_audit',
+  // What the configured MCP servers actually serve (audit_mcp_tools)
+  'mcp_tool_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 

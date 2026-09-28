@@ -12,7 +12,7 @@
  */
 import { hashConfigValue } from '../agentaudit/hash.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
-import { MCP_TOOL_AUDIT } from './analyze.js';
+import { MCP_AUDIT_TOOL_NAME } from './analyze.js';
 import { escapeInvisible } from './rules.js';
 export function toolDefinitionHash(tool) {
     return hashConfigValue({
@@ -48,7 +48,7 @@ export function comparePins(listing, previous, auditedBefore) {
     const removed = [...previous.keys()].filter((name) => !current.has(name)).sort();
     const server = escapeInvisible(listing.serverName);
     const finding = (ruleId, severity, name, title, message) => makeFinding({
-        tool: MCP_TOOL_AUDIT,
+        tool: MCP_AUDIT_TOOL_NAME,
         rule_id: ruleId,
         severity,
         category: 'security',

@@ -6908,7 +6908,7 @@ var require_formats = __commonJS({
     }
     exports.fullFormats = {
       // date: http://tools.ietf.org/html/rfc3339#section-5.6
-      date: fmtDef(date3, compareDate),
+      date: fmtDef(date4, compareDate),
       // date-time: http://tools.ietf.org/html/rfc3339#section-5.6
       time: fmtDef(getTime(true), compareTime),
       "date-time": fmtDef(getDateTime(true), compareDateTime),
@@ -6974,7 +6974,7 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date3(str6) {
+    function date4(str6) {
       const matches = DATE.exec(str6);
       if (!matches)
         return false;
@@ -7043,7 +7043,7 @@ var require_formats = __commonJS({
       const time3 = getTime(strictTimeZone);
       return function date_time(str6) {
         const dateTime = str6.split(DATE_TIME_SEPARATOR);
-        return dateTime.length === 2 && date3(dateTime[0]) && time3(dateTime[1]);
+        return dateTime.length === 2 && date4(dateTime[0]) && time3(dateTime[1]);
       };
     }
     function compareDateTime(dt1, dt2) {
@@ -7283,7 +7283,7 @@ var init_uint_array = __esm({
     isUint8Array = (value) => objectToString.call(value) === "[object Uint8Array]";
     bufferToUint8Array = (buffer) => new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     textEncoder = new TextEncoder();
-    stringToUint8Array = (string3) => textEncoder.encode(string3);
+    stringToUint8Array = (string4) => textEncoder.encode(string4);
     textDecoder = new TextDecoder();
     uint8ArrayToString = (uint8Array) => textDecoder.decode(uint8Array);
     joinToString = (uint8ArraysOrStrings, encoding) => {
@@ -7901,21 +7901,21 @@ var init_base = __esm({
       const openCode = `\x1B[${open}m`;
       const closeCode = `\x1B[${close}m`;
       return (input) => {
-        const string3 = input + "";
-        let index = string3.indexOf(closeCode);
+        const string4 = input + "";
+        let index = string4.indexOf(closeCode);
         if (index === -1) {
-          return openCode + string3 + closeCode;
+          return openCode + string4 + closeCode;
         }
         let result = openCode;
         let lastIndex = 0;
         const reopenOnNestedClose = close === 22;
         const replaceCode = (reopenOnNestedClose ? closeCode : "") + openCode;
         while (index !== -1) {
-          result += string3.slice(lastIndex, index) + replaceCode;
+          result += string4.slice(lastIndex, index) + replaceCode;
           lastIndex = index + closeCode.length;
-          index = string3.indexOf(closeCode, lastIndex);
+          index = string4.indexOf(closeCode, lastIndex);
         }
-        result += string3.slice(lastIndex) + closeCode;
+        result += string4.slice(lastIndex) + closeCode;
         return result;
       };
     };
@@ -8026,7 +8026,7 @@ var init_default = __esm({
       error: getFinalIcon,
       duration: getFinalIcon
     };
-    identity = (string3) => string3;
+    identity = (string4) => string4;
     COLORS = {
       command: () => bold,
       output: () => identity,
@@ -8512,8 +8512,8 @@ var require_shebang_command = __commonJS({
   "node_modules/shebang-command/index.js"(exports, module) {
     "use strict";
     var shebangRegex = require_shebang_regex();
-    module.exports = (string3 = "") => {
-      const match = string3.match(shebangRegex);
+    module.exports = (string4 = "") => {
+      const match = string4.match(shebangRegex);
       if (!match) {
         return null;
       }
@@ -8668,7 +8668,7 @@ var require_cross_spawn = __commonJS({
     var cp = __require("child_process");
     var parse8 = require_parse();
     var enoent = require_enoent();
-    function spawn2(command, args, options) {
+    function spawn3(command, args, options) {
       const parsed = parse8(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
@@ -8680,8 +8680,8 @@ var require_cross_spawn = __commonJS({
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
     }
-    module.exports = spawn2;
-    module.exports.spawn = spawn2;
+    module.exports = spawn3;
+    module.exports.spawn = spawn3;
     module.exports.sync = spawnSync2;
     module.exports._parse = parse8;
     module.exports._enoent = enoent;
@@ -9149,8 +9149,8 @@ var init_signals = __esm({
         signals: { [name]: constantSignal }
       } = constants;
       const supported = constantSignal !== void 0;
-      const number3 = supported ? constantSignal : defaultNumber;
-      return { name, number: number3, description, supported, action, forced, standard };
+      const number4 = supported ? constantSignal : defaultNumber;
+      return { name, number: number4, description, supported, action, forced, standard };
     };
   }
 });
@@ -9168,33 +9168,33 @@ var init_main = __esm({
     };
     getSignalByName = ({
       name,
-      number: number3,
+      number: number4,
       description,
       supported,
       action,
       forced,
       standard
-    }) => [name, { name, number: number3, description, supported, action, forced, standard }];
+    }) => [name, { name, number: number4, description, supported, action, forced, standard }];
     signalsByName = getSignalsByName();
     getSignalsByNumber = () => {
       const signals2 = getSignals();
       const length = SIGRTMAX + 1;
       const signalsA = Array.from(
         { length },
-        (value, number3) => getSignalByNumber(number3, signals2)
+        (value, number4) => getSignalByNumber(number4, signals2)
       );
       return Object.assign({}, ...signalsA);
     };
-    getSignalByNumber = (number3, signals2) => {
-      const signal = findSignalByNumber(number3, signals2);
+    getSignalByNumber = (number4, signals2) => {
+      const signal = findSignalByNumber(number4, signals2);
       if (signal === void 0) {
         return {};
       }
       const { name, description, supported, action, forced, standard } = signal;
       return {
-        [number3]: {
+        [number4]: {
           name,
-          number: number3,
+          number: number4,
           description,
           supported,
           action,
@@ -9203,12 +9203,12 @@ var init_main = __esm({
         }
       };
     };
-    findSignalByNumber = (number3, signals2) => {
-      const signal = signals2.find(({ name }) => constants2.signals[name] === number3);
+    findSignalByNumber = (number4, signals2) => {
+      const signal = signals2.find(({ name }) => constants2.signals[name] === number4);
       if (signal !== void 0) {
         return signal;
       }
-      return signals2.find((signalA) => signalA.number === number3);
+      return signals2.find((signalA) => signalA.number === number4);
     };
     signalsByNumber = getSignalsByNumber();
   }
@@ -12258,8 +12258,8 @@ var init_split = __esm({
     };
     getAppendNewlineGenerator = ({ binary, preserveNewlines, readableObjectMode, state }) => binary || preserveNewlines || readableObjectMode ? void 0 : { transform: appendNewlineGenerator.bind(void 0, state) };
     appendNewlineGenerator = function* ({ isWindowsNewline = false }, chunk) {
-      const { unixNewline, windowsNewline, LF: LF2, concatBytes } = typeof chunk === "string" ? linesStringInfo : linesUint8ArrayInfo;
-      if (chunk.at(-1) === LF2) {
+      const { unixNewline, windowsNewline, LF: LF3, concatBytes } = typeof chunk === "string" ? linesStringInfo : linesUint8ArrayInfo;
+      if (chunk.at(-1) === LF3) {
         yield chunk;
         return;
       }
@@ -13646,7 +13646,7 @@ var processOk, kExitEmitter, global2, ObjectDefineProperty, Emitter, SignalExitB
 var init_mjs = __esm({
   "node_modules/signal-exit/dist/mjs/index.js"() {
     init_signals2();
-    processOk = (process11) => !!process11 && typeof process11 === "object" && typeof process11.removeListener === "function" && typeof process11.emit === "function" && typeof process11.reallyExit === "function" && typeof process11.listeners === "function" && typeof process11.kill === "function" && typeof process11.pid === "number" && typeof process11.on === "function";
+    processOk = (process12) => !!process12 && typeof process12 === "object" && typeof process12.removeListener === "function" && typeof process12.emit === "function" && typeof process12.reallyExit === "function" && typeof process12.listeners === "function" && typeof process12.kill === "function" && typeof process12.pid === "number" && typeof process12.on === "function";
     kExitEmitter = /* @__PURE__ */ Symbol.for("signal-exit emitter");
     global2 = globalThis;
     ObjectDefineProperty = Object.defineProperty.bind(Object);
@@ -13704,16 +13704,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler45) => {
+    signalExitWrap = (handler46) => {
       return {
         onExit(cb, opts) {
-          return handler45.onExit(cb, opts);
+          return handler46.onExit(cb, opts);
         },
         load() {
-          return handler45.load();
+          return handler46.load();
         },
         unload() {
-          return handler45.unload();
+          return handler46.unload();
         }
       };
     };
@@ -13739,15 +13739,15 @@ var init_mjs = __esm({
       #originalProcessReallyExit;
       #sigListeners = {};
       #loaded = false;
-      constructor(process11) {
+      constructor(process12) {
         super();
-        this.#process = process11;
+        this.#process = process12;
         this.#sigListeners = {};
         for (const sig of signals) {
           this.#sigListeners[sig] = () => {
             const listeners = this.#process.listeners(sig);
             let { count: count2 } = this.#emitter;
-            const p = process11;
+            const p = process12;
             if (typeof p.__signal_exit_emitter__ === "object" && typeof p.__signal_exit_emitter__.count === "number") {
               count2 += p.__signal_exit_emitter__.count;
             }
@@ -13756,12 +13756,12 @@ var init_mjs = __esm({
               const ret = this.#emitter.emit("exit", null, sig);
               const s = sig === "SIGHUP" ? this.#hupSig : sig;
               if (!ret)
-                process11.kill(process11.pid, s);
+                process12.kill(process12.pid, s);
             }
           };
         }
-        this.#originalProcessReallyExit = process11.reallyExit;
-        this.#originalProcessEmit = process11.emit;
+        this.#originalProcessReallyExit = process12.reallyExit;
+        this.#originalProcessEmit = process12.emit;
       }
       onExit(cb, opts) {
         if (!processOk(this.#process)) {
@@ -17765,7 +17765,7 @@ var require_string = __commonJS({
   "node_modules/yaml/dist/schema/common/string.js"(exports) {
     "use strict";
     var stringifyString = require_stringifyString();
-    var string3 = {
+    var string4 = {
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
@@ -17775,7 +17775,7 @@ var require_string = __commonJS({
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
       }
     };
-    exports.string = string3;
+    exports.string = string4;
   }
 });
 
@@ -17913,7 +17913,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 2, 8, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int2 = {
@@ -17921,7 +17921,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 0, 10, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -17930,7 +17930,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 2, 16, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -17946,14 +17946,14 @@ var require_schema = __commonJS({
     var map = require_map();
     var _null4 = require_null();
     var seq = require_seq();
-    var string3 = require_string();
+    var string4 = require_string();
     var bool = require_bool();
     var float = require_float();
     var int2 = require_int();
     var schema = [
       map.map,
       seq.seq,
-      string3.string,
+      string4.string,
       _null4.nullTag,
       bool.boolTag,
       int2.intOct,
@@ -18008,7 +18008,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str6, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6, 10),
+        resolve: (str6, _onError2, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -18380,7 +18380,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 2, 2, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -18389,7 +18389,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 1, 8, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int2 = {
@@ -18397,7 +18397,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 0, 10, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -18406,7 +18406,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str6, _onError, opt) => intResolve(str6, 2, 16, opt),
+      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -18549,7 +18549,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str6, _onError, { intAsBigInt }) => parseSexagesimal(str6, intAsBigInt),
+      resolve: (str6, _onError2, { intAsBigInt }) => parseSexagesimal(str6, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -18575,15 +18575,15 @@ var require_timestamp = __commonJS({
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
         const millisec = match[7] ? Number((match[7] + "00").substr(1, 3)) : 0;
-        let date3 = Date.UTC(year, month - 1, day, hour || 0, minute || 0, second || 0, millisec);
+        let date4 = Date.UTC(year, month - 1, day, hour || 0, minute || 0, second || 0, millisec);
         const tz = match[8];
         if (tz && tz !== "Z") {
           let d = parseSexagesimal(tz, false);
           if (Math.abs(d) < 30)
             d *= 60;
-          date3 -= 6e4 * d;
+          date4 -= 6e4 * d;
         }
-        return new Date(date3);
+        return new Date(date4);
       },
       stringify: ({ value }) => value?.toISOString().replace(/(T00:00:00)?\.000Z$/, "") ?? ""
     };
@@ -18600,7 +18600,7 @@ var require_schema3 = __commonJS({
     var map = require_map();
     var _null4 = require_null();
     var seq = require_seq();
-    var string3 = require_string();
+    var string4 = require_string();
     var binary = require_binary();
     var bool = require_bool2();
     var float = require_float2();
@@ -18613,7 +18613,7 @@ var require_schema3 = __commonJS({
     var schema = [
       map.map,
       seq.seq,
-      string3.string,
+      string4.string,
       _null4.nullTag,
       bool.trueTag,
       bool.falseTag,
@@ -18644,7 +18644,7 @@ var require_tags = __commonJS({
     var map = require_map();
     var _null4 = require_null();
     var seq = require_seq();
-    var string3 = require_string();
+    var string4 = require_string();
     var bool = require_bool();
     var float = require_float();
     var int2 = require_int();
@@ -18659,7 +18659,7 @@ var require_tags = __commonJS({
     var timestamp = require_timestamp();
     var schemas = /* @__PURE__ */ new Map([
       ["core", schema.schema],
-      ["failsafe", [map.map, seq.seq, string3.string]],
+      ["failsafe", [map.map, seq.seq, string4.string]],
       ["json", schema$1.schema],
       ["yaml11", schema$2.schema],
       ["yaml-1.1", schema$2.schema]
@@ -18738,7 +18738,7 @@ var require_Schema = __commonJS({
     var identity3 = require_identity();
     var map = require_map();
     var seq = require_seq();
-    var string3 = require_string();
+    var string4 = require_string();
     var tags = require_tags();
     var sortMapEntriesByKey = (a2, b) => a2.key < b.key ? -1 : a2.key > b.key ? 1 : 0;
     var Schema = class _Schema {
@@ -18749,7 +18749,7 @@ var require_Schema = __commonJS({
         this.tags = tags.getTags(customTags, this.name, merge2);
         this.toStringOptions = toStringDefaults ?? null;
         Object.defineProperty(this, identity3.MAP, { value: map.map });
-        Object.defineProperty(this, identity3.SCALAR, { value: string3.string });
+        Object.defineProperty(this, identity3.SCALAR, { value: string4.string });
         Object.defineProperty(this, identity3.SEQ, { value: seq.seq });
         this.sortMapEntries = typeof sortMapEntries === "function" ? sortMapEntries : sortMapEntries === true ? sortMapEntriesByKey : null;
       }
@@ -20081,19 +20081,19 @@ var require_resolve_flow_scalar = __commonJS({
       const { offset, type, source, end } = scalar;
       let _type;
       let value;
-      const _onError = (rel2, code, msg) => onError(offset + rel2, code, msg);
+      const _onError2 = (rel2, code, msg) => onError(offset + rel2, code, msg);
       switch (type) {
         case "scalar":
           _type = Scalar.Scalar.PLAIN;
-          value = plainValue(source, _onError);
+          value = plainValue(source, _onError2);
           break;
         case "single-quoted-scalar":
           _type = Scalar.Scalar.QUOTE_SINGLE;
-          value = singleQuotedValue(source, _onError);
+          value = singleQuotedValue(source, _onError2);
           break;
         case "double-quoted-scalar":
           _type = Scalar.Scalar.QUOTE_DOUBLE;
-          value = doubleQuotedValue(source, _onError);
+          value = doubleQuotedValue(source, _onError2);
           break;
         /* istanbul ignore next should not happen */
         default:
@@ -20770,7 +20770,7 @@ var require_cst_scalar = __commonJS({
     var stringifyString = require_stringifyString();
     function resolveAsScalar(token, strict = true, onError) {
       if (token) {
-        const _onError = (pos, code, message3) => {
+        const _onError2 = (pos, code, message3) => {
           const offset = typeof pos === "number" ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
           if (onError)
             onError(offset, code, message3);
@@ -20781,9 +20781,9 @@ var require_cst_scalar = __commonJS({
           case "scalar":
           case "single-quoted-scalar":
           case "double-quoted-scalar":
-            return resolveFlowScalar.resolveFlowScalar(token, strict, _onError);
+            return resolveFlowScalar.resolveFlowScalar(token, strict, _onError2);
           case "block-scalar":
-            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token, _onError);
+            return resolveBlockScalar.resolveBlockScalar({ options: { strict } }, token, _onError2);
         }
       }
       return null;
@@ -22810,6 +22810,110 @@ var require_dist2 = __commonJS({
     exports.stringify = publicApi.stringify;
     exports.visit = visit.visit;
     exports.visitAsync = visit.visitAsync;
+  }
+});
+
+// node_modules/content-type/index.js
+var require_content_type = __commonJS({
+  "node_modules/content-type/index.js"(exports) {
+    "use strict";
+    var PARAM_REGEXP = /; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) */g;
+    var TEXT_REGEXP = /^[\u000b\u0020-\u007e\u0080-\u00ff]+$/;
+    var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var QESC_REGEXP = /\\([\u000b\u0020-\u00ff])/g;
+    var QUOTE_REGEXP = /([\\"])/g;
+    var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    exports.format = format2;
+    exports.parse = parse8;
+    function format2(obj) {
+      if (!obj || typeof obj !== "object") {
+        throw new TypeError("argument obj is required");
+      }
+      var parameters = obj.parameters;
+      var type = obj.type;
+      if (!type || !TYPE_REGEXP.test(type)) {
+        throw new TypeError("invalid type");
+      }
+      var string4 = type;
+      if (parameters && typeof parameters === "object") {
+        var param;
+        var params = Object.keys(parameters).sort();
+        for (var i2 = 0; i2 < params.length; i2++) {
+          param = params[i2];
+          if (!TOKEN_REGEXP.test(param)) {
+            throw new TypeError("invalid parameter name");
+          }
+          string4 += "; " + param + "=" + qstring(parameters[param]);
+        }
+      }
+      return string4;
+    }
+    function parse8(string4) {
+      if (!string4) {
+        throw new TypeError("argument string is required");
+      }
+      var header = typeof string4 === "object" ? getcontenttype(string4) : string4;
+      if (typeof header !== "string") {
+        throw new TypeError("argument string is required to be a string");
+      }
+      var index = header.indexOf(";");
+      var type = index !== -1 ? header.slice(0, index).trim() : header.trim();
+      if (!TYPE_REGEXP.test(type)) {
+        throw new TypeError("invalid media type");
+      }
+      var obj = new ContentType(type.toLowerCase());
+      if (index !== -1) {
+        var key;
+        var match;
+        var value;
+        PARAM_REGEXP.lastIndex = index;
+        while (match = PARAM_REGEXP.exec(header)) {
+          if (match.index !== index) {
+            throw new TypeError("invalid parameter format");
+          }
+          index += match[0].length;
+          key = match[1].toLowerCase();
+          value = match[2];
+          if (value.charCodeAt(0) === 34) {
+            value = value.slice(1, -1);
+            if (value.indexOf("\\") !== -1) {
+              value = value.replace(QESC_REGEXP, "$1");
+            }
+          }
+          obj.parameters[key] = value;
+        }
+        if (index !== header.length) {
+          throw new TypeError("invalid parameter format");
+        }
+      }
+      return obj;
+    }
+    function getcontenttype(obj) {
+      var header;
+      if (typeof obj.getHeader === "function") {
+        header = obj.getHeader("content-type");
+      } else if (typeof obj.headers === "object") {
+        header = obj.headers && obj.headers["content-type"];
+      }
+      if (typeof header !== "string") {
+        throw new TypeError("content-type header is missing from object");
+      }
+      return header;
+    }
+    function qstring(val) {
+      var str6 = String(val);
+      if (TOKEN_REGEXP.test(str6)) {
+        return str6;
+      }
+      if (str6.length > 0 && !TEXT_REGEXP.test(str6)) {
+        throw new TypeError("invalid parameter value");
+      }
+      return '"' + str6.replace(QUOTE_REGEXP, "\\$1") + '"';
+    }
+    function ContentType(type) {
+      this.parameters = /* @__PURE__ */ Object.create(null);
+      this.type = type;
+    }
   }
 });
 
@@ -27612,6 +27716,7 @@ var string = (params) => {
   const regex = params ? `[\\s\\S]{${params?.minimum ?? 0},${params?.maximum ?? ""}}` : `[\\s\\S]*`;
   return new RegExp(`^${regex}$`);
 };
+var bigint = /^\d+n?$/;
 var integer = /^\d+$/;
 var number = /^-?\d+(?:\.\d+)?/i;
 var boolean = /true|false/i;
@@ -28189,11 +28294,11 @@ var $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
   inst._zod.check = (payload) => {
     try {
       const orig = payload.value;
-      const url = new URL(orig);
-      const href = url.href;
+      const url2 = new URL(orig);
+      const href = url2.href;
       if (def.hostname) {
         def.hostname.lastIndex = 0;
-        if (!def.hostname.test(url.hostname)) {
+        if (!def.hostname.test(url2.hostname)) {
           payload.issues.push({
             code: "invalid_format",
             format: "url",
@@ -28207,7 +28312,7 @@ var $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
       }
       if (def.protocol) {
         def.protocol.lastIndex = 0;
-        if (!def.protocol.test(url.protocol.endsWith(":") ? url.protocol.slice(0, -1) : url.protocol)) {
+        if (!def.protocol.test(url2.protocol.endsWith(":") ? url2.protocol.slice(0, -1) : url2.protocol)) {
           payload.issues.push({
             code: "invalid_format",
             format: "url",
@@ -28480,6 +28585,26 @@ var $ZodBoolean = /* @__PURE__ */ $constructor("$ZodBoolean", (inst, def) => {
     return payload;
   };
 });
+var $ZodBigInt = /* @__PURE__ */ $constructor("$ZodBigInt", (inst, def) => {
+  $ZodType.init(inst, def);
+  inst._zod.pattern = bigint;
+  inst._zod.parse = (payload, _ctx) => {
+    if (def.coerce)
+      try {
+        payload.value = BigInt(payload.value);
+      } catch (_) {
+      }
+    if (typeof payload.value === "bigint")
+      return payload;
+    payload.issues.push({
+      expected: "bigint",
+      code: "invalid_type",
+      input: payload.value,
+      inst
+    });
+    return payload;
+  };
+});
 var $ZodNull = /* @__PURE__ */ $constructor("$ZodNull", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.pattern = _null;
@@ -28497,6 +28622,10 @@ var $ZodNull = /* @__PURE__ */ $constructor("$ZodNull", (inst, def) => {
     return payload;
   };
 });
+var $ZodAny = /* @__PURE__ */ $constructor("$ZodAny", (inst, def) => {
+  $ZodType.init(inst, def);
+  inst._zod.parse = (payload) => payload;
+});
 var $ZodUnknown = /* @__PURE__ */ $constructor("$ZodUnknown", (inst, def) => {
   $ZodType.init(inst, def);
   inst._zod.parse = (payload) => payload;
@@ -28508,6 +28637,30 @@ var $ZodNever = /* @__PURE__ */ $constructor("$ZodNever", (inst, def) => {
       expected: "never",
       code: "invalid_type",
       input: payload.value,
+      inst
+    });
+    return payload;
+  };
+});
+var $ZodDate = /* @__PURE__ */ $constructor("$ZodDate", (inst, def) => {
+  $ZodType.init(inst, def);
+  inst._zod.parse = (payload, _ctx) => {
+    if (def.coerce) {
+      try {
+        payload.value = new Date(payload.value);
+      } catch (_err) {
+      }
+    }
+    const input = payload.value;
+    const isDate = input instanceof Date;
+    const isValidDate = isDate && !Number.isNaN(input.getTime());
+    if (isValidDate)
+      return payload;
+    payload.issues.push({
+      expected: "date",
+      code: "invalid_type",
+      input,
+      ...isDate ? { received: "Invalid Date" } : {},
       inst
     });
     return payload;
@@ -29458,6 +29611,13 @@ function _string(Class2, params) {
     ...normalizeParams(params)
   });
 }
+function _coercedString(Class2, params) {
+  return new Class2({
+    type: "string",
+    coerce: true,
+    ...normalizeParams(params)
+  });
+}
 function _email(Class2, params) {
   return new Class2({
     type: "string",
@@ -29702,6 +29862,14 @@ function _number(Class2, params) {
     ...normalizeParams(params)
   });
 }
+function _coercedNumber(Class2, params) {
+  return new Class2({
+    type: "number",
+    coerce: true,
+    checks: [],
+    ...normalizeParams(params)
+  });
+}
 function _int(Class2, params) {
   return new Class2({
     type: "number",
@@ -29717,10 +29885,29 @@ function _boolean(Class2, params) {
     ...normalizeParams(params)
   });
 }
+function _coercedBoolean(Class2, params) {
+  return new Class2({
+    type: "boolean",
+    coerce: true,
+    ...normalizeParams(params)
+  });
+}
+function _coercedBigint(Class2, params) {
+  return new Class2({
+    type: "bigint",
+    coerce: true,
+    ...normalizeParams(params)
+  });
+}
 function _null2(Class2, params) {
   return new Class2({
     type: "null",
     ...normalizeParams(params)
+  });
+}
+function _any(Class2) {
+  return new Class2({
+    type: "any"
   });
 }
 function _unknown(Class2) {
@@ -29731,6 +29918,13 @@ function _unknown(Class2) {
 function _never(Class2, params) {
   return new Class2({
     type: "never",
+    ...normalizeParams(params)
+  });
+}
+function _coercedDate(Class2, params) {
+  return new Class2({
+    type: "date",
+    coerce: true,
     ...normalizeParams(params)
   });
 }
@@ -31087,6 +31281,9 @@ var ZodURL = /* @__PURE__ */ $constructor("ZodURL", (inst, def) => {
   $ZodURL.init(inst, def);
   ZodStringFormat.init(inst, def);
 });
+function url(params) {
+  return _url(ZodURL, params);
+}
 var ZodEmoji = /* @__PURE__ */ $constructor("ZodEmoji", (inst, def) => {
   $ZodEmoji.init(inst, def);
   ZodStringFormat.init(inst, def);
@@ -31189,12 +31386,40 @@ var ZodBoolean2 = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
 function boolean2(params) {
   return _boolean(ZodBoolean2, params);
 }
+var ZodBigInt2 = /* @__PURE__ */ $constructor("ZodBigInt", (inst, def) => {
+  $ZodBigInt.init(inst, def);
+  ZodType2.init(inst, def);
+  inst.gte = (value, params) => inst.check(_gte(value, params));
+  inst.min = (value, params) => inst.check(_gte(value, params));
+  inst.gt = (value, params) => inst.check(_gt(value, params));
+  inst.gte = (value, params) => inst.check(_gte(value, params));
+  inst.min = (value, params) => inst.check(_gte(value, params));
+  inst.lt = (value, params) => inst.check(_lt(value, params));
+  inst.lte = (value, params) => inst.check(_lte(value, params));
+  inst.max = (value, params) => inst.check(_lte(value, params));
+  inst.positive = (params) => inst.check(_gt(BigInt(0), params));
+  inst.negative = (params) => inst.check(_lt(BigInt(0), params));
+  inst.nonpositive = (params) => inst.check(_lte(BigInt(0), params));
+  inst.nonnegative = (params) => inst.check(_gte(BigInt(0), params));
+  inst.multipleOf = (value, params) => inst.check(_multipleOf(value, params));
+  const bag = inst._zod.bag;
+  inst.minValue = bag.minimum ?? null;
+  inst.maxValue = bag.maximum ?? null;
+  inst.format = bag.format ?? null;
+});
 var ZodNull2 = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
   $ZodNull.init(inst, def);
   ZodType2.init(inst, def);
 });
 function _null3(params) {
   return _null2(ZodNull2, params);
+}
+var ZodAny2 = /* @__PURE__ */ $constructor("ZodAny", (inst, def) => {
+  $ZodAny.init(inst, def);
+  ZodType2.init(inst, def);
+});
+function any() {
+  return _any(ZodAny2);
 }
 var ZodUnknown2 = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
   $ZodUnknown.init(inst, def);
@@ -31210,6 +31435,15 @@ var ZodNever2 = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
 function never(params) {
   return _never(ZodNever2, params);
 }
+var ZodDate2 = /* @__PURE__ */ $constructor("ZodDate", (inst, def) => {
+  $ZodDate.init(inst, def);
+  ZodType2.init(inst, def);
+  inst.min = (value, params) => inst.check(_gte(value, params));
+  inst.max = (value, params) => inst.check(_lte(value, params));
+  const c3 = inst._zod.bag;
+  inst.minDate = c3.minimum ? new Date(c3.minimum) : null;
+  inst.maxDate = c3.maximum ? new Date(c3.maximum) : null;
+});
 var ZodArray2 = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
   $ZodArray.init(inst, def);
   ZodType2.init(inst, def);
@@ -31553,6 +31787,46 @@ function superRefine(fn) {
 }
 function preprocess(fn, schema) {
   return pipe(transform(fn), schema);
+}
+
+// node_modules/zod/v4/classic/compat.js
+var ZodIssueCode2 = {
+  invalid_type: "invalid_type",
+  too_big: "too_big",
+  too_small: "too_small",
+  invalid_format: "invalid_format",
+  not_multiple_of: "not_multiple_of",
+  unrecognized_keys: "unrecognized_keys",
+  invalid_union: "invalid_union",
+  invalid_key: "invalid_key",
+  invalid_element: "invalid_element",
+  invalid_value: "invalid_value",
+  custom: "custom"
+};
+
+// node_modules/zod/v4/classic/coerce.js
+var coerce_exports2 = {};
+__export(coerce_exports2, {
+  bigint: () => bigint2,
+  boolean: () => boolean3,
+  date: () => date3,
+  number: () => number3,
+  string: () => string3
+});
+function string3(params) {
+  return _coercedString(ZodString2, params);
+}
+function number3(params) {
+  return _coercedNumber(ZodNumber2, params);
+}
+function boolean3(params) {
+  return _coercedBoolean(ZodBoolean2, params);
+}
+function bigint2(params) {
+  return _coercedBigint(ZodBigInt2, params);
+}
+function date3(params) {
+  return _coercedDate(ZodDate2, params);
 }
 
 // node_modules/zod/v4/classic/external.js
@@ -31959,6 +32233,7 @@ var InitializedNotificationSchema = NotificationSchema.extend({
   method: literal("notifications/initialized"),
   params: NotificationsParamsSchema.optional()
 });
+var isInitializedNotification = (value) => InitializedNotificationSchema.safeParse(value).success;
 var PingRequestSchema = RequestSchema.extend({
   method: literal("ping"),
   params: BaseRequestParamsSchema.optional()
@@ -34643,25 +34918,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler45 of responseHandlers.values()) {
-      handler45(error2);
+    for (const handler46 of responseHandlers.values()) {
+      handler46(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler45 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler45 === void 0) {
+    const handler46 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler46 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler45(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler46(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler45 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler46 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler45 === void 0) {
+    if (handler46 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -34725,7 +35000,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler45(request, fullExtra)).then(async (result) => {
+    }).then(() => handler46(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -34774,8 +35049,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler45 = this._progressHandlers.get(messageId);
-    if (!handler45) {
+    const handler46 = this._progressHandlers.get(messageId);
+    if (!handler46) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -34792,7 +35067,7 @@ var Protocol = class {
         return;
       }
     }
-    handler45(params);
+    handler46(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -34807,8 +35082,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler45 = this._responseHandlers.get(messageId);
-    if (handler45 === void 0) {
+    const handler46 = this._responseHandlers.get(messageId);
+    if (handler46 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -34829,10 +35104,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler45(response);
+      handler46(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler45(error2);
+      handler46(error2);
     }
   }
   get transport() {
@@ -35030,9 +35305,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler45 = this._responseHandlers.get(messageId);
-          if (handler45) {
-            handler45(response);
+          const handler46 = this._responseHandlers.get(messageId);
+          if (handler46) {
+            handler46(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -35169,12 +35444,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler45) {
+  setRequestHandler(requestSchema, handler46) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler45(parsed, extra));
+      return Promise.resolve(handler46(parsed, extra));
     });
   }
   /**
@@ -35196,11 +35471,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler45) {
+  setNotificationHandler(notificationSchema, handler46) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler45(parsed));
+      return Promise.resolve(handler46(parsed));
     });
   }
   /**
@@ -35750,7 +36025,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler45) {
+  setRequestHandler(requestSchema, handler46) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -35769,7 +36044,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage5}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler45(request, extra));
+        const result = await Promise.resolve(handler46(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -35787,7 +36062,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler45);
+    return super.setRequestHandler(requestSchema, handler46);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36360,13 +36635,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler45) {
+  registerToolTask(name, config2, handler46) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler45);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler46);
   }
 };
 
@@ -36424,24 +36699,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool48]) => tool48.enabled).map(([name, tool48]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool49]) => tool49.enabled).map(([name, tool49]) => {
         const toolDefinition = {
           name,
-          title: tool48.title,
-          description: tool48.description,
+          title: tool49.title,
+          description: tool49.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool48.inputSchema);
+            const obj = normalizeObjectSchema(tool49.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool48.annotations,
-          execution: tool48.execution,
-          _meta: tool48._meta
+          annotations: tool49.annotations,
+          execution: tool49.execution,
+          _meta: tool49._meta
         };
-        if (tool48.outputSchema) {
-          const obj = normalizeObjectSchema(tool48.outputSchema);
+        if (tool49.outputSchema) {
+          const obj = normalizeObjectSchema(tool49.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36454,16 +36729,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool48 = this._registeredTools[request.params.name];
-        if (!tool48) {
+        const tool49 = this._registeredTools[request.params.name];
+        if (!tool49) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool48.enabled) {
+        if (!tool49.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool48.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool48.handler;
+        const taskSupport = tool49.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool49.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36471,14 +36746,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool48, request, extra);
+          return await this.handleAutomaticTaskPolling(tool49, request, extra);
         }
-        const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool48, args, extra);
+        const args = await this.validateToolInput(tool49, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool49, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool48, result, request.params.name);
+        await this.validateToolOutput(tool49, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36511,12 +36786,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool48, args, toolName) {
-    if (!tool48.inputSchema) {
+  async validateToolInput(tool49, args, toolName) {
+    if (!tool49.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool48.inputSchema);
-    const schemaToParse = inputObj ?? tool48.inputSchema;
+    const inputObj = normalizeObjectSchema(tool49.inputSchema);
+    const schemaToParse = inputObj ?? tool49.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36528,8 +36803,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool48, result, toolName) {
-    if (!tool48.outputSchema) {
+  async validateToolOutput(tool49, result, toolName) {
+    if (!tool49.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36541,7 +36816,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool48.outputSchema);
+    const outputObj = normalizeObjectSchema(tool49.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36552,43 +36827,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool48, args, extra) {
-    const handler45 = tool48.handler;
-    const isTaskHandler = "createTask" in handler45;
+  async executeToolHandler(tool49, args, extra) {
+    const handler46 = tool49.handler;
+    const isTaskHandler = "createTask" in handler46;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool48.inputSchema) {
-        const typedHandler = handler45;
+      if (tool49.inputSchema) {
+        const typedHandler = handler46;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler45;
+        const typedHandler = handler46;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool48.inputSchema) {
-      const typedHandler = handler45;
+    if (tool49.inputSchema) {
+      const typedHandler = handler46;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler45;
+      const typedHandler = handler46;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool48, request, extra) {
+  async handleAutomaticTaskPolling(tool49, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool48, request.params.arguments, request.params.name);
-    const handler45 = tool48.handler;
+    const args = await this.validateToolInput(tool49, request.params.arguments, request.params.name);
+    const handler46 = tool49.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler45.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler46.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler45.createTask(taskExtra))
+      await Promise.resolve(handler46.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -36924,17 +37199,17 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, execution, _meta, handler45) {
+  _createRegisteredTool(name, title, description, inputSchema29, outputSchema, annotations, execution, _meta, handler46) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
       description,
-      inputSchema: getZodSchemaObject(inputSchema28),
+      inputSchema: getZodSchemaObject(inputSchema29),
       outputSchema: getZodSchemaObject(outputSchema),
       annotations,
       execution,
       _meta,
-      handler: handler45,
+      handler: handler46,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -36980,7 +37255,7 @@ var McpServer = class {
       throw new Error(`Tool ${name} is already registered`);
     }
     let description;
-    let inputSchema28;
+    let inputSchema29;
     let outputSchema;
     let annotations;
     if (typeof rest[0] === "string") {
@@ -36989,7 +37264,7 @@ var McpServer = class {
     if (rest.length > 1) {
       const firstArg = rest[0];
       if (isZodRawShapeCompat(firstArg)) {
-        inputSchema28 = rest.shift();
+        inputSchema29 = rest.shift();
         if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
           annotations = rest.shift();
         }
@@ -37001,7 +37276,7 @@ var McpServer = class {
       }
     }
     const callback = rest[0];
-    return this._createRegisteredTool(name, void 0, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+    return this._createRegisteredTool(name, void 0, description, inputSchema29, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
   }
   /**
    * Registers a tool with a config object and callback.
@@ -37010,8 +37285,8 @@ var McpServer = class {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
     }
-    const { title, description, inputSchema: inputSchema28, outputSchema, annotations, _meta } = config2;
-    return this._createRegisteredTool(name, title, description, inputSchema28, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+    const { title, description, inputSchema: inputSchema29, outputSchema, annotations, _meta } = config2;
+    return this._createRegisteredTool(name, title, description, inputSchema29, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
   }
   prompt(name, ...rest) {
     if (this._registeredPrompts[name]) {
@@ -37414,8 +37689,8 @@ async function probeShell(runtimeMeta, deps = defaultDeps(), os = detectOs()) {
   const candidates2 = candidatesFor(os);
   const cached2 = runtimeMeta.getJson(STORAGE_KEY);
   if (cached2) {
-    const rank = candidates2.findIndex((c3) => c3.command === cached2.command);
-    for (const candidate of rank > 0 ? candidates2.slice(0, rank) : []) {
+    const rank2 = candidates2.findIndex((c3) => c3.command === cached2.command);
+    for (const candidate of rank2 > 0 ? candidates2.slice(0, rank2) : []) {
       const chosen = await tryCandidate(candidate, deps);
       if (chosen) {
         runtimeMeta.setJson(STORAGE_KEY, chosen);
@@ -37775,8 +38050,8 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   }
   return "none";
 }
-function snippetText(tool48, snippet) {
-  if (tool48.toLowerCase() !== "bandit") return snippet;
+function snippetText(tool49, snippet) {
+  if (tool49.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
 }
 var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
@@ -39155,7 +39430,9 @@ var SCAN_TYPES = [
   // Active DAST
   "dast",
   // Agent workspace / host-config audit
-  "agent_audit"
+  "agent_audit",
+  // What the configured MCP servers actually serve (audit_mcp_tools)
+  "mcp_tool_audit"
 ];
 var CVE_SOURCE_SCAN_TYPES = ["deps_audit", "deps", "security_full"];
 function isDepsAuditScan(scan2) {
@@ -39733,8 +40010,8 @@ var SuppressionsRepo = class {
    * findings table on either key, since a suppression stores only the
    * finding's fingerprint/identity. Newest first.
    */
-  listActiveForRule(tool48, ruleId, limit, projectPath) {
-    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool48, ruleId, limit).map(rowToSuppression);
+  listActiveForRule(tool49, ruleId, limit, projectPath) {
+    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool49, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
@@ -40368,20 +40645,20 @@ function attachAllResources(server, ctx) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool48) {
-  if (TOOLS.some((t) => t.name === tool48.name)) {
-    throw new Error(`Tool '${tool48.name}' is already registered`);
+function registerToolModule(tool49) {
+  if (TOOLS.some((t) => t.name === tool49.name)) {
+    throw new Error(`Tool '${tool49.name}' is already registered`);
   }
-  TOOLS.push(tool48);
+  TOOLS.push(tool49);
 }
 function attachAllTools(server, ctx) {
-  for (const tool48 of TOOLS) {
+  for (const tool49 of TOOLS) {
     server.registerTool(
-      tool48.name,
+      tool49.name,
       {
-        ...tool48.title ? { title: tool48.title } : {},
-        description: tool48.description,
-        inputSchema: tool48.inputSchema
+        ...tool49.title ? { title: tool49.title } : {},
+        description: tool49.description,
+        inputSchema: tool49.inputSchema
       },
       async (input, extra) => {
         const callMeta = {};
@@ -40393,8 +40670,8 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool48.handler(input, ctx, callMeta);
-        return toCallToolResult(result, tool48.contentOnlyKeys ?? []);
+        const result = await tool49.handler(input, ctx, callMeta);
+        return toCallToolResult(result, tool49.contentOnlyKeys ?? []);
       }
     );
   }
@@ -41971,23 +42248,23 @@ async function resolveSince(projectPath, since) {
       meta: { since, since_sha: sinceSha, head_sha: headSha }
     };
   }
-  const date3 = sinceDate(since);
-  if (date3 === null) {
+  const date4 = sinceDate(since);
+  if (date4 === null) {
     throw new ScopeError(
       `scope.since "${since}" is neither a commit nor a date (YYYY-MM-DD, "2 weeks ago", "yesterday")`,
       "target_not_found"
     );
   }
-  if (ISO_DATE.test(date3) && Date.parse(date3) > Date.now()) {
+  if (ISO_DATE.test(date4) && Date.parse(date4) > Date.now()) {
     throw new ScopeError(`scope.since "${since}" is in the future`, "unsupported_target");
   }
-  const touched = await listZ(projectPath, ["log", "-z", "--name-only", "--format=", "--relative", "--no-renames", `--since=${date3}`, headSha, "--"]);
+  const touched = await listZ(projectPath, ["log", "-z", "--name-only", "--format=", "--relative", "--no-renames", `--since=${date4}`, headSha, "--"]);
   return {
     files: onDisk(projectPath, touched),
     touched,
     contentFiles: [],
-    history: { logOpts: `--since=${date3}` },
-    meta: { since, since_date: date3, head_sha: headSha }
+    history: { logOpts: `--since=${date4}` },
+    meta: { since, since_date: date4, head_sha: headSha }
   };
 }
 
@@ -46807,7 +47084,7 @@ function mapFinding(raw, ctx) {
   const determinations = getProp(raw, "determinations");
   const severity = normalizeSeverity(getString(determinations, "severity"));
   const confidence = getString(determinations, "confidence");
-  const url = getString(raw, "url");
+  const url2 = getString(raw, "url");
   const loc = primaryLocation(asArray(getProp(raw, "locations")));
   const input = {
     tool: ZIZMOR_TOOL_NAME,
@@ -46820,7 +47097,7 @@ function mapFinding(raw, ctx) {
   };
   const messageParts = [];
   if (confidence !== void 0) messageParts.push(`confidence: ${confidence}`);
-  if (url !== void 0) messageParts.push(url);
+  if (url2 !== void 0) messageParts.push(url2);
   if (messageParts.length > 0) input.message = `${desc} (${messageParts.join(", ")})`;
   if (loc) {
     const filePath = localVerbatimPath(loc);
@@ -47125,8 +47402,8 @@ async function runChild(name, input, ctx, meta) {
     cves: [],
     cancelled
   });
-  const tool48 = TOOLS.find((t) => t.name === name);
-  if (!tool48) {
+  const tool49 = TOOLS.find((t) => t.name === name);
+  if (!tool49) {
     return empty({ tool: name, scan_id: null, status: "failed", error: "not registered" }, [
       { name, status: "failed", reason: `tool ${name} is not registered` }
     ], false);
@@ -47134,7 +47411,7 @@ async function runChild(name, input, ctx, meta) {
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
   let r;
   try {
-    r = await tool48.handler(input, ctx.plugin, meta);
+    r = await tool49.handler(input, ctx.plugin, meta);
   } catch (e) {
     if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
     const reason = e instanceof Error ? e.message : String(e);
@@ -47549,8 +47826,8 @@ function findConfigDownloadFailures(raw) {
     if (message3 === void 0) continue;
     const downloadMatch = DOWNLOAD_FAILURE_RE.exec(message3);
     if (downloadMatch) {
-      const url = downloadMatch[1];
-      const pack = url !== void 0 ? url.replace(REGISTRY_URL_PREFIX_RE, "") : null;
+      const url2 = downloadMatch[1];
+      const pack = url2 !== void 0 ? url2.replace(REGISTRY_URL_PREFIX_RE, "") : null;
       failures.push({ pack, message: message3 });
       continue;
     }
@@ -48327,8 +48604,8 @@ function fileEntries2(input) {
 function mapBlock(raw, file, ctx, seen) {
   const type = getString(raw, "type");
   if (type !== "function" && type !== "method") return null;
-  const rank = getString(raw, "rank") ?? "";
-  const severity = RANK_SEVERITY[rank];
+  const rank2 = getString(raw, "rank") ?? "";
+  const severity = RANK_SEVERITY[rank2];
   if (severity === void 0) return null;
   const name = getString(raw, "name") ?? "(anonymous)";
   const className = getString(raw, "classname");
@@ -48338,7 +48615,7 @@ function mapBlock(raw, file, ctx, seen) {
   if (seen.has(key)) return null;
   seen.add(key);
   const complexity = getNumber(raw, "complexity");
-  const title = `Cyclomatic complexity ${String(complexity ?? "?")} (rank ${rank}) in ${type} ${qualified}`;
+  const title = `Cyclomatic complexity ${String(complexity ?? "?")} (rank ${rank2}) in ${type} ${qualified}`;
   const input = {
     tool: RADON_TOOL_NAME,
     rule_id: "cyclomatic-complexity",
@@ -49209,8 +49486,8 @@ function mapPackage(raw, projectPath, framework, ctx) {
   const out = [];
   for (const vuln of asArray(getProp(raw, "vulnerabilities"))) {
     const severity = normalizeSeverity(getString(vuln, "severity"));
-    const url = getString(vuln, "advisoryurl");
-    const ruleId = url ? advisoryIdFromUrl(url) : `${id}@${resolved ?? ""}`;
+    const url2 = getString(vuln, "advisoryurl");
+    const ruleId = url2 ? advisoryIdFromUrl(url2) : `${id}@${resolved ?? ""}`;
     const findingInput = {
       tool: DOTNET_SCA_TOOL_NAME,
       rule_id: ruleId,
@@ -49222,14 +49499,14 @@ function mapPackage(raw, projectPath, framework, ctx) {
       file_path: relPath,
       snippet: `${id}@${resolved ?? ""}`
     };
-    if (url !== void 0) findingInput.message = url;
+    if (url2 !== void 0) findingInput.message = url2;
     out.push(makeFinding(findingInput));
   }
   return out;
 }
-function advisoryIdFromUrl(url) {
-  const m = /\/advisories\/([A-Za-z0-9-]+)/i.exec(url);
-  return m?.[1] ?? url;
+function advisoryIdFromUrl(url2) {
+  const m = /\/advisories\/([A-Za-z0-9-]+)/i.exec(url2);
+  return m?.[1] ?? url2;
 }
 
 // src/runners/scannerParsers/npmAudit.ts
@@ -49269,17 +49546,17 @@ function fixIsAvailable(raw) {
 }
 function mapV2Advisory(via, fixAvailable, seen, _ctx) {
   const source = getNumber(via, "source") ?? getString(via, "source");
-  const url = getString(via, "url");
+  const url2 = getString(via, "url");
   const pkg = getString(via, "name") ?? getString(via, "dependency");
   const title = getString(via, "title");
-  if (source === void 0 && !url && !title) return null;
-  const key = `v2:${source ?? url ?? `${pkg}:${title}`}`;
+  if (source === void 0 && !url2 && !title) return null;
+  const key = `v2:${source ?? url2 ?? `${pkg}:${title}`}`;
   if (seen.has(key)) return null;
   seen.add(key);
   const range = getString(via, "range");
   const input = {
     tool: NPM_AUDIT_TOOL_NAME,
-    rule_id: String(source ?? url ?? pkg ?? "npm-advisory"),
+    rule_id: String(source ?? url2 ?? pkg ?? "npm-advisory"),
     severity: normalizeSeverity(getString(via, "severity")),
     category: "security",
     subcategory: "dependency",
@@ -49288,7 +49565,7 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
     fix_available: fixAvailable,
     snippet: `${pkg ?? ""}@${range ?? ""}`
   };
-  const message3 = composeMessage(pkg, range, url);
+  const message3 = composeMessage(pkg, range, url2);
   if (message3) input.message = message3;
   return makeFinding(input);
 }
@@ -49302,7 +49579,7 @@ function mapV1Advisory(adv, seen) {
   seen.add(key);
   const severity = normalizeSeverity(getString(adv, "severity"));
   const range = getString(adv, "vulnerable_versions");
-  const url = getString(adv, "url");
+  const url2 = getString(adv, "url");
   const recommendation2 = getString(adv, "recommendation");
   const input = {
     tool: NPM_AUDIT_TOOL_NAME,
@@ -49315,7 +49592,7 @@ function mapV1Advisory(adv, seen) {
     fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
     snippet: `${pkg ?? ""}@${range ?? ""}`
   };
-  const message3 = composeMessage(pkg, range, url ?? recommendation2);
+  const message3 = composeMessage(pkg, range, url2 ?? recommendation2);
   if (message3) input.message = message3;
   const cves = [];
   for (const cveId of asArray(getProp(adv, "cves"))) {
@@ -49941,6 +50218,10 @@ var RUN_NAMES = {
   "osv.dev": scanner(SKILL_OSV),
   // audit_agent_config: its own static checks of the agent workspace config.
   "agent-audit": scanner("agent-audit"),
+  // audit_mcp_tools: one `mcp-tool-audit:<source>::<server>` entry per server
+  // it started (`runNameEntry` reads each as a pass of this base); a server
+  // that failed or was skipped leaves the audit's findings unmeasured.
+  "mcp-tool-audit": scanner("mcp-tool-audit"),
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
@@ -50005,6 +50286,7 @@ var SCAN_TYPE_ROLE = {
   audit: "never",
   skill_audit: "never",
   agent_audit: "never",
+  mcp_tool_audit: "never",
   review_pr: "never",
   wp_audit: "never",
   wp_cron_audit: "never",
@@ -50045,8 +50327,8 @@ function sourceTypesOf(slot) {
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
 }
-function runSlotOf(tool48) {
-  return SCRIPT_ERA_RUN_SLOTS[tool48] ?? "security_full";
+function runSlotOf(tool49) {
+  return SCRIPT_ERA_RUN_SLOTS[tool49] ?? "security_full";
 }
 function findingInSlot(scan2, finding4, slot) {
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
@@ -50904,7 +51186,7 @@ function carriedFrom(args) {
         everything = true;
         break;
       }
-      for (const tool48 of toolsOfKey(key)) tools.add(tool48);
+      for (const tool49 of toolsOfKey(key)) tools.add(tool49);
       continue;
     }
     const lookup = admitLookup(scope.admit);
@@ -50974,8 +51256,8 @@ function openSetForProject(storage, projectPath, opts = {}) {
     }
   }
   const order = storage.scans.sortNewestFirst([...considered.keys()]);
-  const rank = new Map(order.map((id, i2) => [id, i2]));
-  const rankOf = (scanId) => rank.get(scanId) ?? order.length;
+  const rank2 = new Map(order.map((id, i2) => [id, i2]));
+  const rankOf = (scanId) => rank2.get(scanId) ?? order.length;
   picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
   carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
   const findings = [];
@@ -54696,8 +54978,8 @@ function subToolRuns(subTools, subResults) {
   });
 }
 function worstCoverage(list2) {
-  const rank = { none: 0, partial: 1, full: 2 };
-  return list2.reduce((worst, c3) => rank[c3] < rank[worst] ? c3 : worst, "full");
+  const rank2 = { none: 0, partial: 1, full: 2 };
+  return list2.reduce((worst, c3) => rank2[c3] < rank2[worst] ? c3 : worst, "full");
 }
 function buildSubToolsForStack(ctx, projectPath) {
   const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
@@ -55202,13 +55484,13 @@ function npmInstallGlobal(pkg) {
     description: `npm install -g ${pkg}`
   };
 }
-function curlInstaller(url, tag) {
+function curlInstaller(url2, tag) {
   const pinned = tag !== void 0 ? ` ${tag}` : "";
   return {
     command: "bash",
-    args: ["-c", `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
+    args: ["-c", `curl -sSfL ${url2} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
     needs_elevation: false,
-    description: `curl ${url} | sh${pinned}`
+    description: `curl ${url2} | sh${pinned}`
   };
 }
 function uvInstall(pkg) {
@@ -56339,14 +56621,14 @@ async function queryEpss(cveIds, opts = {}) {
   const scores = /* @__PURE__ */ new Map();
   for (let i2 = 0; i2 < ids2.length; i2 += CHUNK) {
     const chunk = ids2.slice(i2, i2 + CHUNK);
-    const url = `${EPSS_URL}?cve=${chunk.map(encodeURIComponent).join(",")}`;
-    const result = await fetchOneBatch(url, fetchImpl, opts);
+    const url2 = `${EPSS_URL}?cve=${chunk.map(encodeURIComponent).join(",")}`;
+    const result = await fetchOneBatch(url2, fetchImpl, opts);
     if (!result.ok) return result;
     for (const [cveId, entry] of result.scores) scores.set(cveId, entry);
   }
   return { ok: true, scores };
 }
-async function fetchOneBatch(url, fetchImpl, opts) {
+async function fetchOneBatch(url2, fetchImpl, opts) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
   if (opts.signal) {
@@ -56354,7 +56636,7 @@ async function fetchOneBatch(url, fetchImpl, opts) {
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
   try {
-    const res = await fetchImpl(url, { signal: controller.signal });
+    const res = await fetchImpl(url2, { signal: controller.signal });
     if (!res.ok) return { ok: false, reason: `FIRST EPSS returned http ${res.status}` };
     const json = await res.json();
     return { ok: true, scores: parseEntries2(json.data) };
@@ -57681,8 +57963,8 @@ function inline(raw) {
     codes.push(`<code>${c3}</code>`);
     return `[[[CODE_${codes.length - 1}]]]`;
   });
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, url) => {
-    const safe = sanitizeUrl(url);
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, url2) => {
+    const safe = sanitizeUrl(url2);
     return safe ? `<a href="${safe}">${text}</a>` : text;
   });
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -58560,8 +58842,8 @@ async function createIssue(cwd, title, body, labels) {
   for (const l of labels) args.push("--label", l);
   const r = await runProcess({ command: "gh", args, cwd, timeoutMs: 3e4 });
   if (r.outcome === "completed") {
-    const url = r.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s.startsWith("https://"));
-    return { ok: true, url: url ?? "" };
+    const url2 = r.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s.startsWith("https://"));
+    return { ok: true, url: url2 ?? "" };
   }
   return {
     ok: false,
@@ -59208,8 +59490,8 @@ function severityFromVuln(raw) {
 // src/wordpress/siteKeys.ts
 import { existsSync as existsSync40 } from "node:fs";
 import { isAbsolute as isAbsolute8, resolve as resolve13 } from "node:path";
-function wpSiteKey(url) {
-  return url.replace(/\/$/, "");
+function wpSiteKey(url2) {
+  return url2.replace(/\/$/, "");
 }
 function wpInstallPathProblem(raw) {
   if (namesOneInstall(raw)) return null;
@@ -59223,9 +59505,9 @@ function wpInstallKeys(canonical, raw) {
 function namesOneInstall(raw) {
   return isAbsolute8(raw) || existsSync40(raw);
 }
-function wpSiteKeys(url) {
-  const key = wpSiteKey(url);
-  return unique2([key, `${key}/`, url]);
+function wpSiteKeys(url2) {
+  const key = wpSiteKey(url2);
+  return unique2([key, `${key}/`, url2]);
 }
 function latestUnderKeys(storage, keys, types, opts = {}) {
   let newest = null;
@@ -59276,9 +59558,9 @@ async function handler26(input, ctx) {
       'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
     );
   }
-  let url = inp.target_url;
+  let url2 = inp.target_url;
   const warnings = [];
-  if (!url && inp.wp_install_path) {
+  if (!url2 && inp.wp_install_path) {
     const wpBin = await scannerAvailable("wp");
     if (!wpBin) {
       return failDomain20(
@@ -59293,7 +59575,7 @@ async function handler26(input, ctx) {
       timeoutMs: 3e4
     });
     if (r2.outcome === "completed") {
-      url = r2.stdout.trim();
+      url2 = r2.stdout.trim();
     } else {
       return failDomain20(
         "scanner_failed",
@@ -59301,7 +59583,7 @@ async function handler26(input, ctx) {
       );
     }
   }
-  if (!url) {
+  if (!url2) {
     return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
@@ -59321,7 +59603,7 @@ async function handler26(input, ctx) {
     // Filed under the key the project-scoped readers look it up by
     // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
     // canonical spelling, or the site URL the way wp_rest_audit files it.
-    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url),
+    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url2),
     tree_hash: "",
     report_dir: reportDir
   });
@@ -59335,7 +59617,7 @@ async function handler26(input, ctx) {
     "--enumerate",
     "vp,vt",
     "--url",
-    url
+    url2
   ];
   if (token) args.push("--api-token", token);
   const r = await runProcess({
@@ -59386,12 +59668,12 @@ async function handler26(input, ctx) {
     tools_run: [{ name: "wpscan", status: r.outcome === "completed" ? "ok" : "failed" }],
     missing_tools: [],
     report_dir: reportDir,
-    meta: { url, rate_limited: rateLimited, has_token: token.length > 0 }
+    meta: { url: url2, rate_limited: rateLimited, has_token: token.length > 0 }
   });
   return {
     ok: true,
     scan_id: scanId,
-    url,
+    url: url2,
     has_token: token.length > 0,
     rate_limited: rateLimited,
     findings_count: findingsCount,
@@ -59919,8 +60201,8 @@ async function fetchWpOrgPluginInfo(slug, opts) {
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
   try {
-    const url = `${WP_ORG_URL}?action=plugin_information&request%5Bslug%5D=${encodeURIComponent(slug)}`;
-    const res = await fetchImpl(url, { signal: controller.signal });
+    const url2 = `${WP_ORG_URL}?action=plugin_information&request%5Bslug%5D=${encodeURIComponent(slug)}`;
+    const res = await fetchImpl(url2, { signal: controller.signal });
     let json;
     try {
       json = await res.json();
@@ -60650,7 +60932,7 @@ var tool33 = {
 registerToolModule(tool33);
 async function handler30(input, ctx) {
   const inp = input;
-  const url = inp.target_url.replace(/\/$/, "");
+  const url2 = inp.target_url.replace(/\/$/, "");
   const timeoutMs = inp.timeout_ms ?? 15e3;
   const endpoints = [
     { path: "/wp-json/wp/v2/users", label: "users (enumeration)", expectListing: true },
@@ -60665,14 +60947,14 @@ async function handler30(input, ctx) {
   ];
   const results = [];
   for (const ep of endpoints) {
-    results.push(await probe(`${url}${ep.path}`, ep.label, ep.expectListing, timeoutMs));
+    results.push(await probe(`${url2}${ep.path}`, ep.label, ep.expectListing, timeoutMs));
   }
   const exposed = results.filter((r) => r.exposed);
   const scanId = randomUUID12();
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_rest_audit",
-    project_path: url,
+    project_path: url2,
     tree_hash: ""
   });
   ctx.storage.scans.finalize({
@@ -60680,12 +60962,12 @@ async function handler30(input, ctx) {
     status: "completed",
     tools_run: [{ name: "http-probe", status: "ok" }],
     missing_tools: [],
-    meta: { target_url: url, results, exposed_count: exposed.length }
+    meta: { target_url: url2, results, exposed_count: exposed.length }
   });
   return {
     ok: true,
     scan_id: scanId,
-    target_url: url,
+    target_url: url2,
     results,
     exposed_count: exposed.length,
     hint: exposed.length > 0 ? 'Block / restrict the exposed endpoints. Common fix: WP plugin "Disable REST API" or filter via `rest_endpoints` hook in functions.php.' : "No exposed endpoints from this probe set."
@@ -61627,7 +61909,7 @@ async function queryOsv(packages, opts = {}) {
   }
   return { online: true, queried: queryable.length, vulnerable_packages: vulnerable };
 }
-async function postJson(url, body, opts, fetchImpl) {
+async function postJson(url2, body, opts, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS6);
   if (opts.signal) {
@@ -61635,7 +61917,7 @@ async function postJson(url, body, opts, fetchImpl) {
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
   }
   try {
-    const res = await fetchImpl(url, {
+    const res = await fetchImpl(url2, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -62881,13 +63163,13 @@ async function ingestTarget(targetRaw) {
   }
   return { ok: false, code: "unsupported_target", message: "Unsupported target type." };
 }
-function looksLikeGitHost(url) {
-  return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url);
+function looksLikeGitHost(url2) {
+  return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url2);
 }
-async function ingestGit(url) {
+async function ingestGit(url2) {
   const dir = mkdtempSync5(join59(tmpdir6(), "guardian-scanskill-git-"));
   try {
-    await execa("git", ["clone", "--depth", "1", "--quiet", url, dir], { timeout: 12e4 });
+    await execa("git", ["clone", "--depth", "1", "--quiet", url2, dir], { timeout: 12e4 });
   } catch (e) {
     safeRm(dir);
     const msg = e instanceof Error ? e.message : "git clone failed";
@@ -62906,19 +63188,19 @@ async function ingestGit(url) {
     cleanup: () => safeRm(dir)
   };
 }
-async function ingestUrl(url) {
+async function ingestUrl(url2) {
   if (typeof fetch !== "function") {
     return { ok: false, code: "unsupported_target", message: "No fetch available to download URL." };
   }
   const dir = mkdtempSync5(join59(tmpdir6(), "guardian-scanskill-url-"));
-  const isZip = /\.zip($|\?)/i.test(url);
-  const fileName = isZip ? "download.zip" : basename6(url.split("?")[0] ?? "download") || "download";
+  const isZip = /\.zip($|\?)/i.test(url2);
+  const fileName = isZip ? "download.zip" : basename6(url2.split("?")[0] ?? "download") || "download";
   const dest = join59(dir, fileName);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6e4);
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url2, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       writeFileSync15(dest, buf);
@@ -64839,18 +65121,18 @@ function detectFormat2(root) {
 }
 function openapiBasePath(root) {
   const servers = asArray3(prop5(root, "servers"));
-  const url = str5(servers[0], "url");
-  if (url === void 0) return { base: "", partial: false };
-  if (url.includes("{")) return { base: "", partial: true };
+  const url2 = str5(servers[0], "url");
+  if (url2 === void 0) return { base: "", partial: false };
+  if (url2.includes("{")) return { base: "", partial: true };
   try {
-    return { base: stripTrailingSlash(new URL(url).pathname), partial: false };
+    return { base: stripTrailingSlash(new URL(url2).pathname), partial: false };
   } catch {
-    if (isAbsolutePathReference(url)) return { base: stripTrailingSlash(url), partial: false };
+    if (isAbsolutePathReference(url2)) return { base: stripTrailingSlash(url2), partial: false };
     return { base: "", partial: true };
   }
 }
-function isAbsolutePathReference(url) {
-  return url.startsWith("/") && !url.startsWith("//");
+function isAbsolutePathReference(url2) {
+  return url2.startsWith("/") && !url2.startsWith("//");
 }
 function swaggerBasePath(root) {
   const basePath = str5(root, "basePath") ?? "";
@@ -65466,14 +65748,14 @@ var CORS_PROBE_ORIGIN = "https://dev-guardian-cors-probe.invalid";
 var SYNTHETIC_PARAM_VALUE = "1";
 function buildProbeUrl(origin, path8) {
   const normalized = path8.startsWith("/") ? path8 : `/${path8}`;
-  let url;
+  let url2;
   try {
-    url = new URL(normalized, origin);
+    url2 = new URL(normalized, origin);
   } catch {
     return { ok: false, reason: "off_origin" };
   }
-  if (url.origin !== origin) return { ok: false, reason: "off_origin" };
-  return { ok: true, url: url.toString(), path: normalized };
+  if (url2.origin !== origin) return { ok: false, reason: "off_origin" };
+  return { ok: true, url: url2.toString(), path: normalized };
 }
 function planProbes(routes, opts) {
   const requests = [];
@@ -65556,13 +65838,13 @@ function expandMethods(method, allowWrites) {
   if (isWrite && !allowWrites) return [];
   return [method];
 }
-function build2(method, path8, url, variant, extraHeaders, synthetic, routeIndex) {
+function build2(method, path8, url2, variant, extraHeaders, synthetic, routeIndex) {
   const isWrite = WRITE_METHODS.includes(method);
   const req = {
     id: `${variant} ${method} ${path8}`,
     method,
     path: path8,
-    url,
+    url: url2,
     headers: { accept: "*/*", ...extraHeaders },
     variant,
     synthetic_params: synthetic,
@@ -69369,8 +69651,8 @@ function extractMcpServers(source) {
     if (Array.isArray(args) && args.every((a2) => typeof a2 === "string")) entry.args = args;
     const cwd = raw["cwd"];
     if (typeof cwd === "string") entry.cwd = cwd;
-    const url = raw["url"];
-    if (typeof url === "string") entry.url = url;
+    const url2 = raw["url"];
+    if (typeof url2 === "string") entry.url = url2;
     const type = raw["type"];
     if (typeof type === "string") entry.type = type;
     const env = raw["env"];
@@ -70286,7 +70568,7 @@ var inputSchema27 = {
 var tool46 = {
   name: "audit_agent_config",
   title: "Audit the AI-agent workspace configuration (MCP servers, permissions, hooks)",
-  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, .claude-plugin/plugin.json, and with include_user_config also ~/.claude.json, ~/.claude/settings.json and the Claude Desktop, Cursor, Windsurf and Gemini user configs. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed.",
+  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, .claude-plugin/plugin.json, and with include_user_config also ~/.claude.json, ~/.claude/settings.json and the Claude Desktop, Cursor, Windsurf and Gemini user configs. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed. For the tool definitions a server actually serves (poisoning, rug pulls), use audit_mcp_tools, which starts the servers you name.",
   inputSchema: inputSchema27,
   handler: (input, ctx) => handler43(input, ctx)
 };
@@ -70349,6 +70631,3779 @@ async function handler43(input, ctx) {
   };
 }
 function countBySeverity5(findings) {
+  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
+  for (const f of findings) out[f.severity] += 1;
+  return out;
+}
+
+// src/tools/auditMcpTools.ts
+import { randomUUID as randomUUID20 } from "node:crypto";
+
+// src/mcpaudit/rules.ts
+var SKILL_TEXT_RULE_IDS = /* @__PURE__ */ new Set([
+  "pi-override-instructions",
+  "pi-roleplay-escape",
+  "spl-reveal-prompt",
+  "mp-persist-instruction",
+  "ta-overbroad-activation",
+  "mtp-instructions-in-description"
+]);
+var isPathOnlyPattern = (p) => p.source.includes(String.raw`\.claude\/`);
+var SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap((r) => r.patterns).filter((p) => !isPathOnlyPattern(p));
+var CONCEAL_SKILL_PATTERNS = SKILL_RULES.find((r) => r.id === "pi-conceal-from-user")?.patterns ?? [];
+var READ_VERB = String.raw`\b(read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather)\s+`;
+var OWNER = String.raw`(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
+var SECRET_NOUN = String.raw`(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
+var DATA_NOUN = String.raw`\b(data|contents?|conversation|chat|history|messages?|files?|results?|outputs?|keys?|tokens?|secrets?|credentials?|env(ironment)?|variables|everything|context|prompts?)\b`;
+var TEXT_RULES = [
+  {
+    id: "mcp-tool-poisoning",
+    severity: "high",
+    subcategory: "mcp_tool_poisoning",
+    label: "instructions aimed at the model",
+    explain: "The text carries directives aimed at the model rather than a description of what the tool does \u2014 instruction overrides, <IMPORTANT>/<system> blocks, jailbreak or persistence phrasing. The host loads it into the model context with every tool list.",
+    patterns: [MCP_DESCRIPTION_POISONING, ...SKILL_TEXT_PATTERNS]
+  },
+  {
+    id: "mcp-tool-sensitive-file-access",
+    severity: "high",
+    subcategory: "data_exfiltration",
+    label: "a reference to credential or agent-config files",
+    explain: "The text points the model at SSH keys, cloud or package-registry credentials, .env files or an MCP host config \u2014 files a tool description has no reason to ask for. A secrets-manager server may legitimately name them; any other server should not.",
+    patterns: [
+      /(~\/\.ssh\b|\.ssh\/|\bid_(rsa|dsa|ecdsa|ed25519)\b|\bauthorized_keys\b)/i,
+      /(\bmcp\.json\b|\bmcp_config\.json\b|claude_desktop_config\.json|\.claude\.json\b|~\/\.claude\/|\.claude\/memory\b)/i,
+      /(\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.git-credentials\b|\.docker\/config\.json|\.kube\/config\b|\/etc\/(passwd|shadow)\b)/i,
+      /(^|[\s`'"(/])\.env(\.[\w-]+)?(?![\w-])/i,
+      new RegExp(`${READ_VERB}${OWNER}${SECRET_NOUN}`, "i")
+    ]
+  },
+  {
+    id: "mcp-tool-conceal-from-user",
+    severity: "high",
+    subcategory: "prompt_injection",
+    label: "an instruction to hide something from the user",
+    explain: "The text tells the model to keep an action from the user \u2014 the covert half of nearly every published tool-poisoning attack. No legitimate tool needs its use hidden.",
+    patterns: [
+      ...CONCEAL_SKILL_PATTERNS,
+      /\b(do\s+not|don'?t|never)\s+(mention|reveal|show|disclose|display|tell|inform|notify|alert)\b[^.\n]{0,60}\b(user|human|anyone)\b/i,
+      /\b(do\s+not|don'?t|never)\s+(mention|reveal|disclose)\s+(that|this|it)\b/i,
+      /\b(silently|secretly|covertly|quietly)\s+(send|read|copy|upload|forward|call|run|execute|include|add|attach|post)\b/i,
+      /\bwithout\s+(the\s+)?(user|user'?s|their)\s+(knowing|knowledge|consent|awareness|noticing)\b/i,
+      /\bthe\s+user\s+(must|should|need)\s+not\s+(know|see|notice|be\s+(told|informed|aware))\b/i,
+      /\b(keep|hide)\s+(this|it|these)\s+(secret\s+)?from\s+the\s+user\b/i
+    ]
+  },
+  {
+    id: "mcp-tool-exfiltration",
+    severity: "high",
+    subcategory: "data_exfiltration",
+    label: "an instruction to send data to an outside destination",
+    explain: "The text tells the model to ship data to a URL, a webhook or a fixed address. A notification or webhook server that names its own endpoint can trip this; a tool whose job is not sending should not.",
+    patterns: [
+      new RegExp(
+        String.raw`\b(send|post|upload|forward|transmit|exfiltrate|submit|report|copy|mirror|beacon)\b[^.\n]{0,60}` + DATA_NOUN + String.raw`[^\n]{0,80}?(https?:\/\/|\bwebhook\b|\bendpoint\b|\bremote\s+server\b)`,
+        "i"
+      ),
+      /\b(send|forward|bcc|cc|redirect|copy)\b[^.\n]{0,80}\b(to|bcc)\s+[\w.+-]+@[\w-]+\.[\w.-]+/i,
+      /\bmust\s+(be\s+)?sent\s+to\s+[\w.+-]+@[\w-]+\.[\w.-]+/i
+    ]
+  },
+  {
+    id: "mcp-tool-parameter-smuggling",
+    severity: "high",
+    subcategory: "data_exfiltration",
+    label: "an instruction to smuggle data out through a parameter",
+    explain: "The text tells the model to put conversation, file or secret content into a tool argument \u2014 the argument is then sent to the server with the call, which is how a description exfiltrates data without any network code of its own.",
+    patterns: [
+      /\b(pass|put|include|add|append|embed|insert|place|provide|attach|encode|send)\b[^.\n]{0,60}\b(its|the|their|this|that)\s+(full\s+|entire\s+|raw\s+|complete\s+)?(content|contents|text|value|data)\s+(as|in|into)\s+[`'"][\w-]+[`'"]/i,
+      /\b(pass|put|include|add|append|embed|insert|place|provide|attach|encode)\b[^.\n]{0,80}\b(contents?|conversation|chat\s+history|previous\s+messages|system\s+prompt|files?|keys?|tokens?|secrets?|credentials|environment|variables|history|instructions)\b[^.\n]{0,60}\b(in|into|as|inside|within)\s+(the\s+|this\s+|a\s+)?[`'"]?[\w-]+[`'"]?\s+(parameter|param|argument|arg|field)\b/i
+    ]
+  },
+  {
+    id: "mcp-tool-cross-server-shadowing",
+    severity: "high",
+    subcategory: "mcp_tool_poisoning",
+    label: "instructions about how other tools must behave",
+    explain: `The text tells the model how to use tools other than this one. Every tool of every server shares one context, so a description can rewrite another server's behaviour ("shadowing") without ever being called itself.`,
+    patterns: [
+      /\b(when|whenever|before|after)\s+(using|calling|invoking|you\s+(use|call|invoke))\s+(any|all|every|other|another|the\s+other)\s+(\w+\s+)?(tools?|servers?|mcp)\b/i,
+      /\b(all|any|every)\s+other\s+(tools?|mcp\s+servers?|servers?)\b/i,
+      /\binstead\s+of\s+(using|calling)\s+(the\s+)?[`'"]?[\w.-]+[`'"]?\s+tool\b/i,
+      /\b(other|another)\s+(mcp\s+)?servers?'?s?\s+tools?\b/i,
+      /\bwhen\s+this\s+tool\s+is\s+(available|present|loaded|installed|enabled)\b/i,
+      /\bthis\s+tool\s+(overrides|replaces|supersedes)\b/i
+    ]
+  }
+];
+function invisibleKind(code) {
+  if (code >= 917504 && code <= 917631) return "tag characters";
+  if (code >= 8203 && code <= 8205 || // zero-width space / non-joiner / joiner
+  code >= 8288 && code <= 8292 || // word joiner, invisible operators
+  code === 65279 || // zero-width no-break space (BOM)
+  code === 6158) {
+    return "zero-width characters";
+  }
+  if (code === 8206 || // LRM
+  code === 8207 || // RLM
+  code >= 8234 && code <= 8238 || // embeddings / overrides
+  code >= 8294 && code <= 8297) {
+    return "bidi controls";
+  }
+  return null;
+}
+function scanInvisible(text) {
+  const kinds = /* @__PURE__ */ new Set();
+  let count2 = 0;
+  let decodedTags = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (code === void 0) continue;
+    const kind = invisibleKind(code);
+    if (kind === null) continue;
+    kinds.add(kind);
+    count2 += 1;
+    if (kind === "tag characters" && code >= 917536 && code <= 917630) {
+      decodedTags += String.fromCharCode(code - 917504);
+    }
+  }
+  return count2 === 0 ? null : { kinds: [...kinds], count: count2, decodedTags };
+}
+function escapeInvisible(text) {
+  let out = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    out += code !== void 0 && invisibleKind(code) !== null ? `\\u{${code.toString(16).toUpperCase()}}` : ch;
+  }
+  return out;
+}
+var BASE64_RUN = /[A-Za-z0-9+/_-]{100,}={0,2}/g;
+function findEncodedBlob(text) {
+  BASE64_RUN.lastIndex = 0;
+  for (const m of text.matchAll(BASE64_RUN)) {
+    const run = m[0];
+    if (!/[A-Z]/.test(run) || !/[a-z]/.test(run) || !/[0-9]/.test(run)) continue;
+    const decoded = Buffer.from(run.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    let printable = 0;
+    for (const ch of decoded) {
+      const code = ch.codePointAt(0) ?? 0;
+      if (code >= 32 && code < 127 || code === 10 || code === 13 || code === 9) printable += 1;
+    }
+    const readable2 = decoded.length > 0 && printable / decoded.length >= 0.9;
+    return { length: run.length, decodedText: readable2 ? decoded : null };
+  }
+  return null;
+}
+var OVERSIZED_DESCRIPTION_CHARS = 2048;
+
+// src/mcpaudit/analyze.ts
+var MCP_AUDIT_TOOL_NAME = "mcp-tool-audit";
+function normalizeListing(raw) {
+  let malformed = 0;
+  const pick2 = (items, build3) => {
+    const out = [];
+    for (const item of items ?? []) {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) {
+        malformed += 1;
+        continue;
+      }
+      const o2 = item;
+      const name = o2["name"];
+      if (typeof name !== "string") {
+        malformed += 1;
+        continue;
+      }
+      out.push(build3(o2, name));
+    }
+    return out;
+  };
+  const str6 = (v) => typeof v === "string" ? v : void 0;
+  const tools = pick2(raw.tools, (o2, name) => {
+    const t = { name };
+    const title = str6(o2["title"]);
+    if (title !== void 0) t.title = title;
+    const description = str6(o2["description"]);
+    if (description !== void 0) t.description = description;
+    if (o2["inputSchema"] !== void 0) t.inputSchema = o2["inputSchema"];
+    if (o2["outputSchema"] !== void 0) t.outputSchema = o2["outputSchema"];
+    if (o2["annotations"] !== void 0) t.annotations = o2["annotations"];
+    return t;
+  });
+  const prompts = pick2(raw.prompts, (o2, name) => {
+    const p = { name };
+    const title = str6(o2["title"]);
+    if (title !== void 0) p.title = title;
+    const description = str6(o2["description"]);
+    if (description !== void 0) p.description = description;
+    if (o2["arguments"] !== void 0) p.arguments = o2["arguments"];
+    return p;
+  });
+  const resources = pick2(raw.resources, (o2, name) => {
+    const r = { name };
+    const title = str6(o2["title"]);
+    if (title !== void 0) r.title = title;
+    const description = str6(o2["description"]);
+    if (description !== void 0) r.description = description;
+    const uri = str6(o2["uri"]);
+    if (uri !== void 0) r.uri = uri;
+    return r;
+  });
+  const resourceTemplates = pick2(raw.resourceTemplates, (o2, name) => {
+    const r = { name };
+    const title = str6(o2["title"]);
+    if (title !== void 0) r.title = title;
+    const description = str6(o2["description"]);
+    if (description !== void 0) r.description = description;
+    const uri = str6(o2["uriTemplate"]);
+    if (uri !== void 0) r.uri = uri;
+    return r;
+  });
+  return { tools, prompts, resources, resourceTemplates, malformed };
+}
+var MAX_DEPTH = 24;
+function walkStrings(value, path8, item, out, depth = 0) {
+  if (depth > MAX_DEPTH) return;
+  if (typeof value === "string") {
+    out.push({ item, path: path8, text: value });
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i2) => walkStrings(v, `${path8}[${i2}]`, item, out, depth + 1));
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const isPropertyMap = /(^|\.)(properties|patternProperties|\$defs|definitions)$/.test(path8);
+  for (const [key, v] of Object.entries(value)) {
+    const childPath = path8 === "" ? key : `${path8}.${key}`;
+    if (isPropertyMap) out.push({ item, path: `${childPath} (name)`, text: key });
+    walkStrings(v, childPath, item, out, depth + 1);
+  }
+}
+function shortName(name) {
+  const visible = escapeInvisible(name);
+  return visible.length > 80 ? `${visible.slice(0, 80)}\u2026` : visible;
+}
+function fieldsOf(listing) {
+  const out = [];
+  if (listing.instructions !== void 0) {
+    out.push({ item: "server instructions", path: "instructions", text: listing.instructions });
+  }
+  for (const t of listing.tools) {
+    const item = `tool '${shortName(t.name)}'`;
+    out.push({ item, path: "name", text: t.name });
+    if (t.title !== void 0) out.push({ item, path: "title", text: t.title });
+    if (t.description !== void 0) out.push({ item, path: "description", text: t.description });
+    walkStrings(t.inputSchema, "inputSchema", item, out);
+    walkStrings(t.outputSchema, "outputSchema", item, out);
+    walkStrings(t.annotations, "annotations", item, out);
+  }
+  for (const p of listing.prompts) {
+    const item = `prompt '${shortName(p.name)}'`;
+    out.push({ item, path: "name", text: p.name });
+    if (p.title !== void 0) out.push({ item, path: "title", text: p.title });
+    if (p.description !== void 0) out.push({ item, path: "description", text: p.description });
+    walkStrings(p.arguments, "arguments", item, out);
+  }
+  const resources = [
+    ...listing.resources.map((r) => ({ r, kind: "resource" })),
+    ...(listing.resourceTemplates ?? []).map((r) => ({ r, kind: "resource template" }))
+  ];
+  for (const { r, kind } of resources) {
+    const item = `${kind} '${shortName(r.name)}'`;
+    out.push({ item, path: "name", text: r.name });
+    if (r.title !== void 0) out.push({ item, path: "title", text: r.title });
+    if (r.description !== void 0) out.push({ item, path: "description", text: r.description });
+    if (r.uri !== void 0) out.push({ item, path: "uri", text: r.uri });
+  }
+  return out;
+}
+var EXCERPT_BEFORE = 60;
+var EXCERPT_AFTER = 120;
+function excerpt(text, index) {
+  const start = Math.max(0, index - EXCERPT_BEFORE);
+  const end = Math.min(text.length, index + EXCERPT_AFTER);
+  const body = escapeInvisible(text.slice(start, end)).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "\u2026" : ""}${body}${end < text.length ? "\u2026" : ""}`;
+}
+function textRuleHits(field2) {
+  const hits = [];
+  for (const rule of TEXT_RULES) {
+    if (rule.id === "mcp-tool-cross-server-shadowing") continue;
+    for (const pattern of rule.patterns) {
+      pattern.lastIndex = 0;
+      const m = pattern.exec(field2.text);
+      if (m === null) continue;
+      hits.push({ ...ruleMeta(rule.id), field: field2, index: m.index });
+      break;
+    }
+  }
+  return hits;
+}
+function ruleMeta(id) {
+  const rule = TEXT_RULES.find((r) => r.id === id);
+  if (rule !== void 0) {
+    return { rule: id, severity: rule.severity, subcategory: rule.subcategory, label: rule.label, explain: rule.explain };
+  }
+  if (id === "mcp-tool-hidden-unicode") {
+    return {
+      rule: id,
+      severity: "high",
+      subcategory: "mcp_tool_poisoning",
+      label: "hidden Unicode",
+      explain: "The text carries characters that render as nothing or reorder what is shown \u2014 invisible to anyone reviewing the tool list, read in full by the model."
+    };
+  }
+  if (id === "mcp-tool-encoded-blob") {
+    return {
+      rule: id,
+      severity: "medium",
+      subcategory: "mcp_tool_poisoning",
+      label: "a large encoded blob",
+      explain: "The text carries a long base64 run. A description has no use for one; an instruction encoded this way passes every plain-text check, and the model can decode it."
+    };
+  }
+  return {
+    rule: id,
+    severity: "low",
+    subcategory: "mcp_tool_poisoning",
+    label: "an abnormally long description",
+    explain: `The description is over ${OVERSIZED_DESCRIPTION_CHARS} characters. Length is no attack by itself, but it is where a payload hides below the part a reviewer reads.`
+  };
+}
+function hiddenUnicodeHit(field2) {
+  const scan2 = scanInvisible(field2.text);
+  if (scan2 === null) return null;
+  const decoded = scan2.decodedTags.trim();
+  const detail = `${scan2.count} invisible code point(s): ${scan2.kinds.join(", ")}` + (decoded === "" ? "" : `; the tag characters spell ${JSON.stringify(decoded.slice(0, 200))}`);
+  let index = 0;
+  for (const ch of field2.text) {
+    if (scanInvisible(ch) !== null) break;
+    index += ch.length;
+  }
+  return { ...ruleMeta("mcp-tool-hidden-unicode"), field: field2, index, detail };
+}
+function blobHit(field2) {
+  const blob = findEncodedBlob(field2.text);
+  if (blob === null) return null;
+  const detail = `a ${blob.length}-character base64 run` + (blob.decodedText === null ? " (it does not decode to readable text)" : ` that decodes to readable text: ${JSON.stringify(escapeInvisible(blob.decodedText).slice(0, 200))}`);
+  const meta = ruleMeta("mcp-tool-encoded-blob");
+  return { ...meta, severity: blob.decodedText === null ? "medium" : "high", field: field2, index: 0, detail };
+}
+function oversizedHit(field2) {
+  if (field2.path !== "description" && field2.path !== "instructions") return null;
+  if (field2.text.length <= OVERSIZED_DESCRIPTION_CHARS) return null;
+  return {
+    ...ruleMeta("mcp-tool-description-oversized"),
+    field: field2,
+    index: OVERSIZED_DESCRIPTION_CHARS,
+    detail: `${field2.text.length} characters`
+  };
+}
+function escapeRegExp4(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function distinctive(name) {
+  return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
+}
+function nameMention(name) {
+  const n2 = escapeRegExp4(name);
+  return distinctive(name) ? new RegExp(`(^|[^A-Za-z0-9_-])${n2}($|[^A-Za-z0-9_-])`) : new RegExp(`[\`'"]${n2}[\`'"]`);
+}
+function shadowingHits(field2, listing, others) {
+  const meta = ruleMeta("mcp-tool-cross-server-shadowing");
+  const own = new Set(listing.tools.map((t) => t.name));
+  for (const other of others) {
+    if (other.serverKey === listing.serverKey) continue;
+    for (const toolName of other.toolNames) {
+      if (own.has(toolName)) continue;
+      const m = nameMention(toolName).exec(field2.text);
+      if (m !== null) {
+        return [{ ...meta, field: field2, index: m.index, detail: `it names '${toolName}', a tool of server '${other.serverName}'` }];
+      }
+    }
+  }
+  for (const m of field2.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
+    if (m[1] !== void 0 && m[1] !== listing.serverName) {
+      return [{ ...meta, field: field2, index: m.index, detail: `it names ${JSON.stringify(m[0])}, a tool of server '${m[1]}'` }];
+    }
+  }
+  const rule = TEXT_RULES.find((r) => r.id === "mcp-tool-cross-server-shadowing");
+  for (const pattern of rule?.patterns ?? []) {
+    pattern.lastIndex = 0;
+    const m = pattern.exec(field2.text);
+    if (m !== null) return [{ ...meta, field: field2, index: m.index }];
+  }
+  return [];
+}
+function itemKey(hit) {
+  return `${hit.rule}\0${hit.field.item}`;
+}
+function analyzeServerListing(listing, others) {
+  const groups = /* @__PURE__ */ new Map();
+  const add = (hit) => {
+    if (hit === null) return;
+    const key = itemKey(hit);
+    const group = groups.get(key);
+    if (group === void 0) groups.set(key, [hit]);
+    else group.push(hit);
+  };
+  for (const field2 of fieldsOf(listing)) {
+    for (const hit of textRuleHits(field2)) add(hit);
+    add(hiddenUnicodeHit(field2));
+    add(blobHit(field2));
+    add(oversizedHit(field2));
+    for (const hit of shadowingHits(field2, listing, others)) add(hit);
+  }
+  const findings = [];
+  for (const hits of groups.values()) {
+    const first = hits[0];
+    if (first === void 0) continue;
+    const severity = hits.reduce((s, h2) => rank(h2.severity) > rank(s) ? h2.severity : s, first.severity);
+    const paths = [...new Set(hits.map((h2) => h2.field.path))];
+    const details = [...new Set(hits.flatMap((h2) => h2.detail === void 0 ? [] : [h2.detail]))];
+    const shownPaths = paths.slice(0, 6).join(", ") + (paths.length > 6 ? `, and ${paths.length - 6} more` : "");
+    const server = shortName(listing.serverName);
+    findings.push(
+      makeFinding({
+        tool: MCP_AUDIT_TOOL_NAME,
+        rule_id: first.rule,
+        severity,
+        category: "security",
+        subcategory: first.subcategory,
+        title: escapeInvisible(`MCP server '${server}', ${first.field.item}: ${first.label}`),
+        message: escapeInvisible(
+          `${first.explain} Seen in ${first.field.item} of server '${server}' (${listing.sourceLabel}), field(s): ${shownPaths}.` + (details.length > 0 ? ` Evidence: ${details.slice(0, 3).join("; ")}.` : "")
+        ),
+        file_path: listing.sourceLabel,
+        snippet: escapeInvisible(
+          `${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`
+        ),
+        fix_available: false
+      })
+    );
+  }
+  return findings;
+}
+var RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+function rank(s) {
+  return RANK[s];
+}
+
+// src/mcpaudit/pins.ts
+function toolDefinitionHash(tool49) {
+  return hashConfigValue({
+    name: tool49.name,
+    description: tool49.description ?? null,
+    inputSchema: tool49.inputSchema ?? null,
+    annotations: tool49.annotations ?? null
+  });
+}
+function comparePins(listing, previous, auditedBefore) {
+  const current = /* @__PURE__ */ new Map();
+  for (const tool49 of listing.tools) current.set(tool49.name, toolDefinitionHash(tool49));
+  const pins = [...current].map(([tool_name, hash]) => ({ tool_name, hash }));
+  const firstAudit = !auditedBefore && previous.size === 0;
+  if (firstAudit) return { findings: [], firstAudit, changed: [], added: [], removed: [], pins };
+  const changed = [];
+  const added = [];
+  for (const [name, hash] of current) {
+    const before = previous.get(name);
+    if (before === void 0) added.push(name);
+    else if (before !== hash) changed.push(name);
+  }
+  const removed = [...previous.keys()].filter((name) => !current.has(name)).sort();
+  const server = escapeInvisible(listing.serverName);
+  const finding4 = (ruleId, severity, name, title, message3) => makeFinding({
+    tool: MCP_AUDIT_TOOL_NAME,
+    rule_id: ruleId,
+    severity,
+    category: "security",
+    subcategory: "mcp_rug_pull",
+    title: escapeInvisible(title),
+    message: escapeInvisible(message3),
+    file_path: listing.sourceLabel,
+    snippet: escapeInvisible(`${server} > tool '${name}'`),
+    fix_available: false
+  });
+  const findings = [
+    ...changed.map(
+      (name) => finding4(
+        "mcp-tool-definition-changed",
+        "high",
+        name,
+        `Rug pull: MCP server '${server}' changed tool '${name}' since the previous audit`,
+        `Tool '${name}' of server '${server}' (${listing.sourceLabel}) is served with a different definition (description, input schema or annotations) than the previous audit_mcp_tools run recorded, under the same name. A tool approved once and rewritten later is how a server turns malicious after review. Read the new definition before using the server again; this audit now pins it.`
+      )
+    ),
+    ...added.map(
+      (name) => finding4(
+        "mcp-tool-added",
+        "low",
+        name,
+        `MCP server '${server}' added tool '${name}' since the previous audit`,
+        `Server '${server}' (${listing.sourceLabel}) now serves a tool '${name}' the previous audit did not see.`
+      )
+    ),
+    ...removed.map(
+      (name) => finding4(
+        "mcp-tool-removed",
+        "info",
+        name,
+        `MCP server '${server}' no longer serves tool '${name}'`,
+        `Server '${server}' (${listing.sourceLabel}) served a tool '${name}' at the previous audit and does not now.`
+      )
+    )
+  ];
+  return { findings, firstAudit, changed, added, removed, pins };
+}
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
+var ExperimentalClientTasks = class {
+  constructor(_client) {
+    this._client = _client;
+  }
+  /**
+   * Calls a tool and returns an AsyncGenerator that yields response messages.
+   * The generator is guaranteed to end with either a 'result' or 'error' message.
+   *
+   * This method provides streaming access to tool execution, allowing you to
+   * observe intermediate task status updates for long-running tool calls.
+   * Automatically validates structured output if the tool has an outputSchema.
+   *
+   * @example
+   * ```typescript
+   * const stream = client.experimental.tasks.callToolStream({ name: 'myTool', arguments: {} });
+   * for await (const message of stream) {
+   *   switch (message.type) {
+   *     case 'taskCreated':
+   *       console.log('Tool execution started:', message.task.taskId);
+   *       break;
+   *     case 'taskStatus':
+   *       console.log('Tool status:', message.task.status);
+   *       break;
+   *     case 'result':
+   *       console.log('Tool result:', message.result);
+   *       break;
+   *     case 'error':
+   *       console.error('Tool error:', message.error);
+   *       break;
+   *   }
+   * }
+   * ```
+   *
+   * @param params - Tool call parameters (name and arguments)
+   * @param resultSchema - Zod schema for validating the result (defaults to CallToolResultSchema)
+   * @param options - Optional request options (timeout, signal, task creation params, etc.)
+   * @returns AsyncGenerator that yields ResponseMessage objects
+   *
+   * @experimental
+   */
+  async *callToolStream(params, resultSchema = CallToolResultSchema, options) {
+    const clientInternal = this._client;
+    const optionsWithTask = {
+      ...options,
+      // We check if the tool is known to be a task during auto-configuration, but assume
+      // the caller knows what they're doing if they pass this explicitly
+      task: options?.task ?? (clientInternal.isToolTask(params.name) ? {} : void 0)
+    };
+    const stream = clientInternal.requestStream({ method: "tools/call", params }, resultSchema, optionsWithTask);
+    const validator = clientInternal.getToolOutputValidator(params.name);
+    for await (const message3 of stream) {
+      if (message3.type === "result" && validator) {
+        const result = message3.result;
+        if (!result.structuredContent && !result.isError) {
+          yield {
+            type: "error",
+            error: new McpError(ErrorCode.InvalidRequest, `Tool ${params.name} has an output schema but did not return structured content`)
+          };
+          return;
+        }
+        if (result.structuredContent) {
+          try {
+            const validationResult = validator(result.structuredContent);
+            if (!validationResult.valid) {
+              yield {
+                type: "error",
+                error: new McpError(ErrorCode.InvalidParams, `Structured content does not match the tool's output schema: ${validationResult.errorMessage}`)
+              };
+              return;
+            }
+          } catch (error2) {
+            if (error2 instanceof McpError) {
+              yield { type: "error", error: error2 };
+              return;
+            }
+            yield {
+              type: "error",
+              error: new McpError(ErrorCode.InvalidParams, `Failed to validate structured content: ${error2 instanceof Error ? error2.message : String(error2)}`)
+            };
+            return;
+          }
+        }
+      }
+      yield message3;
+    }
+  }
+  /**
+   * Gets the current status of a task.
+   *
+   * @param taskId - The task identifier
+   * @param options - Optional request options
+   * @returns The task status
+   *
+   * @experimental
+   */
+  async getTask(taskId, options) {
+    return this._client.getTask({ taskId }, options);
+  }
+  /**
+   * Retrieves the result of a completed task.
+   *
+   * @param taskId - The task identifier
+   * @param resultSchema - Zod schema for validating the result
+   * @param options - Optional request options
+   * @returns The task result
+   *
+   * @experimental
+   */
+  async getTaskResult(taskId, resultSchema, options) {
+    return this._client.getTaskResult({ taskId }, resultSchema, options);
+  }
+  /**
+   * Lists tasks with optional pagination.
+   *
+   * @param cursor - Optional pagination cursor
+   * @param options - Optional request options
+   * @returns List of tasks with optional next cursor
+   *
+   * @experimental
+   */
+  async listTasks(cursor, options) {
+    return this._client.listTasks(cursor ? { cursor } : void 0, options);
+  }
+  /**
+   * Cancels a running task.
+   *
+   * @param taskId - The task identifier
+   * @param options - Optional request options
+   *
+   * @experimental
+   */
+  async cancelTask(taskId, options) {
+    return this._client.cancelTask({ taskId }, options);
+  }
+  /**
+   * Sends a request and returns an AsyncGenerator that yields response messages.
+   * The generator is guaranteed to end with either a 'result' or 'error' message.
+   *
+   * This method provides streaming access to request processing, allowing you to
+   * observe intermediate task status updates for task-augmented requests.
+   *
+   * @param request - The request to send
+   * @param resultSchema - Zod schema for validating the result
+   * @param options - Optional request options (timeout, signal, task creation params, etc.)
+   * @returns AsyncGenerator that yields ResponseMessage objects
+   *
+   * @experimental
+   */
+  requestStream(request, resultSchema, options) {
+    return this._client.requestStream(request, resultSchema, options);
+  }
+};
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js
+function applyElicitationDefaults(schema, data) {
+  if (!schema || data === null || typeof data !== "object")
+    return;
+  if (schema.type === "object" && schema.properties && typeof schema.properties === "object") {
+    const obj = data;
+    const props = schema.properties;
+    for (const key of Object.keys(props)) {
+      const propSchema = props[key];
+      if (obj[key] === void 0 && Object.prototype.hasOwnProperty.call(propSchema, "default")) {
+        obj[key] = propSchema.default;
+      }
+      if (obj[key] !== void 0) {
+        applyElicitationDefaults(propSchema, obj[key]);
+      }
+    }
+  }
+  if (Array.isArray(schema.anyOf)) {
+    for (const sub of schema.anyOf) {
+      if (typeof sub !== "boolean") {
+        applyElicitationDefaults(sub, data);
+      }
+    }
+  }
+  if (Array.isArray(schema.oneOf)) {
+    for (const sub of schema.oneOf) {
+      if (typeof sub !== "boolean") {
+        applyElicitationDefaults(sub, data);
+      }
+    }
+  }
+}
+function getSupportedElicitationModes(capabilities) {
+  if (!capabilities) {
+    return { supportsFormMode: false, supportsUrlMode: false };
+  }
+  const hasFormCapability = capabilities.form !== void 0;
+  const hasUrlCapability = capabilities.url !== void 0;
+  const supportsFormMode = hasFormCapability || !hasFormCapability && !hasUrlCapability;
+  const supportsUrlMode = hasUrlCapability;
+  return { supportsFormMode, supportsUrlMode };
+}
+var Client = class extends Protocol {
+  /**
+   * Initializes this client with the given name and version information.
+   */
+  constructor(_clientInfo, options) {
+    super(options);
+    this._clientInfo = _clientInfo;
+    this._cachedToolOutputValidators = /* @__PURE__ */ new Map();
+    this._cachedKnownTaskTools = /* @__PURE__ */ new Set();
+    this._cachedRequiredTaskTools = /* @__PURE__ */ new Set();
+    this._listChangedDebounceTimers = /* @__PURE__ */ new Map();
+    this._capabilities = options?.capabilities ?? {};
+    this._jsonSchemaValidator = options?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
+    if (options?.listChanged) {
+      this._pendingListChangedConfig = options.listChanged;
+    }
+  }
+  /**
+   * Set up handlers for list changed notifications based on config and server capabilities.
+   * This should only be called after initialization when server capabilities are known.
+   * Handlers are silently skipped if the server doesn't advertise the corresponding listChanged capability.
+   * @internal
+   */
+  _setupListChangedHandlers(config2) {
+    if (config2.tools && this._serverCapabilities?.tools?.listChanged) {
+      this._setupListChangedHandler("tools", ToolListChangedNotificationSchema, config2.tools, async () => {
+        const result = await this.listTools();
+        return result.tools;
+      });
+    }
+    if (config2.prompts && this._serverCapabilities?.prompts?.listChanged) {
+      this._setupListChangedHandler("prompts", PromptListChangedNotificationSchema, config2.prompts, async () => {
+        const result = await this.listPrompts();
+        return result.prompts;
+      });
+    }
+    if (config2.resources && this._serverCapabilities?.resources?.listChanged) {
+      this._setupListChangedHandler("resources", ResourceListChangedNotificationSchema, config2.resources, async () => {
+        const result = await this.listResources();
+        return result.resources;
+      });
+    }
+  }
+  /**
+   * Access experimental features.
+   *
+   * WARNING: These APIs are experimental and may change without notice.
+   *
+   * @experimental
+   */
+  get experimental() {
+    if (!this._experimental) {
+      this._experimental = {
+        tasks: new ExperimentalClientTasks(this)
+      };
+    }
+    return this._experimental;
+  }
+  /**
+   * Registers new capabilities. This can only be called before connecting to a transport.
+   *
+   * The new capabilities will be merged with any existing capabilities previously given (e.g., at initialization).
+   */
+  registerCapabilities(capabilities) {
+    if (this.transport) {
+      throw new Error("Cannot register capabilities after connecting to transport");
+    }
+    this._capabilities = mergeCapabilities(this._capabilities, capabilities);
+  }
+  /**
+   * Override request handler registration to enforce client-side validation for elicitation.
+   */
+  setRequestHandler(requestSchema, handler46) {
+    const shape = getObjectShape(requestSchema);
+    const methodSchema = shape?.method;
+    if (!methodSchema) {
+      throw new Error("Schema is missing a method literal");
+    }
+    const methodValue = getLiteralValue(methodSchema);
+    if (typeof methodValue !== "string") {
+      throw new Error("Schema method literal must be a string");
+    }
+    const method = methodValue;
+    if (method === "elicitation/create") {
+      const wrappedHandler = async (request, extra) => {
+        const validatedRequest = safeParse2(ElicitRequestSchema, request);
+        if (!validatedRequest.success) {
+          const errorMessage5 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid elicitation request: ${errorMessage5}`);
+        }
+        const { params } = validatedRequest.data;
+        params.mode = params.mode ?? "form";
+        const { supportsFormMode, supportsUrlMode } = getSupportedElicitationModes(this._capabilities.elicitation);
+        if (params.mode === "form" && !supportsFormMode) {
+          throw new McpError(ErrorCode.InvalidParams, "Client does not support form-mode elicitation requests");
+        }
+        if (params.mode === "url" && !supportsUrlMode) {
+          throw new McpError(ErrorCode.InvalidParams, "Client does not support URL-mode elicitation requests");
+        }
+        const result = await Promise.resolve(handler46(request, extra));
+        if (params.task) {
+          const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+          if (!taskValidationResult.success) {
+            const errorMessage5 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage5}`);
+          }
+          return taskValidationResult.data;
+        }
+        const validationResult = safeParse2(ElicitResultSchema, result);
+        if (!validationResult.success) {
+          const errorMessage5 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid elicitation result: ${errorMessage5}`);
+        }
+        const validatedResult = validationResult.data;
+        const requestedSchema = params.mode === "form" ? params.requestedSchema : void 0;
+        if (params.mode === "form" && validatedResult.action === "accept" && validatedResult.content && requestedSchema) {
+          if (this._capabilities.elicitation?.form?.applyDefaults) {
+            try {
+              applyElicitationDefaults(requestedSchema, validatedResult.content);
+            } catch {
+            }
+          }
+        }
+        return validatedResult;
+      };
+      return super.setRequestHandler(requestSchema, wrappedHandler);
+    }
+    if (method === "sampling/createMessage") {
+      const wrappedHandler = async (request, extra) => {
+        const validatedRequest = safeParse2(CreateMessageRequestSchema, request);
+        if (!validatedRequest.success) {
+          const errorMessage5 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid sampling request: ${errorMessage5}`);
+        }
+        const { params } = validatedRequest.data;
+        const result = await Promise.resolve(handler46(request, extra));
+        if (params.task) {
+          const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+          if (!taskValidationResult.success) {
+            const errorMessage5 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage5}`);
+          }
+          return taskValidationResult.data;
+        }
+        const hasTools = params.tools || params.toolChoice;
+        const resultSchema = hasTools ? CreateMessageResultWithToolsSchema : CreateMessageResultSchema;
+        const validationResult = safeParse2(resultSchema, result);
+        if (!validationResult.success) {
+          const errorMessage5 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid sampling result: ${errorMessage5}`);
+        }
+        return validationResult.data;
+      };
+      return super.setRequestHandler(requestSchema, wrappedHandler);
+    }
+    return super.setRequestHandler(requestSchema, handler46);
+  }
+  assertCapability(capability, method) {
+    if (!this._serverCapabilities?.[capability]) {
+      throw new Error(`Server does not support ${capability} (required for ${method})`);
+    }
+  }
+  async connect(transport, options) {
+    await super.connect(transport);
+    if (transport.sessionId !== void 0) {
+      return;
+    }
+    try {
+      const result = await this.request({
+        method: "initialize",
+        params: {
+          protocolVersion: LATEST_PROTOCOL_VERSION,
+          capabilities: this._capabilities,
+          clientInfo: this._clientInfo
+        }
+      }, InitializeResultSchema, options);
+      if (result === void 0) {
+        throw new Error(`Server sent invalid initialize result: ${result}`);
+      }
+      if (!SUPPORTED_PROTOCOL_VERSIONS.includes(result.protocolVersion)) {
+        throw new Error(`Server's protocol version is not supported: ${result.protocolVersion}`);
+      }
+      this._serverCapabilities = result.capabilities;
+      this._serverVersion = result.serverInfo;
+      if (transport.setProtocolVersion) {
+        transport.setProtocolVersion(result.protocolVersion);
+      }
+      this._instructions = result.instructions;
+      await this.notification({
+        method: "notifications/initialized"
+      });
+      if (this._pendingListChangedConfig) {
+        this._setupListChangedHandlers(this._pendingListChangedConfig);
+        this._pendingListChangedConfig = void 0;
+      }
+    } catch (error2) {
+      void this.close();
+      throw error2;
+    }
+  }
+  /**
+   * After initialization has completed, this will be populated with the server's reported capabilities.
+   */
+  getServerCapabilities() {
+    return this._serverCapabilities;
+  }
+  /**
+   * After initialization has completed, this will be populated with information about the server's name and version.
+   */
+  getServerVersion() {
+    return this._serverVersion;
+  }
+  /**
+   * After initialization has completed, this may be populated with information about the server's instructions.
+   */
+  getInstructions() {
+    return this._instructions;
+  }
+  assertCapabilityForMethod(method) {
+    switch (method) {
+      case "logging/setLevel":
+        if (!this._serverCapabilities?.logging) {
+          throw new Error(`Server does not support logging (required for ${method})`);
+        }
+        break;
+      case "prompts/get":
+      case "prompts/list":
+        if (!this._serverCapabilities?.prompts) {
+          throw new Error(`Server does not support prompts (required for ${method})`);
+        }
+        break;
+      case "resources/list":
+      case "resources/templates/list":
+      case "resources/read":
+      case "resources/subscribe":
+      case "resources/unsubscribe":
+        if (!this._serverCapabilities?.resources) {
+          throw new Error(`Server does not support resources (required for ${method})`);
+        }
+        if (method === "resources/subscribe" && !this._serverCapabilities.resources.subscribe) {
+          throw new Error(`Server does not support resource subscriptions (required for ${method})`);
+        }
+        break;
+      case "tools/call":
+      case "tools/list":
+        if (!this._serverCapabilities?.tools) {
+          throw new Error(`Server does not support tools (required for ${method})`);
+        }
+        break;
+      case "completion/complete":
+        if (!this._serverCapabilities?.completions) {
+          throw new Error(`Server does not support completions (required for ${method})`);
+        }
+        break;
+      case "initialize":
+        break;
+      case "ping":
+        break;
+    }
+  }
+  assertNotificationCapability(method) {
+    switch (method) {
+      case "notifications/roots/list_changed":
+        if (!this._capabilities.roots?.listChanged) {
+          throw new Error(`Client does not support roots list changed notifications (required for ${method})`);
+        }
+        break;
+      case "notifications/initialized":
+        break;
+      case "notifications/cancelled":
+        break;
+      case "notifications/progress":
+        break;
+    }
+  }
+  assertRequestHandlerCapability(method) {
+    if (!this._capabilities) {
+      return;
+    }
+    switch (method) {
+      case "sampling/createMessage":
+        if (!this._capabilities.sampling) {
+          throw new Error(`Client does not support sampling capability (required for ${method})`);
+        }
+        break;
+      case "elicitation/create":
+        if (!this._capabilities.elicitation) {
+          throw new Error(`Client does not support elicitation capability (required for ${method})`);
+        }
+        break;
+      case "roots/list":
+        if (!this._capabilities.roots) {
+          throw new Error(`Client does not support roots capability (required for ${method})`);
+        }
+        break;
+      case "tasks/get":
+      case "tasks/list":
+      case "tasks/result":
+      case "tasks/cancel":
+        if (!this._capabilities.tasks) {
+          throw new Error(`Client does not support tasks capability (required for ${method})`);
+        }
+        break;
+      case "ping":
+        break;
+    }
+  }
+  assertTaskCapability(method) {
+    assertToolsCallTaskCapability(this._serverCapabilities?.tasks?.requests, method, "Server");
+  }
+  assertTaskHandlerCapability(method) {
+    if (!this._capabilities) {
+      return;
+    }
+    assertClientRequestTaskCapability(this._capabilities.tasks?.requests, method, "Client");
+  }
+  async ping(options) {
+    return this.request({ method: "ping" }, EmptyResultSchema, options);
+  }
+  async complete(params, options) {
+    return this.request({ method: "completion/complete", params }, CompleteResultSchema, options);
+  }
+  async setLoggingLevel(level, options) {
+    return this.request({ method: "logging/setLevel", params: { level } }, EmptyResultSchema, options);
+  }
+  async getPrompt(params, options) {
+    return this.request({ method: "prompts/get", params }, GetPromptResultSchema, options);
+  }
+  async listPrompts(params, options) {
+    return this.request({ method: "prompts/list", params }, ListPromptsResultSchema, options);
+  }
+  async listResources(params, options) {
+    return this.request({ method: "resources/list", params }, ListResourcesResultSchema, options);
+  }
+  async listResourceTemplates(params, options) {
+    return this.request({ method: "resources/templates/list", params }, ListResourceTemplatesResultSchema, options);
+  }
+  async readResource(params, options) {
+    return this.request({ method: "resources/read", params }, ReadResourceResultSchema, options);
+  }
+  async subscribeResource(params, options) {
+    return this.request({ method: "resources/subscribe", params }, EmptyResultSchema, options);
+  }
+  async unsubscribeResource(params, options) {
+    return this.request({ method: "resources/unsubscribe", params }, EmptyResultSchema, options);
+  }
+  /**
+   * Calls a tool and waits for the result. Automatically validates structured output if the tool has an outputSchema.
+   *
+   * For task-based execution with streaming behavior, use client.experimental.tasks.callToolStream() instead.
+   */
+  async callTool(params, resultSchema = CallToolResultSchema, options) {
+    if (this.isToolTaskRequired(params.name)) {
+      throw new McpError(ErrorCode.InvalidRequest, `Tool "${params.name}" requires task-based execution. Use client.experimental.tasks.callToolStream() instead.`);
+    }
+    const result = await this.request({ method: "tools/call", params }, resultSchema, options);
+    const validator = this.getToolOutputValidator(params.name);
+    if (validator) {
+      if (!result.structuredContent && !result.isError) {
+        throw new McpError(ErrorCode.InvalidRequest, `Tool ${params.name} has an output schema but did not return structured content`);
+      }
+      if (result.structuredContent) {
+        try {
+          const validationResult = validator(result.structuredContent);
+          if (!validationResult.valid) {
+            throw new McpError(ErrorCode.InvalidParams, `Structured content does not match the tool's output schema: ${validationResult.errorMessage}`);
+          }
+        } catch (error2) {
+          if (error2 instanceof McpError) {
+            throw error2;
+          }
+          throw new McpError(ErrorCode.InvalidParams, `Failed to validate structured content: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        }
+      }
+    }
+    return result;
+  }
+  isToolTask(toolName) {
+    if (!this._serverCapabilities?.tasks?.requests?.tools?.call) {
+      return false;
+    }
+    return this._cachedKnownTaskTools.has(toolName);
+  }
+  /**
+   * Check if a tool requires task-based execution.
+   * Unlike isToolTask which includes 'optional' tools, this only checks for 'required'.
+   */
+  isToolTaskRequired(toolName) {
+    return this._cachedRequiredTaskTools.has(toolName);
+  }
+  /**
+   * Cache validators for tool output schemas.
+   * Called after listTools() to pre-compile validators for better performance.
+   */
+  cacheToolMetadata(tools) {
+    this._cachedToolOutputValidators.clear();
+    this._cachedKnownTaskTools.clear();
+    this._cachedRequiredTaskTools.clear();
+    for (const tool49 of tools) {
+      if (tool49.outputSchema) {
+        const toolValidator = this._jsonSchemaValidator.getValidator(tool49.outputSchema);
+        this._cachedToolOutputValidators.set(tool49.name, toolValidator);
+      }
+      const taskSupport = tool49.execution?.taskSupport;
+      if (taskSupport === "required" || taskSupport === "optional") {
+        this._cachedKnownTaskTools.add(tool49.name);
+      }
+      if (taskSupport === "required") {
+        this._cachedRequiredTaskTools.add(tool49.name);
+      }
+    }
+  }
+  /**
+   * Get cached validator for a tool
+   */
+  getToolOutputValidator(toolName) {
+    return this._cachedToolOutputValidators.get(toolName);
+  }
+  async listTools(params, options) {
+    const result = await this.request({ method: "tools/list", params }, ListToolsResultSchema, options);
+    this.cacheToolMetadata(result.tools);
+    return result;
+  }
+  /**
+   * Set up a single list changed handler.
+   * @internal
+   */
+  _setupListChangedHandler(listType, notificationSchema, options, fetcher) {
+    const parseResult = ListChangedOptionsBaseSchema.safeParse(options);
+    if (!parseResult.success) {
+      throw new Error(`Invalid ${listType} listChanged options: ${parseResult.error.message}`);
+    }
+    if (typeof options.onChanged !== "function") {
+      throw new Error(`Invalid ${listType} listChanged options: onChanged must be a function`);
+    }
+    const { autoRefresh, debounceMs } = parseResult.data;
+    const { onChanged } = options;
+    const refresh = async () => {
+      if (!autoRefresh) {
+        onChanged(null, null);
+        return;
+      }
+      try {
+        const items = await fetcher();
+        onChanged(null, items);
+      } catch (e) {
+        const error2 = e instanceof Error ? e : new Error(String(e));
+        onChanged(error2, null);
+      }
+    };
+    const handler46 = () => {
+      if (debounceMs) {
+        const existingTimer = this._listChangedDebounceTimers.get(listType);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(refresh, debounceMs);
+        this._listChangedDebounceTimers.set(listType, timer);
+      } else {
+        refresh();
+      }
+    };
+    this.setNotificationHandler(notificationSchema, handler46);
+  }
+  async sendRootsListChanged() {
+    return this.notification({ method: "notifications/roots/list_changed" });
+  }
+};
+
+// node_modules/eventsource-parser/dist/index.js
+var ParseError = class extends Error {
+  constructor(message3, options) {
+    super(message3), this.name = "ParseError", this.type = options.type, this.field = options.field, this.value = options.value, this.line = options.line;
+  }
+};
+var LF2 = 10;
+var CR2 = 13;
+var SPACE = 32;
+function noop3(_arg) {
+}
+function createParser(config2) {
+  if (typeof config2 == "function")
+    throw new TypeError(
+      "`config` must be an object, got a function instead. Did you mean `createParser({onEvent: fn})`?"
+    );
+  const { onEvent = noop3, onError = noop3, onRetry = noop3, onComment, maxBufferSize } = config2, pendingFragments = [];
+  let pendingFragmentsLength = 0, isFirstChunk = true, id, data = "", dataLines = 0, eventType, terminated = false;
+  function feed(chunk) {
+    if (terminated)
+      throw new Error(
+        "Cannot feed parser: it was terminated after exceeding the configured max buffer size. Call `reset()` to resume parsing."
+      );
+    if (isFirstChunk && (isFirstChunk = false, chunk.charCodeAt(0) === 239 && chunk.charCodeAt(1) === 187 && chunk.charCodeAt(2) === 191 && (chunk = chunk.slice(3))), pendingFragments.length === 0) {
+      const trailing2 = processLines(chunk);
+      trailing2 !== "" && (pendingFragments.push(trailing2), pendingFragmentsLength = trailing2.length), checkBufferSize();
+      return;
+    }
+    if (chunk.indexOf(`
+`) === -1 && chunk.indexOf("\r") === -1) {
+      pendingFragments.push(chunk), pendingFragmentsLength += chunk.length, checkBufferSize();
+      return;
+    }
+    pendingFragments.push(chunk);
+    const input = pendingFragments.join("");
+    pendingFragments.length = 0, pendingFragmentsLength = 0;
+    const trailing = processLines(input);
+    trailing !== "" && (pendingFragments.push(trailing), pendingFragmentsLength = trailing.length), checkBufferSize();
+  }
+  function checkBufferSize() {
+    maxBufferSize !== void 0 && (pendingFragmentsLength + data.length <= maxBufferSize || (terminated = true, pendingFragments.length = 0, pendingFragmentsLength = 0, id = void 0, data = "", dataLines = 0, eventType = void 0, onError(
+      new ParseError(`Buffered data exceeded max buffer size of ${maxBufferSize} characters`, {
+        type: "max-buffer-size-exceeded"
+      })
+    )));
+  }
+  function processLines(chunk) {
+    let searchIndex = 0;
+    if (chunk.indexOf("\r") === -1) {
+      let lfIndex = chunk.indexOf(`
+`, searchIndex);
+      for (; lfIndex !== -1; ) {
+        if (searchIndex === lfIndex) {
+          dataLines > 0 && onEvent({ id, event: eventType, data }), id = void 0, data = "", dataLines = 0, eventType = void 0, searchIndex = lfIndex + 1, lfIndex = chunk.indexOf(`
+`, searchIndex);
+          continue;
+        }
+        const firstCharCode = chunk.charCodeAt(searchIndex);
+        if (isDataPrefix(chunk, searchIndex, firstCharCode)) {
+          const valueStart = chunk.charCodeAt(searchIndex + 5) === SPACE ? searchIndex + 6 : searchIndex + 5, value = chunk.slice(valueStart, lfIndex);
+          if (dataLines === 0 && chunk.charCodeAt(lfIndex + 1) === LF2) {
+            onEvent({ id, event: eventType, data: value }), id = void 0, data = "", eventType = void 0, searchIndex = lfIndex + 2, lfIndex = chunk.indexOf(`
+`, searchIndex);
+            continue;
+          }
+          data = dataLines === 0 ? value : `${data}
+${value}`, dataLines++;
+        } else isEventPrefix(chunk, searchIndex, firstCharCode) ? eventType = chunk.slice(
+          chunk.charCodeAt(searchIndex + 6) === SPACE ? searchIndex + 7 : searchIndex + 6,
+          lfIndex
+        ) || void 0 : parseLine2(chunk, searchIndex, lfIndex);
+        searchIndex = lfIndex + 1, lfIndex = chunk.indexOf(`
+`, searchIndex);
+      }
+      return chunk.slice(searchIndex);
+    }
+    for (; searchIndex < chunk.length; ) {
+      const crIndex = chunk.indexOf("\r", searchIndex), lfIndex = chunk.indexOf(`
+`, searchIndex);
+      let lineEnd = -1;
+      if (crIndex !== -1 && lfIndex !== -1 ? lineEnd = crIndex < lfIndex ? crIndex : lfIndex : crIndex !== -1 ? crIndex === chunk.length - 1 ? lineEnd = -1 : lineEnd = crIndex : lfIndex !== -1 && (lineEnd = lfIndex), lineEnd === -1)
+        break;
+      parseLine2(chunk, searchIndex, lineEnd), searchIndex = lineEnd + 1, chunk.charCodeAt(searchIndex - 1) === CR2 && chunk.charCodeAt(searchIndex) === LF2 && searchIndex++;
+    }
+    return chunk.slice(searchIndex);
+  }
+  function parseLine2(chunk, start, end) {
+    if (start === end) {
+      dispatchEvent();
+      return;
+    }
+    const firstCharCode = chunk.charCodeAt(start);
+    if (isDataPrefix(chunk, start, firstCharCode)) {
+      const valueStart = chunk.charCodeAt(start + 5) === SPACE ? start + 6 : start + 5, value2 = chunk.slice(valueStart, end);
+      data = dataLines === 0 ? value2 : `${data}
+${value2}`, dataLines++;
+      return;
+    }
+    if (isEventPrefix(chunk, start, firstCharCode)) {
+      eventType = chunk.slice(chunk.charCodeAt(start + 6) === SPACE ? start + 7 : start + 6, end) || void 0;
+      return;
+    }
+    if (firstCharCode === 105 && chunk.charCodeAt(start + 1) === 100 && chunk.charCodeAt(start + 2) === 58) {
+      const value2 = chunk.slice(chunk.charCodeAt(start + 3) === SPACE ? start + 4 : start + 3, end);
+      value2.includes("\0") || (id = value2);
+      return;
+    }
+    if (firstCharCode === 58) {
+      if (onComment) {
+        const line2 = chunk.slice(start, end);
+        onComment(line2.slice(chunk.charCodeAt(start + 1) === SPACE ? 2 : 1));
+      }
+      return;
+    }
+    const line = chunk.slice(start, end), fieldSeparatorIndex = line.indexOf(":");
+    if (fieldSeparatorIndex === -1) {
+      processField(line, "", line);
+      return;
+    }
+    const field2 = line.slice(0, fieldSeparatorIndex), offset = line.charCodeAt(fieldSeparatorIndex + 1) === SPACE ? 2 : 1, value = line.slice(fieldSeparatorIndex + offset);
+    processField(field2, value, line);
+  }
+  function processField(field2, value, line) {
+    switch (field2) {
+      case "event":
+        eventType = value || void 0;
+        break;
+      case "data":
+        data = dataLines === 0 ? value : `${data}
+${value}`, dataLines++;
+        break;
+      case "id":
+        value.includes("\0") || (id = value);
+        break;
+      case "retry":
+        /^\d+$/.test(value) ? onRetry(parseInt(value, 10)) : onError(
+          new ParseError(`Invalid \`retry\` value: "${value}"`, {
+            type: "invalid-retry",
+            value,
+            line
+          })
+        );
+        break;
+      default:
+        onError(
+          new ParseError(
+            `Unknown field "${field2.length > 20 ? `${field2.slice(0, 20)}\u2026` : field2}"`,
+            { type: "unknown-field", field: field2, value, line }
+          )
+        );
+        break;
+    }
+  }
+  function dispatchEvent() {
+    dataLines > 0 && onEvent({
+      id,
+      event: eventType,
+      data
+    }), id = void 0, data = "", dataLines = 0, eventType = void 0;
+  }
+  function reset2(options = {}) {
+    if (options.consume && pendingFragments.length > 0) {
+      const incompleteLine = pendingFragments.join("");
+      parseLine2(incompleteLine, 0, incompleteLine.length);
+    }
+    isFirstChunk = true, id = void 0, data = "", dataLines = 0, eventType = void 0, pendingFragments.length = 0, pendingFragmentsLength = 0, terminated = false;
+  }
+  return { feed, reset: reset2 };
+}
+function isDataPrefix(chunk, i2, firstCharCode) {
+  return firstCharCode === 100 && chunk.charCodeAt(i2 + 1) === 97 && chunk.charCodeAt(i2 + 2) === 116 && chunk.charCodeAt(i2 + 3) === 97 && chunk.charCodeAt(i2 + 4) === 58;
+}
+function isEventPrefix(chunk, i2, firstCharCode) {
+  return firstCharCode === 101 && chunk.charCodeAt(i2 + 1) === 118 && chunk.charCodeAt(i2 + 2) === 101 && chunk.charCodeAt(i2 + 3) === 110 && chunk.charCodeAt(i2 + 4) === 116 && chunk.charCodeAt(i2 + 5) === 58;
+}
+
+// node_modules/eventsource/dist/index.js
+var ErrorEvent = class extends Event {
+  /**
+   * Constructs a new `ErrorEvent` instance. This is typically not called directly,
+   * but rather emitted by the `EventSource` object when an error occurs.
+   *
+   * @param type - The type of the event (should be "error")
+   * @param errorEventInitDict - Optional properties to include in the error event
+   */
+  constructor(type, errorEventInitDict) {
+    var _a, _b;
+    super(type), this.code = (_a = errorEventInitDict == null ? void 0 : errorEventInitDict.code) != null ? _a : void 0, this.message = (_b = errorEventInitDict == null ? void 0 : errorEventInitDict.message) != null ? _b : void 0;
+  }
+  /**
+   * Node.js "hides" the `message` and `code` properties of the `ErrorEvent` instance,
+   * when it is `console.log`'ed. This makes it harder to debug errors. To ease debugging,
+   * we explicitly include the properties in the `inspect` method.
+   *
+   * This is automatically called by Node.js when you `console.log` an instance of this class.
+   *
+   * @param _depth - The current depth
+   * @param options - The options passed to `util.inspect`
+   * @param inspect - The inspect function to use (prevents having to import it from `util`)
+   * @returns A string representation of the error
+   */
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")](_depth, options, inspect3) {
+    return inspect3(inspectableError(this), options);
+  }
+  /**
+   * Deno "hides" the `message` and `code` properties of the `ErrorEvent` instance,
+   * when it is `console.log`'ed. This makes it harder to debug errors. To ease debugging,
+   * we explicitly include the properties in the `inspect` method.
+   *
+   * This is automatically called by Deno when you `console.log` an instance of this class.
+   *
+   * @param inspect - The inspect function to use (prevents having to import it from `util`)
+   * @param options - The options passed to `Deno.inspect`
+   * @returns A string representation of the error
+   */
+  [/* @__PURE__ */ Symbol.for("Deno.customInspect")](inspect3, options) {
+    return inspect3(inspectableError(this), options);
+  }
+};
+function syntaxError(message3) {
+  const DomException = globalThis.DOMException;
+  return typeof DomException == "function" ? new DomException(message3, "SyntaxError") : new SyntaxError(message3);
+}
+function flattenError2(err) {
+  return err instanceof Error ? "errors" in err && Array.isArray(err.errors) ? err.errors.map(flattenError2).join(", ") : "cause" in err && err.cause instanceof Error ? `${err}: ${flattenError2(err.cause)}` : err.message : `${err}`;
+}
+function inspectableError(err) {
+  return {
+    type: err.type,
+    message: err.message,
+    code: err.code,
+    defaultPrevented: err.defaultPrevented,
+    cancelable: err.cancelable,
+    timeStamp: err.timeStamp
+  };
+}
+var __typeError = (msg) => {
+  throw TypeError(msg);
+};
+var __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot " + msg);
+var __privateGet = (obj, member, getter) => (__accessCheck(obj, member, "read from private field"), getter ? getter.call(obj) : member.get(obj));
+var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
+var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), member.set(obj, value), value);
+var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method);
+var _readyState;
+var _url2;
+var _redirectUrl;
+var _withCredentials;
+var _fetch;
+var _reconnectInterval;
+var _reconnectTimer;
+var _lastEventId;
+var _controller;
+var _parser;
+var _onError;
+var _onMessage;
+var _onOpen;
+var _EventSource_instances;
+var connect_fn;
+var _onFetchResponse;
+var _onFetchError;
+var getRequestOptions_fn;
+var _onEvent;
+var _onRetryChange;
+var failConnection_fn;
+var scheduleReconnect_fn;
+var _reconnect;
+var EventSource = class extends EventTarget {
+  constructor(url2, eventSourceInitDict) {
+    var _a, _b;
+    super(), __privateAdd(this, _EventSource_instances), this.CONNECTING = 0, this.OPEN = 1, this.CLOSED = 2, __privateAdd(this, _readyState), __privateAdd(this, _url2), __privateAdd(this, _redirectUrl), __privateAdd(this, _withCredentials), __privateAdd(this, _fetch), __privateAdd(this, _reconnectInterval), __privateAdd(this, _reconnectTimer), __privateAdd(this, _lastEventId, null), __privateAdd(this, _controller), __privateAdd(this, _parser), __privateAdd(this, _onError, null), __privateAdd(this, _onMessage, null), __privateAdd(this, _onOpen, null), __privateAdd(this, _onFetchResponse, async (response) => {
+      var _a2;
+      __privateGet(this, _parser).reset();
+      const { body, redirected, status, headers } = response;
+      if (status === 204) {
+        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, "Server sent HTTP 204, not reconnecting", 204), this.close();
+        return;
+      }
+      if (redirected ? __privateSet(this, _redirectUrl, new URL(response.url)) : __privateSet(this, _redirectUrl, void 0), status !== 200) {
+        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, `Non-200 status code (${status})`, status);
+        return;
+      }
+      if (!(headers.get("content-type") || "").startsWith("text/event-stream")) {
+        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, 'Invalid content type, expected "text/event-stream"', status);
+        return;
+      }
+      if (__privateGet(this, _readyState) === this.CLOSED)
+        return;
+      __privateSet(this, _readyState, this.OPEN);
+      const openEvent = new Event("open");
+      if ((_a2 = __privateGet(this, _onOpen)) == null || _a2.call(this, openEvent), this.dispatchEvent(openEvent), typeof body != "object" || !body || !("getReader" in body)) {
+        __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, "Invalid response body, expected a web ReadableStream", status), this.close();
+        return;
+      }
+      const decoder = new TextDecoder(), reader = body.getReader();
+      let open = true;
+      do {
+        const { done, value } = await reader.read();
+        value && __privateGet(this, _parser).feed(decoder.decode(value, { stream: !done })), done && (open = false, __privateGet(this, _parser).reset(), __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this));
+      } while (open);
+    }), __privateAdd(this, _onFetchError, (err) => {
+      __privateSet(this, _controller, void 0), !(err.name === "AbortError" || err.type === "aborted") && __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this, flattenError2(err));
+    }), __privateAdd(this, _onEvent, (event) => {
+      typeof event.id == "string" && __privateSet(this, _lastEventId, event.id);
+      const messageEvent = new MessageEvent(event.event || "message", {
+        data: event.data,
+        origin: __privateGet(this, _redirectUrl) ? __privateGet(this, _redirectUrl).origin : __privateGet(this, _url2).origin,
+        lastEventId: event.id || ""
+      });
+      __privateGet(this, _onMessage) && (!event.event || event.event === "message") && __privateGet(this, _onMessage).call(this, messageEvent), this.dispatchEvent(messageEvent);
+    }), __privateAdd(this, _onRetryChange, (value) => {
+      __privateSet(this, _reconnectInterval, value);
+    }), __privateAdd(this, _reconnect, () => {
+      __privateSet(this, _reconnectTimer, void 0), __privateGet(this, _readyState) === this.CONNECTING && __privateMethod(this, _EventSource_instances, connect_fn).call(this);
+    });
+    try {
+      if (url2 instanceof URL)
+        __privateSet(this, _url2, url2);
+      else if (typeof url2 == "string")
+        __privateSet(this, _url2, new URL(url2, getBaseURL()));
+      else
+        throw new Error("Invalid URL");
+    } catch {
+      throw syntaxError("An invalid or illegal string was specified");
+    }
+    __privateSet(this, _parser, createParser({
+      onEvent: __privateGet(this, _onEvent),
+      onRetry: __privateGet(this, _onRetryChange)
+    })), __privateSet(this, _readyState, this.CONNECTING), __privateSet(this, _reconnectInterval, 3e3), __privateSet(this, _fetch, (_a = eventSourceInitDict == null ? void 0 : eventSourceInitDict.fetch) != null ? _a : globalThis.fetch), __privateSet(this, _withCredentials, (_b = eventSourceInitDict == null ? void 0 : eventSourceInitDict.withCredentials) != null ? _b : false), __privateMethod(this, _EventSource_instances, connect_fn).call(this);
+  }
+  /**
+   * Returns the state of this EventSource object's connection. It can have the values described below.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/readyState)
+   *
+   * Note: typed as `number` instead of `0 | 1 | 2` for compatibility with the `EventSource` interface,
+   * defined in the TypeScript `dom` library.
+   *
+   * @public
+   */
+  get readyState() {
+    return __privateGet(this, _readyState);
+  }
+  /**
+   * Returns the URL providing the event stream.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/url)
+   *
+   * @public
+   */
+  get url() {
+    return __privateGet(this, _url2).href;
+  }
+  /**
+   * Returns true if the credentials mode for connection requests to the URL providing the event stream is set to "include", and false otherwise.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/withCredentials)
+   */
+  get withCredentials() {
+    return __privateGet(this, _withCredentials);
+  }
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/error_event) */
+  get onerror() {
+    return __privateGet(this, _onError);
+  }
+  set onerror(value) {
+    __privateSet(this, _onError, value);
+  }
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/message_event) */
+  get onmessage() {
+    return __privateGet(this, _onMessage);
+  }
+  set onmessage(value) {
+    __privateSet(this, _onMessage, value);
+  }
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/open_event) */
+  get onopen() {
+    return __privateGet(this, _onOpen);
+  }
+  set onopen(value) {
+    __privateSet(this, _onOpen, value);
+  }
+  addEventListener(type, listener, options) {
+    const listen = listener;
+    super.addEventListener(type, listen, options);
+  }
+  removeEventListener(type, listener, options) {
+    const listen = listener;
+    super.removeEventListener(type, listen, options);
+  }
+  /**
+   * Aborts any instances of the fetch algorithm started for this EventSource object, and sets the readyState attribute to CLOSED.
+   *
+   * [MDN Reference](https://developer.mozilla.org/docs/Web/API/EventSource/close)
+   *
+   * @public
+   */
+  close() {
+    __privateGet(this, _reconnectTimer) && clearTimeout(__privateGet(this, _reconnectTimer)), __privateGet(this, _readyState) !== this.CLOSED && (__privateGet(this, _controller) && __privateGet(this, _controller).abort(), __privateSet(this, _readyState, this.CLOSED), __privateSet(this, _controller, void 0));
+  }
+};
+_readyState = /* @__PURE__ */ new WeakMap(), _url2 = /* @__PURE__ */ new WeakMap(), _redirectUrl = /* @__PURE__ */ new WeakMap(), _withCredentials = /* @__PURE__ */ new WeakMap(), _fetch = /* @__PURE__ */ new WeakMap(), _reconnectInterval = /* @__PURE__ */ new WeakMap(), _reconnectTimer = /* @__PURE__ */ new WeakMap(), _lastEventId = /* @__PURE__ */ new WeakMap(), _controller = /* @__PURE__ */ new WeakMap(), _parser = /* @__PURE__ */ new WeakMap(), _onError = /* @__PURE__ */ new WeakMap(), _onMessage = /* @__PURE__ */ new WeakMap(), _onOpen = /* @__PURE__ */ new WeakMap(), _EventSource_instances = /* @__PURE__ */ new WeakSet(), /**
+* Connect to the given URL and start receiving events
+*
+* @internal
+*/
+connect_fn = function() {
+  __privateSet(this, _readyState, this.CONNECTING), __privateSet(this, _controller, new AbortController()), __privateGet(this, _fetch)(__privateGet(this, _url2), __privateMethod(this, _EventSource_instances, getRequestOptions_fn).call(this)).then(__privateGet(this, _onFetchResponse)).catch(__privateGet(this, _onFetchError));
+}, _onFetchResponse = /* @__PURE__ */ new WeakMap(), _onFetchError = /* @__PURE__ */ new WeakMap(), /**
+* Get request options for the `fetch()` request
+*
+* @returns The request options
+* @internal
+*/
+getRequestOptions_fn = function() {
+  var _a;
+  const init = {
+    // [spec] Let `corsAttributeState` be `Anonymous`…
+    // [spec] …will have their mode set to "cors"…
+    mode: "cors",
+    redirect: "follow",
+    headers: { Accept: "text/event-stream", ...__privateGet(this, _lastEventId) ? { "Last-Event-ID": __privateGet(this, _lastEventId) } : void 0 },
+    cache: "no-store",
+    signal: (_a = __privateGet(this, _controller)) == null ? void 0 : _a.signal
+  };
+  return "window" in globalThis && (init.credentials = this.withCredentials ? "include" : "same-origin"), init;
+}, _onEvent = /* @__PURE__ */ new WeakMap(), _onRetryChange = /* @__PURE__ */ new WeakMap(), /**
+* Handles the process referred to in the EventSource specification as "failing a connection".
+*
+* @param error - The error causing the connection to fail
+* @param code - The HTTP status code, if available
+* @internal
+*/
+failConnection_fn = function(message3, code) {
+  var _a;
+  __privateGet(this, _readyState) !== this.CLOSED && __privateSet(this, _readyState, this.CLOSED);
+  const errorEvent = new ErrorEvent("error", { code, message: message3 });
+  (_a = __privateGet(this, _onError)) == null || _a.call(this, errorEvent), this.dispatchEvent(errorEvent);
+}, /**
+* Schedules a reconnection attempt against the EventSource endpoint.
+*
+* @param message - The error causing the connection to fail
+* @param code - The HTTP status code, if available
+* @internal
+*/
+scheduleReconnect_fn = function(message3, code) {
+  var _a;
+  if (__privateGet(this, _readyState) === this.CLOSED)
+    return;
+  __privateSet(this, _readyState, this.CONNECTING);
+  const errorEvent = new ErrorEvent("error", { code, message: message3 });
+  (_a = __privateGet(this, _onError)) == null || _a.call(this, errorEvent), this.dispatchEvent(errorEvent), __privateSet(this, _reconnectTimer, setTimeout(__privateGet(this, _reconnect), __privateGet(this, _reconnectInterval)));
+}, _reconnect = /* @__PURE__ */ new WeakMap(), /**
+* ReadyState representing an EventSource currently trying to connect
+*
+* @public
+*/
+EventSource.CONNECTING = 0, /**
+* ReadyState representing an EventSource connection that is open (eg connected)
+*
+* @public
+*/
+EventSource.OPEN = 1, /**
+* ReadyState representing an EventSource connection that is closed (eg disconnected)
+*
+* @public
+*/
+EventSource.CLOSED = 2;
+function getBaseURL() {
+  const doc = "document" in globalThis ? globalThis.document : void 0;
+  return doc && typeof doc == "object" && "baseURI" in doc && typeof doc.baseURI == "string" ? doc.baseURI : void 0;
+}
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
+function normalizeHeaders(headers) {
+  if (!headers)
+    return {};
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return { ...headers };
+}
+function createFetchWithInit(baseFetch = fetch, baseInit) {
+  if (!baseInit) {
+    return baseFetch;
+  }
+  return async (url2, init) => {
+    const mergedInit = {
+      ...baseInit,
+      ...init,
+      // Headers need special handling - merge instead of replace
+      headers: init?.headers ? { ...normalizeHeaders(baseInit.headers), ...normalizeHeaders(init.headers) } : baseInit.headers
+    };
+    return baseFetch(url2, mergedInit);
+  };
+}
+
+// node_modules/pkce-challenge/dist/index.node.js
+var crypto;
+crypto = globalThis.crypto?.webcrypto ?? // Node.js [18-16] REPL
+globalThis.crypto ?? // Node.js >18
+import("node:crypto").then((m) => m.webcrypto);
+async function getRandomValues(size) {
+  return (await crypto).getRandomValues(new Uint8Array(size));
+}
+async function random(size) {
+  const mask = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+  const evenDistCutoff = Math.pow(2, 8) - Math.pow(2, 8) % mask.length;
+  let result = "";
+  while (result.length < size) {
+    const randomBytes2 = await getRandomValues(size - result.length);
+    for (const randomByte of randomBytes2) {
+      if (randomByte < evenDistCutoff) {
+        result += mask[randomByte % mask.length];
+      }
+    }
+  }
+  return result;
+}
+async function generateVerifier(length) {
+  return await random(length);
+}
+async function generateChallenge(code_verifier) {
+  const buffer = await (await crypto).subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
+  return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\//g, "_").replace(/\+/g, "-").replace(/=/g, "");
+}
+async function pkceChallenge(length) {
+  if (!length)
+    length = 43;
+  if (length < 43 || length > 128) {
+    throw `Expected a length between 43 and 128. Received ${length}.`;
+  }
+  const verifier = await generateVerifier(length);
+  const challenge = await generateChallenge(verifier);
+  return {
+    code_verifier: verifier,
+    code_challenge: challenge
+  };
+}
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js
+var SafeUrlSchema = url().superRefine((val, ctx) => {
+  if (!URL.canParse(val)) {
+    ctx.addIssue({
+      code: ZodIssueCode2.custom,
+      message: "URL must be parseable",
+      fatal: true
+    });
+    return NEVER2;
+  }
+}).refine((url2) => {
+  const u2 = new URL(url2);
+  return u2.protocol !== "javascript:" && u2.protocol !== "data:" && u2.protocol !== "vbscript:";
+}, { message: "URL cannot use javascript:, data:, or vbscript: scheme" });
+var OAuthProtectedResourceMetadataSchema = looseObject({
+  resource: string2().url(),
+  authorization_servers: array(SafeUrlSchema).optional(),
+  jwks_uri: string2().url().optional(),
+  scopes_supported: array(string2()).optional(),
+  bearer_methods_supported: array(string2()).optional(),
+  resource_signing_alg_values_supported: array(string2()).optional(),
+  resource_name: string2().optional(),
+  resource_documentation: string2().optional(),
+  resource_policy_uri: string2().url().optional(),
+  resource_tos_uri: string2().url().optional(),
+  tls_client_certificate_bound_access_tokens: boolean2().optional(),
+  authorization_details_types_supported: array(string2()).optional(),
+  dpop_signing_alg_values_supported: array(string2()).optional(),
+  dpop_bound_access_tokens_required: boolean2().optional()
+});
+var OAuthMetadataSchema = looseObject({
+  issuer: string2(),
+  authorization_endpoint: SafeUrlSchema,
+  token_endpoint: SafeUrlSchema,
+  registration_endpoint: SafeUrlSchema.optional(),
+  scopes_supported: array(string2()).optional(),
+  response_types_supported: array(string2()),
+  response_modes_supported: array(string2()).optional(),
+  grant_types_supported: array(string2()).optional(),
+  token_endpoint_auth_methods_supported: array(string2()).optional(),
+  token_endpoint_auth_signing_alg_values_supported: array(string2()).optional(),
+  service_documentation: SafeUrlSchema.optional(),
+  revocation_endpoint: SafeUrlSchema.optional(),
+  revocation_endpoint_auth_methods_supported: array(string2()).optional(),
+  revocation_endpoint_auth_signing_alg_values_supported: array(string2()).optional(),
+  introspection_endpoint: string2().optional(),
+  introspection_endpoint_auth_methods_supported: array(string2()).optional(),
+  introspection_endpoint_auth_signing_alg_values_supported: array(string2()).optional(),
+  code_challenge_methods_supported: array(string2()).optional(),
+  client_id_metadata_document_supported: boolean2().optional()
+});
+var OpenIdProviderMetadataSchema = looseObject({
+  issuer: string2(),
+  authorization_endpoint: SafeUrlSchema,
+  token_endpoint: SafeUrlSchema,
+  userinfo_endpoint: SafeUrlSchema.optional(),
+  jwks_uri: SafeUrlSchema,
+  registration_endpoint: SafeUrlSchema.optional(),
+  scopes_supported: array(string2()).optional(),
+  response_types_supported: array(string2()),
+  response_modes_supported: array(string2()).optional(),
+  grant_types_supported: array(string2()).optional(),
+  acr_values_supported: array(string2()).optional(),
+  subject_types_supported: array(string2()),
+  id_token_signing_alg_values_supported: array(string2()),
+  id_token_encryption_alg_values_supported: array(string2()).optional(),
+  id_token_encryption_enc_values_supported: array(string2()).optional(),
+  userinfo_signing_alg_values_supported: array(string2()).optional(),
+  userinfo_encryption_alg_values_supported: array(string2()).optional(),
+  userinfo_encryption_enc_values_supported: array(string2()).optional(),
+  request_object_signing_alg_values_supported: array(string2()).optional(),
+  request_object_encryption_alg_values_supported: array(string2()).optional(),
+  request_object_encryption_enc_values_supported: array(string2()).optional(),
+  token_endpoint_auth_methods_supported: array(string2()).optional(),
+  token_endpoint_auth_signing_alg_values_supported: array(string2()).optional(),
+  display_values_supported: array(string2()).optional(),
+  claim_types_supported: array(string2()).optional(),
+  claims_supported: array(string2()).optional(),
+  service_documentation: string2().optional(),
+  claims_locales_supported: array(string2()).optional(),
+  ui_locales_supported: array(string2()).optional(),
+  claims_parameter_supported: boolean2().optional(),
+  request_parameter_supported: boolean2().optional(),
+  request_uri_parameter_supported: boolean2().optional(),
+  require_request_uri_registration: boolean2().optional(),
+  op_policy_uri: SafeUrlSchema.optional(),
+  op_tos_uri: SafeUrlSchema.optional(),
+  client_id_metadata_document_supported: boolean2().optional()
+});
+var OpenIdProviderDiscoveryMetadataSchema = object2({
+  ...OpenIdProviderMetadataSchema.shape,
+  ...OAuthMetadataSchema.pick({
+    code_challenge_methods_supported: true
+  }).shape
+});
+var OAuthTokensSchema = object2({
+  access_token: string2(),
+  id_token: string2().optional(),
+  // Optional for OAuth 2.1, but necessary in OpenID Connect
+  token_type: string2(),
+  expires_in: coerce_exports2.number().optional(),
+  scope: string2().optional(),
+  refresh_token: string2().optional()
+}).strip();
+var OAuthErrorResponseSchema = object2({
+  error: string2(),
+  error_description: string2().optional(),
+  error_uri: string2().optional()
+});
+var OptionalSafeUrlSchema = SafeUrlSchema.optional().or(literal("").transform(() => void 0));
+var OAuthClientMetadataSchema = object2({
+  redirect_uris: array(SafeUrlSchema),
+  token_endpoint_auth_method: string2().optional(),
+  grant_types: array(string2()).optional(),
+  response_types: array(string2()).optional(),
+  client_name: string2().optional(),
+  client_uri: SafeUrlSchema.optional(),
+  logo_uri: OptionalSafeUrlSchema,
+  scope: string2().optional(),
+  contacts: array(string2()).optional(),
+  tos_uri: OptionalSafeUrlSchema,
+  policy_uri: string2().optional(),
+  jwks_uri: SafeUrlSchema.optional(),
+  jwks: any().optional(),
+  software_id: string2().optional(),
+  software_version: string2().optional(),
+  software_statement: string2().optional()
+}).strip();
+var OAuthClientInformationSchema = object2({
+  client_id: string2(),
+  client_secret: string2().optional(),
+  client_id_issued_at: number2().optional(),
+  client_secret_expires_at: number2().optional()
+}).strip();
+var OAuthClientInformationFullSchema = OAuthClientMetadataSchema.merge(OAuthClientInformationSchema);
+var OAuthClientRegistrationErrorSchema = object2({
+  error: string2(),
+  error_description: string2().optional()
+}).strip();
+var OAuthTokenRevocationRequestSchema = object2({
+  token: string2(),
+  token_type_hint: string2().optional()
+}).strip();
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js
+function resourceUrlFromServerUrl(url2) {
+  const resourceURL = typeof url2 === "string" ? new URL(url2) : new URL(url2.href);
+  resourceURL.hash = "";
+  return resourceURL;
+}
+function checkResourceAllowed({ requestedResource, configuredResource }) {
+  const requested = typeof requestedResource === "string" ? new URL(requestedResource) : new URL(requestedResource.href);
+  const configured = typeof configuredResource === "string" ? new URL(configuredResource) : new URL(configuredResource.href);
+  if (requested.origin !== configured.origin) {
+    return false;
+  }
+  if (requested.pathname.length < configured.pathname.length) {
+    return false;
+  }
+  const requestedPath = requested.pathname.endsWith("/") ? requested.pathname : requested.pathname + "/";
+  const configuredPath = configured.pathname.endsWith("/") ? configured.pathname : configured.pathname + "/";
+  return requestedPath.startsWith(configuredPath);
+}
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js
+var OAuthError = class extends Error {
+  constructor(message3, errorUri) {
+    super(message3);
+    this.errorUri = errorUri;
+    this.name = this.constructor.name;
+  }
+  /**
+   * Converts the error to a standard OAuth error response object
+   */
+  toResponseObject() {
+    const response = {
+      error: this.errorCode,
+      error_description: this.message
+    };
+    if (this.errorUri) {
+      response.error_uri = this.errorUri;
+    }
+    return response;
+  }
+  get errorCode() {
+    return this.constructor.errorCode;
+  }
+};
+var InvalidRequestError = class extends OAuthError {
+};
+InvalidRequestError.errorCode = "invalid_request";
+var InvalidClientError = class extends OAuthError {
+};
+InvalidClientError.errorCode = "invalid_client";
+var InvalidGrantError = class extends OAuthError {
+};
+InvalidGrantError.errorCode = "invalid_grant";
+var UnauthorizedClientError = class extends OAuthError {
+};
+UnauthorizedClientError.errorCode = "unauthorized_client";
+var UnsupportedGrantTypeError = class extends OAuthError {
+};
+UnsupportedGrantTypeError.errorCode = "unsupported_grant_type";
+var InvalidScopeError = class extends OAuthError {
+};
+InvalidScopeError.errorCode = "invalid_scope";
+var AccessDeniedError = class extends OAuthError {
+};
+AccessDeniedError.errorCode = "access_denied";
+var ServerError = class extends OAuthError {
+};
+ServerError.errorCode = "server_error";
+var TemporarilyUnavailableError = class extends OAuthError {
+};
+TemporarilyUnavailableError.errorCode = "temporarily_unavailable";
+var UnsupportedResponseTypeError = class extends OAuthError {
+};
+UnsupportedResponseTypeError.errorCode = "unsupported_response_type";
+var UnsupportedTokenTypeError = class extends OAuthError {
+};
+UnsupportedTokenTypeError.errorCode = "unsupported_token_type";
+var InvalidTokenError = class extends OAuthError {
+};
+InvalidTokenError.errorCode = "invalid_token";
+var MethodNotAllowedError = class extends OAuthError {
+};
+MethodNotAllowedError.errorCode = "method_not_allowed";
+var TooManyRequestsError = class extends OAuthError {
+};
+TooManyRequestsError.errorCode = "too_many_requests";
+var InvalidClientMetadataError = class extends OAuthError {
+};
+InvalidClientMetadataError.errorCode = "invalid_client_metadata";
+var InsufficientScopeError = class extends OAuthError {
+};
+InsufficientScopeError.errorCode = "insufficient_scope";
+var InvalidTargetError = class extends OAuthError {
+};
+InvalidTargetError.errorCode = "invalid_target";
+var OAUTH_ERRORS = {
+  [InvalidRequestError.errorCode]: InvalidRequestError,
+  [InvalidClientError.errorCode]: InvalidClientError,
+  [InvalidGrantError.errorCode]: InvalidGrantError,
+  [UnauthorizedClientError.errorCode]: UnauthorizedClientError,
+  [UnsupportedGrantTypeError.errorCode]: UnsupportedGrantTypeError,
+  [InvalidScopeError.errorCode]: InvalidScopeError,
+  [AccessDeniedError.errorCode]: AccessDeniedError,
+  [ServerError.errorCode]: ServerError,
+  [TemporarilyUnavailableError.errorCode]: TemporarilyUnavailableError,
+  [UnsupportedResponseTypeError.errorCode]: UnsupportedResponseTypeError,
+  [UnsupportedTokenTypeError.errorCode]: UnsupportedTokenTypeError,
+  [InvalidTokenError.errorCode]: InvalidTokenError,
+  [MethodNotAllowedError.errorCode]: MethodNotAllowedError,
+  [TooManyRequestsError.errorCode]: TooManyRequestsError,
+  [InvalidClientMetadataError.errorCode]: InvalidClientMetadataError,
+  [InsufficientScopeError.errorCode]: InsufficientScopeError,
+  [InvalidTargetError.errorCode]: InvalidTargetError
+};
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js
+var UnauthorizedError = class extends Error {
+  constructor(message3) {
+    super(message3 ?? "Unauthorized");
+  }
+};
+function isClientAuthMethod(method) {
+  return ["client_secret_basic", "client_secret_post", "none"].includes(method);
+}
+var AUTHORIZATION_CODE_RESPONSE_TYPE = "code";
+var AUTHORIZATION_CODE_CHALLENGE_METHOD = "S256";
+function selectClientAuthMethod(clientInformation, supportedMethods) {
+  const hasClientSecret = clientInformation.client_secret !== void 0;
+  if ("token_endpoint_auth_method" in clientInformation && clientInformation.token_endpoint_auth_method && isClientAuthMethod(clientInformation.token_endpoint_auth_method) && (supportedMethods.length === 0 || supportedMethods.includes(clientInformation.token_endpoint_auth_method))) {
+    return clientInformation.token_endpoint_auth_method;
+  }
+  if (supportedMethods.length === 0) {
+    return hasClientSecret ? "client_secret_basic" : "none";
+  }
+  if (hasClientSecret && supportedMethods.includes("client_secret_basic")) {
+    return "client_secret_basic";
+  }
+  if (hasClientSecret && supportedMethods.includes("client_secret_post")) {
+    return "client_secret_post";
+  }
+  if (supportedMethods.includes("none")) {
+    return "none";
+  }
+  return hasClientSecret ? "client_secret_post" : "none";
+}
+function applyClientAuthentication(method, clientInformation, headers, params) {
+  const { client_id, client_secret } = clientInformation;
+  switch (method) {
+    case "client_secret_basic":
+      applyBasicAuth(client_id, client_secret, headers);
+      return;
+    case "client_secret_post":
+      applyPostAuth(client_id, client_secret, params);
+      return;
+    case "none":
+      applyPublicAuth(client_id, params);
+      return;
+    default:
+      throw new Error(`Unsupported client authentication method: ${method}`);
+  }
+}
+function applyBasicAuth(clientId, clientSecret, headers) {
+  if (!clientSecret) {
+    throw new Error("client_secret_basic authentication requires a client_secret");
+  }
+  const credentials = btoa(`${clientId}:${clientSecret}`);
+  headers.set("Authorization", `Basic ${credentials}`);
+}
+function applyPostAuth(clientId, clientSecret, params) {
+  params.set("client_id", clientId);
+  if (clientSecret) {
+    params.set("client_secret", clientSecret);
+  }
+}
+function applyPublicAuth(clientId, params) {
+  params.set("client_id", clientId);
+}
+async function parseErrorResponse(input) {
+  const statusCode = input instanceof Response ? input.status : void 0;
+  const body = input instanceof Response ? await input.text() : input;
+  try {
+    const result = OAuthErrorResponseSchema.parse(JSON.parse(body));
+    const { error: error2, error_description, error_uri } = result;
+    const errorClass = OAUTH_ERRORS[error2] || ServerError;
+    return new errorClass(error_description || "", error_uri);
+  } catch (error2) {
+    const errorMessage5 = `${statusCode ? `HTTP ${statusCode}: ` : ""}Invalid OAuth error response: ${error2}. Raw body: ${body}`;
+    return new ServerError(errorMessage5);
+  }
+}
+async function auth(provider, options) {
+  try {
+    return await authInternal(provider, options);
+  } catch (error2) {
+    if (error2 instanceof InvalidClientError || error2 instanceof UnauthorizedClientError) {
+      await provider.invalidateCredentials?.("all");
+      return await authInternal(provider, options);
+    } else if (error2 instanceof InvalidGrantError) {
+      await provider.invalidateCredentials?.("tokens");
+      return await authInternal(provider, options);
+    }
+    throw error2;
+  }
+}
+async function authInternal(provider, { serverUrl, authorizationCode, scope, resourceMetadataUrl, fetchFn }) {
+  const cachedState = await provider.discoveryState?.();
+  let resourceMetadata;
+  let authorizationServerUrl;
+  let metadata;
+  let effectiveResourceMetadataUrl = resourceMetadataUrl;
+  if (!effectiveResourceMetadataUrl && cachedState?.resourceMetadataUrl) {
+    effectiveResourceMetadataUrl = new URL(cachedState.resourceMetadataUrl);
+  }
+  if (cachedState?.authorizationServerUrl) {
+    authorizationServerUrl = cachedState.authorizationServerUrl;
+    resourceMetadata = cachedState.resourceMetadata;
+    metadata = cachedState.authorizationServerMetadata ?? await discoverAuthorizationServerMetadata(authorizationServerUrl, { fetchFn });
+    if (!resourceMetadata) {
+      try {
+        resourceMetadata = await discoverOAuthProtectedResourceMetadata(serverUrl, { resourceMetadataUrl: effectiveResourceMetadataUrl }, fetchFn);
+      } catch {
+      }
+    }
+    if (metadata !== cachedState.authorizationServerMetadata || resourceMetadata !== cachedState.resourceMetadata) {
+      await provider.saveDiscoveryState?.({
+        authorizationServerUrl: String(authorizationServerUrl),
+        resourceMetadataUrl: effectiveResourceMetadataUrl?.toString(),
+        resourceMetadata,
+        authorizationServerMetadata: metadata
+      });
+    }
+  } else {
+    const serverInfo = await discoverOAuthServerInfo(serverUrl, { resourceMetadataUrl: effectiveResourceMetadataUrl, fetchFn });
+    authorizationServerUrl = serverInfo.authorizationServerUrl;
+    metadata = serverInfo.authorizationServerMetadata;
+    resourceMetadata = serverInfo.resourceMetadata;
+    await provider.saveDiscoveryState?.({
+      authorizationServerUrl: String(authorizationServerUrl),
+      resourceMetadataUrl: effectiveResourceMetadataUrl?.toString(),
+      resourceMetadata,
+      authorizationServerMetadata: metadata
+    });
+  }
+  const selectedResource = await selectResourceURL(serverUrl, provider, resourceMetadata);
+  const resource = selectedResource && resourceMetadata && !provider.validateResourceURL ? resourceMetadata.resource : selectedResource;
+  const resolvedScope = scope || resourceMetadata?.scopes_supported?.join(" ") || provider.clientMetadata.scope;
+  let clientInformation = await Promise.resolve(provider.clientInformation());
+  if (!clientInformation) {
+    if (authorizationCode !== void 0) {
+      throw new Error("Existing OAuth client information is required when exchanging an authorization code");
+    }
+    const supportsUrlBasedClientId = metadata?.client_id_metadata_document_supported === true;
+    const clientMetadataUrl = provider.clientMetadataUrl;
+    if (clientMetadataUrl && !isHttpsUrl(clientMetadataUrl)) {
+      throw new InvalidClientMetadataError(`clientMetadataUrl must be a valid HTTPS URL with a non-root pathname, got: ${clientMetadataUrl}`);
+    }
+    const shouldUseUrlBasedClientId = supportsUrlBasedClientId && clientMetadataUrl;
+    if (shouldUseUrlBasedClientId) {
+      clientInformation = {
+        client_id: clientMetadataUrl
+      };
+      await provider.saveClientInformation?.(clientInformation);
+    } else {
+      if (!provider.saveClientInformation) {
+        throw new Error("OAuth client information must be saveable for dynamic registration");
+      }
+      const fullInformation = await registerClient(authorizationServerUrl, {
+        metadata,
+        clientMetadata: provider.clientMetadata,
+        scope: resolvedScope,
+        fetchFn
+      });
+      await provider.saveClientInformation(fullInformation);
+      clientInformation = fullInformation;
+    }
+  }
+  const nonInteractiveFlow = !provider.redirectUrl;
+  if (authorizationCode !== void 0 || nonInteractiveFlow) {
+    const tokens2 = await fetchToken(provider, authorizationServerUrl, {
+      metadata,
+      resource,
+      authorizationCode,
+      fetchFn
+    });
+    await provider.saveTokens(tokens2);
+    return "AUTHORIZED";
+  }
+  const tokens = await provider.tokens();
+  if (tokens?.refresh_token) {
+    try {
+      const newTokens = await refreshAuthorization(authorizationServerUrl, {
+        metadata,
+        clientInformation,
+        refreshToken: tokens.refresh_token,
+        resource,
+        addClientAuthentication: provider.addClientAuthentication,
+        fetchFn
+      });
+      await provider.saveTokens(newTokens);
+      return "AUTHORIZED";
+    } catch (error2) {
+      if (!(error2 instanceof OAuthError) || error2 instanceof ServerError) {
+      } else {
+        throw error2;
+      }
+    }
+  }
+  const state = provider.state ? await provider.state() : void 0;
+  const { authorizationUrl, codeVerifier } = await startAuthorization(authorizationServerUrl, {
+    metadata,
+    clientInformation,
+    state,
+    redirectUrl: provider.redirectUrl,
+    scope: resolvedScope,
+    resource
+  });
+  await provider.saveCodeVerifier(codeVerifier);
+  await provider.redirectToAuthorization(authorizationUrl);
+  return "REDIRECT";
+}
+function isHttpsUrl(value) {
+  if (!value)
+    return false;
+  try {
+    const url2 = new URL(value);
+    return url2.protocol === "https:" && url2.pathname !== "/";
+  } catch {
+    return false;
+  }
+}
+async function selectResourceURL(serverUrl, provider, resourceMetadata) {
+  const defaultResource = resourceUrlFromServerUrl(serverUrl);
+  if (provider.validateResourceURL) {
+    return await provider.validateResourceURL(defaultResource, resourceMetadata?.resource);
+  }
+  if (!resourceMetadata) {
+    return void 0;
+  }
+  if (!checkResourceAllowed({ requestedResource: defaultResource, configuredResource: resourceMetadata.resource })) {
+    throw new Error(`Protected resource ${resourceMetadata.resource} does not match expected ${defaultResource} (or origin)`);
+  }
+  return new URL(resourceMetadata.resource);
+}
+function extractWWWAuthenticateParams(res) {
+  const authenticateHeader = res.headers.get("WWW-Authenticate");
+  if (!authenticateHeader) {
+    return {};
+  }
+  const [type, scheme] = authenticateHeader.split(" ");
+  if (type.toLowerCase() !== "bearer" || !scheme) {
+    return {};
+  }
+  const resourceMetadataMatch = extractFieldFromWwwAuth(res, "resource_metadata") || void 0;
+  let resourceMetadataUrl;
+  if (resourceMetadataMatch) {
+    try {
+      resourceMetadataUrl = new URL(resourceMetadataMatch);
+    } catch {
+    }
+  }
+  const scope = extractFieldFromWwwAuth(res, "scope") || void 0;
+  const error2 = extractFieldFromWwwAuth(res, "error") || void 0;
+  return {
+    resourceMetadataUrl,
+    scope,
+    error: error2
+  };
+}
+function extractFieldFromWwwAuth(response, fieldName) {
+  const wwwAuthHeader = response.headers.get("WWW-Authenticate");
+  if (!wwwAuthHeader) {
+    return null;
+  }
+  const pattern = new RegExp(`${fieldName}=(?:"([^"]+)"|([^\\s,]+))`);
+  const match = wwwAuthHeader.match(pattern);
+  if (match) {
+    return match[1] || match[2];
+  }
+  return null;
+}
+async function discoverOAuthProtectedResourceMetadata(serverUrl, opts, fetchFn = fetch) {
+  const response = await discoverMetadataWithFallback(serverUrl, "oauth-protected-resource", fetchFn, {
+    protocolVersion: opts?.protocolVersion,
+    metadataUrl: opts?.resourceMetadataUrl
+  });
+  if (!response || response.status === 404) {
+    await response?.body?.cancel();
+    throw new Error(`Resource server does not implement OAuth 2.0 Protected Resource Metadata.`);
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`HTTP ${response.status} trying to load well-known OAuth protected resource metadata.`);
+  }
+  return OAuthProtectedResourceMetadataSchema.parse(await response.json());
+}
+async function fetchWithCorsRetry(url2, headers, fetchFn = fetch) {
+  try {
+    return await fetchFn(url2, { headers });
+  } catch (error2) {
+    if (error2 instanceof TypeError) {
+      if (headers) {
+        return fetchWithCorsRetry(url2, void 0, fetchFn);
+      } else {
+        return void 0;
+      }
+    }
+    throw error2;
+  }
+}
+function buildWellKnownPath(wellKnownPrefix, pathname = "", options = {}) {
+  if (pathname.endsWith("/")) {
+    pathname = pathname.slice(0, -1);
+  }
+  return options.prependPathname ? `${pathname}/.well-known/${wellKnownPrefix}` : `/.well-known/${wellKnownPrefix}${pathname}`;
+}
+async function tryMetadataDiscovery(url2, protocolVersion, fetchFn = fetch) {
+  const headers = {
+    "MCP-Protocol-Version": protocolVersion
+  };
+  return await fetchWithCorsRetry(url2, headers, fetchFn);
+}
+function shouldAttemptFallback(response, pathname) {
+  return !response || response.status >= 400 && response.status < 500 && pathname !== "/";
+}
+async function discoverMetadataWithFallback(serverUrl, wellKnownType, fetchFn, opts) {
+  const issuer = new URL(serverUrl);
+  const protocolVersion = opts?.protocolVersion ?? LATEST_PROTOCOL_VERSION;
+  let url2;
+  if (opts?.metadataUrl) {
+    url2 = new URL(opts.metadataUrl);
+  } else {
+    const wellKnownPath = buildWellKnownPath(wellKnownType, issuer.pathname);
+    url2 = new URL(wellKnownPath, opts?.metadataServerUrl ?? issuer);
+    url2.search = issuer.search;
+  }
+  let response = await tryMetadataDiscovery(url2, protocolVersion, fetchFn);
+  if (!opts?.metadataUrl && shouldAttemptFallback(response, issuer.pathname)) {
+    const rootUrl = new URL(`/.well-known/${wellKnownType}`, issuer);
+    response = await tryMetadataDiscovery(rootUrl, protocolVersion, fetchFn);
+  }
+  return response;
+}
+function buildDiscoveryUrls(authorizationServerUrl) {
+  const url2 = typeof authorizationServerUrl === "string" ? new URL(authorizationServerUrl) : authorizationServerUrl;
+  const hasPath = url2.pathname !== "/";
+  const urlsToTry = [];
+  if (!hasPath) {
+    urlsToTry.push({
+      url: new URL("/.well-known/oauth-authorization-server", url2.origin),
+      type: "oauth"
+    });
+    urlsToTry.push({
+      url: new URL(`/.well-known/openid-configuration`, url2.origin),
+      type: "oidc"
+    });
+    return urlsToTry;
+  }
+  let pathname = url2.pathname;
+  if (pathname.endsWith("/")) {
+    pathname = pathname.slice(0, -1);
+  }
+  urlsToTry.push({
+    url: new URL(`/.well-known/oauth-authorization-server${pathname}`, url2.origin),
+    type: "oauth"
+  });
+  urlsToTry.push({
+    url: new URL(`/.well-known/openid-configuration${pathname}`, url2.origin),
+    type: "oidc"
+  });
+  urlsToTry.push({
+    url: new URL(`${pathname}/.well-known/openid-configuration`, url2.origin),
+    type: "oidc"
+  });
+  return urlsToTry;
+}
+async function discoverAuthorizationServerMetadata(authorizationServerUrl, { fetchFn = fetch, protocolVersion = LATEST_PROTOCOL_VERSION } = {}) {
+  const headers = {
+    "MCP-Protocol-Version": protocolVersion,
+    Accept: "application/json"
+  };
+  const urlsToTry = buildDiscoveryUrls(authorizationServerUrl);
+  for (const { url: endpointUrl, type } of urlsToTry) {
+    const response = await fetchWithCorsRetry(endpointUrl, headers, fetchFn);
+    if (!response) {
+      continue;
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      if (response.status >= 400 && response.status < 500) {
+        continue;
+      }
+      throw new Error(`HTTP ${response.status} trying to load ${type === "oauth" ? "OAuth" : "OpenID provider"} metadata from ${endpointUrl}`);
+    }
+    if (type === "oauth") {
+      return OAuthMetadataSchema.parse(await response.json());
+    } else {
+      return OpenIdProviderDiscoveryMetadataSchema.parse(await response.json());
+    }
+  }
+  return void 0;
+}
+async function discoverOAuthServerInfo(serverUrl, opts) {
+  let resourceMetadata;
+  let authorizationServerUrl;
+  try {
+    resourceMetadata = await discoverOAuthProtectedResourceMetadata(serverUrl, { resourceMetadataUrl: opts?.resourceMetadataUrl }, opts?.fetchFn);
+    if (resourceMetadata.authorization_servers && resourceMetadata.authorization_servers.length > 0) {
+      authorizationServerUrl = resourceMetadata.authorization_servers[0];
+    }
+  } catch {
+  }
+  if (!authorizationServerUrl) {
+    authorizationServerUrl = String(new URL("/", serverUrl));
+  }
+  const authorizationServerMetadata = await discoverAuthorizationServerMetadata(authorizationServerUrl, { fetchFn: opts?.fetchFn });
+  return {
+    authorizationServerUrl,
+    authorizationServerMetadata,
+    resourceMetadata
+  };
+}
+function resourceIndicatorToString(resource) {
+  return typeof resource === "string" ? resource : resource.href;
+}
+async function startAuthorization(authorizationServerUrl, { metadata, clientInformation, redirectUrl, scope, state, resource }) {
+  let authorizationUrl;
+  if (metadata) {
+    authorizationUrl = new URL(metadata.authorization_endpoint);
+    if (!metadata.response_types_supported.includes(AUTHORIZATION_CODE_RESPONSE_TYPE)) {
+      throw new Error(`Incompatible auth server: does not support response type ${AUTHORIZATION_CODE_RESPONSE_TYPE}`);
+    }
+    if (metadata.code_challenge_methods_supported && !metadata.code_challenge_methods_supported.includes(AUTHORIZATION_CODE_CHALLENGE_METHOD)) {
+      throw new Error(`Incompatible auth server: does not support code challenge method ${AUTHORIZATION_CODE_CHALLENGE_METHOD}`);
+    }
+  } else {
+    authorizationUrl = new URL("/authorize", authorizationServerUrl);
+  }
+  const challenge = await pkceChallenge();
+  const codeVerifier = challenge.code_verifier;
+  const codeChallenge = challenge.code_challenge;
+  authorizationUrl.searchParams.set("response_type", AUTHORIZATION_CODE_RESPONSE_TYPE);
+  authorizationUrl.searchParams.set("client_id", clientInformation.client_id);
+  authorizationUrl.searchParams.set("code_challenge", codeChallenge);
+  authorizationUrl.searchParams.set("code_challenge_method", AUTHORIZATION_CODE_CHALLENGE_METHOD);
+  authorizationUrl.searchParams.set("redirect_uri", String(redirectUrl));
+  if (state) {
+    authorizationUrl.searchParams.set("state", state);
+  }
+  if (scope) {
+    authorizationUrl.searchParams.set("scope", scope);
+  }
+  if (scope?.includes("offline_access")) {
+    authorizationUrl.searchParams.append("prompt", "consent");
+  }
+  if (resource) {
+    authorizationUrl.searchParams.set("resource", resourceIndicatorToString(resource));
+  }
+  return { authorizationUrl, codeVerifier };
+}
+function prepareAuthorizationCodeRequest(authorizationCode, codeVerifier, redirectUri) {
+  return new URLSearchParams({
+    grant_type: "authorization_code",
+    code: authorizationCode,
+    code_verifier: codeVerifier,
+    redirect_uri: String(redirectUri)
+  });
+}
+async function executeTokenRequest(authorizationServerUrl, { metadata, tokenRequestParams, clientInformation, addClientAuthentication, resource, fetchFn }) {
+  const tokenUrl = metadata?.token_endpoint ? new URL(metadata.token_endpoint) : new URL("/token", authorizationServerUrl);
+  const headers = new Headers({
+    "Content-Type": "application/x-www-form-urlencoded",
+    Accept: "application/json"
+  });
+  if (resource) {
+    tokenRequestParams.set("resource", resourceIndicatorToString(resource));
+  }
+  if (addClientAuthentication) {
+    await addClientAuthentication(headers, tokenRequestParams, tokenUrl, metadata);
+  } else if (clientInformation) {
+    const supportedMethods = metadata?.token_endpoint_auth_methods_supported ?? [];
+    const authMethod = selectClientAuthMethod(clientInformation, supportedMethods);
+    applyClientAuthentication(authMethod, clientInformation, headers, tokenRequestParams);
+  }
+  const response = await (fetchFn ?? fetch)(tokenUrl, {
+    method: "POST",
+    headers,
+    body: tokenRequestParams
+  });
+  if (!response.ok) {
+    throw await parseErrorResponse(response);
+  }
+  return OAuthTokensSchema.parse(await response.json());
+}
+async function refreshAuthorization(authorizationServerUrl, { metadata, clientInformation, refreshToken, resource, addClientAuthentication, fetchFn }) {
+  const tokenRequestParams = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken
+  });
+  const tokens = await executeTokenRequest(authorizationServerUrl, {
+    metadata,
+    tokenRequestParams,
+    clientInformation,
+    addClientAuthentication,
+    resource,
+    fetchFn
+  });
+  return { refresh_token: refreshToken, ...tokens };
+}
+async function fetchToken(provider, authorizationServerUrl, { metadata, resource, authorizationCode, fetchFn } = {}) {
+  const scope = provider.clientMetadata.scope;
+  let tokenRequestParams;
+  if (provider.prepareTokenRequest) {
+    tokenRequestParams = await provider.prepareTokenRequest(scope);
+  }
+  if (!tokenRequestParams) {
+    if (!authorizationCode) {
+      throw new Error("Either provider.prepareTokenRequest() or authorizationCode is required");
+    }
+    if (!provider.redirectUrl) {
+      throw new Error("redirectUrl is required for authorization_code flow");
+    }
+    const codeVerifier = await provider.codeVerifier();
+    tokenRequestParams = prepareAuthorizationCodeRequest(authorizationCode, codeVerifier, provider.redirectUrl);
+  }
+  const clientInformation = await provider.clientInformation();
+  return executeTokenRequest(authorizationServerUrl, {
+    metadata,
+    tokenRequestParams,
+    clientInformation: clientInformation ?? void 0,
+    addClientAuthentication: provider.addClientAuthentication,
+    resource,
+    fetchFn
+  });
+}
+async function registerClient(authorizationServerUrl, { metadata, clientMetadata, scope, fetchFn }) {
+  let registrationUrl;
+  if (metadata) {
+    if (!metadata.registration_endpoint) {
+      throw new Error("Incompatible auth server: does not support dynamic client registration");
+    }
+    registrationUrl = new URL(metadata.registration_endpoint);
+  } else {
+    registrationUrl = new URL("/register", authorizationServerUrl);
+  }
+  const response = await (fetchFn ?? fetch)(registrationUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      ...clientMetadata,
+      ...scope !== void 0 ? { scope } : {}
+    })
+  });
+  if (!response.ok) {
+    throw await parseErrorResponse(response);
+  }
+  return OAuthClientInformationFullSchema.parse(await response.json());
+}
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js
+var SseError = class extends Error {
+  constructor(code, message3, event) {
+    super(`SSE error: ${message3}`);
+    this.code = code;
+    this.event = event;
+  }
+};
+var SSEClientTransport = class {
+  constructor(url2, opts) {
+    this._url = url2;
+    this._resourceMetadataUrl = void 0;
+    this._scope = void 0;
+    this._eventSourceInit = opts?.eventSourceInit;
+    this._requestInit = opts?.requestInit;
+    this._authProvider = opts?.authProvider;
+    this._fetch = opts?.fetch;
+    this._fetchWithInit = createFetchWithInit(opts?.fetch, opts?.requestInit);
+  }
+  async _authThenStart() {
+    if (!this._authProvider) {
+      throw new UnauthorizedError("No auth provider");
+    }
+    let result;
+    try {
+      result = await auth(this._authProvider, {
+        serverUrl: this._url,
+        resourceMetadataUrl: this._resourceMetadataUrl,
+        scope: this._scope,
+        fetchFn: this._fetchWithInit
+      });
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+    if (result !== "AUTHORIZED") {
+      throw new UnauthorizedError();
+    }
+    return await this._startOrAuth();
+  }
+  async _commonHeaders() {
+    const headers = {};
+    if (this._authProvider) {
+      const tokens = await this._authProvider.tokens();
+      if (tokens) {
+        headers["Authorization"] = `Bearer ${tokens.access_token}`;
+      }
+    }
+    if (this._protocolVersion) {
+      headers["mcp-protocol-version"] = this._protocolVersion;
+    }
+    const extraHeaders = normalizeHeaders(this._requestInit?.headers);
+    return new Headers({
+      ...headers,
+      ...extraHeaders
+    });
+  }
+  _startOrAuth() {
+    const fetchImpl = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
+    return new Promise((resolve23, reject) => {
+      this._eventSource = new EventSource(this._url.href, {
+        ...this._eventSourceInit,
+        fetch: async (url2, init) => {
+          const headers = await this._commonHeaders();
+          headers.set("Accept", "text/event-stream");
+          const response = await fetchImpl(url2, {
+            ...init,
+            headers
+          });
+          if (response.status === 401 && response.headers.has("www-authenticate")) {
+            const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
+            this._resourceMetadataUrl = resourceMetadataUrl;
+            this._scope = scope;
+          }
+          return response;
+        }
+      });
+      this._abortController = new AbortController();
+      this._eventSource.onerror = (event) => {
+        if (event.code === 401 && this._authProvider) {
+          this._authThenStart().then(resolve23, reject);
+          return;
+        }
+        const error2 = new SseError(event.code, event.message, event);
+        reject(error2);
+        this.onerror?.(error2);
+      };
+      this._eventSource.onopen = () => {
+      };
+      this._eventSource.addEventListener("endpoint", (event) => {
+        const messageEvent = event;
+        try {
+          this._endpoint = new URL(messageEvent.data, this._url);
+          if (this._endpoint.origin !== this._url.origin) {
+            throw new Error(`Endpoint origin does not match connection origin: ${this._endpoint.origin}`);
+          }
+        } catch (error2) {
+          reject(error2);
+          this.onerror?.(error2);
+          void this.close();
+          return;
+        }
+        resolve23();
+      });
+      this._eventSource.onmessage = (event) => {
+        const messageEvent = event;
+        let message3;
+        try {
+          message3 = JSONRPCMessageSchema.parse(JSON.parse(messageEvent.data));
+        } catch (error2) {
+          this.onerror?.(error2);
+          return;
+        }
+        this.onmessage?.(message3);
+      };
+    });
+  }
+  async start() {
+    if (this._eventSource) {
+      throw new Error("SSEClientTransport already started! If using Client class, note that connect() calls start() automatically.");
+    }
+    return await this._startOrAuth();
+  }
+  /**
+   * Call this method after the user has finished authorizing via their user agent and is redirected back to the MCP client application. This will exchange the authorization code for an access token, enabling the next connection attempt to successfully auth.
+   */
+  async finishAuth(authorizationCode) {
+    if (!this._authProvider) {
+      throw new UnauthorizedError("No auth provider");
+    }
+    const result = await auth(this._authProvider, {
+      serverUrl: this._url,
+      authorizationCode,
+      resourceMetadataUrl: this._resourceMetadataUrl,
+      scope: this._scope,
+      fetchFn: this._fetchWithInit
+    });
+    if (result !== "AUTHORIZED") {
+      throw new UnauthorizedError("Failed to authorize");
+    }
+  }
+  async close() {
+    this._abortController?.abort();
+    this._eventSource?.close();
+    this.onclose?.();
+  }
+  async send(message3) {
+    if (!this._endpoint) {
+      throw new Error("Not connected");
+    }
+    try {
+      const headers = await this._commonHeaders();
+      headers.set("content-type", "application/json");
+      const init = {
+        ...this._requestInit,
+        method: "POST",
+        headers,
+        body: JSON.stringify(message3),
+        signal: this._abortController?.signal
+      };
+      const response = await (this._fetch ?? fetch)(this._endpoint, init);
+      if (!response.ok) {
+        const text = await response.text().catch(() => null);
+        if (response.status === 401 && this._authProvider) {
+          const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
+          this._resourceMetadataUrl = resourceMetadataUrl;
+          this._scope = scope;
+          const result = await auth(this._authProvider, {
+            serverUrl: this._url,
+            resourceMetadataUrl: this._resourceMetadataUrl,
+            scope: this._scope,
+            fetchFn: this._fetchWithInit
+          });
+          if (result !== "AUTHORIZED") {
+            throw new UnauthorizedError();
+          }
+          return this.send(message3);
+        }
+        throw new Error(`Error POSTing to endpoint (HTTP ${response.status}): ${text}`);
+      }
+      await response.body?.cancel();
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+  }
+  setProtocolVersion(version2) {
+    this._protocolVersion = version2;
+  }
+};
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js
+var import_content_type = __toESM(require_content_type(), 1);
+function mediaTypeEssence(header) {
+  if (!header) {
+    return void 0;
+  }
+  try {
+    return import_content_type.default.parse(header).type;
+  } catch {
+    const essence = (header.split(";", 1)[0] ?? "").trim().toLowerCase();
+    if (essence === "" || header.slice(essence.length).includes(",")) {
+      return void 0;
+    }
+    return essence;
+  }
+}
+
+// node_modules/eventsource-parser/dist/stream.js
+var EventSourceParserStream = class extends TransformStream {
+  constructor({ onError, onRetry, onComment, maxBufferSize } = {}) {
+    let parser;
+    super({
+      start(controller) {
+        parser = createParser({
+          onEvent: (event) => {
+            controller.enqueue(event);
+          },
+          onError(error2) {
+            typeof onError == "function" && onError(error2), (onError === "terminate" || error2.type === "max-buffer-size-exceeded") && controller.error(error2);
+          },
+          onRetry,
+          onComment,
+          maxBufferSize
+        });
+      },
+      transform(chunk) {
+        parser.feed(chunk);
+      }
+    });
+  }
+};
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js
+var DEFAULT_STREAMABLE_HTTP_RECONNECTION_OPTIONS = {
+  initialReconnectionDelay: 1e3,
+  maxReconnectionDelay: 3e4,
+  reconnectionDelayGrowFactor: 1.5,
+  maxRetries: 2
+};
+var StreamableHTTPError = class extends Error {
+  constructor(code, message3) {
+    super(`Streamable HTTP error: ${message3}`);
+    this.code = code;
+  }
+};
+var StreamableHTTPClientTransport = class {
+  constructor(url2, opts) {
+    this._hasCompletedAuthFlow = false;
+    this._url = url2;
+    this._resourceMetadataUrl = void 0;
+    this._scope = void 0;
+    this._requestInit = opts?.requestInit;
+    this._authProvider = opts?.authProvider;
+    this._fetch = opts?.fetch;
+    this._fetchWithInit = createFetchWithInit(opts?.fetch, opts?.requestInit);
+    this._sessionId = opts?.sessionId;
+    this._reconnectionOptions = opts?.reconnectionOptions ?? DEFAULT_STREAMABLE_HTTP_RECONNECTION_OPTIONS;
+  }
+  async _authThenStart() {
+    if (!this._authProvider) {
+      throw new UnauthorizedError("No auth provider");
+    }
+    let result;
+    try {
+      result = await auth(this._authProvider, {
+        serverUrl: this._url,
+        resourceMetadataUrl: this._resourceMetadataUrl,
+        scope: this._scope,
+        fetchFn: this._fetchWithInit
+      });
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+    if (result !== "AUTHORIZED") {
+      throw new UnauthorizedError();
+    }
+    return await this._startOrAuthSse({ resumptionToken: void 0 });
+  }
+  async _commonHeaders() {
+    const headers = {};
+    if (this._authProvider) {
+      const tokens = await this._authProvider.tokens();
+      if (tokens) {
+        headers["Authorization"] = `Bearer ${tokens.access_token}`;
+      }
+    }
+    if (this._sessionId) {
+      headers["mcp-session-id"] = this._sessionId;
+    }
+    if (this._protocolVersion) {
+      headers["mcp-protocol-version"] = this._protocolVersion;
+    }
+    const extraHeaders = normalizeHeaders(this._requestInit?.headers);
+    return new Headers({
+      ...headers,
+      ...extraHeaders
+    });
+  }
+  async _startOrAuthSse(options) {
+    const { resumptionToken } = options;
+    try {
+      const headers = await this._commonHeaders();
+      headers.set("Accept", "text/event-stream");
+      if (resumptionToken) {
+        headers.set("last-event-id", resumptionToken);
+      }
+      const response = await (this._fetch ?? fetch)(this._url, {
+        method: "GET",
+        headers,
+        signal: this._abortController?.signal
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        if (response.status === 401 && this._authProvider) {
+          return await this._authThenStart();
+        }
+        if (response.status === 405) {
+          return;
+        }
+        throw new StreamableHTTPError(response.status, `Failed to open SSE stream: ${response.statusText}`);
+      }
+      this._handleSseStream(response.body, options, true);
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+  }
+  /**
+   * Calculates the next reconnection delay using  backoff algorithm
+   *
+   * @param attempt Current reconnection attempt count for the specific stream
+   * @returns Time to wait in milliseconds before next reconnection attempt
+   */
+  _getNextReconnectionDelay(attempt) {
+    if (this._serverRetryMs !== void 0) {
+      return this._serverRetryMs;
+    }
+    const initialDelay = this._reconnectionOptions.initialReconnectionDelay;
+    const growFactor = this._reconnectionOptions.reconnectionDelayGrowFactor;
+    const maxDelay = this._reconnectionOptions.maxReconnectionDelay;
+    return Math.min(initialDelay * Math.pow(growFactor, attempt), maxDelay);
+  }
+  /**
+   * Schedule a reconnection attempt using server-provided retry interval or backoff
+   *
+   * @param lastEventId The ID of the last received event for resumability
+   * @param attemptCount Current reconnection attempt count for this specific stream
+   */
+  _scheduleReconnection(options, attemptCount = 0) {
+    const maxRetries = this._reconnectionOptions.maxRetries;
+    if (attemptCount >= maxRetries) {
+      this.onerror?.(new Error(`Maximum reconnection attempts (${maxRetries}) exceeded.`));
+      return;
+    }
+    const delay = this._getNextReconnectionDelay(attemptCount);
+    this._reconnectionTimeout = setTimeout(() => {
+      this._startOrAuthSse(options).catch((error2) => {
+        this.onerror?.(new Error(`Failed to reconnect SSE stream: ${error2 instanceof Error ? error2.message : String(error2)}`));
+        this._scheduleReconnection(options, attemptCount + 1);
+      });
+    }, delay);
+  }
+  _handleSseStream(stream, options, isReconnectable) {
+    if (!stream) {
+      return;
+    }
+    const { onresumptiontoken, replayMessageId } = options;
+    let lastEventId;
+    let hasPrimingEvent = false;
+    let receivedResponse = false;
+    const processStream = async () => {
+      try {
+        const reader = stream.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream({
+          onRetry: (retryMs) => {
+            this._serverRetryMs = retryMs;
+          }
+        })).getReader();
+        while (true) {
+          const { value: event, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (event.id) {
+            lastEventId = event.id;
+            hasPrimingEvent = true;
+            onresumptiontoken?.(event.id);
+          }
+          if (!event.data) {
+            continue;
+          }
+          if (!event.event || event.event === "message") {
+            try {
+              const message3 = JSONRPCMessageSchema.parse(JSON.parse(event.data));
+              if (isJSONRPCResultResponse(message3)) {
+                receivedResponse = true;
+                if (replayMessageId !== void 0) {
+                  message3.id = replayMessageId;
+                }
+              }
+              this.onmessage?.(message3);
+            } catch (error2) {
+              this.onerror?.(error2);
+            }
+          }
+        }
+        const canResume = isReconnectable || hasPrimingEvent;
+        const needsReconnect = canResume && !receivedResponse;
+        if (needsReconnect && this._abortController && !this._abortController.signal.aborted) {
+          this._scheduleReconnection({
+            resumptionToken: lastEventId,
+            onresumptiontoken,
+            replayMessageId
+          }, 0);
+        }
+      } catch (error2) {
+        this.onerror?.(new Error(`SSE stream disconnected: ${error2}`));
+        const canResume = isReconnectable || hasPrimingEvent;
+        const needsReconnect = canResume && !receivedResponse;
+        if (needsReconnect && this._abortController && !this._abortController.signal.aborted) {
+          try {
+            this._scheduleReconnection({
+              resumptionToken: lastEventId,
+              onresumptiontoken,
+              replayMessageId
+            }, 0);
+          } catch (error3) {
+            this.onerror?.(new Error(`Failed to reconnect: ${error3 instanceof Error ? error3.message : String(error3)}`));
+          }
+        }
+      }
+    };
+    processStream();
+  }
+  async start() {
+    if (this._abortController) {
+      throw new Error("StreamableHTTPClientTransport already started! If using Client class, note that connect() calls start() automatically.");
+    }
+    this._abortController = new AbortController();
+  }
+  /**
+   * Call this method after the user has finished authorizing via their user agent and is redirected back to the MCP client application. This will exchange the authorization code for an access token, enabling the next connection attempt to successfully auth.
+   */
+  async finishAuth(authorizationCode) {
+    if (!this._authProvider) {
+      throw new UnauthorizedError("No auth provider");
+    }
+    const result = await auth(this._authProvider, {
+      serverUrl: this._url,
+      authorizationCode,
+      resourceMetadataUrl: this._resourceMetadataUrl,
+      scope: this._scope,
+      fetchFn: this._fetchWithInit
+    });
+    if (result !== "AUTHORIZED") {
+      throw new UnauthorizedError("Failed to authorize");
+    }
+  }
+  async close() {
+    if (this._reconnectionTimeout) {
+      clearTimeout(this._reconnectionTimeout);
+      this._reconnectionTimeout = void 0;
+    }
+    this._abortController?.abort();
+    this.onclose?.();
+  }
+  async send(message3, options) {
+    try {
+      const { resumptionToken, onresumptiontoken } = options || {};
+      if (resumptionToken) {
+        this._startOrAuthSse({ resumptionToken, replayMessageId: isJSONRPCRequest(message3) ? message3.id : void 0 }).catch((err) => this.onerror?.(err));
+        return;
+      }
+      const headers = await this._commonHeaders();
+      headers.set("content-type", "application/json");
+      headers.set("accept", "application/json, text/event-stream");
+      const init = {
+        ...this._requestInit,
+        method: "POST",
+        headers,
+        body: JSON.stringify(message3),
+        signal: this._abortController?.signal
+      };
+      const response = await (this._fetch ?? fetch)(this._url, init);
+      const sessionId = response.headers.get("mcp-session-id");
+      if (sessionId) {
+        this._sessionId = sessionId;
+      }
+      if (!response.ok) {
+        const text = await response.text().catch(() => null);
+        if (response.status === 401 && this._authProvider) {
+          if (this._hasCompletedAuthFlow) {
+            throw new StreamableHTTPError(401, "Server returned 401 after successful authentication");
+          }
+          const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
+          this._resourceMetadataUrl = resourceMetadataUrl;
+          this._scope = scope;
+          const result = await auth(this._authProvider, {
+            serverUrl: this._url,
+            resourceMetadataUrl: this._resourceMetadataUrl,
+            scope: this._scope,
+            fetchFn: this._fetchWithInit
+          });
+          if (result !== "AUTHORIZED") {
+            throw new UnauthorizedError();
+          }
+          this._hasCompletedAuthFlow = true;
+          return this.send(message3);
+        }
+        if (response.status === 403 && this._authProvider) {
+          const { resourceMetadataUrl, scope, error: error2 } = extractWWWAuthenticateParams(response);
+          if (error2 === "insufficient_scope") {
+            const wwwAuthHeader = response.headers.get("WWW-Authenticate");
+            if (this._lastUpscopingHeader === wwwAuthHeader) {
+              throw new StreamableHTTPError(403, "Server returned 403 after trying upscoping");
+            }
+            if (scope) {
+              this._scope = scope;
+            }
+            if (resourceMetadataUrl) {
+              this._resourceMetadataUrl = resourceMetadataUrl;
+            }
+            this._lastUpscopingHeader = wwwAuthHeader ?? void 0;
+            const result = await auth(this._authProvider, {
+              serverUrl: this._url,
+              resourceMetadataUrl: this._resourceMetadataUrl,
+              scope: this._scope,
+              fetchFn: this._fetch
+            });
+            if (result !== "AUTHORIZED") {
+              throw new UnauthorizedError();
+            }
+            return this.send(message3);
+          }
+        }
+        throw new StreamableHTTPError(response.status, `Error POSTing to endpoint: ${text}`);
+      }
+      this._hasCompletedAuthFlow = false;
+      this._lastUpscopingHeader = void 0;
+      if (response.status === 202) {
+        await response.body?.cancel();
+        if (isInitializedNotification(message3)) {
+          this._startOrAuthSse({ resumptionToken: void 0 }).catch((err) => this.onerror?.(err));
+        }
+        return;
+      }
+      const messages = Array.isArray(message3) ? message3 : [message3];
+      const hasRequests = messages.filter((msg) => "method" in msg && "id" in msg && msg.id !== void 0).length > 0;
+      const contentType2 = response.headers.get("content-type");
+      const responseMediaType = mediaTypeEssence(contentType2);
+      if (hasRequests) {
+        if (responseMediaType === "text/event-stream") {
+          this._handleSseStream(response.body, { onresumptiontoken }, false);
+        } else if (responseMediaType === "application/json") {
+          const data = await response.json();
+          const responseMessages = Array.isArray(data) ? data.map((msg) => JSONRPCMessageSchema.parse(msg)) : [JSONRPCMessageSchema.parse(data)];
+          for (const msg of responseMessages) {
+            this.onmessage?.(msg);
+          }
+        } else {
+          await response.body?.cancel();
+          throw new StreamableHTTPError(-1, `Unexpected content type: ${contentType2}`);
+        }
+      } else {
+        await response.body?.cancel();
+      }
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+  }
+  get sessionId() {
+    return this._sessionId;
+  }
+  /**
+   * Terminates the current session by sending a DELETE request to the server.
+   *
+   * Clients that no longer need a particular session
+   * (e.g., because the user is leaving the client application) SHOULD send an
+   * HTTP DELETE to the MCP endpoint with the Mcp-Session-Id header to explicitly
+   * terminate the session.
+   *
+   * The server MAY respond with HTTP 405 Method Not Allowed, indicating that
+   * the server does not allow clients to terminate sessions.
+   */
+  async terminateSession() {
+    if (!this._sessionId) {
+      return;
+    }
+    try {
+      const headers = await this._commonHeaders();
+      const init = {
+        ...this._requestInit,
+        method: "DELETE",
+        headers,
+        signal: this._abortController?.signal
+      };
+      const response = await (this._fetch ?? fetch)(this._url, init);
+      await response.body?.cancel();
+      if (!response.ok && response.status !== 405) {
+        throw new StreamableHTTPError(response.status, `Failed to terminate session: ${response.statusText}`);
+      }
+      this._sessionId = void 0;
+    } catch (error2) {
+      this.onerror?.(error2);
+      throw error2;
+    }
+  }
+  setProtocolVersion(version2) {
+    this._protocolVersion = version2;
+  }
+  get protocolVersion() {
+    return this._protocolVersion;
+  }
+  /**
+   * Resume an SSE stream from a previous event ID.
+   * Opens a GET SSE connection with Last-Event-ID header to replay missed events.
+   *
+   * @param lastEventId The event ID to resume from
+   * @param options Optional callback to receive new resumption tokens
+   */
+  async resumeStream(lastEventId, options) {
+    await this._startOrAuthSse({
+      resumptionToken: lastEventId,
+      onresumptiontoken: options?.onresumptiontoken
+    });
+  }
+};
+
+// src/mcpaudit/stdioTransport.ts
+import { randomUUID as randomUUID19 } from "node:crypto";
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
+var import_cross_spawn2 = __toESM(require_cross_spawn(), 1);
+import process11 from "node:process";
+var DEFAULT_INHERITED_ENV_VARS = process11.platform === "win32" ? [
+  "APPDATA",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "LOCALAPPDATA",
+  "PATH",
+  "PROCESSOR_ARCHITECTURE",
+  "SYSTEMDRIVE",
+  "SYSTEMROOT",
+  "TEMP",
+  "USERNAME",
+  "USERPROFILE",
+  "PROGRAMFILES"
+] : (
+  /* list inspired by the default env inheritance of sudo */
+  ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"]
+);
+function getDefaultEnvironment() {
+  const env = {};
+  for (const key of DEFAULT_INHERITED_ENV_VARS) {
+    const value = process11.env[key];
+    if (value === void 0) {
+      continue;
+    }
+    if (value.startsWith("()")) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
+// src/mcpaudit/stdioTransport.ts
+init_execa();
+init_mjs();
+var MAX_READ_BUFFER_BYTES = 8 * 1024 * 1024;
+var STDERR_TAIL_CHARS = 2048;
+var TERM_GRACE_MS = 2e3;
+var KILL_GRACE_MS2 = 2e3;
+function probeEnvironment(entryEnv, treeToken) {
+  const base = {};
+  for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base[k] = v;
+  return { ...base, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
+}
+var ProbeStdioTransport = class {
+  constructor(launch) {
+    this.launch = launch;
+  }
+  launch;
+  onclose;
+  onerror;
+  onmessage;
+  child;
+  done;
+  readBuffer = new ReadBuffer({ maxBufferSize: MAX_READ_BUFFER_BYTES });
+  posixGroup = process.platform !== "win32";
+  treeToken = process.platform === "win32" ? randomUUID19() : null;
+  removeExitHook = null;
+  stderr = "";
+  exited = null;
+  closing = null;
+  closeNotified = false;
+  /** Last {@link STDERR_TAIL_CHARS} characters the server wrote to stderr. */
+  get stderrTail() {
+    return this.stderr;
+  }
+  /** How the process ended, once it has; null while it runs. */
+  get exit() {
+    return this.exited;
+  }
+  async start() {
+    if (this.child !== void 0) throw new Error("ProbeStdioTransport already started");
+    const child = execa(this.launch.command, this.launch.args, {
+      cwd: this.launch.cwd,
+      env: probeEnvironment(this.launch.env, this.treeToken),
+      extendEnv: false,
+      shell: false,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      buffer: false,
+      reject: false,
+      detached: this.posixGroup,
+      windowsHide: true
+    });
+    this.child = child;
+    if (this.posixGroup) this.removeExitHook = onExit(() => signalGroup2(child.pid, "SIGKILL"));
+    child.stdout?.on("data", (chunk) => {
+      try {
+        this.readBuffer.append(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      } catch (e) {
+        this.onerror?.(e);
+        void this.close();
+        return;
+      }
+      for (; ; ) {
+        let message3;
+        try {
+          message3 = this.readBuffer.readMessage();
+        } catch (e) {
+          this.onerror?.(e);
+          continue;
+        }
+        if (message3 === null) break;
+        this.onmessage?.(message3);
+      }
+    });
+    child.stderr?.on("data", (chunk) => {
+      this.stderr = (this.stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS);
+    });
+    child.stdin?.on("error", (e) => this.onerror?.(e));
+    const spawned = new Promise((resolve23) => child.once("spawn", () => resolve23("spawned")));
+    this.done = child.then((result) => {
+      this.exited = {
+        exitCode: result.exitCode ?? null,
+        signal: result.signal ?? null,
+        ...result.exitCode === void 0 && result.signal === void 0 && result.failed ? { spawnError: result.shortMessage } : {}
+      };
+      this.removeExitHook?.();
+      this.notifyClosed();
+    });
+    const first = await Promise.race([spawned, this.done.then(() => "ended")]);
+    if (first === "ended" && this.exited?.spawnError !== void 0) {
+      throw new Error(`could not start '${this.launch.command}': ${this.exited.spawnError}`);
+    }
+  }
+  send(message3) {
+    return new Promise((resolve23, reject) => {
+      const stdin = this.child?.stdin;
+      if (stdin === void 0 || stdin === null || this.exited !== null) {
+        reject(new Error("Not connected"));
+        return;
+      }
+      if (stdin.write(serializeMessage(message3))) resolve23();
+      else stdin.once("drain", () => resolve23());
+    });
+  }
+  /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
+  close() {
+    this.closing ??= this.killAndWait();
+    return this.closing;
+  }
+  async killAndWait() {
+    const child = this.child;
+    const done = this.done;
+    if (child === void 0 || done === void 0) {
+      this.notifyClosed();
+      return;
+    }
+    try {
+      child.stdin?.end();
+    } catch {
+    }
+    const pid = child.pid;
+    if (pid !== void 0) {
+      if (this.treeToken !== null) {
+        const direct = () => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+          }
+        };
+        await killWindowsTree(pid, this.launch.command, this.treeToken, direct).catch(direct);
+      } else {
+        signalGroup2(pid, "SIGTERM");
+      }
+    }
+    if (!await settlesWithin(done, TERM_GRACE_MS)) {
+      if (this.treeToken === null) signalGroup2(pid, "SIGKILL");
+      else child.kill("SIGKILL");
+      if (!await settlesWithin(done, KILL_GRACE_MS2)) {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }
+    } else if (this.treeToken === null) {
+      signalGroup2(pid, "SIGKILL");
+    }
+    this.removeExitHook?.();
+    this.readBuffer.clear();
+    this.notifyClosed();
+  }
+  notifyClosed() {
+    if (this.closeNotified) return;
+    this.closeNotified = true;
+    this.onclose?.();
+  }
+};
+function signalGroup2(pid, signal) {
+  if (pid === void 0) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+  }
+}
+async function settlesWithin(p, ms) {
+  let timer;
+  const timeout = new Promise((resolve23) => {
+    timer = setTimeout(() => resolve23(false), ms);
+    timer.unref();
+  });
+  const settled = await Promise.race([p.then(() => true, () => true), timeout]);
+  if (timer !== void 0) clearTimeout(timer);
+  return settled;
+}
+
+// src/mcpaudit/probe.ts
+var PLUGIN_JSON_LABEL = ".claude-plugin/plugin.json";
+var PLACEHOLDER = /\$\{[^}]*\}/g;
+var MAX_PAGES = 100;
+var MAX_ITEMS = 1e4;
+var HTTP_TYPES = /* @__PURE__ */ new Set(["http", "streamable-http", "streamablehttp", "streamable_http"]);
+async function probeServer(entry, opts) {
+  const warnings = [];
+  const expand = placeholderExpander(entry, opts.projectPath, warnings);
+  const type = entry.type?.toLowerCase();
+  let transport;
+  let kind;
+  let stdio = null;
+  if (entry.command !== void 0 && type !== "sse" && (type === void 0 || !HTTP_TYPES.has(type))) {
+    kind = "stdio";
+    const launch = {
+      command: expand(entry.command),
+      args: (entry.args ?? []).map(expand),
+      env: stringEnv(entry.env, expand, warnings),
+      cwd: opts.projectPath
+    };
+    stdio = new ProbeStdioTransport(launch);
+    transport = stdio;
+  } else if (entry.url !== void 0) {
+    kind = type === "sse" ? "sse" : "http";
+    let url2;
+    try {
+      url2 = new URL(expand(entry.url));
+    } catch {
+      return { status: "failed", transport: kind, reason: "the entry's url is not a valid URL", warnings };
+    }
+    if (!opts.allowRemote) {
+      return {
+        status: "skipped",
+        transport: kind,
+        reason: `remote server at ${url2.origin}: audit_mcp_tools contacts a remote MCP server only with allow_remote: true`,
+        warnings
+      };
+    }
+    const requestInit = { headers: stringHeaders(entry.raw["headers"], expand) };
+    transport = kind === "sse" ? new SSEClientTransport(url2, { requestInit }) : new StreamableHTTPClientTransport(url2, { requestInit });
+  } else {
+    return { status: "failed", reason: "the entry has neither a command nor a url", warnings };
+  }
+  const deadline = AbortSignal.timeout(opts.timeoutMs);
+  const signal = opts.signal === void 0 ? deadline : AbortSignal.any([deadline, opts.signal]);
+  const requestOptions = () => {
+    return { signal, timeout: opts.timeoutMs, maxTotalTimeout: opts.timeoutMs };
+  };
+  const client = new Client({ name: "dev-guardian-audit", version: opts.clientVersion }, { capabilities: {} });
+  client.onerror = () => {
+  };
+  let phase = "start";
+  try {
+    phase = "initialize";
+    await client.connect(transport, requestOptions());
+    const caps = client.getServerCapabilities() ?? {};
+    const advertised = {
+      tools: caps.tools !== void 0,
+      prompts: caps.prompts !== void 0,
+      resources: caps.resources !== void 0
+    };
+    const listing = { tools: [], prompts: [], resources: [], resourceTemplates: [] };
+    if (advertised.tools) {
+      phase = "tools/list";
+      listing.tools = await listAll(
+        "tools",
+        (cursor) => client.request({ method: "tools/list", params: cursor === void 0 ? {} : { cursor } }, PAGE2, requestOptions())
+      );
+    }
+    if (advertised.prompts) {
+      phase = "prompts/list";
+      listing.prompts = await listAll(
+        "prompts",
+        (cursor) => client.request({ method: "prompts/list", params: cursor === void 0 ? {} : { cursor } }, PAGE2, requestOptions())
+      );
+    }
+    if (advertised.resources) {
+      phase = "resources/list";
+      listing.resources = await listAll(
+        "resources",
+        (cursor) => client.request(
+          { method: "resources/list", params: cursor === void 0 ? {} : { cursor } },
+          PAGE2,
+          requestOptions()
+        )
+      );
+      phase = "resources/templates/list";
+      try {
+        listing.resourceTemplates = await listAll(
+          "resourceTemplates",
+          (cursor) => client.request(
+            { method: "resources/templates/list", params: cursor === void 0 ? {} : { cursor } },
+            PAGE2,
+            requestOptions()
+          )
+        );
+      } catch (e) {
+        if (signal.aborted || (stdio?.exit ?? null) !== null) throw e;
+        if (!(e instanceof McpError && e.code === ErrorCode.MethodNotFound)) {
+          warnings.push(`resources/templates/list failed, templates were not read: ${String(e.message).slice(0, 200)}`);
+        }
+      }
+    }
+    if (!advertised.tools) warnings.push("the server does not advertise tools; tools/list was not called");
+    const info = client.getServerVersion();
+    const instructions = client.getInstructions();
+    return {
+      status: "ok",
+      transport: kind,
+      ...info === void 0 ? {} : { serverInfo: { name: info.name, version: info.version } },
+      ...instructions === void 0 ? {} : { instructions },
+      advertised,
+      listing,
+      warnings
+    };
+  } catch (e) {
+    await stdio?.close();
+    return { status: "failed", transport: kind, reason: failureReason(e, phase, opts, stdio, deadline), warnings };
+  } finally {
+    await client.close().catch(() => {
+    });
+    await transport.close().catch(() => {
+    });
+  }
+}
+async function listAll(key, page) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  let cursor;
+  for (let i2 = 0; i2 < MAX_PAGES; i2 += 1) {
+    const result = await page(cursor);
+    const items = result[key];
+    if (!Array.isArray(items)) throw new Error(`${key}/list answered without a '${key}' array`);
+    out.push(...items);
+    if (out.length > MAX_ITEMS) throw new Error(`${key}/list returned more than ${MAX_ITEMS} items`);
+    const next = result.nextCursor;
+    if (typeof next !== "string" || next === "") return out;
+    if (seen.has(next)) throw new Error(`${key}/list repeated cursor ${JSON.stringify(next.slice(0, 40))}`);
+    seen.add(next);
+    cursor = next;
+  }
+  throw new Error(`${key}/list did not finish within ${MAX_PAGES} pages`);
+}
+var PAGE2 = external_exports.object({}).passthrough();
+function failureReason(e, phase, opts, stdio, deadline) {
+  const exit = stdio?.exit ?? null;
+  const stderr = stdio?.stderrTail.trim() ?? "";
+  const withStderr = (s) => stderr === "" ? s : `${s}; stderr: ${stderr.slice(-600)}`;
+  if (exit?.spawnError !== void 0) return withStderr(`could not start the server: ${exit.spawnError}`);
+  if (deadline.aborted) return withStderr(`did not answer within ${opts.timeoutMs} ms (during ${phase})`);
+  if (opts.signal?.aborted === true) return `cancelled during ${phase}`;
+  if (exit !== null) {
+    const how = exit.signal !== null ? `was killed by ${exit.signal}` : `exited with code ${exit.exitCode ?? "?"}`;
+    return withStderr(`the server ${how} during ${phase}`);
+  }
+  const message3 = e instanceof Error ? e.message : String(e);
+  return withStderr(`${phase} failed: ${message3.slice(0, 400)}`);
+}
+function placeholderExpander(entry, projectPath, warnings) {
+  const seen = /* @__PURE__ */ new Set();
+  return (value) => {
+    const expanded = entry.sourceLabel === PLUGIN_JSON_LABEL ? value.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, projectPath) : value;
+    for (const m of expanded.matchAll(PLACEHOLDER)) {
+      if (seen.has(m[0])) continue;
+      seen.add(m[0]);
+      warnings.push(`${m[0]} was passed literally: placeholders are not expanded from dev-guardian's environment`);
+    }
+    return expanded;
+  };
+}
+function stringEnv(env, expand, warnings) {
+  const out = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (typeof v === "string") out[k] = expand(v);
+    else warnings.push(`env ${k} is not a string and was not passed`);
+  }
+  return out;
+}
+function stringHeaders(headers, expand) {
+  const out = {};
+  if (headers === null || typeof headers !== "object" || Array.isArray(headers)) return out;
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof v === "string") out[k] = expand(v);
+  }
+  return out;
+}
+
+// src/tools/auditMcpTools.ts
+var DEFAULT_TIMEOUT_MS7 = 2e4;
+var inputSchema28 = {
+  project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project whose MCP configs declare the servers. Defaults to the current working directory."),
+  servers: external_exports.array(external_exports.string().min(1).regex(/^[^*?]+$/, "exact server names only: no wildcards")).min(1).max(50).describe(
+    'REQUIRED. The exact MCP server entry names to start and audit, as they appear in the config (e.g. ["github", "filesystem"]). No wildcard and no default: only these are executed.'
+  ),
+  include_user_config: external_exports.boolean().optional().default(false).describe(
+    "Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini). Off by default."
+  ),
+  allow_remote: external_exports.boolean().optional().default(false).describe("Contact remote (http/sse) servers among the named ones. Off by default: they are skipped."),
+  timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS7).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
+};
+var tool47 = {
+  name: "audit_mcp_tools",
+  title: "Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)",
+  // Worded so this description does not trip the checks it lists: measured,
+  // a literal tag block or file name here was a finding on dev-guardian itself.
+  description: "Start the MCP servers named in `servers`, list the tools, prompts and resources each one serves, and check those definitions: tool poisoning (instructions aimed at the model, IMPORTANT-tag blocks), hidden Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of name, description, inputSchema, annotations): a definition changed since the previous audit is a high \"rug pull\" finding (reported once, then re-pinned); a new or removed tool is low/info. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus the entry's own env), cwd = the project; it never calls tools/call; it contacts remote servers only with allow_remote; and it kills the process tree after. Run it only for servers the user asked to audit. Names are looked up in the configs audit_agent_config reads. A name not declared, a remote server without allow_remote, or a server that fails or does not answer within timeout_ms is skipped/failed with a reason and lowers coverage \u2014 never a clean pass.",
+  inputSchema: inputSchema28,
+  handler: (input, ctx, callMeta) => handler44(input, ctx, callMeta)
+};
+registerToolModule(tool47);
+async function handler44(input, ctx, callMeta) {
+  const inp = input;
+  const names = Array.isArray(inp.servers) ? [...new Set(inp.servers.filter((s) => typeof s === "string" && s !== ""))] : [];
+  if (names.length === 0 || names.some((n2) => /[*?]/.test(n2))) {
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_target",
+        message: "servers must list the exact MCP server names to audit; no wildcard and no default."
+      }
+    };
+  }
+  let projectPath;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    if (e instanceof InvalidProjectPathError) {
+      return { ok: false, error: { code: "target_not_found", message: e.message } };
+    }
+    throw e;
+  }
+  const includeUserConfig = inp.include_user_config === true;
+  const allowRemote = inp.allow_remote === true;
+  const timeoutMs = typeof inp.timeout_ms === "number" ? inp.timeout_ms : DEFAULT_TIMEOUT_MS7;
+  const collected = collectMcpEntries(readConfigSources(projectPath, includeUserConfig));
+  const scanId = randomUUID20();
+  ctx.storage.scans.insert({ scan_id: scanId, scan_type: "mcp_tool_audit", project_path: projectPath, tree_hash: "" });
+  const run = { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected };
+  try {
+    return await runAudit(ctx, run, callMeta);
+  } catch (e) {
+    ctx.storage.scans.finalize({
+      scan_id: scanId,
+      status: "failed",
+      tools_run: [],
+      missing_tools: [],
+      error: e instanceof Error ? e.message : String(e)
+    });
+    throw e;
+  }
+}
+async function runAudit(ctx, run, callMeta) {
+  const { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected } = run;
+  const toolsRun = [];
+  const missingTools = [];
+  const reports = [];
+  const probed = [];
+  const clientVersion = resolveVersion();
+  for (const name of names) {
+    const entries2 = collected.entries.filter((e) => e.name === name);
+    if (entries2.length === 0) {
+      const runName = `${MCP_AUDIT_TOOL_NAME}:${name}`;
+      const reason = `not declared in any config source read (${collected.sourcesRead.join(", ") || "none found"})` + (includeUserConfig ? "" : "; user-level configs were not read (include_user_config)");
+      toolsRun.push({ name: runName, status: "skipped", reason });
+      missingTools.push(runName);
+      reports.push({ name, status: "skipped", reason, tools_count: 0, prompts_count: 0, resources_count: 0 });
+      continue;
+    }
+    for (const entry of entries2) {
+      const serverKey = `${entry.sourceLabel}::${entry.name}`;
+      const runName = `${MCP_AUDIT_TOOL_NAME}:${serverKey}`;
+      const outcome = await probeServer(entry, {
+        projectPath,
+        timeoutMs,
+        allowRemote,
+        clientVersion,
+        ...callMeta?.signal === void 0 ? {} : { signal: callMeta.signal }
+      });
+      const base = {
+        name,
+        server_key: serverKey,
+        source: entry.sourceLabel,
+        ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
+        ...outcome.warnings.length > 0 ? { warnings: outcome.warnings.map(escapeInvisible) } : {}
+      };
+      if (outcome.status !== "ok") {
+        const reason = escapeInvisible(outcome.reason);
+        toolsRun.push({ name: runName, status: outcome.status, reason });
+        missingTools.push(runName);
+        reports.push({ ...base, status: outcome.status, reason, tools_count: 0, prompts_count: 0, resources_count: 0 });
+        continue;
+      }
+      const normalized = normalizeListing(outcome.listing);
+      const listing = {
+        serverKey,
+        serverName: entry.name,
+        sourceLabel: entry.sourceLabel,
+        ...outcome.instructions === void 0 ? {} : { instructions: outcome.instructions },
+        tools: normalized.tools,
+        prompts: normalized.prompts,
+        resources: normalized.resources,
+        resourceTemplates: normalized.resourceTemplates
+      };
+      const report = {
+        ...base,
+        status: "ok",
+        ...outcome.serverInfo === void 0 ? {} : {
+          server_info: {
+            name: escapeInvisible(outcome.serverInfo.name),
+            version: escapeInvisible(outcome.serverInfo.version)
+          }
+        },
+        tools_count: normalized.tools.length,
+        prompts_count: normalized.prompts.length,
+        resources_count: normalized.resources.length,
+        resource_templates_count: normalized.resourceTemplates.length,
+        ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}
+      };
+      toolsRun.push({ name: runName, status: "ok" });
+      reports.push(report);
+      probed.push({ entry, report, listing });
+    }
+  }
+  const others = probed.map((p) => ({
+    serverKey: p.listing.serverKey,
+    serverName: p.listing.serverName,
+    toolNames: p.listing.tools.map((t) => t.name)
+  }));
+  const probedKeys = new Set(others.map((o2) => o2.serverKey));
+  const pinned = /* @__PURE__ */ new Map();
+  for (const row of ctx.storage.mcpToolPins.listToolNames(projectPath)) {
+    if (probedKeys.has(row.server_key)) continue;
+    const list2 = pinned.get(row.server_key) ?? [];
+    list2.push(row.tool_name);
+    pinned.set(row.server_key, list2);
+  }
+  for (const [serverKey, toolNames] of pinned) {
+    others.push({ serverKey, serverName: serverKey.slice(serverKey.lastIndexOf("::") + 2), toolNames });
+  }
+  const findings = [];
+  const newPins = [];
+  for (const { report, listing } of probed) {
+    findings.push(...analyzeServerListing(listing, others));
+    const comparison = comparePins(
+      listing,
+      ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
+      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey)
+    );
+    findings.push(...comparison.findings);
+    report.pins = {
+      first_audit: comparison.firstAudit,
+      changed: comparison.changed,
+      added: comparison.added,
+      removed: comparison.removed
+    };
+    newPins.push({ serverKey: listing.serverKey, pins: comparison.pins });
+  }
+  if (findings.length > 0) {
+    ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+  }
+  for (const { serverKey, pins } of newPins) ctx.storage.mcpToolPins.replaceServerPins(projectPath, serverKey, pins);
+  const warnings = [...collected.warnings];
+  const coverage = computeCoverage(toolsRun, missingTools);
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: "completed",
+    tools_run: toolsRun,
+    missing_tools: missingTools,
+    meta: {
+      servers_requested: names,
+      include_user_config: includeUserConfig,
+      allow_remote: allowRemote,
+      timeout_ms: timeoutMs,
+      servers: reports,
+      sources_read: collected.sourcesRead
+    }
+  });
+  return {
+    ok: true,
+    scan_id: scanId,
+    project_path: projectPath,
+    coverage,
+    findings_count: findings.length,
+    findings_by_severity: countBySeverity6(findings),
+    findings,
+    servers: reports,
+    tools_run: toolsRun,
+    missing_tools: missingTools,
+    sources_read: collected.sourcesRead,
+    warnings
+  };
+}
+function countBySeverity6(findings) {
   const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) out[f.severity] += 1;
   return out;
@@ -71368,10 +75423,10 @@ function findTyposquatTarget(index, name, opts = {}) {
       const d = damerauLevenshtein(cand, target, max);
       if (d === 0 || d > max) continue;
       if (isSiblingNotTypo(cand, target, d)) continue;
-      const rank = index.names.indexOf(target);
-      if (best === null || d < best.distance || d === best.distance && rank < bestRank) {
+      const rank2 = index.names.indexOf(target);
+      if (best === null || d < best.distance || d === best.distance && rank2 < bestRank) {
         best = { similar_to: target, distance: d };
-        bestRank = rank;
+        bestRank = rank2;
       }
     }
   }
@@ -71503,11 +75558,11 @@ var PUBLIC_HOSTS = {
   packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
   nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
 };
-function isPublic(ecosystem, url) {
-  return PUBLIC_HOSTS[ecosystem].test(url.trim().replace(/^["']|["']$/g, ""));
+function isPublic(ecosystem, url2) {
+  return PUBLIC_HOSTS[ecosystem].test(url2.trim().replace(/^["']|["']$/g, ""));
 }
-function isPublicRegistryUrl(ecosystem, url) {
-  return isPublic(ecosystem, url);
+function isPublicRegistryUrl(ecosystem, url2) {
+  return isPublic(ecosystem, url2);
 }
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside4(dir, path8) {
@@ -71605,9 +75660,9 @@ function fromNpmrc(text, scope) {
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    const url = (m[2] ?? "").trim();
-    if (lineScope === void 0) found = found ?? url;
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url;
+    const url2 = (m[2] ?? "").trim();
+    if (lineScope === void 0) found = found ?? url2;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
   }
   return found;
 }
@@ -71660,11 +75715,11 @@ function fromBunfig(text, scope) {
       section = (header[1] ?? "").trim();
       continue;
     }
-    const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
-    if (section === "install" && /^registry\s*=/.test(line)) found = found ?? url;
+    const url2 = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
+    if (section === "install" && /^registry\s*=/.test(line)) found = found ?? url2;
     if (section === "install.scopes" && scope !== void 0) {
       const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
-      if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url;
+      if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url2;
     }
   }
   return found;
@@ -71736,8 +75791,8 @@ function npmRegistry(name, ctx) {
   for (const { path: path8, parse: parse8 } of npmConfigFiles(ctx)) {
     const text = read(path8, ctx);
     if (text === void 0) continue;
-    const url = parse8(text, scope);
-    if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path8, url };
+    const url2 = parse8(text, scope);
+    if (url2 !== void 0 && !isPublic("npm", url2)) return { kind: "registry", source: path8, url: url2 };
     if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path8;
   }
   if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource };
@@ -71866,8 +75921,8 @@ function pypiRegistry(name, ctx) {
   if (programData !== void 0) confs.push(join77(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
     const text = read(path8, ctx);
-    const url = text === void 0 ? void 0 : fromPipConf(text);
-    if (url !== void 0) return { kind: "registry", source: path8, url };
+    const url2 = text === void 0 ? void 0 : fromPipConf(text);
+    if (url2 !== void 0) return { kind: "registry", source: path8, url: url2 };
   }
   const uvConfs = [];
   const uvExplicit = envValue(env, "UV_CONFIG_FILE");
@@ -71875,8 +75930,8 @@ function pypiRegistry(name, ctx) {
   uvConfs.push(join77(xdg, "uv", "uv.toml"), join77(appdata, "uv", "uv.toml"), join77(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
     const text = read(path8, ctx);
-    const url = text === void 0 ? void 0 : fromUvToml(text);
-    if (url !== void 0) return { kind: "registry", source: path8, url };
+    const url2 = text === void 0 ? void 0 : fromUvToml(text);
+    if (url2 !== void 0) return { kind: "registry", source: path8, url: url2 };
   }
   for (const dir of ancestors(ctx)) {
     const uvToml = join77(dir, "uv.toml");
@@ -71886,8 +75941,8 @@ function pypiRegistry(name, ctx) {
     const pyproject = join77(dir, "pyproject.toml");
     const text = read(pyproject, ctx);
     if (text === void 0) continue;
-    const url = fromPyproject(text);
-    if (url !== void 0) return { kind: "registry", source: pyproject, url };
+    const url2 = fromPyproject(text);
+    if (url2 !== void 0) return { kind: "registry", source: pyproject, url: url2 };
     break;
   }
   const local = uvWorkspacePackage(name, ctx);
@@ -71927,8 +75982,8 @@ function customNugetSources(text) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
   const out = [];
   for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
-    const url = m[1] ?? "";
-    if (url !== "" && !isPublic("nuget", url)) out.push(url);
+    const url2 = m[1] ?? "";
+    if (url2 !== "" && !isPublic("nuget", url2)) out.push(url2);
   }
   return out;
 }
@@ -71995,9 +76050,9 @@ function nugetRegistry(name, ctx) {
   for (const path8 of files) {
     const text = read(path8, ctx);
     if (text === void 0) continue;
-    for (const url of customNugetSources(text)) {
-      if (machineWide.has(path8) && isLocalFolderSource(url) && !localFeedHas(url, path8, name, ctx)) continue;
-      return { kind: "registry", source: path8, url };
+    for (const url2 of customNugetSources(text)) {
+      if (machineWide.has(path8) && isLocalFolderSource(url2) && !localFeedHas(url2, path8, name, ctx)) continue;
+      return { kind: "registry", source: path8, url: url2 };
     }
   }
   return null;
@@ -72040,12 +76095,12 @@ function describeError(e, signal) {
   }
   return String(e);
 }
-async function fetchJson(url, http, headers = {}) {
+async function fetchJson(url2, http, headers = {}) {
   try {
-    const res = await http.fetchImpl(url, { headers: { accept: "application/json", ...headers }, signal: http.signal });
+    const res = await http.fetchImpl(url2, { headers: { accept: "application/json", ...headers }, signal: http.signal });
     if (res.status === 404 || res.status === 410) return { kind: "not_found" };
-    if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url).host} (HTTP 429)` };
-    if (!res.ok) return { kind: "error", reason: `${new URL(url).host} answered HTTP ${res.status}` };
+    if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url2).host} (HTTP 429)` };
+    if (!res.ok) return { kind: "error", reason: `${new URL(url2).host} answered HTTP ${res.status}` };
     return { kind: "ok", json: await res.json() };
   } catch (e) {
     return { kind: "error", reason: describeError(e, http.signal) };
@@ -72167,8 +76222,8 @@ async function nugetCanonicalId(id, http) {
   return void 0;
 }
 async function nugetPublished(name, version2, http) {
-  const url = `https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version2.toLowerCase())}.json`;
-  const r = await fetchJson(url, http);
+  const url2 = `https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/${encodeURIComponent(version2.toLowerCase())}.json`;
+  const r = await fetchJson(url2, http);
   if (r.kind === "not_found") return { kind: "error", reason: "NuGet registration leaf not found" };
   if (r.kind === "error") return r;
   const published = isRecord8(r.json) ? r.json["published"] : void 0;
@@ -72790,9 +76845,9 @@ async function networkRounds(work, http, signal, deadline, now) {
   return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
 }
 function worstVerdict(results) {
-  const rank = { ok: 0, unknown: 1, warn: 2, block: 3 };
+  const rank2 = { ok: 0, unknown: 1, warn: 2, block: 3 };
   let worst = "ok";
-  for (const r of results) if (rank[r.verdict] > rank[worst]) worst = r.verdict;
+  for (const r of results) if (rank2[r.verdict] > rank2[worst]) worst = r.verdict;
   return worst;
 }
 
@@ -72813,7 +76868,7 @@ var ECOSYSTEM_ALIASES = {
   nuget: "nuget",
   dotnet: "nuget"
 };
-var tool47 = {
+var tool48 = {
   name: "vet_packages",
   title: "Vet packages before installing",
   description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured (scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only when the whole command is one plain install statement with allowlisted flags (otherwise it warns), and warns on known vulnerabilities only for an exact version pin.',
@@ -72824,10 +76879,10 @@ var tool47 = {
       "Project whose registry configuration (.npmrc, pyproject.toml, composer.json, nuget.config) applies. Defaults to the current directory."
     )
   },
-  handler: async (input, ctx, callMeta) => handler44(input, ctx, callMeta)
+  handler: async (input, ctx, callMeta) => handler45(input, ctx, callMeta)
 };
-registerToolModule(tool47);
-async function handler44(input, _ctx, callMeta) {
+registerToolModule(tool48);
+async function handler45(input, _ctx, callMeta) {
   const inp = input;
   const ecosystem = ECOSYSTEM_ALIASES[inp.ecosystem];
   if (ecosystem === void 0) {
@@ -72911,7 +76966,7 @@ function enrich(scanId, ctx) {
   const record4 = ctx.storage.scans.getById(scanId);
   if (!record4) return { last_run: null };
   const findings = ctx.storage.findings.listByScan(scanId);
-  const counts = countBySeverity6(findings);
+  const counts = countBySeverity7(findings);
   const top = topFindings4(findings, 10);
   return {
     ...record4,
@@ -72919,7 +76974,7 @@ function enrich(scanId, ctx) {
     top_findings: top.map(boundFinding)
   };
 }
-function countBySeverity6(findings) {
+function countBySeverity7(findings) {
   const out = {
     info: 0,
     low: 0,

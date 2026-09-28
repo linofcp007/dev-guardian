@@ -13,8 +13,11 @@
  */
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { escapeInvisible, findEncodedBlob, OVERSIZED_DESCRIPTION_CHARS, scanInvisible, TEXT_RULES, } from './rules.js';
-/** The `tool` every finding of `audit_mcp_tools` carries. */
-export const MCP_TOOL_AUDIT = 'mcp-tool-audit';
+/**
+ * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
+ * per-server `tools_run` names (`mcp-tool-audit:<source>::<server>`).
+ */
+export const MCP_AUDIT_TOOL_NAME = 'mcp-tool-audit';
 /**
  * The raw `tools` / `prompts` / `resources` arrays a server answered with,
  * reduced to what is checked. The SDK's own schemas are not used to read
@@ -82,7 +85,20 @@ export function normalizeListing(raw) {
             r.uri = uri;
         return r;
     });
-    return { tools, prompts, resources, malformed };
+    const resourceTemplates = pick(raw.resourceTemplates, (o, name) => {
+        const r = { name };
+        const title = str(o['title']);
+        if (title !== undefined)
+            r.title = title;
+        const description = str(o['description']);
+        if (description !== undefined)
+            r.description = description;
+        const uri = str(o['uriTemplate']);
+        if (uri !== undefined)
+            r.uri = uri;
+        return r;
+    });
+    return { tools, prompts, resources, resourceTemplates, malformed };
 }
 /** Deep enough for any real schema; a deeper one is cut rather than walked for ever. */
 const MAX_DEPTH = 24;
@@ -138,8 +154,12 @@ function fieldsOf(listing) {
             out.push({ item, path: 'description', text: p.description });
         walkStrings(p.arguments, 'arguments', item, out);
     }
-    for (const r of listing.resources) {
-        const item = `resource '${shortName(r.name)}'`;
+    const resources = [
+        ...listing.resources.map((r) => ({ r, kind: 'resource' })),
+        ...(listing.resourceTemplates ?? []).map((r) => ({ r, kind: 'resource template' })),
+    ];
+    for (const { r, kind } of resources) {
+        const item = `${kind} '${shortName(r.name)}'`;
         out.push({ item, path: 'name', text: r.name });
         if (r.title !== undefined)
             out.push({ item, path: 'title', text: r.title });
@@ -332,7 +352,7 @@ export function analyzeServerListing(listing, others) {
         // Every string below may carry text the server chose; `escapeInvisible`
         // keeps an invisible payload from riding out in the audit's own output.
         findings.push(makeFinding({
-            tool: MCP_TOOL_AUDIT,
+            tool: MCP_AUDIT_TOOL_NAME,
             rule_id: first.rule,
             severity,
             category: 'security',

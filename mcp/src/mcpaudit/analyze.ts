@@ -23,8 +23,11 @@ import {
   type McpRuleId,
 } from './rules.js';
 
-/** The `tool` every finding of `audit_mcp_tools` carries. */
-export const MCP_TOOL_AUDIT = 'mcp-tool-audit';
+/**
+ * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
+ * per-server `tools_run` names (`mcp-tool-audit:<source>::<server>`).
+ */
+export const MCP_AUDIT_TOOL_NAME = 'mcp-tool-audit';
 
 export interface ToolDefinition {
   name: string;
@@ -59,6 +62,8 @@ export interface ServerListing {
   tools: ToolDefinition[];
   prompts: PromptDefinition[];
   resources: ResourceDefinition[];
+  /** `resources/templates/list`; `uri` holds the template. */
+  resourceTemplates?: ResourceDefinition[];
 }
 
 /** Another server's tools, for the cross-server shadowing check. */
@@ -72,6 +77,7 @@ export interface NormalizedListing {
   tools: ToolDefinition[];
   prompts: PromptDefinition[];
   resources: ResourceDefinition[];
+  resourceTemplates: ResourceDefinition[];
   /** Entries dropped because they were not an object with a string `name`. */
   malformed: number;
 }
@@ -82,7 +88,12 @@ export interface NormalizedListing {
  * them: a server whose definitions do not validate is exactly the kind this
  * audit exists for, and rejecting its whole listing would report nothing.
  */
-export function normalizeListing(raw: { tools?: unknown[]; prompts?: unknown[]; resources?: unknown[] }): NormalizedListing {
+export function normalizeListing(raw: {
+  tools?: unknown[];
+  prompts?: unknown[];
+  resources?: unknown[];
+  resourceTemplates?: unknown[];
+}): NormalizedListing {
   let malformed = 0;
   const pick = <T>(items: unknown[] | undefined, build: (o: Record<string, unknown>, name: string) => T): T[] => {
     const out: T[] = [];
@@ -133,7 +144,17 @@ export function normalizeListing(raw: { tools?: unknown[]; prompts?: unknown[]; 
     if (uri !== undefined) r.uri = uri;
     return r;
   });
-  return { tools, prompts, resources, malformed };
+  const resourceTemplates = pick<ResourceDefinition>(raw.resourceTemplates, (o, name) => {
+    const r: ResourceDefinition = { name };
+    const title = str(o['title']);
+    if (title !== undefined) r.title = title;
+    const description = str(o['description']);
+    if (description !== undefined) r.description = description;
+    const uri = str(o['uriTemplate']);
+    if (uri !== undefined) r.uri = uri;
+    return r;
+  });
+  return { tools, prompts, resources, resourceTemplates, malformed };
 }
 
 /** One string the model will read, and where it sits. */
@@ -195,8 +216,12 @@ function fieldsOf(listing: ServerListing): TextField[] {
     if (p.description !== undefined) out.push({ item, path: 'description', text: p.description });
     walkStrings(p.arguments, 'arguments', item, out);
   }
-  for (const r of listing.resources) {
-    const item = `resource '${shortName(r.name)}'`;
+  const resources = [
+    ...listing.resources.map((r) => ({ r, kind: 'resource' })),
+    ...(listing.resourceTemplates ?? []).map((r) => ({ r, kind: 'resource template' })),
+  ];
+  for (const { r, kind } of resources) {
+    const item = `${kind} '${shortName(r.name)}'`;
     out.push({ item, path: 'name', text: r.name });
     if (r.title !== undefined) out.push({ item, path: 'title', text: r.title });
     if (r.description !== undefined) out.push({ item, path: 'description', text: r.description });
@@ -405,7 +430,7 @@ export function analyzeServerListing(listing: ServerListing, others: readonly Ot
     // keeps an invisible payload from riding out in the audit's own output.
     findings.push(
       makeFinding({
-        tool: MCP_TOOL_AUDIT,
+        tool: MCP_AUDIT_TOOL_NAME,
         rule_id: first.rule,
         severity,
         category: 'security',

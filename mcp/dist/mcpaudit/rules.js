@@ -27,11 +27,29 @@ const SKILL_TEXT_RULE_IDS = new Set([
     'ta-overbroad-activation',
     'mtp-instructions-in-description',
 ]);
-const SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap((r) => r.patterns);
+/**
+ * `mp-persist-instruction` also matches a bare `~/.claude/` or
+ * `.claude/memory` PATH. In a skill that is a write target; in a tool
+ * description it is a reference, and it is checked as one — by
+ * `mcp-tool-sensitive-file-access` below. Measured: kept here, it reported
+ * `audit_agent_config`'s own list of the files it reads as "poisoning".
+ */
+const isPathOnlyPattern = (p) => p.source.includes(String.raw `\.claude\/`);
+const SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id))
+    .flatMap((r) => r.patterns)
+    .filter((p) => !isPathOnlyPattern(p));
 const CONCEAL_SKILL_PATTERNS = SKILL_RULES.find((r) => r.id === 'pi-conceal-from-user')?.patterns ?? [];
-/** A request verb within one clause of a secret-bearing noun. */
-const READ_VERB = String.raw `\b(read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward)\b`;
-const SECRET_NOUN = String.raw `\b(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
+/**
+ * An instruction to fetch SOMEONE's secrets: a verb, then a possessive or
+ * quantifier, then the secret within two words — "read the user's API keys",
+ * "collect all stored credentials". A verb merely NEAR a secret word was
+ * measured noisy on dev-guardian's own 58 tools: "copy the configs …, then
+ * report a first-pass secrets status", and sudo's own "a terminal is required
+ * to read the password".
+ */
+const READ_VERB = String.raw `\b(read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather)\s+`;
+const OWNER = String.raw `(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
+const SECRET_NOUN = String.raw `(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 /** What an exfiltration instruction ships out. */
 const DATA_NOUN = String.raw `\b(data|contents?|conversation|chat|history|messages?|files?|results?|outputs?|keys?|tokens?|secrets?|credentials?|env(ironment)?|variables|everything|context|prompts?)\b`;
 export const TEXT_RULES = [
@@ -55,10 +73,10 @@ export const TEXT_RULES = [
             'legitimately name them; any other server should not.',
         patterns: [
             /(~\/\.ssh\b|\.ssh\/|\bid_(rsa|dsa|ecdsa|ed25519)\b|\bauthorized_keys\b)/i,
-            /(\bmcp\.json\b|\bmcp_config\.json\b|claude_desktop_config\.json|\.claude\.json\b)/i,
+            /(\bmcp\.json\b|\bmcp_config\.json\b|claude_desktop_config\.json|\.claude\.json\b|~\/\.claude\/|\.claude\/memory\b)/i,
             /(\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.git-credentials\b|\.docker\/config\.json|\.kube\/config\b|\/etc\/(passwd|shadow)\b)/i,
             /(^|[\s`'"(/])\.env(\.[\w-]+)?(?![\w-])/i,
-            new RegExp(`${READ_VERB}[^.\\n]{0,60}${SECRET_NOUN}`, 'i'),
+            new RegExp(`${READ_VERB}${OWNER}${SECRET_NOUN}`, 'i'),
         ],
     },
     {

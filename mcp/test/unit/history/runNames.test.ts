@@ -107,6 +107,9 @@ function bookkeepingNames(): string[] {
   }
   // scan_skill's OSV entry: `name: 'osv.dev', status: report.osv.online ? …`.
   found.push(...collect(/name:\s*'(osv\.dev)'/g));
+  // audit_mcp_tools: one `${MCP_AUDIT_TOOL_NAME}:<source>::<server>` per server
+  // (or `:<name>` for one no config declares) — each a pass of the base name.
+  found.push(...collect(/export const MCP_AUDIT_TOOL_NAME\s*=\s*'([^']+)'/g));
   // review_pr's per-file passes: `semgrepOnFiles` / `banditOnFiles` hand `name: '…'` to `scanFileBatches`.
   found.push(...collect(/\bname:\s*'([^']+)'/g, (f) => f === 'runners/fileBatchScan.ts'));
   // security_scan_full's own entry for a child that threw or answered an error: the child's name.
@@ -159,6 +162,10 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/depsAudit.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
   'tools/scanIac.ts:spec.name': "runWorkflowScanner's own WorkflowScannerSpec.name — the caller only ever passes the literals 'zizmor' or 'actionlint'",
   'tools/scanIac.ts:run.toolRun.name': "the missing_tools push for a workflow scanner runWorkflowScanner reported missing — copies that same run's own toolRun.name ('zizmor'/'actionlint')",
+  'tools/auditMcpTools.ts:runName':
+    "`${MCP_AUDIT_TOOL_NAME}:<server>` — a pass of the MCP_AUDIT_TOOL_NAME base, which runNameEntry falls back to",
+  'tools/auditMcpTools.ts:name':
+    'never reaches tools_run: a per-server report object (`servers` in the response and meta), not a ToolRun',
 };
 
 /** Every `tools_run` / `missing_tools` write whose name is an expression, as `file:expression`. */
@@ -200,7 +207,7 @@ describe('runNames: exhaustive over the source', () => {
         'npm-audit', 'dast', 'nuclei', 'trivy', 'semgrep', 'gitleaks', 'bandit', 'phpcs', 'security-code-scan',
         'guardian-scanskill', 'scan_dotnet_secrets', 'dotnet_efcore_audit', 'wpscan', 'eslint', 'ruff',
         'hadolint', 'docker-compose', 'budgets', 'pip-audit', 'dotnet-list-package', 'agent-audit',
-        'zizmor', 'actionlint',
+        'zizmor', 'actionlint', 'mcp-tool-audit',
       ]),
     );
     expect(names).toEqual(
@@ -210,7 +217,7 @@ describe('runNames: exhaustive over the source', () => {
         'semgrep-wp', 'phpcs-wpcs', 'phpcs', 'dotnet-sdk', 'security-code-scan', 'osv.dev', 'jscpd',
         'security_scan_full', 'deps_audit', 'quality_check', 'compliance_check', 'scan_wordpress',
         'hadolint', 'docker-compose', 'budgets', 'scan_sast', 'scan_iac', 'syft', 'dotnet', 'agent-audit',
-        'zizmor', 'actionlint',
+        'zizmor', 'actionlint', 'mcp-tool-audit',
         'trivy:npm', 'trivy:dotnet',
       ]),
     );
@@ -245,6 +252,7 @@ describe('runNames: the pairs that do not share a name', () => {
     ['pip-audit', ['pip-audit']],
     ['dotnet', ['dotnet-list-package']],
     ['agent-audit', ['agent-audit']],
+    ['mcp-tool-audit:.mcp.json::github', ['mcp-tool-audit']],
     ['guardian-dast', ['dast']],
     ['guardian-dast:unanswered', ['dast']],
     ['guardian-dast:wall-clock', ['dast']],

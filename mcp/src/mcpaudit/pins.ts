@@ -15,7 +15,7 @@ import { hashConfigValue } from '../agentaudit/hash.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { McpToolPin } from '../storage/mcpToolPinsRepo.js';
 import type { Finding, Severity } from '../types.js';
-import { MCP_TOOL_AUDIT, type ServerListing, type ToolDefinition } from './analyze.js';
+import { MCP_AUDIT_TOOL_NAME, type ServerListing, type ToolDefinition } from './analyze.js';
 import { escapeInvisible } from './rules.js';
 
 export function toolDefinitionHash(tool: ToolDefinition): string {
@@ -68,7 +68,7 @@ export function comparePins(
   const server = escapeInvisible(listing.serverName);
   const finding = (ruleId: string, severity: Severity, name: string, title: string, message: string): Finding =>
     makeFinding({
-      tool: MCP_TOOL_AUDIT,
+      tool: MCP_AUDIT_TOOL_NAME,
       rule_id: ruleId,
       severity,
       category: 'security',

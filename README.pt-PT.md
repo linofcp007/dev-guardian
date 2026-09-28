@@ -9,7 +9,7 @@ Trilingue: as skills e os comandos respondem em inglês, português ou espanhol,
 ## O que inclui
 
 - **13 skills** e **10 comandos** slash para o Claude Code / Cowork (abaixo).
-- Um **servidor MCP** com **57 ferramentas** e **18 recursos**, em TypeScript sobre `node:sqlite`, entregue já compilado — referência completa em [docs/tools.md](docs/tools.md) (em inglês).
+- Um **servidor MCP** com **58 ferramentas** e **18 recursos**, em TypeScript sobre `node:sqlite`, entregue já compilado — referência completa em [docs/tools.md](docs/tools.md) (em inglês).
 - **142 regras Semgrep em 10 packs** escritas para este projeto: classes de bugs para sete linguagens, um pack RGPD e um pack de inventário de rotas para nove linguagens — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de proteção** que bloqueiam comandos de shell catastróficos, verificam pacotes no momento da instalação e avisam quando um segredo é escrito num ficheiro — ver [docs/hooks.md](docs/hooks.md).
 - Uma **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuração de hosts, um resumo no terminal e um dashboard HTML.
@@ -82,7 +82,7 @@ A versão 2.0.0 tinha 48; o `CHANGELOG.md` indica, para cada nome antigo, o que 
 | --- | --- |
 | Scans de segurança | `security_scan_full`, `scan_sast`, `scan_secrets`, `scan_deps`, `scan_containers`, `scan_iac`, `review_pr` |
 | Bugs e qualidade | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
-| Dependências e cadeia de fornecimento | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
+| Dependências e cadeia de fornecimento | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superfície de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | Histórico e triagem | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
 | Relatórios | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |

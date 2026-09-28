@@ -1,6 +1,6 @@
 # dev-guardian MCP server
 
-The stdio MCP server behind the dev-guardian plugin: **57 tools** and **18 resources** for security, quality, bug hunting, dependencies, compliance, observability and performance. Every tool and resource, with its parameters, is listed in [`docs/tools.md`](../docs/tools.md), which `npm run build` generates from the registry.
+The stdio MCP server behind the dev-guardian plugin: **58 tools** and **18 resources** for security, quality, bug hunting, dependencies, compliance, observability and performance. Every tool and resource, with its parameters, is listed in [`docs/tools.md`](../docs/tools.md), which `npm run build` generates from the registry.
 
 Claude Code starts it from `.claude-plugin/plugin.json`:
 

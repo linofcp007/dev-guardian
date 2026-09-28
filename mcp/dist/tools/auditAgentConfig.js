@@ -53,7 +53,8 @@ const tool = {
         'to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a ' +
         'project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). ' +
         'Hashes each MCP server entry and flags ones changed since the previous audit. No network access; ' +
-        'nothing here is executed.',
+        'nothing here is executed. For the tool definitions a server actually serves (poisoning, rug pulls), ' +
+        'use audit_mcp_tools, which starts the servers you name.',
     inputSchema,
     handler: (input, ctx) => handler(input, ctx),
 };
