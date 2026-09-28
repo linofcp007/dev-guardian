@@ -52755,6 +52755,7 @@ async function handler2(input, ctx) {
   } catch (e) {
     return failDomain3("not_a_git_repo", e.message);
   }
+  const treeHash = await computeTreeHash(projectPath);
   const format2 = inp.format ?? "cyclonedx-json";
   const inlineMaxBytes = Math.min(inp.inline_max_kb ?? DEFAULT_INLINE_KB, MAX_INLINE_KB) * 1024;
   const scanId = randomUUID3();
@@ -52803,7 +52804,7 @@ async function handler2(input, ctx) {
     scan_id: scanId,
     scan_type: "sbom",
     project_path: projectPath,
-    tree_hash: "",
+    tree_hash: treeHash,
     report_dir: outFile
   });
   ctx.storage.scans.finalize({
@@ -73618,8 +73619,11 @@ import { basename as basename9, join as join78, posix, win32 } from "node:path";
 
 // src/vex/render.ts
 var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
-function nvdUrl(vulnerability) {
-  return /^CVE-\d{4}-\d+$/i.test(vulnerability) ? `https://nvd.nist.gov/vuln/detail/${vulnerability.toUpperCase()}` : null;
+function sourceOf(id) {
+  if (/^CVE-\d{4}-\d+$/i.test(id)) return { name: "NVD", url: `https://nvd.nist.gov/vuln/detail/${id.toUpperCase()}` };
+  if (/^GHSA(-[0-9a-z]{4}){3}$/i.test(id)) return { name: "GitHub Advisories", url: `https://github.com/advisories/${id}` };
+  if (/^(PYSEC|GO|RUSTSEC|OSV|GSD|MAL)-/i.test(id)) return { name: "OSV", url: `https://osv.dev/vulnerability/${id}` };
+  return null;
 }
 function renderOpenVex(statements, meta) {
   return {
@@ -73633,14 +73637,18 @@ function renderOpenVex(statements, meta) {
   };
 }
 function openVexStatement(s, meta) {
-  const url = nvdUrl(s.vulnerability);
+  const source = sourceOf(s.vulnerability);
   const product = {
     "@id": meta.product.id,
     identifiers: { purl: meta.product.id },
     ...s.subcomponent_purls.length > 0 ? { subcomponents: s.subcomponent_purls.map((purl) => ({ "@id": purl, identifiers: { purl } })) } : {}
   };
   return {
-    vulnerability: { ...url !== null ? { "@id": url } : {}, name: s.vulnerability },
+    vulnerability: {
+      ...source !== null ? { "@id": source.url } : {},
+      name: s.vulnerability,
+      ...s.aliases.length > 0 ? { aliases: s.aliases } : {}
+    },
     products: [product],
     status: s.status,
     ...s.justification !== void 0 ? { justification: s.justification } : {},
@@ -73674,10 +73682,15 @@ function renderCycloneDxVex(statements, meta) {
     return ref;
   };
   const vulnerabilities = statements.map((s) => {
-    const url = nvdUrl(s.vulnerability);
+    const source = sourceOf(s.vulnerability);
+    const references = s.aliases.flatMap((id) => {
+      const from = sourceOf(id);
+      return from === null ? [] : [{ id, source: from }];
+    });
     return {
       id: s.vulnerability,
-      ...url !== null ? { source: { name: "NVD", url } } : {},
+      ...source !== null ? { source } : {},
+      ...references.length > 0 ? { references } : {},
       analysis: cycloneDxAnalysis(s),
       ...s.status === "affected" && s.action_statement !== void 0 ? { recommendation: s.action_statement } : {},
       affects: [{ ref: refOf(s) }]
@@ -73796,6 +73809,37 @@ function purlsFor(inventory, name, version2, ecosystem) {
   const types = new Set(matching.map(purlType));
   return types.size > 1 ? { purls: [], ambiguous: true } : { purls: matching, ambiguous: false };
 }
+function buildPurl(ecosystem, name, version2) {
+  if (ecosystem === null || version2 === null || name === "" || version2 === "") return null;
+  const at = `@${encodeURIComponent(version2)}`;
+  const seg = (s) => encodeURIComponent(s);
+  switch (ecosystem) {
+    case "npm": {
+      const scoped = /^(@[^/]+)\/(.+)$/.exec(name);
+      return scoped?.[1] !== void 0 && scoped[2] !== void 0 ? `pkg:npm/${seg(scoped[1])}/${seg(scoped[2])}${at}` : `pkg:npm/${seg(name)}${at}`;
+    }
+    case "pypi":
+      return `pkg:pypi/${seg(name.toLowerCase().replace(/_/g, "-"))}${at}`;
+    case "golang":
+      return `pkg:golang/${name.split("/").map(seg).join("/")}${at}`;
+    case "maven": {
+      const [group, artifact] = name.split(":");
+      return group !== void 0 && artifact !== void 0 ? `pkg:maven/${seg(group)}/${seg(artifact)}${at}` : null;
+    }
+    case "composer": {
+      const parts = name.toLowerCase().split("/");
+      return parts.length === 2 ? `pkg:composer/${parts.map(seg).join("/")}${at}` : null;
+    }
+    case "nuget":
+    case "cargo":
+    case "gem":
+    case "hex":
+    case "pub":
+      return `pkg:${ecosystem}/${seg(name)}${at}`;
+    default:
+      return null;
+  }
+}
 function purlType(purl) {
   return /^pkg:([^/]+)\//.exec(purl)?.[1]?.toLowerCase() ?? null;
 }
@@ -73814,26 +73858,107 @@ function buildVexStatements(inputs) {
   const active = inputs.suppressions.filter(
     (s) => (s.expires_at === void 0 || Date.parse(s.expires_at) > inputs.now) && (s.project_path === void 0 || s.project_path === inputs.projectPath)
   );
-  return inputs.cves.map((cve) => statementFor(cve, inputs, active));
+  const members = [
+    ...inputs.cves.map(memberOfRow),
+    ...inputs.findings.flatMap((f) => {
+      const member = memberOfFinding(f);
+      return member === null ? [] : [member];
+    })
+  ];
+  const drafts = groupMembers(members).map((group) => statementFor(group, inputs, active));
+  return mergeSameSubcomponent(drafts);
 }
-function statementFor(cve, inputs, active) {
-  const installed = cve.installed_version ?? null;
-  const findings = findingsOf(cve, inputs.findings);
-  const subject = findings.map(dependencySubjectOf).find((s) => s !== null && s.ecosystem !== null) ?? null;
-  const ecosystem = subject?.ecosystem ?? sbomEcosystem(inputs.sbom, cve.package_name, installed);
-  const base = {
-    vulnerability: cve.cve_id,
-    package_name: cve.package_name,
-    installed_version: installed,
-    fixed_version: cve.fixed_version ?? null,
-    severity: cve.severity,
-    subcomponent_purls: inputs.sbom === null ? [] : purlsFor(inputs.sbom, cve.package_name, installed, ecosystem).purls
+function memberOfRow(row) {
+  return {
+    ids: [row.cve_id],
+    keys: /* @__PURE__ */ new Set([vulnIdKey(row.cve_id)]),
+    pkg: row.package_name.toLowerCase(),
+    name: row.package_name,
+    version: row.installed_version ?? null,
+    row
   };
-  const label = `${cve.package_name}${installed === null ? "" : `@${installed}`}`;
-  const suppressions = findings.map((f) => active.find((s) => matches(s, f)));
-  const vex = suppressions.map((s) => s?.vex_status === "not_affected" ? s : void 0);
+}
+function memberOfFinding(finding4) {
+  const coordinates = dependencyCoordinates(finding4);
+  const subject = dependencySubjectOf(finding4);
+  const ids2 = findingVulnIds(finding4);
+  if (coordinates === null || subject === null || ids2.length === 0) return null;
+  return {
+    ids: ids2,
+    keys: new Set(ids2.map(vulnIdKey)),
+    pkg: coordinates.name.toLowerCase(),
+    name: coordinates.name,
+    version: subject.version,
+    finding: finding4
+  };
+}
+function groupMembers(members) {
+  const parent = members.map((_, i2) => i2);
+  const find = (i2) => {
+    let root = i2;
+    while (parent[root] !== root) root = parent[root] ?? root;
+    return root;
+  };
+  for (let i2 = 0; i2 < members.length; i2 += 1) {
+    for (let j = i2 + 1; j < members.length; j += 1) {
+      const a2 = members[i2];
+      const b = members[j];
+      if (a2 === void 0 || b === void 0) continue;
+      if (a2.pkg === b.pkg && a2.version === b.version && intersects(a2.keys, b.keys)) {
+        parent[find(j)] = find(i2);
+      }
+    }
+  }
+  const byRoot = /* @__PURE__ */ new Map();
+  members.forEach((member, index) => {
+    const root = find(index);
+    const group = byRoot.get(root) ?? { members: [], first: index };
+    group.members.push(member);
+    byRoot.set(root, group);
+  });
+  const groups = [...byRoot.values()];
+  const exact = groups.filter((g) => g.members[0]?.version !== null);
+  const out = [...exact];
+  for (const loose of groups.filter((g) => g.members[0]?.version === null)) {
+    const pkg = loose.members[0]?.pkg;
+    const keys = new Set(loose.members.flatMap((m) => [...m.keys]));
+    const targets = exact.filter((g) => g.members[0]?.pkg === pkg && g.members.some((m) => intersects(m.keys, keys)));
+    if (targets.length === 0) out.push(loose);
+    for (const target of targets) target.members.push(...loose.members);
+  }
+  return out.sort((a2, b) => a2.first - b.first);
+}
+function intersects(a2, b) {
+  for (const key of a2) if (b.has(key)) return true;
+  return false;
+}
+function statementFor(group, inputs, active) {
+  const rows = group.members.flatMap((m) => m.row === void 0 ? [] : [m.row]);
+  const findings = uniqueFindings(group.members.flatMap((m) => m.finding === void 0 ? [] : [m.finding]));
+  const version2 = group.members.find((m) => m.version !== null)?.version ?? null;
+  const name = rows[0]?.package_name ?? group.members[0]?.name ?? "";
+  const { vulnerability, aliases } = namesOf(group.members);
+  const subjects = findings.flatMap((f) => {
+    const subject = dependencySubjectOf(f);
+    return subject === null ? [] : [{ ...subject, version: subject.version ?? version2 }];
+  });
+  const ecosystem = subjects.find((s) => s.ecosystem !== null)?.ecosystem ?? sbomEcosystem(inputs.sbom, name, version2);
+  const sbomPurls = inputs.sbom === null ? [] : purlsFor(inputs.sbom, name, version2, ecosystem).purls;
+  const built = buildPurl(ecosystem, name, version2);
+  const base = {
+    vulnerability,
+    aliases,
+    package_name: name,
+    installed_version: version2,
+    fixed_version: rows.find((r) => r.fixed_version !== void 0)?.fixed_version ?? null,
+    severity: maxSeverity([...rows.map((r) => r.severity), ...findings.map((f) => f.severity)]),
+    subcomponent_purls: sbomPurls.length > 0 ? sbomPurls : built === null ? [] : [built]
+  };
+  const label = `${name}${version2 === null ? "" : `@${version2}`}`;
+  const vex = findings.map((f) => active.find((s) => matches(s, f) && s.vex_status === "not_affected"));
+  const justifications = new Set(vex.map((s) => s?.vex_justification));
   const first = vex[0];
-  if (first !== void 0 && vex.every((s) => s !== void 0) && first.vex_justification !== void 0) {
+  if (first !== void 0 && vex.every((s) => s !== void 0) && justifications.size === 1 && first.vex_justification !== void 0) {
     return {
       ...base,
       status: "not_affected",
@@ -73842,16 +73967,13 @@ function statementFor(cve, inputs, active) {
       status_notes: `${label}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`
     };
   }
-  const suppressedNote = suppressions.some((s) => s !== void 0) ? ` The finding is suppressed in dev-guardian without a VEX justification on every copy, so it is not exported as not_affected.` : "";
-  const assessment = inputs.dependency === null ? null : assessDependency(
-    subject ?? { package_name: cve.package_name, ecosystem, version: installed, manifest: null },
-    inputs.dependency
-  );
+  const suppressedNote = findings.some((f) => active.some((s) => matches(s, f))) ? vex.every((s) => s !== void 0) ? " Its findings are stated not_affected for different reasons, so no single justification can be published." : " The finding is suppressed in dev-guardian without a VEX justification on every copy, so it is not exported as not_affected." : "";
+  const assessment = assess(subjects, { package_name: name, ecosystem, version: version2, manifest: null }, inputs.dependency);
   if (assessment?.verdict === "reachable") {
     return {
       ...base,
       status: "affected",
-      action_statement: cve.fixed_version !== void 0 ? `Upgrade ${cve.package_name}${installed === null ? "" : ` from ${installed}`} to ${cve.fixed_version} or later.` : `No fixed version of ${cve.package_name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
+      action_statement: base.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
       status_notes: `${label}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
     };
   }
@@ -73861,34 +73983,87 @@ function statementFor(cve, inputs, active) {
     status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
   };
 }
+function namesOf(members) {
+  const ids2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const member of members) {
+    for (const id of member.ids) {
+      if (seen.has(vulnIdKey(id))) continue;
+      seen.add(vulnIdKey(id));
+      ids2.push(id);
+    }
+  }
+  const vulnerability = ids2.find(isCveId) ?? ids2[0] ?? "";
+  return { vulnerability, aliases: ids2.filter((id) => vulnIdKey(id) !== vulnIdKey(vulnerability)) };
+}
+function assess(subjects, fallback, index) {
+  if (index === null) return null;
+  const rank = { reachable: 0, imported: 1, unknown: 2 };
+  const assessments = (subjects.length > 0 ? subjects : [fallback]).map((s) => assessDependency(s, index));
+  return assessments.sort((a2, b) => rank[a2.verdict] - rank[b.verdict])[0] ?? null;
+}
 function whyNot(assessment) {
   if (assessment === null) {
     return "no attack-surface snapshot, so whether the package is imported was not checked (run map_attack_surface)";
   }
   if (assessment.verdict === "imported") {
-    return `imported by ${assessment.importing_files.slice(0, 5).join(", ")}, which no known HTTP route reaches through the import graph`;
+    return `imported by ${assessment.importing_files.slice(0, 5).join(", ")}, which no known HTTP route was shown to reach with this version`;
   }
   return assessment.coverage_gaps[0] ?? "nothing showed the package in use";
 }
-function findingsOf(cve, findings) {
-  const id = cve.cve_id.toUpperCase();
-  const name = cve.package_name.toLowerCase();
-  const sameCve = findings.filter((f) => {
-    const coordinates = dependencyCoordinates(f);
-    if (coordinates === null || coordinates.name.toLowerCase() !== name) return false;
-    return findingCveIds(f).includes(id) || f.rule_id?.toUpperCase() === id;
-  });
-  const sameVersion = sameCve.filter((f) => dependencyCoordinates(f)?.version === cve.installed_version);
-  return sameVersion.length > 0 ? sameVersion : sameCve;
-}
 function matches(s, f) {
   return s.finding_fingerprint === f.fingerprint || f.identity !== void 0 && s.finding_identity === f.identity;
+}
+function uniqueFindings(findings) {
+  const seen = /* @__PURE__ */ new Set();
+  return findings.filter((f) => seen.has(f.fingerprint) ? false : (seen.add(f.fingerprint), true));
+}
+function maxSeverity(severities) {
+  return severities.reduce((max, s) => SEVERITY_ORDER[s] > SEVERITY_ORDER[max] ? s : max, "info");
 }
 function sbomEcosystem(sbom, name, version2) {
   if (sbom === null) return null;
   const { purls, ambiguous } = purlsFor(sbom, name, version2, null);
   const first = purls[0];
   return ambiguous || first === void 0 ? null : purlType(first);
+}
+var STATUS_CAUTION = { affected: 0, under_investigation: 1, not_affected: 2 };
+function mergeSameSubcomponent(drafts) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const draft of drafts) {
+    const key = `${vulnIdKey(draft.vulnerability)}|${[...draft.subcomponent_purls].sort().join(",")}`;
+    byKey.set(key, [...byKey.get(key) ?? [], draft]);
+  }
+  return [...byKey.values()].map(mergeOne);
+}
+function mergeOne(same) {
+  const [first, ...rest] = same;
+  if (first === void 0) throw new Error("mergeOne: empty group");
+  if (rest.length === 0) return first;
+  const status = same.map((s) => s.status).sort((a2, b) => STATUS_CAUTION[a2] - STATUS_CAUTION[b])[0] ?? "under_investigation";
+  const justifications = new Set(same.map((s) => s.justification));
+  const agreed = status === "not_affected" && justifications.size === 1 ? first : null;
+  const one = (values) => new Set(values).size === 1 ? values[0] ?? null : null;
+  const aliases = [...new Map(same.flatMap((s) => s.aliases).map((a2) => [vulnIdKey(a2), a2])).values()].filter((a2) => vulnIdKey(a2) !== vulnIdKey(first.vulnerability));
+  const affected = same.find((s) => s.status === "affected");
+  const notes = [
+    `One statement for ${same.length} package versions this document cannot tell apart (no purl could be built), with the most cautious status of them:`,
+    ...same.map((s) => s.status_notes)
+  ].join(" ");
+  return {
+    vulnerability: first.vulnerability,
+    aliases,
+    package_name: one(same.map((s) => s.package_name)) ?? first.package_name,
+    installed_version: one(same.map((s) => s.installed_version)),
+    fixed_version: one(same.map((s) => s.fixed_version)),
+    severity: maxSeverity(same.map((s) => s.severity)),
+    status: status === "not_affected" && agreed === null ? "under_investigation" : status,
+    ...agreed?.justification !== void 0 ? { justification: agreed.justification } : {},
+    ...agreed?.impact_statement !== void 0 ? { impact_statement: agreed.impact_statement } : {},
+    ...affected?.action_statement !== void 0 ? { action_statement: affected.action_statement } : {},
+    status_notes: notes,
+    subcomponent_purls: first.subcomponent_purls
+  };
 }
 
 // src/tools/exportVex.ts
@@ -73902,12 +74077,13 @@ var inputSchema28 = {
 var tool48 = {
   name: "export_vex",
   title: "Export VEX (OpenVEX / CycloneDX)",
-  description: "Write a VEX document for project_path: one statement per CVE of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full). Status: not_affected ONLY from a suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding's dependency provider finds the package imported by a file an HTTP route reaches (latest map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is never guessed. The product and each vulnerable package are named by purl from the newest generate_sbom when there is one. Writes .guardian/reports/vex-*/vex.openvex.json (format openvex, default) or vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know \u2014 no SBOM, no surface snapshot, a partial dependency scan \u2014 and nothing is written when no CVE was measured. No network.",
+  description: "Write a VEX document for project_path: one statement per vulnerability (and package version) of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full), named by its CVE or its own GHSA/PYSEC id with the aliases its scanner gave \u2014 tied to findings by those ids only, never by ids a description mentions. Status: not_affected ONLY from a suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding's dependency provider finds that version imported by a file an HTTP route reaches (latest map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is never guessed. Packages are named by purl (the newest generate_sbom's, else built from ecosystem, name and version); the product by the SBOM's purl only when that SBOM describes the same tree. Writes .guardian/reports/vex-*/vex.openvex.json (openvex, default) or vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know \u2014 no SBOM, no surface snapshot, a partial scan \u2014 and nothing is written when no vulnerability was measured. No network.",
   inputSchema: inputSchema28,
   handler: async (input, ctx) => handler45(input, ctx)
 };
 registerToolModule(tool48);
 var NO_STATEMENTS = { total: 0, not_affected: 0, affected: 0, under_investigation: 0 };
+var EMPTY_CONTEXT = { suppressions: [], now: 0, dependency: null, sbom: null };
 async function handler45(input, ctx) {
   const inp = input;
   const format2 = inp.format ?? "openvex";
@@ -73939,33 +74115,34 @@ async function handler45(input, ctx) {
     );
   }
   const cves = ctx.storage.cves.listActive(depsScan.scan_id);
-  if (cves.length === 0) {
+  const findings = ctx.storage.findings.listByScan(depsScan.scan_id);
+  if (buildVexStatements({ ...EMPTY_CONTEXT, cves, findings, projectPath }).length === 0) {
     return nothingWritten(format2, depsScan, {
       unknowns,
-      note: `Nothing was written: the dependency scan ${depsScan.scan_id} measured 0 CVEs, and a VEX document needs at least one statement.`
+      note: `Nothing was written: the dependency scan ${depsScan.scan_id} measured 0 vulnerabilities, and a VEX document needs at least one statement.`
     });
   }
   const sbom = readSbom(ctx, projectPath, unknowns);
   const surface = readSurface(ctx, projectPath, depsScan, unknowns);
   const statements = buildVexStatements({
     cves,
-    findings: ctx.storage.findings.listByScan(depsScan.scan_id),
+    findings,
     suppressions: ctx.storage.suppressions.listAll(),
     projectPath,
     now: Date.now(),
     dependency: surface?.index ?? null,
     sbom: sbom?.inventory ?? null
   });
-  if (sbom !== null) {
-    const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
-    if (unnamed > 0) {
-      unknowns.push(
-        `${unnamed} statement(s) name a package version the SBOM does not list (or lists in more than one ecosystem), so they carry no subcomponent purl \u2014 the SBOM may predate the dependency scan`
-      );
-    }
+  const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
+  if (unnamed > 0) {
+    unknowns.push(
+      `${unnamed} statement(s) carry no subcomponent purl: neither a finding nor the SBOM said which ecosystem (or which version) the package is from`
+    );
   }
-  const product = productOf(projectPath, sbom?.inventory ?? null);
-  if (product.source === "directory" && sbom !== null) {
+  const trust = sbom === null ? null : sbomTrust(sbom.scan, depsScan);
+  if (trust !== null && trust.note !== null) unknowns.push(trust.note);
+  const product = productOf(projectPath, sbom !== null && trust?.trusted === true ? sbom.inventory : null);
+  if (product.source === "directory" && sbom !== null && trust?.trusted === true) {
     unknowns.push("the SBOM names no product purl, so the product is identified by its directory name only");
   }
   const documentId = randomUUID19();
@@ -73994,6 +74171,7 @@ async function handler45(input, ctx) {
     unknowns,
     statements_sample: statements.slice(0, SAMPLE_SIZE2).map((s) => ({
       vulnerability: s.vulnerability,
+      ...s.aliases.length > 0 ? { aliases: s.aliases } : {},
       package: s.package_name,
       installed_version: s.installed_version,
       status: s.status,
@@ -74093,6 +74271,23 @@ function productOf(projectPath, sbom) {
   const productPurl = sbom?.product_purl ?? null;
   if (productPurl !== null) return { id: productPurl, name, source: "sbom" };
   return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: "directory" };
+}
+function sbomTrust(sbom, deps) {
+  const label = `the newest SBOM (${sbom.scan_id}, ${sbom.started_at})`;
+  if (sbom.tree_hash !== "" && deps.tree_hash !== "") {
+    if (sbom.tree_hash === deps.tree_hash) return { trusted: true, note: null };
+    return {
+      trusted: false,
+      note: `${label} describes another tree (${sbom.tree_hash}) than the dependency scan (${deps.tree_hash}): its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
+    };
+  }
+  if (Date.parse(sbom.started_at) < Date.parse(deps.started_at)) {
+    return {
+      trusted: false,
+      note: `${label} is older than the dependency scan (${deps.started_at}) and records no tree: its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
+    };
+  }
+  return { trusted: true, note: null };
 }
 function isAbsolutePath(name) {
   return posix.isAbsolute(name) || win32.isAbsolute(name);

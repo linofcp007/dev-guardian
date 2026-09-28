@@ -19,9 +19,13 @@
  * CycloneDX 1.6 (`schema/bom-1.6.schema.json`, tag 1.6), a BOM whose
  * `vulnerabilities[].analysis` is the VEX: `state`, `justification`,
  * `response`, `detail`, and `affects[].ref` naming a component `bom-ref` in
- * the same BOM. OpenVEX → CycloneDX mapping, after the CycloneDX maintainers'
- * own table (github.com/CycloneDX/specification discussion #609, "Mapping
- * CycloneDX bi-directionally to Minimum Requirements for VEX"):
+ * the same BOM. A vulnerability's other ids go in `references`, each with its
+ * source. OpenVEX → CycloneDX mapping, after the table a community member
+ * (RingoDev) posted opening github.com/CycloneDX/specification discussion
+ * #609 ("Mapping CycloneDX bi-directionally to Minimum Requirements for VEX",
+ * March 2025), and CycloneDX maintainer Steve Springett's reply on its one
+ * open row — a user's proposal and a maintainer's comment, not a mapping
+ * CycloneDX publishes:
  *
  *   not_affected + component_not_present             → state false_positive
  *   not_affected + vulnerable_code_not_present        → not_affected, code_not_present
@@ -37,11 +41,20 @@
  *   under_investigation                               → in_triage
  */
 const OPENVEX_CONTEXT = 'https://openvex.dev/ns/v0.2.0';
-/** NVD's page for a CVE id; nothing for any other kind of id. */
-function nvdUrl(vulnerability) {
-    return /^CVE-\d{4}-\d+$/i.test(vulnerability)
-        ? `https://nvd.nist.gov/vuln/detail/${vulnerability.toUpperCase()}`
-        : null;
+/**
+ * Where a vulnerability id is published: NVD for a CVE, GitHub's advisory
+ * database for a GHSA id, OSV for the schemes it indexes (PYSEC, GO,
+ * RUSTSEC, OSV, …). Null for an id of any other scheme — named, never linked
+ * to a page that may not exist.
+ */
+function sourceOf(id) {
+    if (/^CVE-\d{4}-\d+$/i.test(id))
+        return { name: 'NVD', url: `https://nvd.nist.gov/vuln/detail/${id.toUpperCase()}` };
+    if (/^GHSA(-[0-9a-z]{4}){3}$/i.test(id))
+        return { name: 'GitHub Advisories', url: `https://github.com/advisories/${id}` };
+    if (/^(PYSEC|GO|RUSTSEC|OSV|GSD|MAL)-/i.test(id))
+        return { name: 'OSV', url: `https://osv.dev/vulnerability/${id}` };
+    return null;
 }
 export function renderOpenVex(statements, meta) {
     return {
@@ -55,7 +68,7 @@ export function renderOpenVex(statements, meta) {
     };
 }
 function openVexStatement(s, meta) {
-    const url = nvdUrl(s.vulnerability);
+    const source = sourceOf(s.vulnerability);
     const product = {
         '@id': meta.product.id,
         identifiers: { purl: meta.product.id },
@@ -64,7 +77,11 @@ function openVexStatement(s, meta) {
             : {}),
     };
     return {
-        vulnerability: { ...(url !== null ? { '@id': url } : {}), name: s.vulnerability },
+        vulnerability: {
+            ...(source !== null ? { '@id': source.url } : {}),
+            name: s.vulnerability,
+            ...(s.aliases.length > 0 ? { aliases: s.aliases } : {}),
+        },
         products: [product],
         status: s.status,
         ...(s.justification !== undefined ? { justification: s.justification } : {}),
@@ -101,10 +118,15 @@ export function renderCycloneDxVex(statements, meta) {
         return ref;
     };
     const vulnerabilities = statements.map((s) => {
-        const url = nvdUrl(s.vulnerability);
+        const source = sourceOf(s.vulnerability);
+        const references = s.aliases.flatMap((id) => {
+            const from = sourceOf(id);
+            return from === null ? [] : [{ id, source: from }];
+        });
         return {
             id: s.vulnerability,
-            ...(url !== null ? { source: { name: 'NVD', url } } : {}),
+            ...(source !== null ? { source } : {}),
+            ...(references.length > 0 ? { references } : {}),
             analysis: cycloneDxAnalysis(s),
             ...(s.status === 'affected' && s.action_statement !== undefined
                 ? { recommendation: s.action_statement }

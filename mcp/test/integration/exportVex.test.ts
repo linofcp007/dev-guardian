@@ -102,7 +102,7 @@ function seedSurface(treeHash = 'tree-1'): number {
   }).id;
 }
 
-function seedSbom(): string {
+function seedSbom(treeHash = '', startedAt?: string): string {
   const file = join(projectPath, 'sbom.cdx.json');
   writeFileSync(file, JSON.stringify({
     bomFormat: 'CycloneDX',
@@ -113,7 +113,10 @@ function seedSbom(): string {
       { type: 'library', name: 'minimist', version: '1.2.5', purl: 'pkg:npm/minimist@1.2.5' },
     ],
   }));
-  ctx.storage.scans.insert({ scan_id: 'sbom-1', scan_type: 'sbom', project_path: projectPath, tree_hash: '' });
+  ctx.storage.scans.insert({ scan_id: 'sbom-1', scan_type: 'sbom', project_path: projectPath, tree_hash: treeHash });
+  if (startedAt !== undefined) {
+    ctx.storage.rawHandle().prepare('UPDATE scans SET started_at = ? WHERE id = ?').run(startedAt, 'sbom-1');
+  }
   ctx.storage.scans.finalize({
     scan_id: 'sbom-1', status: 'completed', tools_run: [{ name: 'syft', status: 'ok' }], missing_tools: [],
     meta: { format: 'cyclonedx-json', file_path: file },
@@ -214,7 +217,33 @@ describe('export_vex', () => {
 
     expect(r.file_path).toBeNull();
     expect(r.deps_scan?.scan_id).toBe('deps-0');
-    expect(r.note).toMatch(/0 CVE/);
+    expect(r.note).toMatch(/0 vulnerabilities/);
+  });
+
+  it('states a PYSEC-only advisory a scan recorded no CVE row for (review M3)', async () => {
+    // pip-audit writes a scan_cves row only for a vulnerability with a CVE
+    // alias; a PYSEC-only one exists only as a finding.
+    ctx.storage.scans.insert({ scan_id: 'deps-py', scan_type: 'deps_audit', project_path: projectPath, tree_hash: 't' });
+    ctx.storage.findings.bulkInsert([{
+      scan_id: 'deps-py', fingerprint: 'fp-pysec', identity: 'id-pysec', tool: 'pip-audit', rule_id: 'PYSEC-2024-60',
+      severity: 'medium', category: 'security', subcategory: 'dependency', title: 'PYSEC-2024-60 in jinja2 3.1.3',
+      file_path: 'requirements.txt', snippet: 'jinja2@3.1.3', fix_available: true,
+    }]);
+    ctx.storage.scans.finalize({
+      scan_id: 'deps-py', status: 'completed', tools_run: [{ name: 'pip-audit', status: 'ok' }], missing_tools: [],
+    });
+
+    const r = await exportVex();
+
+    expect(r.statements.total).toBe(1);
+    if (r.file_path === null) throw new Error('no document written');
+    const doc = JSON.parse(readFileSync(r.file_path, 'utf8')) as {
+      statements: Array<{ vulnerability: { name: string; '@id'?: string }; products: Array<{ subcomponents?: unknown[] }> }>;
+    };
+    expect(doc.statements[0]?.vulnerability).toEqual({ '@id': 'https://osv.dev/vulnerability/PYSEC-2024-60', name: 'PYSEC-2024-60' });
+    expect(doc.statements[0]?.products[0]?.subcomponents).toEqual([
+      { '@id': 'pkg:pypi/jinja2@3.1.3', identifiers: { purl: 'pkg:pypi/jinja2@3.1.3' } },
+    ]);
   });
 
   it('never writes the absolute project path into the document, even when the SBOM names the product by it', async () => {
@@ -246,6 +275,42 @@ describe('export_vex', () => {
     if (cdx.file_path === null) throw new Error('no document written');
     const doc = JSON.parse(readFileSync(cdx.file_path, 'utf8')) as { metadata: { component: { name: string } } };
     expect(doc.metadata.component.name).toBe(basename(projectPath));
+  });
+
+  it('does not trust the product purl of an SBOM older than the dependency scan, and says so', async () => {
+    seedDepsScan();
+    seedSurface();
+    seedSbom('', '2000-01-01T00:00:00.000Z');
+
+    const r = await exportVex();
+
+    expect(r.unknowns.join(' | ')).toMatch(/SBOM .*older than the dependency scan/);
+    expect(r.product.source).toBe('directory');
+    // The packages are still named: a purl is name + version, whatever its age.
+    if (r.file_path === null) throw new Error('no document written');
+    expect(readFileSync(r.file_path, 'utf8')).toContain('pkg:npm/lodash@4.17.20');
+  });
+
+  it('does not trust the product purl of an SBOM of another tree, and says so', async () => {
+    seedDepsScan('tree-1');
+    seedSurface('tree-1');
+    seedSbom('tree-older');
+
+    const r = await exportVex();
+
+    expect(r.unknowns.join(' | ')).toMatch(/SBOM .*another tree/);
+    expect(r.product.source).toBe('directory');
+  });
+
+  it('trusts an SBOM of the same tree as the dependency scan', async () => {
+    seedDepsScan('tree-1');
+    seedSurface('tree-1');
+    seedSbom('tree-1', '2000-01-01T00:00:00.000Z');
+
+    const r = await exportVex();
+
+    expect(r.product).toEqual({ id: 'pkg:npm/shop@1.0.0', source: 'sbom' });
+    expect(r.unknowns).toEqual([]);
   });
 
   it('names a surface snapshot of a different tree than the dependency scan', async () => {

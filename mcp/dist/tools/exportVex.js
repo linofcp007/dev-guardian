@@ -1,18 +1,21 @@
 /**
  * `export_vex` — a VEX document (OpenVEX, or CycloneDX VEX) for one project:
- * one statement per CVE of its latest usable dependency scan.
+ * one statement per vulnerability (and package version) of its latest usable
+ * dependency scan.
  *
  * This module is wiring: it reads storage, the SBOM file and the surface
  * snapshot, and writes the document. Every status rule is in
  * `../vex/statements.ts`; every field name in `../vex/render.ts`, with the
  * specifications they follow.
  *
- *   - CVEs: `scan_cves` of the newest usable scan of a CVE-source type
- *     (`CVE_SOURCE_SCAN_TYPES`, judged on its `deps` slot — the dashboard's
- *     and `risk_score`'s read), with that scan's findings for the VEX
- *     suppressions and the package's ecosystem.
+ *   - Vulnerabilities: `scan_cves` of the newest usable scan of a CVE-source
+ *     type (`CVE_SOURCE_SCAN_TYPES`, judged on its `deps` slot — the
+ *     dashboard's and `risk_score`'s read) and that scan's vulnerability
+ *     findings, tied by their own ids (`../vex/statements.ts`).
  *   - Purls: the newest completed `generate_sbom` scan of the project, read
- *     from its file on disk.
+ *     from its file on disk, else built from ecosystem, name and version; the
+ *     SBOM's PRODUCT purl only when it describes the dependency scan's tree
+ *     (`sbomTrust`).
  *   - Reachability: the dependency provider over the project's latest
  *     `map_attack_surface` snapshot, computed here rather than read from
  *     stored `validate_finding` verdicts, which may be of an older snapshot.
@@ -23,7 +26,7 @@
  * the "clean because nothing looked" this project refuses to report.
  *
  * Nothing is written when there is nothing to state: no usable dependency
- * scan, or one that measured no CVE. OpenVEX requires at least one
+ * scan, or one that measured no vulnerability. OpenVEX requires at least one
  * statement, and an empty document would read as "not affected by anything".
  *
  * No network, no subprocess; one file under `.guardian/reports/vex-*`.
@@ -63,21 +66,26 @@ const inputSchema = {
 const tool = {
     name: 'export_vex',
     title: 'Export VEX (OpenVEX / CycloneDX)',
-    description: 'Write a VEX document for project_path: one statement per CVE of its latest usable dependency ' +
-        'scan (scan_deps, deps_audit or security_scan_full). Status: not_affected ONLY from a ' +
+    description: 'Write a VEX document for project_path: one statement per vulnerability (and package version) ' +
+        'of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full), named by ' +
+        'its CVE or its own GHSA/PYSEC id with the aliases its scanner gave — tied to findings by those ' +
+        'ids only, never by ids a description mentions. Status: not_affected ONLY from a ' +
         'suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding\'s ' +
-        'dependency provider finds the package imported by a file an HTTP route reaches (latest ' +
+        'dependency provider finds that version imported by a file an HTTP route reaches (latest ' +
         'map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is ' +
-        'never guessed. The product and each vulnerable package are named by purl from the newest ' +
-        'generate_sbom when there is one. Writes .guardian/reports/vex-*/vex.openvex.json (format ' +
-        'openvex, default) or vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could ' +
-        'not know — no SBOM, no surface snapshot, a partial dependency scan — and nothing is written ' +
-        'when no CVE was measured. No network.',
+        'never guessed. Packages are named by purl (the newest generate_sbom\'s, else built from ' +
+        'ecosystem, name and version); the product by the SBOM\'s purl only when that SBOM describes ' +
+        'the same tree. Writes .guardian/reports/vex-*/vex.openvex.json (openvex, default) or ' +
+        'vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know — no SBOM, ' +
+        'no surface snapshot, a partial scan — and nothing is written when no vulnerability was ' +
+        'measured. No network.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
 registerToolModule(tool);
 const NO_STATEMENTS = { total: 0, not_affected: 0, affected: 0, under_investigation: 0 };
+/** Enough to ask "is there any statement to make at all", reading nothing else. */
+const EMPTY_CONTEXT = { suppressions: [], now: 0, dependency: null, sbom: null };
 async function handler(input, ctx) {
     const inp = input;
     const format = inp.format ?? 'openvex';
@@ -111,34 +119,41 @@ async function handler(input, ctx) {
         unknowns.push(`${found.skipped.count} newer dependency scan(s) scanned nothing and were passed over; the CVEs ` +
             `are those of ${depsScan.scan_id} (${depsScan.started_at})`);
     }
+    // The scan's CVE rows AND its vulnerability findings: a PYSEC- or GHSA-only
+    // advisory (pip-audit records a row only for one with a CVE alias) exists
+    // only as a finding.
     const cves = ctx.storage.cves.listActive(depsScan.scan_id);
-    if (cves.length === 0) {
+    const findings = ctx.storage.findings.listByScan(depsScan.scan_id);
+    if (buildVexStatements({ ...EMPTY_CONTEXT, cves, findings, projectPath }).length === 0) {
         return nothingWritten(format, depsScan, {
             unknowns,
-            note: `Nothing was written: the dependency scan ${depsScan.scan_id} measured 0 CVEs, and a VEX ` +
-                'document needs at least one statement.',
+            note: `Nothing was written: the dependency scan ${depsScan.scan_id} measured 0 vulnerabilities, and a ` +
+                'VEX document needs at least one statement.',
         });
     }
     const sbom = readSbom(ctx, projectPath, unknowns);
     const surface = readSurface(ctx, projectPath, depsScan, unknowns);
     const statements = buildVexStatements({
         cves,
-        findings: ctx.storage.findings.listByScan(depsScan.scan_id),
+        findings,
         suppressions: ctx.storage.suppressions.listAll(),
         projectPath,
         now: Date.now(),
         dependency: surface?.index ?? null,
         sbom: sbom?.inventory ?? null,
     });
-    if (sbom !== null) {
-        const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
-        if (unnamed > 0) {
-            unknowns.push(`${unnamed} statement(s) name a package version the SBOM does not list (or lists in more than ` +
-                'one ecosystem), so they carry no subcomponent purl — the SBOM may predate the dependency scan');
-        }
+    const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
+    if (unnamed > 0) {
+        unknowns.push(`${unnamed} statement(s) carry no subcomponent purl: neither a finding nor the SBOM said which ` +
+            'ecosystem (or which version) the package is from');
     }
-    const product = productOf(projectPath, sbom?.inventory ?? null);
-    if (product.source === 'directory' && sbom !== null) {
+    // The SBOM's own product purl is trusted only for the tree the CVEs came
+    // from — an older SBOM (or one of another tree) may name another release.
+    const trust = sbom === null ? null : sbomTrust(sbom.scan, depsScan);
+    if (trust !== null && trust.note !== null)
+        unknowns.push(trust.note);
+    const product = productOf(projectPath, sbom !== null && trust?.trusted === true ? sbom.inventory : null);
+    if (product.source === 'directory' && sbom !== null && trust?.trusted === true) {
         unknowns.push('the SBOM names no product purl, so the product is identified by its directory name only');
     }
     const documentId = randomUUID();
@@ -168,6 +183,7 @@ async function handler(input, ctx) {
         unknowns,
         statements_sample: statements.slice(0, SAMPLE_SIZE).map((s) => ({
             vulnerability: s.vulnerability,
+            ...(s.aliases.length > 0 ? { aliases: s.aliases } : {}),
             package: s.package_name,
             installed_version: s.installed_version,
             status: s.status,
@@ -279,6 +295,34 @@ function productOf(projectPath, sbom) {
     if (productPurl !== null)
         return { id: productPurl, name, source: 'sbom' };
     return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: 'directory' };
+}
+/**
+ * Whether the SBOM describes the tree the CVEs were measured on (review of
+ * part C, M9). `generate_sbom` records its tree; an SBOM stored before it did
+ * (an empty tree hash) is judged by its age instead. Trusted: same tree, or
+ * no tree recorded and not older than the dependency scan. A package purl is
+ * name and version, true of any SBOM that lists that version; the PRODUCT
+ * purl names a release, and is what an untrusted SBOM is not believed on.
+ */
+function sbomTrust(sbom, deps) {
+    const label = `the newest SBOM (${sbom.scan_id}, ${sbom.started_at})`;
+    if (sbom.tree_hash !== '' && deps.tree_hash !== '') {
+        if (sbom.tree_hash === deps.tree_hash)
+            return { trusted: true, note: null };
+        return {
+            trusted: false,
+            note: `${label} describes another tree (${sbom.tree_hash}) than the dependency scan (${deps.tree_hash}): ` +
+                'its product purl is not used, and it may list other package versions — run generate_sbom again',
+        };
+    }
+    if (Date.parse(sbom.started_at) < Date.parse(deps.started_at)) {
+        return {
+            trusted: false,
+            note: `${label} is older than the dependency scan (${deps.started_at}) and records no tree: its ` +
+                'product purl is not used, and it may list other package versions — run generate_sbom again',
+        };
+    }
+    return { trusted: true, note: null };
 }
 /** Absolute on either platform — the SBOM may have been written on the other one. */
 function isAbsolutePath(name) {

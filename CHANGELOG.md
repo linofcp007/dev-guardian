@@ -48,11 +48,15 @@ version bump.
   A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding
   counts as `uncorrelated` until the next scan.
 - **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
-  statement per CVE of the latest usable dependency scan — `not_affected` only from a VEX
-  suppression, `affected` when the dependency provider finds the package reachable, otherwise
-  `under_investigation`; `fixed` is never guessed. Product and package purls come from the newest
-  SBOM. Written under `.guardian/reports/vex-*`; `unknowns` names what was missing (no SBOM, no
-  surface snapshot, a partial scan), and nothing is written when no CVE was measured.
+  statement per vulnerability and package version of the latest usable dependency scan — named by
+  its CVE or its own GHSA/PYSEC id, with its aliases (OpenVEX `aliases`, CycloneDX `references`),
+  and tied to findings by those ids only. `not_affected` only from a VEX suppression on every copy,
+  `affected` when the dependency provider finds that version reachable, otherwise
+  `under_investigation`; `fixed` is never guessed. Packages are named by purl (the SBOM's, else built
+  from ecosystem, name and version), never two statuses for one; the product by the SBOM's purl only
+  when that SBOM describes the same tree (`generate_sbom` now records its tree). Written under
+  `.guardian/reports/vex-*`; `unknowns` names what was missing, and nothing is written when no
+  vulnerability was measured.
 
 ## [3.0.0] - 2026-09-28
 

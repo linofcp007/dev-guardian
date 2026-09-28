@@ -48,7 +48,9 @@ import type { ToolRun } from '../../src/types.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { computeTreeHash } from '../../src/treeHash/computeTreeHash.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { okResult } from '../helpers/toolResult.js';
 
 afterAll(cleanupTempDirs);
 
@@ -418,6 +420,22 @@ describe('generate_sbom', () => {
     expect(r.produced_by).toBe('syft');
     expect(r.components_count).toBe(3);
     expect(r.inline).toBeDefined();
+  });
+
+  it('records the tree it described, so export_vex can tell an SBOM of another tree', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'syft' ? '/fake/bin/syft' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const oFlag = opts.args?.find((a) => a.startsWith('cyclonedx-json='));
+      if (oFlag) writeFileSync(oFlag.replace('cyclonedx-json=', ''), readFileSync(join(FIX, 'syft-cyclonedx.json'), 'utf8'), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = okResult<{ scan_id: string }>(await getTool('generate_sbom').handler({ project_path: project }, plugin));
+    const row = plugin.storage.scans.getById(r.scan_id);
+    expect(row?.tree_hash).toBe(await computeTreeHash(project));
+    expect(row?.tree_hash).not.toBe('');
   });
 
   it('omits inline when inline_max_kb is below the SBOM size', async () => {

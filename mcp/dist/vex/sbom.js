@@ -93,6 +93,51 @@ export function purlsFor(inventory, name, version, ecosystem) {
     const types = new Set(matching.map(purlType));
     return types.size > 1 ? { purls: [], ambiguous: true } : { purls: matching, ambiguous: false };
 }
+/**
+ * The purl of one package version, per the purl specification
+ * (github.com/package-url/purl-spec) for the ecosystems dev-guardian's
+ * scanners report: npm (`@scope` as the namespace, `%40`-encoded), pypi
+ * (lower case, `_` → `-`), golang (the module path's segments), maven
+ * (Trivy's `group:artifact`), composer (`vendor/name`), nuget, cargo, gem,
+ * hex, pub. Null for any other ecosystem, and without a version: a purl with
+ * no version would speak for every version of the package.
+ */
+export function buildPurl(ecosystem, name, version) {
+    if (ecosystem === null || version === null || name === '' || version === '')
+        return null;
+    const at = `@${encodeURIComponent(version)}`;
+    const seg = (s) => encodeURIComponent(s);
+    switch (ecosystem) {
+        case 'npm': {
+            const scoped = /^(@[^/]+)\/(.+)$/.exec(name);
+            return scoped?.[1] !== undefined && scoped[2] !== undefined
+                ? `pkg:npm/${seg(scoped[1])}/${seg(scoped[2])}${at}`
+                : `pkg:npm/${seg(name)}${at}`;
+        }
+        case 'pypi':
+            return `pkg:pypi/${seg(name.toLowerCase().replace(/_/g, '-'))}${at}`;
+        case 'golang':
+            return `pkg:golang/${name.split('/').map(seg).join('/')}${at}`;
+        case 'maven': {
+            const [group, artifact] = name.split(':');
+            return group !== undefined && artifact !== undefined
+                ? `pkg:maven/${seg(group)}/${seg(artifact)}${at}`
+                : null;
+        }
+        case 'composer': {
+            const parts = name.toLowerCase().split('/');
+            return parts.length === 2 ? `pkg:composer/${parts.map(seg).join('/')}${at}` : null;
+        }
+        case 'nuget':
+        case 'cargo':
+        case 'gem':
+        case 'hex':
+        case 'pub':
+            return `pkg:${ecosystem}/${seg(name)}${at}`;
+        default:
+            return null;
+    }
+}
 /** `pkg:npm/lodash@4` → `npm`; null for anything that is not a purl. */
 export function purlType(purl) {
     return /^pkg:([^/]+)\//.exec(purl)?.[1]?.toLowerCase() ?? null;

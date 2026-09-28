@@ -58,6 +58,7 @@ function cycloneDxValidator() {
 function statement(over: Partial<VexStatement> = {}): VexStatement {
   return {
     vulnerability: 'CVE-2021-23337',
+    aliases: [],
     package_name: 'lodash',
     installed_version: '4.17.20',
     fixed_version: '4.17.21',
@@ -71,6 +72,7 @@ function statement(over: Partial<VexStatement> = {}): VexStatement {
 
 const STATEMENTS: VexStatement[] = [
   statement({
+    aliases: ['GHSA-35jh-r3h4-6jhm', 'PYSEC-2099-1'],
     status: 'not_affected',
     justification: 'vulnerable_code_not_in_execute_path',
     impact_statement: 'template() is never called',
@@ -151,8 +153,12 @@ describe('renderOpenVex', () => {
       }],
     });
     expect(doc.statements[1]).toMatchObject({ status: 'affected', action_statement: expect.stringMatching(/4\.17\.21/) });
-    // A non-CVE id is named, never linked to NVD.
-    expect(doc.statements[3]?.['vulnerability']).toEqual({ name: 'GHSA-p6mc-m468-83gw' });
+    // Its aliases, the ids its scanner gave for the same vulnerability.
+    expect(doc.statements[0]?.['vulnerability']).toMatchObject({ aliases: ['GHSA-35jh-r3h4-6jhm', 'PYSEC-2099-1'] });
+    // A GHSA id links to its GitHub advisory, never to NVD; no aliases, no key.
+    expect(doc.statements[3]?.['vulnerability']).toEqual({
+      '@id': 'https://github.com/advisories/GHSA-p6mc-m468-83gw', name: 'GHSA-p6mc-m468-83gw',
+    });
   });
 });
 
@@ -183,6 +189,20 @@ describe('renderCycloneDxVex', () => {
     // Every affects ref names a component in the same BOM.
     const refs = new Set(doc.components.map((c) => c['bom-ref']));
     for (const v of doc.vulnerabilities) for (const a of v.affects) expect(refs.has(a.ref)).toBe(true);
+  });
+
+  it('lists a vulnerability’s aliases as references, each with its source', () => {
+    const doc = renderCycloneDxVex(STATEMENTS, META) as {
+      vulnerabilities: Array<{ id: string; source?: { name: string; url: string }; references?: unknown[] }>;
+    };
+    expect(doc.vulnerabilities[0]?.references).toEqual([
+      { id: 'GHSA-35jh-r3h4-6jhm', source: { name: 'GitHub Advisories', url: 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm' } },
+      { id: 'PYSEC-2099-1', source: { name: 'OSV', url: 'https://osv.dev/vulnerability/PYSEC-2099-1' } },
+    ]);
+    expect(doc.vulnerabilities[2]?.references).toBeUndefined();
+    expect(doc.vulnerabilities[3]?.source).toEqual({
+      name: 'GitHub Advisories', url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw',
+    });
   });
 
   it('maps a justification CycloneDX has no single value for to no justification, keeping the label in detail', () => {
