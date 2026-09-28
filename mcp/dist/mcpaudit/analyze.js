@@ -100,36 +100,31 @@ export function normalizeListing(raw) {
     });
     return { tools, prompts, resources, resourceTemplates, malformed };
 }
+const MiB = 1024 * 1024;
+export const ANALYSIS_BOUNDS = {
+    maxTextChars: 2 * MiB,
+    maxStringChars: 64 * 1024,
+    maxStrings: 50_000,
+    maxMentions: 20_000,
+};
+/** Strings analysed between two yields to the event loop, inside one item. */
+const YIELD_EVERY_STRINGS = 1000;
 /**
- * Bounds of one walk, so a hostile schema cannot make the analysis itself
- * the denial of service. Fix round 3, M2: the first cut stopped at depth 24
- * SILENTLY and read object keys only inside `properties`; now every string
- * and every key is read, and a walk that hits a bound says so — the listing
- * is then only partly analysed, which the tool reports as partial.
+ * Depth bound of one walk (fix round 3, M2): every string and every key is
+ * read, and a walk that hits the bound says so.
  */
 const MAX_DEPTH = 128;
-const MAX_NODES_PER_WALK = 50_000;
-/**
- * Every string in `value` and every object key (a key can carry text the
- * model reads as well as a value can), iteratively. A bound reached is
- * pushed to `cuts`.
- */
-function walkStrings(value, root, item, out, cuts) {
+/** Every string in `value` and every object key, iteratively; a bound reached is pushed to `cuts`. */
+function* walkStrings(value, root, item, cuts) {
     const stack = [{ v: value, path: root, depth: 0 }];
-    let nodes = 0;
     let tooDeep = false;
     while (stack.length > 0) {
         const top = stack.pop();
         if (top === undefined)
             break;
-        nodes += 1;
-        if (nodes > MAX_NODES_PER_WALK) {
-            cuts.push(`${item} ${root}: more than ${MAX_NODES_PER_WALK} nodes; the rest was not analysed`);
-            return;
-        }
         const { v, path, depth } = top;
         if (typeof v === 'string') {
-            out.push({ item, path, text: v });
+            yield { item, path, text: v };
             continue;
         }
         if (v === null || typeof v !== 'object')
@@ -150,7 +145,7 @@ function walkStrings(value, root, item, out, cuts) {
                 continue;
             const [key, child] = entry;
             const childPath = `${path}.${key}`;
-            out.push({ item, path: `${childPath} (key)`, text: key });
+            yield { item, path: `${childPath} (key)`, text: key };
             stack.push({ v: child, path: childPath, depth: depth + 1 });
         }
     }
@@ -162,30 +157,39 @@ function shortName(name) {
     const visible = escapeInvisible(name);
     return visible.length > 80 ? `${visible.slice(0, 80)}…` : visible;
 }
-function fieldsOf(listing, cuts) {
-    const out = [];
+function* itemsOf(listing, cuts) {
     if (listing.instructions !== undefined) {
-        out.push({ item: 'server instructions', path: 'instructions', text: listing.instructions });
+        yield { item: 'server instructions', fields: [{ item: 'server instructions', path: 'instructions', text: listing.instructions }] };
     }
     for (const t of listing.tools) {
         const item = `tool '${shortName(t.name)}'`;
-        out.push({ item, path: 'name', text: t.name });
-        if (t.title !== undefined)
-            out.push({ item, path: 'title', text: t.title });
-        if (t.description !== undefined)
-            out.push({ item, path: 'description', text: t.description });
-        walkStrings(t.inputSchema, 'inputSchema', item, out, cuts);
-        walkStrings(t.outputSchema, 'outputSchema', item, out, cuts);
-        walkStrings(t.annotations, 'annotations', item, out, cuts);
+        yield {
+            item,
+            fields: (function* () {
+                yield { item, path: 'name', text: t.name };
+                if (t.title !== undefined)
+                    yield { item, path: 'title', text: t.title };
+                if (t.description !== undefined)
+                    yield { item, path: 'description', text: t.description };
+                yield* walkStrings(t.inputSchema, 'inputSchema', item, cuts);
+                yield* walkStrings(t.outputSchema, 'outputSchema', item, cuts);
+                yield* walkStrings(t.annotations, 'annotations', item, cuts);
+            })(),
+        };
     }
     for (const p of listing.prompts) {
         const item = `prompt '${shortName(p.name)}'`;
-        out.push({ item, path: 'name', text: p.name });
-        if (p.title !== undefined)
-            out.push({ item, path: 'title', text: p.title });
-        if (p.description !== undefined)
-            out.push({ item, path: 'description', text: p.description });
-        walkStrings(p.arguments, 'arguments', item, out, cuts);
+        yield {
+            item,
+            fields: (function* () {
+                yield { item, path: 'name', text: p.name };
+                if (p.title !== undefined)
+                    yield { item, path: 'title', text: p.title };
+                if (p.description !== undefined)
+                    yield { item, path: 'description', text: p.description };
+                yield* walkStrings(p.arguments, 'arguments', item, cuts);
+            })(),
+        };
     }
     const resources = [
         ...listing.resources.map((r) => ({ r, kind: 'resource' })),
@@ -193,15 +197,15 @@ function fieldsOf(listing, cuts) {
     ];
     for (const { r, kind } of resources) {
         const item = `${kind} '${shortName(r.name)}'`;
-        out.push({ item, path: 'name', text: r.name });
+        const fields = [{ item, path: 'name', text: r.name }];
         if (r.title !== undefined)
-            out.push({ item, path: 'title', text: r.title });
+            fields.push({ item, path: 'title', text: r.title });
         if (r.description !== undefined)
-            out.push({ item, path: 'description', text: r.description });
+            fields.push({ item, path: 'description', text: r.description });
         if (r.uri !== undefined)
-            out.push({ item, path: 'uri', text: r.uri });
+            fields.push({ item, path: 'uri', text: r.uri });
+        yield { item, fields };
     }
-    return out;
 }
 const EXCERPT_BEFORE = 60;
 const EXCERPT_AFTER = 120;
@@ -264,44 +268,62 @@ function ruleMeta(id) {
     if (rule !== undefined) {
         return { rule: id, severity: rule.severity, subcategory: rule.subcategory, label: rule.label, explain: rule.explain };
     }
-    if (id === 'mcp-tool-hidden-unicode') {
-        return {
-            rule: id,
-            severity: 'high',
-            subcategory: 'mcp_tool_poisoning',
-            label: 'hidden Unicode',
-            explain: 'The text carries characters that render as nothing or reorder what is shown — invisible to anyone ' +
-                'reviewing the tool list, read in full by the model.',
-        };
+    switch (id) {
+        case 'mcp-tool-hidden-unicode':
+            return {
+                rule: id,
+                severity: 'high',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'hidden Unicode',
+                explain: 'The text carries characters that render as nothing or reorder what is shown — invisible to anyone ' +
+                    'reviewing the tool list, read in full by the model.',
+            };
+        case 'mcp-tool-homoglyph':
+            return {
+                rule: id,
+                severity: 'medium',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'look-alike letters from another script',
+                explain: 'A word mixes Latin letters with Cyrillic or Greek look-alikes — it reads as one thing to a reviewer ' +
+                    'and is another string to every text check. Ordinary text in another alphabet does not trip this.',
+            };
+        case 'mcp-tool-encoded-blob':
+            return {
+                rule: id,
+                severity: 'medium',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'a large encoded blob',
+                explain: 'The text carries a long base64 run. A description has no use for one; an instruction encoded this ' +
+                    'way passes every plain-text check, and the model can decode it.',
+            };
+        case 'mcp-tool-string-over-bound':
+            return {
+                rule: id,
+                severity: 'medium',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'a string too long to analyse',
+                explain: `A single string is over ${ANALYSIS_BOUNDS.maxStringChars / 1024} KiB — no real tool definition needs ` +
+                    'one, and everything past that length was not analysed. The model reads all of it.',
+            };
+        case 'mcp-tool-cross-server-shadowing':
+            return {
+                rule: id,
+                severity: 'high',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'instructions about how other tools must behave',
+                explain: 'The text names a tool of another server. Every tool of every server shares one context, so a ' +
+                    "description can rewrite another server's behaviour (\"shadowing\") without ever being called itself.",
+            };
+        default:
+            return {
+                rule: id,
+                severity: 'low',
+                subcategory: 'mcp_tool_poisoning',
+                label: 'an abnormally long description',
+                explain: `The description is over ${OVERSIZED_DESCRIPTION_CHARS} characters. Length is no attack by itself, ` +
+                    'but it is where a payload hides below the part a reviewer reads.',
+            };
     }
-    if (id === 'mcp-tool-homoglyph') {
-        return {
-            rule: id,
-            severity: 'medium',
-            subcategory: 'mcp_tool_poisoning',
-            label: 'look-alike letters from another script',
-            explain: 'A word mixes Latin letters with Cyrillic or Greek look-alikes — it reads as one thing to a reviewer ' +
-                'and is another string to every text check. Ordinary text in another alphabet does not trip this.',
-        };
-    }
-    if (id === 'mcp-tool-encoded-blob') {
-        return {
-            rule: id,
-            severity: 'medium',
-            subcategory: 'mcp_tool_poisoning',
-            label: 'a large encoded blob',
-            explain: 'The text carries a long base64 run. A description has no use for one; an instruction encoded this ' +
-                'way passes every plain-text check, and the model can decode it.',
-        };
-    }
-    return {
-        rule: id,
-        severity: 'low',
-        subcategory: 'mcp_tool_poisoning',
-        label: 'an abnormally long description',
-        explain: `The description is over ${OVERSIZED_DESCRIPTION_CHARS} characters. Length is no attack by itself, ` +
-            'but it is where a payload hides below the part a reviewer reads.',
-    };
 }
 function hiddenUnicodeHit(field) {
     const scan = scanInvisible(field.text);
@@ -326,17 +348,36 @@ function blobHit(field) {
     // Readable text hidden in an encoding is a stronger signal than bytes.
     return { ...meta, severity: blob.decodedText === null ? 'medium' : 'high', field, index: 0, detail };
 }
-function oversizedHit(field) {
+/** On the FULL length: a description cut for analysis is still as long as it is. */
+function oversizedHit(field, fullLength) {
     if (field.path !== 'description' && field.path !== 'instructions')
         return null;
-    if (field.text.length <= OVERSIZED_DESCRIPTION_CHARS)
+    if (fullLength <= OVERSIZED_DESCRIPTION_CHARS)
         return null;
     return {
         ...ruleMeta('mcp-tool-description-oversized'),
         field,
-        index: OVERSIZED_DESCRIPTION_CHARS,
-        detail: `${field.text.length} characters`,
+        index: Math.min(OVERSIZED_DESCRIPTION_CHARS, field.text.length),
+        detail: `${fullLength} characters`,
     };
+}
+/** The generic "how other tools must behave" phrasings and `mcp__<server>__<tool>`; names come later. */
+function genericShadowingHit(field, listing) {
+    const meta = ruleMeta('mcp-tool-cross-server-shadowing');
+    // `mcp__<server>__<tool>`: how Claude Code names another server's tool.
+    for (const m of field.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
+        if (m[1] !== undefined && m[1] !== listing.serverName) {
+            return { ...meta, field, index: m.index, detail: `it names ${JSON.stringify(m[0])}, a tool of server '${m[1]}'` };
+        }
+    }
+    const rule = TEXT_RULES.find((r) => r.id === 'mcp-tool-cross-server-shadowing');
+    for (const pattern of rule?.patterns ?? []) {
+        pattern.lastIndex = 0;
+        const m = pattern.exec(field.text);
+        if (m !== null)
+            return { ...meta, field, index: m.index };
+    }
+    return null;
 }
 /**
  * A tool name is matched bare only when it cannot be an ordinary word —
@@ -346,104 +387,182 @@ function oversizedHit(field) {
 function distinctive(name) {
     return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
 }
-function buildShadowIndex(listing, others) {
-    const own = new Set(listing.tools.map((t) => t.name));
-    const bare = new Map();
-    const quoted = new Map();
+function indexMentions(field, index, max) {
+    const put = (map, name) => {
+        if (map.has(name))
+            return;
+        if (index.bare.size + index.quoted.size >= max) {
+            index.full = true;
+            return;
+        }
+        map.set(name, { item: field.item, path: field.path });
+    };
+    for (const m of field.text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
+        const token = m[0].replace(/[.-]+$/, '');
+        for (const candidate of [token, ...token.split('.')])
+            if (distinctive(candidate))
+                put(index.bare, candidate);
+    }
+    for (const m of field.text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
+        if (m[1] !== undefined)
+            put(index.quoted, m[1]);
+    }
+}
+/**
+ * Tools of OTHER servers that `mentions` names (fix round 3, I3: one lookup
+ * per name, never a regex per name), the first per item of `target`.
+ */
+function mentionedNames(target, mentions, others) {
+    const byItem = new Map();
     for (const other of others) {
-        if (other.serverKey === listing.serverKey)
+        if (other.serverKey === target.serverKey)
             continue;
-        for (const toolName of other.toolNames) {
-            if (own.has(toolName))
+        for (const name of other.toolNames) {
+            if (target.ownToolNames.has(name))
                 continue;
-            if (!quoted.has(toolName))
-                quoted.set(toolName, other.serverName);
-            if (distinctive(toolName) && !bare.has(toolName))
-                bare.set(toolName, other.serverName);
-        }
-    }
-    return { bare, quoted };
-}
-/** The first other-server tool name `text` mentions, with where. */
-function mentionedToolName(text, index) {
-    if (index.bare.size > 0) {
-        for (const m of text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
-            const token = m[0].replace(/[.-]+$/, '');
-            const candidates = [token, ...token.split('.')];
-            for (const c of candidates) {
-                const server = index.bare.get(c);
-                if (server !== undefined)
-                    return { name: c, server, at: m.index };
-            }
-        }
-    }
-    if (index.quoted.size > 0) {
-        for (const m of text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
-            const quotedName = m[1];
-            if (quotedName === undefined)
+            const ref = (distinctive(name) ? mentions.bare.get(name) : undefined) ?? mentions.quoted.get(name);
+            if (ref === undefined || byItem.has(ref.item))
                 continue;
-            const server = index.quoted.get(quotedName);
-            if (server !== undefined)
-                return { name: quotedName, server, at: m.index };
+            byItem.set(ref.item, { ref, name, server: other.serverName });
         }
     }
-    return null;
+    return [...byItem.values()];
 }
-function shadowingHits(field, listing, index) {
+/**
+ * The cross-server check for a server whose listing is gone: one finding
+ * per item that names another server's tool — except an item already
+ * reported for shadowing by its own phrasing.
+ */
+export function shadowingFromMentions(target, mentions, others) {
     const meta = ruleMeta('mcp-tool-cross-server-shadowing');
-    const mention = mentionedToolName(field.text, index);
-    if (mention !== null) {
-        return [
-            { ...meta, field, index: mention.at, detail: `it names '${mention.name}', a tool of server '${mention.server}'` },
-        ];
-    }
-    // `mcp__<server>__<tool>`: how Claude Code names another server's tool.
-    for (const m of field.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
-        if (m[1] !== undefined && m[1] !== listing.serverName) {
-            return [{ ...meta, field, index: m.index, detail: `it names ${JSON.stringify(m[0])}, a tool of server '${m[1]}'` }];
-        }
-    }
-    const rule = TEXT_RULES.find((r) => r.id === 'mcp-tool-cross-server-shadowing');
-    for (const pattern of rule?.patterns ?? []) {
-        pattern.lastIndex = 0;
-        const m = pattern.exec(field.text);
-        if (m !== null)
-            return [{ ...meta, field, index: m.index }];
-    }
-    return [];
+    const server = shortName(target.serverName);
+    const hits = mentionedNames(target, mentions, others).filter((m) => !mentions.reported.has(m.ref.item));
+    return hits.map(({ ref, name, server: otherServer }) => makeFinding({
+        tool: MCP_AUDIT_TOOL_NAME,
+        rule_id: meta.rule,
+        severity: meta.severity,
+        category: 'security',
+        subcategory: meta.subcategory,
+        title: escapeInvisible(`MCP server '${server}', ${ref.item}: ${meta.label}`),
+        message: escapeInvisible(`${meta.explain} Seen in ${ref.item} of server '${server}' (${target.sourceLabel}), field ${ref.path}. ` +
+            `Evidence: it names '${name}', a tool of server '${otherServer}'.`),
+        file_path: target.sourceLabel,
+        snippet: escapeInvisible(`${server} > ${ref.item} > ${ref.path}: names '${name}'`),
+        fix_available: false,
+    }));
 }
 function itemKey(hit) {
     return `${hit.rule}\u0000${hit.field.item}`;
 }
-export function analyzeServerListing(listing, others) {
-    return analyzeServerListingDetailed(listing, others).findings;
-}
-export function analyzeServerListingDetailed(listing, others) {
-    const groups = new Map();
-    const add = (hit) => {
-        if (hit === null)
-            return;
-        const key = itemKey(hit);
-        const group = groups.get(key);
-        if (group === undefined)
-            groups.set(key, [hit]);
-        else
-            group.push(hit);
+function startRun(listing, bounds) {
+    return {
+        listing,
+        bounds,
+        groups: new Map(),
+        cuts: [],
+        mentions: { bare: new Map(), quoted: new Map(), full: false, reported: new Set() },
+        strings: 0,
+        chars: 0,
     };
-    const cuts = [];
-    const shadowIndex = buildShadowIndex(listing, others);
-    for (const field of fieldsOf(listing, cuts)) {
-        for (const hit of textRuleHits(field))
-            add(hit);
-        add(hiddenUnicodeHit(field));
-        add(homoglyphHit(field));
-        add(blobHit(field));
-        add(oversizedHit(field));
-        for (const hit of shadowingHits(field, listing, shadowIndex))
-            add(hit);
+}
+function addHit(run, hit) {
+    if (hit === null)
+        return;
+    const key = itemKey(hit);
+    const group = run.groups.get(key);
+    if (group === undefined)
+        run.groups.set(key, [hit]);
+    else
+        group.push(hit);
+}
+function formatChars(n) {
+    if (n % MiB === 0)
+        return `${n / MiB} MiB`;
+    if (n % 1024 === 0)
+        return `${n / 1024} KiB`;
+    return `${n} characters`;
+}
+/**
+ * The analysis, one item at a time: yields after every item and every
+ * {@link YIELD_EVERY_STRINGS} strings, so a driver can give the event loop a
+ * turn — and stop — between them.
+ */
+function* analysisSteps(run) {
+    const { listing, bounds } = run;
+    let overlong = false;
+    for (const { fields } of itemsOf(listing, run.cuts)) {
+        for (const field of fields) {
+            if (run.strings >= bounds.maxStrings) {
+                run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);
+                return;
+            }
+            if (run.chars >= bounds.maxTextChars) {
+                run.cuts.push(`more than ${formatChars(bounds.maxTextChars)} of text; the rest was not analysed`);
+                return;
+            }
+            run.strings += 1;
+            const fullLength = field.text.length;
+            let text = field.text;
+            if (fullLength > bounds.maxStringChars) {
+                addHit(run, {
+                    ...ruleMeta('mcp-tool-string-over-bound'),
+                    field: { ...field, text: field.text.slice(0, EXCERPT_AFTER * 2) },
+                    index: 0,
+                    detail: `${fullLength} characters`,
+                });
+                if (!overlong) {
+                    overlong = true;
+                    run.cuts.push(`strings over ${formatChars(bounds.maxStringChars)} were analysed only up to that length`);
+                }
+                text = text.slice(0, bounds.maxStringChars);
+            }
+            text = text.slice(0, bounds.maxTextChars - run.chars);
+            run.chars += text.length;
+            const analysed = text === field.text ? field : { ...field, text };
+            for (const hit of textRuleHits(analysed))
+                addHit(run, hit);
+            addHit(run, hiddenUnicodeHit(analysed));
+            addHit(run, homoglyphHit(analysed));
+            addHit(run, blobHit(analysed));
+            addHit(run, oversizedHit(analysed, fullLength));
+            const shadow = genericShadowingHit(analysed, listing);
+            if (shadow !== null)
+                run.mentions.reported.add(field.item);
+            addHit(run, shadow);
+            indexMentions(analysed, run.mentions, bounds.maxMentions);
+            if (run.strings % YIELD_EVERY_STRINGS === 0)
+                yield;
+        }
+        yield;
+    }
+}
+function finishRun(run, others) {
+    const { listing } = run;
+    if (run.mentions.full) {
+        run.cuts.push(`more than ${run.bounds.maxMentions} names mentioned; the cross-server check saw only those`);
+    }
+    // With the other servers known now, a name mention joins the item's other
+    // shadowing evidence in one finding; the tool, which drops each listing
+    // before the next server is known, calls shadowingFromMentions later.
+    if (others.length > 0) {
+        const target = {
+            serverKey: listing.serverKey,
+            serverName: listing.serverName,
+            sourceLabel: listing.sourceLabel,
+            ownToolNames: new Set(listing.tools.map((t) => t.name)),
+        };
+        const meta = ruleMeta('mcp-tool-cross-server-shadowing');
+        for (const m of mentionedNames(target, run.mentions, others)) {
+            addHit(run, {
+                ...meta,
+                field: { item: m.ref.item, path: m.ref.path, text: `names '${m.name}'` },
+                index: 0,
+                detail: `it names '${m.name}', a tool of server '${m.server}'`,
+            });
+        }
     }
     const findings = [];
-    for (const hits of groups.values()) {
+    for (const hits of run.groups.values()) {
         const first = hits[0];
         if (first === undefined)
             continue;
@@ -469,7 +588,37 @@ export function analyzeServerListingDetailed(listing, others) {
             fix_available: false,
         }));
     }
-    return { findings, cuts: cuts.map(escapeInvisible) };
+    return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };
+}
+export function analyzeServerListing(listing, others) {
+    return analyzeServerListingDetailed(listing, others).findings;
+}
+/** The whole analysis at once — for tests and small listings. The tool uses {@link analyzeServerListingAsync}. */
+export function analyzeServerListingDetailed(listing, others, bounds = ANALYSIS_BOUNDS) {
+    const run = startRun(listing, bounds);
+    for (const step of analysisSteps(run))
+        void step;
+    return finishRun(run, others);
+}
+/**
+ * The analysis as the tool runs it: a turn of the event loop between items
+ * (and every {@link YIELD_EVERY_STRINGS} strings), so no listing stalls the
+ * server, and a stop — cancel, the audit budget — honoured between them.
+ */
+export async function analyzeServerListingAsync(listing, others, options = {}) {
+    const run = startRun(listing, options.bounds ?? ANALYSIS_BOUNDS);
+    const steps = analysisSteps(run);
+    for (;;) {
+        const stop = options.shouldStop?.() ?? null;
+        if (stop !== null) {
+            run.cuts.push(`analysis stopped: ${stop}`);
+            break;
+        }
+        if (steps.next().done === true)
+            break;
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    return finishRun(run, others);
 }
 const RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function rank(s) {

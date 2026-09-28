@@ -101,7 +101,7 @@ interface ChildAudit {
 }
 
 /** Runs the tool in a child process, killed after `killAfterMs`. */
-function auditInChild(input: Record<string, unknown>, killAfterMs: number): Promise<ChildAudit> {
+function auditInChild(input: Record<string, unknown>, killAfterMs: number, nodeFlags: string[] = []): Promise<ChildAudit> {
   const dir = makeTempDir('mcp-bounds-child-');
   const url = (rel: string): string => JSON.stringify(pathToFileURL(resolve(MCP_ROOT, 'src', rel)).href);
   const script = join(dir, 'audit.mjs');
@@ -121,6 +121,9 @@ function auditInChild(input: Record<string, unknown>, killAfterMs: number): Prom
       'const hb = setInterval(() => { const now = Date.now(); maxGap = Math.max(maxGap, now - last); last = now; }, 50);',
       'const t0 = Date.now();',
       "const result = await TOOLS.find((t) => t.name === 'audit_mcp_tools').handler(input, ctx);",
+      // The gap still open when the handler returns counts too: fix round 4
+      // found a 19 s analysis stall this test missed by clearing first.
+      'maxGap = Math.max(maxGap, Date.now() - last);',
       'clearInterval(hb);',
       'process.stdout.write(JSON.stringify({ elapsed: Date.now() - t0, maxGap, result }));',
       'process.exit(0);',
@@ -128,7 +131,7 @@ function auditInChild(input: Record<string, unknown>, killAfterMs: number): Prom
   );
   return new Promise((done) => {
     const started = Date.now();
-    const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, JSON.stringify(input)], {
+    const child = spawn(process.execPath, [...nodeFlags, ...TSX_NODE_ARGS, script, JSON.stringify(input)], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -182,6 +185,68 @@ describe('C1: the audit keeps its own time', () => {
   });
 });
 
+/**
+ * Fix round 4, C1 residual: the ANALYSIS ran synchronously over every
+ * listing, unbounded, with all of them held to the end. Measured by the
+ * review: one server of 4 pages x a 7 MiB "send data " description stalled
+ * the event loop 19 s (and reported ok, coverage full); 4 x 250 tools x
+ * 4000 enum strings, 27 s; three such servers, 44 s at 1.7 GB RSS, and a
+ * heap abort under --max-old-space-size=600.
+ */
+describe('C1 residual: the analysis is bounded, yields, and is never a clean pass when cut', () => {
+  const quick = (r: ChildAudit): void => {
+    expect(r.killed, 'the audit never returned and was killed').toBe(false);
+    expect(r.elapsed).toBeLessThan(60_000);
+    expect(r.maxGap).toBeLessThan(1500);
+  };
+
+  it.each([
+    ['4 pages x a 7 MiB description', 'huge'],
+    ['4 pages x 250 tools x 4000 enum strings', 'enum'],
+  ])('the review shape (%s) returns promptly, and not as a clean pass', async (_what, mode) => {
+    const dir = project({ s: stdio(mode) });
+    const r = await auditInChild({ project_path: dir, servers: ['s'], timeout_ms: 60_000 }, 150_000);
+    quick(r);
+    expect(r.result?.servers[0]?.status).not.toBe('ok');
+    expect(r.result?.coverage).not.toBe('full');
+  });
+
+  it('text past the analysed-text bound makes the server partial, with the reason', async () => {
+    const dir = project({ s: stdio('bulky') });
+    const r = await auditInChild({ project_path: dir, servers: ['s'], timeout_ms: 60_000 }, 150_000);
+    quick(r);
+    expect(r.result?.servers[0]?.status).toBe('partial');
+    expect(r.result?.servers[0]?.reason).toMatch(/2 MiB of text/);
+  });
+
+  it('strings past the analysed-string count make the server partial, with the reason', async () => {
+    const dir = project({ s: stdio('manyenum') });
+    const r = await auditInChild({ project_path: dir, servers: ['s'], timeout_ms: 60_000 }, 150_000);
+    quick(r);
+    expect(r.result?.servers[0]?.status).toBe('partial');
+    expect(r.result?.servers[0]?.reason).toMatch(/strings/);
+  });
+
+  it('a string over the per-string bound is a finding, and the server partial', async () => {
+    const dir = project({ s: stdio('longstring') });
+    const r = await audit({ project_path: dir, servers: ['s'], timeout_ms: 60_000 });
+    expect(r.servers[0]?.status).toBe('partial');
+    const findings = (r as AuditResult & { findings: Array<{ rule_id?: string }> }).findings;
+    expect(findings.some((f) => f.rule_id === 'mcp-tool-string-over-bound')).toBe(true);
+  });
+
+  it('three heavy servers in one audit stay within a 400 MB heap', async () => {
+    const dir = project({ a: stdio('bulky', { env: { MARK: 'a' } }), b: stdio('bulky', { env: { MARK: 'b' } }), c: stdio('huge') });
+    const r = await auditInChild(
+      { project_path: dir, servers: ['a', 'b', 'c'], timeout_ms: 60_000 },
+      300_000,
+      ['--max-old-space-size=400'],
+    );
+    quick(r);
+    expect(r.result?.servers.map((s) => s.status)).toHaveLength(3);
+  });
+});
+
 describe('I2: remote shapes behind a stdio command', () => {
   it.each([
     ['an https URL argument (mcp-remote)', 'https://192.0.2.1/mcp'],
@@ -229,7 +294,7 @@ describe('I3 and M1: budgets, and saying which one stopped the listing', () => {
     const dir = project({ big: stdio('bigline') });
     const r = await audit({ project_path: dir, servers: ['big'], timeout_ms: 60_000 });
     expect(r.servers[0]?.status).toBe('failed');
-    expect(r.servers[0]?.reason).toMatch(/8 MiB/);
+    expect(r.servers[0]?.reason).toMatch(/2 MiB/);
     expect(r.servers[0]?.reason).not.toMatch(/exited with code/);
   });
 });

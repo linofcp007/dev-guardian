@@ -109,9 +109,13 @@ their respective projects.
   whether the server answered or not. On Windows the command is resolved
   with asynchronous look-ups over the local `PATH` entries only, so a
   network path never blocks the server. Each server has a time budget, an
-  inbound budget (32 MiB, 10 000 messages, 8 MiB per message) and a
-  1000-item cap per list, and the whole audit a budget
-  (`GUARDIAN_MCP_AUDIT_BUDGET_MS`); cancelling the call stops launching.
+  inbound budget (4 MiB, 10 000 messages, 2 MiB per message — 40 times the
+  largest real listing measured) and a 1000-item cap per list; its listing
+  is analysed right after it answers, up to 2 MiB of text, 64 KiB per
+  string and 50 000 strings, with a turn of the event loop between items,
+  then dropped. The whole audit has a budget (`GUARDIAN_MCP_AUDIT_BUDGET_MS`);
+  cancelling the call, or the budget running out, stops launching and stops
+  the analysis. Whatever a bound leaves unread makes that server partial.
   What a started server does while it runs — its own network requests
   included — is that server's code: run the audit only for servers you would
   let the host start.

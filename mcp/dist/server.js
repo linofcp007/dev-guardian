@@ -71194,23 +71194,24 @@ function normalizeListing(raw) {
   });
   return { tools, prompts, resources, resourceTemplates, malformed };
 }
+var MiB = 1024 * 1024;
+var ANALYSIS_BOUNDS = {
+  maxTextChars: 2 * MiB,
+  maxStringChars: 64 * 1024,
+  maxStrings: 5e4,
+  maxMentions: 2e4
+};
+var YIELD_EVERY_STRINGS = 1e3;
 var MAX_DEPTH = 128;
-var MAX_NODES_PER_WALK = 5e4;
-function walkStrings(value, root, item, out, cuts) {
+function* walkStrings(value, root, item, cuts) {
   const stack = [{ v: value, path: root, depth: 0 }];
-  let nodes = 0;
   let tooDeep = false;
   while (stack.length > 0) {
     const top = stack.pop();
     if (top === void 0) break;
-    nodes += 1;
-    if (nodes > MAX_NODES_PER_WALK) {
-      cuts.push(`${item} ${root}: more than ${MAX_NODES_PER_WALK} nodes; the rest was not analysed`);
-      return;
-    }
     const { v, path: path8, depth } = top;
     if (typeof v === "string") {
-      out.push({ item, path: path8, text: v });
+      yield { item, path: path8, text: v };
       continue;
     }
     if (v === null || typeof v !== "object") continue;
@@ -71228,7 +71229,7 @@ function walkStrings(value, root, item, out, cuts) {
       if (entry === void 0) continue;
       const [key, child] = entry;
       const childPath = `${path8}.${key}`;
-      out.push({ item, path: `${childPath} (key)`, text: key });
+      yield { item, path: `${childPath} (key)`, text: key };
       stack.push({ v: child, path: childPath, depth: depth + 1 });
     }
   }
@@ -71238,26 +71239,35 @@ function shortName(name) {
   const visible = escapeInvisible(name);
   return visible.length > 80 ? `${visible.slice(0, 80)}\u2026` : visible;
 }
-function fieldsOf(listing, cuts) {
-  const out = [];
+function* itemsOf(listing, cuts) {
   if (listing.instructions !== void 0) {
-    out.push({ item: "server instructions", path: "instructions", text: listing.instructions });
+    yield { item: "server instructions", fields: [{ item: "server instructions", path: "instructions", text: listing.instructions }] };
   }
   for (const t of listing.tools) {
     const item = `tool '${shortName(t.name)}'`;
-    out.push({ item, path: "name", text: t.name });
-    if (t.title !== void 0) out.push({ item, path: "title", text: t.title });
-    if (t.description !== void 0) out.push({ item, path: "description", text: t.description });
-    walkStrings(t.inputSchema, "inputSchema", item, out, cuts);
-    walkStrings(t.outputSchema, "outputSchema", item, out, cuts);
-    walkStrings(t.annotations, "annotations", item, out, cuts);
+    yield {
+      item,
+      fields: (function* () {
+        yield { item, path: "name", text: t.name };
+        if (t.title !== void 0) yield { item, path: "title", text: t.title };
+        if (t.description !== void 0) yield { item, path: "description", text: t.description };
+        yield* walkStrings(t.inputSchema, "inputSchema", item, cuts);
+        yield* walkStrings(t.outputSchema, "outputSchema", item, cuts);
+        yield* walkStrings(t.annotations, "annotations", item, cuts);
+      })()
+    };
   }
   for (const p of listing.prompts) {
     const item = `prompt '${shortName(p.name)}'`;
-    out.push({ item, path: "name", text: p.name });
-    if (p.title !== void 0) out.push({ item, path: "title", text: p.title });
-    if (p.description !== void 0) out.push({ item, path: "description", text: p.description });
-    walkStrings(p.arguments, "arguments", item, out, cuts);
+    yield {
+      item,
+      fields: (function* () {
+        yield { item, path: "name", text: p.name };
+        if (p.title !== void 0) yield { item, path: "title", text: p.title };
+        if (p.description !== void 0) yield { item, path: "description", text: p.description };
+        yield* walkStrings(p.arguments, "arguments", item, cuts);
+      })()
+    };
   }
   const resources = [
     ...listing.resources.map((r) => ({ r, kind: "resource" })),
@@ -71265,12 +71275,12 @@ function fieldsOf(listing, cuts) {
   ];
   for (const { r, kind } of resources) {
     const item = `${kind} '${shortName(r.name)}'`;
-    out.push({ item, path: "name", text: r.name });
-    if (r.title !== void 0) out.push({ item, path: "title", text: r.title });
-    if (r.description !== void 0) out.push({ item, path: "description", text: r.description });
-    if (r.uri !== void 0) out.push({ item, path: "uri", text: r.uri });
+    const fields = [{ item, path: "name", text: r.name }];
+    if (r.title !== void 0) fields.push({ item, path: "title", text: r.title });
+    if (r.description !== void 0) fields.push({ item, path: "description", text: r.description });
+    if (r.uri !== void 0) fields.push({ item, path: "uri", text: r.uri });
+    yield { item, fields };
   }
-  return out;
 }
 var EXCERPT_BEFORE = 60;
 var EXCERPT_AFTER = 120;
@@ -71321,40 +71331,56 @@ function ruleMeta(id) {
   if (rule !== void 0) {
     return { rule: id, severity: rule.severity, subcategory: rule.subcategory, label: rule.label, explain: rule.explain };
   }
-  if (id === "mcp-tool-hidden-unicode") {
-    return {
-      rule: id,
-      severity: "high",
-      subcategory: "mcp_tool_poisoning",
-      label: "hidden Unicode",
-      explain: "The text carries characters that render as nothing or reorder what is shown \u2014 invisible to anyone reviewing the tool list, read in full by the model."
-    };
+  switch (id) {
+    case "mcp-tool-hidden-unicode":
+      return {
+        rule: id,
+        severity: "high",
+        subcategory: "mcp_tool_poisoning",
+        label: "hidden Unicode",
+        explain: "The text carries characters that render as nothing or reorder what is shown \u2014 invisible to anyone reviewing the tool list, read in full by the model."
+      };
+    case "mcp-tool-homoglyph":
+      return {
+        rule: id,
+        severity: "medium",
+        subcategory: "mcp_tool_poisoning",
+        label: "look-alike letters from another script",
+        explain: "A word mixes Latin letters with Cyrillic or Greek look-alikes \u2014 it reads as one thing to a reviewer and is another string to every text check. Ordinary text in another alphabet does not trip this."
+      };
+    case "mcp-tool-encoded-blob":
+      return {
+        rule: id,
+        severity: "medium",
+        subcategory: "mcp_tool_poisoning",
+        label: "a large encoded blob",
+        explain: "The text carries a long base64 run. A description has no use for one; an instruction encoded this way passes every plain-text check, and the model can decode it."
+      };
+    case "mcp-tool-string-over-bound":
+      return {
+        rule: id,
+        severity: "medium",
+        subcategory: "mcp_tool_poisoning",
+        label: "a string too long to analyse",
+        explain: `A single string is over ${ANALYSIS_BOUNDS.maxStringChars / 1024} KiB \u2014 no real tool definition needs one, and everything past that length was not analysed. The model reads all of it.`
+      };
+    case "mcp-tool-cross-server-shadowing":
+      return {
+        rule: id,
+        severity: "high",
+        subcategory: "mcp_tool_poisoning",
+        label: "instructions about how other tools must behave",
+        explain: `The text names a tool of another server. Every tool of every server shares one context, so a description can rewrite another server's behaviour ("shadowing") without ever being called itself.`
+      };
+    default:
+      return {
+        rule: id,
+        severity: "low",
+        subcategory: "mcp_tool_poisoning",
+        label: "an abnormally long description",
+        explain: `The description is over ${OVERSIZED_DESCRIPTION_CHARS} characters. Length is no attack by itself, but it is where a payload hides below the part a reviewer reads.`
+      };
   }
-  if (id === "mcp-tool-homoglyph") {
-    return {
-      rule: id,
-      severity: "medium",
-      subcategory: "mcp_tool_poisoning",
-      label: "look-alike letters from another script",
-      explain: "A word mixes Latin letters with Cyrillic or Greek look-alikes \u2014 it reads as one thing to a reviewer and is another string to every text check. Ordinary text in another alphabet does not trip this."
-    };
-  }
-  if (id === "mcp-tool-encoded-blob") {
-    return {
-      rule: id,
-      severity: "medium",
-      subcategory: "mcp_tool_poisoning",
-      label: "a large encoded blob",
-      explain: "The text carries a long base64 run. A description has no use for one; an instruction encoded this way passes every plain-text check, and the model can decode it."
-    };
-  }
-  return {
-    rule: id,
-    severity: "low",
-    subcategory: "mcp_tool_poisoning",
-    label: "an abnormally long description",
-    explain: `The description is over ${OVERSIZED_DESCRIPTION_CHARS} characters. Length is no attack by itself, but it is where a payload hides below the part a reviewer reads.`
-  };
 }
 function hiddenUnicodeHit(field2) {
   const scan2 = scanInvisible(field2.text);
@@ -71371,99 +71397,181 @@ function blobHit(field2) {
   const meta = ruleMeta("mcp-tool-encoded-blob");
   return { ...meta, severity: blob.decodedText === null ? "medium" : "high", field: field2, index: 0, detail };
 }
-function oversizedHit(field2) {
+function oversizedHit(field2, fullLength) {
   if (field2.path !== "description" && field2.path !== "instructions") return null;
-  if (field2.text.length <= OVERSIZED_DESCRIPTION_CHARS) return null;
+  if (fullLength <= OVERSIZED_DESCRIPTION_CHARS) return null;
   return {
     ...ruleMeta("mcp-tool-description-oversized"),
     field: field2,
-    index: OVERSIZED_DESCRIPTION_CHARS,
-    detail: `${field2.text.length} characters`
+    index: Math.min(OVERSIZED_DESCRIPTION_CHARS, field2.text.length),
+    detail: `${fullLength} characters`
   };
 }
-function distinctive(name) {
-  return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
-}
-function buildShadowIndex(listing, others) {
-  const own = new Set(listing.tools.map((t) => t.name));
-  const bare = /* @__PURE__ */ new Map();
-  const quoted = /* @__PURE__ */ new Map();
-  for (const other of others) {
-    if (other.serverKey === listing.serverKey) continue;
-    for (const toolName of other.toolNames) {
-      if (own.has(toolName)) continue;
-      if (!quoted.has(toolName)) quoted.set(toolName, other.serverName);
-      if (distinctive(toolName) && !bare.has(toolName)) bare.set(toolName, other.serverName);
-    }
-  }
-  return { bare, quoted };
-}
-function mentionedToolName(text, index) {
-  if (index.bare.size > 0) {
-    for (const m of text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
-      const token = m[0].replace(/[.-]+$/, "");
-      const candidates2 = [token, ...token.split(".")];
-      for (const c3 of candidates2) {
-        const server = index.bare.get(c3);
-        if (server !== void 0) return { name: c3, server, at: m.index };
-      }
-    }
-  }
-  if (index.quoted.size > 0) {
-    for (const m of text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
-      const quotedName = m[1];
-      if (quotedName === void 0) continue;
-      const server = index.quoted.get(quotedName);
-      if (server !== void 0) return { name: quotedName, server, at: m.index };
-    }
-  }
-  return null;
-}
-function shadowingHits(field2, listing, index) {
+function genericShadowingHit(field2, listing) {
   const meta = ruleMeta("mcp-tool-cross-server-shadowing");
-  const mention = mentionedToolName(field2.text, index);
-  if (mention !== null) {
-    return [
-      { ...meta, field: field2, index: mention.at, detail: `it names '${mention.name}', a tool of server '${mention.server}'` }
-    ];
-  }
   for (const m of field2.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
     if (m[1] !== void 0 && m[1] !== listing.serverName) {
-      return [{ ...meta, field: field2, index: m.index, detail: `it names ${JSON.stringify(m[0])}, a tool of server '${m[1]}'` }];
+      return { ...meta, field: field2, index: m.index, detail: `it names ${JSON.stringify(m[0])}, a tool of server '${m[1]}'` };
     }
   }
   const rule = TEXT_RULES.find((r) => r.id === "mcp-tool-cross-server-shadowing");
   for (const pattern of rule?.patterns ?? []) {
     pattern.lastIndex = 0;
     const m = pattern.exec(field2.text);
-    if (m !== null) return [{ ...meta, field: field2, index: m.index }];
+    if (m !== null) return { ...meta, field: field2, index: m.index };
   }
-  return [];
+  return null;
+}
+function distinctive(name) {
+  return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
+}
+function indexMentions(field2, index, max) {
+  const put = (map, name) => {
+    if (map.has(name)) return;
+    if (index.bare.size + index.quoted.size >= max) {
+      index.full = true;
+      return;
+    }
+    map.set(name, { item: field2.item, path: field2.path });
+  };
+  for (const m of field2.text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
+    const token = m[0].replace(/[.-]+$/, "");
+    for (const candidate of [token, ...token.split(".")]) if (distinctive(candidate)) put(index.bare, candidate);
+  }
+  for (const m of field2.text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
+    if (m[1] !== void 0) put(index.quoted, m[1]);
+  }
+}
+function mentionedNames(target, mentions, others) {
+  const byItem = /* @__PURE__ */ new Map();
+  for (const other of others) {
+    if (other.serverKey === target.serverKey) continue;
+    for (const name of other.toolNames) {
+      if (target.ownToolNames.has(name)) continue;
+      const ref = (distinctive(name) ? mentions.bare.get(name) : void 0) ?? mentions.quoted.get(name);
+      if (ref === void 0 || byItem.has(ref.item)) continue;
+      byItem.set(ref.item, { ref, name, server: other.serverName });
+    }
+  }
+  return [...byItem.values()];
+}
+function shadowingFromMentions(target, mentions, others) {
+  const meta = ruleMeta("mcp-tool-cross-server-shadowing");
+  const server = shortName(target.serverName);
+  const hits = mentionedNames(target, mentions, others).filter((m) => !mentions.reported.has(m.ref.item));
+  return hits.map(
+    ({ ref, name, server: otherServer }) => makeFinding({
+      tool: MCP_AUDIT_TOOL_NAME,
+      rule_id: meta.rule,
+      severity: meta.severity,
+      category: "security",
+      subcategory: meta.subcategory,
+      title: escapeInvisible(`MCP server '${server}', ${ref.item}: ${meta.label}`),
+      message: escapeInvisible(
+        `${meta.explain} Seen in ${ref.item} of server '${server}' (${target.sourceLabel}), field ${ref.path}. Evidence: it names '${name}', a tool of server '${otherServer}'.`
+      ),
+      file_path: target.sourceLabel,
+      snippet: escapeInvisible(`${server} > ${ref.item} > ${ref.path}: names '${name}'`),
+      fix_available: false
+    })
+  );
 }
 function itemKey(hit) {
   return `${hit.rule}\0${hit.field.item}`;
 }
-function analyzeServerListingDetailed(listing, others) {
-  const groups = /* @__PURE__ */ new Map();
-  const add = (hit) => {
-    if (hit === null) return;
-    const key = itemKey(hit);
-    const group = groups.get(key);
-    if (group === void 0) groups.set(key, [hit]);
-    else group.push(hit);
+function startRun(listing, bounds) {
+  return {
+    listing,
+    bounds,
+    groups: /* @__PURE__ */ new Map(),
+    cuts: [],
+    mentions: { bare: /* @__PURE__ */ new Map(), quoted: /* @__PURE__ */ new Map(), full: false, reported: /* @__PURE__ */ new Set() },
+    strings: 0,
+    chars: 0
   };
-  const cuts = [];
-  const shadowIndex = buildShadowIndex(listing, others);
-  for (const field2 of fieldsOf(listing, cuts)) {
-    for (const hit of textRuleHits(field2)) add(hit);
-    add(hiddenUnicodeHit(field2));
-    add(homoglyphHit(field2));
-    add(blobHit(field2));
-    add(oversizedHit(field2));
-    for (const hit of shadowingHits(field2, listing, shadowIndex)) add(hit);
+}
+function addHit(run, hit) {
+  if (hit === null) return;
+  const key = itemKey(hit);
+  const group = run.groups.get(key);
+  if (group === void 0) run.groups.set(key, [hit]);
+  else group.push(hit);
+}
+function formatChars(n2) {
+  if (n2 % MiB === 0) return `${n2 / MiB} MiB`;
+  if (n2 % 1024 === 0) return `${n2 / 1024} KiB`;
+  return `${n2} characters`;
+}
+function* analysisSteps(run) {
+  const { listing, bounds } = run;
+  let overlong = false;
+  for (const { fields } of itemsOf(listing, run.cuts)) {
+    for (const field2 of fields) {
+      if (run.strings >= bounds.maxStrings) {
+        run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);
+        return;
+      }
+      if (run.chars >= bounds.maxTextChars) {
+        run.cuts.push(`more than ${formatChars(bounds.maxTextChars)} of text; the rest was not analysed`);
+        return;
+      }
+      run.strings += 1;
+      const fullLength = field2.text.length;
+      let text = field2.text;
+      if (fullLength > bounds.maxStringChars) {
+        addHit(run, {
+          ...ruleMeta("mcp-tool-string-over-bound"),
+          field: { ...field2, text: field2.text.slice(0, EXCERPT_AFTER * 2) },
+          index: 0,
+          detail: `${fullLength} characters`
+        });
+        if (!overlong) {
+          overlong = true;
+          run.cuts.push(`strings over ${formatChars(bounds.maxStringChars)} were analysed only up to that length`);
+        }
+        text = text.slice(0, bounds.maxStringChars);
+      }
+      text = text.slice(0, bounds.maxTextChars - run.chars);
+      run.chars += text.length;
+      const analysed = text === field2.text ? field2 : { ...field2, text };
+      for (const hit of textRuleHits(analysed)) addHit(run, hit);
+      addHit(run, hiddenUnicodeHit(analysed));
+      addHit(run, homoglyphHit(analysed));
+      addHit(run, blobHit(analysed));
+      addHit(run, oversizedHit(analysed, fullLength));
+      const shadow = genericShadowingHit(analysed, listing);
+      if (shadow !== null) run.mentions.reported.add(field2.item);
+      addHit(run, shadow);
+      indexMentions(analysed, run.mentions, bounds.maxMentions);
+      if (run.strings % YIELD_EVERY_STRINGS === 0) yield;
+    }
+    yield;
+  }
+}
+function finishRun(run, others) {
+  const { listing } = run;
+  if (run.mentions.full) {
+    run.cuts.push(`more than ${run.bounds.maxMentions} names mentioned; the cross-server check saw only those`);
+  }
+  if (others.length > 0) {
+    const target = {
+      serverKey: listing.serverKey,
+      serverName: listing.serverName,
+      sourceLabel: listing.sourceLabel,
+      ownToolNames: new Set(listing.tools.map((t) => t.name))
+    };
+    const meta = ruleMeta("mcp-tool-cross-server-shadowing");
+    for (const m of mentionedNames(target, run.mentions, others)) {
+      addHit(run, {
+        ...meta,
+        field: { item: m.ref.item, path: m.ref.path, text: `names '${m.name}'` },
+        index: 0,
+        detail: `it names '${m.name}', a tool of server '${m.server}'`
+      });
+    }
   }
   const findings = [];
-  for (const hits of groups.values()) {
+  for (const hits of run.groups.values()) {
     const first = hits[0];
     if (first === void 0) continue;
     const severity = hits.reduce((s, h2) => rank(h2.severity) > rank(s) ? h2.severity : s, first.severity);
@@ -71490,7 +71598,21 @@ function analyzeServerListingDetailed(listing, others) {
       })
     );
   }
-  return { findings, cuts: cuts.map(escapeInvisible) };
+  return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };
+}
+async function analyzeServerListingAsync(listing, others, options = {}) {
+  const run = startRun(listing, options.bounds ?? ANALYSIS_BOUNDS);
+  const steps = analysisSteps(run);
+  for (; ; ) {
+    const stop = options.shouldStop?.() ?? null;
+    if (stop !== null) {
+      run.cuts.push(`analysis stopped: ${stop}`);
+      break;
+    }
+    if (steps.next().done === true) break;
+    await new Promise((resolve24) => setImmediate(resolve24));
+  }
+  return finishRun(run, others);
 }
 var RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function rank(s) {
@@ -74587,17 +74709,17 @@ function getDefaultEnvironment() {
 // src/mcpaudit/stdioTransport.ts
 init_execa();
 init_mjs();
-var MiB = 1024 * 1024;
+var MiB2 = 1024 * 1024;
 var DEFAULT_INBOUND_LIMITS = {
-  maxBytes: 32 * MiB,
+  maxBytes: 4 * MiB2,
   maxMessages: 1e4,
-  maxMessageBytes: 8 * MiB
+  maxMessageBytes: 2 * MiB2
 };
 var STDERR_TAIL_CHARS = 2048;
 var TERM_GRACE_MS = 2e3;
 var KILL_GRACE_MS2 = 2e3;
 function formatBytes(n2) {
-  return n2 % MiB === 0 ? `${n2 / MiB} MiB` : `${n2} bytes`;
+  return n2 % MiB2 === 0 ? `${n2 / MiB2} MiB` : `${n2} bytes`;
 }
 function probeEnvironment(entryEnv, treeToken) {
   const base = {};
@@ -75166,28 +75288,45 @@ async function handler44(input, ctx, callMeta) {
     throw e;
   }
 }
+function visibleList(values) {
+  return values.map(escapeInvisible);
+}
 async function runAudit(ctx, run, callMeta) {
   const { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected } = run;
   const toolsRun = [];
   const missingTools = [];
   const reports = [];
-  const probed = [];
+  const audited = [];
+  const findings = [];
   const clientVersion = resolveVersion();
   const budgetMs = auditBudgetMs();
   const auditDeadline = Date.now() + budgetMs;
   const signal = callMeta?.signal;
+  const shouldStop = () => {
+    if (signal?.aborted === true) return "cancelled";
+    if (Date.now() > auditDeadline) return `the audit's overall budget of ${budgetMs} ms ran out`;
+    return null;
+  };
   for (const u2 of collected.sourcesUnreadable) {
-    const runName = `${MCP_AUDIT_TOOL_NAME}:${u2.source}`;
-    toolsRun.push({ name: runName, status: "failed", reason: `config not read: ${u2.reason}` });
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${escapeInvisible(u2.source)}`;
+    toolsRun.push({ name: runName, status: "failed", reason: escapeInvisible(`config not read: ${u2.reason}`) });
     missingTools.push(runName);
   }
   const unreadableNote = collected.sourcesUnreadable.length === 0 ? "" : `; these config sources exist and could not be read: ${collected.sourcesUnreadable.map((u2) => `${u2.source} (${u2.reason})`).join(", ")}`;
   const notRun = (name, status, reason, extra = {}) => {
-    const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? name}`;
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? escapeInvisible(name)}`;
     const shown = escapeInvisible(reason);
     toolsRun.push({ name: runName, status, reason: shown });
     missingTools.push(runName);
-    reports.push({ name, ...extra, status, reason: shown, tools_count: 0, prompts_count: 0, resources_count: 0 });
+    reports.push({
+      name: escapeInvisible(name),
+      ...extra,
+      status,
+      reason: shown,
+      tools_count: 0,
+      prompts_count: 0,
+      resources_count: 0
+    });
   };
   for (const target of planTargets(names, collected.entries)) {
     const name = target.requested;
@@ -75205,9 +75344,9 @@ async function runAudit(ctx, run, callMeta) {
     }
     if (target.kind === "duplicate") {
       reports.push({
-        name,
+        name: escapeInvisible(name),
         status: "skipped",
-        reason: `the same entry as '${escapeInvisible(target.of)}', audited once`,
+        reason: escapeInvisible(`the same server as '${target.of}', audited once`),
         tools_count: 0,
         prompts_count: 0,
         resources_count: 0
@@ -75215,11 +75354,11 @@ async function runAudit(ctx, run, callMeta) {
       continue;
     }
     const entry = target.entry;
-    const qualified = qualifiedName(entry);
+    const qualified = escapeInvisible(qualifiedName(entry));
     const base = {
       server_key: qualified,
-      source: entry.sourceLabel,
-      ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: target.alsoDeclaredIn } : {}
+      source: escapeInvisible(entry.sourceLabel),
+      ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: visibleList(target.alsoDeclaredIn) } : {}
     };
     if (signal?.aborted === true) {
       notRun(name, "skipped", "cancelled before it was started", base);
@@ -75240,7 +75379,7 @@ async function runAudit(ctx, run, callMeta) {
     const withTransport = {
       ...base,
       ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
-      ...outcome.warnings.length > 0 ? { warnings: outcome.warnings.map(escapeInvisible) } : {}
+      ...outcome.warnings.length > 0 ? { warnings: visibleList(outcome.warnings) } : {}
     };
     if (!isListed(outcome)) {
       notRun(name, outcome.status, outcome.reason, withTransport);
@@ -75257,12 +75396,26 @@ async function runAudit(ctx, run, callMeta) {
       resources: normalized.resources,
       resourceTemplates: normalized.resourceTemplates
     };
-    const partialReason = outcome.status === "partial" ? escapeInvisible(outcome.reason ?? "the listing was cut short") : void 0;
+    const partialReasons = outcome.status === "partial" ? [outcome.reason ?? "the listing was cut short"] : [];
+    const complete = partialReasons.length === 0;
+    const comparison = comparePins(
+      listing,
+      ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
+      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
+      { complete }
+    );
+    findings.push(...comparison.findings);
+    const analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
+    findings.push(...analysis.findings);
+    if (analysis.cuts.length > 0) partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join("; ")}`);
+    const reason = partialReasons.length === 0 ? void 0 : escapeInvisible(partialReasons.join("; "));
+    const warnings2 = [...withTransport.warnings ?? [], ...visibleList(comparison.warnings)];
     const report = {
-      name,
+      name: escapeInvisible(name),
       ...withTransport,
-      status: outcome.status,
-      ...partialReason === void 0 ? {} : { reason: partialReason },
+      ...warnings2.length > 0 ? { warnings: warnings2 } : {},
+      status: reason === void 0 ? "ok" : "partial",
+      ...reason === void 0 ? {} : { reason },
       ...outcome.serverInfo === void 0 ? {} : {
         server_info: {
           name: escapeInvisible(outcome.serverInfo.name),
@@ -75273,27 +75426,47 @@ async function runAudit(ctx, run, callMeta) {
       prompts_count: normalized.prompts.length,
       resources_count: normalized.resources.length,
       resource_templates_count: normalized.resourceTemplates.length,
-      ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}
+      ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {},
+      pins: {
+        first_audit: comparison.firstAudit,
+        changed: visibleList(comparison.changed),
+        added: visibleList(comparison.added),
+        removed: visibleList(comparison.removed),
+        ...comparison.rehashed.length > 0 ? { rehashed: visibleList(comparison.rehashed) } : {},
+        ...comparison.firstPinned.length > 0 ? { first_pinned: visibleList(comparison.firstPinned) } : {}
+      }
     };
     const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;
-    if (partialReason === void 0) {
+    if (reason === void 0) {
       toolsRun.push({ name: runName, status: "ok" });
     } else {
-      toolsRun.push({ name: runName, status: "ok", reason: `partial: ${partialReason}` });
+      toolsRun.push({ name: runName, status: "ok", reason: `partial: ${reason}` });
       missingTools.push(runName);
     }
     reports.push(report);
-    probed.push({ report, listing, complete: partialReason === void 0 });
+    audited.push({
+      report,
+      target: {
+        serverKey: listing.serverKey,
+        serverName: listing.serverName,
+        sourceLabel: listing.sourceLabel,
+        ownToolNames: new Set(listing.tools.map((t) => t.name))
+      },
+      mentions: analysis.mentions,
+      toolNames: listing.tools.map((t) => t.name),
+      pins: comparison.pins,
+      complete
+    });
   }
-  const others = probed.map((p) => ({
-    serverKey: p.listing.serverKey,
-    serverName: p.listing.serverName,
-    toolNames: p.listing.tools.map((t) => t.name)
+  const others = audited.map((a2) => ({
+    serverKey: a2.target.serverKey,
+    serverName: a2.target.serverName,
+    toolNames: a2.toolNames
   }));
-  const probedKeys = new Set(others.map((o2) => o2.serverKey));
+  const auditedKeys = new Set(others.map((o2) => o2.serverKey));
   const pinned = /* @__PURE__ */ new Map();
   for (const row of ctx.storage.mcpToolPins.listPinKeys(projectPath)) {
-    if (probedKeys.has(row.server_key)) continue;
+    if (auditedKeys.has(row.server_key)) continue;
     const item = parsePinKey(row.key);
     if (item.kind !== "tool") continue;
     const list2 = pinned.get(row.server_key) ?? [];
@@ -75303,46 +75476,20 @@ async function runAudit(ctx, run, callMeta) {
   for (const [serverKey, toolNames] of pinned) {
     others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
   }
-  const findings = [];
-  const newPins = [];
-  for (const { report, listing, complete } of probed) {
-    const analysis = analyzeServerListingDetailed(listing, others);
-    findings.push(...analysis.findings);
-    if (analysis.cuts.length > 0) {
-      const cutReason = `analysis cut: ${analysis.cuts.slice(0, 3).join("; ")}`;
-      const runName = `${MCP_AUDIT_TOOL_NAME}:${report.server_key ?? report.name}`;
-      report.status = "partial";
-      report.reason = report.reason === void 0 ? cutReason : `${report.reason}; ${cutReason}`;
-      const run2 = toolsRun.find((t) => t.name === runName);
-      if (run2 !== void 0) run2.reason = `partial: ${report.reason}`;
-      if (!missingTools.includes(runName)) missingTools.push(runName);
-    }
-    const comparison = comparePins(
-      listing,
-      ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
-      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
-      { complete }
-    );
-    findings.push(...comparison.findings);
-    report.pins = {
-      first_audit: comparison.firstAudit,
-      changed: comparison.changed,
-      added: comparison.added,
-      removed: comparison.removed,
-      ...comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {},
-      ...comparison.firstPinned.length > 0 ? { first_pinned: comparison.firstPinned } : {}
-    };
-    if (comparison.warnings.length > 0) report.warnings = [...report.warnings ?? [], ...comparison.warnings];
-    newPins.push({ serverKey: listing.serverKey, pins: comparison.pins, complete });
-  }
+  for (const a2 of audited) findings.push(...shadowingFromMentions(a2.target, a2.mentions, others));
   if (findings.length > 0) {
     ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   }
-  for (const { serverKey, pins, complete } of newPins) {
-    if (complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, serverKey, pins);
-    else ctx.storage.mcpToolPins.upsertServerPins(projectPath, serverKey, pins);
+  for (const a2 of audited) {
+    if (a2.complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, a2.target.serverKey, a2.pins);
+    else ctx.storage.mcpToolPins.upsertServerPins(projectPath, a2.target.serverKey, a2.pins);
   }
-  const warnings = [...collected.warnings];
+  const warnings = visibleList(collected.warnings);
+  const sourcesRead = visibleList(collected.sourcesRead);
+  const sourcesUnreadable = collected.sourcesUnreadable.map((u2) => ({
+    source: escapeInvisible(u2.source),
+    reason: escapeInvisible(u2.reason)
+  }));
   const coverage = computeCoverage(toolsRun, missingTools);
   ctx.storage.scans.finalize({
     scan_id: scanId,
@@ -75350,13 +75497,13 @@ async function runAudit(ctx, run, callMeta) {
     tools_run: toolsRun,
     missing_tools: missingTools,
     meta: {
-      servers_requested: names,
+      servers_requested: visibleList(names),
       include_user_config: includeUserConfig,
       allow_remote: allowRemote,
       timeout_ms: timeoutMs,
       servers: reports,
-      sources_read: collected.sourcesRead,
-      sources_unreadable: collected.sourcesUnreadable
+      sources_read: sourcesRead,
+      sources_unreadable: sourcesUnreadable
     }
   });
   return {
@@ -75370,8 +75517,8 @@ async function runAudit(ctx, run, callMeta) {
     servers: reports,
     tools_run: toolsRun,
     missing_tools: missingTools,
-    sources_read: collected.sourcesRead,
-    sources_unreadable: collected.sourcesUnreadable,
+    sources_read: sourcesRead,
+    sources_unreadable: sourcesUnreadable,
     warnings
   };
 }

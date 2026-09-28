@@ -41,7 +41,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { collectMcpEntries } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
-import { analyzeServerListingDetailed, MCP_AUDIT_TOOL_NAME, normalizeListing, } from '../mcpaudit/analyze.js';
+import { analyzeServerListingAsync, MCP_AUDIT_TOOL_NAME, normalizeListing, shadowingFromMentions, } from '../mcpaudit/analyze.js';
 import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { isListed, probeServer } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
@@ -164,21 +164,34 @@ async function handler(input, ctx, callMeta) {
         throw e;
     }
 }
+/** Every string a report carries, made visible: server text never rides out raw (fix round 4). */
+function visibleList(values) {
+    return values.map(escapeInvisible);
+}
 async function runAudit(ctx, run, callMeta) {
     const { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected } = run;
     const toolsRun = [];
     const missingTools = [];
     const reports = [];
-    const probed = [];
+    const audited = [];
+    const findings = [];
     const clientVersion = resolveVersion();
     const budgetMs = auditBudgetMs();
     const auditDeadline = Date.now() + budgetMs;
     const signal = callMeta?.signal;
+    /** Cancel and the overall budget stop the analysis too, between items. */
+    const shouldStop = () => {
+        if (signal?.aborted === true)
+            return 'cancelled';
+        if (Date.now() > auditDeadline)
+            return `the audit's overall budget of ${budgetMs} ms ran out`;
+        return null;
+    };
     // A config that exists and was not read may declare any of the names: the
     // audit did not see it, so it is a failed pass, never "no servers there".
     for (const u of collected.sourcesUnreadable) {
-        const runName = `${MCP_AUDIT_TOOL_NAME}:${u.source}`;
-        toolsRun.push({ name: runName, status: 'failed', reason: `config not read: ${u.reason}` });
+        const runName = `${MCP_AUDIT_TOOL_NAME}:${escapeInvisible(u.source)}`;
+        toolsRun.push({ name: runName, status: 'failed', reason: escapeInvisible(`config not read: ${u.reason}`) });
         missingTools.push(runName);
     }
     const unreadableNote = collected.sourcesUnreadable.length === 0
@@ -187,11 +200,19 @@ async function runAudit(ctx, run, callMeta) {
             .map((u) => `${u.source} (${u.reason})`)
             .join(', ')}`;
     const notRun = (name, status, reason, extra = {}) => {
-        const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? name}`;
+        const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? escapeInvisible(name)}`;
         const shown = escapeInvisible(reason);
         toolsRun.push({ name: runName, status, reason: shown });
         missingTools.push(runName);
-        reports.push({ name, ...extra, status, reason: shown, tools_count: 0, prompts_count: 0, resources_count: 0 });
+        reports.push({
+            name: escapeInvisible(name),
+            ...extra,
+            status,
+            reason: shown,
+            tools_count: 0,
+            prompts_count: 0,
+            resources_count: 0,
+        });
     };
     for (const target of planTargets(names, collected.entries)) {
         const name = target.requested;
@@ -207,9 +228,9 @@ async function runAudit(ctx, run, callMeta) {
         }
         if (target.kind === 'duplicate') {
             reports.push({
-                name,
+                name: escapeInvisible(name),
                 status: 'skipped',
-                reason: `the same entry as '${escapeInvisible(target.of)}', audited once`,
+                reason: escapeInvisible(`the same server as '${target.of}', audited once`),
                 tools_count: 0,
                 prompts_count: 0,
                 resources_count: 0,
@@ -217,11 +238,11 @@ async function runAudit(ctx, run, callMeta) {
             continue;
         }
         const entry = target.entry;
-        const qualified = qualifiedName(entry);
+        const qualified = escapeInvisible(qualifiedName(entry));
         const base = {
             server_key: qualified,
-            source: entry.sourceLabel,
-            ...(target.alsoDeclaredIn.length > 0 ? { also_declared_in: target.alsoDeclaredIn } : {}),
+            source: escapeInvisible(entry.sourceLabel),
+            ...(target.alsoDeclaredIn.length > 0 ? { also_declared_in: visibleList(target.alsoDeclaredIn) } : {}),
         };
         if (signal?.aborted === true) {
             notRun(name, 'skipped', 'cancelled before it was started', base);
@@ -242,12 +263,14 @@ async function runAudit(ctx, run, callMeta) {
         const withTransport = {
             ...base,
             ...(outcome.transport === undefined ? {} : { transport: outcome.transport }),
-            ...(outcome.warnings.length > 0 ? { warnings: outcome.warnings.map(escapeInvisible) } : {}),
+            ...(outcome.warnings.length > 0 ? { warnings: visibleList(outcome.warnings) } : {}),
         };
         if (!isListed(outcome)) {
             notRun(name, outcome.status, outcome.reason, withTransport);
             continue;
         }
+        // From here the listing lives only until the end of this iteration:
+        // pinned, analysed, then dropped before the next server is started.
         const normalized = normalizeListing(outcome.listing);
         const listing = {
             serverKey: serverPinKey(entry),
@@ -259,12 +282,25 @@ async function runAudit(ctx, run, callMeta) {
             resources: normalized.resources,
             resourceTemplates: normalized.resourceTemplates,
         };
-        const partialReason = outcome.status === 'partial' ? escapeInvisible(outcome.reason ?? 'the listing was cut short') : undefined;
+        const partialReasons = outcome.status === 'partial' ? [outcome.reason ?? 'the listing was cut short'] : [];
+        const complete = partialReasons.length === 0;
+        // Pins hash the FULL content — linear and cheap — so a change past any
+        // analysis bound is still caught.
+        const comparison = comparePins(listing, ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey), ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey), { complete });
+        findings.push(...comparison.findings);
+        const analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
+        findings.push(...analysis.findings);
+        // Listed in full, analysed in part: partial, with what was not read.
+        if (analysis.cuts.length > 0)
+            partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`);
+        const reason = partialReasons.length === 0 ? undefined : escapeInvisible(partialReasons.join('; '));
+        const warnings = [...(withTransport.warnings ?? []), ...visibleList(comparison.warnings)];
         const report = {
-            name,
+            name: escapeInvisible(name),
             ...withTransport,
-            status: outcome.status,
-            ...(partialReason === undefined ? {} : { reason: partialReason }),
+            ...(warnings.length > 0 ? { warnings } : {}),
+            status: reason === undefined ? 'ok' : 'partial',
+            ...(reason === undefined ? {} : { reason }),
             ...(outcome.serverInfo === undefined
                 ? {}
                 : {
@@ -278,30 +314,51 @@ async function runAudit(ctx, run, callMeta) {
             resources_count: normalized.resources.length,
             resource_templates_count: normalized.resourceTemplates.length,
             ...(normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}),
+            pins: {
+                first_audit: comparison.firstAudit,
+                changed: visibleList(comparison.changed),
+                added: visibleList(comparison.added),
+                removed: visibleList(comparison.removed),
+                ...(comparison.rehashed.length > 0 ? { rehashed: visibleList(comparison.rehashed) } : {}),
+                ...(comparison.firstPinned.length > 0 ? { first_pinned: visibleList(comparison.firstPinned) } : {}),
+            },
         };
         const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;
-        if (partialReason === undefined) {
+        if (reason === undefined) {
             toolsRun.push({ name: runName, status: 'ok' });
         }
         else {
             // Ran, and saw part of it: ok AND missing, the partial shape.
-            toolsRun.push({ name: runName, status: 'ok', reason: `partial: ${partialReason}` });
+            toolsRun.push({ name: runName, status: 'ok', reason: `partial: ${reason}` });
             missingTools.push(runName);
         }
         reports.push(report);
-        probed.push({ report, listing, complete: partialReason === undefined });
+        audited.push({
+            report,
+            target: {
+                serverKey: listing.serverKey,
+                serverName: listing.serverName,
+                sourceLabel: listing.sourceLabel,
+                ownToolNames: new Set(listing.tools.map((t) => t.name)),
+            },
+            mentions: analysis.mentions,
+            toolNames: listing.tools.map((t) => t.name),
+            pins: comparison.pins,
+            complete,
+        });
     }
-    // Cross-server shadowing: every other server listed now, plus what earlier
-    // audits pinned for servers not listed this time.
-    const others = probed.map((p) => ({
-        serverKey: p.listing.serverKey,
-        serverName: p.listing.serverName,
-        toolNames: p.listing.tools.map((t) => t.name),
+    // Cross-server shadowing, once every server of this audit is known: each
+    // server's mentioned names against every other server listed now, and what
+    // earlier audits pinned for servers not listed this time.
+    const others = audited.map((a) => ({
+        serverKey: a.target.serverKey,
+        serverName: a.target.serverName,
+        toolNames: a.toolNames,
     }));
-    const probedKeys = new Set(others.map((o) => o.serverKey));
+    const auditedKeys = new Set(others.map((o) => o.serverKey));
     const pinned = new Map();
     for (const row of ctx.storage.mcpToolPins.listPinKeys(projectPath)) {
-        if (probedKeys.has(row.server_key))
+        if (auditedKeys.has(row.server_key))
             continue;
         const item = parsePinKey(row.key);
         if (item.kind !== 'tool')
@@ -313,47 +370,23 @@ async function runAudit(ctx, run, callMeta) {
     for (const [serverKey, toolNames] of pinned) {
         others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
     }
-    const findings = [];
-    const newPins = [];
-    for (const { report, listing, complete } of probed) {
-        const analysis = analyzeServerListingDetailed(listing, others);
-        findings.push(...analysis.findings);
-        if (analysis.cuts.length > 0) {
-            // Listed in full, analysed in part: partial, with what was not read.
-            const cutReason = `analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`;
-            const runName = `${MCP_AUDIT_TOOL_NAME}:${report.server_key ?? report.name}`;
-            report.status = 'partial';
-            report.reason = report.reason === undefined ? cutReason : `${report.reason}; ${cutReason}`;
-            const run = toolsRun.find((t) => t.name === runName);
-            if (run !== undefined)
-                run.reason = `partial: ${report.reason}`;
-            if (!missingTools.includes(runName))
-                missingTools.push(runName);
-        }
-        const comparison = comparePins(listing, ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey), ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey), { complete });
-        findings.push(...comparison.findings);
-        report.pins = {
-            first_audit: comparison.firstAudit,
-            changed: comparison.changed,
-            added: comparison.added,
-            removed: comparison.removed,
-            ...(comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {}),
-            ...(comparison.firstPinned.length > 0 ? { first_pinned: comparison.firstPinned } : {}),
-        };
-        if (comparison.warnings.length > 0)
-            report.warnings = [...(report.warnings ?? []), ...comparison.warnings];
-        newPins.push({ serverKey: listing.serverKey, pins: comparison.pins, complete });
-    }
+    for (const a of audited)
+        findings.push(...shadowingFromMentions(a.target, a.mentions, others));
     if (findings.length > 0) {
         ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
     }
-    for (const { serverKey, pins, complete } of newPins) {
-        if (complete)
-            ctx.storage.mcpToolPins.replaceServerPins(projectPath, serverKey, pins);
+    for (const a of audited) {
+        if (a.complete)
+            ctx.storage.mcpToolPins.replaceServerPins(projectPath, a.target.serverKey, a.pins);
         else
-            ctx.storage.mcpToolPins.upsertServerPins(projectPath, serverKey, pins);
+            ctx.storage.mcpToolPins.upsertServerPins(projectPath, a.target.serverKey, a.pins);
     }
-    const warnings = [...collected.warnings];
+    const warnings = visibleList(collected.warnings);
+    const sourcesRead = visibleList(collected.sourcesRead);
+    const sourcesUnreadable = collected.sourcesUnreadable.map((u) => ({
+        source: escapeInvisible(u.source),
+        reason: escapeInvisible(u.reason),
+    }));
     const coverage = computeCoverage(toolsRun, missingTools);
     ctx.storage.scans.finalize({
         scan_id: scanId,
@@ -361,13 +394,13 @@ async function runAudit(ctx, run, callMeta) {
         tools_run: toolsRun,
         missing_tools: missingTools,
         meta: {
-            servers_requested: names,
+            servers_requested: visibleList(names),
             include_user_config: includeUserConfig,
             allow_remote: allowRemote,
             timeout_ms: timeoutMs,
             servers: reports,
-            sources_read: collected.sourcesRead,
-            sources_unreadable: collected.sourcesUnreadable,
+            sources_read: sourcesRead,
+            sources_unreadable: sourcesUnreadable,
         },
     });
     return {
@@ -381,8 +414,8 @@ async function runAudit(ctx, run, callMeta) {
         servers: reports,
         tools_run: toolsRun,
         missing_tools: missingTools,
-        sources_read: collected.sourcesRead,
-        sources_unreadable: collected.sourcesUnreadable,
+        sources_read: sourcesRead,
+        sources_unreadable: sourcesUnreadable,
         warnings,
     };
 }

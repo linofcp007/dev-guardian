@@ -21,6 +21,7 @@ export type McpRuleId =
   | 'mcp-tool-poisoning'
   | 'mcp-tool-hidden-unicode'
   | 'mcp-tool-homoglyph'
+  | 'mcp-tool-string-over-bound'
   | 'mcp-tool-sensitive-file-access'
   | 'mcp-tool-conceal-from-user'
   | 'mcp-tool-exfiltration'

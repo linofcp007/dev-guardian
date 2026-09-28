@@ -39,9 +39,16 @@ version bump.
 - `audit_mcp_tools` kept no time on Windows against a server flooding stdout (the event loop starved;
   `timeout_ms` never fired) or with a command on a UNC path (the process blocked synchronously, and
   contacted SMB without `allow_remote`). The transport now reads one chunk per event-loop turn,
-  checks the deadline on every chunk and closes itself past a 32 MiB / 10 000-message / 8 MiB-line
-  budget; Windows commands are resolved with async `stat` over local `PATH` entries only, and a UNC
-  command is remote.
+  checks the deadline on every chunk and closes itself past a 4 MiB / 10 000-message / 2 MiB-line
+  budget (40x the largest real listing measured, dev-guardian's own 101 KB); Windows commands are
+  resolved with async `stat` over local `PATH` entries only, and a UNC command is remote.
+- The analysis of what a server served ran on the main thread over every listing, unbounded, all
+  of them kept to the end: one server of 4 pages x a 7 MiB description stalled the event loop 24 s
+  and reported ok. Each server is now pinned and analysed right after its probe and its listing
+  dropped; the analysis reads at most 2 MiB of text, 64 KiB per string and 50 000 strings, yields
+  between items, and stops on cancel or the audit budget. A bound reached makes the server partial;
+  a string over 64 KiB is itself a finding (`mcp-tool-string-over-bound`). Pins still hash the full
+  content.
 - `allow_remote` now also gates `mcp-remote`-style proxies (an `http(s)`/`ws(s)` URL on the command
   line), UNC commands and UNC arguments. A name selects entries exactly: `<source>::<name>` picks one;
   a bare name whose entries launch different servers is refused with the qualified names; another

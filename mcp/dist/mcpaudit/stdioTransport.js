@@ -63,11 +63,19 @@ import { execa } from 'execa';
 import { onExit } from 'signal-exit';
 import { killWindowsTree, PROC_TREE_ENV } from '../runners/windowsTreeKill.js';
 const MiB = 1024 * 1024;
-/** A tool listing has no business being larger: 32 MiB, 10 000 messages, 8 MiB per message. */
+/**
+ * What real listings need, with a wide margin (fix round 4, measured): the
+ * largest listing of the servers launched for the measurement — dev-guardian
+ * itself, 58 tools, 14 resources, 6 templates — is 101 KB; playwright-mcp
+ * 0.0.82 is 20 KB, server-everything and -filesystem 12-13 KB. 4 MiB per
+ * server is 40x the largest, 2 MiB per message 20x; 10 000 messages is far
+ * past the handful a listing takes. The first cut (32 MiB, 8 MiB) let a
+ * single server hold the analysis for tens of seconds.
+ */
 export const DEFAULT_INBOUND_LIMITS = {
-    maxBytes: 32 * MiB,
+    maxBytes: 4 * MiB,
     maxMessages: 10_000,
-    maxMessageBytes: 8 * MiB,
+    maxMessageBytes: 2 * MiB,
 };
 /** How much of the server's stderr is kept, from the end. */
 const STDERR_TAIL_CHARS = 2048;

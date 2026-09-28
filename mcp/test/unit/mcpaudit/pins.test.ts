@@ -368,3 +368,12 @@ describe('pinKey / parsePinKey', () => {
     expect(pinKey('tool', 'read_file')).toBe('read_file');
   });
 });
+
+describe('fix round 4: pins hash the full content, past any analysis bound', () => {
+  it('catches a change 100 000 characters into a description', () => {
+    const long: ToolDefinition = { name: 'long', description: `${'a'.repeat(100_000)} tail` };
+    const changedLong = { ...long, description: `${'a'.repeat(100_000)} tail changed` };
+    const r = comparePins(listing([changedLong]), pinned(listing([long])), true);
+    expect(r.changed).toEqual(['long']);
+  });
+});
