@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ChainIndex, chainScope, openGapFor, scopeAdmits, type Bookkeeping } from '../../../src/history/runCompare.js';
+import { ChainIndex, chainScope, MAX_ADMIT_PAIRS, meetAdmit, openGapFor, scopeAdmits, type Admit, type Bookkeeping } from '../../../src/history/runCompare.js';
 import { findingKey, toolsOfKey } from '../../../src/history/runNames.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
@@ -187,5 +187,70 @@ describe('carry-forward: the per-key scope and the per-finding verdict agree', (
     }
     expect(checks).toBeGreaterThan(10_000);
     expect(carried).toBeGreaterThan(500);
+  });
+});
+
+/**
+ * Round 3's review, M-2: two disjoint sets of W partly parsed files and W
+ * rules not loaded, alternating over 2000 scans, cost W x W per step (17.6 s
+ * at W = 200). A constraint already met is skipped (exact), and a meet past
+ * MAX_ADMIT_PAIRS keeps the constraint itself — a superset, so it only ever
+ * carries MORE.
+ */
+describe('the admit set stays bounded (round 3 review, M-2)', () => {
+  const holder: Bookkeeping = { tools_run: [{ name: 'semgrep', status: 'ok' }], missing_tools: [] };
+  const gapOf = (tag: string, w: number): Bookkeeping => ({
+    tools_run: [
+      {
+        name: 'semgrep',
+        status: 'ok',
+        partially_parsed: Array.from({ length: w }, (_, i) => ({ file: `${tag}-${i}.php`, type: 'PartialParsing', message: 'x' })),
+        failed_rules: Array.from({ length: w }, (_, i) => ({ rule_id: `${tag}-r${i}`, message: 'x' })),
+      },
+    ],
+    missing_tools: ['semgrep'],
+  });
+
+  it('2000 scans alternating two disjoint sets of 200 files and 200 rules: within budget', () => {
+    const a = gapOf('a', 200);
+    const b = gapOf('b', 200);
+    const index = new ChainIndex();
+    const t0 = performance.now();
+    for (let i = 0; i < 2000; i++) {
+      index.push(i % 2 === 0 ? a : b);
+      index.scope(holder, 'semgrep');
+    }
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it('the same shape under the bound stays exact: a repeat that is skipped changes nothing', () => {
+    const a = gapOf('a', 3);
+    const b = gapOf('b', 3);
+    const chain = Array.from({ length: 50 }, (_, i) => (i % 2 === 0 ? a : b));
+    const f = (file: string, rule: string): Finding => ({ fingerprint: 'fp', tool: 'semgrep', severity: 'high', category: 'security', title: 't', file_path: file, rule_id: rule, fix_available: false });
+    for (const [file, rule] of [['a-0.php', 'b-r1'], ['b-2.php', 'a-r0'], ['a-0.php', 'a-r1'], ['c.php', 'b-r0']] as const) {
+      const exact = chain.every((asked) => openGapFor(holder, asked, f(file, rule)) !== null);
+      expect(scopeAdmits(chainScope(holder, chain, 'semgrep'), file, rule), `${file} ${rule}`).toBe(exact);
+    }
+  });
+
+  it('past the bound the meet is a superset of the exact one: it never drops a finding', () => {
+    const side = Math.ceil(Math.sqrt(MAX_ADMIT_PAIRS)) + 1;
+    const set = (tag: string): Set<string> => new Set(Array.from({ length: side }, (_, i) => `${tag}${i}`));
+    const c1 = { files: set('f'), rules: set('r') };
+    const c2 = { files: set('g'), rules: set('s') };
+    const approx = meetAdmit(meetAdmit({ all: true }, c1), c2);
+    const admits = (s: Admit, file: string, rule: string): boolean => scopeAdmits({ kind: 'open', admit: s }, file, rule);
+    const inC = (c: typeof c1, file: string, rule: string): boolean => c.files.has(file) || c.rules.has(rule);
+    let checked = 0;
+    for (const file of ['f0', 'g0', 'x']) {
+      for (const rule of ['r0', 's0', 'y']) {
+        if (!(inC(c1, file, rule) && inC(c2, file, rule))) continue;
+        checked += 1;
+        expect(admits(approx, file, rule), `${file} ${rule}`).toBe(true);
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(!approx.all && approx.pairs.size === 0).toBe(true);
   });
 });

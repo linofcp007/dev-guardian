@@ -307,11 +307,32 @@ export function openGapFor(holder, asked, f) {
 }
 const ADMIT_ALL = { all: true };
 const NEVER_SCOPE = { kind: 'never' };
-function meetAdmit(s, c) {
+/** The most (file, rule) pairs an {@link Admit} holds before it widens to the constraint itself (sound: a superset). */
+export const MAX_ADMIT_PAIRS = 10_000;
+function onlyConstraint(c) {
+    return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+}
+export function meetAdmit(s, c) {
     if (s.all)
-        return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+        return onlyConstraint(c);
     const files = new Set([...s.files].filter((f) => c.files.has(f)));
     const rules = new Set([...s.rules].filter((r) => c.rules.has(r)));
+    // Before building any pair: how many could this meet make? Past the bound,
+    // the constraint alone — a superset of the exact meet (see `Admit`).
+    let bound = 0;
+    for (const rs of s.pairs.values())
+        bound += rs.size;
+    let filesLeaving = 0;
+    for (const f of s.files)
+        if (!c.files.has(f))
+            filesLeaving += 1;
+    let rulesLeaving = 0;
+    for (const r of s.rules)
+        if (!c.rules.has(r))
+            rulesLeaving += 1;
+    bound += filesLeaving * c.rules.size + rulesLeaving * c.files.size;
+    if (bound > MAX_ADMIT_PAIRS)
+        return onlyConstraint(c);
     const pairs = new Map();
     const add = (f, r) => {
         if (files.has(f) || rules.has(r))
@@ -437,7 +458,7 @@ export class ChainIndex {
             return NEVER_SCOPE;
         let state = idx.classes.get(cls.signature);
         if (state === undefined) {
-            state = { admit: ADMIT_ALL, closed: false, a: 0, b: 0, snapshot: null };
+            state = { admit: ADMIT_ALL, met: new Set(), closed: false, a: 0, b: 0, snapshot: null };
             idx.classes.set(cls.signature, state);
         }
         this.advance(idx, cls, state, L);
@@ -482,6 +503,10 @@ export class ChainIndex {
                 state.closed = true;
                 return;
             }
+            // Met already: the set lies inside it, meeting it again changes nothing.
+            if (state.met.has(c.narrowSig))
+                continue;
+            state.met.add(c.narrowSig);
             state.admit = meetAdmit(state.admit, c.narrow);
             if (admitsNothing(state.admit))
                 state.closed = true;
@@ -521,7 +546,7 @@ export class ChainIndex {
                 idx.firstNotRun = Math.min(idx.firstNotRun, i);
                 continue;
             }
-            const c = { project: false, images: new Set(), legacy: new Set(), any: new Set(), narrow: null };
+            const c = { project: false, images: new Set(), legacy: new Set(), any: new Set(), narrow: null, narrowSig: '' };
             for (const run of asked.tools_run) {
                 if (!measuresKeyOk(run, key))
                     continue;
@@ -537,8 +562,10 @@ export class ChainIndex {
                     c.images.add(`${t.pass}\0${t.ref}`);
             }
             const narrow = narrowGapsOf(asked, key);
-            if (narrow.files.size > 0 || narrow.rules.size > 0)
+            if (narrow.files.size > 0 || narrow.rules.size > 0) {
                 c.narrow = narrow;
+                c.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort()]);
+            }
             idx.at.set(i, c);
             idx.measured.push(i);
             if (c.project)

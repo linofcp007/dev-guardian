@@ -49952,10 +49952,22 @@ function openGapFor(holder, asked, f) {
 }
 var ADMIT_ALL = { all: true };
 var NEVER_SCOPE = { kind: "never" };
+var MAX_ADMIT_PAIRS = 1e4;
+function onlyConstraint(c3) {
+  return { all: false, files: new Set(c3.files), rules: new Set(c3.rules), pairs: /* @__PURE__ */ new Map() };
+}
 function meetAdmit(s, c3) {
-  if (s.all) return { all: false, files: new Set(c3.files), rules: new Set(c3.rules), pairs: /* @__PURE__ */ new Map() };
+  if (s.all) return onlyConstraint(c3);
   const files = new Set([...s.files].filter((f) => c3.files.has(f)));
   const rules = new Set([...s.rules].filter((r) => c3.rules.has(r)));
+  let bound = 0;
+  for (const rs of s.pairs.values()) bound += rs.size;
+  let filesLeaving = 0;
+  for (const f of s.files) if (!c3.files.has(f)) filesLeaving += 1;
+  let rulesLeaving = 0;
+  for (const r of s.rules) if (!c3.rules.has(r)) rulesLeaving += 1;
+  bound += filesLeaving * c3.rules.size + rulesLeaving * c3.files.size;
+  if (bound > MAX_ADMIT_PAIRS) return onlyConstraint(c3);
   const pairs = /* @__PURE__ */ new Map();
   const add = (f, r) => {
     if (files.has(f) || rules.has(r)) return;
@@ -50038,7 +50050,7 @@ var ChainIndex = class {
     if (idx.firstEmpty < L || !cls.onRequest && idx.firstNotRun < L) return NEVER_SCOPE;
     let state = idx.classes.get(cls.signature);
     if (state === void 0) {
-      state = { admit: ADMIT_ALL, closed: false, a: 0, b: 0, snapshot: null };
+      state = { admit: ADMIT_ALL, met: /* @__PURE__ */ new Set(), closed: false, a: 0, b: 0, snapshot: null };
       idx.classes.set(cls.signature, state);
     }
     this.advance(idx, cls, state, L);
@@ -50075,6 +50087,8 @@ var ChainIndex = class {
         state.closed = true;
         return;
       }
+      if (state.met.has(c3.narrowSig)) continue;
+      state.met.add(c3.narrowSig);
       state.admit = meetAdmit(state.admit, c3.narrow);
       if (admitsNothing(state.admit)) state.closed = true;
     }
@@ -50111,7 +50125,7 @@ var ChainIndex = class {
         idx.firstNotRun = Math.min(idx.firstNotRun, i2);
         continue;
       }
-      const c3 = { project: false, images: /* @__PURE__ */ new Set(), legacy: /* @__PURE__ */ new Set(), any: /* @__PURE__ */ new Set(), narrow: null };
+      const c3 = { project: false, images: /* @__PURE__ */ new Set(), legacy: /* @__PURE__ */ new Set(), any: /* @__PURE__ */ new Set(), narrow: null, narrowSig: "" };
       for (const run of asked.tools_run) {
         if (!measuresKeyOk(run, key)) continue;
         const t = targetOf(run);
@@ -50124,7 +50138,10 @@ var ChainIndex = class {
         else c3.images.add(`${t.pass}\0${t.ref}`);
       }
       const narrow = narrowGapsOf(asked, key);
-      if (narrow.files.size > 0 || narrow.rules.size > 0) c3.narrow = narrow;
+      if (narrow.files.size > 0 || narrow.rules.size > 0) {
+        c3.narrow = narrow;
+        c3.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort()]);
+      }
       idx.at.set(i2, c3);
       idx.measured.push(i2);
       if (c3.project) idx.project.push(i2);

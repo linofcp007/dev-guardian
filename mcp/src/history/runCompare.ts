@@ -352,6 +352,18 @@ export function openGapFor(holder: Bookkeeping, asked: Bookkeeping, f: Finding):
  * `rules` once, so the pairs ever made are bounded by the constraints' own
  * sizes, never by the chain's length: a partial parse AND a different rule
  * not loaded in each of 5000 scans closes after the third (review, M-4).
+ *
+ * Two bounds keep a step cheap however large each constraint is (round 3's
+ * review, M-2: 2000 scans alternating two disjoint sets of W partly parsed
+ * files and W rules not loaded cost W x W per step — 17.6 s at W = 200):
+ *   - a constraint already met is skipped: meeting it again changes nothing
+ *     (the set is inside it already), exactly;
+ *   - a meet that would hold more than {@link MAX_ADMIT_PAIRS} pairs keeps
+ *     the constraint itself instead (`F x * ∪ * x R`) — a superset of the
+ *     exact answer, which lies inside every constraint met, so it can only
+ *     carry MORE findings (flagged not re-measured), never drop one. Each step
+ *     then costs O(|pairs| + |files| + |rules| + |F| + |R|), with pairs at most
+ *     {@link MAX_ADMIT_PAIRS}.
  */
 export type Admit =
   | { all: true }
@@ -378,10 +390,27 @@ export interface ScopeConstraint {
 const ADMIT_ALL: Admit = { all: true };
 const NEVER_SCOPE: ChainScope = { kind: 'never' };
 
-function meetAdmit(s: Admit, c: ScopeConstraint): Admit {
-  if (s.all) return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+/** The most (file, rule) pairs an {@link Admit} holds before it widens to the constraint itself (sound: a superset). */
+export const MAX_ADMIT_PAIRS = 10_000;
+
+function onlyConstraint(c: ScopeConstraint): Admit {
+  return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+}
+
+export function meetAdmit(s: Admit, c: ScopeConstraint): Admit {
+  if (s.all) return onlyConstraint(c);
   const files = new Set([...s.files].filter((f) => c.files.has(f)));
   const rules = new Set([...s.rules].filter((r) => c.rules.has(r)));
+  // Before building any pair: how many could this meet make? Past the bound,
+  // the constraint alone — a superset of the exact meet (see `Admit`).
+  let bound = 0;
+  for (const rs of s.pairs.values()) bound += rs.size;
+  let filesLeaving = 0;
+  for (const f of s.files) if (!c.files.has(f)) filesLeaving += 1;
+  let rulesLeaving = 0;
+  for (const r of s.rules) if (!c.rules.has(r)) rulesLeaving += 1;
+  bound += filesLeaving * c.rules.size + rulesLeaving * c.files.size;
+  if (bound > MAX_ADMIT_PAIRS) return onlyConstraint(c);
   const pairs = new Map<string, Set<string>>();
   const add = (f: string, r: string): void => {
     if (files.has(f) || rules.has(r)) return;
@@ -446,6 +475,8 @@ interface Covered {
   any: Set<string>;
   /** Its partly parsed files and rules not loaded, or null: none. */
   narrow: ScopeConstraint | null;
+  /** `narrow`, spelled once: a constraint a fold has met already is skipped. */
+  narrowSig: string;
 }
 
 /** A holder as the chain sees it for one key (the only part of it {@link openGapFor} reads). */
@@ -459,6 +490,8 @@ interface HolderClass {
 
 interface ClassState {
   admit: Admit;
+  /** The constraints met so far, by {@link Covered.narrowSig}. */
+  met: Set<string>;
   closed: boolean;
   /** Positions reached in the class's driver lists (see `driverOf`). */
   a: number;
@@ -556,7 +589,7 @@ export class ChainIndex {
     if (idx.firstEmpty < L || (!cls.onRequest && idx.firstNotRun < L)) return NEVER_SCOPE;
     let state = idx.classes.get(cls.signature);
     if (state === undefined) {
-      state = { admit: ADMIT_ALL, closed: false, a: 0, b: 0, snapshot: null };
+      state = { admit: ADMIT_ALL, met: new Set(), closed: false, a: 0, b: 0, snapshot: null };
       idx.classes.set(cls.signature, state);
     }
     this.advance(idx, cls, state, L);
@@ -595,6 +628,9 @@ export class ChainIndex {
         state.closed = true;
         return;
       }
+      // Met already: the set lies inside it, meeting it again changes nothing.
+      if (state.met.has(c.narrowSig)) continue;
+      state.met.add(c.narrowSig);
       state.admit = meetAdmit(state.admit, c.narrow);
       if (admitsNothing(state.admit)) state.closed = true;
     }
@@ -632,7 +668,7 @@ export class ChainIndex {
         idx.firstNotRun = Math.min(idx.firstNotRun, i);
         continue;
       }
-      const c: Covered = { project: false, images: new Set(), legacy: new Set(), any: new Set(), narrow: null };
+      const c: Covered = { project: false, images: new Set(), legacy: new Set(), any: new Set(), narrow: null, narrowSig: '' };
       for (const run of asked.tools_run) {
         if (!measuresKeyOk(run, key)) continue;
         const t = targetOf(run);
@@ -645,7 +681,10 @@ export class ChainIndex {
         else c.images.add(`${t.pass}\0${t.ref}`);
       }
       const narrow = narrowGapsOf(asked, key);
-      if (narrow.files.size > 0 || narrow.rules.size > 0) c.narrow = narrow;
+      if (narrow.files.size > 0 || narrow.rules.size > 0) {
+        c.narrow = narrow;
+        c.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort()]);
+      }
       idx.at.set(i, c);
       idx.measured.push(i);
       if (c.project) idx.project.push(i);
