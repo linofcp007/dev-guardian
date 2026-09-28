@@ -6,7 +6,7 @@ class Encomendas
 {
     private $logger;
 
-    public function registar($user, $order, $email, $nif_cliente, $telefone, array $data, $cliente): void
+    public function registar($user, $order, $email, $nif_cliente, $telefone, array $data, $cliente, $fila): int
     {
         error_log('login falhado para ' . $email); // BUG: a plain variable
         error_log("novo registo {$user->user_email}"); // BUG: WP_User::$user_email, interpolated
@@ -26,5 +26,8 @@ class Encomendas
         logger('registo', ['e' => $email]); // BUG: logger() called directly logs at debug level
         error_log(md5($email) . ' ' . $user->niss); // BUG: the niss is whole (excluded: the hashed email)
         error_log(substr($data['iban'], -4) . ' ' . $email); // BUG: the email is whole (excluded: last four)
+        error_log('normalizado ' . $email->toString()); // BUG: a METHOD of a value object still returns the address
+        error_log('contacto ' . $cliente->telefone->numero); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
+        return $fila->adicionar(fn () => $this->logger->info('agendado', ['e' => $user->user_email]))->id; // BUG: a log call INSIDE an arrow fn whose result's `->id` is read (the $V lambda limit)
     }
 }

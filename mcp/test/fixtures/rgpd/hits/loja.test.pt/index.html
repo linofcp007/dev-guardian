@@ -1,0 +1,12 @@
+<!-- rgpd-tracker-hotjar-without-consent: a site kept in a DIRECTORY named
+     like a test domain. Semgrep matches a slash-free `paths.exclude` glob
+     against every path segment, directories included, so the old `*.test.*`
+     skipped this whole folder; the anchored `*.test.js` (and siblings) must
+     not. One finding. -->
+<!doctype html>
+<html lang="pt">
+<head>
+  <script src="https://static.hotjar.com/c/hotjar-1234567.js?sv=6"></script>
+</head>
+<body><h1>Loja</h1></body>
+</html>

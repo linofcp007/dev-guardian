@@ -28,10 +28,10 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // testTimeout; see baseRules.test.ts.
 vi.setConfig({ testTimeout: 180_000 });
 import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
-import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
-import { basename, extname, resolve } from 'node:path';
+import { cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -55,6 +55,8 @@ interface SemgrepRun {
   readonly rows: SemgrepResult[];
   readonly scanned: number;
   readonly errors: number;
+  /** The temp copy that was scanned: `relative(work, row.path)` is the fixture's own path. */
+  readonly work: string;
 }
 
 function run(config: string, dir: string): SemgrepRun {
@@ -66,7 +68,13 @@ function run(config: string, dir: string): SemgrepRun {
     rows: (parsed.results ?? []) as SemgrepResult[],
     scanned: (parsed.paths?.scanned ?? []).length,
     errors: (parsed.errors ?? []).length,
+    work,
   };
+}
+
+/** A row's path relative to the scanned copy, with `/` separators. */
+function fixturePath(result: SemgrepRun, row: SemgrepResult): string {
+  return relative(result.work, row.path).split(sep).join('/');
 }
 
 /** Last dot-separated segment — semgrep prefixes the config path onto ids. */
@@ -74,11 +82,14 @@ function ruleOf(row: SemgrepResult): string {
   return row.check_id.split('.').pop() ?? row.check_id;
 }
 
-/** `{ ruleId: count }` per basename, from RAW rows (no dedup). */
-function countsByFile(rows: readonly SemgrepResult[]): Record<string, Record<string, number>> {
+/**
+ * `{ ruleId: count }` per fixture path (relative to the scanned copy, `/`
+ * separators — `hits/` has one nested file), from RAW rows (no dedup).
+ */
+function countsByFile(result: SemgrepRun): Record<string, Record<string, number>> {
   const out: Record<string, Record<string, number>> = {};
-  for (const row of rows) {
-    const file = basename(row.path);
+  for (const row of result.rows) {
+    const file = fixturePath(result, row);
     const byRule = out[file] ?? {};
     byRule[ruleOf(row)] = (byRule[ruleOf(row)] ?? 0) + 1;
     out[file] = byRule;
@@ -88,6 +99,20 @@ function countsByFile(rows: readonly SemgrepResult[]): Record<string, Record<str
 
 function filesIn(dir: string): string[] {
   return readdirSync(dir).sort();
+}
+
+/**
+ * Every FILE under `dir`, recursively, as `/`-separated relative paths.
+ * `misses/` has subdirectories (`__tests__/`, `__mocks__/`, ...: the
+ * test-code directories the tracker rules exclude) and `hits/` has one (a
+ * site folder named like a test domain), so a top-level listing would count
+ * a directory as a file.
+ */
+function allFilesIn(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile())
+    .map((d) => relative(dir, resolve(d.parentPath, d.name)).split(sep).join('/'))
+    .sort();
 }
 
 const PII_JS = 'rgpd-pii-in-log-js';
@@ -113,7 +138,14 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // masking), NestJS's static `Logger.log` and pino's `logger.child({...})`.
   // Fix round 2 added `this.hashing.logger.info(..., user.email)`: "hash" in
   // the RECEIVER path used to count as a masking call and hide the line.
-  'pii_log.js': { [PII_JS]: 21 },
+  // Twenty-three after the round measured on application code, two lines the
+  // attribute-read guard must leave alone: `email.toLowerCase()` (a METHOD
+  // call still returns the address) and `user.phone.number` (an attribute
+  // whose name is not an id, a date or a size still holds the value).
+  // Twenty-four after its review: a log call INSIDE a callback whose result's
+  // `.length` is read — the guard's `$V` was the whole `users.filter(...)`
+  // call, callback and log call included, and swallowed it.
+  'pii_log.js': { [PII_JS]: 24 },
   // The same rule through the TypeScript parser: a typed member, a type
   // assertion, a typed parameter, a subscript.
   'pii_log.ts': { [PII_JS]: 4 },
@@ -124,15 +156,30 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // alternatives read DEAD until a plain variable sat in each); eighteen
   // after fix round 1: `$cliente->NIF`, the fully-qualified
   // `\Illuminate\Support\Facades\Log::`, `Log::channel(...)->`,
-  // `logger()->` and `logger(...)`.
-  'pii_log.php': { [PII_PHP]: 18 },
+  // `logger()->` and `logger(...)`. Twenty after the application-code round:
+  // `$email->toString()` and `$cliente->telefone->numero` (see pii_log.js);
+  // twenty-one after its review: a log call inside an arrow `fn` whose
+  // result's `->id` is read (see pii_log.js).
+  'pii_log.php': { [PII_PHP]: 21 },
   // Thirteen: fix round 1 added keyword arguments whose value is a plain
   // name (`extra={"email": email}`, structlog's `nif=nif_cliente`),
-  // structlog's `bind(...)` and an all-caps attribute.
-  'pii_log.py': { [PII_PY]: 13 },
+  // structlog's `bind(...)` and an all-caps attribute. Eighteen after the
+  // application-code round: `email.lower()`, `user.phone.as_e164`
+  // (django-phonenumber-field), a LOGGER inside a Django management command,
+  // and `print()` in two classes that are not management commands — one of
+  // them a model that merely happens to be named `Command`. Twenty after its
+  // review: a log call inside a `lambda` whose result's `.id` is read (see
+  // pii_log.js), and `print()` in `class Command(ProcessoCommand)` — a base
+  // that merely ends in `Command` is not one of Django's.
+  'pii_log.py': { [PII_PY]: 20 },
   // Thirteen: fix round 2 added `Cliente.Email` — a PascalCase PROPERTY, which
   // the type-constant exclusion (`Campos.EMAIL`) must not take for a type.
-  'PiiLog.cs': { [PII_CS]: 13 },
+  // Fifteen after the application-code round: `email.ToLowerInvariant()` and
+  // `mensagem.Email.Address` (see pii_log.js). Seventeen after its review:
+  // `emails.ElementAt(0)` (LINQ's `ElementAt` returns the element, it is not
+  // a date ending in `At`) and a log call inside a LINQ lambda whose
+  // `.Count()` is read (see pii_log.js).
+  'PiiLog.cs': { [PII_CS]: 17 },
   // Two GA4 loaders (the stock snippet, and `type="text/javascript"`, which
   // still executes); three Meta pixels — AFTER a consent function that has
   // already closed, inside a function merely NAMED after consent, inside a
@@ -178,7 +225,52 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'layout.ejs': { [META]: 1 },
   // Unconditional, and (fix round 2) in the `{{else}}` arm of a consent `{{#if}}`.
   'analytics.hbs': { [HOTJAR]: 2 },
+  // A page NAMED "stories" is served to visitors: the `*.stories.jsx`
+  // exclusion (Storybook) needs the dot on each side and must not swallow it.
+  'stories.html': { [YOUTUBE]: 1 },
+  // A site kept in a DIRECTORY named like a test domain. Semgrep matches a
+  // slash-free exclude glob against every path segment, directories included:
+  // the first `*.test.*` skipped this whole folder (review of the
+  // application-code round). The anchored `*.test.js` does not.
+  'loja.test.pt/index.html': { [HOTJAR]: 1 },
 };
+
+/**
+ * The test-code paths every tracker rule excludes (`paths.exclude`), added
+ * after the pack was measured on application code: every tracker finding in
+ * a test, spec, story or test-support directory was markup that is input to a
+ * test, never served to a visitor. Each has a fixture in `misses/` that fires
+ * once the exclusion is removed — see the test that proves it.
+ *
+ * The file globs carry their EXTENSION (`*.test.js`, not `*.test.*`) because
+ * Semgrep has no file-only glob: measured, a slash-free glob matches any path
+ * segment, so `*.test.*` also skipped a directory `sites/loja.test.pt/`, and
+ * `{js,jsx}` brace sets are not expanded (such a glob excluded nothing). With
+ * the extension in the glob only a directory named like a test FILE
+ * (`x.test.js/`) is skipped. Only the JS family is listed: the other
+ * extensions the tracker rules read have no test-file convention of this
+ * shape.
+ */
+const TRACKER_EXCLUDES = [
+  '*.test.js', '*.test.jsx', '*.test.tsx',
+  '*.spec.js', '*.spec.jsx', '*.spec.tsx',
+  '*.stories.js', '*.stories.jsx', '*.stories.tsx',
+  '__tests__', '__mocks__', '__fixtures__', '__factories__',
+];
+
+/**
+ * Whether a `/`-separated fixture path is excluded by one `paths.exclude`
+ * glob, the way Semgrep matches a glob with no `/` in it (probed against
+ * Semgrep 1.176, see TRACKER_EXCLUDES): against EVERY path segment, file name
+ * and directory names alike, with `*` matching within one segment. A glob
+ * holding `/` or any glob syntax beyond `*` throws, so a new glob cannot be
+ * silently mis-modelled here.
+ */
+function excludedBy(path: string, glob: string): boolean {
+  if (!/^[\w.*-]+$/.test(glob)) throw new Error(`a paths.exclude glob this test does not model: ${glob}`);
+  const segment = new RegExp(`^${glob.replace(/\./g, '\\.').replace(/\*/g, '[^/]*')}$`);
+  return path.split('/').some((s) => segment.test(s));
+}
 
 /**
  * The files whose `// BUG:` / `# BUG:` markers sit on the very line that
@@ -216,7 +308,7 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
 interface RuleDoc {
   id: string;
   languages?: string[];
-  paths?: { include?: string[] };
+  paths?: { include?: string[]; exclude?: string[] };
 }
 
 function packRules(): RuleDoc[] {
@@ -234,7 +326,7 @@ describe('rgpd rules', () => {
   });
 
   it('Step 0: every hits/ fixture on disk has a registered expectation, and vice versa', () => {
-    expect(filesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
+    expect(allFilesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
   });
 
   it('declares exactly the rules the fixtures are written for', () => {
@@ -243,10 +335,10 @@ describe('rgpd rules', () => {
 
   it.skipIf(!AVAILABLE)('fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
     const hitsDir = resolve(FIXTURES, 'hits');
-    const { rows, scanned, errors } = run(RULES, hitsDir);
-    expect(errors).toBe(0);
-    expect(scanned).toBe(filesIn(hitsDir).length);
-    expect(countsByFile(rows)).toEqual(EXPECTED_HITS);
+    const result = run(RULES, hitsDir);
+    expect(result.errors).toBe(0);
+    expect(result.scanned).toBe(allFilesIn(hitsDir).length);
+    expect(countsByFile(result)).toEqual(EXPECTED_HITS);
   });
 
   it.skipIf(!AVAILABLE)('fires on exactly the marked lines of the personal-data-in-log fixtures', () => {
@@ -262,9 +354,41 @@ describe('rgpd rules', () => {
     const { rows, scanned, errors } = run(RULES, missesDir);
     expect(errors).toBe(0);
     // Every misses/ file must actually have been looked at, or "nothing" is
-    // "never read".
-    expect(scanned).toBe(filesIn(missesDir).length);
+    // "never read". The files under the test-code directories the tracker
+    // rules exclude are JavaScript, so the JS log rule still reads them and
+    // the count stays exact.
+    expect(scanned).toBe(allFilesIn(missesDir).length);
     expect(rows.map((r) => `${basename(r.path)}:${r.start.line}: ${ruleOf(r)}`)).toEqual([]);
+  });
+
+  /**
+   * `paths.exclude` is not a clause, so the ablation harness never removes it
+   * and could not say whether any of the thirteen globs is load-bearing. This
+   * does it by hand, for all of them at once: with the exclusions stripped
+   * from the pack, a tracker fires in EXACTLY the misses/ files the globs
+   * exclude, and every glob excludes at least one of them. A glob with no
+   * fixture, or a fixture that no glob covers, fails here.
+   */
+  it.skipIf(!AVAILABLE)('every test-code exclusion of the tracker rules has a misses fixture that fires without it', () => {
+    const doc = parse(readFileSync(RULES, 'utf8')) as { rules: RuleDoc[] };
+    for (const rule of doc.rules) {
+      if (!(rule.languages ?? []).includes('generic')) continue;
+      expect([rule.id, rule.paths?.exclude]).toEqual([rule.id, TRACKER_EXCLUDES]);
+      delete rule.paths?.exclude;
+    }
+    const unexcluded = resolve(makeTempDir('guardian-rgpd-noexclude-'), 'rgpd.yml');
+    writeFileSync(unexcluded, stringify(doc));
+
+    const result = run(unexcluded, resolve(FIXTURES, 'misses'));
+    expect(result.errors).toBe(0);
+    const fired = [...new Set(result.rows.map((r) => fixturePath(result, r)))].sort();
+    const excluded = allFilesIn(resolve(FIXTURES, 'misses')).filter((f) =>
+      TRACKER_EXCLUDES.some((g) => excludedBy(f, g)),
+    );
+    expect(fired).toEqual(excluded);
+    for (const glob of TRACKER_EXCLUDES) {
+      expect([glob, excluded.filter((f) => excludedBy(f, glob)).length > 0]).toEqual([glob, true]);
+    }
   });
 
   /**
@@ -416,6 +540,193 @@ describe('the personal-data name regex', () => {
 });
 
 /**
+ * The attribute-read guard, added after measuring the pack on application
+ * code: a value that only appears as the OBJECT of an attribute read is not
+ * what reaches the log when the attribute's NAME says it is an id, a date or
+ * a size (`email.id`, `email.scheduled_timestamp`, `lookup(email).id`,
+ * `user.email.length`). The guard is keyed on that name list rather than on
+ * "any attribute that is not called", because the broad form dropped values
+ * held under neutral names — `user.phone.as_e164`, `email.address` — which
+ * the member branch cannot see. Four copies, one per log rule; they must not
+ * drift, and the list is exercised here the way the name regex is above.
+ */
+describe('the attribute-read guard name list', () => {
+  function attrRegexes(): string[] {
+    const found: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$ATTR' && typeof regex === 'string') found.push(regex);
+      }
+      for (const value of Object.values(node)) walk(value);
+    };
+    for (const r of packRules()) if (r.id.startsWith('rgpd-pii-in-log-')) walk(r);
+    return found;
+  }
+
+  it('is written once per log rule, identically', () => {
+    const regexes = attrRegexes();
+    expect(regexes.length).toBe(4);
+    expect(new Set(regexes).size).toBe(1);
+  });
+
+  const isMetadata = (name: string): boolean => {
+    const first = attrRegexes()[0];
+    if (first === undefined) throw new Error('no $ATTR regex in the pack');
+    return new RegExp(first).test(name);
+  };
+
+  it.each([
+    'id', 'Id', 'ID', 'pk', 'uuid', 'guid', '_id', 'message_id', 'recipient_ids', 'userId', 'MessageId', 'ExternalID',
+    'scheduled_at', 'sentAt', 'enviar_em', 'EnviarEm', 'send_date', 'SendDate', 'send_time', 'SentTime',
+    'timestamp', 'scheduled_timestamp', 'length', 'Length', 'size', 'count', 'Count',
+  ])('names metadata, not the value: %s', (name) => {
+    expect(isMetadata(name)).toBe(true);
+  });
+
+  it.each([
+    'address', 'Address', 'number', 'numero', 'as_e164', 'national_number', 'value', 'Value', 'to', 'subject',
+    'domain', 'lower', 'toLowerCase', 'ToLowerInvariant', 'format', 'Format', 'update', 'data', 'identity', 'item',
+    // LINQ's `ElementAt` returns the element itself; it only LOOKS like a
+    // date ending in `At` (review of the application-code round).
+    'ElementAt',
+  ])('does not name metadata, so the value is still judged: %s', (name) => {
+    expect(isMetadata(name)).toBe(false);
+  });
+
+  /**
+   * The guard's `$V` must not hold a function body. `$V` is whatever the
+   * attribute is read on, of any size: in
+   * `users.filter((u) => { logger.warn(u.email) }).length` it is the whole
+   * `users.filter(...)` call, log call included, and the guard excluded the
+   * finding inside it (review of the application-code round: four true
+   * positives lost, one per language). A `$V` whose text holds a lambda,
+   * an arrow, a `function` or a `delegate` is not a value whose metadata is
+   * read. PHP gets its own copy: `=>` is PHP's array-pair separator, so there
+   * the body marker is `fn`/`function`, never `=>`.
+   */
+  function valueRegexes(): Map<string, string> {
+    const found = new Map<string, string>();
+    const walk = (rule: string, node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(rule, child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$V' && typeof regex === 'string') {
+          if (found.has(rule)) throw new Error(`two $V regexes in ${rule}`);
+          found.set(rule, regex);
+        }
+      }
+      for (const value of Object.values(node)) walk(rule, value);
+    };
+    for (const r of packRules()) if (r.id.startsWith('rgpd-pii-in-log-')) walk(r.id, r);
+    return found;
+  }
+
+  const valueRegex = (rule: string): RegExp => {
+    const re = valueRegexes().get(rule);
+    if (re === undefined) throw new Error(`no $V regex in ${rule}`);
+    return new RegExp(re);
+  };
+
+  it('limits $V in every log rule: one body-marker regex for JS, Python and C#, its own for PHP', () => {
+    const regexes = valueRegexes();
+    expect([...regexes.keys()].sort()).toEqual([PII_CS, PII_JS, PII_PHP, PII_PY].sort());
+    expect(new Set([regexes.get(PII_JS), regexes.get(PII_PY), regexes.get(PII_CS)]).size).toBe(1);
+    expect(regexes.get(PII_PHP)).not.toBe(regexes.get(PII_JS));
+  });
+
+  it.each([
+    'email', 'user.email', 'get_bot(item["email"], 3)', 'lookup(email)', 'findBot(req.body[\'email\'])',
+    'obter_function_id(email)', 'lambda_client.get(email)', 'functionality(email)',
+  ])('JS/Python/C#: keeps the guard for a plain value: %s', (text) => {
+    expect(valueRegex(PII_JS).test(text)).toBe(true);
+  });
+
+  it.each([
+    'users.filter((u) => { console.warn(u.email); return true; })',
+    'queue.add(function () { logger.info(user.email); })',
+    'scheduler.add_job(lambda: logger.info("%s", user.email))',
+    'users.Where(u => { _logger.LogInformation("{E}", u.Email); return true; })',
+    'users.Where(delegate (User u) { _logger.LogInformation("{E}", u.Email); return true; })',
+    'users.filter((u) => {\n  logger.warn(u.email);\n})',
+  ])('JS/Python/C#: drops the guard when $V holds a function body: %s', (text) => {
+    expect(valueRegex(PII_JS).test(text)).toBe(false);
+  });
+
+  it.each(['$email', 'obter_bot($data[\'email\'])', 'f([\'e\' => $email])', '$this->bots[$email]'])(
+    'PHP: keeps the guard for a plain value, array pairs included: %s',
+    (text) => {
+      expect(valueRegex(PII_PHP).test(text)).toBe(true);
+    },
+  );
+
+  it.each([
+    '$fila->adicionar(fn () => $this->logger->info(\'x\', [\'e\' => $user->email]))',
+    '$fila->adicionar(function () use ($user) { error_log($user->email); })',
+  ])('PHP: drops the guard when $V holds a function body: %s', (text) => {
+    expect(valueRegex(PII_PHP).test(text)).toBe(false);
+  });
+});
+
+/**
+ * The Python print sink skips a Django management command: `class Command`
+ * whose base is one of Django's (`BaseCommand`, `AppCommand`, `LabelCommand`,
+ * `TemplateCommand`, the pre-1.10 `NoArgsCommand`, a project's
+ * `...BaseCommand`), or `module.Command` — a command extending a built-in
+ * one. The first version accepted any base ending in `Command`
+ * (`ProcessCommand`, `ICommand`), which are not Django's (review of the
+ * application-code round).
+ */
+describe('the Django management command base regex', () => {
+  const baseRegex = (): RegExp => {
+    const found: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$BASE' && typeof regex === 'string') found.push(regex);
+      }
+      for (const value of Object.values(node)) walk(value);
+    };
+    for (const r of packRules()) if (r.id === PII_PY) walk(r);
+    const [only, ...rest] = found;
+    if (only === undefined || rest.length > 0) throw new Error(`expected one $BASE regex, found ${String(found.length)}`);
+    return new RegExp(only);
+  };
+
+  it.each([
+    'BaseCommand', 'AppCommand', 'LabelCommand', 'TemplateCommand', 'NoArgsCommand', 'ZulipBaseCommand',
+    'base.BaseCommand', 'templates.TemplateCommand', 'django.core.management.base.BaseCommand',
+    'sendtestemail.Command', 'email_de_teste.Command',
+  ])('is a Django command base: %s', (base) => {
+    expect(baseRegex().test(base)).toBe(true);
+  });
+
+  it.each(['ProcessCommand', 'ProcessoCommand', 'ICommand', 'Command', 'BaseModel', 'CommandBase', 'RunserverCommand'])(
+    'is not: %s',
+    (base) => {
+      expect(baseRegex().test(base)).toBe(false);
+    },
+  );
+});
+
+/**
  * What the messages PRESCRIBE — fix round 1, item 6. Google Consent Mode v2
  * with `analytics_storage` denied ("advanced mode": the tag loads and pings
  * before consent) and Meta's `fbq('consent', 'revoke')` (fbevents.js still
@@ -453,7 +764,7 @@ describe('the tracker messages prescribe loading nothing before consent', () => 
 
 describe('the tracker rules are restricted to markup', () => {
   it('every generic-mode rule names the file types it reads, and has a hit fixture of each', () => {
-    const hitExts = new Set(filesIn(resolve(FIXTURES, 'hits')).map((f) => extname(f)));
+    const hitExts = new Set(allFilesIn(resolve(FIXTURES, 'hits')).map((f) => extname(f)));
     for (const rule of packRules()) {
       if (!(rule.languages ?? []).includes('generic')) continue;
       const include = rule.paths?.include ?? [];
@@ -464,5 +775,27 @@ describe('the tracker rules are restricted to markup', () => {
         expect([rule.id, glob, hitExts.has(extname(glob))]).toEqual([rule.id, glob, true]);
       }
     }
+  });
+
+  it('every generic-mode rule skips the same test-code paths, and no hits/ fixture is one of them', () => {
+    for (const rule of packRules()) {
+      if (!(rule.languages ?? []).includes('generic')) continue;
+      expect([rule.id, rule.paths?.exclude]).toEqual([rule.id, TRACKER_EXCLUDES]);
+    }
+    // Recursive, and judged on every path segment: `loja.test.pt/index.html`
+    // is the fixture a directory-matching glob would swallow.
+    const swallowed = allFilesIn(resolve(FIXTURES, 'hits')).filter((f) => TRACKER_EXCLUDES.some((g) => excludedBy(f, g)));
+    expect(swallowed).toEqual([]);
+  });
+
+  it('models Semgrep\'s glob the way Semgrep was measured to apply it: to every path segment', () => {
+    // Probed with Semgrep 1.176 on a tree built for it (see TRACKER_EXCLUDES).
+    expect(excludedBy('sites/loja.test.pt/index.html', '*.test.*')).toBe(true);
+    expect(excludedBy('sites/loja.test.pt/index.html', '*.test.js')).toBe(false);
+    expect(excludedBy('sites/foo.test.js/index.html', '*.test.js')).toBe(true);
+    expect(excludedBy('src/a.test.js', '*.test.js')).toBe(true);
+    expect(excludedBy('src/test.js', '*.test.js')).toBe(false);
+    expect(excludedBy('src/__tests__/h.js', '__tests__')).toBe(true);
+    expect(() => excludedBy('a.test.js', '*.test.{js,jsx}')).toThrow();
   });
 });

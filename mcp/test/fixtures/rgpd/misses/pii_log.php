@@ -25,4 +25,13 @@ class Encomendas
         $total = log($data['valor']); // math, not logging
         wp_mail($email, 'Assunto', 'Corpo'); // not a log call at all
     }
+
+    // `$email` is a queued-message OBJECT: what reaches the log is its id and
+    // its date, read as properties; and an address used as a LOOKUP KEY, where
+    // what is logged is the id of the result (attribute-read guard).
+    public function agendar($email, array $data): void
+    {
+        error_log('mensagem sem destinatarios ' . $email->id . ' ' . $email->enviar_em);
+        $this->logger->info('mapa de ids', ['id' => obter_bot($data['email'])->id]);
+    }
 }

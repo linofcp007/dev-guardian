@@ -14,7 +14,7 @@ function registo(user, req, email, phone, log, maskedEmail, emailHash, isValidEm
   logger.info('utilizador', user.id); // an internal id is the right thing to log
   logger.info('pedido', req.body['orderId']); // a subscript whose key is not personal data ($KEY regex)
   console.log(crypto.createHash('sha256').update(user.email).digest('hex')); // a hash (derived-value guard)
-  console.log(user.email.length); // a length ($X.length)
+  console.log(user.email.length); // a length: an attribute read on the value (attribute-read guard)
   console.log(!!user.email, !email); // a boolean (!$X)
   console.log(formik.errors.email); // a form's error message for the field ($OBJ regex)
   logger.info('existe', repo.exists({ email })); // a predicate's boolean (derived-value guard)
@@ -27,6 +27,14 @@ function registo(user, req, email, phone, log, maskedEmail, emailHash, isValidEm
   sendEmail(email); // not a log call at all
   const params = new URLSearchParams(req.url);
   logger.debug('pagina', params.get('page')); // a .get() whose key is not personal data
+}
+
+// `email` is a queued-message OBJECT: what reaches the log is its id and its
+// date, read as attributes; and an address used as a LOOKUP KEY, where what is
+// logged is the id of the result (attribute-read guard).
+function agendar(email, req) {
+  logger.warn('mensagem sem destinatarios', email.id, email.sendAt);
+  logger.info('mapa de ids', findBot(req.body['email']).id);
 }
 
 module.exports = { registo };

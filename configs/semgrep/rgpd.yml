@@ -126,11 +126,60 @@
 # repo (146). LEIA O ZERO COMO FRACO: todos sao codigo de BIBLIOTECA, quase
 # sem chamadas de log com um destes nomes — o WordPress tem 49 `error_log()`
 # e nenhum com email, telefone, IBAN ou NIF. O zero diz "nenhum falso positivo
-# onde podia ter aparecido um nome", nao "preciso em aplicações". Um corpus de
-# codigo de APLICAÇAO (o `GUARDIAN_RGPD_SRC` da ablação) continua em divida.
+# onde podia ter aparecido um nome", nao "preciso em aplicações".
+#
+# MEDIÇAO EM CODIGO DE APLICAÇAO (ronda de seguimento, 2026-09-26): onze
+# aplicações open source de licença permissiva, clones superficiais num
+# commit fixo, o pack inteiro com as opções por omissao do Semgrep (que ja
+# saltam `test/`, `tests/`, `node_modules/`, `vendor/`). CADA resultado foi
+# lido e julgado à mao: verdadeiro so se um dado pessoal chega mesmo a um log,
+# ou um rastreador carrega mesmo antes do consentimento.
+#
+#   | aplicação                      | commit   | ficheiros | antes (V/F) | depois (V/F) |
+#   | ------------------------------ | -------- | --------: | ----------- | ------------ |
+#   | Zulip (Python, Django)         | e9ffac37 |      3094 | 19 / 27     | 19 / 1       |
+#   | Saleor (Python, Django)        | 5ff56489 |      2604 | 0 / 0       | 0 / 0        |
+#   | CTFd (Python, Flask)           | e661e074 |       555 | 2 / 0       | 2 / 0        |
+#   | Ghost (JS/TS, Node)            | 7464bbf0 |      4964 | 2 / 7       | 2 / 2        |
+#   | freeCodeCamp (TS, Fastify)     | 9723d3b1 |      1184 | 3 / 0       | 3 / 0        |
+#   | Site Kit by Google (WordPress) | bf5062db |      2768 | 0 / 3       | 0 / 0        |
+#   | BookStack (PHP, Laravel)       | 1633b3ab |      2014 | 0 / 0       | 0 / 0        |
+#   | Coolify (PHP, Laravel)         | a8117f91 |      1862 | 8 / 0       | 8 / 0        |
+#   | Umbraco CMS (C#)               | cee7d898 |      8954 | 1 / 0       | 1 / 0        |
+#   | Orchard Core (C#)              | 4910d172 |      3714 | 0 / 0       | 0 / 0        |
+#   | eShop (C#)                     | b4a40872 |       527 | 0 / 0       | 0 / 0        |
+#
+# Por regra, antes e depois (verdadeiros / total): py 21/48 e 21/22; js 3/5 e
+# 3/5; php 8/8 e 8/8; cs 1/1 e 1/1; ga4 0/3 e 0/0; youtube 2/7 e 2/2; meta e
+# hotjar 0 e 0. O pack inteiro: 35/72 (48,6 %) e 35/38 (92,1 %) — os 35
+# verdadeiros ficaram todos. As tres classes de falso positivo que sairam,
+# cada uma com a sua fixture em misses/: o `print()` de um comando de gestao
+# do Django (23, todos no Zulip), a leitura de um atributo de id/data/tamanho
+# (3) e o markup de rastreadores em codigo de teste (8). Os tres que ficam nao
+# se distinguem pelo nome: o endereço de uma conta de bot (Zulip) e dois
+# endereços sinteticos num script de seed (Ghost).
+#
+# REVISAO DESTA MEDIÇAO (ronda de correção 1, 2026-09-27). A revisao achou
+# um guarda largo de mais — o `$V` da leitura de atributo engolia uma
+# chamada de log DENTRO de um callback — e tres pontos menores: o
+# `ElementAt` lido como uma data, uma base de `class Command` que nao era do
+# Django, e uma pasta de site com um ponto no nome saltada pelas exclusoes
+# de teste. O pack corrigido, re-corrido nas mesmas onze aplicações no mesmo
+# commit, da os MESMOS 38 resultados no mesmo ficheiro, linha e coluna — 35
+# verdadeiros, 3 falsos, 92,1 % — e nenhum resultado novo: nenhuma das
+# formas que a revisao encontrou aparece nestas onze, e a prova de cada uma
+# é a sua fixture em hits/.
+#
+# LEIA TAMBEM ESTE NUMERO COM CUIDADO: é pequeno (72 resultados), dois terços vêm
+# de uma aplicação, e as regras da Meta e do Hotjar nao dispararam em nenhuma
+# das onze — o seu falso positivo continua medido so nas fixtures. O C# tem
+# um resultado: o parser do Semgrep nao le os construtores primarios (o eShop
+# da 20 ficheiros parcialmente lidos), e os logs das aplicações C# medidas
+# quase nunca nomeiam o dado. Para o eixo 3 da ablação cada regra foi medida
+# contra a arvore da sua linguagem (ver `mcp/test/ablate/packs.ts`).
 #
 # ---------------------------------------------------------------------------
-# A ABLAÇAO (`npm run ablate -- rgpd`) correu cinco vezes, e as duas
+# A ABLAÇAO (`npm run ablate -- rgpd`) correu sete vezes, e as duas
 # primeiras mudaram o pack:
 #
 #   1. 75 clauses: 8/8 regras disparam em hits/, 67 vivos, 8 DEAD. Os DEAD
@@ -159,6 +208,30 @@
 #      acusar no eixo 2 os ramos ENTAO guardados ao lado dos bugs nos ramos
 #      ELSE (`base.twig`, `app.blade.php`, `header.php`, marcados
 #      `excluded:`) — o guarda a funcionar.
+#   6. Ronda de codigo de aplicação: 109 clauses, 127 resultados de base em
+#      hits/, e cada regra tocada re-ablada sozinha (`--filter`) com o eixo 3
+#      sobre a arvore de aplicação da sua linguagem (`--real-code`): py 23/23
+#      vivos sobre 22 resultados reais, js 17/17 sobre 4, php 24/24 sobre 8,
+#      rastreadores 17/17 e youtube 3/3 sobre 2, piso de ruido 0 em todas. O
+#      C# deu 15/16 e 1 DEAD — o regex `$METHOD`, cuja unica linha de misses
+#      (`Debug.Assert(email.Length > 0)`) o guarda da leitura de atributo passou
+#      a excluir tambem. Faltava a fixture, nao sobrava o clause: a linha
+#      passou a `Debug.Assert(email != null)` e a re-ablação deu 16/16. Todos
+#      os clauses novos leram vivos, sem revelar nada em hits/ e sem subir a
+#      contagem real; os eixos 2 e 3 so acusaram os tipos ja conhecidos (os
+#      regexes de nome, os guardas de valor derivado ao lado da sua linha
+#      `excluded:`, os ramos positivos e o regex `$MASK`).
+#   7. Ronda de correção 1 da medição em aplicações (a revisao): 113
+#      clauses, 134 resultados de base em hits/, e todas as regras
+#      re-abladas sozinhas contra as mesmas arvores de aplicação da corrida
+#      6: py 24/24 vivos sobre 22 resultados reais, js 18/18 sobre 6, php
+#      25/25 sobre 8, cs 17/17 sobre 1, rastreadores 17/17 e youtube 3/3
+#      sobre 2; 8/8 regras disparam em hits/, 0 DEAD, piso de ruido 0 em
+#      todas. Os clauses novos — o regex do `$V` nas quatro regras de log — e
+#      o `$BASE` mais estreito leram vivos, sem revelar nada em hits/ e sem
+#      subir a contagem real; os eixos 2 e 3 so acusaram os tipos ja
+#      conhecidos. A corrida do py deixou 7 ficheiros de fora por timeout
+#      (dito no relatorio); as outras, nenhum.
 #
 # Os 16 SUPPRESSES-TP do eixo 2 sao todos esperados, e a quarta corrida
 # confirmou-os linha a linha: 8 sao os regexes de nome dos ramos POSITIVOS
@@ -166,7 +239,8 @@
 # derivado por linguagem, cada um a revelar exatamente o vizinho
 # `(excluded: ...)` da penultima ou ultima linha de hits/. O eixo 3 é vacuo
 # em todas as regras sobre `mcp/src` (0 de base), e o relatorio diz isso
-# regra a regra.
+# regra a regra; sobre as arvores de aplicação das corridas 6 e 7 deixou de
+# o ser nas regras de log e no youtube.
 #
 # ---------------------------------------------------------------------------
 # POR QUE NAO SE PROCURAM OS FORMATOS (`PT50` + 21 digitos, `+351 9xx`, nove
@@ -221,8 +295,34 @@
 #   `debug` do npm, `trigger_error` em PHP, e em C# `Substring(Length - 4)`
 #   nao é reconhecido como os ultimos digitos. Os valores derivados so sao
 #   reconhecidos por NOME da chamada (`len`, `strlen`, `count`, `exists`,
-#   `has`, `includes`, `test`, `is...`, `Boolean`/`bool`) e, em JS, `.length`
-#   e `!x`; `x.Length` do C# e `x is None` do Python nao.
+#   `has`, `includes`, `test`, `is...`, `Boolean`/`bool`), pelo nome de um
+#   atributo lido (`.length`, `.Length`, `.id`) e, em JS, `!x`; `x is None`
+#   do Python nao.
+# - Log: o guarda da leitura de atributo decide pelo NOME do atributo: um
+#   `email.data_envio` ou um `email.subject` continuam a disparar, e um
+#   atributo que guardasse o valor com um nome da lista (`phone.id` a guardar
+#   o numero) seria excluido. O caso portugues mais provavel é o NIF: em
+#   codigo portugues o `id` de um contribuinte é muitas vezes o proprio NIF,
+#   e `log(contribuinte.id)` ou `log(nif.id)` sao excluidos como se fossem um
+#   id interno. Nenhuma mudança da regra separa os dois casos: o Django, o
+#   Rails, o Laravel e o EF dao a cada entidade um `id` substituto, e é esse
+#   id interno que a mensagem destas regras manda registar; um NIF guardado
+#   como chave chama-se quase sempre `nif`, e `log(contribuinte.nif)`
+#   continua a disparar. Do mesmo lado do guarda fica um metodo com um nome
+#   da lista que devolve o proprio elemento: so o `ElementAt` do LINQ é
+#   reconhecido, e `emails.findById(x)` ou o `objectAt` do Ember nao.
+# - Log: o limite do `$V` le o TEXTO. Um corpo de função sem `=>`,
+#   `function`, `lambda` ou `delegate` (no PHP, `fn` ou `function`) — o
+#   metodo abreviado de um objeto JS, `{ m() { ... } }` — continua a ser
+#   excluido, e um `$V` com uma dessas palavras numa string perde o guarda:
+#   um falso positivo possivel, nunca um achado escondido.
+# - Log: o `print()` de um comando de gestao do Django nao conta, mesmo num
+#   comando que corre como daemon e cuja saida vai para um ficheiro de log, e
+#   tambem nao conta com `file=sys.stderr` ou outro `file=`; um logger dentro
+#   do mesmo comando conta. Um comando que estende outro importado com um
+#   ALIAS (`from ...runserver import Command as RunserverCommand`) nao é
+#   reconhecido como comando, e o `print()` dele dispara; o `modulo.Command`
+#   é reconhecido.
 # - Rastreadores: GA carregado por codigo JS que monta o `<script>`
 #   (`s.src = '...gtag/js'`), `react-ga4`, o Google Tag Manager (o GTM pode
 #   gerir o consentimento por dentro), `wp_register_script` seguido de
@@ -296,6 +396,48 @@ rules:
   # `substr($iban, -4)`, `iban[^4..]`) existe porque é a pratica bancaria
   # corrente para identificar uma conta num log sem a expor.
   #
+  # O GUARDA DA LEITURA DE ATRIBUTO (ronda de codigo de aplicação): um valor
+  # que so aparece como o OBJETO de uma leitura de um atributo cujo NOME diz
+  # que é um identificador, uma data ou um tamanho — `email.id`,
+  # `email.scheduled_timestamp`, `obter_bot(dados["email"]).id`,
+  # `user.email.length` — nao é o que chega ao log: chega o id, a data, o
+  # tamanho. O `email` ali é um objeto (uma mensagem agendada) ou uma chave de
+  # pesquisa. Medido no Zulip: tres falsos positivos com esta forma e nenhum
+  # verdadeiro. O `focus-metavariable: $V` é o que impede o guarda de excluir
+  # o proprio membro: `user.email` nao esta DENTRO de `user`.
+  #
+  # O regex do `$ATTR` (o mesmo nas quatro regras, e o teste exige-o) é uma
+  # lista de NOMES, de proposito. Uma versao medida na mesma ronda, e nunca
+  # publicada, excluia QUALQUER leitura de atributo que nao fosse uma chamada
+  # de metodo; custava o mesmo tempo e perdia verdadeiros
+  # positivos que o ramo do membro nao ve: `user.phone.as_e164` (o
+  # django-phonenumber-field), `email.address`, `cliente.telefone.numero` —
+  # atributos de nome neutro que guardam o proprio valor. Esses continuam em
+  # hits/, e uma chamada de metodo (`email.lower()`, `email.toLowerCase()`,
+  # `$email->toString()`) tambem, porque nenhum destes nomes esta na lista.
+  # A lista: `id`, `pk`, `uuid`, `guid` e os sufixos `_id`/`Id`/`ID`,
+  # `_uuid`/`Uuid`, `Guid`; as datas `_at`/`At`, `_em`/`Em` (`enviado_em`),
+  # `_date`/`Date`, `_time`/`Time`, `timestamp`; e `length`, `size`, `count`.
+  # O `At` nao conta depois de `Element`: o `ElementAt` do LINQ devolve o
+  # proprio elemento (`emails.ElementAt(0)`), esta em hits/ (revisao desta
+  # ronda). Efeito lateral: `email.Length` do C#, que era um ponto cego, sai
+  # tambem.
+  #
+  # O `$V` NAO PODE CONTER O CORPO DE UMA FUNÇAO (revisao desta ronda). O
+  # `$V` é aquilo em que o atributo é lido, e nao tem tamanho maximo: em
+  # `users.filter((u) => { logger.warn(u.email) }).length` é a chamada
+  # `users.filter(...)` inteira, com o callback e a chamada de log la
+  # dentro, e o guarda excluia o achado que estava dentro dela. A primeira
+  # versao perdeu assim quatro verdadeiros positivos, um por linguagem — um
+  # `.length` depois de um `filter` com callback, o `.Count()` depois de um
+  # `Where` do LINQ, o `.id` do job de um `add_job(lambda: ...)`, o `->id`
+  # de um `fn () =>` do PHP —, todos em hits/. Por isso um `metavariable-regex`
+  # sobre o `$V` recusa o guarda quando o texto do `$V` tem `=>`, `function`,
+  # `lambda` ou `delegate`. No PHP a copia é outra: `=>` é o separador dos
+  # arrays (`['e' => $email]`), e ali o corpo de uma função é `fn` ou
+  # `function`. O teste avalia os dois regexes contra textos que tem e nao
+  # tem corpo.
+  #
   # O EIXO 2 DA ABLAÇAO VAI ACUSAR os dois guardas, e é o guarda a funcionar:
   # as duas ultimas linhas de cada fixture de hits poem um bug AO LADO de um
   # valor mascarado, para que uma exclusao larga de mais tenha onde aparecer.
@@ -364,10 +506,23 @@ rules:
                 metavariable: $MASK
                 regex: '^(?:(?:.*(?:\.|->|::))?(?:(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)\w*|len|strlen|mb_strlen|count|sizeof|[Bb]ool|[Bb]oolean|exists?|has|includes|test|is[A-Z]\w*)$|.*\bcreateH(?:ash|mac)\()'
       - pattern-not-inside: $S.slice(-$N)
-      # Valores derivados que em JS sao nos proprios e nao chamadas: o
-      # tamanho (`email.length`) e um booleano (`!!email`, `!email`).
-      - pattern-not-inside: $X.length
+      # Um booleano (`!!email`, `!email`) é um valor derivado que em JS é um
+      # no proprio e nao uma chamada. O tamanho (`email.length`) tinha aqui
+      # um `pattern-not-inside: $X.length` so dele ate à ronda de codigo de
+      # aplicação; é uma leitura de atributo, e o guarda abaixo cobre-o — o
+      # clause saiu por ser um caso particular dele, e a fixture ficou.
       - pattern-not-inside: '!$X'
+      # O GUARDA DA LEITURA DE ATRIBUTO (ver o comentario das quatro regras).
+      - pattern-not-inside:
+          patterns:
+            - pattern: $V.$ATTR
+            - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
+                metavariable: $ATTR
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+            - focus-metavariable: $V
 
   # PHP: WordPress primeiro, porque é onde o PHP escreve dados pessoais em
   # logs — `error_log()` com `$user->user_email`, e o `wc_get_logger()` do
@@ -455,6 +610,18 @@ rules:
                 metavariable: $MASK
                 regex: '^(?:(?:.*(?:\.|->|::))?(?:(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)\w*|len|strlen|mb_strlen|count|sizeof|[Bb]ool|[Bb]oolean|exists?|has|includes|test|is[A-Z]\w*)$|.*\bcreateH(?:ash|mac)\()'
       - pattern-not-inside: substr($S, -$N)
+      # O GUARDA DA LEITURA DE ATRIBUTO (ver o comentario das quatro regras),
+      # com `->`: `$email->id`, `obter_bot($data['email'])->id`.
+      - pattern-not-inside:
+          patterns:
+            - pattern: $V->$ATTR
+            - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*\b(?:fn|function)\b)'
+            - metavariable-regex:
+                metavariable: $ATTR
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+            - focus-metavariable: $V
 
   # Python: `logging` e qualquer recetor chamado logger/log (incluindo o
   # `_LOGGER` do Home Assistant e o `log` do structlog, com o `bind(...)` que
@@ -482,7 +649,36 @@ rules:
               - metavariable-regex:
                   metavariable: $METHOD
                   regex: '^(?:debug|info|warning|warn|error|exception|critical|fatal|log|bind)$'
-          - pattern-inside: print(...)
+          # O `print()` de um comando de gestao do Django (`class Command`,
+          # que é o nome que o Django carrega) é a saida do comando no
+          # terminal de quem o correu — o mesmo canal que o
+          # `self.stdout.write`, que a regra nunca leu como log. Medido em
+          # codigo de aplicação: 23 dos 27 falsos positivos desta regra no
+          # Zulip eram isto (`show_admins`, `deactivate_user`...). Um logger
+          # dentro do comando continua a contar, e um modelo que por acaso se
+          # chama `Command` tambem (hits/).
+          #
+          # A BASE tem de ser do Django: `BaseCommand`, `AppCommand`,
+          # `LabelCommand`, `TemplateCommand` (a base do `startapp` e do
+          # `startproject`), o `NoArgsCommand` anterior ao Django 1.10, a
+          # base de um projeto que termina em `BaseCommand`
+          # (`ZulipBaseCommand`), ou `modulo.Command` — um
+          # comando que estende um dos do proprio Django, como o
+          # `sendtestemail.Command` do Zulip. A primeira versao aceitava
+          # qualquer base terminada em `Command` (`ProcessCommand`,
+          # `ICommand`), que nao sao do Django (revisao desta ronda; em
+          # hits/). O `file=sys.stderr` nao muda nada: o `print()` inteiro de
+          # um comando fica de fora — ver os pontos cegos.
+          - patterns:
+              - pattern-inside: print(...)
+              - pattern-not-inside:
+                  patterns:
+                    - pattern: |
+                        class Command(..., $BASE, ...):
+                          ...
+                    - metavariable-regex:
+                        metavariable: $BASE
+                        regex: '^(?:(?:.*\.)?(?:App|Label|Template|NoArgs|\w*Base)Command|.+\.Command)$'
       - pattern-either:
           - patterns:
               - pattern: $OBJ.$FIELD
@@ -524,6 +720,17 @@ rules:
                 metavariable: $MASK
                 regex: '^(?:(?:.*(?:\.|->|::))?(?:(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)\w*|len|strlen|mb_strlen|count|sizeof|[Bb]ool|[Bb]oolean|exists?|has|includes|test|is[A-Z]\w*)$|.*\bcreateH(?:ash|mac)\()'
       - pattern-not-inside: '$S[-$N:]'
+      # O GUARDA DA LEITURA DE ATRIBUTO (ver o comentario das quatro regras).
+      - pattern-not-inside:
+          patterns:
+            - pattern: $V.$ATTR
+            - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
+                metavariable: $ATTR
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+            - focus-metavariable: $V
 
   # C#: `ILogger` (os `LogX` de extensao e o `Log(level, ...)`), o `Log`
   # estatico do Serilog, log4net/NLog, e `Console`/`Debug`/`Trace`. O
@@ -589,6 +796,18 @@ rules:
                 metavariable: $MASK
                 regex: '^(?:(?:.*(?:\.|->|::))?(?:(?:[Mm]ask|[Rr]edact|[Aa]nonymi[sz]e|[Pp]seudonymi[sz]e|[Hh]ash|[Oo]bfuscate|[Ee]ncrypt|[Mm]ascar|[Oo]cultar|[Aa]nonimizar|[Cc]ifrar|md5|sha1|sha256|wp_hash)\w*|len|strlen|mb_strlen|count|sizeof|[Bb]ool|[Bb]oolean|exists?|has|includes|test|is[A-Z]\w*)$|.*\bcreateH(?:ash|mac)\()'
       - pattern-not-inside: '$S[^$N..]'
+      # O GUARDA DA LEITURA DE ATRIBUTO (ver o comentario das quatro regras).
+      # Em C# apanha tambem o `email.Length`, que era um ponto cego.
+      - pattern-not-inside:
+          patterns:
+            - pattern: $V.$ATTR
+            - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
+                metavariable: $ATTR
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+            - focus-metavariable: $V
 
   # ---------------------------------------------------------------------------
   # RASTREADORES SEM CONSENTIMENTO
@@ -601,6 +820,35 @@ rules:
   # `*.js` entrou na ronda 1 por causa dos layouts do Next.js em JavaScript
   # (`app/layout.js`), e foi medido sobre misses/ e sobre codigo real antes
   # de entrar.
+  #
+  # O `paths.exclude` tira o codigo de TESTE: `*.test.js`, `*.spec.js`, as
+  # stories do Storybook (`*.stories.js`), cada um com `.js`, `.jsx` e
+  # `.tsx`, e as pastas `__tests__`, `__mocks__`, `__fixtures__`,
+  # `__factories__`. O markup ali é a ENTRADA de um teste ou uma
+  # demonstração para quem desenvolve, e nunca é servido a um visitante.
+  # Medido em codigo de aplicação: todos os 8 falsos positivos das regras de
+  # rastreadores eram isto (um plugin WordPress e o Ghost), e todos os
+  # verdadeiros ficaram. O `.semgrepignore` por omissao do Semgrep ja salta
+  # `test/` e `tests/`, mas nao os testes ao lado do codigo. O `*.test.js`
+  # exige o ponto dos dois lados: uma pagina `stories.html` é servida e esta
+  # em hits/.
+  #
+  # POR QUE A EXTENSAO ESTA ESCRITA (revisao desta ronda). Medido no Semgrep
+  # 1.176: um glob sem `/` casa QUALQUER segmento do caminho, pastas
+  # incluidas, e nao ha sintaxe para "so ficheiros" (`**/x/**` casa so
+  # pastas, o contrario do que se quer); `{js,jsx}` nao é expandido — um
+  # glob assim nao excluiu nada. A primeira versao, `*.test.*`, saltava por
+  # isso uma pasta inteira `sites/loja.test.pt/`, e esse site esta em hits/.
+  # Com a extensao no glob so uma pasta chamada como um ficheiro de teste
+  # (`x.test.js/`) é saltada. So a familia JS esta na lista: as outras
+  # extensoes que estas regras leem nao tem convenção de teste desta forma,
+  # e um `x.test.html` volta a ser lido — o erro possivel é um falso
+  # positivo, nunca um rastreador escondido.
+  #
+  # Nao é um clause, e a ablação nunca o retira: o `rgpdRules.test.ts` tira
+  # as treze exclusoes e exige que disparem exatamente as fixtures de misses/
+  # que elas cobrem, pelo menos uma por exclusao, e modela o glob como o
+  # Semgrep o aplica — a todos os segmentos do caminho.
   #
   # OS GUARDAS SAO OS MESMOS NAS QUATRO REGRAS, e cada um casa o BLOCO
   # INTEIRO que protege, nunca o caminho ate ao alvo: o Semgrep so exclui um
@@ -675,6 +923,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Google Analytics (gtag.js) carregado antes do consentimento: o script é
       pedido no carregamento da pagina e define os cookies `_ga`/`_ga_*`
@@ -714,6 +963,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Meta Pixel iniciado antes do consentimento: `fbq('init', ...)` corre no
       carregamento da pagina, define o cookie `_fbp` e envia eventos para a
@@ -746,6 +996,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Hotjar carregado antes do consentimento: o script grava a sessao do
       visitante (cliques, movimento, scroll) e define cookies `_hj*` no
@@ -780,6 +1031,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Video do YouTube incorporado a partir de youtube.com/embed: o iframe
       define cookies do YouTube (YSC, VISITOR_INFO1_LIVE) no carregamento da

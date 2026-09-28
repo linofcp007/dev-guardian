@@ -2,6 +2,9 @@
 
 import logging
 
+from django.core.management.base import BaseCommand
+from pydantic import BaseModel
+
 logger = logging.getLogger(__name__)
 _LOGGER = logging.getLogger("encomendas")
 
@@ -10,7 +13,7 @@ class Registo:
     def __init__(self, log):
         self.logger = log
 
-    def registar(self, user, request, data, email, nif_cliente, customer_iban, log, cliente):
+    def registar(self, user, request, data, email, nif_cliente, customer_iban, log, cliente, agenda):
         logger.info("login falhado para %s", email)  # BUG: a plain name
         logging.warning(f"novo utilizador {user.email}")  # BUG: an attribute in an f-string
         self.logger.error("contacto %s", request.POST["telefone"])  # BUG: a request field by key
@@ -24,3 +27,31 @@ class Registo:
         logger.info("cliente %s", cliente.NIF)  # BUG: an all-caps attribute is the value
         logger.info("%s %s", mask_email(email), user.niss)  # BUG: the niss (excluded: the email)
         logger.info("%s %s", customer_iban[-4:], user.email)  # BUG: the email (excluded: last four)
+        logger.info("normalizado %s", email.lower())  # BUG: a METHOD call on the name still returns the address
+        logger.info("contacto %s", user.phone.as_e164)  # BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
+        return agenda.add_job(lambda: logger.info("agendado %s", user.email)).id  # BUG: a log call INSIDE a lambda whose result's `.id` is read (the $V lambda limit)
+
+
+class Command(BaseCommand):
+    def handle(self, *args, **options):
+        utilizador = obter_utilizador(options["email"])
+        logger.info("desativado %s", utilizador.email)  # BUG: a LOGGER inside a management command still logs
+
+
+class Pedido(BaseModel):
+    email: str
+
+    def processar(self):
+        print("pedido de", self.email)  # BUG: print in an ordinary class is still a log sink
+
+
+class Command(BaseModel):
+    email: str
+
+    def executar(self):
+        print("comando de", self.email)  # BUG: a model NAMED Command is not a management command
+
+
+class Command(ProcessoCommand):
+    def executar(self):
+        print("processo de", self.email)  # BUG: a base that merely ends in `Command` is not Django's (the $BASE regex)

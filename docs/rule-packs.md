@@ -152,10 +152,10 @@ dev-guardian ships **142 rules in 10 packs** under [`configs/semgrep/`](../confi
 
 | Rule | Severity | Languages | Ablatable clauses |
 | --- | --- | --- | --- |
-| `rgpd-pii-in-log-js` | WARNING | javascript, typescript | 17 |
-| `rgpd-pii-in-log-php` | WARNING | php | 27 |
-| `rgpd-pii-in-log-py` | WARNING | python | 21 |
-| `rgpd-pii-in-log-cs` | WARNING | csharp | 15 |
+| `rgpd-pii-in-log-js` | WARNING | javascript, typescript | 19 |
+| `rgpd-pii-in-log-php` | WARNING | php | 30 |
+| `rgpd-pii-in-log-py` | WARNING | python | 26 |
+| `rgpd-pii-in-log-cs` | WARNING | csharp | 18 |
 | `rgpd-tracker-ga4-without-consent` | WARNING | generic | 8 |
 | `rgpd-tracker-meta-pixel-without-consent` | WARNING | generic | 5 |
 | `rgpd-tracker-hotjar-without-consent` | WARNING | generic | 4 |

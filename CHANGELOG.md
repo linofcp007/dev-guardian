@@ -676,6 +676,29 @@ keeps working (migrations 004–011 are additive).
 
 ### Fixed
 
+- **The RGPD pack, measured on application code**: 72 findings over eleven
+  open-source applications (Zulip, Saleor, CTFd, Ghost, freeCodeCamp, Site Kit
+  by Google, BookStack, Coolify, Umbraco, Orchard Core, eShop), each triaged by
+  hand — 35 true, 37 false (48.6 % precision). Three false-positive classes are
+  gone, and all 35 true positives stay (92.1 %; the same 38 findings after the
+  review's fixes): `print()` inside a Django management command
+  (`class Command` on one of Django's bases — `BaseCommand`, `AppCommand`,
+  `LabelCommand`, `TemplateCommand`, `NoArgsCommand`, a project's
+  `…BaseCommand`, or `module.Command`) is the command's terminal output, like
+  `self.stdout.write`, not a log (23 findings); a value that is only the object
+  of an attribute whose name says id, date or size (`email.id`,
+  `email.scheduled_timestamp`, `lookup(email).id`, `user.email.length`, C#
+  `email.Length`, but not LINQ's `ElementAt`) is not what is logged (3),
+  unless that object holds a function body — a log call inside a callback
+  whose result's `.length`/`.Count()`/`.id` is read still counts; and the
+  tracker rules skip test code — `*.test.js`,
+  `*.spec.js`, `*.stories.js` (each also `.jsx`/`.tsx`), `__tests__`,
+  `__mocks__`, `__fixtures__`, `__factories__` (8). The file globs name their
+  extension because Semgrep matches a slash-free glob against directories too:
+  `*.test.*` would skip a site folder named `loja.test.pt/`. The three that
+  remain are a bot account's address and synthetic addresses in a seed script,
+  which a name cannot tell apart. The corpus list, commits and per-rule counts
+  are in the pack header.
 - **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy
   installed. A `package.json` that declares no dependency (and whose lock
