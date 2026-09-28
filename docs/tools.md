@@ -33,7 +33,7 @@ The dev-guardian MCP server registers **57 tools** and **18 resources**. This pa
 | [`observability_setup`](#observability_setup) | Configure logging + metrics scaffolding | `project_path`, `apply` |
 | [`perf_check`](#perf_check) | Performance probe (Lighthouse or k6) | `project_path`, `target_url`, `k6_script_path`, `lighthouse_categories` |
 | [`precommit_install`](#precommit_install) | Install pre-commit hooks | `project_path` |
-| [`prioritize_findings`](#prioritize_findings) | Prioritise open findings (heuristic) | `project_path`, `limit` |
+| [`prioritize_findings`](#prioritize_findings) | Prioritise open findings (heuristic) | `project_path`, `limit`, `mission_wellbeing` |
 | [`quality_check`](#quality_check) | Code quality scan | `project_path`, `categories`, `force`, `scope` |
 | [`register_custom_rules`](#register_custom_rules) | Register custom Semgrep rules | `project_path`, `paths`, `clear` |
 | [`regression_alert`](#regression_alert) | Regression alert | `project_path`, `scan_type`, `threshold` |
@@ -318,12 +318,13 @@ Run `pre-commit install` in the project to wire its .pre-commit-config.yaml into
 
 ### `prioritize_findings`
 
-Rank one project's open findings (project\_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix\_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id and so cannot be weighted yet. Returns top-N with explanation. No LLM call — the calling model uses the ranking to drive follow-ups.
+Rank one project's open findings (project\_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix\_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). Every CVE finding also gets a CISA SSVC deployer decision (Act / Attend / Track\* / Track) from Exploitation (KEV; EPSS as a PoC proxy), Automatable (a route reaches a file importing the package, from the latest map\_attack\_surface), Technical Impact (from severity) and mission\_wellbeing; a point with no data takes the more severe value and is listed in ssvc.assumed. SSVC does not change the score. `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id. Returns top-N with explanation. No LLM call.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `limit` | number | no | — | Cap on returned items. Default 50. |
+| `mission_wellbeing` | one of "low", "medium", "high" | no | — | SSVC Mission & Well-being for this system (CISA: mission prevalence x public well-being impact). Default medium, reported as assumed. |
 
 ### `quality_check`
 

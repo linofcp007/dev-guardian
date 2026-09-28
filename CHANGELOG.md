@@ -18,6 +18,11 @@ version bump.
   the package, `imported` when only other files do, and `unknown` otherwise — never `unreachable`.
   It runs by default beside `static`; `summary` gains `counts_by_provider`, and `counts_by_verdict`
   the new `imported` verdict.
+- `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /
+  Track, the CISA SSVC Guide's Table 9): Exploitation from KEV (EPSS ≥ 0.1 approximates a public
+  PoC), Automatable from the dependency provider's exposure, Technical Impact from severity, and the
+  new `mission_wellbeing` parameter (default `medium`). A point with no data takes the more severe
+  value and is listed in `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
 
 ## [3.0.0] - 2026-09-28
 

@@ -61395,6 +61395,657 @@ function findLatest2(ctx, projectPath, type, skipCoverageNone) {
   return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }
 
+// src/intel/ssvc.ts
+var SSVC_DECISIONS = ["Act", "Attend", "Track*", "Track"];
+var MISSION_WELLBEING_VALUES = ["low", "medium", "high"];
+var EPSS_POC_THRESHOLD = 0.1;
+var DEFAULT_MISSION_WELLBEING = "medium";
+var TREE = {
+  none: {
+    no: {
+      partial: { low: "Track", medium: "Track", high: "Track" },
+      total: { low: "Track", medium: "Track", high: "Track*" }
+    },
+    yes: {
+      partial: { low: "Track", medium: "Track", high: "Attend" },
+      total: { low: "Track", medium: "Track", high: "Attend" }
+    }
+  },
+  poc: {
+    no: {
+      partial: { low: "Track", medium: "Track", high: "Track*" },
+      total: { low: "Track", medium: "Track*", high: "Attend" }
+    },
+    yes: {
+      partial: { low: "Track", medium: "Track", high: "Attend" },
+      total: { low: "Track", medium: "Track*", high: "Attend" }
+    }
+  },
+  active: {
+    no: {
+      partial: { low: "Track", medium: "Track", high: "Attend" },
+      total: { low: "Track", medium: "Attend", high: "Act" }
+    },
+    yes: {
+      partial: { low: "Attend", medium: "Attend", high: "Act" },
+      total: { low: "Attend", medium: "Act", high: "Act" }
+    }
+  }
+};
+function ssvcDecision(values) {
+  return TREE[values.exploitation][values.automatable][values.technical_impact][values.mission_wellbeing];
+}
+function assessSsvc(points) {
+  const order = ["exploitation", "automatable", "technical_impact", "mission_wellbeing"];
+  return {
+    decision: ssvcDecision({
+      exploitation: points.exploitation.value,
+      automatable: points.automatable.value,
+      technical_impact: points.technical_impact.value,
+      mission_wellbeing: points.mission_wellbeing.value
+    }),
+    ...points,
+    assumed: order.filter((key) => points[key].assumed)
+  };
+}
+function exploitationPoint(cveIds, intel) {
+  const kev = [];
+  const unmeasured = [];
+  const unscored = [];
+  let maxEpss = null;
+  for (const id of cveIds) {
+    const entry = intel.get(id);
+    if (entry === void 0 || entry.status !== "ok") {
+      unmeasured.push(id);
+      continue;
+    }
+    if (entry.kev) kev.push(id);
+    if (entry.epss_score === void 0) unscored.push(id);
+    else if (maxEpss === null || entry.epss_score > maxEpss.score) maxEpss = { id, score: entry.epss_score };
+  }
+  if (kev.length > 0) {
+    return { value: "active", assumed: false, basis: `CISA KEV lists ${kev.join(", ")} as exploited in the wild` };
+  }
+  if (unmeasured.length > 0) {
+    return {
+      value: "active",
+      assumed: true,
+      basis: `no KEV/EPSS intel for ${unmeasured.join(", ")} (offline, or the fetch failed): assumed the most severe value`
+    };
+  }
+  if (maxEpss !== null && maxEpss.score >= EPSS_POC_THRESHOLD) {
+    return {
+      value: "poc",
+      assumed: false,
+      basis: `approximated: not KEV-listed, FIRST EPSS ${maxEpss.score.toFixed(3)} for ${maxEpss.id} is at least ${EPSS_POC_THRESHOLD}, read as a public proof of concept`
+    };
+  }
+  if (unscored.length > 0) {
+    return {
+      value: "poc",
+      assumed: true,
+      basis: `not KEV-listed, but FIRST has no EPSS score for ${unscored.join(", ")}: a public proof of concept cannot be ruled out, so assumed poc`
+    };
+  }
+  return {
+    value: "none",
+    assumed: false,
+    basis: `approximated: not KEV-listed, and FIRST EPSS is below ${EPSS_POC_THRESHOLD}` + (maxEpss === null ? "" : ` (highest ${maxEpss.score.toFixed(3)})`) + " \u2014 neither proves no exploit exists"
+  };
+}
+function automatablePoint(dependency, whyNone) {
+  if (dependency?.verdict === "reachable") {
+    return {
+      value: "yes",
+      assumed: false,
+      basis: `exposed: ${dependency.evidence[0]?.detail ?? "a file an HTTP route reaches imports the package"} \u2014 no barrier dev-guardian can see`
+    };
+  }
+  const why = dependency === null ? whyNone ?? "no reachability data" : dependency.verdict === "imported" ? "the package is imported, but no route was shown to reach an importing file \u2014 not evidence of a barrier" : "no import of the package was found \u2014 absence of evidence, not a barrier";
+  return { value: "yes", assumed: true, basis: `${why}: assumed the most severe value` };
+}
+function technicalImpactPoint(severity) {
+  const total = severity === "critical" || severity === "high";
+  return {
+    value: total ? "total" : "partial",
+    assumed: false,
+    basis: `approximated from severity=${severity} (critical/high \u2192 total, otherwise partial; a high-severity denial of service is really partial)`
+  };
+}
+function missionWellbeingPoint(value) {
+  if (value !== void 0) {
+    return { value, assumed: false, basis: "given as mission_wellbeing" };
+  }
+  return {
+    value: DEFAULT_MISSION_WELLBEING,
+    assumed: true,
+    basis: `default ${DEFAULT_MISSION_WELLBEING} \u2014 pass mission_wellbeing (low/medium/high) for this system`
+  };
+}
+
+// src/validate/dependencyProvider.ts
+import { isBuiltin } from "node:module";
+
+// src/validate/importGraph.ts
+var MAX_GRAPH_EDGES = 2e4;
+function buildImportGraph(records) {
+  const edges = /* @__PURE__ */ new Map();
+  const files = /* @__PURE__ */ new Set();
+  let edgeCount2 = 0;
+  let truncated = false;
+  for (const record4 of records) {
+    files.add(record4.file);
+    files.add(record4.module_file);
+    const existing = edges.get(record4.file);
+    if (existing !== void 0 && existing.has(record4.module_file)) continue;
+    if (edgeCount2 >= MAX_GRAPH_EDGES) {
+      truncated = true;
+      continue;
+    }
+    if (existing === void 0) {
+      edges.set(record4.file, /* @__PURE__ */ new Set([record4.module_file]));
+    } else {
+      existing.add(record4.module_file);
+    }
+    edgeCount2 += 1;
+  }
+  return { edges, files, truncated };
+}
+function shortestDistance(graph, root, target) {
+  if (root === target) return 0;
+  const visited = /* @__PURE__ */ new Set([root]);
+  let frontier = [root];
+  let hops = 0;
+  while (frontier.length > 0) {
+    hops += 1;
+    const next = [];
+    for (const file of frontier) {
+      const imported = graph.edges.get(file);
+      if (imported === void 0) continue;
+      for (const candidate of imported) {
+        if (candidate === target) return hops;
+        if (visited.has(candidate)) continue;
+        visited.add(candidate);
+        next.push(candidate);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+function reachFrom(graph, roots, target) {
+  const found = [];
+  for (const root of roots) {
+    const hops = shortestDistance(graph, root, target);
+    if (hops !== null) found.push({ root, hops });
+  }
+  if (found.length === 0) return { hops: null, reachingRoots: [] };
+  found.sort((a2, b) => a2.hops - b.hops || a2.root.localeCompare(b.root));
+  return {
+    hops: Math.min(...found.map((f) => f.hops)),
+    reachingRoots: found.map((f) => f.root)
+  };
+}
+
+// src/validate/staticProvider.ts
+var RUNTIME_RESOLUTION_LANGUAGES = /* @__PURE__ */ new Set([
+  "ruby",
+  "java",
+  "csharp",
+  "php"
+]);
+function validateStatically(input) {
+  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
+  const roots = [...routesByFile.keys()];
+  const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
+  const reachCache = /* @__PURE__ */ new Map();
+  const languagesWithEdges = languagesWithResolvedEdges(input);
+  const context = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
+  return input.findings.map((finding4) => validateOne(finding4, input, context));
+}
+function languagesWithResolvedEdges(input) {
+  const languages = /* @__PURE__ */ new Set();
+  for (const [file, targets] of input.graph.edges) {
+    if (targets.size === 0) continue;
+    const language = input.languageOf(file);
+    if (language !== null) languages.add(language);
+  }
+  return languages;
+}
+function relativizeSet(files, projectPath) {
+  return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
+}
+function groupRoutesByRelFile(routes, projectPath) {
+  const byFile = /* @__PURE__ */ new Map();
+  for (const route of routes) {
+    if (route.provenance !== "code") continue;
+    const relFile = toRelativeIfPossible(route.file, projectPath);
+    const existing = byFile.get(relFile);
+    if (existing === void 0) byFile.set(relFile, [route]);
+    else existing.push(route);
+  }
+  return byFile;
+}
+function makeEnvelope(finding4, input) {
+  return {
+    fingerprint: finding4.fingerprint,
+    provider: "static",
+    snapshot_id: input.snapshotId,
+    tree_hash: input.treeHash,
+    computed_at: input.computedAt
+  };
+}
+function validateOne(finding4, input, context) {
+  const envelope = makeEnvelope(finding4, input);
+  if (finding4.file_path === void 0) {
+    return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
+  }
+  const relFile = toRelativeIfPossible(finding4.file_path, input.projectPath);
+  const { language, entry, gaps } = resolveLanguageContext(relFile, input);
+  const reach = cachedReachFrom(input.graph, context.roots, relFile, context.reachCache);
+  if (reach.hops !== null) {
+    return reachableVerdict(
+      envelope,
+      reach.hops,
+      reach.reachingRoots,
+      context.routesByFile,
+      context.exposedFiles,
+      gaps
+    );
+  }
+  if (hasNoEdges(input.graph)) {
+    return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
+  }
+  if (language === null) {
+    return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
+  }
+  const blocked = negativeVerdictBlockedBy(
+    language,
+    entry,
+    input.graph.truncated,
+    context.languagesWithEdges.has(language)
+  );
+  if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
+  return unreachableVerdict(envelope, relFile, gaps);
+}
+var EMPTY_GRAPH_GAP = "the import graph holds no import edges at all, so it is evidence of missing DATA rather than of missing reachability \u2014 every file would be unreached by construction. Either the surface snapshot predates the persistence of import edges (re-run map_attack_surface) or no import rule in the pack matched this project.";
+function hasNoEdges(graph) {
+  for (const targets of graph.edges.values()) {
+    if (targets.size > 0) return false;
+  }
+  return true;
+}
+function resolveLanguageContext(relFile, input) {
+  const language = input.languageOf(relFile);
+  if (language === null) return { language: null, entry: void 0, gaps: [] };
+  const entry = input.snapshot.coverage.find((c3) => c3.language === language);
+  const gaps = entry === void 0 ? [] : unresolvedImportsGap(language, entry);
+  return { language, entry, gaps };
+}
+function unresolvedImportsGap(language, entry) {
+  if (entry.unresolved_imports === 0) return [];
+  return [
+    `${entry.unresolved_imports} import(s) for '${language}' could not be resolved to a project file (third-party/stdlib specifiers or an unresolvable dynamic import) and are absent from the graph`
+  ];
+}
+function negativeVerdictBlockedBy(language, entry, graphTruncated, languageHasResolvedEdges) {
+  if (entry === void 0) {
+    return `no coverage entry was recorded for language '${language}'`;
+  }
+  if (entry.status !== "ok" && entry.status !== "no_matches") {
+    return `coverage for '${language}' is '${entry.status}', so its route list cannot be trusted as complete`;
+  }
+  if (RUNTIME_RESOLUTION_LANGUAGES.has(language)) {
+    return `'${language}' resolves code at runtime (autoload/DI container/injection), not by static import \u2014 an absent path proves nothing here`;
+  }
+  if (graphTruncated) {
+    return "the import graph was truncated at its edge cap, so it cannot certify the absence of any path";
+  }
+  if (!languageHasResolvedEdges && entry.unresolved_imports > 0) {
+    return `no import edge in '${language}' resolved to a project file, while ${entry.unresolved_imports} did not \u2014 the graph holds no coverage of this language at all, so an absent path here is missing DATA rather than evidence of missing reachability. Every file in this language would read as imported by nothing, which is what a broken resolver and a genuinely unreferenced file look like alike.`;
+  }
+  return null;
+}
+function cachedReachFrom(graph, roots, target, cache2) {
+  const cached2 = cache2.get(target);
+  if (cached2 !== void 0) return cached2;
+  const result = reachFrom(graph, roots, target);
+  cache2.set(target, result);
+  return result;
+}
+function unreachableVerdict(envelope, relFile, gaps) {
+  return {
+    ...envelope,
+    verdict: "unreachable",
+    confidence: "medium",
+    // a claim about an over-approximating graph, never 'high'
+    evidence: [{ detail: `no route imports '${relFile}', directly or transitively` }],
+    coverage_gaps: [...gaps]
+  };
+}
+function unknownVerdict(envelope, gaps) {
+  return { ...envelope, verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps };
+}
+function reachableVerdict(envelope, hops, reachingRoots, routesByFile, exposedFiles, gaps) {
+  const nearestFile = reachingRoots[0];
+  if (nearestFile === void 0) {
+    return unknownVerdict(envelope, [...gaps, "reachability result was inconsistent: hops without a reaching root"]);
+  }
+  return {
+    ...envelope,
+    verdict: "reachable",
+    confidence: hops === 0 ? "high" : "medium",
+    evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles),
+    coverage_gaps: [...gaps]
+  };
+}
+function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles) {
+  const evidence = [];
+  const nearestRoute = mostInformative(routesByFile.get(nearestFile));
+  if (nearestRoute !== void 0) {
+    evidence.push({
+      detail: `reachable in ${hopWord(hops)} via ${routeLabel(nearestRoute)} (${nearestFile})`
+    });
+  }
+  const totalReaching = reachingRoots.reduce((sum, root) => sum + (routesByFile.get(root)?.length ?? 0), 0);
+  const totalRoutes = [...routesByFile.values()].reduce((sum, rs) => sum + rs.length, 0);
+  evidence.push({ detail: `reached by ${totalReaching} of ${totalRoutes} known route(s)` });
+  const exposed = exposedEvidence(reachingRoots, routesByFile, exposedFiles);
+  if (exposed !== null) evidence.push(exposed);
+  return evidence;
+}
+function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
+  const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
+  if (exposedFile === void 0) return null;
+  const route = mostInformative(routesByFile.get(exposedFile));
+  const label = route === void 0 ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
+  return { detail: `${label} is confirmed anonymously exposed by a live scan` };
+}
+function mostInformative(routes) {
+  if (routes === void 0) return void 0;
+  return routes.find((r) => r.path_resolved !== "") ?? routes[0];
+}
+function routeLabel(route) {
+  if (route.path_resolved !== "") return `${route.method} ${route.path_resolved}`;
+  return `${route.method} (path inherited from the controller)`;
+}
+function hopWord(hops) {
+  return hops === 1 ? "1 hop" : `${hops} hops`;
+}
+
+// src/validate/dependencyProvider.ts
+function prepareDependencyIndex(input) {
+  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
+  return {
+    external: input.snapshot.external_imports,
+    graph: input.graph,
+    roots: [...routesByFile.keys()],
+    routesByFile,
+    partiallyParsed: input.snapshot.partially_parsed?.length ?? 0,
+    reachCache: /* @__PURE__ */ new Map()
+  };
+}
+var PREDATES_GAP = "the surface snapshot was mapped before third-party imports were recorded (it has no external_imports), so no package can be matched \u2014 re-run map_attack_surface with force: true";
+var FILE_LEVEL_GAP = "file-level only: a file importing the package is not proof that the vulnerable function is called, or called with attacker-controlled input";
+function assessDependency(subject, index) {
+  const name = subject.package_name;
+  if (index.external === void 0) return unknown2([PREDATES_GAP]);
+  const matcher = matcherFor(subject);
+  if ("gap" in matcher) return unknown2([matcher.gap]);
+  const importing = [
+    ...new Set(
+      index.external.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier)).map((entry) => entry.file)
+    )
+  ].sort();
+  const parseGap = index.partiallyParsed > 0 ? [
+    `${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an import inside an unparsed span is missing`
+  ] : [];
+  if (importing.length === 0) {
+    return unknown2([
+      `no project file imports '${name}' directly. That is absence of evidence, not of use: a transitive dependency is never imported by the project itself, a dynamic import (import(expr), require(variable), importlib) matches no rule, and a package used through another package's re-export is invisible`,
+      ...parseGap
+    ]);
+  }
+  let nearest = null;
+  for (const file of importing) {
+    const reach = cachedReach(index, file);
+    const root = reach.reachingRoots[0];
+    if (reach.hops === null || root === void 0) continue;
+    if (nearest === null || reach.hops < nearest.hops) nearest = { file, hops: reach.hops, root };
+  }
+  const importedBy = `'${name}' is imported by ${importing.length} project file(s): ${sample(importing)}`;
+  if (nearest !== null) {
+    const route = mostInformative(index.routesByFile.get(nearest.root));
+    const via = route === void 0 ? nearest.root : `${routeLabel(route)} (${nearest.root})`;
+    return {
+      verdict: "reachable",
+      confidence: "medium",
+      evidence: [
+        { detail: `${nearest.file} imports '${name}' and is reachable in ${hopWord(nearest.hops)} via ${via}` },
+        { detail: importedBy }
+      ],
+      coverage_gaps: [FILE_LEVEL_GAP, ...parseGap],
+      importing_files: importing
+    };
+  }
+  return {
+    verdict: "imported",
+    confidence: "medium",
+    evidence: [{ detail: `${importedBy} \u2014 none of them is reached from a known route through the import graph` }],
+    coverage_gaps: [FILE_LEVEL_GAP, ...graphGaps(index), ...parseGap],
+    importing_files: importing
+  };
+}
+function graphGaps(index) {
+  const gaps = [
+    "only HTTP routes are entry points: a file run by a CLI, a cron job or a queue consumer, or loaded by a dynamic import, reads as reached by no route"
+  ];
+  if (index.graph.truncated) {
+    gaps.push("the import graph was truncated at its edge cap, so a path from a route may be missing");
+  }
+  if (index.roots.length === 0) gaps.push("the surface snapshot holds no code route to start from");
+  return gaps;
+}
+function cachedReach(index, file) {
+  const cached2 = index.reachCache.get(file);
+  if (cached2 !== void 0) return cached2;
+  const result = reachFrom(index.graph, index.roots, file);
+  index.reachCache.set(file, result);
+  return result;
+}
+function unknown2(gaps) {
+  return { verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps, importing_files: [] };
+}
+function sample(files) {
+  const shown = files.slice(0, 5).join(", ");
+  return files.length > 5 ? `${shown}, \u2026 (${files.length - 5} more)` : shown;
+}
+var JS_LANGUAGES = /* @__PURE__ */ new Set(["javascript", "typescript"]);
+var PYTHON_LANGUAGES = /* @__PURE__ */ new Set(["python"]);
+function matcherFor(subject) {
+  const name = subject.package_name;
+  switch (subject.ecosystem) {
+    case null:
+      return {
+        gap: `could not tell which ecosystem '${name}' belongs to (the finding's target is not a known lockfile or manifest), and a name alone matches packages of every ecosystem`
+      };
+    case "npm":
+      return { languages: JS_LANGUAGES, matches: (specifier) => npmSpecifierMatches(specifier, name) };
+    case "pypi": {
+      const modules = PYPI_MODULES[normalizePypiName(name)];
+      if (modules === void 0) {
+        return {
+          gap: `no known distribution-to-module mapping for the PyPI package '${name}': its import name cannot be derived from its name (PyYAML is imported as yaml), so no import is matched`
+        };
+      }
+      return {
+        languages: PYTHON_LANGUAGES,
+        matches: (specifier) => modules.some((m) => specifier === m || specifier.startsWith(`${m}.`))
+      };
+    }
+    default:
+      return {
+        gap: `import matching is implemented for npm and PyPI packages only, and '${name}' is a ${subject.ecosystem} package`
+      };
+  }
+}
+function npmSpecifierMatches(specifier, name) {
+  if (specifier.startsWith("node:") || isBuiltin(specifier)) return false;
+  return specifier === name || specifier.startsWith(`${name}/`);
+}
+function normalizePypiName(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+var PYPI_MODULES = {
+  aiohttp: ["aiohttp"],
+  attrs: ["attr", "attrs"],
+  babel: ["babel"],
+  beautifulsoup4: ["bs4"],
+  bleach: ["bleach"],
+  celery: ["celery"],
+  certifi: ["certifi"],
+  cryptography: ["cryptography"],
+  django: ["django"],
+  djangorestframework: ["rest_framework"],
+  dnspython: ["dns"],
+  ecdsa: ["ecdsa"],
+  fastapi: ["fastapi"],
+  flask: ["flask"],
+  gitpython: ["git"],
+  gunicorn: ["gunicorn"],
+  httplib2: ["httplib2"],
+  httpx: ["httpx"],
+  idna: ["idna"],
+  jinja2: ["jinja2"],
+  jsonpickle: ["jsonpickle"],
+  lxml: ["lxml"],
+  mako: ["mako"],
+  markdown: ["markdown"],
+  mysqlclient: ["MySQLdb"],
+  numpy: ["numpy"],
+  "opencv-python": ["cv2"],
+  "opencv-python-headless": ["cv2"],
+  pandas: ["pandas"],
+  paramiko: ["paramiko"],
+  pillow: ["PIL"],
+  pip: ["pip"],
+  protobuf: ["google.protobuf"],
+  psycopg2: ["psycopg2"],
+  "psycopg2-binary": ["psycopg2"],
+  pyasn1: ["pyasn1"],
+  pycryptodome: ["Crypto"],
+  pycryptodomex: ["Cryptodome"],
+  pydantic: ["pydantic"],
+  pyjwt: ["jwt"],
+  pymongo: ["pymongo", "bson", "gridfs"],
+  pymysql: ["pymysql"],
+  pyopenssl: ["OpenSSL"],
+  "python-dateutil": ["dateutil"],
+  "python-jose": ["jose"],
+  "python-multipart": ["multipart", "python_multipart"],
+  pyyaml: ["yaml"],
+  redis: ["redis"],
+  requests: ["requests"],
+  rsa: ["rsa"],
+  "scikit-learn": ["sklearn"],
+  scipy: ["scipy"],
+  setuptools: ["setuptools", "pkg_resources"],
+  sqlalchemy: ["sqlalchemy"],
+  starlette: ["starlette"],
+  tornado: ["tornado"],
+  twisted: ["twisted"],
+  ujson: ["ujson"],
+  urllib3: ["urllib3"],
+  waitress: ["waitress"],
+  werkzeug: ["werkzeug"],
+  wheel: ["wheel"]
+};
+var TOOL_ECOSYSTEMS = {
+  "npm-audit": "npm",
+  "pip-audit": "pypi",
+  wpscan: "wordpress"
+};
+function dependencySubjectOf(finding4) {
+  const coordinates = dependencyCoordinates(finding4);
+  if (coordinates === null || coordinates.name === "") return null;
+  return { package_name: coordinates.name, ecosystem: ecosystemOf(finding4) };
+}
+function ecosystemOf(finding4) {
+  const byTool = TOOL_ECOSYSTEMS[finding4.tool.toLowerCase()];
+  if (byTool !== void 0) return byTool;
+  return finding4.file_path === void 0 ? null : ecosystemOfManifest(finding4.file_path);
+}
+var MANIFEST_ECOSYSTEMS2 = {
+  "package-lock.json": "npm",
+  "npm-shrinkwrap.json": "npm",
+  "yarn.lock": "npm",
+  "pnpm-lock.yaml": "npm",
+  "package.json": "npm",
+  "bun.lock": "npm",
+  "bun.lockb": "npm",
+  "pipfile.lock": "pypi",
+  pipfile: "pypi",
+  "poetry.lock": "pypi",
+  "uv.lock": "pypi",
+  "pdm.lock": "pypi",
+  "pyproject.toml": "pypi",
+  "setup.py": "pypi",
+  "setup.cfg": "pypi",
+  "go.mod": "golang",
+  "go.sum": "golang",
+  "cargo.lock": "cargo",
+  "cargo.toml": "cargo",
+  "composer.lock": "composer",
+  "composer.json": "composer",
+  "pom.xml": "maven",
+  "gradle.lockfile": "maven",
+  "build.gradle": "maven",
+  "build.gradle.kts": "maven",
+  "packages.lock.json": "nuget",
+  "packages.config": "nuget",
+  "gemfile.lock": "gem",
+  gemfile: "gem",
+  "mix.lock": "hex",
+  "pubspec.lock": "pub"
+};
+var MANIFEST_PATTERNS = [
+  [/^requirements.*\.txt$/, "pypi"],
+  [/\.(cs|fs|vb)proj$/, "nuget"],
+  [/\.sln$/, "nuget"],
+  [/\.deps\.json$/, "nuget"],
+  [/\.gemspec$/, "gem"]
+];
+function ecosystemOfManifest(path8) {
+  const base = (path8.split(/[\\/]/).pop() ?? "").toLowerCase();
+  const exact = MANIFEST_ECOSYSTEMS2[base];
+  if (exact !== void 0) return exact;
+  for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
+    if (pattern.test(base)) return ecosystem;
+  }
+  return null;
+}
+function validateDependencies(input) {
+  const index = prepareDependencyIndex(input);
+  const out = [];
+  for (const finding4 of input.findings) {
+    const subject = dependencySubjectOf(finding4);
+    if (subject === null) continue;
+    const assessment = assessDependency(subject, index);
+    out.push({
+      fingerprint: finding4.fingerprint,
+      provider: "dependency",
+      verdict: assessment.verdict,
+      confidence: assessment.confidence,
+      evidence: assessment.evidence,
+      coverage_gaps: assessment.coverage_gaps,
+      snapshot_id: input.snapshotId,
+      tree_hash: input.treeHash,
+      computed_at: input.computedAt
+    });
+  }
+  return out;
+}
+
 // src/tools/prioritizeFindings.ts
 var KEV_BOOST = 220;
 var EPSS_BOOST_MAX = 100;
@@ -61415,12 +62066,15 @@ var CATEGORY_WEIGHT = {
 };
 var inputSchema24 = {
   project_path: ProjectPath,
-  limit: external_exports.number().int().min(1).max(500).optional().describe("Cap on returned items. Default 50.")
+  limit: external_exports.number().int().min(1).max(500).optional().describe("Cap on returned items. Default 50."),
+  mission_wellbeing: external_exports.enum(MISSION_WELLBEING_VALUES).optional().describe(
+    "SSVC Mission & Well-being for this system (CISA: mission prevalence x public well-being impact). Default medium, reported as assumed."
+  )
 };
 var tool40 = {
   name: "prioritize_findings",
   title: "Prioritise open findings (heuristic)",
-  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id and so cannot be weighted yet. Returns top-N with explanation. No LLM call \u2014 the calling model uses the ranking to drive follow-ups.",
+  description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). Every CVE finding also gets a CISA SSVC deployer decision (Act / Attend / Track* / Track) from Exploitation (KEV; EPSS as a PoC proxy), Automatable (a route reaches a file importing the package, from the latest map_attack_surface), Technical Impact (from severity) and mission_wellbeing; a point with no data takes the more severe value and is listed in ssvc.assumed. SSVC does not change the score. `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id. Returns top-N with explanation. No LLM call.",
   inputSchema: inputSchema24,
   handler: async (input, ctx) => handler37(input, ctx)
 };
@@ -61441,6 +62095,7 @@ async function handler37(input, ctx) {
   const cveIdsByFinding = new Map(open.map((f) => [f.fingerprint, findingCveIds(f)]));
   const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
   const intel = await enrichCveIntel(ctx.storage, allCveIds);
+  const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing);
   const ranked = open.map((f) => {
     const factors = [];
     let score = 0;
@@ -61465,7 +62120,8 @@ async function handler37(input, ctx) {
         `FIRST EPSS ${signal.max_epss.toFixed(3)} (${signal.cve_ids.join(", ")}) (+${boost} of ${EPSS_BOOST_MAX})`
       );
     }
-    return { finding: f, priority_score: score, factors };
+    const ssvc = ssvcFor.assess(f, cveIdsByFinding.get(f.fingerprint) ?? []);
+    return { finding: f, priority_score: score, factors, ssvc };
   });
   ranked.sort(
     (a2, b) => b.priority_score - a2.priority_score || a2.finding.fingerprint.localeCompare(b.finding.fingerprint)
@@ -61474,7 +62130,9 @@ async function handler37(input, ctx) {
   const summary = {
     total_open: open.length,
     returned: top.length,
-    score_range: scoreRange(top)
+    score_range: scoreRange(top),
+    // Over every open finding, not just the returned top-N.
+    ssvc: ssvcSummary(ranked, ssvcFor)
   };
   return {
     ok: true,
@@ -61482,7 +62140,7 @@ async function handler37(input, ctx) {
     ranked: top,
     open_set: describeOpenSet(set2),
     cve_intel: uncorrelatedCoverage(open),
-    instructions_for_model: "Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` over speculation. If most top entries are security/critical, call `audit_executive` to understand cross-cutting impact first.",
+    instructions_for_model: "Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` over speculation. If most top entries are security/critical, call `audit_executive` to understand cross-cutting impact first. For CVE findings, `ssvc.decision` is CISA's: Act and Attend come before the schedule, Track*/Track within it \u2014 and read `ssvc.assumed` before quoting it: an assumed point is dev-guardian having no data, not a finding.",
     // unused reference to keep the time variable from being dead-code'd by
     // future maintainers who add age-weighting.
     _recent_scan_ts: recentScanTs
@@ -61494,6 +62152,56 @@ function uncorrelatedCoverage(open) {
   return {
     uncorrelated,
     note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, so they cannot be weighted by KEV/EPSS yet.`
+  };
+}
+function ssvcAssessor(ctx, projectPath, intel, missionWellbeing) {
+  const mission = missionWellbeingPoint(missionWellbeing);
+  const surface = ctx.storage.surface.getLatestForProject(projectPath);
+  const index = surface === null ? null : prepareDependencyIndex({
+    snapshot: surface.snapshot,
+    graph: buildImportGraph(surface.snapshot.imports),
+    projectPath
+  });
+  return {
+    mission,
+    missionGiven: missionWellbeing !== void 0,
+    surfaceSnapshotId: surface?.id ?? null,
+    assess(finding4, cveIds) {
+      if (cveIds.length === 0) return null;
+      const subject = dependencySubjectOf(finding4);
+      const dependency = subject !== null && index !== null ? assessDependency(subject, index) : null;
+      const whyNone = index === null ? "no attack-surface snapshot for this project (run map_attack_surface)" : subject === null ? "the finding names no package to look for in the imports" : null;
+      return {
+        ...assessSsvc({
+          exploitation: exploitationPoint(cveIds, intel),
+          automatable: automatablePoint(dependency, whyNone),
+          technical_impact: technicalImpactPoint(finding4.severity),
+          mission_wellbeing: mission
+        }),
+        cve_ids: [...cveIds]
+      };
+    }
+  };
+}
+function ssvcSummary(ranked, assessor) {
+  const decisions = Object.fromEntries(SSVC_DECISIONS.map((d) => [d, 0]));
+  const assumedInputs = { exploitation: 0, automatable: 0, mission_wellbeing: 0 };
+  let notApplicable = 0;
+  for (const row of ranked) {
+    if (row.ssvc === null) {
+      notApplicable += 1;
+      continue;
+    }
+    decisions[row.ssvc.decision] += 1;
+    for (const key of row.ssvc.assumed) assumedInputs[key] = (assumedInputs[key] ?? 0) + 1;
+  }
+  return {
+    decisions,
+    not_applicable: notApplicable,
+    assumed_inputs: assumedInputs,
+    mission_wellbeing: { value: assessor.mission.value, source: assessor.missionGiven ? "parameter" : "default" },
+    surface_snapshot_id: assessor.surfaceSnapshotId,
+    source: "CISA SSVC Guide (Nov 2022), Table 9 \u2014 the deployer decision tree; see intel/ssvc.ts for which decision points dev-guardian approximates"
   };
 }
 function scoreRange(top) {
@@ -67167,529 +67875,6 @@ function outcomeCounts(results) {
     network_error: 0
   };
   for (const result of results) out[result.outcome] += 1;
-  return out;
-}
-
-// src/validate/dependencyProvider.ts
-import { isBuiltin } from "node:module";
-
-// src/validate/importGraph.ts
-var MAX_GRAPH_EDGES = 2e4;
-function buildImportGraph(records) {
-  const edges = /* @__PURE__ */ new Map();
-  const files = /* @__PURE__ */ new Set();
-  let edgeCount2 = 0;
-  let truncated = false;
-  for (const record4 of records) {
-    files.add(record4.file);
-    files.add(record4.module_file);
-    const existing = edges.get(record4.file);
-    if (existing !== void 0 && existing.has(record4.module_file)) continue;
-    if (edgeCount2 >= MAX_GRAPH_EDGES) {
-      truncated = true;
-      continue;
-    }
-    if (existing === void 0) {
-      edges.set(record4.file, /* @__PURE__ */ new Set([record4.module_file]));
-    } else {
-      existing.add(record4.module_file);
-    }
-    edgeCount2 += 1;
-  }
-  return { edges, files, truncated };
-}
-function shortestDistance(graph, root, target) {
-  if (root === target) return 0;
-  const visited = /* @__PURE__ */ new Set([root]);
-  let frontier = [root];
-  let hops = 0;
-  while (frontier.length > 0) {
-    hops += 1;
-    const next = [];
-    for (const file of frontier) {
-      const imported = graph.edges.get(file);
-      if (imported === void 0) continue;
-      for (const candidate of imported) {
-        if (candidate === target) return hops;
-        if (visited.has(candidate)) continue;
-        visited.add(candidate);
-        next.push(candidate);
-      }
-    }
-    frontier = next;
-  }
-  return null;
-}
-function reachFrom(graph, roots, target) {
-  const found = [];
-  for (const root of roots) {
-    const hops = shortestDistance(graph, root, target);
-    if (hops !== null) found.push({ root, hops });
-  }
-  if (found.length === 0) return { hops: null, reachingRoots: [] };
-  found.sort((a2, b) => a2.hops - b.hops || a2.root.localeCompare(b.root));
-  return {
-    hops: Math.min(...found.map((f) => f.hops)),
-    reachingRoots: found.map((f) => f.root)
-  };
-}
-
-// src/validate/staticProvider.ts
-var RUNTIME_RESOLUTION_LANGUAGES = /* @__PURE__ */ new Set([
-  "ruby",
-  "java",
-  "csharp",
-  "php"
-]);
-function validateStatically(input) {
-  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
-  const roots = [...routesByFile.keys()];
-  const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
-  const reachCache = /* @__PURE__ */ new Map();
-  const languagesWithEdges = languagesWithResolvedEdges(input);
-  const context = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
-  return input.findings.map((finding4) => validateOne(finding4, input, context));
-}
-function languagesWithResolvedEdges(input) {
-  const languages = /* @__PURE__ */ new Set();
-  for (const [file, targets] of input.graph.edges) {
-    if (targets.size === 0) continue;
-    const language = input.languageOf(file);
-    if (language !== null) languages.add(language);
-  }
-  return languages;
-}
-function relativizeSet(files, projectPath) {
-  return new Set([...files].map((file) => toRelativeIfPossible(file, projectPath)));
-}
-function groupRoutesByRelFile(routes, projectPath) {
-  const byFile = /* @__PURE__ */ new Map();
-  for (const route of routes) {
-    if (route.provenance !== "code") continue;
-    const relFile = toRelativeIfPossible(route.file, projectPath);
-    const existing = byFile.get(relFile);
-    if (existing === void 0) byFile.set(relFile, [route]);
-    else existing.push(route);
-  }
-  return byFile;
-}
-function makeEnvelope(finding4, input) {
-  return {
-    fingerprint: finding4.fingerprint,
-    provider: "static",
-    snapshot_id: input.snapshotId,
-    tree_hash: input.treeHash,
-    computed_at: input.computedAt
-  };
-}
-function validateOne(finding4, input, context) {
-  const envelope = makeEnvelope(finding4, input);
-  if (finding4.file_path === void 0) {
-    return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
-  }
-  const relFile = toRelativeIfPossible(finding4.file_path, input.projectPath);
-  const { language, entry, gaps } = resolveLanguageContext(relFile, input);
-  const reach = cachedReachFrom(input.graph, context.roots, relFile, context.reachCache);
-  if (reach.hops !== null) {
-    return reachableVerdict(
-      envelope,
-      reach.hops,
-      reach.reachingRoots,
-      context.routesByFile,
-      context.exposedFiles,
-      gaps
-    );
-  }
-  if (hasNoEdges(input.graph)) {
-    return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
-  }
-  if (language === null) {
-    return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
-  }
-  const blocked = negativeVerdictBlockedBy(
-    language,
-    entry,
-    input.graph.truncated,
-    context.languagesWithEdges.has(language)
-  );
-  if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
-  return unreachableVerdict(envelope, relFile, gaps);
-}
-var EMPTY_GRAPH_GAP = "the import graph holds no import edges at all, so it is evidence of missing DATA rather than of missing reachability \u2014 every file would be unreached by construction. Either the surface snapshot predates the persistence of import edges (re-run map_attack_surface) or no import rule in the pack matched this project.";
-function hasNoEdges(graph) {
-  for (const targets of graph.edges.values()) {
-    if (targets.size > 0) return false;
-  }
-  return true;
-}
-function resolveLanguageContext(relFile, input) {
-  const language = input.languageOf(relFile);
-  if (language === null) return { language: null, entry: void 0, gaps: [] };
-  const entry = input.snapshot.coverage.find((c3) => c3.language === language);
-  const gaps = entry === void 0 ? [] : unresolvedImportsGap(language, entry);
-  return { language, entry, gaps };
-}
-function unresolvedImportsGap(language, entry) {
-  if (entry.unresolved_imports === 0) return [];
-  return [
-    `${entry.unresolved_imports} import(s) for '${language}' could not be resolved to a project file (third-party/stdlib specifiers or an unresolvable dynamic import) and are absent from the graph`
-  ];
-}
-function negativeVerdictBlockedBy(language, entry, graphTruncated, languageHasResolvedEdges) {
-  if (entry === void 0) {
-    return `no coverage entry was recorded for language '${language}'`;
-  }
-  if (entry.status !== "ok" && entry.status !== "no_matches") {
-    return `coverage for '${language}' is '${entry.status}', so its route list cannot be trusted as complete`;
-  }
-  if (RUNTIME_RESOLUTION_LANGUAGES.has(language)) {
-    return `'${language}' resolves code at runtime (autoload/DI container/injection), not by static import \u2014 an absent path proves nothing here`;
-  }
-  if (graphTruncated) {
-    return "the import graph was truncated at its edge cap, so it cannot certify the absence of any path";
-  }
-  if (!languageHasResolvedEdges && entry.unresolved_imports > 0) {
-    return `no import edge in '${language}' resolved to a project file, while ${entry.unresolved_imports} did not \u2014 the graph holds no coverage of this language at all, so an absent path here is missing DATA rather than evidence of missing reachability. Every file in this language would read as imported by nothing, which is what a broken resolver and a genuinely unreferenced file look like alike.`;
-  }
-  return null;
-}
-function cachedReachFrom(graph, roots, target, cache2) {
-  const cached2 = cache2.get(target);
-  if (cached2 !== void 0) return cached2;
-  const result = reachFrom(graph, roots, target);
-  cache2.set(target, result);
-  return result;
-}
-function unreachableVerdict(envelope, relFile, gaps) {
-  return {
-    ...envelope,
-    verdict: "unreachable",
-    confidence: "medium",
-    // a claim about an over-approximating graph, never 'high'
-    evidence: [{ detail: `no route imports '${relFile}', directly or transitively` }],
-    coverage_gaps: [...gaps]
-  };
-}
-function unknownVerdict(envelope, gaps) {
-  return { ...envelope, verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps };
-}
-function reachableVerdict(envelope, hops, reachingRoots, routesByFile, exposedFiles, gaps) {
-  const nearestFile = reachingRoots[0];
-  if (nearestFile === void 0) {
-    return unknownVerdict(envelope, [...gaps, "reachability result was inconsistent: hops without a reaching root"]);
-  }
-  return {
-    ...envelope,
-    verdict: "reachable",
-    confidence: hops === 0 ? "high" : "medium",
-    evidence: buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles),
-    coverage_gaps: [...gaps]
-  };
-}
-function buildReachableEvidence(hops, nearestFile, reachingRoots, routesByFile, exposedFiles) {
-  const evidence = [];
-  const nearestRoute = mostInformative(routesByFile.get(nearestFile));
-  if (nearestRoute !== void 0) {
-    evidence.push({
-      detail: `reachable in ${hopWord(hops)} via ${routeLabel(nearestRoute)} (${nearestFile})`
-    });
-  }
-  const totalReaching = reachingRoots.reduce((sum, root) => sum + (routesByFile.get(root)?.length ?? 0), 0);
-  const totalRoutes = [...routesByFile.values()].reduce((sum, rs) => sum + rs.length, 0);
-  evidence.push({ detail: `reached by ${totalReaching} of ${totalRoutes} known route(s)` });
-  const exposed = exposedEvidence(reachingRoots, routesByFile, exposedFiles);
-  if (exposed !== null) evidence.push(exposed);
-  return evidence;
-}
-function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
-  const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
-  if (exposedFile === void 0) return null;
-  const route = mostInformative(routesByFile.get(exposedFile));
-  const label = route === void 0 ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
-  return { detail: `${label} is confirmed anonymously exposed by a live scan` };
-}
-function mostInformative(routes) {
-  if (routes === void 0) return void 0;
-  return routes.find((r) => r.path_resolved !== "") ?? routes[0];
-}
-function routeLabel(route) {
-  if (route.path_resolved !== "") return `${route.method} ${route.path_resolved}`;
-  return `${route.method} (path inherited from the controller)`;
-}
-function hopWord(hops) {
-  return hops === 1 ? "1 hop" : `${hops} hops`;
-}
-
-// src/validate/dependencyProvider.ts
-function prepareDependencyIndex(input) {
-  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
-  return {
-    external: input.snapshot.external_imports,
-    graph: input.graph,
-    roots: [...routesByFile.keys()],
-    routesByFile,
-    partiallyParsed: input.snapshot.partially_parsed?.length ?? 0,
-    reachCache: /* @__PURE__ */ new Map()
-  };
-}
-var PREDATES_GAP = "the surface snapshot was mapped before third-party imports were recorded (it has no external_imports), so no package can be matched \u2014 re-run map_attack_surface with force: true";
-var FILE_LEVEL_GAP = "file-level only: a file importing the package is not proof that the vulnerable function is called, or called with attacker-controlled input";
-function assessDependency(subject, index) {
-  const name = subject.package_name;
-  if (index.external === void 0) return unknown2([PREDATES_GAP]);
-  const matcher = matcherFor(subject);
-  if ("gap" in matcher) return unknown2([matcher.gap]);
-  const importing = [
-    ...new Set(
-      index.external.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier)).map((entry) => entry.file)
-    )
-  ].sort();
-  const parseGap = index.partiallyParsed > 0 ? [
-    `${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an import inside an unparsed span is missing`
-  ] : [];
-  if (importing.length === 0) {
-    return unknown2([
-      `no project file imports '${name}' directly. That is absence of evidence, not of use: a transitive dependency is never imported by the project itself, a dynamic import (import(expr), require(variable), importlib) matches no rule, and a package used through another package's re-export is invisible`,
-      ...parseGap
-    ]);
-  }
-  let nearest = null;
-  for (const file of importing) {
-    const reach = cachedReach(index, file);
-    const root = reach.reachingRoots[0];
-    if (reach.hops === null || root === void 0) continue;
-    if (nearest === null || reach.hops < nearest.hops) nearest = { file, hops: reach.hops, root };
-  }
-  const importedBy = `'${name}' is imported by ${importing.length} project file(s): ${sample(importing)}`;
-  if (nearest !== null) {
-    const route = mostInformative(index.routesByFile.get(nearest.root));
-    const via = route === void 0 ? nearest.root : `${routeLabel(route)} (${nearest.root})`;
-    return {
-      verdict: "reachable",
-      confidence: "medium",
-      evidence: [
-        { detail: `${nearest.file} imports '${name}' and is reachable in ${hopWord(nearest.hops)} via ${via}` },
-        { detail: importedBy }
-      ],
-      coverage_gaps: [FILE_LEVEL_GAP, ...parseGap],
-      importing_files: importing
-    };
-  }
-  return {
-    verdict: "imported",
-    confidence: "medium",
-    evidence: [{ detail: `${importedBy} \u2014 none of them is reached from a known route through the import graph` }],
-    coverage_gaps: [FILE_LEVEL_GAP, ...graphGaps(index), ...parseGap],
-    importing_files: importing
-  };
-}
-function graphGaps(index) {
-  const gaps = [
-    "only HTTP routes are entry points: a file run by a CLI, a cron job or a queue consumer, or loaded by a dynamic import, reads as reached by no route"
-  ];
-  if (index.graph.truncated) {
-    gaps.push("the import graph was truncated at its edge cap, so a path from a route may be missing");
-  }
-  if (index.roots.length === 0) gaps.push("the surface snapshot holds no code route to start from");
-  return gaps;
-}
-function cachedReach(index, file) {
-  const cached2 = index.reachCache.get(file);
-  if (cached2 !== void 0) return cached2;
-  const result = reachFrom(index.graph, index.roots, file);
-  index.reachCache.set(file, result);
-  return result;
-}
-function unknown2(gaps) {
-  return { verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps, importing_files: [] };
-}
-function sample(files) {
-  const shown = files.slice(0, 5).join(", ");
-  return files.length > 5 ? `${shown}, \u2026 (${files.length - 5} more)` : shown;
-}
-var JS_LANGUAGES = /* @__PURE__ */ new Set(["javascript", "typescript"]);
-var PYTHON_LANGUAGES = /* @__PURE__ */ new Set(["python"]);
-function matcherFor(subject) {
-  const name = subject.package_name;
-  switch (subject.ecosystem) {
-    case null:
-      return {
-        gap: `could not tell which ecosystem '${name}' belongs to (the finding's target is not a known lockfile or manifest), and a name alone matches packages of every ecosystem`
-      };
-    case "npm":
-      return { languages: JS_LANGUAGES, matches: (specifier) => npmSpecifierMatches(specifier, name) };
-    case "pypi": {
-      const modules = PYPI_MODULES[normalizePypiName(name)];
-      if (modules === void 0) {
-        return {
-          gap: `no known distribution-to-module mapping for the PyPI package '${name}': its import name cannot be derived from its name (PyYAML is imported as yaml), so no import is matched`
-        };
-      }
-      return {
-        languages: PYTHON_LANGUAGES,
-        matches: (specifier) => modules.some((m) => specifier === m || specifier.startsWith(`${m}.`))
-      };
-    }
-    default:
-      return {
-        gap: `import matching is implemented for npm and PyPI packages only, and '${name}' is a ${subject.ecosystem} package`
-      };
-  }
-}
-function npmSpecifierMatches(specifier, name) {
-  if (specifier.startsWith("node:") || isBuiltin(specifier)) return false;
-  return specifier === name || specifier.startsWith(`${name}/`);
-}
-function normalizePypiName(name) {
-  return name.toLowerCase().replace(/[-_.]+/g, "-");
-}
-var PYPI_MODULES = {
-  aiohttp: ["aiohttp"],
-  attrs: ["attr", "attrs"],
-  babel: ["babel"],
-  beautifulsoup4: ["bs4"],
-  bleach: ["bleach"],
-  celery: ["celery"],
-  certifi: ["certifi"],
-  cryptography: ["cryptography"],
-  django: ["django"],
-  djangorestframework: ["rest_framework"],
-  dnspython: ["dns"],
-  ecdsa: ["ecdsa"],
-  fastapi: ["fastapi"],
-  flask: ["flask"],
-  gitpython: ["git"],
-  gunicorn: ["gunicorn"],
-  httplib2: ["httplib2"],
-  httpx: ["httpx"],
-  idna: ["idna"],
-  jinja2: ["jinja2"],
-  jsonpickle: ["jsonpickle"],
-  lxml: ["lxml"],
-  mako: ["mako"],
-  markdown: ["markdown"],
-  mysqlclient: ["MySQLdb"],
-  numpy: ["numpy"],
-  "opencv-python": ["cv2"],
-  "opencv-python-headless": ["cv2"],
-  pandas: ["pandas"],
-  paramiko: ["paramiko"],
-  pillow: ["PIL"],
-  pip: ["pip"],
-  protobuf: ["google.protobuf"],
-  psycopg2: ["psycopg2"],
-  "psycopg2-binary": ["psycopg2"],
-  pyasn1: ["pyasn1"],
-  pycryptodome: ["Crypto"],
-  pycryptodomex: ["Cryptodome"],
-  pydantic: ["pydantic"],
-  pyjwt: ["jwt"],
-  pymongo: ["pymongo", "bson", "gridfs"],
-  pymysql: ["pymysql"],
-  pyopenssl: ["OpenSSL"],
-  "python-dateutil": ["dateutil"],
-  "python-jose": ["jose"],
-  "python-multipart": ["multipart", "python_multipart"],
-  pyyaml: ["yaml"],
-  redis: ["redis"],
-  requests: ["requests"],
-  rsa: ["rsa"],
-  "scikit-learn": ["sklearn"],
-  scipy: ["scipy"],
-  setuptools: ["setuptools", "pkg_resources"],
-  sqlalchemy: ["sqlalchemy"],
-  starlette: ["starlette"],
-  tornado: ["tornado"],
-  twisted: ["twisted"],
-  ujson: ["ujson"],
-  urllib3: ["urllib3"],
-  waitress: ["waitress"],
-  werkzeug: ["werkzeug"],
-  wheel: ["wheel"]
-};
-var TOOL_ECOSYSTEMS = {
-  "npm-audit": "npm",
-  "pip-audit": "pypi",
-  wpscan: "wordpress"
-};
-function dependencySubjectOf(finding4) {
-  const coordinates = dependencyCoordinates(finding4);
-  if (coordinates === null || coordinates.name === "") return null;
-  return { package_name: coordinates.name, ecosystem: ecosystemOf(finding4) };
-}
-function ecosystemOf(finding4) {
-  const byTool = TOOL_ECOSYSTEMS[finding4.tool.toLowerCase()];
-  if (byTool !== void 0) return byTool;
-  return finding4.file_path === void 0 ? null : ecosystemOfManifest(finding4.file_path);
-}
-var MANIFEST_ECOSYSTEMS2 = {
-  "package-lock.json": "npm",
-  "npm-shrinkwrap.json": "npm",
-  "yarn.lock": "npm",
-  "pnpm-lock.yaml": "npm",
-  "package.json": "npm",
-  "bun.lock": "npm",
-  "bun.lockb": "npm",
-  "pipfile.lock": "pypi",
-  pipfile: "pypi",
-  "poetry.lock": "pypi",
-  "uv.lock": "pypi",
-  "pdm.lock": "pypi",
-  "pyproject.toml": "pypi",
-  "setup.py": "pypi",
-  "setup.cfg": "pypi",
-  "go.mod": "golang",
-  "go.sum": "golang",
-  "cargo.lock": "cargo",
-  "cargo.toml": "cargo",
-  "composer.lock": "composer",
-  "composer.json": "composer",
-  "pom.xml": "maven",
-  "gradle.lockfile": "maven",
-  "build.gradle": "maven",
-  "build.gradle.kts": "maven",
-  "packages.lock.json": "nuget",
-  "packages.config": "nuget",
-  "gemfile.lock": "gem",
-  gemfile: "gem",
-  "mix.lock": "hex",
-  "pubspec.lock": "pub"
-};
-var MANIFEST_PATTERNS = [
-  [/^requirements.*\.txt$/, "pypi"],
-  [/\.(cs|fs|vb)proj$/, "nuget"],
-  [/\.sln$/, "nuget"],
-  [/\.deps\.json$/, "nuget"],
-  [/\.gemspec$/, "gem"]
-];
-function ecosystemOfManifest(path8) {
-  const base = (path8.split(/[\\/]/).pop() ?? "").toLowerCase();
-  const exact = MANIFEST_ECOSYSTEMS2[base];
-  if (exact !== void 0) return exact;
-  for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
-    if (pattern.test(base)) return ecosystem;
-  }
-  return null;
-}
-function validateDependencies(input) {
-  const index = prepareDependencyIndex(input);
-  const out = [];
-  for (const finding4 of input.findings) {
-    const subject = dependencySubjectOf(finding4);
-    if (subject === null) continue;
-    const assessment = assessDependency(subject, index);
-    out.push({
-      fingerprint: finding4.fingerprint,
-      provider: "dependency",
-      verdict: assessment.verdict,
-      confidence: assessment.confidence,
-      evidence: assessment.evidence,
-      coverage_gaps: assessment.coverage_gaps,
-      snapshot_id: input.snapshotId,
-      tree_hash: input.treeHash,
-      computed_at: input.computedAt
-    });
-  }
   return out;
 }
 
