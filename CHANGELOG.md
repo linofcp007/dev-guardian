@@ -58,6 +58,11 @@ version bump.
   itself is not — 0 high/medium findings on 8 real servers); every string and object key of a
   schema is read, and a depth or size bound reached makes the result partial; shadowing is one
   token pass per field (1000 x 1000 tool names: 10.3 s before).
+- `audit_mcp_tools`' pins: the server's `instructions` are pinned (a change is high
+  `mcp-server-instructions-changed`); a removed item leaves a tombstone, so a tool that disappears
+  and comes back changed is a high rug pull instead of "added" (an audit that saw no tools used to
+  delete every pin); a kind the previous audit did not pin yet is recorded silently the first time
+  (`first_pinned`), not reported as added.
 
 ## [3.0.0] - 2026-09-28
 

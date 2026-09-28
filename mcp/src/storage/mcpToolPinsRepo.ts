@@ -48,7 +48,9 @@ export class McpToolPinsRepo {
       SELECT COUNT(*) AS n FROM mcp_server_pins WHERE project_path = ? AND server_key = ?
     `);
     this.listKeysStmt = db.prepare<[string], PinnedKey>(`
-      SELECT server_key, tool_name AS key FROM mcp_tool_pins WHERE project_path = ? ORDER BY server_key, tool_name
+      SELECT server_key, tool_name AS key FROM mcp_tool_pins
+      WHERE project_path = ? AND hash NOT LIKE '-%'
+      ORDER BY server_key, tool_name
     `);
     this.deletePinsStmt = db.prepare<[string, string]>(`
       DELETE FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
@@ -79,7 +81,7 @@ export class McpToolPinsRepo {
     return (this.hasServerStmt.get(projectPath, serverKey)?.n ?? 0) > 0;
   }
 
-  /** Every pinned item key of a project, with the server that serves it. */
+  /** Every LIVE pinned item key of a project (tombstones left out), with the server that serves it. */
   listPinKeys(projectPath: string): PinnedKey[] {
     return this.listKeysStmt.all(projectPath);
   }
@@ -92,7 +94,8 @@ export class McpToolPinsRepo {
     const at = nowIso();
     const tx = this.db.transaction(() => {
       for (const pin of pins) this.upsertPinStmt.run(projectPath, serverKey, pin.key, pin.hash, at);
-      this.upsertServerStmt.run(projectPath, serverKey, this.getServerPins(projectPath, serverKey).size, at);
+      const stored = [...this.getServerPins(projectPath, serverKey).values()];
+      this.upsertServerStmt.run(projectPath, serverKey, stored.filter((h) => !h.startsWith('-')).length, at);
     });
     tx();
   }
@@ -101,7 +104,7 @@ export class McpToolPinsRepo {
    * Replace one server's pins with `pins`, in one transaction: an item not in
    * `pins` is dropped, and the server is recorded as audited even when
    * `pins` is empty. Duplicate keys keep the last one. `mcp_server_pins.
-   * tool_count` counts every pinned item.
+   * tool_count` counts the live pins (a tombstone is `-` + hash).
    */
   replaceServerPins(projectPath: string, serverKey: string, pins: readonly McpPin[]): void {
     const unique = new Map<string, string>();
@@ -110,7 +113,7 @@ export class McpToolPinsRepo {
     const tx = this.db.transaction(() => {
       this.deletePinsStmt.run(projectPath, serverKey);
       for (const [key, hash] of unique) this.insertPinStmt.run(projectPath, serverKey, key, hash, at);
-      this.upsertServerStmt.run(projectPath, serverKey, unique.size, at);
+      this.upsertServerStmt.run(projectPath, serverKey, [...unique.values()].filter((h) => !h.startsWith('-')).length, at);
     });
     tx();
   }

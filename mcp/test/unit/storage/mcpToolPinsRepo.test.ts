@@ -70,6 +70,18 @@ describe('McpToolPinsRepo', () => {
     expect(storage.mcpToolPins.getServerPins('/a', 's1').size).toBe(0);
   });
 
+  // A tombstone (`-` + hash) is a tool no longer served: kept for the next
+  // comparison, but not a name another server's description can shadow.
+  it('keeps tombstones as pins but leaves them out of the listed keys', () => {
+    const storage = fresh();
+    storage.mcpToolPins.replaceServerPins('/a', 's1', [
+      { key: 'live_tool', hash: 'v3:1' },
+      { key: 'gone_tool', hash: '-v3:2' },
+    ]);
+    expect(storage.mcpToolPins.getServerPins('/a', 's1').get('gone_tool')).toBe('-v3:2');
+    expect(storage.mcpToolPins.listPinKeys('/a')).toEqual([{ server_key: 's1', key: 'live_tool' }]);
+  });
+
   it('lists every pinned key of a project with its server', () => {
     const storage = fresh();
     storage.mcpToolPins.replaceServerPins('/a', 's1', [{ key: 'send_email', hash: '1' }]);
