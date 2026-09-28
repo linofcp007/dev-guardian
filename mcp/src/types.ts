@@ -181,6 +181,23 @@ export interface Finding {
    * text. Present exactly when `identity` is.
    */
   content_key?: string;
+  /**
+   * The weakness, as CWE ids (`CWE-89`), ascending — from the scanner
+   * (Semgrep rule metadata, Trivy `CweIDs`, Bandit `issue_cwe`) or, for a
+   * finding class that is one weakness by definition (a known-vulnerable
+   * dependency, a committed secret), from its parser. An annotation: part
+   * of neither `fingerprint` nor `identity`. ABSENT MEANS UNKNOWN — rows
+   * stored before schema 13, and findings whose scanner named no CWE — never
+   * "no weakness". See `frameworks/taxonomy.ts`.
+   */
+  cwe?: string[];
+  /**
+   * OWASP Top 10:2025 categories (`A05:2025`), in list order: the scanner's
+   * own 2025 labels plus the categories OWASP maps `cwe` to
+   * (`frameworks/owaspTop10_2025.ts`). Absent means unknown or unmapped —
+   * never filed under a category.
+   */
+  owasp?: string[];
 }
 
 export interface ScanRecord {
