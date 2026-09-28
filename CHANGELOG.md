@@ -65,7 +65,9 @@ version bump.
   partial, never the audit's.
 - A list method answering an error other than MethodNotFound (-32601) makes the server partial, with
   the reason, for every list method (reproduced: -32603 on `resources/templates/list` read ok, coverage
-  full); -32601 stays silent.
+  full); -32601 stays silent on a list's first page only — on a later page it cut the list, and the
+  server is partial with nothing tombstoned (reproduced: page 2 answering -32601 read ok and tombstoned
+  the unseen tools).
 - `mcp-tool-sensitive-file-access` is medium when a tool's text tells the model to read a credential
   or agent-config file ("confirm it is the tool's purpose"), and high only when it also directs passing
   it on (a parameter, another tool, a URL) or hiding it — which now also catches "The key is at

@@ -205,6 +205,11 @@ if (mode === 'hang') {
             ],
           });
         } else if (msg.params?.cursor === 'page2') {
+          // PAGE2_MISSING_FILE, once it exists: page 2 answers MethodNotFound.
+          if (process.env.PAGE2_MISSING_FILE && existsSync(process.env.PAGE2_MISSING_FILE)) {
+            send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'no such page' } });
+            break;
+          }
           reply({ tools: [POISONED_TOOL] });
         } else {
           reply({ tools: [BENIGN_TOOL], nextCursor: 'page2' });

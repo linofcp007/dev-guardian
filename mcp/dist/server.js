@@ -75102,6 +75102,7 @@ async function probeServer(entry, opts) {
   const list2 = async (key) => {
     phase = LIST_METHOD[key];
     const method = LIST_METHOD[key];
+    let pages = 0;
     try {
       const result = await listAll(
         key,
@@ -75109,6 +75110,7 @@ async function probeServer(entry, opts) {
           const params = cursor === void 0 ? {} : { cursor };
           return client.request({ method, params }, PAGE2, requestOptions()).then((page) => {
             received = true;
+            pages += 1;
             return page;
           });
         },
@@ -75117,8 +75119,13 @@ async function probeServer(entry, opts) {
       if (result !== null) stops.push(result);
     } catch (e) {
       if (sessionDead(e)) throw e;
-      if (e instanceof McpError && e.code === ErrorCode.MethodNotFound) {
+      if (e instanceof McpError && e.code === ErrorCode.MethodNotFound && pages === 0) {
         warnings.push(`${method} is not implemented by the server (MethodNotFound)`);
+        return;
+      }
+      if (pages > 0) {
+        received = true;
+        stops.push(`${method} failed on page ${pages + 1}: ${messageOf(e).slice(0, 200)}`);
         return;
       }
       received = true;

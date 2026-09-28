@@ -32,8 +32,9 @@
  * received is analysed, and the reason names what stopped it. The same
  * failure before any listing arrived is `failed`. A list method answering
  * an error is `partial` too, and the other lists are still read; only
- * MethodNotFound (-32601) is silent, since a server need not implement
- * every list. None of these is a pass.
+ * MethodNotFound (-32601) on a list's FIRST page is silent, since a server
+ * need not implement every list — on a later page it cut the list, and is
+ * partial. None of these is a pass.
  *
  * The listing is read with a permissive schema, not the SDK's: definitions
  * that do not validate are what this audit is for, and a strict parse would
@@ -147,11 +148,13 @@ export async function probeServer(entry, opts) {
     const list = async (key) => {
         phase = LIST_METHOD[key];
         const method = LIST_METHOD[key];
+        let pages = 0;
         try {
             const result = await listAll(key, (cursor) => {
                 const params = cursor === undefined ? {} : { cursor };
                 return client.request({ method, params }, PAGE, requestOptions()).then((page) => {
                     received = true;
+                    pages += 1;
                     return page;
                 });
             }, listing[key]);
@@ -161,8 +164,17 @@ export async function probeServer(entry, opts) {
         catch (e) {
             if (sessionDead(e))
                 throw e;
-            if (e instanceof McpError && e.code === ErrorCode.MethodNotFound) {
+            // Silent only on the FIRST page (fix round 5, I-2): a server that
+            // answered page 1 with a nextCursor does implement the method, and a
+            // MethodNotFound on page 2 cuts the list — read ok, it tombstoned
+            // every item on the pages never seen.
+            if (e instanceof McpError && e.code === ErrorCode.MethodNotFound && pages === 0) {
                 warnings.push(`${method} is not implemented by the server (MethodNotFound)`);
+                return;
+            }
+            if (pages > 0) {
+                received = true;
+                stops.push(`${method} failed on page ${pages + 1}: ${messageOf(e).slice(0, 200)}`);
                 return;
             }
             received = true; // the session answered: what was listed so far is real

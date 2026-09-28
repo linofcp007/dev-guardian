@@ -50,6 +50,7 @@ interface ServerReport {
   status: 'ok' | 'partial' | 'failed' | 'skipped';
   reason?: string;
   tools_count: number;
+  pins?: { first_audit: boolean; changed: string[]; added: string[]; removed: string[] };
 }
 
 interface AuditResult {
@@ -357,6 +358,23 @@ describe('I3 and M1: budgets, and saying which one stopped the listing', () => {
       expect(r.missing_tools).toContain('mcp-tool-audit:.mcp.json::e');
     },
   );
+
+  // Fix round 5, I-2 (reproduced): page 1 with a nextCursor, then -32601 on
+  // page 2, read ok — clean, pins replaced as complete, unseen tools
+  // tombstoned. MethodNotFound is silent only on a list's FIRST page.
+  it('makes the server partial when a later page answers MethodNotFound, and tombstones nothing', async () => {
+    const plugin = makePlugin();
+    const flag = join(makeTempDir('mcp-bounds-flag-'), 'missing');
+    const dir = project({ p: stdio('poisoned', { env: { PAGE2_MISSING_FILE: flag } }) });
+    const first = await audit({ project_path: dir, servers: ['p'], timeout_ms: 60_000 }, undefined, plugin);
+    expect(first.servers[0]?.status).toBe('ok');
+    writeFileSync(flag, '', 'utf8');
+    const second = await audit({ project_path: dir, servers: ['p'], timeout_ms: 60_000 }, undefined, plugin);
+    expect(second.servers[0]?.status).toBe('partial');
+    expect(second.servers[0]?.reason).toMatch(/tools\/list.*page 2/);
+    expect(second.servers[0]?.pins?.removed ?? []).toEqual([]);
+    expect(second.coverage).toBe('partial');
+  });
 
   it('stays silent when a list method is MethodNotFound (-32601)', async () => {
     const errors = { 'prompts/list': -32601, 'resources/templates/list': -32601 };
