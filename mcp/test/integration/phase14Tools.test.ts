@@ -563,6 +563,88 @@ describe('register_custom_rules', () => {
     expect(resolveCustomSemgrepConfigs(plugin, b)).toEqual([]);
   });
 
+  // Follow-up X, fix round 4: Semgrep compiles what the shape check passed.
+  const KLINGON = 'rules:\n  - id: weird\n    message: m\n    languages: [klingon]\n    severity: ERROR\n    pattern: foo()\n';
+  const KLINGON_STDERR =
+    'semgrep error: invalid language: klingon\n\nunsupported language: klingon. supported languages are: apex, bash\n';
+  /** A fake `semgrep --validate`: refuses any run that passes a file named `refuse`. */
+  function fakeValidate(refuse: string): string[][] {
+    const calls: string[][] = [];
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'semgrep' ? '/fake/bin/semgrep' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const args = [...(opts.args ?? [])];
+      calls.push(args);
+      const bad = args.some((a) => a.endsWith(refuse));
+      return bad
+        ? { outcome: 'failed' as const, exitCode: 8, stdout: '', stderr: KLINGON_STDERR, truncated: false }
+        : { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: 'Configuration is valid', truncated: false };
+    });
+    return calls;
+  }
+
+  it('Semgrep refuses a rule the shape check passed (an unknown language): rejected with its message, never registered', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'good.yml'), VALID_RULES, 'utf8');
+    writeFileSync(join(project, 'klingon.yml'), KLINGON, 'utf8');
+    const calls = fakeValidate('klingon.yml');
+    const plugin = makePlugin();
+    const r = (await register(plugin, { project_path: project, paths: ['good.yml', 'klingon.yml'] })) as RegisterResult & {
+      semgrep_validated?: boolean;
+    };
+    expect(r.registered).toEqual([join(project, 'good.yml')]);
+    expect(r.rejected).toEqual([
+      { path: join(project, 'klingon.yml'), reason: expect.stringMatching(/^Semgrep refused it: semgrep error: invalid language: klingon/) as string },
+    ]);
+    expect(r.semgrep_validated).toBe(true);
+    // One run for both, then one per file to say which; metrics off, bounded.
+    expect(calls[0]).toEqual(expect.arrayContaining(['--validate', '--metrics=off']));
+    expect(calls).toHaveLength(3);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual([join(project, 'good.yml')]);
+  });
+
+  it('a directory holding a refused file is registered as its accepted files; the refused one never reaches a scan', async () => {
+    const project = tempProject();
+    const dir = join(project, '.semgrep');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'a.yml'), VALID_RULES, 'utf8');
+    writeFileSync(join(dir, 'klingon.yml'), KLINGON, 'utf8');
+    fakeValidate('klingon.yml');
+    const plugin = makePlugin();
+    const r = await register(plugin, { project_path: project });
+    expect(r.registered).toEqual([join(dir, 'a.yml')]);
+    expect(r.rejected.map((x) => x.path)).toEqual([join(dir, 'klingon.yml')]);
+    expect(r.note).toMatch(/registered as its accepted files/);
+    expect(resolveCustomSemgrepConfigs(plugin, project)).toEqual([join(dir, 'a.yml')]);
+  });
+
+  it('without Semgrep the shape check stands, and the result says Semgrep did not look', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'klingon.yml'), KLINGON, 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const plugin = makePlugin();
+    const r = (await register(plugin, { project_path: project, paths: ['klingon.yml'] })) as RegisterResult & {
+      semgrep_validated?: boolean;
+    };
+    expect(r.registered).toEqual([join(project, 'klingon.yml')]);
+    expect(r.semgrep_validated).toBe(false);
+    expect(r.note).toMatch(/Not validated by Semgrep \(it is not installed\)/);
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+  });
+
+  it('a Semgrep that cannot answer (timed out) validates nothing: the shape check stands, and says so', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'good.yml'), VALID_RULES, 'utf8');
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue({ outcome: 'timed_out', exitCode: null, stdout: '', stderr: '', truncated: false });
+    const plugin = makePlugin();
+    const r = (await register(plugin, { project_path: project, paths: ['good.yml'] })) as RegisterResult & {
+      semgrep_validated?: boolean;
+    };
+    expect(r.registered).toEqual([join(project, 'good.yml')]);
+    expect(r.semgrep_validated).toBe(false);
+    expect(r.note).toMatch(/Not validated by Semgrep \(semgrep --validate did not finish \(timed_out\)\)/);
+  });
+
   it('clear=true removes this project\'s registration only', async () => {
     const a = tempProject();
     const b = tempProject();

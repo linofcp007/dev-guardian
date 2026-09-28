@@ -345,7 +345,7 @@ Code-quality scan: jscpd (duplication, any language); ruff and radon cyclomatic 
 
 ### `register_custom_rules`
 
-Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project (registrations are per project). scan\_sast and bug\_hunt then run them as extra --config packs. Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, languages, severity and a pattern) — anything else is returned in `rejected` with a reason and never registered, so a stray YAML (e.g. Prometheus alerts in rules/) cannot break later scans. A registered path that later disappears or stops validating is skipped rather than failing the scan. Pass clear=true to remove the registration.
+Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project (registrations are per project). scan\_sast and bug\_hunt then run them as extra --config packs. Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, languages, severity and a pattern) and, when Semgrep is installed, compiled with semgrep --validate (an unknown language or a broken pattern is refused with Semgrep's message) — anything else is returned in `rejected` with a reason and never registered, so a stray YAML (e.g. Prometheus alerts in rules/) cannot break later scans; semgrep\_validated says whether Semgrep looked. A registered path that later disappears or stops validating is skipped rather than failing the scan. Pass clear=true to remove the registration.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

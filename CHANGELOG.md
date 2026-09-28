@@ -683,6 +683,14 @@ keeps working (migrations 004–011 are additive).
 
 ### Fixed
 
+- **`register_custom_rules` registered rules Semgrep cannot compile.** Its
+  shape check passed `languages: [klingon]`, and one such file makes Semgrep
+  refuse the whole configuration on every later scan (exit 8, nothing
+  scanned). When Semgrep is installed, every file is now compiled with
+  `semgrep --validate` (metrics off, 60 s bound) and one it refuses is
+  `rejected` with Semgrep's own message; a directory holding one is
+  registered as its accepted files. Without Semgrep, or when it cannot
+  answer, the shape check stands and `semgrep_validated: false` says so.
 - **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy
   installed. A `package.json` that declares no dependency (and whose lock
