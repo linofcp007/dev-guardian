@@ -483,6 +483,15 @@ export function splitShell(command) {
     let lastCode = '';
     const heredocs = [];
     /**
+     * What each open `(` is: `word` for a substitution that is part of a word
+     * (`$(`, `$((`, `<(`, `>(`, `=(`, `@(`), `group` for a subshell. After a
+     * `)` that closed a word — or after a closing backtick — a `#` continues the
+     * word and is no comment: `echo $(date)#x; rm -rf /` runs `rm` (fix round 5).
+     */
+    const parens = [];
+    let closedWord = false;
+    let inBacktick = false;
+    /**
      * The `ShellStatement` object for whatever statement is currently being
      * built — created up front, then mutated (not replaced) by `endStatement`
      * once its `masked`/`commands` are known, and pushed by that SAME
@@ -589,7 +598,7 @@ export function splitShell(command) {
         // the user's build dir` opened a quote that ran to the end of the command
         // and hid every line after it — `rm -rf /` included (fix round 4, C1).
         // Heredoc bodies never reach here (`skipHeredocBodies`).
-        if (ch === '#' && !hasWord) {
+        if (ch === '#' && !hasWord && !(closedWord && /[)`]/.test(command.charAt(i - 1)))) {
             while (i < command.length && command.charAt(i) !== '\n' && command.charAt(i) !== '\r')
                 i += 1;
             continue;
@@ -636,6 +645,14 @@ export function splitShell(command) {
         // Subshells, groups and command substitution: whatever is inside runs as
         // its own command, so the boundary is a statement boundary.
         if (ch === '(' || ch === ')' || ch === '`') {
+            if (ch === '(')
+                parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? 'word' : 'group');
+            else if (ch === ')')
+                closedWord = parens.pop() === 'word';
+            else {
+                closedWord = inBacktick;
+                inBacktick = !inBacktick;
+            }
             endStatement();
             maskedCommand += ch;
             i += 1;
@@ -682,7 +699,8 @@ export function splitShell(command) {
             i += 1;
             continue;
         }
-        if (ch === '<' && command.charAt(i + 1) === '<' && command.charAt(i + 2) !== '<') {
+        // Not the tail of a `<<<` here-string, whose `<<x` is no heredoc (fix round 5).
+        if (ch === '<' && command.charAt(i + 1) === '<' && command.charAt(i + 2) !== '<' && command.charAt(i - 1) !== '<') {
             const heredoc = readHeredocOperator(command, i);
             if (heredoc !== null) {
                 heredocs.push({ word: heredoc.word, statement: currentStatement });
@@ -756,7 +774,7 @@ function resolveCommand(words) {
         // A redirection may come before the command name: `2>/dev/null rm -rf /`
         // runs `rm` (fix round 4). Its target, when it is the next word, goes too.
         const redirect = parseRedirect(word);
-        if (redirect !== null && /^(?:\d*|&)$/.test(redirect.prefix)) {
+        if (redirect !== null && /^(?:\d*|&|\{[A-Za-z_]\w*\})$/.test(redirect.prefix)) {
             i += redirect.inline === '' ? 2 : 1;
             continue;
         }
@@ -883,9 +901,10 @@ function assessRecursiveDelete(words, start) {
     let force = false;
     let noPreserve = false;
     const targets = [];
-    for (const word of words.slice(start + 1)) {
+    const rest = words.slice(start + 1);
+    for (let k = 0; k < rest.length; k += 1) {
         // PowerShell takes an en or em dash for a parameter's `-` (fix round 4).
-        const token = word.value.replace(/^[\u2013\u2014\u2015]/, '-');
+        const token = (rest[k]?.value ?? '').replace(/^[\u2013\u2014\u2015]/, '-');
         if (slashStyle && token.startsWith('/')) {
             const lower = token.toLowerCase();
             if (lower === '/s')
@@ -907,8 +926,13 @@ function assessRecursiveDelete(words, start) {
             continue;
         else if (token.startsWith('-') && token.length > 1) {
             // A PowerShell switch may be given a value: `-Recurse:$true` is on,
-            // `-Recurse:$false` off.
-            const [flags = '', value] = token.slice(1).split(':', 2);
+            // `-Recurse:$false` — or `-Recurse: $false`, the value a word on — off.
+            const [flags = '', inline] = token.slice(1).split(':', 2);
+            let value = inline;
+            if (value === '') {
+                value = rest[k + 1]?.value ?? '';
+                k += 1;
+            }
             const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
             const lower = flags.toLowerCase();
             // PowerShell's whole-word parameter names first — `-Recurse`,
@@ -2568,6 +2592,12 @@ function collect(command, depth, out, scope) {
     const cmd = command.trim();
     if (cmd.length === 0)
         return;
+    // Before any whole-text work: a nested script is split and scanned whole,
+    // and nested PowerShell text is read twice at every level (fix round 5).
+    if (scope.notes.now() > scope.notes.deadline) {
+        scope.notes.budget = true;
+        return;
+    }
     const { maskedCommand, statements } = splitShell(cmd);
     // The whole-command rules are local signatures, or have a linear `test`
     // (see `BashRule.test`), so they read the whole command uncapped: a long

@@ -1076,7 +1076,9 @@ keeps working (migrations 004–011 are additive).
   `erase` with `-Recurse -Force`, `-Recurse:$true` and en or em dashes; and
   four internal caps that ended in a silent `ok` (40 `nice` runners, five
   `npx -y` launchers, 256 `[IO.File]::` calls, an `[IO.File]::` call padded
-  past 512 characters — the last now warns).
+  past 512 characters — the last now warns). A command inside a PowerShell
+  script block (`Get-ChildItem | ForEach-Object { Remove-Item C:\Users
+  -Recurse -Force }`, `Invoke-Command -ScriptBlock { … }`) is assessed too.
 - **The shell guard and the install hook finish inside the hook's timeout.**
   The pattern rules were quadratic inside a statement (127 × `chmod
   -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s

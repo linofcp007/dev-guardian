@@ -17,8 +17,14 @@ const SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b";
 /** PowerShell's double quotes: `"` and the typographic ones it accepts as the same. */
 const DOUBLE_QUOTES = '"\u201c\u201d\u201e';
 
-/** Where a PowerShell token may start: `#` there opens a comment, `@'` a here-string. */
-const TOKEN_BOUNDARY = /[\s;|&(){}=,]/;
+/**
+ * Where a PowerShell token may start in argument mode: `#` there opens a
+ * comment and `<#` a block comment. Not after `=`: `a=#b` is one argument
+ * (fix round 5 — `Write-Host "C:\x\" a=#b; Remove-Item …` hid the delete).
+ */
+const TOKEN_BOUNDARY = /[\s;|&(){},]/;
+/** Where a here-string may open: also after `=`, as in `$msg=@'`. */
+const HERE_STRING_BOUNDARY = /[\s;|&(){},=]/;
 
 /** `text` as a POSIX single-quoted word. */
 function posixSingle(text: string): string {
@@ -68,8 +74,8 @@ function hereString(text: string, at: number, seen: HereStrings): { body: string
 }
 
 /** Whether a PowerShell token may start at `i`. */
-function atBoundary(text: string, i: number): boolean {
-  return i === 0 || TOKEN_BOUNDARY.test(text.charAt(i - 1));
+function atBoundary(text: string, i: number, boundary: RegExp = TOKEN_BOUNDARY): boolean {
+  return i === 0 || boundary.test(text.charAt(i - 1));
 }
 
 /** The index just past a `<# … #>` comment starting at `i` (the end of the text when it is not closed). */
@@ -97,7 +103,7 @@ export function powershellOpaque(text: string): string {
       out += ' ';
       continue;
     }
-    if (atBoundary(text, i) && text.charAt(i) === '@') {
+    if (atBoundary(text, i, HERE_STRING_BOUNDARY) && text.charAt(i) === '@') {
       const here = hereString(text, i, seen);
       if (here !== null) {
         out += posixSingle(here.body);
@@ -120,12 +126,15 @@ export function powershellOpaque(text: string): string {
  * a line continues it, a backslash is literal, an unquoted comma separates the
  * elements of an array (each one its own argument to a native command), a
  * Unicode space separates words, `#` at the start of a token comments out the
- * rest of the line and `<# … #>` is a comment, and after `--%` the rest of the
- * line goes to the program word by word, unparsed. Everything else is left as
- * it is — a reading for the guards, not a PowerShell parser.
+ * rest of the line and `<# … #>` is a comment, after `--%` the rest of the
+ * line (to a `|`) goes to the program word by word, unparsed, and a script
+ * block's braces separate statements. Everything else is left as it is — a
+ * reading for the guards, not a PowerShell parser.
  */
 export function powershellAsPosix(text: string): string {
   const seen = hereStrings();
+  /** Per open `{`: whether it is a `${…}` / `@{…}` literal rather than a script block. */
+  const braces: boolean[] = [];
   let out = '';
   let i = 0;
   while (i < text.length) {
@@ -142,7 +151,8 @@ export function powershellAsPosix(text: string): string {
     }
     if (boundary && text.startsWith('--%', i) && /^(?:\s|$)/.test(text.charAt(i + 3))) {
       let end = i + 3;
-      while (end < text.length && text.charAt(end) !== '\n' && text.charAt(end) !== '\r') end += 1;
+      // It lasts to the end of the line or the next `|` (fix round 5).
+      while (end < text.length && !'\n\r|'.includes(text.charAt(end))) end += 1;
       const words = text
         .slice(i + 3, end)
         .split(/[ \t]+/)
@@ -151,7 +161,7 @@ export function powershellAsPosix(text: string): string {
       i = end;
       continue;
     }
-    if (boundary && ch === '@') {
+    if (ch === '@' && atBoundary(text, i, HERE_STRING_BOUNDARY)) {
       const here = hereString(text, i, seen);
       if (here !== null) {
         out += posixSingle(here.body);
@@ -196,6 +206,21 @@ export function powershellAsPosix(text: string): string {
         continue;
       }
       out += ' ';
+      continue;
+    }
+    // A script block is code: `ForEach-Object { Remove-Item … }` runs it
+    // (fix round 5). Its braces become statement boundaries; the braces of
+    // `${var}` and of a hashtable `@{…}` stay what they are.
+    if (ch === '{') {
+      const literal = /[$@]/.test(text.charAt(i - 1));
+      braces.push(literal);
+      out += literal ? '{' : ' ; ';
+      i += 1;
+      continue;
+    }
+    if (ch === '}') {
+      out += braces.pop() === true ? '}' : ' ; ';
+      i += 1;
       continue;
     }
     if (ch === '\\') out += '\\\\';
