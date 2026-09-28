@@ -609,6 +609,46 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
     6 * 60_000,
   );
 
+  // Controller ruling on I3: php-wordpress/rest-controller.php's
+  // `const NAMESPACE` is legal PHP that current Semgrep only partly parses
+  // (a warn-level PartialParsing entry). That is partial coverage, not a
+  // failed scan: the snapshot persists, Semgrep reads ok with a named gap,
+  // and the warned file is listed. Refusing the whole snapshot left
+  // scan_dast probing nothing on real WordPress projects.
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'a warn-level PartialParsing file: the snapshot persists as partial and names the file',
+    async () => {
+      const work = makeTempDir('guardian-rulepack-wp-');
+      cpSync(join(FIXTURE, 'php-wordpress'), work, { recursive: true });
+      const ctx = makeContext();
+      const tool = TOOLS.find((t) => t.name === 'map_attack_surface');
+      if (!tool) throw new Error('map_attack_surface is not registered');
+
+      const result = okResult<
+        SurfaceResult & {
+          missing_tools: string[];
+          partially_parsed?: Array<{ file: string; type: string; message: string }>;
+        }
+      >(await tool.handler({ project_path: work, force: true }, ctx));
+
+      const semgrep = result.tools_run.find((t) => t.name === 'semgrep');
+      expect(semgrep?.status, semgrep?.reason).toBe('ok');
+      expect(semgrep?.reason).toMatch(/^partial: 1 file\(s\) only partly parsed/);
+      expect(result.missing_tools).toEqual(['semgrep']);
+      expect(result.partially_parsed).toEqual([
+        expect.objectContaining({ file: 'rest-controller.php', type: 'PartialParsing' }),
+      ]);
+      expect(result.snapshot_id).not.toBeNull();
+      const snapshotId = result.snapshot_id;
+      if (snapshotId === null) return;
+      const snapshot = ctx.storage.surface.getById(snapshotId)?.snapshot;
+      expect(snapshot?.partially_parsed?.map((p) => p.file)).toEqual(['rest-controller.php']);
+      // Both register_rest_route() calls still match — the literal one resolved.
+      expect(snapshot?.routes.map((r) => r.path_resolved)).toContain('/wp-json/guardian/v1/items');
+    },
+    6 * 60_000,
+  );
+
   it.skipIf(!SEMGREP_AVAILABLE)('reports env vars, ports and per-language coverage from the same run', async () => {
     const work = makeTempDir('guardian-rulepack-');
     cpSync(FIXTURE, work, { recursive: true });
@@ -746,7 +786,7 @@ describe('E2E — attack-surface rule pack against the multi-language fixture', 
       expect(entry.module_file, entry.module_file).not.toContain('\\');
     }
 
-    // java/csharp/ruby/php can never resolve an import (design doc §5.3) —
+    // java/csharp/ruby/php can never resolve an import (the design of record) —
     // every guardian_kind:import match the rule pack produced for them (the
     // "matches an import in every one of the nine languages" test above
     // proves each language matched at least one) must land in

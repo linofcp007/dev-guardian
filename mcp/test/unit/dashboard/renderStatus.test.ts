@@ -272,6 +272,49 @@ describe('renderStatus', () => {
     expect(out).toMatch(/\+2\b/);
   });
 
+  // Task 4 brief, item 6: `hotspots[].file_path` is finding-derived — it
+  // comes straight from a `Finding.file_path` a scanner reported, which
+  // ultimately names a file inside the SCANNED, untrusted repo. A file (or
+  // directory) name is attacker-chosen content, so this is the one field in
+  // `renderStatus` a scanned repo can use to inject a terminal escape into
+  // the operator's own terminal — colouring the next line, moving the
+  // cursor, or (via an OSC sequence) rewriting the window/tab title.
+  it('strips a CSI escape sequence (e.g. SGR colour) out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: '\u001b[31mevil.ts\u001b[0m', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/\u001b/);
+    expect(out).toContain('evil.ts');
+  });
+
+  it('strips C0 control characters other than tab out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: 'be\u0007ll\u0000.ts', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/[\u0000\u0007]/);
+    expect(out).toContain('bell.ts');
+  });
+
+  it('strips a C1 control character out of a hotspot file path', () => {
+    const out = renderStatus(snap({
+      findings: { total: 1,
+        by_severity: { critical: 0, high: 0, medium: 0, low: 1, info: 0 },
+        by_category: {}, by_tool: {},
+        hotspots: [{ file_path: 'c1\u009bfile.ts', count: 1 }],
+        items: [] },
+    }), { color: false });
+    expect(out).not.toMatch(/\u009b/);
+    expect(out).toContain('c1file.ts');
+  });
+
   it('renders every truncation notice it is given', () => {
     const out = renderStatus(snap({
       truncation: [{ what: 'findings', shown: 2000, total: 5310,
@@ -299,5 +342,21 @@ describe('renderStatus', () => {
       truncation: [{ what: 'findings', shown: 2000, total: 5310, reason: 'cap' }],
     }), { color: false });
     expect(out.split('\n').length).toBeLessThanOrEqual(24);
+  });
+});
+
+describe('renderStatus — findings a delta could not compare (Task 8 fix round 3)', () => {
+  it('prints the not-re-measured and not-previously-measured counts beside a delta, never hides them', () => {
+    const out = renderStatus(snap({
+      deltas: {
+        since_previous: { from_scan_id: 'a', to_scan_id: 'b', new_count: 1,
+          resolved_count: 0, unchanged_count: 3, not_remeasured_count: 2, new_findings: [] },
+        since_baseline: { from_scan_id: 'z', to_scan_id: 'b', new_count: 0,
+          resolved_count: 0, unchanged_count: 3, not_previously_measured_count: 4, new_findings: [] },
+      },
+      baseline: { active: { baseline_id: 1, scan_id: 'z', set_at: '2026-07-12T00:00:00.000Z' }, age_days: 34 },
+    }), { color: false });
+    expect(out).toMatch(/2 not re-measured/);
+    expect(out).toMatch(/4 not previously measured/);
   });
 });

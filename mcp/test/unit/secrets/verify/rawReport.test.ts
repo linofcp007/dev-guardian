@@ -1,0 +1,429 @@
+/**
+ * The unredacted gitleaks report `verify_live` reads, and what is left of it
+ * once the raw values are taken out.
+ */
+
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+import {
+  REDACTED,
+  STALE_AFTER_MS,
+  openPrivateReportDir,
+  sanitizeGitleaksReport,
+  sweepStaleReportDirs,
+} from '../../../../src/secrets/verify/rawReport.js';
+import { isVerifiableRule } from '../../../../src/secrets/verify/providers.js';
+import { longSecretReport, longValue } from '../../../helpers/longSecretReport.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../../../helpers/tsxNode.js';
+
+const GH = ['ghp', 'Z'.repeat(36)].join('_');
+const AWS = ['AKIA', 'IOSFODNN7', 'ABCDEFG'].join('');
+
+function item(rule: string, secret: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    RuleID: rule,
+    Description: 'd',
+    StartLine: 1,
+    EndLine: 1,
+    StartColumn: 1,
+    EndColumn: 10 + secret.length,
+    Match: `token = "${secret}"`,
+    Secret: secret,
+    File: 'app.env',
+    SymlinkFile: '',
+    Commit: '',
+    Entropy: 4.5,
+    Author: '',
+    Email: '',
+    Date: '',
+    Message: '',
+    Tags: [],
+    Fingerprint: `app.env:${rule}:1`,
+    ...extra,
+  };
+}
+
+/** The fields gitleaks' own `--redact` never touches — they locate a finding. */
+const LOCATORS = [
+  'RuleID',
+  'Description',
+  'StartLine',
+  'EndLine',
+  'StartColumn',
+  'EndColumn',
+  'File',
+  'SymlinkFile',
+  'Commit',
+  'Entropy',
+  'Author',
+  'Email',
+  'Date',
+  'Fingerprint',
+];
+
+function parse(text: string | undefined): Array<Record<string, unknown>> {
+  return JSON.parse(text ?? '[]') as Array<Record<string, unknown>>;
+}
+
+describe('sanitizeGitleaksReport', () => {
+  it('returns the raw values of supported rules only, aligned with the report items', () => {
+    const text = JSON.stringify([item('github-pat', GH), item('aws-access-token', AWS, { StartLine: 2, EndLine: 2 })]);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(out?.secrets).toEqual([GH, null]);
+  });
+
+  it('redacts each value in the fields that carry it — Secret, Match, and a Message or Tags that repeat it', () => {
+    const text = JSON.stringify([
+      item('github-pat', GH, { Commit: 'c1', Message: `add ${GH} and ${AWS}`, Tags: ['t', GH] }),
+      item('aws-access-token', AWS, { StartLine: 5, EndLine: 5, Commit: 'c1', Message: `add ${GH} and ${AWS}` }),
+    ]);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(out?.text).not.toContain(GH);
+    expect(out?.text).not.toContain(AWS);
+    const parsed = parse(out?.text);
+    expect(parsed.map((i) => i['Secret'])).toEqual([REDACTED, REDACTED]);
+    expect(parsed[0]?.['Match']).toBe(`token = "${REDACTED}"`);
+    expect(parsed[1]?.['Message']).toBe(`add ${REDACTED} and ${REDACTED}`);
+    expect(parsed[0]?.['Tags']).toEqual(['t', REDACTED]);
+  });
+
+  it('cross-redacts a Match that overlaps another finding on the same line', () => {
+    // One generic match spanning both tokens, and each token's own finding.
+    const line = `creds ${GH} ${AWS}`;
+    const text = JSON.stringify([
+      item('generic-api-key', `${GH} ${AWS}`.slice(0, 20), { StartColumn: 1, EndColumn: line.length, Match: line }),
+      item('github-pat', GH, { StartColumn: 7, EndColumn: 6 + GH.length, Match: GH }),
+      item('aws-access-token', AWS, { StartColumn: 8 + GH.length, EndColumn: 7 + GH.length + AWS.length, Match: AWS }),
+    ]);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(out?.text).not.toContain(GH);
+    expect(out?.text).not.toContain(AWS);
+  });
+
+  it('leaves every locator field byte-identical, even when another value is a short word found in them', () => {
+    // A custom rule that reports `Secret: "test"`: scrubbing everywhere turned
+    // `test/fixtures/fake.env` into `REDACTED/fixtures/fake.env`, moving the
+    // finding (fingerprint, identity) and defeating `.guardianignore`.
+    const items = [
+      item('custom-password', 'test', {
+        File: 'test/fixtures/fake.env',
+        Description: 'test password',
+        Fingerprint: 'test/fixtures/fake.env:custom-password:1',
+        Author: 'tester',
+        Email: 'test@example.com',
+      }),
+      item('github-pat', GH, {
+        StartLine: 9,
+        EndLine: 9,
+        File: 'test/fixtures/other.env',
+        Commit: 'deadbeefc0ffee',
+        Fingerprint: 'deadbeefc0ffee:test/fixtures/other.env:github-pat:9',
+      }),
+      // A short hex value must not corrupt a commit id.
+      item('custom-hex', 'beef', { StartLine: 3, EndLine: 3, Commit: 'deadbeefc0ffee', File: 'x.cfg' }),
+    ];
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const parsed = parse(out?.text);
+    items.forEach((original, n) => {
+      for (const key of LOCATORS) expect(parsed[n]?.[key], `${n}.${key}`).toEqual(original[key]);
+    });
+    expect(parsed[0]?.['Match']).toBe(`token = "${REDACTED}"`);
+  });
+
+  it('withholds the fields gitleaks never serializes redacted — Line, Fragment — and a Match it cannot place', () => {
+    const text = JSON.stringify([
+      item('github-pat', GH, { Line: `a line with ${GH} and ${AWS}`, Fragment: { Raw: `whole file ${AWS}` } }),
+      { RuleID: 'aws-access-token', File: 'f', Match: `x ${AWS} ${GH}`, Secret: AWS },
+    ]);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(out?.text).not.toContain(GH);
+    expect(out?.text).not.toContain(AWS);
+    const parsed = parse(out?.text);
+    expect(parsed[0]?.['Line']).toBe(REDACTED);
+    expect(parsed[0]?.['Fragment']).toBe(REDACTED);
+    expect(parsed[1]?.['Match']).toBe(REDACTED);
+  });
+
+  it('an item with no usable Secret has its Match withheld too', () => {
+    const text = JSON.stringify([{ RuleID: 'github-pat', File: 'f', Match: `x ${GH}`, Secret: '' }]);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(out?.text).not.toContain(GH);
+    expect(out?.secrets).toEqual([null]);
+  });
+
+  it('is null for anything that is not a JSON array — never passed on, since it may hold raw values', () => {
+    expect(sanitizeGitleaksReport(`not json ${GH}`, isVerifiableRule)).toBeNull();
+    expect(sanitizeGitleaksReport(JSON.stringify({ Secret: GH }), isVerifiableRule)).toBeNull();
+  });
+
+  it('stays near-linear: ~5k findings — half of them on ONE line, all in ONE commit — well within budget', () => {
+    // The first version cross-scrubbed every string of every item against
+    // every distinct value: 3000 items took 16.8 s, 6000 took 66 s, and the
+    // MCP server was frozen for all of it.
+    const items: Array<Record<string, unknown>> = [];
+    const message = `bulk import ${'x'.repeat(200)}`;
+    for (let n = 0; n < 2_500; n += 1) {
+      const secret = `tok_${String(n).padStart(6, '0')}_${'q'.repeat(24)}`;
+      const col = 1 + n * (secret.length + 1);
+      items.push(
+        item('generic-api-key', secret, {
+          File: 'dist/bundle.min.js',
+          StartColumn: col,
+          EndColumn: col + secret.length - 1,
+          Match: secret,
+          Commit: 'c0ffee',
+          Message: message,
+        }),
+      );
+    }
+    for (let n = 0; n < 2_500; n += 1) {
+      const secret = ['ghp', `${String(n).padStart(6, '0')}${'W'.repeat(30)}`].join('_');
+      items.push(
+        item('github-pat', secret, { File: `src/f${n}.ts`, StartLine: 1 + (n % 40), EndLine: 1 + (n % 40), Commit: 'c0ffee', Message: message }),
+      );
+    }
+    const text = JSON.stringify(items);
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    const elapsed = performance.now() - started;
+    expect(out?.secrets.filter((s) => s !== null)).toHaveLength(2_500);
+    expect(out?.text).not.toContain('tok_000123_');
+    expect(out?.text).not.toContain(['ghp', `000123${'W'.repeat(30)}`].join('_'));
+    // Measured ~50 ms; the budget is for a loaded machine, not a benchmark.
+    expect(elapsed).toBeLessThan(3_000);
+  });
+
+  it('stays near-linear when MANY findings overlap one wide region — every value still scrubbed from every Match', () => {
+    // The adversarial shape the sweep alone did not bound: 5000 findings
+    // (a custom rule each, say) whose spans all overlap one another in one
+    // (File, Commit) group. Each Match was scrubbed value by value with all
+    // 5000 values: 4000 findings took 5.9 s, the MCP server frozen for it.
+    const k = 5_000;
+    const values = Array.from({ length: k }, (_, n) => `sk_${String(n).padStart(6, '0')}_${'z'.repeat(20)}`);
+    const items = values.map((v, n) =>
+      item(`custom-rule-${n}`, v, {
+        File: 'config/huge.env',
+        Commit: 'c0ffee',
+        StartLine: 1,
+        EndLine: 100,
+        StartColumn: 1 + (n % 7),
+        EndColumn: 80,
+        // Its own value and both neighbours' — each in another finding's span.
+        Match: `${values[n - 1] ?? 'x'} ${v} ${values[n + 1] ?? 'y'}`,
+      }),
+    );
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const elapsed = performance.now() - started;
+    const parsed = parse(out?.text);
+    expect(parsed).toHaveLength(k);
+    for (const v of values) expect(out?.text.includes(v), v).toBe(false);
+    expect(parsed[1]?.['Match']).toBe(`${REDACTED} ${REDACTED} ${REDACTED}`);
+    // Measured ~60 ms; the budget is for a loaded machine, not a benchmark.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  /**
+   * Fix round 1: the common case — findings that overlap nothing, each with a
+   * long value. A matcher built for every run, all of them kept until the
+   * output was built, made 1000 such findings take 460 ms (+115 MB) and
+   * 10 000 take 3.9 s (+1 GB), where value-by-value replacement took 19 ms
+   * and 149 ms; 30 000 ended in a fatal heap OOM that no catch can stop.
+   */
+  describe('many findings that overlap nothing, each with a long value', () => {
+    it('stay about as fast as a plain replace — every value still scrubbed', () => {
+      const k = 5_000;
+      const text = longSecretReport(k);
+      const started = performance.now();
+      const out = sanitizeGitleaksReport(text, isVerifiableRule);
+      const elapsed = performance.now() - started;
+      expect(out).not.toBeNull();
+      for (let n = 0; n < k; n += 1) expect(out?.text.includes(longValue(n).slice(40, 120)), `value ${n}`).toBe(false);
+      expect(parse(out?.text)[0]?.['Match']).toBe(REDACTED);
+      // Measured ~80 ms (the per-run matcher: ~2 s); the budget is for a loaded machine.
+      expect(elapsed).toBeLessThan(1_000);
+    });
+
+    it('fit in a small heap: nothing per run outlives the run', () => {
+      // A fatal OOM kills the process, so it is watched from outside: a child
+      // with a 192 MB old space. 4000 findings needed ~450 MB with every
+      // run's matcher kept to the end; the report itself is ~15 MB.
+      const r = spawnSync(
+        process.execPath,
+        ['--max-old-space-size=192', ...TSX_NODE_ARGS, join(MCP_ROOT, 'test', 'helpers', 'sanitizeHeapHarness.ts'), '4000'],
+        { cwd: MCP_ROOT, encoding: 'utf8', timeout: 120_000 },
+      );
+      expect(r.stderr).not.toMatch(/heap out of memory/i);
+      expect(r.stdout.trim()).toBe('ok 4000 0');
+      expect(r.status).toBe(0);
+    }, 180_000);
+  });
+
+  it('a value that repeats itself (self-overlapping, periodic) is scrubbed whole, in linear time', () => {
+    // `abab` inside `ababab` occurs twice, overlapping: replaced value by
+    // value (split/join), the second occurrence was cut and `ab` survived.
+    const short = parse(
+      sanitizeGitleaksReport(JSON.stringify([item('rule-a', 'abab', { Match: 'x ababab y' })]), isVerifiableRule)?.text,
+    );
+    expect(short[0]?.['Match']).toBe(`x ${REDACTED} y`);
+    // The worst case for a search restarted after each occurrence: a long
+    // value of one repeated letter, inside a longer run of it, many times.
+    const value = 'a'.repeat(2_000);
+    const items = Array.from({ length: 1_000 }, (_, n) =>
+      item(`rule-${n}`, value, { File: `f${n}.txt`, Match: `k=${'a'.repeat(4_000)};` }),
+    );
+    const started = performance.now();
+    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const elapsed = performance.now() - started;
+    expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
+    // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000 per item.
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
+  it('a Match holding overlapping occurrences of two values keeps no fragment of either', () => {
+    // `abcd1234` and `1234wxyz` overlap in `1234`: replaced one value after
+    // the other, the second is no longer whole and its tail survived.
+    const a = `${'A'.repeat(12)}1234`;
+    const b = `1234${'W'.repeat(12)}`;
+    const merged = `${'A'.repeat(12)}1234${'W'.repeat(12)}`;
+    const text = JSON.stringify([
+      item('rule-a', a, { StartColumn: 1, EndColumn: 30, Match: `k=${merged};` }),
+      item('rule-b', b, { StartColumn: 5, EndColumn: 34, Match: `k=${merged};` }),
+    ]);
+    const parsed = parse(sanitizeGitleaksReport(text, isVerifiableRule)?.text);
+    expect(parsed.map((i) => i['Match'])).toEqual([`k=${REDACTED};`, `k=${REDACTED};`]);
+  });
+
+  it('agrees with a brute-force scrub on dense random overlaps — every occurrence of every value covered', () => {
+    // Every occurrence of every value in the run marks its characters; runs
+    // of marks that overlap are one REDACTED. A two-letter alphabet makes the
+    // occurrences dense, nested and overlapping.
+    let seed = 7; // mulberry32: the low bits of a plain LCG cycle, and dense cases never came up
+    const rand = (n: number): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    const word = (len: number, alphabet: string): string =>
+      Array.from({ length: len }, () => alphabet[rand(alphabet.length)] ?? '').join('');
+    const bruteForce = (text: string, values: readonly string[]): string => {
+      const spans: Array<[number, number]> = [];
+      for (const v of values) {
+        for (let at = text.indexOf(v); at !== -1; at = text.indexOf(v, at + 1)) spans.push([at, at + v.length]);
+      }
+      spans.sort((a, b) => a[0] - b[0]);
+      const merged: Array<[number, number]> = [];
+      for (const [s, e] of spans) {
+        const last = merged.at(-1);
+        if (last !== undefined && s < last[1]) last[1] = Math.max(last[1], e);
+        else merged.push([s, e]);
+      }
+      let out = '';
+      let pos = 0;
+      for (const [s, e] of merged) {
+        out += text.slice(pos, s) + REDACTED;
+        pos = e;
+      }
+      return out + text.slice(pos);
+    };
+    for (let round = 0; round < 300; round += 1) {
+      const values = Array.from({ length: 1 + rand(6) }, () => word(1 + rand(4), 'ab'));
+      const matches = values.map(() => word(rand(24), 'abc'));
+      const items = values.map((v, n) =>
+        item(`rule-${n}`, v, { StartLine: 3, EndLine: 3, StartColumn: 1 + n, EndColumn: 40, Match: matches[n] ?? '' }),
+      );
+      const parsed = parse(sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule)?.text);
+      parsed.forEach((p, n) => expect(p['Match'], `round ${round}, item ${n}`).toBe(bruteForce(matches[n] ?? '', values)));
+    }
+  });
+});
+
+describe('openPrivateReportDir', () => {
+  it('creates a private directory and report files, and removes them', () => {
+    const dir = openPrivateReportDir();
+    const file = dir.pathFor('secrets-history.json');
+    expect(dirname(file)).toBe(dir.dir);
+    expect(basename(dir.dir)).toMatch(/^guardian-verify-/);
+    expect(existsSync(file)).toBe(true);
+    if (process.platform !== 'win32') {
+      expect(statSync(dir.dir).mode & 0o777).toBe(0o700);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
+    writeFileSync(file, JSON.stringify([item('github-pat', GH)]));
+    expect(readFileSync(file, 'utf8')).toContain(GH);
+    expect(dir.remove()).toBeNull();
+    expect(existsSync(dir.dir)).toBe(false);
+  });
+});
+
+describe('sweepStaleReportDirs — what a killed scan left behind', () => {
+  function makeDir(root: string, name: string, ageMs: number): string {
+    const p = join(root, name);
+    mkdirSync(p);
+    writeFileSync(join(p, 'secrets.json'), '[]');
+    const t = new Date(Date.now() - ageMs);
+    utimesSync(p, t, t);
+    return p;
+  }
+
+  it('removes only stale guardian-verify-* directories — never a fresh one, another name, or a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sweep-root-'));
+    try {
+      const stale = makeDir(root, 'guardian-verify-stale1', STALE_AFTER_MS + 60_000);
+      const fresh = makeDir(root, 'guardian-verify-fresh1', 60_000);
+      const other = makeDir(root, 'guardian-gitleaks-old1', STALE_AFTER_MS + 60_000);
+      const target = makeDir(root, 'not-ours', STALE_AFTER_MS + 60_000);
+      let link: string | null = join(root, 'guardian-verify-link1');
+      try {
+        symlinkSync(target, link, 'junction');
+        const t = new Date(Date.now() - STALE_AFTER_MS - 60_000);
+        utimesSync(link, t, t);
+      } catch {
+        link = null; // no symlink privilege here: that half is not exercised
+      }
+      const removed = sweepStaleReportDirs(root);
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(other)).toBe(true);
+      expect(existsSync(join(target, 'secrets.json'))).toBe(true);
+      if (link !== null) expect(readdirSync(root)).toContain('guardian-verify-link1');
+      expect(removed).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never throws — an unreadable root sweeps nothing', () => {
+    expect(sweepStaleReportDirs(join(tmpdir(), 'no-such-dir-for-sweep', 'x'))).toBe(0);
+  });
+
+  it('openPrivateReportDir sweeps the OS temp directory as it opens', () => {
+    const stale = join(tmpdir(), `guardian-verify-sweeptest${process.pid}`);
+    mkdirSync(stale, { recursive: true });
+    const t = new Date(Date.now() - STALE_AFTER_MS - 60_000);
+    utimesSync(stale, t, t);
+    const dir = openPrivateReportDir();
+    try {
+      expect(existsSync(stale)).toBe(false);
+    } finally {
+      dir.remove();
+      rmSync(stale, { recursive: true, force: true });
+    }
+  });
+});

@@ -72,8 +72,15 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
     };
     if (f.file_path) {
       const region: Record<string, number> = {};
-      if (f.line_start) region.startLine = f.line_start;
-      if (f.line_end) region.endLine = f.line_end;
+      // `endLine` only ever accompanies `startLine` — a `Finding` can carry
+      // `line_end` with no `line_start` (both are independently optional on
+      // the type; a hand-built or DB-round-tripped `Finding` can hold
+      // exactly that combination), and a region with `endLine` alone is not
+      // one the SARIF schema recognises as meaningful.
+      if (f.line_start) {
+        region.startLine = f.line_start;
+        if (f.line_end) region.endLine = f.line_end;
+      }
       result.locations = [
         {
           physicalLocation: {
@@ -131,6 +138,26 @@ function levelFor(sev: Severity): SarifLevel {
   return SARIF_LEVEL_BY_SEVERITY[sev];
 }
 
+/**
+ * `artifactLocation.uri` must be a legal `uri-reference` (schema
+ * `format: "uri-reference"`) and must never let a literal `#` reach the
+ * output. Measured, not assumed: a bare space or `%` FAILS that format
+ * check under `ajv-formats` (`test/unit/ci/report.test.ts` enables it), but
+ * a bare `#` does not — it is syntactically legal, since `#` is what STARTS
+ * the fragment component of a URI. That makes it a silent-corruption bug
+ * rather than a validation failure: a file literally named `notes#3.md`
+ * would read back, to any SARIF consumer, as artifact `notes` with fragment
+ * `3.md`.
+ *
+ * Encoded per PATH SEGMENT (`encodeURIComponent`, never the whole string in
+ * one call) so the `/` separators stay literal separators — encoding the
+ * whole string would turn every `/` into `%2F` and collapse the path into
+ * one unreadable segment.
+ */
 function toUri(p: string): string {
-  return p.replace(/\\/g, '/');
+  return p
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
 }

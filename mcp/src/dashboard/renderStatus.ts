@@ -107,7 +107,7 @@ export function renderStatus(snapshot: DashboardSnapshot, opts: { color: boolean
   }
 
   // MISSING / SUPPRESSED / truncation notices: each is independently
-  // omitted when it has nothing to say (design §6: "sections with nothing
+  // omitted when it has nothing to say (the design of record: "sections with nothing
   // to say are omitted, not printed empty"), so this whole block — and its
   // trailing separator — disappears when there is nothing to report.
   const trailing: string[] = [];
@@ -154,7 +154,7 @@ function formatDuration(durationSeconds: number | null, status: string): string 
 // ---------------------------------------------------------------------------
 
 /**
- * Design §2's corollary: "a score computed over a partial scan is presented
+ * The design of record's corollary: "a score computed over a partial scan is presented
  * with its coverage caveat attached, never as a bare number." Reads
  * `risk.coverage_caveat` specifically (not `coverage.level`) because that is
  * the field `RiskAssessment` documents as carrying this exact promise —
@@ -200,7 +200,7 @@ function renderRiskLine(
 
 /**
  * Unlike CVES below, OPEN always prints every severity column, even at
- * zero — design §6's explicit exception: "OPEN with a zero total prints,
+ * zero — the design of record's explicit exception: "OPEN with a zero total prints,
  * because 'zero open findings' is the answer the user came for."
  *
  * **`info` has its own column too** (coordinator review, Minor). It used to
@@ -229,7 +229,7 @@ function renderOpenLine(findings: FindingsSummary, color: boolean): string {
  * CVES, unlike OPEN, is omitted entirely when `total` is 0 (nothing carves
  * out an exception for it the way §6 does for OPEN), and within a non-empty
  * line only shows the severities that are actually non-zero — matching the
- * design §6 mock, which shows "1 crit  4 high" with no "0 med  0 low".
+ * the design of record's mock, which shows "1 crit  4 high" with no "0 med  0 low".
  */
 function renderCvesLine(cves: CveSummary, color: boolean): string | null {
   if (cves.total === 0) return null;
@@ -244,7 +244,7 @@ function renderCvesLine(cves: CveSummary, color: boolean): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Deltas — the "explicit absence, never zeros" rule (design §7)
+// Deltas — the "explicit absence, never zeros" rule (the design of record)
 // ---------------------------------------------------------------------------
 
 /**
@@ -261,7 +261,22 @@ function renderSincePrevious(delta: FindingDelta | null, scanType: string, color
   }
   const added = paint(`+${delta.new_count} new`, '31', color);
   const resolved = paint(`-${delta.resolved_count} resolved`, '32', color);
-  return `  SINCE LAST SCAN     ${added}   ${resolved}`;
+  return `  SINCE LAST SCAN     ${added}   ${resolved}${unmeasured(delta, color)}`;
+}
+
+/**
+ * What the delta could not compare, next to its counts — never only in the
+ * JSON. A finding one side did not measure (its scanner failed or was
+ * missing there) is neither resolved nor new, and a delta that stays silent
+ * about it reads as a complete comparison (`history/runCompare.ts`).
+ */
+function unmeasured(delta: FindingDelta, color: boolean): string {
+  const parts: string[] = [];
+  if ((delta.not_remeasured_count ?? 0) > 0) parts.push(`${delta.not_remeasured_count} not re-measured`);
+  if ((delta.not_previously_measured_count ?? 0) > 0) {
+    parts.push(`${delta.not_previously_measured_count} not previously measured`);
+  }
+  return parts.length === 0 ? '' : `   ${paint(`⚠ ${parts.join(', ')}`, '33', color)}`;
 }
 
 function renderSinceBaseline(delta: FindingDelta | null, ageDays: number | null, color: boolean): string {
@@ -271,12 +286,42 @@ function renderSinceBaseline(delta: FindingDelta | null, ageDays: number | null,
   const added = paint(`+${delta.new_count} new`, '31', color);
   const resolved = paint(`-${delta.resolved_count} resolved`, '32', color);
   const suffix = ageDays === null ? '' : `   set ${ageDays}d ago`;
-  return `  SINCE BASELINE      ${added}   ${resolved}${suffix}`;
+  return `  SINCE BASELINE      ${added}   ${resolved}${suffix}${unmeasured(delta, color)}`;
 }
 
 // ---------------------------------------------------------------------------
 // HOTTEST — at most 3 files, remainder counted rather than dropped (§6)
 // ---------------------------------------------------------------------------
+
+/**
+ * Neutralises terminal-escape injection in finding-derived text before it
+ * reaches raw stdout. `Hotspot.file_path` is the one field this renderer
+ * prints that comes from a `Finding` — a scanner-reported path naming a file
+ * inside the SCANNED, untrusted repo — so it is the one value a malicious
+ * repo can use to inject an ANSI/terminal escape into the operator's own
+ * terminal (recolouring the next line, moving the cursor, or — via an OSC
+ * sequence — rewriting the window/tab title) simply by choosing that file's
+ * name. Every other string this module prints (coverage/tool names,
+ * `next_action`, band labels, `snapshot.project_path`) is either a fixed
+ * label or under the operator's OWN control, not the scanned repo's.
+ *
+ * Two passes, in order:
+ *   1. CSI (`ESC [ … final-byte`) and OSC (`ESC ] … BEL-or-ST`) escape
+ *      sequences are removed WHOLE, so no digit/`;` litter from a CSI's
+ *      parameter bytes is left behind as visible garbage.
+ *   2. Any remaining C0 control byte except `\t` (this also mops up a lone
+ *      or truncated ESC that pass 1 does not fully consume), plus the C1
+ *      control range (`\u0080`-`\u009F`) — the single-byte equivalent of
+ *      CSI/OSC some terminals still honour, and JS strings already decode
+ *      whatever byte encoding produced one into the matching code point.
+ */
+const CSI_SEQUENCE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const OSC_SEQUENCE = /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)?/g;
+const REMAINING_CONTROL = /[\x00-\x08\x0A-\x1F\x80-\x9F]/g;
+
+function sanitizeTerminalText(value: string): string {
+  return value.replace(CSI_SEQUENCE, '').replace(OSC_SEQUENCE, '').replace(REMAINING_CONTROL, '');
+}
 
 function renderHottest(hotspots: readonly Hotspot[]): string[] {
   if (hotspots.length === 0) return [];
@@ -285,7 +330,7 @@ function renderHottest(hotspots: readonly Hotspot[]): string[] {
   let isFirst = true;
   for (const h of shown) {
     const label = isFirst ? '  HOTTEST      ' : '               ';
-    lines.push(`${label}${h.file_path}   ${h.count}`);
+    lines.push(`${label}${sanitizeTerminalText(h.file_path)}   ${h.count}`);
     isFirst = false;
   }
   const remaining = hotspots.length - shown.length;
@@ -316,7 +361,7 @@ function renderHottest(hotspots: readonly Hotspot[]): string[] {
  * on screen). Printing "semgrep did not run this scan" there would be false
  * — a scan with `by_tool: {semgrep: 1}` did run it. Split into two lines,
  * each naming only the tools its own claim is true for; either half is
- * omitted when it has nothing to name, matching design §6.
+ * omitted when it has nothing to name, matching the design of record.
  */
 function renderMissingLine(coverage: CoverageState, color: boolean): string | null {
   if (coverage.omitted_categories.length === 0) return null;
@@ -375,7 +420,7 @@ function daysUntil(iso: string, referenceIso: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Truncation notices (design §8: no cap is ever silent)
+// Truncation notices (the design of record: no cap is ever silent)
 // ---------------------------------------------------------------------------
 
 function renderTruncationLines(notices: readonly TruncationNotice[]): string[] {

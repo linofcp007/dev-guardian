@@ -44,10 +44,11 @@ describe('resolveScriptsDir', () => {
 
   it('contains the scripts the tools actually invoke', () => {
     const dir = resolveScriptsDir();
-    // detect_stack's SCRIPT_REL_PATH (detectStack.ts) and
-    // security_scan_full's SCRIPT_REL_PATH (securityScanFull.ts).
-    expect(existsSync(join(dir, 'detect', 'detect-stack.sh'))).toBe(true);
-    expect(existsSync(join(dir, 'scan', 'full-security-scan.sh'))).toBe(true);
+    // detect_stack no longer shells out (ported to TypeScript — see
+    // runners/stackDetect.ts); the only script left is init_project's
+    // first-pass status (initProject.ts), which is also resolveScriptsDir's
+    // own MARKER_SCRIPT.
+    expect(existsSync(join(dir, 'scan', 'initial-scan.sh'))).toBe(true);
   });
 
   it('is stable across repeated calls', () => {

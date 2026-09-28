@@ -19,6 +19,10 @@ export function livenessRequest(origin) {
         id: 'liveness GET /',
         method: 'GET',
         path: '/',
+        // Not routed through `plan.ts#buildProbeUrl`: `path` here is the fixed
+        // literal `/`, never a value derived from route/spec data, so there is
+        // no off-origin shape for it to take — `origin` itself was already
+        // validated by `target.ts` before it ever reaches this function.
         url: `${origin}/`,
         headers: { accept: '*/*' },
         variant: 'anonymous',

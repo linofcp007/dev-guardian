@@ -2,7 +2,7 @@
  * Render a `GateVerdict` for a CI consumer: human-readable text (the
  * default), JSON (for scripting), and SARIF (for GitHub/GitLab/Azure
  * code-scanning upload — the reason this task exists at all; see the design
- * doc §6).
+ * of record).
  *
  * Pure: every renderer takes everything it needs as an argument — no
  * filesystem access, no clock, no environment lookups. `renderSarif` alone
@@ -11,7 +11,7 @@
  * checkout root: an absolute path — POSIX or a Windows drive letter —
  * matches nothing there, so the finding lands in the results list with no
  * line annotation on the diff, which is the entire point of shipping SARIF
- * (design doc §6, task resolution #2). See `toProjectRelativeUri`.
+ * (the design of record, task resolution #2). See `toProjectRelativeUri`.
  *
  * SARIF generation is delegated to `../report/sarif.ts#toSarif`, the
  * project's existing SARIF producer (already used by the `report_export`
@@ -22,7 +22,7 @@
  * without cross-referencing the exit code; and, for the one requirement
  * carried forward from Task 2 (see `renderSarif` below), a place for the
  * dropped-baseline-entries gap to surface via SARIF's own
- * `toolExecutionNotifications` mechanism. Design doc §9 originally read as
+ * `toolExecutionNotifications` mechanism. The design of record originally read as
  * keeping ALL of `coverage` out of SARIF; it is being amended (see the task
  * report) to describe this — the coarse boolean signal in SARIF natively,
  * general coverage-gap prose (tool names, "not installed" reasons) still
@@ -53,7 +53,7 @@ const EXIT_LABEL = {
  * because SARIF has no general-purpose home for free text.
  *
  * `baselineAbsent` (added on review of this task) gets its own line, printed
- * plainly rather than folded into `coverageGaps`: design doc §4 requires the
+ * plainly rather than folded into `coverageGaps`: the design of record requires the
  * CLI to say so on a first run and to name `baseline update` as the fix, and
  * that is a one-time onboarding fact about the whole run, not a per-scanner
  * gap. It cannot be inferred from `newFindings`/`coverageGaps` — an absent
@@ -74,6 +74,17 @@ export function renderHuman(v) {
         lines.push('coverage gaps:');
         for (const gap of v.coverageGaps)
             lines.push(`  - ${gap}`);
+    }
+    // `--accept-partial-parse`: gaps the caller accepted, printed as such —
+    // never as coverage gaps, never silently. `coverage:` above still says
+    // `partial` for them.
+    if (v.acceptedGaps.length > 0) {
+        lines.push('accepted (--accept-partial-parse):');
+        for (const gap of v.acceptedGaps)
+            lines.push(`  - ${gap}`);
+    }
+    for (const path of v.unusedPartialParseAcceptances) {
+        lines.push(`note: --accept-partial-parse ${path}: no step reported it partly parsed (unused)`);
     }
     if (v.blocking.length > 0) {
         lines.push('blocking findings:');
@@ -103,6 +114,8 @@ export function renderJson(v) {
         new_findings: v.newFindings,
         blocking_findings: v.blocking,
         baseline_absent: v.baselineAbsent,
+        accepted_gaps: v.acceptedGaps,
+        unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
     };
     return JSON.stringify(payload, null, 2);
 }
@@ -115,7 +128,7 @@ export function renderJson(v) {
  * other line is `${step.tool}: ...`, and no scan step is named "baseline".
  * Matching the prefix (rather than owning a second copy of gate.ts's
  * wording) is what lets `renderSarif` single that one line out from the
- * general scanner-coverage gaps design doc §9 keeps out of SARIF entirely.
+ * general scanner-coverage gaps the design of record keeps out of SARIF entirely.
  */
 const BASELINE_GAP_PREFIX = 'baseline: ';
 /**
@@ -129,7 +142,7 @@ const BASELINE_GAP_PREFIX = 'baseline: ';
  *    This is the SARIF-native way to say "this run was incomplete" — a
  *    consumer reading only the SARIF upload can now tell a clean scan from
  *    an incomplete one from this one boolean, without cross-referencing the
- *    exit code, closing the gap design doc §9 itself named as the reason
+ *    exit code, closing the gap the design of record itself named as the reason
  *    exit code 2 has to exist as a separate channel. It is always present
  *    (every call attaches exactly one `invocations` entry), not only when
  *    there is a baseline gap to report alongside it — a fully clean run
@@ -151,7 +164,7 @@ const BASELINE_GAP_PREFIX = 'baseline: ';
  *    "surfaces a dropped-baseline-entries gap" test, which pins
  *    `executionSuccessful: true` in exactly this combination).
  *
- * (Design doc §9 originally read as excluding all of `coverage` from SARIF;
+ * (The design of record originally read as excluding all of `coverage` from SARIF;
  * it is being amended to describe the above, so the doc and this code agree.)
  */
 export function renderSarif(v, projectPath) {

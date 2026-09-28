@@ -1,0 +1,11 @@
+@* An ASP.NET Core layout that prints GA only once consented. NOTHING here may
+   fire (the consent-block guard: Razor's @if keeps C#'s braces). *@
+<head>
+    @if (Model.Consent.Analytics)
+    {
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-LLLL2222"></script>
+    }
+    @if (Model.Consent.Marketing) {
+        <iframe src="https://www.youtube.com/embed/apresentacao"></iframe>
+    }
+</head>

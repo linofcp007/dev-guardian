@@ -13,9 +13,9 @@
  *     (`probe_rate_limit: true` is its own authorisation, scoped to one
  *     route).
  *   - Not in `tools/scanDast.ts`: the orchestrator holds no detection logic
- *     and no severity decisions (design §3).
+ *     and no severity decisions (the design of record).
  *
- * The wording is load-bearing. Design §11 forbids ever rewording this into
+ * The wording is load-bearing. The design of record forbids ever rewording this into
  * "rate limiting is missing": a limiter whose threshold sits above the burst
  * size is indistinguishable from none at this sample size, and the message a
  * reader actually sees has to say so. The two clauses "not proof" and

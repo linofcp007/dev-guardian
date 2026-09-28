@@ -50,6 +50,8 @@ import './tools/createGithubIssues.js';
 import './tools/scanWordpress.js';
 import './tools/wpAudit.js';
 import './tools/wpVulnCheck.js';
+// Source-based WP vulnerability matching, no live URL (Task 18):
+import './tools/wpVulnCheckSource.js';
 // Phase 16 — extended WP / .NET / cross-cutting:
 import './tools/wpCronAudit.js';
 import './tools/wpRecommendHardening.js';
@@ -70,6 +72,10 @@ import './tools/scanDast.js';
 import './tools/validateFinding.js';
 // Fix PR (Phase 19):
 import './tools/createFixPr.js';
+// Agent workspace audit (Task 22):
+import './tools/auditAgentConfig.js';
+// Install-time package vetting (Task 16):
+import './tools/vetPackages.js';
 // Resources:
 import './resources/scans.js';
 import './resources/findings.js';

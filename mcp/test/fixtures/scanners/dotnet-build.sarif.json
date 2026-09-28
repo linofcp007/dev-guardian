@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json.schemastore.org/sarif-2.1.0",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "results": [
+        {
+          "ruleId": "CA5351",
+          "ruleIndex": 268,
+          "level": "warning",
+          "message": {
+            "text": "H uses a broken cryptographic algorithm MD5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/proj/LibA/Class1.cs"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 76,
+                  "endLine": 1,
+                  "endColumn": 117
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "CA1850",
+          "ruleIndex": 132,
+          "level": "note",
+          "message": {
+            "text": "Prefer static 'System.Security.Cryptography.MD5.HashData' method over 'ComputeHash'"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/proj/LibA/Class1.cs"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 126,
+                  "endLine": 1,
+                  "endColumn": 142
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1,
+            "customProperties": {
+              "ComputeTypePropertyKey": "ComputeHash",
+              "DeleteHashCreationPropertyKey": "DeleteHashCreationPropertyKey",
+              "HashCreationIndexPropertyKey": "0",
+              "TargetHashTypeDiagnosticPropertyKey": "MD5"
+            }
+          }
+        },
+        {
+          "ruleId": "CA1822",
+          "ruleIndex": 104,
+          "level": "note",
+          "message": {
+            "text": "Member 'H' does not access instance data and can be marked as static"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/proj/LibA/Class1.cs"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 48,
+                  "endLine": 1,
+                  "endColumn": 49
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "SCS0005",
+          "level": "warning",
+          "message": {
+            "text": "Weak random number generator."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/proj/LibA/Rng.cs"
+                },
+                "region": {
+                  "startLine": 7,
+                  "startColumn": 9,
+                  "endLine": 7,
+                  "endColumn": 30
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CA5351",
+          "level": "warning",
+          "message": {
+            "text": "suppressed MD5 use"
+          },
+          "suppressions": [
+            {
+              "kind": "inSource"
+            }
+          ],
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "file:///C:/proj/LibA/Legacy.cs"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Microsoft (R) Visual C# Compiler",
+          "version": "5.9.0-1.26423.113 (e34a38d2ae1fc26406a317517196e55c68ff83ab)",
+          "rules": [
+            {
+              "id": "CA1822",
+              "shortDescription": {
+                "text": "Mark members as static"
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Performance"
+              }
+            },
+            {
+              "id": "CA1850",
+              "shortDescription": {
+                "text": "Prefer static 'HashData' method over 'ComputeHash'"
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Performance"
+              }
+            },
+            {
+              "id": "CA5351",
+              "shortDescription": {
+                "text": "Do Not Use Broken Cryptographic Algorithms"
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "Security"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -7,13 +7,24 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import { makeFinding } from '../../src/runners/scannerParsers/index.js';
+import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
+
+/**
+ * The project every seeded scan belongs to, and the server's working
+ * directory while each test runs: resources answer for the server's own
+ * project, never for "the newest scan in the database".
+ */
+const P = resolveProjectPath(makeTempDir('resources-')).path;
 
 beforeAll(async () => {
   await import('../../src/resources/scans.js');
@@ -46,7 +57,7 @@ function seedScan(
   plugin.storage.scans.insert({
     scan_id: args.id,
     scan_type: args.type,
-    project_path: '/p',
+    project_path: P,
     tree_hash: `h-${args.id}`,
   });
   if (args.findings) {
@@ -76,6 +87,10 @@ const fakeUri = new URL('guardian://placeholder/');
 let plugin: PluginContext;
 beforeEach(() => {
   plugin = makePlugin();
+  vi.spyOn(process, 'cwd').mockReturnValue(P);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 // ---------------------------------------------------------------------- scans
@@ -197,7 +212,7 @@ describe('guardian://cves/active', () => {
     plugin.storage.scans.insert({
       scan_id: 'd1',
       scan_type: 'deps',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h',
     });
     plugin.storage.cves.upsert({
@@ -224,12 +239,58 @@ describe('guardian://cves/active', () => {
     const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
     expect((r.json as { cves: unknown[] }).cves).toEqual([]);
   });
+
+  it('returns CVEs pinned to a deps_audit scan, which has its own scan type', async () => {
+    plugin.storage.scans.insert({ scan_id: 'a1', scan_type: 'deps_audit', project_path: P, tree_hash: 'h' });
+    plugin.storage.cves.upsert({
+      cve_id: 'CVE-2024-Y', package_name: 'minimist', severity: 'critical', scan_id: 'a1',
+    });
+    plugin.storage.scans.finalize({ scan_id: 'a1', status: 'completed', tools_run: [], missing_tools: [] });
+
+    const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+    const payload = r.json as { cves: Array<{ cve_id: string }>; scan_id?: string };
+    expect(payload.scan_id).toBe('a1');
+    expect(payload.cves.map((c) => c.cve_id)).toEqual(['CVE-2024-Y']);
+  });
+
+  // Task 19 — the resource enriches from the `cve_intel` CACHE ONLY, never a
+  // live network call (a resource read must stay fast and side-effect-free);
+  // `intel/enrich.ts`'s own tests cover the cache/network split itself.
+  describe('KEV/EPSS enrichment (Task 19, cache-only)', () => {
+    it('includes kev/epss fields for a CVE with a cached intel row', async () => {
+      plugin.storage.scans.insert({ scan_id: 'd2', scan_type: 'deps', project_path: P, tree_hash: 'h' });
+      plugin.storage.cves.upsert({
+        cve_id: 'CVE-2024-KEV', package_name: 'lodash', severity: 'high', scan_id: 'd2',
+      });
+      plugin.storage.scans.finalize({ scan_id: 'd2', status: 'completed', tools_run: [], missing_tools: [] });
+      plugin.storage.cveIntel.upsertMany([
+        { cve_id: 'CVE-2024-KEV', kev: true, kev_date_added: '2026-01-01', epss_score: 0.8, epss_percentile: 0.9, fetched_at: new Date().toISOString() },
+      ]);
+
+      const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+      const payload = r.json as { cves: Array<{ cve_id: string; kev?: boolean; epss_score?: number }> };
+      expect(payload.cves[0]).toMatchObject({ cve_id: 'CVE-2024-KEV', kev: true, epss_score: 0.8 });
+    });
+
+    it('a CVE with no cached intel row carries no kev/epss fields at all — never a fabricated kev: false', async () => {
+      plugin.storage.scans.insert({ scan_id: 'd3', scan_type: 'deps', project_path: P, tree_hash: 'h' });
+      plugin.storage.cves.upsert({
+        cve_id: 'CVE-2024-UNKNOWN', package_name: 'lodash', severity: 'high', scan_id: 'd3',
+      });
+      plugin.storage.scans.finalize({ scan_id: 'd3', status: 'completed', tools_run: [], missing_tools: [] });
+
+      const r = await getResource('guardian-cves-active').handler(fakeUri, {}, plugin);
+      const payload = r.json as { cves: Array<Record<string, unknown>> };
+      expect(payload.cves[0]).not.toHaveProperty('kev');
+      expect(payload.cves[0]).not.toHaveProperty('epss_score');
+    });
+  });
 });
 
 describe('guardian://stack', () => {
   it('returns the latest snapshot', async () => {
     plugin.storage.stack.insert({
-      project_path: '/p',
+      project_path: P,
       snapshot: {
         os: 'linux',
         arch: 'x86_64',
@@ -244,6 +305,8 @@ describe('guardian://stack', () => {
         has_ansible: false,
         has_github_actions: false,
         has_gitlab_ci: false,
+        has_iac: false,
+        projects: [],
       },
     });
 
@@ -263,7 +326,7 @@ describe('guardian://compliance/status', () => {
     plugin.storage.scans.insert({
       scan_id: 'c1',
       scan_type: 'compliance',
-      project_path: '/p',
+      project_path: P,
       tree_hash: 'h',
     });
     plugin.storage.scans.finalize({
@@ -317,7 +380,7 @@ describe('guardian://sbom', () => {
     plugin.storage.scans.insert({
       scan_id: 'sb1',
       scan_type: 'sbom',
-      project_path: '/p',
+      project_path: P,
       tree_hash: '',
     });
     plugin.storage.scans.finalize({

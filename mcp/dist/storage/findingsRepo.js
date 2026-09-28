@@ -1,14 +1,28 @@
 /**
  * Findings repository.
  *
- * Findings are stored per-scan but share a stable `fingerprint` across scans
- * (see [src/fingerprint/findingFingerprint.ts]), which is what lets us:
- *   - dedupe inside a scan,
- *   - compute diffs across scans,
- *   - apply suppressions across all future scans.
+ * Findings are stored per-scan, keyed by `fingerprint` within a scan (see
+ * [src/fingerprint/findingFingerprint.ts]), and carry a line-independent
+ * `identity` across scans (schema 7, [src/fingerprint/findingIdentity.ts]):
+ *   - the fingerprint dedupes inside a scan;
+ *   - diffs across scans match on the identity first, the fingerprint as the
+ *     fallback for rows that have no identity;
+ *   - a suppression hides a finding that matches it on EITHER key
+ *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
+ *     still works, and one written after survives a line shift. Since
+ *     migration 011 the match is also scoped to the finding's own project
+ *     (or to no project at all, for a suppression written before that
+ *     column existed) — see that constant's own comment.
  *
- * The `open` list is the canonical "what's wrong right now" view: it joins
- * the latest completed scan with the suppressions table.
+ * **A project's open findings are NOT read here.** They are the union over
+ * every state-describing scan type of that type's newest usable scan — see
+ * `history/openSet.ts#openSetForProject`, which every resource and history
+ * reader uses. `listOpen`, `listOpenForProject` and `listBySeverity` below
+ * read ONE scan (the latest completed row, of any type): after an SBOM, a
+ * stack detection or a scan of another type, they answer from that scan.
+ * Since Task 24 none of them has a production caller (the last two,
+ * `dotnet_describe_setup` and `wp_describe_setup`, read the open set now);
+ * they stay for the storage tests and `create_fix_pr`'s I3 regression test.
  *
  * **The UNSCOPED "latest scan" queries (`listOpen`, `listBySeverity`)
  * exclude `create_fix_pr`'s own verification re-scans (task-7-review.md
@@ -40,23 +54,58 @@ import { SEVERITIES, SEVERITY_ORDER } from '../types.js';
 import { boolToInt, intToBool } from './repoUtil.js';
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
+/**
+ * Suppression `s` names finding `f`: same fingerprint, or — when both sides
+ * have one — the same identity, AND `s` belongs to the finding's own project
+ * (`l.project_path`, from the `latest` CTE every caller of this constant
+ * joins in) or to no project at all (migration 011: NULL means "every
+ * project" — every row written before that column existed). SQL's
+ * `NULL = NULL` is not true, so a legacy row or suppression without an
+ * identity only ever matches by fingerprint; `s.project_path IS NULL` is a
+ * proper null-safe check, so a legacy/global suppression is unaffected by
+ * the project clause.
+ *
+ * Without the project clause, a suppression scoped to project A hid a
+ * finding sharing its fingerprint or identity in project B the moment both
+ * projects' scans lived in the same database — reproduced and fixed
+ * alongside `history/openSet.ts`'s `suppressionMatcher`, the JS-side
+ * equivalent every resource/history reader actually calls through
+ * `openSetForProject` (this file's own module comment already says
+ * `listOpen`/`listOpenForProject`/`listBySeverity` below are legacy, kept
+ * only for callers that have not moved to it).
+ */
+const SUPPRESSION_MATCHES_F = '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) ' +
+    'AND (s.project_path IS NULL OR s.project_path = l.project_path)';
 export class FindingsRepo {
     db;
     insertStmt;
+    identityForFingerprintStmt;
     listByScanStmt;
     listOpenLatestScanStmt;
     listOpenForProjectStmt;
     listBySeverityLatestStmt;
     countBySeverityStmt;
+    findInProjectStmt;
     constructor(db) {
         this.db = db;
         this.insertStmt = db.prepare(`
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw
+        snippet, fix_available, fix_applied, raw, identity, content_key
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+        // The identity of the most recent scan's row for this fingerprint. Rows
+        // of older scans can share a fingerprint with a DIFFERENT identity (same
+        // rule and line under a redacted snippet, other code), so the newest one
+        // — the scan the caller just read the fingerprint from — wins.
+        this.identityForFingerprintStmt = db.prepare(`
+      SELECT f.identity AS identity FROM findings f
+      JOIN scans s ON s.id = f.scan_id
+      WHERE f.fingerprint = ? AND f.identity IS NOT NULL
+      ORDER BY s.started_at DESC, s.rowid DESC
+      LIMIT 1
     `);
         this.listByScanStmt = db.prepare(`
       SELECT * FROM findings WHERE scan_id = ?
@@ -73,7 +122,7 @@ export class FindingsRepo {
         // for why this lives here as a literal rather than an import.
         this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
@@ -81,7 +130,7 @@ export class FindingsRepo {
       JOIN latest l ON l.id = f.scan_id
       WHERE NOT EXISTS (
         SELECT 1 FROM suppressions s
-        WHERE s.finding_fingerprint = f.fingerprint
+        WHERE ${SUPPRESSION_MATCHES_F}
           AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       )
       ORDER BY
@@ -95,14 +144,14 @@ export class FindingsRepo {
         // means latest FOR THIS PROJECT rather than latest in the whole table.
         this.listOpenForProjectStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
       JOIN latest l ON l.id = f.scan_id
       WHERE NOT EXISTS (
         SELECT 1 FROM suppressions s
-        WHERE s.finding_fingerprint = f.fingerprint
+        WHERE ${SUPPRESSION_MATCHES_F}
           AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       )
       ORDER BY
@@ -115,7 +164,7 @@ export class FindingsRepo {
         // reason — this is ALSO an unscoped "latest scan" query.
         this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
-        SELECT id FROM scans
+        SELECT id, project_path FROM scans
         WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
@@ -124,10 +173,17 @@ export class FindingsRepo {
       WHERE f.severity = ?
         AND NOT EXISTS (
           SELECT 1 FROM suppressions s
-          WHERE s.finding_fingerprint = f.fingerprint
+          WHERE ${SUPPRESSION_MATCHES_F}
             AND (s.expires_at IS NULL OR s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         )
       ORDER BY f.fingerprint ASC
+    `);
+        this.findInProjectStmt = db.prepare(`
+      SELECT f.* FROM findings f
+      JOIN scans s ON s.id = f.scan_id
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      ORDER BY s.started_at DESC, s.rowid DESC
+      LIMIT 1
     `);
         this.countBySeverityStmt = db.prepare(`
       SELECT severity, COUNT(*) AS n FROM findings
@@ -141,15 +197,72 @@ export class FindingsRepo {
         const tx = this.db.transaction((rows) => {
             let inserted = 0;
             for (const f of rows) {
-                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw));
+                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw), f.identity ?? null, f.content_key ?? null);
                 inserted += info.changes;
             }
             return inserted;
         });
         return tx(findings);
     }
+    /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
+    identityForFingerprint(fingerprint) {
+        return this.identityForFingerprintStmt.get(fingerprint)?.identity ?? null;
+    }
     listByScan(scanId) {
         return this.listByScanStmt.all(scanId).map(rowToFinding);
+    }
+    /**
+     * The findings of `scanId` of one of `tools`, in one of `files` (matched as
+     * stored, and with `\` for `/`), or of one of `rules` — what the open
+     * set's carry-forward reads when an older scan could only be carried for
+     * those (`history/openSet.ts`), instead of every row of every older scan.
+     * Chunked below SQLite's parameter limit; each row once (the table's key
+     * is `(fingerprint, scan_id)`).
+     *
+     * `skip`, when given, is asked first with each matching row's two keys
+     * alone, and a row it skips is never read in full — the carry-forward
+     * passes the identities it already holds, so a scanner that fails in every
+     * scan while keeping its findings costs a key read per older row, not a
+     * full one.
+     */
+    listByScanMatching(scanId, match, skip) {
+        const fileKeys = [...new Set(match.files.flatMap((f) => [f, f.replace(/\//g, '\\')]))];
+        const chunks = (values) => {
+            const out = [];
+            for (let i = 0; i < values.length; i += 400)
+                out.push(values.slice(i, i + 400));
+            return out;
+        };
+        const inList = (chunk) => chunk.map(() => '?').join(', ');
+        const byFingerprint = new Map();
+        const wanted = new Set();
+        const run = (column, values) => {
+            for (const chunk of chunks(values)) {
+                if (skip === undefined) {
+                    const sql = `SELECT * FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+                    for (const row of this.db.prepare(sql).all(scanId, ...chunk)) {
+                        const finding = rowToFinding(row);
+                        byFingerprint.set(finding.fingerprint, finding);
+                    }
+                    continue;
+                }
+                const sql = `SELECT fingerprint, identity FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+                for (const keys of this.db.prepare(sql).all(scanId, ...chunk)) {
+                    if (!skip(keys))
+                        wanted.add(keys.fingerprint);
+                }
+            }
+        };
+        run('tool', [...new Set(match.tools)]);
+        run('file_path', fileKeys);
+        run('rule_id', [...new Set(match.rules)]);
+        for (const chunk of chunks([...wanted])) {
+            const sql = `SELECT * FROM findings WHERE scan_id = ? AND fingerprint IN (${inList(chunk)})`;
+            for (const row of this.db.prepare(sql).all(scanId, ...chunk)) {
+                byFingerprint.set(row.fingerprint, rowToFinding(row));
+            }
+        }
+        return [...byFingerprint.values()];
     }
     /**
      * Open findings from the latest completed scan IN THE WHOLE DATABASE, from
@@ -184,6 +297,18 @@ export class FindingsRepo {
     }
     listBySeverity(severity) {
         return this.listBySeverityLatestStmt.all(severity).map(rowToFinding);
+    }
+    /**
+     * The newest completed scan OF ONE PROJECT that reported `fingerprint`,
+     * with the finding as that scan stored it — whatever type the scan was
+     * and however many scans ran since. `suggest_fix` looked only in the
+     * single latest scan in the database, so a finding from a SAST run could
+     * not be found once anything else (a secrets scan, another project's
+     * scan) had run after it.
+     */
+    findLatestInProject(projectPath, fingerprint) {
+        const row = this.findInProjectStmt.get(fingerprint, projectPath);
+        return row ? { finding: rowToFinding(row), scan_id: row.scan_id } : null;
     }
     /**
      * Counts findings per severity for one scan, returning the full record
@@ -242,6 +367,10 @@ function rowToFinding(row) {
         finding.line_end = row.line_end;
     if (row.snippet !== null)
         finding.snippet = row.snippet;
+    if (row.identity !== null)
+        finding.identity = row.identity;
+    if (row.content_key !== null)
+        finding.content_key = row.content_key;
     return finding;
 }
 //# sourceMappingURL=findingsRepo.js.map

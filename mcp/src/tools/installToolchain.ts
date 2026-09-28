@@ -33,6 +33,7 @@ import {
   resolveBinary,
   type PkgManagerCandidate,
 } from '../platform/pkgManagerDetect.js';
+import { WSL_SHELL } from '../platform/shellProbe.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import {
@@ -43,6 +44,7 @@ import {
 } from '../runners/installCatalog.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { resetScannerCache } from './scanHelpers.js';
 
 const inputSchema = {
   tools: z
@@ -62,7 +64,10 @@ const inputSchema = {
     .optional()
     .describe(
       'Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). ' +
-        'Default: false — steps needing elevation are reported under `requires_elevation` instead.',
+        'Default: false — steps needing elevation are reported under `requires_elevation` instead. ' +
+        'Install steps run without a terminal, so on Linux/macOS this only works with passwordless ' +
+        'sudo; "sudo: a terminal is required to read the password" means the user must run the ' +
+        'reported command themselves.',
     ),
 };
 
@@ -142,6 +147,10 @@ async function handler(
     await installDefaults({ os, dryRun, elevation, ctx, result });
   }
 
+  // Whatever was installed must be visible to the very next scan: without
+  // this, a cached "not installed" from before the install outlived it and
+  // the re-scan still reported `not_installed`.
+  resetScannerCache();
   const verification = await runCheckToolchain(ctx);
 
   return {
@@ -208,10 +217,14 @@ async function installDefaults(opts: DefaultsContext): Promise<void> {
     });
     return;
   }
+  // Through the shell runner with the WSL shell, so the script path is
+  // translated to its /mnt/<drive>/ form — a raw `C:\…` path handed to
+  // `wsl bash` names nothing inside WSL.
   const scriptPath = join(opts.ctx.scriptsDir, 'install', 'install-linux.sh');
-  const r = await runProcess({
-    command: 'wsl',
-    args: ['bash', scriptPath, '--no-sudo'],
+  const r = await runShellScript({
+    shell: WSL_SHELL,
+    scriptPath,
+    args: ['--no-sudo'],
     cwd: opts.ctx.scriptsDir,
   });
   for (const t of listDefaultTools()) {
@@ -332,7 +345,7 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
     if (picked.spec.needs_elevation && !opts.elevation) {
       opts.result.requires_elevation.push({
         ...entry,
-        hint: 'Re-call with elevation_allowed=true to run this step.',
+        hint: elevationHint(opts.os, `${picked.spec.command} ${picked.spec.args.join(' ')}`),
       });
       continue;
     }
@@ -358,35 +371,73 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
   }
 }
 
+/**
+ * What to do about a step that needs elevation. "Re-call with
+ * elevation_allowed=true" alone was wrong more often than right: install
+ * steps run without a terminal, so `sudo` can only succeed without a
+ * password, and `choco` only from a server that is already elevated —
+ * otherwise the user has to run the command themselves.
+ */
+export function elevationHint(os: DetectedOs, command: string): string {
+  if (os === 'win32') {
+    return (
+      'Needs an administrator shell. Re-calling with elevation_allowed=true only works when this ' +
+      `server itself runs elevated; otherwise run \`${command}\` yourself in an administrator terminal.`
+    );
+  }
+  return (
+    'Needs elevation. Re-calling with elevation_allowed=true only works with passwordless sudo ' +
+    `(install steps run without a terminal to type a password in); otherwise run \`${command}\` ` +
+    'yourself in a terminal.'
+  );
+}
+
 function describeSpec(spec: InstallSpec): string {
   return spec.description ?? `${spec.command} ${spec.args.join(' ')}`;
 }
 
+/**
+ * Every probe here is an independent `where`/`which` call (see
+ * `pkgManagerDetect.ts`'s own doc comment) with nothing for one to learn
+ * from another, so they run concurrently — `Promise.all` over a `.map()`
+ * preserves each list's ORDER in the result regardless of which probe
+ * actually finishes first, which matters: `pickInstallSpec` walks
+ * `availableManagers` in order and returns the FIRST match, so the array's
+ * order is this function's whole notion of "preferred manager first".
+ */
 async function listAvailableManagers(
   os: DetectedOs,
 ): Promise<PkgManagerCandidate[]> {
   if (os === 'win32') {
     const all = ['winget', 'scoop', 'choco'];
-    const out: PkgManagerCandidate[] = [];
-    for (const name of all) {
-      const path = await resolveBinary(name);
-      const candidate: PkgManagerCandidate = { name, available: path !== null };
-      if (path !== null) candidate.command_path = path;
-      out.push(candidate);
-    }
-    return out;
+    return Promise.all(
+      all.map(async (name): Promise<PkgManagerCandidate> => {
+        const path = await resolveBinary(name);
+        const candidate: PkgManagerCandidate = { name, available: path !== null };
+        if (path !== null) candidate.command_path = path;
+        return candidate;
+      }),
+    );
   }
-  // POSIX: probe the managers our catalogue can drive.
-  const order = os === 'darwin' ? ['brew', 'pipx', 'npm'] : ['apt', 'pipx', 'npm'];
-  const out: PkgManagerCandidate[] = [];
-  for (const name of order) {
-    const path = await resolveBinary(name === 'apt' ? 'apt-get' : name);
-    out.push({ name, available: path !== null });
-  }
-  // `curl` fallback at the bottom — most POSIX systems have it.
-  const curlPath = await resolveBinary('curl');
-  out.push({ name: 'curl', available: curlPath !== null });
-  return out;
+  // POSIX: probe the managers our catalogue can drive. `uv`, `cargo` and
+  // `go` are ranked below the OS package manager and pipx/npm — zizmor's
+  // and actionlint's catalog entries list them as fallbacks, not the first
+  // choice, so they are probed last (curl stays the true last resort).
+  const order =
+    os === 'darwin'
+      ? ['brew', 'pipx', 'npm', 'uv', 'cargo', 'go']
+      : ['apt', 'pipx', 'npm', 'uv', 'cargo', 'go'];
+  const [managers, curlPath] = await Promise.all([
+    Promise.all(
+      order.map(async (name): Promise<PkgManagerCandidate> => {
+        const path = await resolveBinary(name === 'apt' ? 'apt-get' : name);
+        return { name, available: path !== null };
+      }),
+    ),
+    // `curl` fallback at the bottom — most POSIX systems have it.
+    resolveBinary('curl'),
+  ]);
+  return [...managers, { name: 'curl', available: curlPath !== null }];
 }
 
 async function isWslUsable(): Promise<boolean> {

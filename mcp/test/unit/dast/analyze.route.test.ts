@@ -12,7 +12,7 @@ describe('analyzeRoutes — anonymous exposure', () => {
     }));
     const hit = f.find((x) => x.check === 'anonymous_exposure');
     expect(hit).toBeDefined();
-    // 'high', not 'critical', and the spec (design doc section 8) is the
+    // 'high', not 'critical', and the spec (the design of record) is the
     // reason: auth_hint 'required' can be inherited from a DOCUMENT-level
     // `security` default, so a genuinely public route whose author forgot to
     // write `security: []` on it would otherwise be reported as a critical
@@ -92,7 +92,16 @@ describe('analyzeRoutes — reachability', () => {
 });
 
 describe('analyzeRoutes — differential authz', () => {
-  it('flags a route whose anonymous and authenticated responses are identical', () => {
+  // Measured defect (task 4 brief, item 3): every public route (`/health`,
+  // `/`, `/docs`) that happens to answer identically with or without a
+  // credential used to fire HIGH "credential not checked" — true of nearly
+  // every public route in existence, and not evidence of anything broken.
+  // `high` now requires one of two things to be true FIRST: the route is
+  // KNOWN to require auth, or the same credential is proven to change
+  // SOME OTHER route's response (so its silence here is meaningful). Neither
+  // present caps the finding at `info` — still reported (an identical
+  // response is still worth a look), never escalated on suspicion alone.
+  it('reports only info when the response is identical and nothing proves the credential does anything', () => {
     const anon = result({ status: 200, body_hash: 'same' });
     const authed = result({
       status: 200, body_hash: 'same',
@@ -101,7 +110,55 @@ describe('analyzeRoutes — differential authz', () => {
     const f = analyzeRoutes(input({ results: [anon, authed], hasCredentials: true }));
     const hit = f.find((x) => x.check === 'differential_authz');
     expect(hit).toBeDefined();
+    expect(hit?.severity).toBe('info');
+  });
+
+  it('flags high when the route is known to require auth, even with no other-route evidence', () => {
+    const r = route({ auth_hint: 'required' });
+    const anon = result({ status: 200, body_hash: 'same' });
+    const authed = result({
+      status: 200, body_hash: 'same',
+      request: { id: 'authenticated GET /users', variant: 'authenticated' },
+    });
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [r], skipped: [], truncated: false },
+      results: [anon, authed],
+      hasCredentials: true,
+    }));
+    const hit = f.find((x) => x.check === 'differential_authz');
     expect(hit?.severity).toBe('high');
+  });
+
+  it('flags high when the same credential changes the response on a different route, even though this route has unknown auth', () => {
+    const routeA = route({ path_resolved: '/users', file: 'src/users.ts' });
+    const routeB = route({ path_resolved: '/admin', file: 'src/admin.ts', line: 20 });
+    const anonA = result({
+      status: 200, body_hash: 'same',
+      request: { id: 'anonymous GET /users', path: '/users', route_index: 0 },
+    });
+    const authedA = result({
+      status: 200, body_hash: 'same',
+      request: { id: 'authenticated GET /users', variant: 'authenticated', path: '/users', route_index: 0 },
+    });
+    const anonB = result({
+      status: 403, body_hash: 'anon-b',
+      request: { id: 'anonymous GET /admin', path: '/admin', route_index: 1 },
+    });
+    const authedB = result({
+      status: 200, body_hash: 'authed-b',
+      request: { id: 'authenticated GET /admin', variant: 'authenticated', path: '/admin', route_index: 1 },
+    });
+    const f = analyzeRoutes(input({
+      plan: { requests: [], routes: [routeA, routeB], skipped: [], truncated: false },
+      results: [anonA, authedA, anonB, authedB],
+      hasCredentials: true,
+    }));
+    const hits = f.filter((x) => x.check === 'differential_authz');
+    // Route B's anon/authed responses differ, so it never enters the
+    // identical-response branch at all — only route A produces a finding.
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.severity).toBe('high');
+    expect(hits[0]?.message).toMatch(/\/users/);
   });
 
   it('does not flag when the bodies differ', () => {

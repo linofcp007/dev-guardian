@@ -1,11 +1,32 @@
 /**
  * Compute a stable hash of the working tree at `projectPath`.
  *
- * Inside a git repo we ask git for the tracked file list (cheap, ignores
- * gitignored files automatically). Outside git we walk the filesystem
- * ourselves with a denylist of directories that change frequently for
- * reasons unrelated to source code (`.guardian/`, `node_modules/`, `.git/`,
- * build outputs, virtualenvs, caches).
+ * Inside a git repo we ask git for the file list: every tracked file plus
+ * every untracked file that is not ignored (`--cached --others
+ * --exclude-standard`), because a scanner reads an untracked source file just
+ * the same, and a new file must invalidate a cached scan. Outside git we walk
+ * the filesystem ourselves with a denylist of directories that change
+ * frequently for reasons unrelated to source code (`.guardian/`,
+ * `node_modules/`, `.git/`, build outputs, virtualenvs, caches).
+ *
+ * ---- Paths are relative to `projectPath`, never to the repository root ----
+ *
+ * The listing used to pass `--full-name`, which prints paths relative to the
+ * REPOSITORY root. For a project that is a subdirectory of its repository —
+ * every package of a monorepo — those paths were then joined to the
+ * subdirectory, so every file read as `missing` and the hash ignored content
+ * entirely: editing a file changed nothing, and a cached scan was served for
+ * a tree that no longer existed. Without `--full-name`, `git -C root
+ * ls-files` prints paths relative to `root`, which is what the join needs.
+ *
+ * ---- Untracked noise is excluded by the same denylist as the walk ----
+ *
+ * `--exclude=<dir>/` applies to UNTRACKED files only (git ls-files docs), so a
+ * project with no `.gitignore` for `node_modules/` does not hash its whole
+ * dependency tree, while a deliberately committed `dist/` still counts.
+ * `.guardian/` is dropped from the listing even when tracked: it is this
+ * tool's own output directory, and a hash that moved every time a scan wrote
+ * its report would never produce a cache hit.
  *
  * The hash is order-independent: file paths are sorted before being joined.
  * Two identical project trees on different machines produce the same hash.
@@ -78,17 +99,26 @@ export async function computeTreeHash(
   return hash.digest('hex');
 }
 
+/** This tool's own output directory; never part of the hash, tracked or not. */
+const TOOL_OUTPUT_DIR = '.guardian';
+
 async function tryGitListFiles(root: string): Promise<string[] | null> {
+  const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
   try {
-    const result = await execa('git', ['-C', root, 'ls-files', '-z', '--full-name'], {
-      reject: false,
-      timeout: 30_000,
-    });
+    const result = await execa(
+      'git',
+      ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes],
+      { reject: false, timeout: 30_000 },
+    );
     if (result.exitCode !== 0) return null;
-    return result.stdout
-      .split('\0')
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
+    // A Set: an unmerged path is listed once per conflict stage.
+    const files = new Set<string>();
+    for (const entry of result.stdout.split('\0')) {
+      if (entry.length === 0) continue;
+      if (entry.split('/').includes(TOOL_OUTPUT_DIR)) continue;
+      files.add(entry);
+    }
+    return [...files];
   } catch {
     return null;
   }

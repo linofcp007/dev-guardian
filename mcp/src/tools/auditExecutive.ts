@@ -27,8 +27,9 @@ import {
   type ScanCoverage,
   type Severity,
   type ToolResult,
+  type ToolRun,
 } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
 const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
@@ -57,7 +58,7 @@ const tool: ToolModule = {
     project_path: ProjectPath,
     severity_min: SeverityMin,
   },
-  handler: async (input, ctx) => handler(input, ctx),
+  handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
 
 registerToolModule(tool);
@@ -65,6 +66,7 @@ registerToolModule(tool);
 async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
+  callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { project_path?: string; severity_min?: Severity };
 
@@ -75,12 +77,7 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  if (ctx.shell === null) {
-    return failDomain(
-      'no_bash_shell',
-      'No usable bash shell found. Install Git Bash or WSL, then restart.',
-    );
-  }
+  // No bash check: none of the sub-tools runs a shell script any more.
 
   // Pre-record the audit scan so the children can be linked by id even if a
   // later step fails. tree_hash is captured up front so it reflects the
@@ -106,8 +103,8 @@ async function handler(
   if (inp.severity_min) subInput['severity_min'] = inp.severity_min;
 
   // Stack-aware: extend the base set with WP / .NET tools when the latest
-  // stack snapshot indicates those languages.
-  const subTools = buildSubToolsForStack(ctx);
+  // stack snapshot OF THIS PROJECT indicates those languages.
+  const subTools = buildSubToolsForStack(ctx, projectPath);
 
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
@@ -122,7 +119,10 @@ async function handler(
           } satisfies SubScanSummary,
         ] as const;
       }
-      const result = await subTool.handler(subInput, ctx);
+      // The host's callMeta, so cancelling the audit aborts every sub-scan's
+      // scanner processes and their progress reaches the host (the emitter
+      // keeps one shared token's progress increasing across all four).
+      const result = await subTool.handler(subInput, ctx, callMeta);
       if (result.ok) {
         const r = result as unknown as {
           ok: true;
@@ -152,15 +152,37 @@ async function handler(
 
   for (const [name, summary] of subResultsArr) {
     subResults[name] = summary;
-    if (summary.ok && summary.scan_id) {
-      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
-    }
   }
 
   // Update audit row meta to link children.
   const subScanIds: Record<string, string | null> = {};
   for (const [name, summary] of Object.entries(subResults)) {
     subScanIds[name] = summary.scan_id ?? null;
+  }
+
+  // Cancelled by the host: the sub-scans were aborted (they share its
+  // signal), so there is nothing to aggregate. The row is finalised
+  // `cancelled`, never `completed` — a completed audit with zero findings
+  // became the previous audit of the next one, whose delta then reported
+  // every finding as new and nothing as resolved.
+  if (callMeta?.signal?.aborted === true) {
+    ctx.storage.scans.finalize({
+      scan_id: auditScanId,
+      status: 'cancelled',
+      tools_run: subToolRuns(subTools, subResults),
+      missing_tools: [],
+      meta: { sub_scan_ids: subScanIds },
+    });
+    return failDomain(
+      'cancelled',
+      'The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated.',
+    );
+  }
+
+  for (const summary of Object.values(subResults)) {
+    if (summary.ok && summary.scan_id) {
+      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
+    }
   }
 
   // Severity floor: re-apply at the aggregate level so audit_executive's own
@@ -176,7 +198,7 @@ async function handler(
   // BOTH sides: the previous audit row holds whatever its own call found,
   // and measuring a filtered present against an unfiltered past reports
   // every below-floor finding as `resolved`.
-  const previousAudit = findPreviousAudit(ctx, auditScanId);
+  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
   let deltas: Record<string, unknown> | undefined;
   if (previousAudit) {
     const prevFindings = ctx.storage.findings.listByScan(previousAudit);
@@ -233,15 +255,7 @@ async function handler(
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: 'completed',
-    tools_run: subTools.map((name) => {
-      const sub = subResults[name];
-      const reason = sub?.error?.code;
-      return {
-        name,
-        status: sub?.ok ? 'ok' : 'failed',
-        ...(reason !== undefined ? { reason } : {}),
-      };
-    }),
+    tools_run: subToolRuns(subTools, subResults),
     missing_tools: [...aggregateMissing],
     // `sub_scan_ids` was computed above and never written — the insert-time
     // placeholder `{}` was all the row ever carried. It is written here
@@ -269,6 +283,22 @@ async function handler(
   };
 }
 
+/** One `tools_run` entry per sub-tool: `ok`, or `failed` with its error code. */
+function subToolRuns(
+  subTools: readonly string[],
+  subResults: Record<string, SubScanSummary>,
+): ToolRun[] {
+  return subTools.map((name) => {
+    const sub = subResults[name];
+    const reason = sub?.error?.code;
+    return {
+      name,
+      status: sub?.ok ? 'ok' : 'failed',
+      ...(reason !== undefined ? { reason } : {}),
+    };
+  });
+}
+
 /** none < partial < full — the executive roll-up is only as trustworthy as
  * its least-covered sub-scan. */
 function worstCoverage(list: ScanCoverage[]): ScanCoverage {
@@ -276,8 +306,14 @@ function worstCoverage(list: ScanCoverage[]): ScanCoverage {
   return list.reduce<ScanCoverage>((worst, c) => (rank[c] < rank[worst] ? c : worst), 'full');
 }
 
-function buildSubToolsForStack(ctx: PluginContext): readonly string[] {
-  const snap = ctx.storage.stack.getLatest()?.snapshot;
+/**
+ * The sub-tools for THIS project's stack. The snapshot used to be
+ * `stack.getLatest()` — the newest detection of ANY project — so an audit of
+ * a Node project ran scan_wordpress because a WordPress site was detected
+ * last, and skipped the .NET checks of a .NET one (Task 24).
+ */
+function buildSubToolsForStack(ctx: PluginContext, projectPath: string): readonly string[] {
+  const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
   const languages = snap?.languages ?? [];
   const frameworks = snap?.frameworks ?? [];
   const out: string[] = [...BASE_SUB_TOOLS];
@@ -290,14 +326,18 @@ function buildSubToolsForStack(ctx: PluginContext): readonly string[] {
   return out;
 }
 
-function findPreviousAudit(ctx: PluginContext, excludeScanId: string): string | null {
-  const history = ctx.storage.scans.listHistory(200);
-  const prev = history.find(
-    (s) =>
-      s.scan_type === 'audit' &&
-      s.status === 'completed' &&
-      s.scan_id !== excludeScanId,
-  );
+/**
+ * This project's newest completed audit that started before `thisAuditId` —
+ * one project- and type-scoped query. It was the newest completed audit
+ * among the 200 newest scans of the whole database: another project's, when
+ * that project was audited more recently, so the delta compared two
+ * different code bases (Task 24).
+ */
+function findPreviousAudit(ctx: PluginContext, projectPath: string, thisAuditId: string): string | null {
+  const [prev] = ctx.storage.scans.listCompletedOfTypes(projectPath, ['audit'], {
+    limit: 1,
+    beforeScanId: thisAuditId,
+  });
   return prev?.scan_id ?? null;
 }
 

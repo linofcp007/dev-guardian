@@ -8,6 +8,1352 @@ version bump.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-28
+
+A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or
+scanned nothing is never reported as clean** — it is `skipped` or `failed` with
+a reason, it lands in `missing_tools`, and coverage says `partial` or `none`.
+Almost every change below is an instance of that rule or of its twin, **every
+history reader answers for one project**.
+
+**BREAKING**, in short (each is detailed below): the slash commands go from 48
+to 10; Node.js ≥ 22.13 without `--experimental-sqlite`; `deps_audit` writes its
+own scan type; `triage_findings` returns `keep` instead of `keep_sample`;
+`generate_sbom` inlines less and only in the text content; the findings
+resources page 50 at a time; a project's hook config can no longer switch any
+protective hook off. Not breaking, despite the new line-independent identities:
+`.guardian/baseline.json` stays `version: 1`, and a database written by 2.0.0
+keeps working (migrations 004–011 are additive).
+
+### Added
+
+- **Install-time package vetting.** The agent runs `npm install`,
+  `pip install` and `composer require` itself, and nothing vetted what it
+  installed.
+  - `vet_packages({ ecosystem, packages, project_path? })` checks each package
+    against the public registry (npm, PyPI JSON, Packagist p2, NuGet flat
+    container + registration) and OSV: does the name exist (a name nobody
+    published is most likely hallucinated), is the version that would install
+    malicious (an OSV `MAL-` advisory, or npm's `0.0.x-security` takedown
+    placeholder), known vulnerabilities, publish age (< 72 h warns — the
+    2025–26 worms spread as fresh patch releases), npm install scripts, and
+    typosquat suspicion. Ranges and tags are resolved to the version they
+    install before OSV is asked, and OSV gets the name as it knows it
+    (Packagist lower case, NuGet in its canonical casing from nuget.org's
+    search). Verdict `block | warn | unknown | ok`; offline, a timeout, an HTTP
+    error or a rate limit is `unknown`, never `ok`. A name missing from the
+    public registry is `unknown`, not `block`, when something explains the 404:
+    a custom registry (project, user and global `.npmrc`, npm's default global
+    npmrc, pnpm's rc, yarn/bun config incl. `~/.yarnrc.yml` and a
+    `.yarnrc.yml` in any parent up to the root, user, global, conda and macOS
+    `pip.conf`/`pip.ini`, user/system `uv.toml`, pyproject/uv indexes,
+    composer `repositories`, a non-nuget.org `nuget.config` anywhere up to the
+    filesystem root or among NuGet's extra user and machine-wide `*.config`,
+    registry environment variables — `npm_config_*registry*`,
+    `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`,
+    `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*SOURCE*|*FEED*|*CONFIG*` — or a non-public `--registry` / `-i`
+    / `--source` / `--index` on the command line), an npmjs auth token for a
+    scoped name (private scoped packages 404 anonymously), or a local
+    workspace package (`package.json` `workspaces`, `pnpm-workspace.yaml`, uv
+    workspace members). 10 s network budget.
+  - The PreToolUse hook runs the same checks on Bash/PowerShell install
+    commands (`npm i|install|add`, `pnpm add`, `yarn add`, `bun add|i|install`,
+    `pip install`, `uv add`, `uv pip install`, `poetry add`,
+    `composer require`, `dotnet add package`) under a 3 s total budget. It
+    DENIES a malicious package in every command shape, and a nonexistent one
+    only when the whole command, comments stripped, is ONE plain install
+    statement — a bare tool name (no `.venv/bin/pip`, no `sudo`/`env`/`VAR=x`),
+    no `&&`/`||`/`;`/`|`/`&`, second line, subshell, `$(…)`, backticks,
+    variables, redirections, unquoted commas or `'…''…'`, and only flags from a
+    small per-tool allowlist that cannot change where a package resolves from
+    (not `composer --no-update` or `dotnet --no-restore`). Otherwise it WARNS
+    "not found on the public registry — if it is private or local, ignore
+    this". The missing-name deny names its own escape hatch, per tool (the
+    tool's registry flag, or a `GUARDIAN_PKG_VET=0` prefix — composer and Yarn
+    Berry have no registry flag; `$env:` from the PowerShell tool); a
+    malicious one does not. From the PowerShell tool a command is also read as
+    PowerShell reads it (comma lists, backtick continuations): a package only
+    that reading finds can be denied as malicious, never as missing. It warns on the other checks (known vulnerabilities only for an exact
+    pin), adds a one-line "not verified" note when it could not vet, and stays
+    silent when clean. Paths, tarballs, URLs, git specs (`git@host:repo`
+    included), `file:`/`workspace:` protocols, requirement files and flag
+    values (short-flag clusters such as `-qr req.txt` included) are never
+    looked up; a bare `npm install` vets nothing; unquoted comments (`# …`,
+    PowerShell `<# … #>`) are stripped first. Fails open; `GUARDIAN_PKG_VET=0`
+    opts out (environment only — a project file cannot). The hook answers on
+    its network paths by letting the process end on its own: on Windows /
+    Node 24, `process.exit()` after a real `fetch()` aborts with a libuv
+    assertion (exit 127), and Claude Code ignores the JSON of a hook that exits
+    non-zero — every deny would have been dropped. Pinned by an e2e test over
+    real sockets.
+  - Typosquat lists: `configs/popular-packages/*.txt`, the 2000
+    most-downloaded names per ecosystem from ecosyste.ms, regenerated by
+    `mcp/scripts/generatePopularPackages.mjs`. Distance ≤ 2 from 8 characters,
+    ≤ 1 for 5–7, none under 5; popular names are never flagged; same-scope /
+    same-vendor names are not compared. Measured against themselves, 49 / 90 /
+    2 / 42 of the 2000 npm / PyPI / Packagist / NuGet entries would be flagged —
+    documented pair by pair in the directory's README and pinned by a test.
+- **`scan_secrets` `verify_live`** (off by default): asks whether each leaked
+  GitHub (classic and fine-grained PAT), GitLab PAT, Slack bot/user, Stripe,
+  OpenAI, Anthropic, npm or SendGrid token still works. Each secret is sent
+  only to its own provider's read-only identity endpoint — a compile-time
+  constant per gitleaks rule, never a host taken from the repository or the
+  finding — with a 5 s timeout, at most 4 requests in flight and at most 50
+  distinct secrets per scan (the rest are `unknown`, "not verified: per-scan
+  limit", counted in `distinct_secrets_over_limit` with a warning); identical
+  secrets are sent once. A finding becomes `live` only on a response that
+  proves the credential authenticates (raised to `critical`, with where to
+  revoke it); `revoked` only on a SaaS-only provider's documented
+  invalid-credential answer (a 401 from github.com/gitlab.com and Slack's
+  `invalid_auth` are `unknown`, because GitHub Enterprise Server, self-managed
+  GitLab and GovSlack use the same prefixes; npm and SendGrid document no such
+  answer, so they are never `revoked`; `token_revoked`, `token_expired` and
+  `account_inactive` are); and `unknown` with a reason otherwise (429, 5xx,
+  redirects, timeout, DNS/offline, `GUARDIAN_OFFLINE=1`). A verdict never
+  lowers a severity and never changes a fingerprint or identity. The result
+  carries a `secret_verification` block (verified / live / revoked / unknown /
+  skipped, the hosts contacted, one record per verified finding), kept in the
+  scan row so a cache hit answers the same. The raw value never reaches the
+  result, the database, a report or a log: only a verifying run omits
+  `--redact`, only into a report in a private temporary directory (0700/0600
+  on POSIX) that is read once, sanitized — the value-carrying fields only, as
+  gitleaks' own `--redact` does, so every locator field and every identity
+  stays byte-identical — and deleted; a directory a killed scan left behind is
+  swept by the next verifying scan after 6 h. Findings `.guardianignore` or the
+  scope drop are never sent. `security_scan_full` does not verify.
+- **RGPD/GDPR rule pack** `configs/semgrep/rgpd.yml`, run by
+  `compliance_check` whenever Semgrep is installed (offline, `--metrics=off`,
+  `.guardianignore` honoured). Eight rules, all WARNING: Portuguese personal
+  identifiers — NIF, NISS, Cartão de Cidadão, IBAN, telefone/phone, email,
+  recognised by variable/field/key NAME — inside log calls in JS/TS (console,
+  winston, pino incl. `child`, NestJS `Logger`), PHP (WordPress/WooCommerce,
+  PSR-3, Laravel incl. channels and `logger()`, syslog), Python (logging,
+  structlog incl. keyword arguments and `bind`, `print`) and C# (ILogger,
+  Serilog, log4net, Console), with masking and derived values (hashes, lengths,
+  booleans, last four digits) and class constants excluded; and trackers loaded
+  by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars markup before consent —
+  GA4 (`gtag.js`, `<GoogleAnalytics>`, `wp_enqueue_script`), the Meta Pixel's
+  `fbq('init')`, Hotjar and `youtube.com/embed` iframes — unless a consent
+  guard is present (`type="text/plain"`, a consent-checking block, JSX
+  condition or template condition — WordPress `if (...): endif;`, Twig, Blade,
+  Handlebars, Vue `v-if` — whose THEN arm holds the tracker; an `else`/`elseif`
+  arm is not guarded). Consent Mode v2 with `analytics_storage` denied and
+  `fbq('consent', 'revoke')` are also accepted, as a documented legal
+  judgement; the messages prescribe loading nothing before consent (EDPB
+  Guidelines 2/2023). Findings are category `compliance`, subcategory
+  `rgpd-pii-in-logs` or `rgpd-tracker-without-consent`. An absent or failing
+  Semgrep run is `skipped`/`failed` with a reason and lowers `coverage`, never
+  a clean result; a project with no file the pack reads is reported as not
+  applicable rather than as a missing scanner. Fixtures in
+  `mcp/test/fixtures/rgpd/`, registered for `npm run ablate -- rgpd`
+  (`GUARDIAN_RGPD_SRC` for an axis-3 corpus). Zero findings on `mcp/src`,
+  `node_modules`, WordPress core, CPython `Lib/`, `dotnet/runtime` and three
+  sibling projects — all library code with almost no candidate log call, so a
+  weak precision signal, recorded as such in the pack header.
+- **RGPD templates** the compliance skill points at:
+  `configs/compliance/cookie-banner/` (vanilla JS/CSS, pt-PT and English,
+  Google Consent Mode v2 — everything `denied` by default, `update` on the
+  visitor's choice, trackers written blocked and activated per category,
+  reject as easy as accept, withdrawal clears the category's cookies on every
+  parent-domain level and reloads; keyboard and screen-reader accessible) and
+  `configs/compliance/privacy-policy-template.md` (pt-PT, the RGPD arts. 13 and
+  14 content, the CNPD as supervisory authority, `[[PREENCHER: …]]`
+  placeholders and `[[CONFIRMAR: …]]` statements that hold only for some
+  processing).
+- **`audit_agent_config`** audits the AI-agent WORKSPACE configuration itself
+  (`.mcp.json`, `.claude/settings.json` + `.claude/settings.local.json`,
+  `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and with
+  `include_user_config: true` also `~/.claude.json` / `~/.claude/settings.json`;
+  JSONC accepted, oversized files reported as a gap). Flags unpinned
+  `npx`/`uvx`/`pipx` MCP server launches; remote servers over plain `http://`;
+  secrets written inline in an `env` block (redacted in every finding);
+  wildcard Bash permission allowlists — any trailing `*` not on a small safe
+  list, critical for a bare `*`, high for an interpreter or eval prefix;
+  `defaultMode: "bypassPermissions"`; `enableAllProjectMcpServers`; hooks that
+  shell out to the network (curl/wget/iwr/irm) or write outside the project;
+  and `${VAR}` placeholders in a project `.mcp.json`, which Claude Code does
+  not expand there — the exact defect this repo's own `.mcp.json` shipped.
+  Hashes each MCP server entry (`agent_config_hashes`, migration 009) and flags
+  one that changed since the previous audit. Offline; reads config, never
+  executes anything in it.
+- **CI.** `dev-guardian ci-init <github|gitlab|bitbucket> [--project <path>]
+  [--branch <name>] [--write] [--force]` generates a pipeline for the PROJECT
+  BEING SCANNED — never for this repository, and never through a symlink
+  escaping it either way. Every GitHub Action is pinned by full commit SHA;
+  Trivy, gitleaks and actionlint by version, a sha256 and an archive-layout
+  path verified against the tool's own GitHub release; bandit, Semgrep and
+  zizmor by exact PyPI version through pipx. The job resolves dev-guardian's
+  release tag to its commit SHA at generation time (from the local checkout's
+  tags when present, else `git ls-remote`) and verifies it again with
+  `git rev-parse HEAD` after cloning, into a directory OUTSIDE the checkout
+  (`$RUNNER_TEMP`/`/tmp`); scanner binaries go to the same scratch area, never
+  the working directory. Full-history clones (`fetch-depth: 0` /
+  `GIT_DEPTH: 0` / `clone: depth: full`) give gitleaks' commit-scoped identity
+  real history to attribute secrets to. The GitHub template also sets
+  `persist-credentials: false` and installs the .NET SDK (`actions/setup-dotnet`,
+  pinned) when a root `.csproj`/`.fsproj`/`.sln`/`.slnx` is present; GitLab and
+  Bitbucket document that requirement instead. The job runs `dev-guardian scan`
+  against the committed baseline and uploads SARIF to code scanning on GitHub
+  (a plain artifact on GitLab/Bitbucket). Every pinned value lives in
+  `configs/ci/pinned.json`; `--write` uses an atomic exclusive create and never
+  overwrites an existing file without `--force`. Templates are snapshot-tested
+  and validated against real actionlint and zizmor when installed.
+- **`scan_iac` audits GitHub Actions workflows**: zizmor (template injection,
+  unpinned `uses:`, excessive `permissions:`, credential persistence) and
+  actionlint (schema and expression correctness) run on `.github/workflows/*.yml`
+  when present, independently of Trivy and concurrently, with findings at
+  `category: security`, `subcategory: ci`. Either tool missing is a named gap
+  (coverage `partial`); no workflows is an explicit `skipped` entry, not a
+  gap; a `.guardianignore`-excluded workflow is never handed to either. One
+  scanner's `output_too_large` or cancellation no longer discards the rest of
+  the scan's findings, and both write their raw output under the report
+  directory. Both are in the install catalogue (zizmor: pipx/uv/cargo/brew;
+  actionlint: go/brew/scoop/choco).
+- **`wp_vuln_check_source`** — WordPress vulnerabilities from source: no live
+  URL, no WP-CLI, no WPScan. Reads a local install's core version
+  (`wp-includes/version.php`), plugin versions (main-file header, else
+  `readme.txt`'s `Stable tag:`), must-use plugins (`wp-content/mu-plugins/`,
+  including a top-level loader that requires a subfolder plugin) and theme
+  versions (`style.css`), and matches them against the Wordfence Intelligence
+  v3 feed (`WORDFENCE_API_KEY`; v1/v2 are gone, HTTP 410, and v3 needs a token
+  for every caller) using PHP's own `version_compare()` ordering, not semver.
+  The ~100+ MB feed is cached whole in the OS user cache directory
+  (`GUARDIAN_CACHE_DIR` overrides), refreshed at most once per 24 h. Also asks
+  wordpress.org's plugin directory (no key needed; bounded concurrency and an
+  overall deadline) whether a plugin was closed/removed or not updated in over
+  two years. No key, or `GUARDIAN_OFFLINE=1`, is a stated coverage gap, never
+  "0 vulnerabilities"; a component with no readable version is named as a
+  sub-gap, and a run where nothing was matchable is `failed`. Complements
+  `wp_vuln_check` (WPScan, needs a live URL).
+- **Scoped scans.** `scan_sast`, `scan_secrets`, `bug_hunt` and
+  `quality_check` take `scope: { paths?, diff?: { base?, head?, staged?,
+  include_untracked? }, since? }` — named files/directories/globs inside the
+  project, a git change set (every uncommitted change, the index, or
+  `base...HEAD`), or what changed since a commit, tag or date. The file set is
+  computed with git (`-z`, `--relative`, refs verified with `--end-of-options`;
+  an unresolvable ref, a missing path, a path outside the project — through a
+  link included — or a date git would misread is an error, never an empty
+  diff). Semgrep, Bandit, ruff, radon, ESLint and jscpd get the files as
+  explicit, batched targets; gitleaks reads exactly the scope's commits
+  (`base..head`, `--since=`) or its files; findings outside the scope are
+  dropped and counted. A scoped scan is recorded with `meta.scope`: it never
+  becomes a baseline, never feeds the open findings, never supersedes a
+  whole-project scan, and never shares a cache entry with one. A scope in
+  which no scanner ran is coverage `none` with `nothing_in_scope: true`. `.NET`
+  build analysis and quality budgets are project-level and reported as
+  skipped for a scope. A `project_path` that is a file is answered with the
+  scoped call to make (`retry_with`). `/guardian-scan`'s flags use it.
+- **`.guardianignore`** at a project root (gitignore syntax, verified against
+  `git check-ignore`) is honoured by every scan: Semgrep `--exclude` (anchored
+  at the git root, as Semgrep does), Trivy `--skip-dirs`/`--skip-files`, Bandit
+  `-x`, and a result filter for every scanner. A pattern any native flag could
+  widen onto a kept file is left to the result filter alone. Every response of
+  a project that has one carries `exclusions` (files excluded, findings
+  dropped), and `review_pr` warns when the diff edits `.guardianignore`. This
+  repository ships one excluding its deliberately vulnerable fixtures.
+- **`scan_deps` `packages`**: a response filter like `categories`; every
+  finding is still recorded, and `package_filter.not_found` names requested
+  packages Trivy reported nothing for.
+- **CVE exploitability.** CISA KEV membership and the FIRST EPSS score per
+  CVE, cached 24 h in `cve_intel` (migration 010, keyed by `cve_id` alone, so it
+  survives retention). The KEV catalog itself is cached once per 24 h, so a new
+  CVE costs no download. `prioritize_findings` and `risk_score` weigh a
+  KEV-listed or high-EPSS CVE up and report `cve_intel.uncorrelated` — findings
+  from a CVE-capable scanner with no CVE id (npm audit v2 advisories), which
+  cannot be boosted. `create_fix_pr` attempts the most exploitable fixes
+  first: within a severity band, a KEV-listed CVE and then a higher EPSS score
+  decide which groups the `max_prs` cap keeps and the order a group's fixes are
+  applied in; severity stays the primary key. `guardian://cves/active` shows
+  both from the cache only. Offline-safe: `GUARDIAN_OFFLINE=1` skips the
+  network, every fetch is timeout-bounded, and a CVE the network could not
+  measure is `unavailable` and left unenriched — never "not exploited".
+- **`.guardian/budgets.yml`**, read by `quality_check` (`quality`:
+  `duplication_pct`, `complexity`) and `perf_check` (`perf`: `lcp_ms`, `inp_ms`,
+  `cls`, `tbt_ms`, `bundle_size_kb`). A breached budget is a finding. A broken
+  file — bad YAML, an unknown key, a non-numeric value — is reported as
+  invalid (`tools_run` `budgets: failed`; `perf_check`'s new
+  `budgets.status: invalid`), never as "no budgets" or "within budget". INP,
+  never FID. The CI gate does not read it.
+- **Container checks**: `scan_containers`' image scan asks Trivy for
+  `vuln,secret,misconfig` (it was vulnerabilities only); hadolint lints the
+  Dockerfile when installed (named gap otherwise; in the install catalogue);
+  and a compose file is checked for `privileged: true`, `network_mode: host`, a
+  mounted `/var/run/docker.sock` and unpinned or `:latest` images. The three
+  run independently — a missing Trivy no longer skips the others.
+- **`detect_stack`** reports each manifest-bearing directory up to 3 levels
+  deep in `projects`, plus `has_iac`; Kotlin (`build.gradle.kts`, `*.kt`) is
+  detected as `kotlin` (it was folded into `java`).
+- **CLI**: `dev-guardian scan --local-only` and `baseline update --local-only`
+  pass `local_only` through (Semgrep with only the rules on disk,
+  `--metrics=off`).
+- **Environment**: `GUARDIAN_OFFLINE`, `GUARDIAN_RETENTION_SCANS`,
+  `GUARDIAN_PKG_VET`, `GUARDIAN_CACHE_DIR`, `GUARDIAN_HOOKS_BASH_BLOCK`. Every
+  variable is documented in `docs/env.md`.
+- **Documentation**: `README.md`, `README.pt-PT.md` and `README.es.md` replace
+  the single three-language README, each with requirements, a quick start, an
+  honest per-stack support matrix and troubleshooting. New `docs/`:
+  `tools.md` and `rule-packs.md` are generated by `npm run build` from the
+  registry and the pack files; `hooks.md`, `ci.md`, `hosts.md` and `env.md`
+  are written by hand. `mcp/test/docs/docs.test.ts` holds every tool,
+  resource, skill and command count the READMEs, CLAUDE.md and
+  `mcp/README.md` state to the code.
+- **`dev-guardian scan --accept-partial-parse <path>`** (repeatable, command
+  line only — a `.guardian/ci.json` declaring `accept_partial_parse` is
+  refused, like `start_command`). When every file a Semgrep step could only
+  partly parse is named, that gap prints as "accepted" (JSON `accepted_gaps`)
+  and no longer forces exit 2; coverage still reads `partial` in the report,
+  the JSON and the SARIF. Paths are project-relative and matched exactly. A
+  skipped, failed or scanned-nothing Semgrep, or any file not named, still
+  exits 2; with `--base-url` the DAST step's `partial-surface` gap is accepted
+  with the same files. A WordPress plugin with PHP's legal `const NAMESPACE`
+  (a Semgrep 1.176.1 `PartialParsing` warning) can now pass the gate once the
+  gap has been looked at. Only parse types are acceptable (`PartialParsing`,
+  `Syntax error`, `Lexical error`): a per-file `Timeout` still exits 2. See
+  `docs/ci.md`.
+
+### Changed
+
+- **BREAKING — the slash commands are consolidated from 48 to 10.** Nine
+  skills were unreachable: a command named like a skill shadows it, and each
+  of those commands (`/guardian-init`, `/guardian-review`, `/guardian-deps`,
+  …) told the model to "invoke the X skill", which it found already loaded,
+  and looped. Those commands are gone, so the same `/name` now invokes the
+  skill itself. Every remaining command names the MCP tools and parameters it
+  drives (or says it is a checklist with no automation), and
+  `mcp/test/unit/pluginSurface/docReferences.test.ts` holds every tool call in
+  `commands/` and `skills/` — parameter names, nested `scope` keys and enum
+  values — to the registered zod schemas, and every `/command` the docs, the
+  READMEs and the hook messages name to a command or skill that exists.
+  Old → new:
+
+  | Old | New |
+  | --- | --- |
+  | `/guardian-scan` | `/guardian-scan` — no argument runs `security_scan_full` |
+  | `/guardian-diff` | `/guardian-scan --uncommitted` (or `--staged` for the index only) |
+  | `/guardian-prepush` | `/guardian-scan --unpushed` |
+  | `/guardian-branch [base]` | `/guardian-scan --branch [base]` |
+  | `/guardian-since <ref>` | `/guardian-scan --since <ref>` |
+  | `/guardian-incoming` | `/guardian-scan --incoming` |
+  | `/guardian-file <path>` | `/guardian-scan <path>` |
+  | `/guardian-fix` | `/guardian-fix` (`--pr` for `create_fix_pr`, a fingerprint for `suggest_fix`) |
+  | `/guardian-postfix` | `/guardian-fix --verify` |
+  | `/guardian-report`, `/guardian-audit` | `/guardian-report exec` (the default mode) |
+  | `/guardian-handoff` | `/guardian-report handoff` |
+  | `/guardian-trend` | `/guardian-report trend` |
+  | `/guardian-debt` | `/guardian-report debt` |
+  | `/guardian-changelog` | `/guardian-report changelog` |
+  | `/guardian-soc2` | `/guardian-report soc2` |
+  | `/guardian-panic` | `/guardian-incident panic` |
+  | `/guardian-leak` | `/guardian-incident leak` |
+  | `/guardian-rollback` | `/guardian-incident rollback` |
+  | `/guardian-postmortem` | `/guardian-incident postmortem` |
+  | `/guardian-predeploy` | `/guardian-release predeploy` |
+  | `/guardian-prerelease` | `/guardian-release prerelease` |
+  | `/guardian-docker` | `/guardian-infra docker` |
+  | `/guardian-iac` | `/guardian-infra iac` |
+  | `/guardian-status`, `/guardian-wp`, `/guardian-dotnet` | unchanged |
+  | `/guardian` | the `guardian` router skill; `/g` stays as its alias |
+  | `/guardian-init`, `/guardian-review`, `/guardian-deps`, `/guardian-quality`, `/guardian-compliance`, `/guardian-grill`, `/guardian-improve`, `/guardian-scanskill` | same name — now the skill itself |
+  | `/guardian-postinstall` | `/guardian-deps` (its after-install section: `scan_deps` with `packages`) |
+  | `/guardian-budget` | `/guardian-quality` (its budgets section) |
+  | `/guardian-perf` | `/guardian-performance` |
+  | `/guardian-observe` | `/guardian-observability` |
+  | `/gs`, `/gf`, `/gr`, `/gq`, `/gg`, `/gi` | `/guardian-scan`, `/guardian-fix`, `/guardian-review`, `/guardian-quality`, `/guardian-grill`, `/guardian-improve` |
+  | `/guardian-llm` | retracted: no tool backed it, and the skill it deferred to (`ai-product-spec-scale`) does not exist |
+
+- **BREAKING — Node.js ≥ 22.13, and no `--experimental-sqlite`.**
+  `engines.node` was `>=22.5.0` and `plugin.json` passed the flag; `node:sqlite`
+  is unflagged from 22.13. On an older Node the server now prints
+  `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1 instead of
+  dying in module loading. The CLI loads storage lazily, only for `status` and
+  `dashboard`, so `--help`, `check` and `mcp-config` never touch it.
+- **BREAKING — `deps_audit` writes its own scan type, `deps_audit`** (it
+  wrote `deps`, the type `scan_deps` writes, so the two served each other's
+  cached scans). Anything that filters scans by type must add it; the CVE and
+  bot-signal readers accept both and still recognise 2.0.x `deps_audit` rows.
+- **BREAKING — `triage_findings` returns `keep`** (at most 50 items, like its
+  other buckets, with `truncated`), not `keep_sample` (the first 20). It reads
+  the project's open set, and a credential finding is always kept, with
+  suppression never suggested.
+- **BREAKING — `generate_sbom` inlines at most 64 KB by default** (max
+  `inline_max_kb` 1024; they were 256 and 8192), and sends the document once, in
+  the text content only — it is no longer in `structuredContent`. `inlined`
+  says whether it was; the full SBOM is always written to disk (`file_path`).
+- **BREAKING — the findings resources page 50 at a time.**
+  `guardian://findings/open`, `/critical` and `/by-severity/{level}` are URI
+  templates taking `?page=&page_size=` (default 50, max 100; they were 200 and
+  1000 — and `?page=2` used to answer "Resource not found"), with messages cut
+  to 500 characters, `sources`, `coverage` and `skipped`.
+- **BREAKING — a project's `.guardian/hooks.config.json` can no longer switch
+  any protective hook off.** A project file is something the assistant can
+  write — through the shell, too, which the write guard does not see — and
+  `{"enabled": false}` there used to switch off the shell guard, install
+  vetting and the config write guard at once, even over
+  `GUARDIAN_HOOKS_BASH_BLOCK=1`. Now `"enabled": false`,
+  `"bash": { "block": false }` and `"bash": { "warn": false }` in a project
+  file are ignored, and the SessionStart briefing says, once, which ones; a
+  project file may still make the guard stricter (`secrets.block: true`) and
+  still set the advisory `secrets.warn`, `sessionStart` and `ignorePaths`.
+  There is no project-level switch for install vetting. To switch a protective
+  hook off, use the user-level `~/.config/dev-guardian/hooks.json` (whose
+  `"enabled": false` turns every hook off) or `GUARDIAN_HOOKS=off`,
+  `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`. An assistant's `Write`,
+  `Edit` or `MultiEdit` of any of the guard's own config files is denied, and
+  so is a shell write onto one that the shell guard can see (see Security); a
+  Claude Code `.claude/settings.json` edit that would set `disableAllHooks` or
+  one of those variables is denied too.
+- **Findings keep a line-independent identity across scans** (migration 007).
+  The fingerprint hashes the line numbers, so inserting one line above a
+  finding used to make it a different finding everywhere: a suppression
+  lapsed, the CI gate called it new, `diff_scans` and `regression_alert` saw a
+  new plus a resolved finding, and `create_fix_pr` judged an unfixed target
+  resolved. `identity` is sha256(tool, rule, normalised path, content,
+  occurrence); the content is the package@installed version for a dependency,
+  else the whitespace-collapsed source lines (only hashed, never stored). A
+  credential finding is keyed on `secret` + rule id (+ gitleaks' commit),
+  never on its line, so the committed baseline holds no hash of a secret line.
+  Suppressions, the CI baseline, `diff_scans`, `regression_alert` and
+  `create_fix_pr`'s verification match on identity, with the fingerprint as
+  fallback for older rows; a 2.0.x fingerprint-only suppression adopts the
+  identity the next time its finding is reported.
+  `.guardian/baseline.json` stays **`version: 1`** with `identity` as an
+  additive entry field — 2.0.x reads the new file whole, gates the same
+  findings and keeps every `added` date (tested against 2.0.0's own reader),
+  and a `version: 2` file from a development build is still read.
+- **Every history reader answers for one project.** One database holds every
+  project's scans, and readers took "the latest scan" or "the open findings"
+  of any project, or searched the 50 newest rows. Now each reads the
+  project's own open set — per scan type, the newest completed, unscoped scan
+  whose coverage is not `none` (migration 008 records a baseline's project and
+  scan type):
+  - `risk_score`, `diff_scans` (from=`previous`/`baseline`, to=`latest`, and
+    `scan_type`), `regression_alert`, `set_baseline`, `triage_findings`,
+    `prioritize_findings`, `suggest_fix`, `report_export`, `validate_finding`,
+    `create_github_issues` and the dashboard, which also cap their lists
+    (`truncated`, true totals in `summary`);
+  - `health_status`, `dotnet_describe_setup`, `wp_describe_setup`,
+    `wp_recommend_hardening`, `wp_plugin_check` and `compliance_evidence` take
+    an optional `project_path` (default: the server's working directory),
+    report only that project — `health_status`'s `last_scan` and
+    `total_scans` included — and name it. `compliance_evidence` documents the
+    project's own compliance, dependency and SBOM scans, its own baseline and
+    only the suppressions that apply to it. The WordPress tools file some rows
+    under the site URL: `wp_describe_setup` and `wp_plugin_check` take an
+    optional `target_url` to include those (`wp_rest_audit` shows up in
+    `wp_describe_setup` only with it, as does a URL-only `wp_vuln_check`), and
+    still find rows earlier builds filed under other spellings of the same
+    install or site;
+  - `audit_executive`, `bug_hunt`, `map_attack_surface`, `init_project` and
+    `observability_setup` read the project's own stack snapshot
+    (`audit_executive` ran `scan_wordpress` on a Node project because a
+    WordPress site was detected last, and compared against another project's
+    audit);
+  - every resource answers for the server's working-directory project;
+    `guardian://surface/latest` is bounded (200 entries per list, true totals,
+    import edges counted, not inlined);
+  - `wp_plugin_check` and `wp_vuln_check` refuse a relative `wp_install_path`
+    that does not exist here (`unsupported_target`: pass the absolute path, or
+    `target_url` for a remote site) — two remote installs both passed as `wp`
+    shared one record, and one's CVEs were reported as the other's.
+    `wp_vuln_check` files a path-given run under the install root's canonical
+    spelling and writes its report under the install only when the install is
+    on this machine. `wp_plugin_check`'s single-plugin lookup is filed under the
+    project with `meta.scope = { kind: 'plugin', slug }`, so it never becomes
+    "the latest `wp_vuln_check`", and its CVEs come from the project's own
+    newest dependency, `wp_vuln_check` and `wp_vuln_check_source` scans; it never
+    refuses for want of a local project (an absolute `wp_install_path` of an
+    install not on this machine is its exact key). `wp_describe_setup` and
+    `wp_plugin_check` pass over a WordPress scan that measured nothing, and a
+    row filed under a RELATIVE raw path is reachable only while that path exists
+    on this machine;
+  - `create_github_issues` files the project's own open findings with
+    suppressions applied (it filed project B's findings on A's repository),
+    dedupes against `gh issue list --state all` (only `[guardian:…]` titles,
+    failing closed at the 1000-issue listing limit), creates or omits missing
+    labels, and answers `ok: false` when every plan failed;
+  - the shipped commands and skills pass `project_path` (and `target_url`) to
+    these tools.
+- **Suppressions belong to a project** (migration 011). A suppression is
+  created with its project and matches only that project's findings; the
+  dashboard panel, `suggest_fix`'s prior-suppression hint and identity
+  adoption are scoped the same way. Legacy rows are backfilled only from
+  completed, non-worktree scans that name exactly one project; an ambiguous or
+  dangling one stays `NULL`, which keeps matching every project as before.
+  `suppress_finding` resolves `project_path` like every other tool and answers
+  `unknown_finding` (not `ok: true` under `unknown_scan_id`) for a fingerprint
+  no completed scan of that project ever reported; `suggest_fix` answers the
+  same.
+- **Comparisons are per scanner.** A scanner the newer scan did not measure
+  (failed, missing, or not re-run) leaves an earlier finding **not
+  re-measured**, never resolved; a scanner the reference measured only
+  partially (failed or missing) makes a later finding **not previously
+  measured**, never new — neither moves `regression_alert`'s score. A scanner
+  the reference did not run at all (not applicable, not requested) is no gap:
+  its findings are new. This is read through an explicit table of every name
+  a scan writes to `tools_run` / `missing_tools` (`history/runNames.ts`),
+  keyed by pass and by target (an image finding is re-measured only by a scan
+  of the image, a Dockerfile finding only by a scan of the files), and for an
+  orchestrated run by its children. New fields: `diff_scans`
+  `summary.not_remeasured`, `not_previously_measured` and their lists,
+  `not_measured`, `reference_not_measured`; `regression_alert`
+  `not_remeasured_by_severity`, `not_previously_measured_by_severity`;
+  `set_baseline` sets a baseline of a partial scan but returns the scanners it
+  did not measure in `not_measured`, with a warning; the dashboard prints both
+  counts beside each delta. Skipped scans are summarised (a count per reason
+  and the 5 newest), not listed one by one.
+- **`security_scan_full` orchestrates the scan tools** instead of
+  `full-security-scan.sh`, which called a scanner `ok` whenever its report
+  file existed (Semgrep exit 7 counted as clean, Bandit was lost to SIGPIPE,
+  `auto_fix` was ignored, only `--config=auto` ran). It runs `scan_sast` first
+  (an autofix may rewrite files), then `scan_secrets`, `scan_deps` and
+  `scan_iac` concurrently, through the same handlers an MCP client calls. Each
+  child is its own scan with `meta.parent_scan_id`; the parent keeps the merged,
+  de-duplicated findings and the CVEs and lists `child_scans`. `auto_fix` and
+  `local_only` pass through; the parent holds no scanner slot (two concurrent
+  full scans deadlocked otherwise) and its children reuse its tree hash. A
+  child that throws is a `failed` entry and the siblings' results are kept.
+  The CI gate and `audit_executive` run it too.
+- **`review_pr` reviews the diff in TypeScript** instead of `review-scan.sh`
+  (one deleted file aborted the whole Semgrep run, paths with spaces split,
+  `gitleaks protect --staged` never read the branch's commits, and an
+  unresolvable base read as "no files changed", ok). Refs are resolved with
+  `rev-parse --verify --end-of-options` (`target_not_found` /
+  `not_a_git_repo`); the default base tries `origin/HEAD`, `main`, `master`;
+  a head that is not checked out is checked out in a detached worktree for
+  the scan; Semgrep (`scan_sast`'s rule sources, `local_only` too) runs on
+  every changed file in batches, each judged by its report; gitleaks reads
+  exactly the PR's commits, plus the uncommitted files when head is checked
+  out; Bandit reads the changed `.py` files and Trivy runs when a manifest
+  changed. A changed file missing from the scanned tree is a coverage gap.
+- **`quality_check` runs every analyser in TypeScript** instead of
+  `quality-scan.sh` (ruff and radon lost to `find | head -1`, ESLint / radon /
+  staticcheck output never parsed, `categories` ignored, `npx eslint`
+  downloading ESLint into the project): jscpd; ruff and radon when there is a
+  `.py` file; ESLint only when configured AND installed in `node_modules`, run
+  with this Node (configured-but-not-installed is a named gap); staticcheck
+  when there is a `go.mod` (a fatal exit or compile-only output is `failed`).
+  Files an analyser could not read are named and make coverage `partial`.
+  `categories` is a response filter like `bug_hunt`'s.
+- **`scan_secrets` reads what is not committed.** `gitleaks detect` reads
+  commits only, so an uncommitted `.env`, a directory that is not a
+  repository, and a repository with no commits all came back clean. Now: the
+  history pass plus a working-tree pass over modified, staged and
+  untracked-not-ignored files; the working tree alone when there are no
+  commits; the directory itself (in place, skipping `node_modules`, `vendor`,
+  `.git` and build output) when it is not a repository. "0 commits scanned" on
+  a repository with commits is a failed pass. Each finding says where it was
+  found (`history` with the commit, `working_tree`, `directory`). New
+  `log_opts` (`--all`, `<ref>..<ref>`, `--since=<date>`, refs resolved first).
+  An unreadable or oversized file (25 MB per file, 512 MB in total) is a named
+  gap, never a crash, and HEAD and every ref join the cache key.
+- **`detect_stack` is TypeScript** (no bash needed; `no_bash_shell` is gone
+  from it): PHP is detected from any `*.php` file, WordPress (with
+  WooCommerce, Kadence) from `wp-config.php`, `wp-content/` or a theme/plugin
+  header without `composer.json`, and manifests are read up to 3 directories
+  deep, not only at the root. `scripts/detect/detect-stack.sh` is deleted.
+- **`init_project`'s `paranoid` profile is stricter than `standard`** (it
+  installed the same files): a gitleaks config with no content allowlist
+  (only generated/vendored trees excluded) and a Renovate config with automerge
+  off everywhere and a 7-day minimum release age. Shared configs updated:
+  Renovate's removed `matchPackagePatterns` → `matchPackageNames` globs with a
+  3-day minimum release age on automerge rules; gitleaks' allowlist narrowed
+  from `docs/`, `examples/`, `tests/` to fixture trees; pre-commit pins
+  refreshed (gitleaks v8.30.1, `semgrep/semgrep` v1.178.0, ruff v0.16.9,
+  hadolint v2.15.1) and the bandit hook passes `-c pyproject.toml` only when
+  that file exists (it failed every commit otherwise); bandit installs as
+  `bandit[toml]`. The first-pass status's secrets line comes from the
+  TypeScript gitleaks helper (history and working tree), and
+  `initial-scan.sh` prints a count only for a scanner that ran and wrote a
+  report this run ("falhou" otherwise, never 0).
+- **`check_toolchain` probes every catalogue entry in TypeScript** (the
+  script probed 11 of 17 and its raw output broke on Windows). The .NET SDK is
+  read from `dotnet --list-sdks`, `dotnet-format` is satisfied by SDK ≥ 6
+  (`provided_by`), a binary that cannot run is `probe_error`, and **Trivy
+  0.69.4–0.69.6 is reported `compromised`** (GHSA-69fq-xp46-6x23 /
+  CVE-2026-33634). The catalogue names .NET SDK 10, adds `scoop install
+  nuclei`, hadolint, zizmor and actionlint, and pins Trivy's curl installer to
+  v0.74.0. `scripts/scan/check-tools.sh` is deleted.
+- **Processes are killed as whole trees.** A timeout, a cancel or the 5 MB
+  output cap kills the scanner and everything it started (a POSIX process
+  group; on Windows `taskkill /T` plus the MSYS descendants it cannot see);
+  `bash -c 'sleep 25 & wait'` with a 2 s timeout returned after 25 s. The
+  shell probe prefers Git Bash, then WSL, then `bash` on `PATH` on Windows,
+  and replaces a cached choice when a better one appears; under WSL every
+  absolute Windows path argument is translated; Docker calls get
+  `MSYS_NO_PATHCONV=1`; a "not installed" answer is re-checked after 60 s.
+- **The scan cache keys on everything that shapes a run** (migration 006):
+  project, tool, scan type, tree hash (now relative to the project, with
+  untracked non-ignored files, without `.guardian/` or `node_modules/`), the
+  normalised input, the plugin version and the content of every rule pack the
+  tool loads — `scan_containers({image})` used to get a cached Dockerfile scan
+  and two projects with the same tree shared scans. Only a run with full
+  coverage is ever served from the cache. Cache hits re-emit a run's extras;
+  results carry the real `started_at` / `finished_at` / `duration_ms`;
+  `map_attack_surface` snapshots are keyed by project, tree, `routes.yml`,
+  plugin version and `include_env_vars` with a 24 h TTL. Scans emit progress
+  heartbeats with the scanner's latest stderr line.
+- **Scan history is pruned**: the newest `GUARDIAN_RETENTION_SCANS` (default
+  50; `0` disables) scans per project and scan type are kept — never a
+  baseline's scan or a running one — in short background batches after the
+  server connects. Nothing was ever deleted before. The startup reaper now only
+  fails scans whose owner process is gone (migration 004; it failed every
+  running scan, killing another live server's work) — or, when the owner cannot
+  be checked, scans older than 6 h, and a live-looking owner's after 24 h — and
+  CVEs are recorded per scan (migration 005; a later scan of another project
+  used to hide them).
+- **The database waits for locks.** Every connection sets a 5 s busy timeout
+  (15 of 20 concurrent first opens failed with "database is locked"), WAL gets
+  its own bounded retry, transactions and each migration take the write lock
+  up front, and a duplicated migration number is an error. A
+  `.guardian/guardian.db` that is not writable (left by `sudo` or Docker, or
+  denied by an ACL) is detected with a real write and falls back to the
+  user-level location with a warning instead of crashing at the first write.
+- **Project paths are canonical**: the real path, with an upper-case drive
+  letter on Windows, so `C:\Users\ADMINI~1\…` and `C:\Users\Administrator\…`
+  are one project. Only new rows use it; `status` and `dashboard` look a
+  project up by its canonical spelling.
+- **Skills route through the MCP tools.** `guardian-deps`, `guardian-review`,
+  `guardian-quality`, `guardian-compliance`, `guardian-observability` and
+  `guardian-performance` told the model to run Trivy, license-checker, Syft,
+  k6 and friends by hand — no baseline, no delta, no history. They drive
+  `deps_audit`, `deps_update_plan`, `scan_deps`, `create_fix_pr`,
+  `generate_sbom`, `license_compatibility`, `review_pr`, `bug_hunt` /
+  `quality_check` with `scope`, `compliance_check`, `compliance_evidence`,
+  `observability_setup` and `perf_check`, with raw commands only as a labelled
+  fallback. `guardian-init` drives `check_toolchain`, `install_toolchain`,
+  `init_project` and `precommit_install`. `/guardian-scan`,
+  `/guardian-incident leak` and `guardian-security` describe `verify_live`.
+- **Description limits.** Skill `description`s are at most 1024 characters
+  and valid YAML (18 939 → 11 145 characters across the 13; the router's alone
+  was 4 487, now 958; `guardian-grill`'s and `guardian-improve`'s carried an
+  unquoted colon-space a strict YAML loader rejects). MCP tool descriptions are at
+  most 1500 (`bug_hunt` 25 568 → 1 454, `validate_finding` 1 809 → 1 463);
+  Claude Code truncates at 2048. Enforced by `descriptionLimits.test.ts`.
+- **False or dead references removed** from skills and commands: dashboards
+  under `configs/grafana/` (never shipped); `.guardian/perf-budget.yml`;
+  quality budgets the schema never had (max file / function lines, coverage
+  floor — the examples in the skills are now checked with `loadBudgets`);
+  FID; a PII grep for `cpf` (a Brazilian id — now NIF, NISS and Cartão de
+  Cidadão) whose quoted brace glob matched no file; "Windows: use WSL2"
+  (`install_toolchain` uses winget, scoop or choco); brakeman, gosec,
+  Checkov, SpotBugs and PHPStan presented as tools the plugin runs or
+  installs; `perf_check` results presented as scan history. The PostToolUse
+  secret warning points at `/guardian-incident leak`; the `bug_hunt`
+  description no longer suggests `create_fix_pr` with `severity_min: "medium"`
+  (no local rule ships a fix).
+- **Host setup.** `mcp-config`'s rules files carry a `{{DEV_GUARDIAN_CLI}}`
+  placeholder filled with the install's own absolute CLI path (they
+  hard-coded `node cli/dev-guardian.mjs`, which exists only in this
+  repository). `AGENTS.md`, `GEMINI.md`, the Copilot instructions and
+  `.clinerules` are managed as a delimited block (`<!-- dev-guardian:begin -->`
+  … `<!-- dev-guardian:end -->`): content outside it is never touched (`--force`
+  used to overwrite the whole file). An unmarked copy written by 2.0.0 is
+  recognised only when it is byte-for-byte one of 2.0.0's templates (whole
+  file, leading or trailing part), and only that copy is replaced; a file that
+  merely mentions dev-guardian reports `manual_merge_required`. Cursor's
+  `.mdc` and Windsurf's rules file are written whole, frontmatter first.
+  `--update-mcp` refreshes a stale entry or block (`--force` is its deprecated
+  alias). Codex TOML entries are compared by content, and an update removes
+  every `mcp_servers.dev-guardian` table and sub-table wherever it is. `all
+  --write` skips the global-only Windsurf and Claude Desktop configs unless
+  `--global` is given. Windsurf rules install to
+  `.windsurf/rules/dev-guardian.md` (not `.windsurfrules`). Every
+  `host-rules/*` template and in-repo rules copy is generated from
+  `mcp/src/hostsetup/rulesTemplate.ts` by `npm run build`, which fixes copies
+  that had drifted (`.cursor/rules/dev-guardian.mdc` lacked `scan_skill` and
+  `check_toolchain`, root `AGENTS.md` the `severity_filter` guidance), corrects
+  `guardian://wp/audit/{id}` to `{scan_id}`, and replaces the unqualified "no
+  telemetry" claim: Semgrep's registry mode sends metrics unless
+  `local_only: true` is passed.
+- Semgrep findings whose `metadata.category` is `correctness` are category
+  `bug` (they were caught by the quality branch).
+- `@modelcontextprotocol/sdk` ^1.30.1, `vitest` / `@vitest/coverage-v8`
+  ^5.0.1; `npm audit` reports 0 vulnerabilities. Semgrep-heavy test files set
+  their own long timeout; the unit default stays 10 s.
+
+#### Once, after upgrading
+
+- A comparison against a scan or baseline from 2.0.x reports the findings of
+  scanners it did not run — hadolint, the compose checks, zizmor, actionlint,
+  the image's secrets and misconfigurations, pip-audit (now parsed), the .NET
+  analyzers, the RGPD pack, budgets — as **new**, once: the older scan never
+  ran them, so it is no gap. `regression_alert` and the CI gate may fire on
+  them. Re-set the baseline (`baseline update`, `set_baseline`) once you have
+  reviewed them.
+- Findings stored from a **Docker-fallback** Semgrep run carried a `/src/`
+  path prefix, now stripped so they match native runs; their fingerprints
+  change once, and they read as resolved plus new in the first comparison.
+- Rows stored under a non-canonical spelling of a project path (a Windows 8.3
+  alias, a lower-case drive letter) stay under that spelling; the first scan
+  after the upgrade starts that project's history under the canonical one.
+- Findings stored before 007 have no identity and match by fingerprint only,
+  so a finding that also moved lines reads as new once.
+
+### Fixed
+
+- **The RGPD pack, measured on application code**: 72 findings over eleven
+  open-source applications (Zulip, Saleor, CTFd, Ghost, freeCodeCamp, Site Kit
+  by Google, BookStack, Coolify, Umbraco, Orchard Core, eShop), each triaged by
+  hand — 35 true, 37 false (48.6 % precision). Three false-positive classes are
+  gone, and all 35 true positives stay (92.1 %; the same 38 findings after the
+  review's fixes): `print()` inside a Django management command
+  (`class Command` on one of Django's bases — `BaseCommand`, `AppCommand`,
+  `LabelCommand`, `TemplateCommand`, `NoArgsCommand`, a project's
+  `…BaseCommand`, or `module.Command`) is the command's terminal output, like
+  `self.stdout.write`, not a log (23 findings); a value that is only the object
+  of an attribute whose name says id, date or size (`email.id`,
+  `email.scheduled_timestamp`, `lookup(email).id`, `user.email.length`, C#
+  `email.Length`, but not LINQ's `ElementAt`) is not what is logged (3),
+  unless that object holds a function body — a log call inside a callback
+  whose result's `.length`/`.Count()`/`.id` is read still counts; and the
+  tracker rules skip test code — `*.test.js`,
+  `*.spec.js`, `*.stories.js` (each also `.jsx`/`.tsx`), `__tests__`,
+  `__mocks__`, `__fixtures__`, `__factories__` (8). The file globs name their
+  extension because Semgrep matches a slash-free glob against directories too:
+  `*.test.*` would skip a site folder named `loja.test.pt/`. The three that
+  remain are a bot account's address and synthetic addresses in a seed script,
+  which a name cannot tell apart. The corpus list, commits and per-rule counts
+  are in the pack header.
+- **`register_custom_rules` registered rules Semgrep cannot compile.** Its
+  shape check passed `languages: [klingon]`, and one such file makes Semgrep
+  refuse the whole configuration on every later scan (exit 8, nothing
+  scanned). When Semgrep is installed, every file is now compiled with
+  `semgrep --validate` (metrics off, 60 s bound) and one it refuses is
+  `rejected` with Semgrep's own message; a directory holding one is
+  registered as its accepted files. Without Semgrep, or when it cannot
+  answer, the shape check stands and `semgrep_validated: false` says so.
+- **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
+  security_scan_full: trivy not installed") on a clean project with Trivy
+  installed. A `package.json` that declares no dependency (and whose lock
+  files lock nothing) is no longer a manifest Trivy "missed" — Trivy reports
+  nothing for one, so the gap could never close (npm only; a `.csproj` draws
+  packages from outside itself). The gate words each `missing_tools` name from
+  its own `tools_run` entry: `trivy skipped (no_supported_manifest)`, `trivy
+  ran with reduced coverage — dotnet not covered (…)`, a failed scanner once,
+  as failed; "not installed" only when nothing says otherwise. Coverage and
+  exit codes are unchanged.
+- **The CI gate** reads the scanned project's own unscoped rows of every
+  status: a `failed` row keeps its real findings (`scan_iac` fails the row when
+  one pass exits non-zero), so a regression exits GATE_FAILED instead of hiding
+  behind the coverage gap.
+- **`scan_iac` threw away every actionlint finding**: actionlint exits 1 when
+  it finds problems, the runner reports a non-zero exit as `failed`, and the
+  check accepted exit 1 only from a `completed` run. Exit 0/1 of a finished run
+  is accepted.
+- **An image-only `scan_containers` resolved the Dockerfile's
+  misconfigurations** (they share the key `trivy:config`), and the false
+  resolution cancelled a real new image CVE in `regression_alert`. A finding
+  is now re-measured only by a pass with the target of the pass that may have
+  produced it, in both directions, and `not_measured` names the pass that was
+  not run again.
+- **Scan comparisons**: a `trivy:<ecosystem>` gap leaves only that
+  ecosystem's findings (keyed by their lock file) not re-measured — it fell
+  back to every Trivy finding, IaC included; `pip-audit`, `dotnet` and
+  `agent-audit` are placed in the bookkeeping table, so a failed one no longer
+  resolves its findings; a blind `security_full` row is no longer a
+  zero-finding source; script-era rows are routed by what their findings are.
+- **Dependencies, licences and SBOM:**
+  - Trivy fs silently reports "0 findings" for a bare `.csproj` (no
+    `packages.lock.json`) or a bare `package.json` / `composer.json` (no lock
+    file) — reproduced on Trivy 0.69.3. `scan_deps` and `deps_audit` compare
+    every root manifest with what Trivy's output covers and mark the scanner
+    `skipped`/`no_supported_manifest` (never `ok` with 0) when one goes
+    unrecognised (`requirements.txt` and `go.mod` excepted — Trivy reads them
+    bare). A partial gap is named `trivy:<ecosystem>`, never a bare `trivy`,
+    which `create_fix_pr` read as "Trivy did not run" and so blocked every
+    Trivy-sourced fix.
+  - **New: .NET SCA.** `deps_audit` runs `dotnet list <target> package
+    --vulnerable --include-transitive --format json` for every `.sln` /
+    `.csproj`, gated on the SDK — the only source of NuGet findings without a
+    lock file. It restores explicitly first, every time (a stale `obj/` makes
+    `dotnet list --no-restore` answer from the old resolution), with
+    `--locked-mode`, which fails an out-of-sync lock (`NU1004`) instead of
+    rewriting it. Lock files are found from the solution's project list and
+    every `ProjectReference`, `packages.<project>.lock.json` included. Because
+    `--locked-mode` does not stop `RestorePackagesWithLockFile=true` from
+    CREATING a lock, `-p:RestorePackagesWithLockFile=false` is passed when no
+    project has one; a solution mixing a locked project with an opted-in
+    lock-less one is not restored and is reported as a gap; a lock file that
+    appears anyway is deleted and reported. Only then does
+    `dotnet list --no-restore` run. A restore failure carries NuGet's code
+    (`NU1004` vs `NU1101` vs `NU1301`; `extras.dotnet_restore_failures`).
+    `requestedVersion` ≠ `resolvedVersion` is no longer treated as staleness —
+    one `Serilog 2.*` emptied the whole .NET plan. `deps_update_plan`'s .NET
+    branch shares the same targets and restore plan.
+  - `pip-audit` ran bare, auditing the MCP host's own Python, and its output
+    was never parsed; an exit-1 resolution failure read as a clean scan. It
+    now runs once per `requirements*.txt` (each finding attributed to its real
+    file) or once against the project for a `pyproject.toml`-only project, and
+    is `ok` only when its output parses as a report.
+  - `deps_update_plan`'s pip branch ran `pip list --outdated` / `pip install
+    -U` against the host interpreter. It reads the project's own
+    `requirements*.txt` pins (pip-compile hash continuations, extras and
+    markers included) and PEP 621 `[project] dependencies` (that table only,
+    markers stripped), and proposes a step only for an exact pin with an active
+    CVE and a fix version genuinely ABOVE what is installed — never a
+    downgrade (a scanner's `fixed_version` can be an older branch's backport),
+    with real semver pre-release precedence. The npm branch targets that same
+    minimum fixed version (not `npm outdated`'s "latest"), every `npm install`
+    carries `--ignore-scripts`, and a vulnerable TRANSITIVE dependency the
+    lock file (or `node_modules`) actually resolves gets an
+    `npm pkg set overrides[<pkg>]=<version>` step (bracket notation; the lock
+    file's own spelling of the name) followed by `npm install
+    --ignore-scripts`. `upgrade_command` stays unquoted — `create_fix_pr` runs
+    it without a shell, and a quoted form corrupted `package.json` while
+    reporting success; a shell-quoted copy is in the new `shell_command`. A CVE
+    already fixed by the installed version is `already_fixed`, including for a
+    direct dependency `npm outdated` does not list. A pnpm or yarn project,
+    workspace members included (found up to the repository root, or through
+    workspace globs when there is no repository), gets NO npm command: pnpm
+    ignores npm's `overrides` (measured on 10.33.2), so each package is
+    reported with the manual `pnpm.overrides` / `resolutions` fix on the
+    workspace ROOT `package.json`, and the manager is named in
+    `unsupported_ecosystems_present`. Only npm and pip target the minimum
+    fixed version; the other stacks keep their "outdated" command's latest.
+    Every CVE'd package that could not become a step is in the new `unplanned`
+    list with the reason that applies (a range specifier, an impossible
+    downgrade, already fixed, a failed runner, declared but not listed by its
+    runner, only transitive in a lock file — `composer.lock`, `Cargo.lock`,
+    `go.mod`/`go.sum`, `Gemfile.lock`, NuGet `packages.lock.json` are read —
+    or declared nowhere), and `runner_failures` names every ecosystem command
+    that could not do its job. The CVE source is the same project's latest
+    `deps` / `deps_audit` / `security_full` scan.
+  - `license_compatibility` returned zero issues whenever the project
+    declared no licence — the normal case for proprietary client work — and
+    never read npm's `UNLICENSED`, composer's `"proprietary"` / `"SEE LICENSE
+    IN …"` or a `.csproj`'s `PackageLicenseExpression`; all of those are now
+    proprietary and still flag copyleft dependencies. SPDX `OR`/`AND` is
+    evaluated on BOTH sides (the project's own expression was never parsed);
+    a licence the tool does not recognise is reported in the new `undetermined`
+    list, never silently compatible. GPL/LGPL/AGPL are matched in all SPDX
+    forms (`-only`, `-or-later`, the deprecated `+`) and GNU pairs are decided
+    by version: the same licence on both sides is compatible,
+    `GPL-2.0-only` + `GPL-3.0-only` is incompatible either way, a
+    `GPL-2.0-or-later` project is compatible with GPL-3.0 and Apache-2.0
+    dependencies, and an LGPL dependency in a GPL project is judged by the GPL
+    versions it may be relicensed under; AGPL reasons are version-accurate. An
+    expression mixing `AND`/`OR` with parentheses beyond one redundant outer
+    pair is `undetermined` by design (the old OR-first split dropped
+    `AND GPL-3.0-only`). It reads the project's own latest compliance scan.
+  - `sbom_diff` compared only the first 25 components, keyed by name only
+    (`lodash@3` and `lodash@4` in the same ecosystem collapsed into one row),
+    against an unscoped default pair. It reads the full SBOM on disk, keys
+    components by (ecosystem, name) with a set of versions, scopes the default
+    pair to `project_path`'s latest two SBOM scans, and refuses to mix a full
+    component list with the capped summary fallback; `summary` carries the true
+    totals (except on the flagged fallback where both files are gone).
+- **`create_fix_pr`:**
+  - A dry run never mutates anything outside its detached worktree: no branch
+    in your refs, the failing-test comparison runs in a disposable tree of
+    the base commit (never your working tree; one that cannot be built is
+    `unattributed`), `deps_update_plan` itself plans in a worktree (its .NET
+    branch ran `dotnet restore` in your project on every dry run), and the
+    verification scans' rows are deleted once read.
+  - Targets come from the project's open set; each is re-scanned by the tool
+    and rule packs that found it (`scan_sast` with its recorded `local_only`,
+    `bug_hunt` with its language packs, `deps_audit` or `scan_deps`) with the
+    original project's rule configuration, and every scanner that produced a
+    target must re-run `ok`, `trivy:<ecosystem>` included.
+  - An upgrade step is paired with a finding by its structured package and
+    ecosystem, never by words in an advisory's text; pip steps edit the pin in
+    the worktree's copy of the file; the Semgrep autofix applies only the
+    target rules, with `--metrics=off`, on the targets' files; every install
+    runs with `--ignore-scripts` / `--no-scripts`, and a step's
+    `follow_up_command` runs so override-only fixes re-resolve the lock file.
+  - A target in a file that differs from HEAD is excluded as
+    `uncommitted_changes`; a project in a subdirectory of its repository works;
+    Bundler runs only as `bundle lock --update`; a fresh checkout plans from
+    lock files (`composer outdated --locked`; npm's lock-file version stands in
+    for `current`); a failed plan runner is `deps_plan_runner_failures` and its
+    findings `upgrade_plan_failed`.
+  - A cancel stops before the next group; the remaining groups are reported
+    `cancelled` and the call answers `ok: true` with `cancelled: true`. An
+    apply or verification step already running stops at the next boundary.
+- **`scan_sast`:** a Semgrep run with no report, `paths.scanned` empty or a
+  non-empty `errors` array is never `ok` (exit 2 with a rule error used to be),
+  native or Docker; Bandit is judged by its report the same way. `.NET` SAST
+  restores in `--locked-mode` then runs `dotnet build --no-restore` with the
+  SDK analyzers enabled (`EnableNETAnalyzers`, `AnalysisLevelSecurity=latest` —
+  below .NET 5 they were off and an MD5 read as clean), reading SARIF per
+  project and target framework and keeping each result once; a SARIF with no
+  security rule means the analyzers did not load, which is `failed`. Security
+  Code Scan is no longer required. `register_custom_rules` expands globs
+  (stored literally and dropped before), keys registrations per project
+  (project A's rules ran on B), validates every file as a Semgrep rules file
+  with a valid `severity` (others come back in `rejected` and are never
+  registered), and names the 2.0.x global registration, which `clear: true`
+  removes. `auto_fix` refuses unless git positively confirms a clean tree —
+  a directory that is not a repository, or any git error, read as clean.
+- **`scan_containers`** refuses an `image` starting with `-` or containing
+  whitespace, and a `dockerfile_path` outside the project (symlinks
+  included), as `unsupported_target` before anything runs.
+- **`precommit_install`** reports `stages_installed` and `stages_failed` (it
+  listed all three as installed whatever happened).
+- **`perf_check`** reports an invalid `budgets.yml` as `budgets.status:
+  invalid`, never as an empty success; `detect_stack` spells 64-bit ARM as
+  `uname -m` does again (`aarch64` on Linux, `arm64` on macOS).
+- **`wp_vuln_check`, `deps_update_plan` and `observability_setup`** called
+  `require()` inside ES modules: under the per-file `dist` the CLI imports, it
+  threw, the error was swallowed, `wp_vuln_check` returned 0 findings and .NET
+  projects went undetected.
+- **The server** exits 0 when the client closes its stdout (it crashed on
+  EPIPE); on Windows a tree kill waits for `taskkill` to finish before
+  escalating.
+- **`audit_executive`** records a cancelled audit as `cancelled` (it was
+  `completed` with zero findings and became the next audit's baseline).
+- **Secret hygiene and honest evidence:**
+  - Raw secrets no longer reach a response, the database, an exported report,
+    a GitHub issue body or the dashboard HTML: a credential finding's
+    `snippet` (Bandit B105–B107's `code`, Semgrep `extra.lines` when logged in
+    or via Docker, `scan_dotnet_secrets`' matched connection-string line,
+    `dotnet_efcore_audit`'s `efcore-raw-sql-creds`) is cleared before
+    persistence, and `create_github_issues`, `report_export` and the dashboard
+    clear it again. `suggest_fix` withholds `surrounding_source` for a
+    credential finding and returns rotation guidance.
+  - `compliance_evidence` no longer prints three hard-coded bullets per
+    framework whatever was scanned, and no longer maps GDPR Art. 5 to "SBOM
+    components and license posture"; each control is evidenced (pointing at
+    the section that backs it) or NOT COVERED (naming the scan never run). Its
+    footer, `report_export`'s and the dashboard's state the real telemetry
+    posture instead of "no telemetry".
+  - `triage_findings` never suggests suppressing a credential finding (one
+    under `test/` or `fixtures/` was bucketed `likely_false_positive`).
+  - The `.gitignore` guard wrote a bare `.guardian/` line, under which git
+    cannot re-include `.guardian/baseline.json` — the CI baseline could never
+    be committed. It writes `**/.guardian/*` + `!**/.guardian/baseline.json`,
+    upgrades the old line in any of its four spellings (header included), and
+    keeps the file's line endings. The `**/` keeps what the bare line did:
+    it matched at every depth, so a sub-project's `.guardian/` (a scan pointed
+    at `packages/api`) stays out of `git status`, and can commit its own
+    baseline.
+- **Configuration and CLI:**
+  - `.mcp.json` used `${CLAUDE_PROJECT_DIR}`, which Claude Code does not expand
+    there — the literal placeholder became part of the path and the server
+    failed to start. It is a bare relative `mcp/dist/server.js`; `.cursor/`
+    uses `${workspaceFolder}` and `.gemini/` sets `"cwd": "."`.
+  - The CLI's entry-point guard compared `import.meta.url` with a bare
+    `process.argv[1]`, so through a symlink or junction `main()` never ran
+    (`check --bash 'rm -rf /'` printed nothing, exit 0).
+  - `mcp-config --project` (or `--scope`) with no value threw a `TypeError`;
+    it is a usage error, exit 2.
+  - `dashboard` opened the browser through `cmd.exe /c start`, which re-parses
+    its argument: a path containing `&` could split into two commands. It
+    uses `explorer.exe`.
+  - `status` / `dashboard` read "No scan yet" through a symlink, 8.3 alias or
+    lower-case drive letter.
+  - `plugin.json` claimed the plugin installs Playwright; it does not.
+  - Removed the dead `mcp/scripts/smoke-wp-dotnet.mjs` (it imported the removed
+    `better-sqlite3`); `scripts/copy-assets.mjs` copied no migration from a
+    checkout whose path contains a `.`.
+- The 2.0.0 entry below said `map_attack_surface` reads Postman documents; it
+  reads OpenAPI 3.x and Swagger 2.0 only.
+- Contributors: `npm test` no longer hangs on a stuck Semgrep — every Semgrep
+  a test spawns is bounded (120 s, SIGKILL; `GUARDIAN_TEST_SEMGREP_TIMEOUT_MS`)
+  and fails its test at the bound; `ciInitCli` runs its probe with Git Bash
+  and skips visibly when no usable bash exists (the WSL stub is not one).
+- **Scan retention** ranks scoped scans (`--staged`, `--unpushed`, file lists)
+  apart from whole-project ones, so pre-commit runs can no longer prune the
+  last whole-project scan the open set reads. It also keeps the children of a
+  baselined `security_scan_full` run (and the parent of a baselined child):
+  pruning one made every later finding of its type "not previously measured"
+  and `regression_alert` went quiet. The under-lock re-check re-applies the
+  whole rule.
+- **`map_attack_surface` judged Semgrep by its exit code alone**, so a run that
+  scanned no file (a `.semgrepignore` over the sources, the locale-codec
+  hazard) was `ok` and persisted an empty surface for 24 h. It now uses the
+  shared Semgrep judge against the project's route-language files — counted
+  as Semgrep would see them, its default ignore (`test/`, `tests/`,
+  `*_test.go`, …) applied when there is no `.semgrepignore`: none at all is
+  `skipped`, not applicable, never a gap (Semgrep is not run and the snapshot
+  persists), so a Terraform module with Terratest under `test/` stays exit 0;
+  files present but none scanned is a gap, nothing persisted; a file only
+  partly parsed (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`)
+  persists as partial coverage, the files listed in `partially_parsed`, and a
+  `scan_dast` over that surface reads partial (`guardian-dast:partial-surface`);
+  a fatal run (unclean exit, rule/config error) is `failed`, its routes shown
+  but not persisted. Semgrep now runs in UTF-8 mode here too.
+- **A Gradle build without `gradle.lockfile`, or a Python project Trivy
+  cannot read** (a PEP 621 `pyproject.toml`, a setuptools `setup.py` /
+  `setup.cfg`, a `Pipfile` without `Pipfile.lock`, an unpinned
+  `requirements.txt`, a `requirements-dev.txt`), made `scan_deps`,
+  `deps_audit`, `security_scan_full` and the CI gate report `trivy ok`,
+  coverage `full`, 0 findings — Trivy 0.69.3 returns no Results for any of
+  them. They are now `trivy:gradle` / `trivy:python` coverage gaps; a Python
+  manifest that declares nothing is not. The coverage warning no longer says
+  "NO scanner ran … Install trivy" for a Trivy that ran: it names the manifest
+  and the lock file that closes the gap (for Gradle, `dependencyLocking {
+  lockAllConfigurations() }` before `gradle dependencies --write-locks`).
+- **`bug_hunt` read a `build.gradle.kts` as Java** and ran `p/java` against a
+  Kotlin project, which read as a Java bug hunt with 0 findings. It is Kotlin,
+  as `detect_stack` says; a language no pack covers (Kotlin, Ruby) is named in
+  `languages_not_covered` with a warning.
+- **`dev-guardian scan --help` and the host rules said to add `.guardian/` to
+  `.gitignore`** — a bare directory entry, below which git cannot re-include
+  `baseline.json`, so the baseline CI needs could never be committed. Both now
+  name the two lines the server writes: `**/.guardian/*` and
+  `!**/.guardian/baseline.json`.
+- **`install_toolchain`'s elevation hint** said only "re-call with
+  `elevation_allowed=true`". Install steps run without a terminal, so that
+  works only with passwordless sudo (or, on Windows, a server already running
+  elevated); the hint now says so and names the command to run yourself.
+- **`scan_skill`'s OSV lookup ignored `GUARDIAN_OFFLINE=1`** and posted the
+  skill's dependency list to `api.osv.dev`. Offline it now sends nothing and
+  records `osv.dev: skipped` with `network disabled (GUARDIAN_OFFLINE=1)`, like
+  every other network caller; `docs/env.md` and `SECURITY.md` say so.
+- **"The latest scan" could be an orchestrated run that measured nothing**:
+  the search judged the child (an iac child with no IaC is coverage `full`),
+  then answered with its parent without judging it. A parent at coverage
+  `none` is now passed over, with its children, so `set_baseline` and
+  `report_export` default to the newest scan that measured something.
+- **`deps_update_plan` took its CVEs from the first completed deps-flavoured
+  row in a 50-row window**, so a scoped `deps` run or a `security_scan_full`
+  whose Trivy failed made it plan no security update while `risk_score`
+  counted the CVE. It now reads the same newest usable deps scan as
+  `risk_score` and the dashboard.
+- **A gitleaks history pass that logged no commit count read `ok`** ("an
+  unreported number of commits scanned"). On a repository with commits it is
+  now `failed` unless the report holds findings — git's own count of a range
+  says what there was to read, not what gitleaks read.
+- **Scoped scans and the `.guardianignore` result filter asked the disk once
+  per file or finding**: a `realpath` per file of a directory, glob or diff
+  scope, an existence walk per finding. Both are now one check per directory
+  and the filter tests the pattern first (20 000 files on Windows: a directory
+  scope 2.5 s → 0.16 s, a diff 4.5 s → 1.4 s, the filter 1.4 s → 0.04 s). A
+  link out of the project is still refused, mid-path included; one reached
+  through an untracked junction now says to add it to `.gitignore` or pass
+  `scope.diff.include_untracked: false`.
+- **`wp_plugin_check` refused a call whose `project_path` was valid** because
+  a decorative `wp_install_path` beside it was relative and absent. The lookup
+  is keyed on `project_path`; the WP-CLI version probe is now skipped with a
+  warning instead.
+- **The `.gitignore` guard rewrote a mixed-ending file in one ending**, a diff
+  of every line of the other. Each line now keeps its own ending; the lines it
+  adds take the file's dominant one.
+- **`verify_live`'s report sanitizer was quadratic in findings that overlap one
+  another** (4000 custom-rule findings over one region: 5.9 s, the MCP server
+  frozen), and scrubbing value by value could leave a fragment of one value
+  where it overlapped another, or of a value that overlaps itself (`abab` in
+  `ababab`). Each run of overlapping findings is now scrubbed in one pass per
+  match — a native search for a run of one value, the common case — and
+  overlapping occurrences become one `REDACTED`.
+- **`ci-init --write` created the target of a dangling pipeline-file symlink
+  on Windows**, wherever it pointed: a `wx` open there follows a dangling link.
+  The file is now written to a temp file and published with a hard link, which
+  refuses anything at the name and never follows it. `--force` renames the
+  temp file over the pipeline file, so it never writes through a symlink or a
+  hard link and never leaves the file half-written; `--help` says what it
+  still refuses.
+- **Scan retention** also keeps the sub-scans a baselined `audit_executive`
+  row links in `meta.sub_scan_ids`: pruning them made the audit's
+  per-scanner comparison fall back to its one-line-per-tool entries.
+- **Two images, one target**: `scan_containers` of image B "re-measured"
+  image A's findings, so `diff_scans` and `regression_alert` read them as
+  resolved. The `trivy-image` run now records its image (`tools_run[].target`),
+  and an image's findings are re-measured only by a scan of the same image —
+  otherwise not re-measured, named `trivy-image (<image>)`. References are
+  compared as Docker resolves them (`nginx`, `nginx:latest` and
+  `docker.io/library/nginx:latest` are one image). Rows written before keep
+  today's reading. A misconfiguration does not record whether the Dockerfile
+  pass or the image pass found it, so one from a scan that also scanned an
+  image stays not re-measured (and open, carried) until that image is
+  scanned again — even when a later Dockerfile pass no longer reports it:
+  the conservative reading.
+- **The open set dropped findings a newer scan did not look at again.** A
+  slot's newest scan was its whole answer, so a partly parsed file, a Semgrep
+  that failed beside an ok Bandit, or a scan of image B made every older
+  finding it did not re-measure vanish from `findings/open`, `risk_score`,
+  the dashboard, triage, prioritize, `create_fix_pr`, `validate_finding` and
+  `create_github_issues`, with only `coverage: partial` left to say so. Each
+  slot now carries forward the findings of its older scans that every newer
+  one left open — `runCompare`'s own "not re-measured" predicate, shared —
+  marked `not_remeasured: true`, the older scan listed in `sources` with
+  `carried_for`. A finding a newer scan measured and did not find stays
+  resolved; a scanner the newer scan did not run at all is not a gap —
+  except a pass that runs only when asked (`trivy-image`, nuclei): a scan
+  that did not ask did not look, so image A's CVEs stay open under a
+  Dockerfile-only scan. A carry makes the set's coverage `partial`; the
+  dashboard names only what a carried scan was carried for (never its own
+  stale gaps), as reduced coverage when the scanner ran on another target;
+  `sources` stay newest first. The walk is linear in the history it covers:
+  250 scans x 1000 findings with a gap in every scan took 10-15.5 s, now
+  under 0.3 s (200 x 300: 4.2 s, now 0.06 s); 2000 scans each over its own
+  image took 19 s, now 0.33 s (5000, half of them Dockerfile-only: 63 s, now
+  0.44 s); a partly parsed file and a different rule not loaded in every scan
+  no longer grow the carry's conditions (5000 scans: 1.3 s, now 0.02 s), and
+  large sets of them stay cheap: a set already met is skipped, and past 10 000
+  (file, rule) pairs the carry keeps the newest set alone — it can only carry
+  more, never drop a finding (2000 scans alternating two sets of 200 files
+  and 200 rules: 11.8 s, now 0.1 s).
+- **A bug_hunt or RGPD finding changed identity with every plugin update.**
+  Semgrep names a rule from a local file by that file's directory, dotted —
+  the whole absolute path when it does not run from under it
+  (`C.Users.….plugins.cache.<version>.configs.semgrep.<rule>`) — and both
+  the fingerprint and the identity hash `rule_id`. So a new install path
+  (every version) made every finding of the plugin's own packs new:
+  suppressions stopped applying, the open set held both copies. A project's
+  own rule did the same whenever Semgrep ran from elsewhere (`review_pr` on
+  a ref, `create_fix_pr`'s worktree). The parser now stores a rule of the
+  plugin's own packs — found from the plugin's root, not from any directory
+  named `configs/semgrep` — under its own id, and a project rule under the
+  id Semgrep gives it from the project root (what every scan run from the
+  project always stored); a rule file anywhere else keeps Semgrep's own id,
+  so two files that define the same rule id stay two rules. Stored
+  plugin-pack findings are re-keyed at startup (the own id, the fingerprint
+  and identity a fresh scan computes, their suppressions and cached
+  validations): in batches that commit as they go, so a start that is
+  stopped keeps its progress, and on each later start for rows an older
+  plugin process wrote since (200 000 rows: about 40 s once, on a loaded
+  machine; nothing new: 1 ms); a scan left `running` by a process that is
+  gone does not hold it back. Only an install in Claude Code's plugin cache
+  layout (`…/<marketplace>/dev-guardian/<version>/`) is recognised across
+  versions — the running install and one version directory beside it.
+  Findings stored by an install anywhere else (`--plugin-dir`, another
+  marketplace name, a fork's directory) keep their old ids, by design, and
+  read as new once after the update. A committed `.guardian/baseline.json` is
+  unaffected: `dev-guardian scan` runs no plugin pack, and a project rule's
+  id did not change.
+- **`scan_dast` over a surface whose route recovery failed** read coverage
+  `full`: `map_attack_surface` persists a snapshot whose
+  `semgrep-metavar-recovery` step lost some matches, with nothing in
+  `missing_tools`. Any failed step of the surface's run now makes the DAST run
+  partial (`guardian-dast:partial-surface`), names the step in the warning and
+  lists it under `summary.surface_gaps.failed_steps`.
+- **`map_attack_surface` counted gitignored route files** as Semgrep targets.
+  Inside a git work tree Semgrep lists its targets through git (measured on
+  1.176.1), so a project whose only route files are gitignored read "scanned 0
+  of N" — a gap, and exit 2 in CI. The count now reads `git ls-files --cached
+  --others --exclude-standard` there (Semgrep's default ignore still applied
+  when there is no `.semgrepignore`): such a project is not applicable, never a
+  gap. Outside git the walk is unchanged.
+- **`scan_sast` read a file Semgrep only partly parsed as a failed scanner**
+  (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`), while
+  `map_attack_surface` read the same warning as partial coverage. The per-file
+  classification now lives in the shared Semgrep judge
+  (`runners/semgrepReport.ts`, a `partial` verdict), used by `scan_sast`,
+  `map_attack_surface` and the batched scoped runs (`scan_sast`/`bug_hunt`
+  with `scope`, `review_pr`): `paths.scanned > 0` with only per-file errors is
+  partial coverage — Semgrep `ok` and listed missing, the files named in
+  `tools_run[].partially_parsed` (one entry per file and error type); fatal
+  errors stay `failed`. Whole-project `bug_hunt` and `scan_wordpress`
+  (`semgrep-wp`), which judged Semgrep by its exit code alone, use it too: a
+  partly parsed file or a run that scanned nothing no longer reads `ok` at
+  coverage full (`scan_wordpress` with no `.php` file is not applicable).
+  A rule that did not load while the other rules ran (a typo'd pattern in
+  `.semgrep.yml`, a registered rule or a bugfix pack) is a narrower gap, not
+  a failed Semgrep: the judge names such rules (`rules_not_loaded`: a rule
+  error with its `rule_id`), and `scan_sast` (whole-project, the Docker
+  fallback and scoped runs), `bug_hunt` and `review_pr` record Semgrep `ok`
+  and missing with them in `tools_run[].failed_rules` and a reason naming
+  each ("Semgrep ran, but 1 rule(s) did not load: …") — never coverage none
+  and "NO scanner ran … Install semgrep" for a Semgrep that ran, and never a
+  row the open set skips; the other rules' findings resolve as usual, and an
+  earlier finding of the broken rule stays open as not re-measured.
+  `bug_hunt`'s retry after a dead registry pack is judged the same way. A
+  rule error that names no rule stays `failed`. A run in which NO rule
+  loaded — every rule of the local rule files failed and no registry pack
+  ran — is `failed` (nothing was scanned for), the rules named; a rule
+  configuration Semgrep refuses outright (a rule with an unknown language:
+  exit 8, `UnknownLanguageError`) names that error, once, instead of `(no
+  message)`. The Docker fallback reads the project's rule file on the host to
+  tell (it passes the container's `/src/…` name). Both are marked `tools_run[].rule_config_error`, and the
+  coverage warning then says Semgrep ran and its rules did not load, never
+  "Install semgrep". A comparison
+  (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
+  Semgrep finding in a partly parsed file as not measured by that run —
+  never resolved, never new — and names it `semgrep (partly parsed: …)`;
+  its note (and `regression_alert`'s hint) says Semgrep "only partly
+  measured" it, never that it "failed, or is not installed".
+
+### Security
+
+- **The shell guard covers PowerShell** (`Remove-Item -Recurse -Force`,
+  `Format-Volume`, `Clear-Disk`, `iwr | iex`, `iex (irm …)`,
+  `Invoke-Expression (Invoke-RestMethod …)`, `pwsh -c`) and blocks the
+  everyday catastrophic forms that only warned: `rm -rf` of `~/*`, `$HOME/*`,
+  Git Bash / WSL and Windows drive roots, `/Users`, `/System`; `mkfs -t`,
+  `wipefs -a`, `chmod -R 777 /`, `curl | sudo -E bash`, `bash <(curl …)`,
+  `sh -c "$(curl …)"`, `find / -delete`. Text fed to a shell (`bash <<EOF`,
+  `echo … | bash`) is assessed as a command, with each heredoc attached to the
+  statement that opened it; `dd of=` blocks only for a real block device. The
+  deny message no longer names the file or key that disables the guard.
+- **The shell guard reads loop, `if`, brace-group and function bodies.** A
+  command inside `do … done`, `then … fi`, `else`, `elif`, `{ … }`,
+  `function f { … }`, `time { … }` or after `!` was never assessed
+  (`while :; do rm -rf /; done` read as a command called `do`); it is now
+  judged like a top-level statement.
+- **`cmd /c mklink` onto a hook config path with a space in it is denied.**
+  The guard split every word on whitespace, so a quoted
+  `"C:\Users\me\CLAUDE SKILLS\…\.guardian\hooks.config.json"` was cut in two
+  and let through; only a word that is itself a whole cmd line is split now,
+  the way cmd splits it — into commands on `&`, `&&`, `||`, `|`, each
+  checked past a leading `@` or `call` (`cmd /c "cd /d C:\p && mklink …"`).
+- **A project's `ignorePaths` no longer switches off a user-enabled secret
+  block.** It narrows the advisory warning only; a `secrets.block: true` set
+  in the user-level config honours the user's own `ignorePaths` or the
+  defaults (`"ignorePaths": ["/"]` in a project file used to exempt every
+  path).
+- **A shell write onto a hook config file is denied**, not only a
+  `Write`/`Edit`: a redirection (`>`, `>>`, `>|`, `N>`, `&>`), `tee`,
+  `sed -i`, `cp`/`mv`/`install` onto it, `dd of=`, `curl -o`, `wget -O`,
+  PowerShell `Set-Content`/`Add-Content`/`Out-File`/`Tee-Object`/
+  `Copy-Item`/`Move-Item` and cmd `copy`/`move`.
+- **An edit of Claude Code's settings that would switch the hooks off is
+  denied.** A `Write`/`Edit`/`MultiEdit` of `.claude/settings.json` or
+  `settings.local.json` (project or user level) whose result newly sets
+  `"disableAllHooks": true` or an `env` entry `GUARDIAN_HOOKS=off`,
+  `GUARDIAN_HOOKS_BASH_BLOCK=0|false` or `GUARDIAN_PKG_VET=0`; every other
+  edit of those files — permissions, other variables, other hooks — passes.
+- **A hook config file that is a FIFO, a device, a link to a network share
+  or too large is not read.** The hooks read `.guardian/hooks.config.json`,
+  `.guardian/hooks-allowlist.json` and `~/.config/dev-guardian/hooks.json`
+  with no check on what the path was: a FIFO or a link to `/dev/zero` there
+  blocked the hook until Claude Code killed it at 15 s, and the tool call
+  then ran unguarded (a 300 MB file took 23 s on Windows; a Windows link to
+  an unreachable `\\host\share` held the open for ~136 s). Now the path's
+  components below the project (or home) directory are first walked with
+  `lstat` + `readlink`, which never touch a link's target, and a file reached
+  through a link to a UNC or device path (`\\…`, `//…`, `\\?\…`, `\\.\…`) —
+  the file, `.guardian` as a directory link, or a chain of local links ending
+  there — is not opened. Otherwise it is opened (non-blocking on Linux and
+  macOS, so a FIFO opens at once) and judged by `fstat` on the open
+  descriptor — never by an earlier look at the path, which a Windows link to
+  a named pipe fools (it `stat`s as an empty regular file) and a swap between
+  two checks defeats — and read only when it is a regular file of at most
+  64 KiB, at most 64 KiB + 1 bytes (a file that grows meanwhile is refused).
+  Anything else counts as absent — the protective defaults — and SessionStart
+  names it. Not covered: the project and home directories themselves, and a
+  path the OS redirects without a link (a mapped drive, a DFS or NFS mount).
+  The install hook's registry configuration reads get both checks (capped at
+  1 MiB). The shell guard denies `mkfifo`,
+  `mknod`, `ln`, `mklink` (also through `cmd /c`) and PowerShell `New-Item
+  -ItemType SymbolicLink|HardLink|Junction` when the path they CREATE is one
+  of those files, or a link at `.guardian` or `~/.config/dev-guardian` (never
+  when it is only a link's source), and a leading UTF-8 byte-order mark
+  (PowerShell 5 writes one) no longer makes a config file unreadable.
+- **The shell guard sees more of what a command does to the hook
+  configuration.** Besides writing a config file, it now denies removing one
+  (`rm`, `del`, `Remove-Item`, a `mv` that moves it away) or
+  `~/.config/dev-guardian` itself; moving or copying a directory onto
+  `.guardian` or `~/.config/dev-guardian` (`mv`, `cp -r`, `rsync -a`,
+  `robocopy`); `rsync`, `perl -pi`, `sort -o`, `truncate`, `sponge`,
+  `Clear-Content` onto one; a relative write after a `cd` into the directory;
+  a redirection inside a quoted `cmd /c "… > file"`; `[IO.File]::` writes;
+  and program text on the command line (`node -e`, `python -c`, `perl -e`,
+  `pwsh -Command` / `-EncodedCommand`, a heredoc fed to `python`) whose
+  string literals name a config path. A shell write of
+  `.claude/settings*.json` is denied when the command names a key that
+  switches the hooks off, and `claude plugin disable|uninstall` of
+  dev-guardian is denied. A program run from a file is still not seen.
+- **`cmd /c` no longer hides a catastrophic command.** `cmd /c rd /s /q C:\`,
+  `cmd /c "rmdir /s /q %USERPROFILE%"`, `cmd /c "rm -rf /"`, `cmd /c "bash -c
+  'rm -rf /'"` and `cmd /c "curl …|sh"` were `ok` — through the PowerShell
+  tool too. Every command of a `cmd /c` line now gets the full assessment of a
+  top-level statement; `%USERPROFILE%`, `%SystemDrive%`, `$env:USERPROFILE`
+  and `C:\Windows` / `C:\Users` / `C:\Program Files` are catastrophic delete
+  targets; cmd's `start` is followed to the program it runs. What is nested
+  past the guard's three levels (`cmd /c cmd /c cmd /c cmd /c rd /s /q C:\`,
+  four `bash -c` or `eval` deep) is still not judged, but it warns "nested
+  more than 3 levels deep" where it was a silent `ok`.
+- **The PowerShell tool's commands are read with PowerShell's quoting too.**
+  Read only as a POSIX shell quotes, a Windows path ending in `\"` escaped its
+  closing quote and swallowed the rest of the line: `Remove-Item "C:\Users\"
+  -Recurse -Force` was `ok`, and so was anything after `Get-ChildItem
+  "C:\temp\" ;`. The guard now also reads the command the way PowerShell does
+  (backslash literal, backtick escapes, `''` and `""`, typographic quotes,
+  here-strings, `<# … #>`, `--%`) — the reading the install hook already
+  had — and the more severe verdict stands; so is the text handed to
+  `pwsh -Command` / `-EncodedCommand`, from either tool. `check --bash …
+  --powershell` does the same from a terminal.
+- **A comment no longer hides the lines after it.** The shell guard read
+  `#` comments as code, so the apostrophe in `# clean the user's build dir`
+  opened a quote that ran to the end of the command and hid `rm -rf /` on the
+  next line, from both tools; the same happened after a here-string whose
+  body held an odd `'`, and a commit message in a here-string that quoted
+  `curl x | sh` was denied. Also closed: a redirection before the command
+  name (`2>/dev/null rm -rf /`); PowerShell's `rmdir` / `rd` / `del` /
+  `erase` with `-Recurse -Force`, `-Recurse:$true` and en or em dashes; and
+  four internal caps that ended in a silent `ok` (40 `nice` runners, five
+  `npx -y` launchers, 256 `[IO.File]::` calls, an `[IO.File]::` call padded
+  past 512 characters — the last now warns). A command inside a PowerShell
+  script block (`Get-ChildItem | ForEach-Object { Remove-Item C:\Users
+  -Recurse -Force }`, `Invoke-Command -ScriptBlock { … }`) is assessed too.
+- **The shell guard and the install hook finish inside the hook's timeout.**
+  The pattern rules were quadratic inside a statement (127 × `chmod
+  -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s
+  timeout, after which a command runs unassessed); they are linear now. The
+  command is read to 512 KB and a 2.5 s budget backs the caps up, each named
+  in its warning, checked between the commands of a statement as well as
+  between statements. Work inside one statement was still quadratic (64 KB of
+  `-c -c …` took 15 s; `find -exec`, `git -c`, `python -c`, `| sudo -x`,
+  `time -a … {`, the PowerShell environment check); it is linear now. A
+  command with ~125 000 operands (`rm a a … /`) overflowed the stack, and the
+  hook answered with no decision at all, so the command ran; it is assessed
+  now, and any assessment that fails part-way warns "the assessment failed"
+  (a block found before it still blocks). The install hook looks each package
+  up once, at most 50 per command (60 KB of repeated `npm i x;` took ~57 s),
+  names not on the popular list first, so popular padding cannot push another
+  past the cap. The worst 512 KB shape measured takes up to about 2 s per
+  reading in the shell guard on a loaded machine; the PowerShell tool reads
+  twice, and the 2.5 s budget backs it up.
+- **Padding a line no longer hides a catastrophic command from the shell
+  guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
+  `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
+  statement's pattern text (blank runs collapsed first); whatever a cap
+  still drops adds the warning "part of this command was not assessed (over
+  16 KB)" — never a silent `ok`. Each command of a `cmd /c` line is also
+  checked for `claude plugin disable` and for program text, `npx node -e` /
+  `start /b node -e` are read as program text, and a bare CR (a PowerShell
+  line break) ends a statement.
+- **`enabledPlugins` turning dev-guardian off is denied** in a
+  `Write`/`Edit`/`MultiEdit` of Claude Code's settings, like
+  `disableAllHooks`.
+- **A project's `.guardian/hooks-allowlist.json` no longer exempts a match
+  from a secret block the user enabled** — it narrows the warning, as a
+  project `ignorePaths` does.
+- **The install hook's registry configuration reads are link-walked**: a
+  `.npmrc` (or `pip.conf`, `nuget.config`, …) linked to an unreachable
+  `\\host\share` held the hook into its 15 s timeout, and the install then
+  ran unvetted; such a file is now refused unopened. A registry
+  configuration that is there but could not be read (that link, a loop, a
+  directory or FIFO in its place, over 1 MiB, no permission) is unknown, not
+  absent: a missing name then warns "registry configuration at … could not
+  be read — possibly a private registry" instead of being denied.
+  `NUGET_PACKAGES` / `NUGET_XMLDOC_MODE` no longer disable the missing-name
+  deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` and
+  `NUGET_FALLBACK_PACKAGES` count), and a machine-wide NuGet config's local
+  folder (Visual Studio's offline feed) explains a 404 only for a package it
+  holds — every id a `.nupkg` name can split into (`foo.2.1.0.0.nupkg` is
+  `foo`, `foo.2` and `foo.2.1`).
+- **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
+  camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
+  while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;
+  `sk-ant-…` no longer also reports as OpenAI; a short secret's preview shows
+  at most 4 characters; each scanned line is capped at 16 KB and the JWT
+  pattern is bounded (ReDoS). Ignore paths match relative to the project (a
+  React `src/hooks/` was silently skipped) and `NotebookEdit` is matched on
+  `notebook_path`.
+- **DAST probes stay on the target origin.** Every probe URL goes through one
+  builder that refuses a URL leaving the origin (`off_origin`) — a path
+  missing its leading slash, a protocol-relative path or a value shaped like
+  `@evil.example/x` sent requests, credentialed in the rate-limit burst, to
+  another host. Route extraction rejects such paths too, a spec path without a
+  leading slash is `path_partial`, and `differential_authz` is `high` only for
+  a route that requires auth, not for every public route.
+- **`scan_skill` never follows a link** out of the package being audited (a
+  symlink's target content was read and echoed into findings); each refused
+  link is reported as a finding.
+- **Output encoding**: SARIF `artifactLocation.uri` is percent-encoded per
+  segment (a space or `%` failed the schema; `#` corrupted the reference), and
+  `dev-guardian status` strips terminal escape sequences from file paths a
+  scanned repository controls.
+- A committed baseline no longer contains a fast, unsalted hash of a secret's
+  line (an offline brute-force oracle): credential identities never hash the
+  line.
+- Trivy 0.69.4–0.69.6 (GHSA-69fq-xp46-6x23) is flagged by `check_toolchain`;
+  `ci-init` pins every action by SHA and every scanner by checksum; every npm
+  install `deps_update_plan` proposes and `create_fix_pr` runs carries
+  `--ignore-scripts` (`--no-scripts` for Composer).
+
 ## [2.0.0] - 2026-08-23
 
 **A maturity marker, not a breaking change. There is no migration work.**
@@ -28,8 +1374,9 @@ gitleaks and friends, with SQLite history and baselines.
 Since then, and absent from 1.0.0 entirely:
 
 - **`map_attack_surface`** — a static route inventory across nine languages,
-  cross-referenced against OpenAPI and Postman documents to surface shadow
-  endpoints and dead documentation.
+  cross-referenced against OpenAPI 3.x and Swagger 2.0 documents (not Postman —
+  an earlier version of this entry said so) to surface shadow endpoints and dead
+  documentation.
 - **`scan_dast`** — active probing driven by that inventory, against a running
   application.
 - **`validate_finding`** — reachability qualification, answering whether
@@ -1637,7 +2984,6 @@ had nine rows and all nine were false positives.
   empty, the tool returns `scanner_failed` instead of invoking the scanner
   with a bad target.
 
-
 ### Changed
 
 - **No non-null assertions anywhere.** 31 `!` assertions across 22 files
@@ -1760,7 +3106,7 @@ Measured against the shipped rules, not inferred:
 - **They do not replace the model-driven `/guardian-fix` path.** Rules catch
   shapes; reading the code catches reasons.
 
-### Added
+### Added — local bug rules
 
 - **`bug_hunt` now runs fourteen local, hand-authored Semgrep rules for JS/TS by default** —
   `configs/semgrep/bugfix-js.yml`, alongside the always-on `p/r2c-bug-scan` +
@@ -1792,7 +3138,7 @@ Measured against the shipped rules, not inferred:
   - **Not a substitute for the model-driven `/guardian-fix` path.** These rules catch shapes;
     reading the code catches reasons.
 
-### Fixed
+### Fixed — local bug rules
 
 - **A malformed `configs/semgrep/bugfix-js.yml` degrades instead of failing the whole
   `bug_hunt` scan.** Two distinct ways a hand-edited local rule file can break, both handled:

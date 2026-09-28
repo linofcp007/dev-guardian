@@ -1,7 +1,8 @@
 /**
  * Integration tests for check_toolchain and install_toolchain.
  *
- * check_toolchain shells out to check-tools.sh → mock runShellScript.
+ * check_toolchain runs each catalogue entry's version command through
+ * runProcess (no bash) → mock runProcess per command.
  * install_toolchain has two branches:
  *   - Per-tool install → runs runProcess; mock it + scannerAvailable
  *     (used by check_toolchain's verification re-run).
@@ -109,6 +110,15 @@ function makePlugin(): PluginContext {
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
+  // Default: every binary is absent. install_toolchain's verification step
+  // re-runs check_toolchain, whose version probes go through runProcess.
+  vi.mocked(runProcess).mockResolvedValue({
+    outcome: 'failed',
+    exitCode: null,
+    stdout: '',
+    stderr: '',
+    truncated: false,
+  });
   vi.mocked(runShellScript).mockReset();
   vi.mocked(resolveBinary).mockReset();
   vi.mocked(firstWindowsAvailable).mockReset();
@@ -123,68 +133,199 @@ afterEach(() => {
 
 // ---------------------------------------------------------------------- check_toolchain
 
-describe('check_toolchain', () => {
-  it('parses check-tools.sh JSON and annotates each catalog entry with required_by + install_command', async () => {
-    const plugin = makePlugin();
-    vi.mocked(runShellScript).mockResolvedValue({
-      outcome: 'completed',
-      exitCode: 0,
-      stdout: JSON.stringify({
-        semgrep: '1.50.0',
-        trivy: '',
-        gitleaks: '8.10.0',
-        ruff: '0.1.5',
-        syft: '',
-        node: 'v24.13.0',
-        python: '3.11.0',
-        docker: '',
-        bandit: '',
-        'pre-commit': '',
-        k6: '',
-      }),
-      stderr: '',
-      truncated: false,
-    });
+interface ToolStatusView {
+  name: string;
+  installed: boolean;
+  version: string;
+  expected_version_floor: string;
+  meets_version_floor: boolean | null;
+  required_by: string[];
+  install_command: string | null;
+  compromised?: boolean;
+  advisory?: { id: string; cve?: string; url: string };
+  provided_by?: string;
+  probe_error?: string;
+}
 
-    const r = (await getTool('check_toolchain').handler({}, plugin)) as {
-      ok: true;
-      tools: Array<{
-        name: string;
-        installed: boolean;
-        version: string;
-        required_by: string[];
-        install_command: string | null;
-      }>;
-      summary: { installed: number; missing: number };
-    };
-    expect(r.ok).toBe(true);
-    const semgrep = r.tools.find((t) => t.name === 'semgrep');
-    const trivy = r.tools.find((t) => t.name === 'trivy');
-    expect(semgrep?.installed).toBe(true);
-    expect(semgrep?.required_by).toEqual(
-      expect.arrayContaining(['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr']),
-    );
-    expect(trivy?.installed).toBe(false);
-    expect(trivy?.install_command).toBeTruthy();
-    expect(r.summary.installed).toBeGreaterThan(0);
-    expect(r.summary.missing).toBeGreaterThan(0);
+interface CheckView {
+  ok: true;
+  tools: ToolStatusView[];
+  summary: {
+    total_catalogued: number;
+    installed: number;
+    missing: number;
+    below_floor: number;
+    compromised?: number;
+  };
+  warnings?: string[];
+}
+
+type Run = Awaited<ReturnType<typeof runProcess>>;
+const ran = (stdout: string, stderr = ''): Run => ({
+  outcome: 'completed',
+  exitCode: 0,
+  stdout,
+  stderr,
+  truncated: false,
+});
+// What runProcess returns when the binary does not exist (spawn ENOENT).
+const absent: Run = { outcome: 'failed', exitCode: null, stdout: '', stderr: '', truncated: false };
+
+/** Real output captured on the Windows machine this was written on. */
+const MACHINE: Record<string, Run> = {
+  semgrep: ran('1.176.1\n\nA new version of Semgrep is available.'),
+  trivy: ran('Version: 0.69.3\nVulnerability DB:\n  Version: 2\n'),
+  gitleaks: ran('8.30.1'),
+  ruff: ran('ruff 0.16.6'),
+  'pre-commit': ran('pre-commit 4.6.0'),
+  bandit: ran(
+    'python.exe C:\\Program Files\\Python314\\Scripts\\bandit 1.9.4\n  python version = 3.14.7 (tags/v3.14.7)',
+  ),
+  syft: ran('Application:   syft\nVersion:       1.51.1\nGoVersion:     go1.26.3\nSchemaVersion: 16.1.10'),
+  k6: ran('k6.exe v2.2.0 (commit/00a9a1b7f5, go1.26.5, windows/amd64)'),
+  dotnet: ran('10.0.401 [C:\\Program Files\\dotnet\\sdk]\r\n'),
+  node: ran('v24.19.0'),
+  python3: ran('Python 3.14.7'),
+  docker: ran('Docker version 29.8.0, build 88096ef'),
+};
+
+function machine(overrides: Record<string, Run> = {}): void {
+  const table = { ...MACHINE, ...overrides };
+  vi.mocked(runProcess).mockImplementation(async (opts) => table[opts.command] ?? absent);
+}
+
+async function check(plugin: PluginContext): Promise<CheckView> {
+  const r = (await getTool('check_toolchain').handler({}, plugin)) as CheckView | { ok: false };
+  expect(r.ok).toBe(true);
+  return r as CheckView;
+}
+
+describe('check_toolchain', () => {
+  it('probes every catalogued tool directly — no bash, no check-tools.sh', async () => {
+    const plugin = { ...makePlugin(), shell: null };
+    machine();
+    const r = await check(plugin);
+
+    const commands = new Set(vi.mocked(runProcess).mock.calls.map((c) => c[0].command));
+    // The nine the old script never probed are probed now.
+    for (const cmd of ['nuclei', 'phpcs', 'wp', 'wpscan', 'jscpd', 'lighthouse', 'dotnet', 'dotnet-outdated']) {
+      expect(commands.has(cmd), cmd).toBe(true);
+    }
+    expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
+    // 20, not 18: Task 21 added zizmor and actionlint (scan_iac's GitHub
+    // Actions workflow scanners) to the catalogue.
+    expect(r.summary.total_catalogued).toBe(20);
+    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(20);
   });
 
-  it('returns scanner_failed when check-tools.sh stdout is invalid JSON', async () => {
-    const plugin = makePlugin();
-    vi.mocked(runShellScript).mockResolvedValue({
-      outcome: 'completed',
-      exitCode: 0,
-      stdout: 'not-json',
-      stderr: '',
-      truncated: false,
-    });
+  it('reads each version correctly, including the outputs that broke the bash probe', async () => {
+    machine();
+    const r = await check(makePlugin());
+    const v = (name: string) => r.tools.find((t) => t.name === name);
+    expect(v('semgrep')).toMatchObject({ installed: true, version: '1.176.1', meets_version_floor: true });
+    expect(v('trivy')).toMatchObject({ installed: true, version: '0.69.3', compromised: false });
+    expect(v('syft')).toMatchObject({ installed: true, version: '1.51.1' });
+    expect(v('bandit')).toMatchObject({ installed: true, version: '1.9.4' });
+    expect(v('k6')).toMatchObject({ installed: true, version: '2.2.0' });
+    expect(v('nuclei')).toMatchObject({ installed: false, version: '' });
+    expect(v('semgrep')?.required_by).toEqual(
+      expect.arrayContaining(['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr']),
+    );
+    // Each entry carries this OS's install hint. semgrep has one on every
+    // OS; nuclei, for instance, has none on linux.
+    expect(v('semgrep')?.install_command).toBeTruthy();
+  });
 
-    const r = (await getTool('check_toolchain').handler({}, plugin)) as
-      | { ok: true }
-      | { ok: false; error: { code: string } };
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('scanner_failed');
+  it('sees the .NET SDK, and treats dotnet-format as provided by SDK >= 6', async () => {
+    machine();
+    const r = await check(makePlugin());
+    const sdk = r.tools.find((t) => t.name === 'dotnet-sdk');
+    const format = r.tools.find((t) => t.name === 'dotnet-format');
+    expect(sdk).toMatchObject({ installed: true, version: '10.0.401' });
+    expect(format).toMatchObject({ installed: true, provided_by: 'dotnet-sdk', meets_version_floor: true });
+    expect(r.tools.find((t) => t.name === 'dotnet-outdated')?.installed).toBe(false);
+  });
+
+  it('flags an installed Trivy in the compromised range with the advisory id', async () => {
+    machine({ trivy: ran('Version: 0.69.4\n') });
+    const r = await check(makePlugin());
+    const trivy = r.tools.find((t) => t.name === 'trivy');
+    expect(trivy?.compromised).toBe(true);
+    expect(trivy?.advisory?.id).toBe('GHSA-69fq-xp46-6x23');
+    expect(trivy?.advisory?.cve).toBe('CVE-2026-33634');
+    expect(r.summary.compromised).toBe(1);
+    expect(r.warnings?.join('\n')).toContain('GHSA-69fq-xp46-6x23');
+    // The most urgent line comes first.
+    expect(r.tools[0]?.name).toBe('trivy');
+  });
+
+  it('says why a binary that exists could not report its version', async () => {
+    machine({
+      wp: { outcome: 'failed', exitCode: 1, stdout: '', stderr: 'Error: YIKES! It looks like you are running this as root.', truncated: false },
+      // What a MISSING tool looks like on Windows: cross-spawn runs an
+      // unresolved command through cmd.exe, which exits 1.
+      nuclei: {
+        outcome: 'failed',
+        exitCode: 1,
+        stdout: '',
+        stderr: "'nuclei' is not recognized as an internal or external command,",
+        truncated: false,
+      },
+    });
+    vi.mocked(resolveBinary).mockImplementation(async (name) =>
+      name === 'wp' ? '/usr/local/bin/wp' : null,
+    );
+    const r = await check(makePlugin());
+    const wp = r.tools.find((t) => t.name === 'wp-cli');
+    expect(wp?.installed).toBe(false);
+    expect(wp?.probe_error).toMatch(/found at \/usr\/local\/bin\/wp, but `wp --version --allow-root` exited 1: Error: YIKES/);
+    // Not on PATH at all: simply missing, however the failed spawn looked.
+    const nuclei = r.tools.find((t) => t.name === 'nuclei');
+    expect(nuclei?.installed).toBe(false);
+    expect(nuclei?.probe_error).toBeUndefined();
+  });
+
+  it('explains a tool that is on PATH but cannot be started by a non-bash process', async () => {
+    // Measured on the machine this was written on: `syft` on PATH was an
+    // extensionless `#!/usr/bin/env bash` shim. `where` finds it; Windows
+    // cannot execute it, so every direct invocation fails — the old bash
+    // probe said "installed", which generate_sbom then disproved.
+    // cross-spawn reads the shebang and runs `bash <shim>`; on that host
+    // `bash` on PATH was WSL's launcher, which failed.
+    machine({
+      syft: {
+        outcome: 'failed',
+        exitCode: 1,
+        stdout: '',
+        stderr: '<3>WSL (532880 - Relay) ERROR: CreateProcessCommon:818: execvpe(/bin/bash) failed',
+        truncated: false,
+      },
+    });
+    vi.mocked(resolveBinary).mockImplementation(async (name) =>
+      name === 'syft' ? 'C:\\ProgramData\\chocolatey\\bin\\syft' : null,
+    );
+    const r = await check(makePlugin());
+    const syft = r.tools.find((t) => t.name === 'syft');
+    expect(syft?.installed).toBe(false);
+    expect(syft?.probe_error).toContain('found at C:\\ProgramData\\chocolatey\\bin\\syft');
+    if (process.platform === 'win32') {
+      expect(syft?.probe_error).toMatch(/bash shim it runs only inside bash/);
+    }
+    expect(r.tools.find((t) => t.name === 'nuclei')?.probe_error).toBeUndefined();
+  });
+
+  it('keeps node, python and docker as informational entries (python3, then python)', async () => {
+    machine({
+      python3: { outcome: 'failed', exitCode: 9009, stdout: '', stderr: '', truncated: false },
+      python: ran('Python 3.12.1'),
+    });
+    const r = await check(makePlugin());
+    expect(r.tools.find((t) => t.name === 'node')).toMatchObject({ installed: true, version: '24.19.0', required_by: [] });
+    expect(r.tools.find((t) => t.name === 'python')).toMatchObject({ installed: true, version: '3.12.1' });
+    expect(r.tools.find((t) => t.name === 'docker')).toMatchObject({ installed: true, version: '29.8.0' });
+    // Informational entries never count toward the catalogue summary.
+    // 20, not 18 — see the comment on the other total_catalogued assertion above.
+    expect(r.summary.installed + r.summary.missing).toBe(20);
   });
 });
 
@@ -206,7 +347,7 @@ describe('install_toolchain (per-tool)', () => {
       stderr: '',
       truncated: false,
     });
-    // Verification re-run uses runShellScript on check-tools.sh.
+    // Kept mocked so no real script can run from this test.
     vi.mocked(runShellScript).mockResolvedValue({
       outcome: 'completed',
       exitCode: 0,
@@ -259,7 +400,10 @@ describe('install_toolchain (per-tool)', () => {
     expect(r.ok).toBe(true);
     expect(r.applied).toBe(false);
     expect(r.installed).toEqual([]);
-    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    // runProcess still runs — for the verification's version probes — but
+    // never an install command.
+    const installs = vi.mocked(runProcess).mock.calls.filter((c) => c[0].args?.includes('install'));
+    expect(installs).toEqual([]);
   });
 
   it('routes elevation-required steps to requires_elevation when elevation_allowed is false', async () => {

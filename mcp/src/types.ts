@@ -38,6 +38,9 @@ export const SCAN_TYPES = [
   'sast',
   'secrets',
   'deps',
+  // `deps_audit` wrote 'deps' until 2.0.x, sharing its cache entries with
+  // `scan_deps`; see `isDepsAuditScan` for reading those older rows.
+  'deps_audit',
   'containers',
   'iac',
   'bugs',
@@ -54,6 +57,8 @@ export const SCAN_TYPES = [
   'wordpress',
   'wp_audit',
   'wp_vuln_check',
+  // Source-based vulnerability matching (no live URL): wp_vuln_check_source.
+  'wp_vuln_check_source',
   'wp_cron_audit',
   'wp_rest_audit',
   // .NET family
@@ -64,8 +69,29 @@ export const SCAN_TYPES = [
   'skill_audit',
   // Active DAST
   'dast',
+  // Agent workspace / host-config audit
+  'agent_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
+
+/**
+ * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and
+ * the full security scan, which runs Trivy too. For readers that want "the
+ * latest scan that measured CVEs".
+ */
+export const CVE_SOURCE_SCAN_TYPES: readonly ScanType[] = ['deps_audit', 'deps', 'security_full'];
+
+/**
+ * Whether a scan row was written by `deps_audit` — the only tool that records
+ * `bot_configured`. Rows from 2.0.x carry scan type 'deps', the type
+ * `scan_deps` also writes, and are told apart by that very key: `scan_deps`
+ * never wrote it. Without this, the latest `scan_deps` run shadowed the
+ * latest `deps_audit` and read as "no dependency bot configured".
+ */
+export function isDepsAuditScan(scan: { scan_type: string; meta?: Record<string, unknown> }): boolean {
+  if (scan.scan_type === 'deps_audit') return true;
+  return scan.scan_type === 'deps' && scan.meta?.['bot_configured'] !== undefined;
+}
 
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'] as const;
 export type ToolRunStatus = (typeof TOOL_RUN_STATUSES)[number];
@@ -83,6 +109,45 @@ export interface ToolRun {
   version?: string;
   status: ToolRunStatus;
   reason?: string;
+  /**
+   * What a pass with a target of its own looked at — `trivy-image`: the
+   * image reference it scanned. `history/runCompare.ts` re-measures such a
+   * pass's findings only by a pass over the same target, so scanning image B
+   * never resolves image A's findings. Absent on every other pass, and on
+   * rows written before it was recorded (read as "any image", as before).
+   */
+  target?: string;
+  /**
+   * A Semgrep run the shared judge (`runners/semgrepReport.ts`) found
+   * `partial`: `ok`, and also listed in `missing_tools`, because these files
+   * were only partly parsed (project-relative). What the CI gate's
+   * `--accept-partial-parse` matches. Absent on every complete run.
+   */
+  partially_parsed?: PartialParse[];
+  /**
+   * Rules a Semgrep run did not load (a rule parse error) while the rest of
+   * its rules ran — scan_sast's and bug_hunt's broken-rule shape, `ok` AND
+   * missing. Their
+   * findings were not looked for: `history/runCompare.ts` reads a finding of
+   * one of these rules as not re-measured. `rule_id` is the id the rule's
+   * findings are stored under. Absent on every other run.
+   */
+  failed_rules?: FailedRule[];
+  /**
+   * The scanner is installed and ran, but its RULES did not load — none of
+   * them (a Semgrep run in which every local rule failed to compile and no
+   * registry pack ran), or its configuration was refused outright (an
+   * unknown language, a rule missing a required key). Set on a `failed` run
+   * only. A coverage warning then names the rule error, never "install the
+   * scanner" (`tools/scanCoverage.ts`).
+   */
+  rule_config_error?: true;
+}
+
+/** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */
+export interface FailedRule {
+  rule_id: string;
+  message: string;
 }
 
 export interface Finding {
@@ -100,6 +165,22 @@ export interface Finding {
   snippet?: string;
   fix_available: boolean;
   fix_applied?: boolean;
+  /**
+   * Line-independent identity — the key every cross-scan comparison uses
+   * first (suppressions, the CI baseline, `diff_scans`, `regression_alert`).
+   * `fingerprint` hashes the line numbers and so changes when a line is
+   * inserted above the finding; this does not. See
+   * `fingerprint/findingIdentity.ts`. Absent on rows written before schema 7
+   * and on findings from tools that do not compute one; consumers then fall
+   * back to `fingerprint`.
+   */
+  identity?: string;
+  /**
+   * sha256 of what the finding flags (its source lines, whitespace-collapsed,
+   * or `package@installed_version` for a dependency) — a hash, never the
+   * text. Present exactly when `identity` is.
+   */
+  content_key?: string;
 }
 
 export interface ScanRecord {
@@ -149,6 +230,12 @@ export interface SeverityFilterDisclosure {
 }
 
 export interface ScanResult extends ScanRecord {
+  /**
+   * `finished_at` minus `started_at` of the scan row, in ms — the scan that
+   * produced these findings, which for a cache hit is the original run.
+   * Null when the row has no finish time.
+   */
+  duration_ms?: number | null;
   findings_count_by_severity: FindingsCountBySeverity;
   top_findings: Finding[];
   warnings: string[];
@@ -180,10 +267,21 @@ export interface Cve {
 export interface Suppression {
   id: number;
   finding_fingerprint: string;
+  /** The suppressed finding's `identity`, when it had one. A suppression
+   *  matches a finding on either key. */
+  finding_identity?: string;
   reason: string;
   created_at: string;
   expires_at?: string;
   created_by?: string;
+  /**
+   * The project this suppression belongs to (migration 011). Absent means
+   * "every project" — every row written before this column existed, and any
+   * row an older build still inserts without it — never "no project"; the
+   * match predicate treats it exactly like the global behaviour it always
+   * had. Present on every suppression `suppress_finding` writes from now on.
+   */
+  project_path?: string;
 }
 
 export interface Baseline {
@@ -191,6 +289,23 @@ export interface Baseline {
   scan_id: string;
   set_at: string;
   note?: string;
+}
+
+/**
+ * One manifest-bearing directory `detectStack` found while walking the
+ * project (the root itself, path `'.'`, when it has a manifest or a
+ * WordPress/PHP signal of its own, plus every nested manifest up to depth 3).
+ * The top-level `languages` / `package_managers` / `frameworks` on
+ * {@link StackSnapshot} are the union of every entry here — added so a repo
+ * whose manifests live below the root (this repo: `mcp/package.json`) is no
+ * longer reported as having no languages at all.
+ */
+export interface SubProjectStack {
+  /** `/`-separated, relative to the project root; `'.'` for the root itself. */
+  path: string;
+  languages: string[];
+  package_managers: string[];
+  frameworks: string[];
 }
 
 export interface StackSnapshot {
@@ -207,6 +322,10 @@ export interface StackSnapshot {
   has_ansible: boolean;
   has_github_actions: boolean;
   has_gitlab_ci: boolean;
+  /** `has_terraform || has_kubernetes || has_ansible` — one flag for "any IaC". */
+  has_iac: boolean;
+  /** Per-directory detail behind the top-level union — see {@link SubProjectStack}. */
+  projects: SubProjectStack[];
 }
 
 export const HTTP_METHODS = [
@@ -256,7 +375,7 @@ export interface RouteRecord {
   language: string;
   /**
    * Never inferred from the absence of an auth decorator — see the design
-   * doc. 'none' is emitted only for affirmative public declarations such as
+   * of record. 'none' is emitted only for affirmative public declarations such as
    * WordPress `permission_callback: '__return_true'`.
    */
   auth_hint: 'none' | 'required' | 'unknown';
@@ -438,6 +557,25 @@ export interface AttackSurfaceSnapshot {
    * reachability to a later consumer.
    */
   imports: { file: string; module_file: string }[];
+  /**
+   * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
+   * syntax error confined to one file): the routes outside the unparsed span
+   * are in `routes`, the ones inside it may be missing. Present only when
+   * there were some — the snapshot is then partial coverage, with `semgrep`
+   * both `ok` in `tools_run` and listed in `missing_tools`. Absent on every
+   * snapshot persisted before this field existed.
+   */
+  partially_parsed?: PartialParse[];
+}
+
+/** One file a Semgrep run could not fully parse, as `map_attack_surface` reports it. */
+export interface PartialParse {
+  /** Project-relative when the file is inside the project. */
+  file: string;
+  /** Semgrep's error type (`PartialParsing`, `Syntax error`, …). */
+  type: string;
+  /** The first line of Semgrep's message. */
+  message: string;
 }
 
 /**
@@ -451,6 +589,7 @@ export const DOMAIN_ERROR_CODES = [
   'not_a_git_repo',
   'working_tree_dirty',
   'unknown_scan_id',
+  'unknown_finding',
   'requires_elevation',
   'unsupported_os',
   'output_too_large',

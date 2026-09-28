@@ -11,10 +11,15 @@ function freshRuntimeMeta() {
 }
 
 describe('candidatesFor', () => {
-  it('starts Windows with WSL bash and ends with bash on PATH', () => {
+  it('orders Windows as Git Bash, then WSL bash, then bash on PATH', () => {
+    // Git Bash first: it sees the Windows-native scanners on PATH and takes
+    // Windows paths as they are; WSL sees neither without translation.
     const c = candidatesFor('win32');
-    expect(c[0]?.command).toBe('wsl');
-    expect(c[0]?.needs_wsl_path_translate).toBe(true);
+    expect(c.map((x) => x.label)).toEqual(['Git Bash', 'WSL bash', 'bash on PATH']);
+    expect(c[0]?.command).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+    expect(c[0]?.needs_wsl_path_translate).toBe(false);
+    expect(c[1]?.command).toBe('wsl');
+    expect(c[1]?.needs_wsl_path_translate).toBe(true);
     expect(c.at(-1)?.command).toBe('bash.exe');
   });
 
@@ -93,6 +98,51 @@ describe('probeShell', () => {
       'linux',
     );
     expect(result?.command).toBe('/bin/bash');
+  });
+
+  it('replaces a cached WSL choice once Git Bash is usable (the order changed)', async () => {
+    // A host that cached WSL under the old order must not stay on it: the
+    // cache only saves re-probing what the choice already outranks.
+    const meta = freshRuntimeMeta();
+    meta.setJson('shell_choice', {
+      command: 'wsl',
+      args_prefix: ['bash'],
+      needs_wsl_path_translate: true,
+      label: 'WSL bash (cached)',
+    });
+    const result = await probeShell(
+      meta,
+      { testShell: async () => 'GNU bash, version 5.2' },
+      'win32',
+    );
+    expect(result?.command).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+    expect(meta.getJson<{ command: string }>('shell_choice')?.command).toBe(
+      'C:\\Program Files\\Git\\bin\\bash.exe',
+    );
+  });
+
+  it('keeps a cached WSL choice when nothing outranks it', async () => {
+    const meta = freshRuntimeMeta();
+    meta.setJson('shell_choice', {
+      command: 'wsl',
+      args_prefix: ['bash'],
+      needs_wsl_path_translate: true,
+      label: 'WSL bash (cached)',
+    });
+    const probed: string[] = [];
+    const result = await probeShell(
+      meta,
+      {
+        testShell: async (cmd) => {
+          probed.push(cmd);
+          return cmd === 'wsl' ? 'GNU bash, version 5.2' : null;
+        },
+      },
+      'win32',
+    );
+    expect(result?.label).toBe('WSL bash (cached)');
+    // Git Bash (the one candidate that outranks it) and the cached choice.
+    expect(probed).toEqual(['C:\\Program Files\\Git\\bin\\bash.exe', 'wsl']);
   });
 
   it('returns null when no candidate is usable', async () => {

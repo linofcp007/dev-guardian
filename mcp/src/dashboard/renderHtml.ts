@@ -1,13 +1,12 @@
 /**
  * `renderDashboard` — the self-contained HTML page behind `dev-guardian
- * dashboard`. See
- * §9 for the rules this reproduces.
+ * dashboard`. See the design of record for the rules this reproduces.
  *
  * Pure: a `DashboardSnapshot` in, an HTML string out. No storage, no clock,
  * no I/O, no network — every value shown is read straight from the snapshot.
  *
  * Two properties this file exists to hold, both load-bearing enough that the
- * committed tests parse the output rather than eyeball it (design §11):
+ * committed tests parse the output rather than eyeball it (the design of record):
  *
  *  - **Self-contained.** No `<link>`, no `<script src>`, no CDN, no web font,
  *    no `@import url`. All CSS/JS is inline (built on `report/htmlTheme.ts`'s
@@ -40,6 +39,7 @@
 
 import type { Cve, Finding, Severity } from '../types.js';
 import { escapeHtml, renderHtmlDocument, severityBar, severityChip, SEVERITY_COLORS } from '../report/htmlTheme.js';
+import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import type {
   BaselineState,
   CoverageState,
@@ -55,7 +55,16 @@ import type {
 const SEV_RANK: Record<Severity, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 const SEVERITY_ORDER: readonly Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
 
-export function renderDashboard(snapshot: DashboardSnapshot): string {
+export function renderDashboard(rawSnapshot: DashboardSnapshot): string {
+  // Every Finding-bearing array the snapshot carries — `findings.items` and
+  // both deltas' `new_findings` — is redacted here, once, before either the
+  // server-rendered tables or the inlined JSON payload reads it. The
+  // snapshot's own findings should already be redacted at persistence time
+  // (`redaction/secretFindingRedaction.ts`, applied at every scan-tool's
+  // write path), but this is the one place ALL of them funnel through on
+  // their way into a page anyone with the file can open, so it is the
+  // second, independent place that guarantees it.
+  const snapshot = redactSnapshot(rawSnapshot);
   if (snapshot.scan === null) return renderNoScan(snapshot);
   const scan = snapshot.scan;
 
@@ -86,7 +95,7 @@ export function renderDashboard(snapshot: DashboardSnapshot): string {
 }
 
 /**
- * Design §5.1: a project with no completed scan is *unknown*, not safe. A
+ * The design of record: a project with no completed scan is *unknown*, not safe. A
  * single line naming the command to run, still inside the same branded
  * shell — never the full layout built over data that does not exist. The
  * JSON payload is still inlined (the snapshot's every field carries its
@@ -110,7 +119,7 @@ function renderNoScan(snapshot: DashboardSnapshot): string {
 }
 
 // ---------------------------------------------------------------------------
-// RISK — design §2's corollary: a score computed over a partial scan carries
+// RISK — the design of record's corollary: a score computed over a partial scan carries
 // its caveat attached, never as a bare number.
 // ---------------------------------------------------------------------------
 
@@ -129,7 +138,7 @@ function riskSection(snapshot: DashboardSnapshot): string {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage banner — design §2's governing rule, made visible as a banner
+// Coverage banner — the design of record's governing rule, made visible as a banner
 // (not a footnote): present only when coverage is partial, naming both the
 // missing tools and what the numbers therefore do not contain.
 // ---------------------------------------------------------------------------
@@ -184,7 +193,7 @@ function coverageBanner(coverage: CoverageState): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Truncation notices (design §8: no cap is ever silent). Rendered generically
+// Truncation notices (the design of record: no cap is ever silent). Rendered generically
 // — one line per notice, regardless of what `what` says — deliberately NOT
 // matched to a specific section by exact string: `TruncationNotice.what` is
 // documented as free-form ("which field was capped, e.g. 'new_findings'"),
@@ -224,7 +233,7 @@ function severitySection(findings: FindingsSummary): string {
 }
 
 // ---------------------------------------------------------------------------
-// The two deltas (design §7) — an absent reference renders as an explicit
+// The two deltas (the design of record) — an absent reference renders as an explicit
 // sentence, never as zeros; a present-but-flat delta renders its zeros.
 // ---------------------------------------------------------------------------
 
@@ -250,8 +259,18 @@ function renderDelta(label: string, delta: FindingDelta | null, emptyMessage: st
   const table = delta.new_findings.length > 0
     ? `<table><thead><tr><th>Sev</th><th>Title</th><th>Location</th></tr></thead><tbody>${rows}</tbody></table>`
     : '';
+  // What the delta could not compare is shown beside its counts — a finding
+  // one side did not measure is neither resolved nor new (history/runCompare.ts).
+  const gaps: string[] = [];
+  if ((delta.not_remeasured_count ?? 0) > 0) gaps.push(`${delta.not_remeasured_count} not re-measured`);
+  if ((delta.not_previously_measured_count ?? 0) > 0) {
+    gaps.push(`${delta.not_previously_measured_count} not previously measured`);
+  }
+  const caveat = gaps.length === 0
+    ? ''
+    : ` · <span class="pdk-delta-caveat">⚠ ${escapeHtml(gaps.join(', '))} (a scanner did not run on one side)</span>`;
   return `<div>
-  <p><strong>${escapeHtml(label)}:</strong> +${delta.new_count} new · -${delta.resolved_count} resolved · ${delta.unchanged_count} unchanged</p>
+  <p><strong>${escapeHtml(label)}:</strong> +${delta.new_count} new · -${delta.resolved_count} resolved · ${delta.unchanged_count} unchanged${caveat}</p>
   ${table}
 </div>`;
 }
@@ -372,7 +391,7 @@ function findingRow(f: Finding): string {
 }
 
 // ---------------------------------------------------------------------------
-// Hotspots — plain counts, not severity-weighted (design §12).
+// Hotspots — plain counts, not severity-weighted (the design of record).
 // ---------------------------------------------------------------------------
 
 function hotspotsSection(hotspots: readonly Hotspot[]): string {
@@ -483,6 +502,27 @@ function baselineMetaLine(baseline: BaselineState): string {
   const note = baseline.active.note ? ` — ${escapeHtml(baseline.active.note)}` : '';
   const age = baseline.age_days === null ? '' : ` (${baseline.age_days}d ago)`;
   return `<br><strong>Baseline:</strong> ${escapeHtml(baseline.active.set_at)}${age}${note}`;
+}
+
+// ---------------------------------------------------------------------------
+// Credential-finding redaction — see the module-level comment and the call
+// in `renderDashboard`.
+// ---------------------------------------------------------------------------
+
+function redactSnapshot(snapshot: DashboardSnapshot): DashboardSnapshot {
+  return {
+    ...snapshot,
+    findings: { ...snapshot.findings, items: redactCredentialSnippets(snapshot.findings.items) },
+    deltas: {
+      since_previous: redactDelta(snapshot.deltas.since_previous),
+      since_baseline: redactDelta(snapshot.deltas.since_baseline),
+    },
+  };
+}
+
+function redactDelta(delta: FindingDelta | null): FindingDelta | null {
+  if (delta === null) return null;
+  return { ...delta, new_findings: redactCredentialSnippets(delta.new_findings) };
 }
 
 // ---------------------------------------------------------------------------

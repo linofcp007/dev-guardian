@@ -1,7 +1,7 @@
 /**
  * Types for `create_fix_pr` — deciding which findings are fixable at all,
  * and how they group into one candidate pull request per ecosystem or
- * scanner (design doc the design of record).
+ * scanner (the design of record).
  *
  * `UpgradeStep` mirrors `depsUpdatePlan.ts`'s interface of the same name.
  * It is declared here, not imported, because that interface has no `export`
@@ -19,7 +19,19 @@ export interface UpgradeStep {
   classification: 'security' | 'patch' | 'minor' | 'major';
   ecosystem: 'npm' | 'pip' | 'composer' | 'cargo' | 'go' | 'rubygems' | 'dotnet' | 'unknown';
   reason?: string;
+  /** Argv-safe (no quoting): split on whitespace and run without a shell.
+   *  For a pip step, a human-readable label only — the step is an edit of
+   *  `file`, never a command (see `apply.ts`). */
   upgrade_command: string;
+  /** Active CVE ids on `installed_version`, for a `security` step. */
+  cve_ids?: string[];
+  /** The manifest a pip step edits, relative to the project. */
+  file?: string;
+  /** A shell-quoted copy of `upgrade_command`, for a human. Never run. */
+  shell_command?: string;
+  /** A second command that must run after `upgrade_command` for the fix to
+   *  take effect (an npm `overrides` step's `npm install --ignore-scripts`). */
+  follow_up_command?: string;
 }
 
 export type FixSource = 'deps' | 'semgrep';
@@ -30,10 +42,17 @@ export interface FixCandidate {
   fingerprints: string[];
   /** Highest severity among those findings. */
   severity: Severity;
-  /** For deps: the pinned upgrade command. For semgrep: null — the group runs one autofix pass. */
+  /** Display only: the first step's upgrade command (deps), or null (semgrep). */
   command: string | null;
   /** Human label: "lodash 4.17.20 -> 4.17.21", or the rule id for semgrep. */
   label: string;
+  /** deps: every step `deps_update_plan` planned for this package (one per
+   *  pinned requirements file, say), applied in order. semgrep: none. */
+  steps?: UpgradeStep[];
+  /** semgrep: the rule whose own autofix this candidate is. */
+  rule_id?: string;
+  /** semgrep: the target's file, relative to the project. */
+  file_path?: string;
 }
 
 export interface FixGroup {
@@ -55,10 +74,10 @@ export interface GroupSelection {
 }
 
 /**
- * The scan differential's verdict (design doc §4.1) — produced by
+ * The scan differential's verdict (the design of record) — produced by
  * `verify.ts#judgeScan`, consumed by `verify.ts#mayOpenPr` and, later, by
- * `pr.ts`'s report. Declared here rather than in `verify.ts` itself: design
- * doc §8's module table assigns `ScanVerdict`/`TestVerdict` to `types.ts`
+ * `pr.ts`'s report. Declared here rather than in `verify.ts` itself: the
+ * design of record's module table assigns `ScanVerdict`/`TestVerdict` to `types.ts`
  * alongside `FixCandidate`/`FixGroup`, matching how Task 1 already split
  * `candidates.ts`'s shapes out into this file rather than keeping them local.
  */
@@ -71,9 +90,11 @@ export interface ScanVerdict {
   new_findings: { fingerprint: string; severity: string; title: string }[];
 }
 
-/** The test differential's outcome (design doc §4.2's three-verdict table,
- *  plus `not_run` for a project with no derivable test command). */
-export type TestOutcome = 'passed' | 'broken_by_fix' | 'already_failing' | 'not_run';
+/** The test differential's outcome (the design of record's three-verdict table,
+ *  plus `not_run` for a project with no derivable test command, and
+ *  `unattributed` when the fix's run failed and the base-commit tree to
+ *  compare against could not be built — no PR either way). */
+export type TestOutcome = 'passed' | 'broken_by_fix' | 'already_failing' | 'not_run' | 'unattributed';
 
 /** The test differential's verdict — produced by `verify.ts#judgeTests`. */
 export interface TestVerdict {

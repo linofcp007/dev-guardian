@@ -1,7 +1,7 @@
 /**
  * `compareFindings` — the fingerprint delta between two scans, pure.
  *
- * Computed over fingerprint SETS, not array lengths (design doc §7), so a
+ * Computed over fingerprint SETS, not array lengths (the design of record), so a
  * side that (a caller merging scans could produce this) holds a repeated
  * fingerprint is never double-counted.
  *
@@ -11,7 +11,7 @@
  * `TruncationNotice` is returned describing the cut — never both a capped
  * list AND a capped count, which is the exact "something that did not
  * happen acquiring the appearance of having happened" this dashboard exists
- * to refuse (design doc §2, §8).
+ * to refuse (the design of record).
  */
 export function compareFindings(from, to, cap) {
     const fromFingerprints = new Set(from.findings.map((finding) => finding.fingerprint));

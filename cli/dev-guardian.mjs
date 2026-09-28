@@ -9,6 +9,7 @@
  *                           the hooks use, from a plain terminal / CI:
  *                             --file <path>   scan a file for secrets
  *                             --bash "<cmd>"  risk-assess a shell command
+ *                             --powershell    read it as PowerShell quotes too
  *   scan                    Headless CI entry point: run the same scan
  *                           pipeline the MCP tools run, gate the result
  *                           against the committed baseline, and report
@@ -20,6 +21,9 @@
  *                             --base-url <url>         include scan_dast
  *                             --authorized-target      confirm DAST target
  *                             --start-command <cmd> …  CLI ARGV ONLY, see below
+ *                             --accept-partial-parse <path>  repeatable, CLI ARGV
+ *                                                      ONLY: accept that Semgrep
+ *                                                      only partly parsed <path>
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -28,6 +32,22 @@
  *                             Same pipeline flags as `scan` except --fail-on,
  *                             --format and --sarif (baseline update does not
  *                             gate or render a report — it writes a file).
+ *   ci-init <host>          Generate a CI pipeline for the PROJECT being
+ *                           scanned (github, gitlab or bitbucket) — never
+ *                           for this repo, which ships none of its own.
+ *                           Actions pinned by full commit SHA; scanner
+ *                           binaries pinned by version and a sha256
+ *                           verified against the tool's own GitHub release.
+ *                             --project <path>   default: cwd
+ *                             --branch <name>     GitHub push trigger branch, default main
+ *                             --write             write the file (default: preview to stdout)
+ *                             --force             overwrite an existing pipeline file (with --write);
+ *                                                 never one that is a symlink out of the project
+ *                                                 or a broken one
+ *                             Needs network + git: resolves the release tag to its
+ *                             commit SHA and pins that, not just the tag.
+ *                             Exit codes: 0 done, 1 missing/unknown target or
+ *                             refused overwrite, 3 usage error
  *   status                  One-screen terminal summary of the latest scan
  *                           for this project (read-only — no scan runs).
  *                           Reports; does not gate: exits 0 even on a
@@ -72,31 +92,61 @@
  */
 
 import {
+  closeSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, join, parse, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync, spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
+import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
-import { buildSnapshot } from '../mcp/dist/dashboard/snapshot.js';
-import { renderStatus } from '../mcp/dist/dashboard/renderStatus.js';
-import { renderDashboard } from '../mcp/dist/dashboard/renderHtml.js';
-import { openDatabase, openDatabaseAtPath, resolveFallbackDbPath, Storage } from '../mcp/dist/storage/index.js';
-import { runMigrations } from '../mcp/dist/storage/migrations/runner.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/bin
+// `storage/*` and `dashboard/*` are NOT statically imported here (contrast
+// the five imports directly above, which are pure — no `node:sqlite`
+// anywhere in their own transitive closure, confirmed by grepping the built
+// `dist/` for it). `storage/db.ts` requires `node:sqlite` at MODULE LOAD
+// TIME (`createRequire(import.meta.url)('node:sqlite')`, top-level, not
+// inside a function) — still a gated/experimental Node builtin below the
+// project's own floor (Global Constraint 12: Node >= 22.13, no
+// `--experimental-sqlite` anywhere), so on an OLDER Node a static top-level
+// `import` of `storage/index.js` would throw the moment THIS FILE loads,
+// before `main()` runs and before argv is even inspected — every
+// invocation, including `--help`, `check`, and `mcp-config` (none of which
+// touch a database), would crash with a raw `ERR_UNKNOWN_BUILTIN_MODULE`
+// stack trace instead of running. `status`/`dashboard` are the only two
+// subcommands that ever need a database or a snapshot renderer; they load
+// this cluster lazily via `loadDashboardModules()` (mirroring
+// `loadCiModules()`'s identical reasoning for `scan`/`baseline update`,
+// just below), so every OTHER subcommand's process never touches
+// `node:sqlite` at all, on any Node version.
+
+const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
 const ROOT = resolve(HERE, '..'); // <plugin>
 const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
+// Item 6a: the absolute path this project's own CLI substitutes into every
+// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
+// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
+// file installed into ANOTHER project told the agent to run
+// `node cli/dev-guardian.mjs`, a path that exists only inside the
+// dev-guardian repo itself.
+const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
 
@@ -149,9 +199,10 @@ function usage() {
 
 Usage:
   node cli/dev-guardian.mjs mcp-config <host|all> [options]
-  node cli/dev-guardian.mjs check (--file <path> | --bash "<command>") [--min high|medium] [--json]
+  node cli/dev-guardian.mjs check (--file <path> | --bash "<command>" [--powershell]) [--min high|medium] [--json]
   node cli/dev-guardian.mjs scan [options]
   node cli/dev-guardian.mjs baseline update [options]
+  node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [options]
   node cli/dev-guardian.mjs status [--project <path>]
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
 
@@ -159,15 +210,29 @@ mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
   --write              Write/merge into the project (+ drop the rules file)
   --scope project|global   MCP scope (default project)
+  --global             Shorthand for --scope global. Also required to include a
+                        global-only host (windsurf, claude-desktop) when writing
+                        "all" — otherwise those two are skipped, never silently
+                        written to your global config
   --project <path>     Target project directory (default: current directory)
-  --force              Overwrite an existing rules file / update a differing MCP entry
+  --update-mcp         Refresh a stale MCP entry / rules block that already exists
+  --force              Deprecated alias of --update-mcp
+  Rules files are managed as a delimited block inside the target file
+  (<!-- dev-guardian:begin --> … <!-- dev-guardian:end -->) — your own content
+  around it is never touched or replaced.
+  Exit codes: 0 preview/write completed, 1 missing or unknown host,
+              2 usage error (e.g. --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
+  --powershell         With --bash: also read it with PowerShell's quoting, as
+                        the hook does for the PowerShell tool
   --min high|medium    Minimum secret confidence to report (default: medium)
   --json               Machine-readable output
-  Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic
+  Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
+             2 = usage error (no --file/--bash given) or the --file path does
+             not exist / could not be read
 
 scan — headless CI: run the scan pipeline, gate against the baseline, report
   --project <path>      Target project directory (default: current directory)
@@ -178,6 +243,10 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
+  --local-only          Semgrep runs only the rules on disk (the project's
+                         .semgrep.yml and registered custom rules) with
+                         --metrics=off: no registry download, no telemetry.
+                         Fewer rules than the default registry ruleset.
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
@@ -186,11 +255,28 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          a fork's pull request could otherwise edit
                          .guardian/ci.json and run arbitrary code on the
                          runner the moment this CLI read the key from there.
+  --accept-partial-parse <path>
+                         Repeatable. Semgrep could parse <path> (relative to
+                         --project) only in part — e.g. PHP's legal
+                         \`const NAMESPACE\` — and you accept that: when EVERY
+                         file a Semgrep step only partly parsed is accepted,
+                         its gap prints as "accepted" and does not force exit
+                         2. Coverage still reads partial (JSON, SARIF). Matched
+                         exactly: no globs, no directories. Parse errors only
+                         (PartialParsing, Syntax error, Lexical error): a
+                         per-file Timeout, a skipped, failed or scanned-nothing
+                         Semgrep, or any file not named, still exits 2. With
+                         --base-url, DAST never probed routes in those spans.
+                         CLI ARGV ONLY, like --start-command: a repository
+                         file declaring it is refused.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
-  and map_attack_surface write there, same as interactively) — add \`.guardian/\`
-  to .gitignore by hand. The MCP server does this automatically every time it
-  starts against a project; this CLI never starts that server.
+  and map_attack_surface write there, same as interactively) — add the two lines
+  \`**/.guardian/*\` and \`!**/.guardian/baseline.json\` to .gitignore by hand
+  (never a bare \`.guardian/\`: git cannot re-include a file below an ignored
+  directory, so the baseline CI needs could never be committed; \`**/\` covers
+  a sub-project's .guardian/ too). The MCP server writes
+  them every time it starts against a project; this CLI never starts that server.
   --sarif records coverage as a single pass/fail bit (SARIF's own
   invocation.executionSuccessful) — enough to tell an incomplete run from a clean
   one without cross-referencing anything else, but not WHICH scanner was missing
@@ -203,13 +289,54 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
 
 baseline update — regenerate .guardian/baseline.json from the current scan
   Same pipeline flags as scan: --project, --base-url, --authorized-target,
-  --start-command (same argv-only rule, --base-url requirement, and
+  --local-only, --start-command (same argv-only rule, --base-url requirement, and
   teardown). No --fail-on/--format/--sarif — this command does not gate or
   render a report, it writes a file.
   The ONLY dev-guardian command that writes the baseline; scan never does.
   Exit codes: 0 written with full coverage, 2 written but an expected
               scanner did not run (baseline may under-represent findings),
               3 usage or configuration error.
+
+ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project being scanned
+  --project <path>     Target project directory (default: current directory)
+  --branch <name>       Branch the GitHub template triggers on push for (default: main);
+                        no effect on gitlab/bitbucket, which trigger on the repo's own
+                        default branch without naming one
+  --write               Write the pipeline file (default: preview to stdout)
+  --force               With --write, overwrite an existing pipeline file
+                        (without it, an existing file is left untouched).
+                        Still refused (exit 3) when that file is a symlink
+                        that resolves outside the project, or a broken one;
+                        replaced in one step (temp file + rename), never
+                        written through a link
+  Writes: github -> .github/workflows/dev-guardian.yml
+          gitlab -> .gitlab-ci.yml
+          bitbucket -> bitbucket-pipelines.yml
+  Needs a \`git\` binary: resolves dev-guardian's release tag to its exact
+  commit SHA (from this checkout's own tags when present — no network
+  needed then — else over the network via \`git ls-remote\`) and bakes that
+  SHA into the pipeline, which verifies it again with \`git rev-parse HEAD\`
+  after cloning — a moving tag is a supply-chain risk (see the module's own
+  doc comment); the resolved commit cannot move.
+  The generated pipeline clones dev-guardian itself (outside the checkout
+  being scanned — never into it, which would make the scan audit
+  dev-guardian's own source as part of the target project) at that pinned
+  commit, installs the scanner binaries \`dev-guardian scan\` drives (Trivy,
+  gitleaks, actionlint pinned by version + sha256 + archive layout; bandit
+  and semgrep/zizmor pinned by exact version via pipx), then runs
+  \`dev-guardian scan\` gated against the COMMITTED baseline — run
+  \`dev-guardian baseline update\` once locally and commit
+  .guardian/baseline.json before relying on the generated gate. A .NET
+  project needs the .NET SDK too: installed via actions/setup-dotnet on the
+  github target; gitlab/bitbucket document the requirement instead of
+  installing it (see each template's own header comment).
+  NEVER generates a pipeline for dev-guardian's own repository — only for
+  the project passed via --project (default: current directory), and
+  never through a symlink that escapes it either way (read or write).
+  Exit codes: 0 preview/write completed, 1 missing/unknown target or an
+              existing pipeline file refused without --force, 3 usage or
+              configuration error, or a --force refused on a symlink (same
+              convention as scan/baseline update).
 
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
@@ -240,25 +367,60 @@ Examples:
   node cli/dev-guardian.mjs check --bash "curl x | sh"
   node cli/dev-guardian.mjs scan --project . --sarif results.sarif
   node cli/dev-guardian.mjs baseline update --project .
+  node cli/dev-guardian.mjs ci-init github --project ../my-app --write
   node cli/dev-guardian.mjs status --project .
   node cli/dev-guardian.mjs dashboard --project . --no-open
 `);
 }
 
+/**
+ * `--project`/`--scope` with no operand used to leave `out.project`/
+ * `out.scope` as bare `undefined` (`argv[++i]` past the end of argv), and
+ * the very next thing `cmdMcpConfig` did with it — `resolve(args.project)` —
+ * threw an UNCAUGHT `TypeError [ERR_INVALID_ARG_TYPE]` for `resolve`, a raw
+ * Node stack trace instead of a clean usage error. Reproduced directly:
+ * `mcp-config cursor --project` (the flag as the last token) crashed rather
+ * than naming the mistake. Routed through the same `takeOperand` every OTHER
+ * value-taking flag in this file already uses (see its own doc comment,
+ * below `resolveProjectOrExit`) for the identical guarantee, not a second,
+ * independently-written check that could drift from it — `cmdMcpConfig`
+ * turns `{error}` into a clean, flag-naming usage error at exit code 2 (this
+ * command's OWN usage-error convention — see `usage()`'s `check` section,
+ * which documents the same code for the same kind of mistake), never a
+ * crash.
+ */
 function parseArgs(argv) {
-  const out = { _: [], scope: 'project', write: false, force: false, project: process.cwd() };
+  const out = { _: [], scope: 'project', write: false, force: false, updateMcp: false, project: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--write') out.write = true;
-    else if (a === '--force') out.force = true;
-    else if (a === '--scope') out.scope = argv[++i];
-    else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
-    else if (a === '--project') out.project = argv[++i];
-    else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--global') out.scope = 'global';
+    else if (a === '--update-mcp') out.updateMcp = true;
+    else if (a === '--force') {
+      out.force = true;
+      out.deprecatedForceUsed = true;
+    } else if (a === '--scope') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.scope = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
+    else if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else out._.push(a);
   }
   if (out.scope !== 'project' && out.scope !== 'global') out.scope = 'project';
-  return out;
+  // `--force` is a deprecated alias of `--update-mcp` (item 6b): both drive
+  // the exact same underlying `force` behaviour downstream (a stale MCP
+  // entry / rules block gets updated in place), so they collapse to one
+  // flag here rather than `setupHost` having to know about two names for
+  // the same thing.
+  out.force = out.force || out.updateMcp;
+  return { value: out };
 }
 
 function indent(s) {
@@ -269,7 +431,19 @@ function indent(s) {
 }
 
 function cmdMcpConfig(argv) {
-  const args = parseArgs(argv);
+  const parsed = parseArgs(argv);
+  if (parsed.error) {
+    // This command's own usage-error convention (see `usage()`'s `check`
+    // section, which documents the same code for the same kind of mistake) —
+    // exit 2, never the uncaught TypeError this replaces.
+    process.stderr.write(`error: ${parsed.error}\n\n`);
+    usage();
+    process.exit(2);
+  }
+  const args = parsed.value;
+  if (args.deprecatedForceUsed) {
+    process.stderr.write('warning: --force is deprecated; use --update-mcp instead.\n');
+  }
   const hostArg = args._[0];
   if (!hostArg || !VALID_HOSTS.has(hostArg)) {
     process.stderr.write(`Missing or unknown host: ${hostArg ?? '(none)'}\n\n`);
@@ -293,6 +467,7 @@ function cmdMcpConfig(argv) {
       projectPath,
       hostsDir: HOST_RULES_DIR,
       serverJsPath: SERVER_JS,
+      cliPath: CLI_JS,
       env,
       scope: args.scope,
       registerMcp: true,
@@ -332,7 +507,7 @@ function cmdMcpConfig(argv) {
 }
 
 function parseCheckArgs(argv) {
-  const out = { file: undefined, bash: undefined, min: 'medium', json: false };
+  const out = { file: undefined, bash: undefined, min: 'medium', json: false, powershell: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--file') out.file = argv[++i];
@@ -342,6 +517,7 @@ function parseCheckArgs(argv) {
     else if (a === '--min') out.min = argv[++i];
     else if (a.startsWith('--min=')) out.min = a.slice('--min='.length);
     else if (a === '--json') out.json = true;
+    else if (a === '--powershell') out.powershell = true;
   }
   if (out.min !== 'high' && out.min !== 'medium') out.min = 'medium';
   return out;
@@ -364,7 +540,7 @@ function cmdCheck(argv) {
   const opts = parseCheckArgs(argv);
 
   if (opts.bash != null) {
-    const a = assessBashCommand(opts.bash);
+    const a = assessBashCommand(opts.bash, { shell: opts.powershell ? 'powershell' : 'bash' });
     if (opts.json) {
       process.stdout.write(JSON.stringify(a) + '\n');
     } else {
@@ -473,7 +649,7 @@ async function loadCiModules() {
 /**
  * Default budget for `--start-command` to become healthy — generous for a
  * typical `npm start`/build-then-serve boot (which can genuinely take tens
- * of seconds under a cold cache) while still bounded: design doc §7 and the
+ * of seconds under a cold cache) while still bounded: the design of record and the
  * app-runner module both exist because "a hang is the worst failure mode in
  * CI" (a job that never finishes burns its whole budget and the log says
  * nothing). Not exposed as a flag — the brief scopes `--start-command` to
@@ -483,7 +659,7 @@ async function loadCiModules() {
 const APP_START_TIMEOUT_MS = 60_000;
 
 /**
- * The pwn-request guard (design doc §7). `--start-command` may be supplied
+ * The pwn-request guard (the design of record). `--start-command` may be supplied
  * only on argv — never honoured from a file inside the scanned repository,
  * because that file can arrive via a pull request from a fork, and a CLI
  * that read a command to run from it would hand that fork arbitrary code
@@ -521,6 +697,59 @@ function startCommandRefusalMessage(configPath) {
     `code on the CI runner. Remove start_command from ${CI_CONFIG_RELATIVE_PATH} and pass ` +
     '--start-command as a command-line argument instead.'
   );
+}
+
+/**
+ * `--accept-partial-parse` is argv-only too, by the same rule as
+ * `--start-command`: it widens what the gate lets through, and a repository
+ * file a fork's pull request can edit must never do that. A
+ * `.guardian/ci.json` declaring `accept_partial_parse` is refused outright —
+ * loudly, rather than read or silently ignored. Returns the config path when
+ * it declares the key, else `null`; lenient on everything else, like
+ * `findStartCommandInRepoConfig`.
+ */
+function findAcceptPartialParseInRepoConfig(projectPath) {
+  const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
+  if (!existsSync(configPath)) return null;
+  let data;
+  try {
+    data = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data) && data.accept_partial_parse !== undefined) {
+    return configPath;
+  }
+  return null;
+}
+
+function acceptPartialParseRefusalMessage(configPath) {
+  return (
+    `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "accept_partial_parse" (found at ${configPath}). ` +
+    '--accept-partial-parse may only be supplied on the command line, never from a file inside the ' +
+    'repository — a pull request could otherwise edit this file and turn a scan gap into a pass. ' +
+    `Remove accept_partial_parse from ${CI_CONFIG_RELATIVE_PATH} and pass --accept-partial-parse <path> ` +
+    'in the pipeline definition instead.'
+  );
+}
+
+/**
+ * Why a `--accept-partial-parse` value cannot name a project file, or null.
+ * The gate matches it exactly against project-relative paths, so an absolute
+ * path or one climbing out with `..` could never match anything — refused as
+ * a usage error rather than accepted and silently useless. Backslashes and a
+ * leading `./` are fine (the gate normalises both); globs are not expanded,
+ * so `*.php` is the literal file name `*.php`.
+ */
+function checkAcceptedPartialParse(value) {
+  const posix = value.replace(/\\/g, '/');
+  if (isAbsolute(value) || posix.startsWith('/') || /^[A-Za-z]:/.test(value)) {
+    return `--accept-partial-parse takes a path relative to --project, not an absolute one (got '${value}')`;
+  }
+  if (posix.split('/').includes('..')) {
+    return `--accept-partial-parse takes a path inside --project; '..' cannot name a scanned file (got '${value}')`;
+  }
+  return null;
 }
 
 /** Shared by `parseScanArgs`/`parseBaselineUpdateArgs`: `--start-command`
@@ -617,7 +846,9 @@ function parseScanArgs(argv) {
     sarif: undefined,
     baseUrl: undefined,
     authorizedTarget: false,
+    localOnly: false,
     startCommand: undefined,
+    acceptPartialParse: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -627,7 +858,24 @@ function parseScanArgs(argv) {
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--fail-on') {
+    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+      // Repeatable; each value a project-relative file (see
+      // `checkAcceptedPartialParse`). requireNonEmpty: an unset CI variable
+      // must not silently accept nothing and read as if it had.
+      let value;
+      if (a === '--accept-partial-parse') {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        value = r.value;
+        i = r.nextIndex;
+      } else {
+        value = a.slice('--accept-partial-parse='.length);
+        if (isMissingOperand(value, true)) return { error: '--accept-partial-parse requires a value' };
+      }
+      const problem = checkAcceptedPartialParse(value);
+      if (problem) return { error: problem };
+      out.acceptPartialParse.push(value);
+    } else if (a === '--fail-on') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.failOn = r.value;
@@ -659,6 +907,7 @@ function parseScanArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
+    else if (a === '--local-only') out.localOnly = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -672,6 +921,7 @@ function parseBaselineUpdateArgs(argv) {
     project: process.cwd(),
     baseUrl: undefined,
     authorizedTarget: false,
+    localOnly: false,
     startCommand: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -689,6 +939,7 @@ function parseBaselineUpdateArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
+    else if (a === '--local-only') out.localOnly = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -882,6 +1133,10 @@ async function cmdScan(argv) {
 
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
+  // The same argv-only rule for --accept-partial-parse, checked whatever argv
+  // says (see `findAcceptPartialParseInRepoConfig`).
+  const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
+  if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -914,6 +1169,7 @@ async function cmdScan(argv) {
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
+      localOnly: opts.localOnly ? true : undefined,
     });
   } catch (e) {
     pipelineError = e;
@@ -942,6 +1198,8 @@ async function cmdScan(argv) {
     failOn: opts.failOn,
     steps: result.steps,
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
+    // argv only — see `findAcceptPartialParseInRepoConfig`.
+    acceptedPartialParses: opts.acceptPartialParse,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human
@@ -967,7 +1225,7 @@ async function cmdScan(argv) {
   // async I/O to flush, so a large write — and `renderHuman`/`renderJson`
   // are UNBOUNDED, scaling with finding count, worst case on exactly the
   // "first scan of an existing codebase, baseline absent, everything new"
-  // case design doc §4 names — can be truncated mid-write on a real Linux CI
+  // case the design of record names — can be truncated mid-write on a real Linux CI
   // runner (invisible in this project's own tests, all of which run on
   // Windows, where stdout-to-pipe is synchronous). Setting `exitCode` and
   // returning lets Node exit on its own once the event loop drains AND the
@@ -1031,6 +1289,7 @@ async function cmdBaseline(argv) {
       projectPath,
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
+      localOnly: opts.localOnly ? true : undefined,
     });
   } catch (e) {
     pipelineError = e;
@@ -1128,12 +1387,597 @@ async function cmdBaseline(argv) {
   return;
 }
 
+// --- ci-init (CI config generator, Task 21) -------------------------------
+//
+// `dev-guardian ci-init <github|gitlab|bitbucket>` writes a CI pipeline for
+// the project being scanned — NEVER for this repo, which has none of its
+// own (Global Constraint 7). Kept free of `node:sqlite`: it renders a
+// static template with values read from two JSON files
+// (.claude-plugin/plugin.json, configs/ci/pinned.json) and writes a file —
+// no scan runs, so there is nothing here that needs `loadCiModules()`/
+// `loadDashboardModules()`'s lazy-import dance at all, and `ci-init` works
+// on any supported Node version, not just >= 22.13. It DOES need a `git`
+// binary now (fix round 1, "pin the one component that runs everything"):
+// it resolves the release tag to its exact commit SHA at generation time —
+// from THIS checkout's own tags when it has the tag (no network at all,
+// the common case), else over the network via `git ls-remote` — and bakes
+// that SHA into the template, which then verifies it with `git rev-parse
+// HEAD` in the pipeline itself, after cloning by tag — the tag is a moving
+// pointer an attacker who compromised the release process (or force-pushed
+// over it) could repoint after this file was generated; the resolved commit cannot
+// move without changing its own hash. Same reasoning Trivy's own
+// GHSA-69fq-xp46-6x23 lesson already lives in this codebase for
+// (`installCatalog.ts`'s `TRIVY_INSTALL_TAG` comment).
+
+const CONFIGS_CI_DIR = resolve(ROOT, 'configs', 'ci');
+const PINNED_PATH = resolve(CONFIGS_CI_DIR, 'pinned.json');
+const PLUGIN_JSON_PATH = resolve(ROOT, '.claude-plugin', 'plugin.json');
+const DEFAULT_CI_BRANCH = 'main';
+
+/**
+ * One entry per `ci-init` target: which template under `configs/ci/` to
+ * render, and where the rendered pipeline lives in the TARGET project —
+ * each path is GitHub's/GitLab's/Bitbucket's own fixed convention, not a
+ * choice this tool makes.
+ */
+const CI_TARGETS = {
+  github: { templateFile: 'github.yml', outputPath: join('.github', 'workflows', 'dev-guardian.yml') },
+  gitlab: { templateFile: 'gitlab.yml', outputPath: '.gitlab-ci.yml' },
+  bitbucket: { templateFile: 'bitbucket.yml', outputPath: 'bitbucket-pipelines.yml' },
+};
+
+function parseCiInitArgs(argv) {
+  const out = { _: [], project: process.cwd(), write: false, force: false, branch: DEFAULT_CI_BRANCH };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--write') out.write = true;
+    else if (a === '--force') out.force = true;
+    else if (a === '--project') {
+      const r = takeOperand(argv, i, a);
+      if (r.error) return { error: r.error };
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
+    else if (a === '--branch') {
+      const r = takeOperand(argv, i, a, true); // requireNonEmpty — an empty branch name is never meaningful
+      if (r.error) return { error: r.error };
+      out.branch = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--branch=')) {
+      const value = a.slice('--branch='.length);
+      if (value.length === 0) return { error: '--branch requires a value' };
+      out.branch = value;
+    } else if (a.startsWith('--')) return { error: `Unknown flag: ${a}` };
+    else out._.push(a);
+  }
+  return { value: out };
+}
+
+/**
+ * Substitutes every `{{KEY}}` token in `text` with `vars[KEY]`, then
+ * refuses (throws) if anything shaped LIKE a placeholder survives — a
+ * safety net against a template referencing a variable this function was
+ * never given, which would otherwise leak a literal `{{TYPO}}` into a
+ * generated CI pipeline silently. The leftover check uses the EXACT SAME
+ * token shape as the substitution itself (`{{[A-Z0-9_]+}}`), not a generic
+ * `{{...}}`: a generic one also matches GitHub Actions' own live expression
+ * syntax, `${{ github.event_name }}` — its INNER `{{ github.event_name }}`
+ * fits a naive `\{\{[^}]*\}\}` even though the leading `$` makes it a
+ * completely different, legitimate thing this function never touches (the
+ * substitution regex already requires `[A-Z0-9_]+` with no spaces or dots,
+ * so it never matches a real expression either — only the leftover check
+ * had the wider, wrong pattern).
+ */
+const PLACEHOLDER_TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
+
+export function renderCiTemplate(text, vars) {
+  const rendered = text.replace(PLACEHOLDER_TOKEN, (whole, key) => {
+    if (!Object.hasOwn(vars, key)) throw new Error(`ci-init: template references unknown placeholder {{${key}}}`);
+    return String(vars[key]);
+  });
+  const leftover = new RegExp(PLACEHOLDER_TOKEN.source).exec(rendered);
+  if (leftover) throw new Error(`ci-init: unresolved placeholder in rendered template: ${leftover[0]}`);
+  return rendered;
+}
+
+function readJsonOrExit(path, label) {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    return usageError(`ci-init: could not read ${label} (${path}): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return usageError(`ci-init: ${label} (${path}) is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** `https://…` — the shape `git clone` needs; refuses anything else (a bare `owner/repo` slug, a `git@` SSH form, or garbage). */
+const REPO_URL_SHAPE = /^https:\/\/\S+$/;
+/** `vX.Y.Z` — a plain, unambiguous release tag. Refuses a pre-release/build suffix too: `git clone --branch` needs an exact ref, never a range. */
+const RELEASE_TAG_SHAPE = /^v\d+\.\d+\.\d+$/;
+
+/**
+ * `pinned.<section>[<key>]` -> `<KEY>_<SUFFIX>` placeholder entries, driven
+ * by `fieldSuffix` (which JSON field becomes which placeholder suffix) —
+ * one small map instead of hand-enumerating every `PACK_FIELD: pinned.pack.field`
+ * line per scanner/action, so adding an entry to `pinned.json` cannot drift
+ * from what this function derives: it either shows up under its own
+ * `<KEY>_<SUFFIX>` name automatically, or (a field `fieldSuffix` does not
+ * name, e.g. a future scanner-specific extra) is silently not turned into a
+ * placeholder at all — never silently WRONG, only silently absent, and a
+ * template referencing it would fail loudly via `renderCiTemplate`'s own
+ * unknown-placeholder check. Keys starting with `_` (`_readme`, `_note`, …)
+ * are documentation, not data, and are skipped.
+ */
+function placeholdersFromSection(pinned, sectionName, fieldSuffix) {
+  const section = pinned[sectionName];
+  if (typeof section !== 'object' || section === null || Array.isArray(section)) {
+    throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}" is missing or not an object`);
+  }
+  const out = {};
+  for (const [key, entry] of Object.entries(section)) {
+    if (key.startsWith('_')) continue;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}.${key}" is not an object`);
+    }
+    const prefix = key.toUpperCase();
+    for (const [field, suffix] of Object.entries(fieldSuffix)) {
+      const value = entry[field];
+      if (value === undefined) continue; // e.g. semgrep/zizmor have no url/sha256
+      out[`${prefix}_${suffix}`] = value;
+    }
+  }
+  return out;
+}
+
+/** A plain git ref/branch name: no whitespace, none of the characters YAML flow syntax or a shell would read specially. */
+const BRANCH_NAME_SHAPE = /^[A-Za-z0-9._/-]+$/;
+/** A full, lower-hex, 40-character commit SHA. */
+const COMMIT_SHA_SHAPE = /^[0-9a-f]{40}$/;
+
+/**
+ * Resolves `tag` on `repoUrl` to the commit it actually names — tried
+ * locally first (`resolveTagLocally`, no network at all, the common case),
+ * falling back to the network only when the local checkout cannot answer
+ * (`resolveTagRemotely`). Returns null when NEITHER can — no `git` at all,
+ * offline with no local tag either, or an unknown tag — never throws.
+ */
+/**
+ * Test seam (fix round 2): `GUARDIAN_CI_INIT_PIN_SHA`, honoured ONLY when
+ * set, skips both the local-tag lookup and the network fallback entirely.
+ * Real, undoctored need for it: this repo bumps `.claude-plugin/
+ * plugin.json`'s `version` and tags the release SEPARATELY — the version
+ * is committed first, the tag comes later — so between those two steps
+ * (which is most of the time a release branch exists at all) neither
+ * `resolveTagLocally` nor `resolveTagRemotely` has an answer, and every
+ * `ci-init` call in the test suite would exit 3 for a reason that has
+ * nothing to do with what the suite is testing. Production `ci-init` never
+ * sets this itself; only a test's own `env` does.
+ */
+function resolveDevGuardianCommitSha(repoUrl, tag) {
+  const pinned = process.env['GUARDIAN_CI_INIT_PIN_SHA'];
+  if (pinned !== undefined) {
+    return COMMIT_SHA_SHAPE.test(pinned) ? pinned : null;
+  }
+  return resolveTagLocally(tag) ?? resolveTagRemotely(repoUrl, tag);
+}
+
+/**
+ * `tag` resolved from THIS CLI's own checkout (`ROOT`) — no network at all.
+ * `ci-init` normally runs from inside a clone of dev-guardian itself, and
+ * that clone's own refs already carry the answer whenever it is a full,
+ * unmodified clone/fetch — confirmed directly against this repo's own
+ * checkout. `^{commit}` peels either tag shape (lightweight or annotated)
+ * down to the commit in one call, so there is no separate-line parsing to
+ * get wrong the way a raw `ls-remote` listing needs (see
+ * `resolveTagRemotely`). Null when `ROOT` is not a git repo, or does not
+ * have this tag (a shallow or tag-less install) — `resolveDevGuardianCommitSha`
+ * falls back to the network in either case, never assumes offline means
+ * "unknown".
+ */
+function resolveTagLocally(tag) {
+  try {
+    const sha = execFileSync(
+      'git',
+      ['-C', ROOT, 'rev-parse', '--verify', `refs/tags/${tag}^{commit}`],
+      { encoding: 'utf8', timeout: 10_000, windowsHide: true },
+    ).trim();
+    return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `tag` on `repoUrl`, resolved over the network via `git ls-remote --tags`
+ * — the fallback when `resolveTagLocally` cannot answer. Deliberately NOT
+ * `git ls-remote --tags <url> <tag>` (a single-ref query): dev-guardian's
+ * own release tags are ANNOTATED — confirmed directly (`git ls-remote
+ * --tags` against the real repo lists TWO lines per tag) — and a
+ * single-ref query returns only the tag OBJECT's own SHA, not the commit
+ * it points at and `git checkout`/`git clone --branch` actually resolves
+ * to; verified they differ for this project's own v2.0.0 tag. The full
+ * listing includes a second, `^{}`-suffixed line for an annotated tag's
+ * dereferenced commit; this prefers that line when present and falls back
+ * to the plain one only for a lightweight tag (no such line at all).
+ * Returns null on any failure — no network, no `git`, unknown tag, or an
+ * answer not shaped like a commit SHA — never throws.
+ */
+function resolveTagRemotely(repoUrl, tag) {
+  let out;
+  try {
+    out = execFileSync('git', ['ls-remote', '--tags', repoUrl], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      windowsHide: true,
+    });
+  } catch {
+    return null;
+  }
+  let plain;
+  let peeled;
+  for (const line of out.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const sha = line.slice(0, tab).trim();
+    const ref = line.slice(tab + 1).trim();
+    if (ref === `refs/tags/${tag}`) plain = sha;
+    else if (ref === `refs/tags/${tag}^{}`) peeled = sha;
+  }
+  const sha = peeled ?? plain;
+  return sha !== undefined && COMMIT_SHA_SHAPE.test(sha) ? sha : null;
+}
+
+/** Builds the placeholder table every `configs/ci/*.yml` template draws from — see `renderCiTemplate`. */
+function ciTemplateVars(plugin, pinned, branch) {
+  if (typeof plugin !== 'object' || plugin === null || Array.isArray(plugin)) {
+    return usageError(`ci-init: ${PLUGIN_JSON_PATH} does not contain a JSON object`);
+  }
+  if (typeof pinned !== 'object' || pinned === null || Array.isArray(pinned)) {
+    return usageError(`ci-init: ${PINNED_PATH} does not contain a JSON object`);
+  }
+  const repo = plugin.repository;
+  if (typeof repo !== 'string' || !REPO_URL_SHAPE.test(repo)) {
+    return usageError(
+      `ci-init: ${PLUGIN_JSON_PATH}'s "repository" (${JSON.stringify(repo)}) is not an https:// URL`,
+    );
+  }
+  const tag = typeof plugin.version === 'string' ? `v${plugin.version}` : '';
+  if (!RELEASE_TAG_SHAPE.test(tag)) {
+    return usageError(
+      `ci-init: ${PLUGIN_JSON_PATH}'s "version" (${JSON.stringify(plugin.version)}) is not a plain X.Y.Z ` +
+        'release version — refusing to render a `git clone --branch` target this loosely shaped.',
+    );
+  }
+  if (!BRANCH_NAME_SHAPE.test(branch)) {
+    return usageError(`ci-init: --branch ${JSON.stringify(branch)} is not a plain branch name`);
+  }
+  const sha = resolveDevGuardianCommitSha(repo, tag);
+  if (sha === null) {
+    return usageError(
+      `ci-init: could not resolve ${tag} to a commit SHA — neither this checkout's own tags nor ` +
+        `\`git ls-remote --tags ${repo}\` had an answer. ci-init needs a \`git\` binary (found on PATH?) ` +
+        'and, unless this checkout already has the tag, network access — it pins the exact commit the ' +
+        'generated pipeline verifies against, not just the tag name (a moving tag is a supply-chain risk; ' +
+        'see the module doc comment).',
+    );
+  }
+  let actionVars;
+  let scannerVars;
+  try {
+    actionVars = placeholdersFromSection(pinned, 'actions', { sha: 'SHA', version: 'VERSION' });
+    scannerVars = placeholdersFromSection(pinned, 'scanners', {
+      version: 'VERSION',
+      linux_amd64_url: 'URL',
+      linux_amd64_sha256: 'SHA256',
+      archive_member: 'MEMBER',
+    });
+  } catch (e) {
+    return usageError(e instanceof Error ? e.message : String(e));
+  }
+  return {
+    DEV_GUARDIAN_REPO: repo,
+    DEV_GUARDIAN_TAG: tag,
+    DEV_GUARDIAN_SHA: sha,
+    DEFAULT_BRANCH: branch,
+    ...actionVars,
+    ...scannerVars,
+  };
+}
+
+/**
+ * Whether `projectPath` is dev-guardian's OWN checkout, OR is INSIDE it —
+ * the one place `ci-init` must never write to (Global Constraint 7: no
+ * GitHub Actions in this repo; the brief's own words, "never for this
+ * repo"). A CONTAINMENT check, not mere equality: `--project <this
+ * repo>/mcp` is still inside the checkout, and `--write` there would create
+ * `.github/workflows/dev-guardian.yml` (or the other targets' equivalents)
+ * somewhere under this repo's own tree — exactly what the constraint
+ * forbids, just one directory removed from the obvious case. Checked
+ * lexically first, then again on the real paths (mirrors
+ * `isRunAsEntryPoint`'s own reasoning below for the identical hazard, and
+ * `scanContainers.ts#isInside` upstream in `mcp/src/`): a symlink INTO this
+ * checkout must refuse exactly like a direct path into it, and a path
+ * `realpathSync` cannot resolve must read as "not inside" rather than
+ * crash a usage check.
+ */
+/** Whether `candidate` (an absolute, already-resolved path) IS `root` or is inside it. */
+function isWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+}
+
+function isDevGuardianOwnRepo(projectPath) {
+  if (isWithin(resolve(ROOT), resolve(projectPath))) return true;
+  try {
+    return isWithin(realpathSync(ROOT), realpathSync(projectPath));
+  } catch {
+    return false;
+  }
+}
+
+function safeRealpath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+function safeLstat(p) {
+  try {
+    return lstatSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The first ALREADY-EXISTING ancestor directory of `outPath`, between
+ * `projectPath` and `outPath`'s own parent, that resolves outside
+ * `projectPath` — or null when every existing one stays inside (an
+ * ancestor that does not exist yet is not checked: `mkdirSync` creates it
+ * fresh, with nothing to escape through). Github's nested output
+ * (`.github/workflows/dev-guardian.yml`) is the case this matters for: a
+ * `.github` that is already a symlink pointing outside the project would
+ * otherwise have `mkdirSync(..., { recursive: true })` silently create
+ * `workflows/` THROUGH it, and the write would land outside the project
+ * entirely. gitlab/bitbucket's flat, root-level output paths have no
+ * intermediate ancestor to check at all.
+ *
+ * Does NOT check `outPath` itself — a symlinked LEAF (the pipeline file's
+ * own name already existing as a symlink) is a different hazard, handled at
+ * the write: a plain `--write` publishes with `link()` (`createFile`), which
+ * refuses ANY existing entry at that name, a dangling symlink included, and
+ * never follows one; `--force` refuses a leaf link that escapes or dangles
+ * (`refuseEscapingLeafSymlink`) and otherwise replaces the entry by rename
+ * (`replaceFile`). Not `wx` alone: on Windows a `wx` open over a dangling
+ * symlink follows it and creates the link's target, wherever that is.
+ */
+function firstEscapingAncestor(projectPath, outPath) {
+  const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
+  const segments = relative(projectPath, outPath).split(sep).filter((s) => s.length > 0);
+  let current = projectPath;
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = join(current, segments[i]);
+    if (!existsSync(current)) continue;
+    const real = safeRealpath(current);
+    if (real === null) continue;
+    if (!isWithin(rootReal, real)) return current;
+  }
+  return null;
+}
+
+/**
+ * Guards `--force` specifically: an existing `outPath` that is a symlink
+ * resolving OUTSIDE the project, or a broken one (pointing nowhere this
+ * process can resolve), is refused — never "fixed" by guessing what the
+ * link was for. The write itself (`replaceFile`) replaces a link rather
+ * than following it, so this refusal is about intent, not mechanics: a
+ * pipeline file that is a link out of the project is not this command's
+ * to replace.
+ *
+ * Returns `{ ok: true }` when `outPath` is not a symlink, or is one that
+ * resolves INSIDE the project (replaced by a plain file — what `--force`
+ * means for every other existing path); `{ ok: false, reason }` otherwise.
+ */
+function refuseEscapingLeafSymlink(projectPath, outPath) {
+  const st = safeLstat(outPath);
+  if (st === null || !st.isSymbolicLink()) return { ok: true };
+  const real = safeRealpath(outPath);
+  const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
+  if (real === null || !isWithin(rootReal, real)) {
+    return {
+      ok: false,
+      reason: real === null ? 'it is a broken symlink' : 'it is a symlink that resolves outside the project',
+    };
+  }
+  return { ok: true };
+}
+
+/** Remove `path`, ignoring a failure: it is a temp file this command made. */
+function removeTemp(path) {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone, or held open by a scanner: the name is random and hidden.
+  }
+}
+
+/**
+ * A fresh temp file beside `outPath` holding `content`; its path. The name is
+ * random (`crypto.randomBytes`) and the file is opened `wx`: an entry already
+ * at that name — anyone's, a link included — fails the open with EEXIST and
+ * is never written to or deleted. Once the open succeeded the file is this
+ * call's, and a failed write removes it.
+ */
+function writeTempBeside(outPath, content) {
+  const { dir, base } = parse(outPath);
+  const tmp = join(dir, `.${base}.${randomBytes(8).toString('hex')}.tmp`);
+  const fd = openSync(tmp, 'wx');
+  let written = false;
+  try {
+    writeFileSync(fd, content, 'utf8');
+    written = true;
+  } finally {
+    closeSync(fd);
+    if (!written) removeTemp(tmp);
+  }
+  return tmp;
+}
+
+/**
+ * `--force`'s write: a temp file beside `outPath`, renamed over it in one
+ * step. A rename replaces the directory ENTRY — a symlink or a hard link at
+ * `outPath` is replaced, never written through (a truncating `'w'` write goes
+ * through the inode every name of the file shares) — and `outPath` is never
+ * absent or half-written.
+ */
+function replaceFile(outPath, content) {
+  const tmp = writeTempBeside(outPath, content);
+  try {
+    renameSync(tmp, outPath);
+  } catch (e) {
+    removeTemp(tmp);
+    throw e;
+  }
+}
+
+/**
+ * A plain `--write`: creates `outPath` only when NOTHING is at that name.
+ * Returns false, having written nothing there, when something is.
+ *
+ * The file is written to a temp file and published with `link()`, which
+ * refuses any existing entry at `outPath` — a dangling symlink included —
+ * with EEXIST, and never follows one. Not a `wx` open: on Windows a `wx`
+ * (CREATE_NEW) open over a DANGLING symlink follows it and creates the
+ * link's target, wherever it points (measured), which would put the pipeline
+ * outside the project. The published file is complete from its first moment.
+ *
+ * Where hard links are not supported (FAT/exFAT, some network shares), this
+ * falls back to an `lstat` check and a `wx` write. That leaves one race, on
+ * Windows only: a dangling symlink created at `outPath` between the check and
+ * the open would be followed. POSIX `O_EXCL` never follows a link.
+ */
+function createFile(outPath, content) {
+  const tmp = writeTempBeside(outPath, content);
+  try {
+    linkSync(tmp, outPath);
+    return true;
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'EEXIST') return false;
+    if (safeLstat(outPath) !== null) return false;
+    try {
+      writeFileSync(outPath, content, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (e2) {
+      if (e2 instanceof Error && 'code' in e2 && e2.code === 'EEXIST') return false;
+      throw e2;
+    }
+  } finally {
+    removeTemp(tmp);
+  }
+}
+
+function cmdCiInit(argv) {
+  const parsed = parseCiInitArgs(argv);
+  if (parsed.error) return usageError(parsed.error);
+  const args = parsed.value;
+
+  const targetArg = args._[0];
+  const target = targetArg !== undefined ? CI_TARGETS[targetArg] : undefined;
+  if (!target) {
+    process.stderr.write(
+      `Missing or unknown ci-init target: ${targetArg ?? '(none)'}\n` +
+        `Valid targets: ${Object.keys(CI_TARGETS).join(', ')}\n\n`,
+    );
+    usage();
+    process.exit(1);
+  }
+
+  const projectPath = resolveProjectOrExit(args.project);
+  if (isDevGuardianOwnRepo(projectPath)) {
+    return usageError(
+      "ci-init generates a pipeline for the PROJECT BEING SCANNED, never for dev-guardian's own " +
+        'repository (it ships no GitHub Actions of its own). Pass --project pointing at the project ' +
+        'you want a CI pipeline for.',
+    );
+  }
+
+  const plugin = readJsonOrExit(PLUGIN_JSON_PATH, 'dev-guardian plugin.json');
+  const pinned = readJsonOrExit(PINNED_PATH, 'configs/ci/pinned.json');
+  const vars = ciTemplateVars(plugin, pinned, args.branch);
+
+  const templatePath = resolve(CONFIGS_CI_DIR, target.templateFile);
+  if (!existsSync(templatePath)) {
+    return usageError(`ci-init: template missing: ${templatePath}`);
+  }
+  const templateText = readFileSync(templatePath, 'utf8');
+  const rendered = renderCiTemplate(templateText, vars);
+
+  const outPath = resolve(projectPath, target.outputPath);
+
+  if (!args.write) {
+    process.stdout.write(`# ${targetArg} pipeline  ->  ${outPath}\n\n`);
+    process.stdout.write(rendered);
+    process.stdout.write(`\n# Paste this at the path shown, or re-run with --write to write it there.\n`);
+    return;
+  }
+
+  // Never follow a symlinked ancestor (e.g. a `.github` that is itself a
+  // symlink) out of the project — same containment rule `scanIac.ts`
+  // applies on the READ side to a symlinked `.github/workflows`, applied
+  // here on the WRITE side before anything is created.
+  const escapee = firstEscapingAncestor(projectPath, outPath);
+  if (escapee !== null) {
+    return usageError(
+      `ci-init: refusing to write through ${escapee} — it exists and resolves outside the project ` +
+        `(${projectPath}). Remove or fix that path first.`,
+    );
+  }
+  mkdirSync(dirname(outPath), { recursive: true });
+
+  const refuseExisting = () => {
+    process.stderr.write(
+      `ci-init: refusing to overwrite existing pipeline file: ${outPath}\n` +
+        `Re-run with --force to overwrite it, or remove it first.\n`,
+    );
+    process.exit(1);
+  };
+
+  if (args.force) {
+    const leaf = refuseEscapingLeafSymlink(projectPath, outPath);
+    if (!leaf.ok) {
+      return usageError(
+        `ci-init: refusing to overwrite ${outPath} with --force — ${leaf.reason}. Remove it first.`,
+      );
+    }
+    replaceFile(outPath, rendered);
+  } else if (!createFile(outPath, rendered)) {
+    // Something is at the name — a dangling symlink included (see createFile).
+    refuseExisting();
+  }
+  process.stdout.write(`Wrote ${targetArg} pipeline to ${outPath}\n`);
+  if (targetArg === 'github') {
+    process.stdout.write(
+      'Enable "security-events: write" / code scanning for this repository so the SARIF upload step can run.\n',
+    );
+  }
+  process.stdout.write(
+    'If .guardian/baseline.json does not exist yet in this project, run `dev-guardian baseline update` ' +
+      "once locally and commit it before relying on this pipeline's gate.\n",
+  );
+}
+
 // --- status / dashboard (local reporting) ---------------------------------
 //
-// Design doc §1: "Nothing here runs a scan, mutates the database, opens a
+// The design of record: "Nothing here runs a scan, mutates the database, opens a
 // socket, or reaches the network." Both commands are thin — resolve
 // --project, open THIS project's own database, build one snapshot, render,
-// print or write — and both REPORT rather than gate (design doc §6):
+// print or write — and both REPORT rather than gate (the design of record):
 // `status`/`dashboard` exit 0 whenever they render, including over a
 // project full of critical findings or one that has never been scanned.
 // `scan` is the gate, with its own exit codes; if either of these two ever
@@ -1187,7 +2031,7 @@ async function cmdBaseline(argv) {
  * correct for the MCP server, which persists scans, but wrong here: on a
  * directory that has no database yet ANYWHERE `openDatabase` would look, it
  * CREATES one (an empty, freshly-migrated 143 KB file), which contradicts
- * this command's own documented promise (design doc §1: "Nothing here runs a
+ * this command's own documented promise (the design of record: "Nothing here runs a
  * scan, mutates the database, opens a socket, or reaches the network") the
  * moment a user points `status`/`dashboard` at a project it has never
  * touched. Detected by `resolveDbHandle` (below) checking BOTH locations
@@ -1224,22 +2068,97 @@ async function cmdBaseline(argv) {
  * writability probe at this point would risk creating a fresh, empty PRIMARY
  * database instead of reading the fallback that was just found.
  */
-function resolveDbHandle(projectPath) {
-  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
-  if (existsSync(primaryPath)) return openDatabase({ projectPath }).db;
-
-  const fallbackPath = resolveFallbackDbPath(projectPath);
-  if (existsSync(fallbackPath)) return openDatabaseAtPath(fallbackPath);
-
-  return openDatabase({ projectPath, inMemory: true }).db;
+/**
+ * True when `error` is the shape Node throws for a builtin module that does
+ * not exist on the running Node version — `createRequire(...)('node:sqlite')`
+ * in `storage/db.ts` throws exactly this when `node:sqlite` is not
+ * registered (below the project's Node floor). Matched on BOTH the stable
+ * error `code` and a message fallback (Node has changed the exact wording of
+ * this error across versions; the `code` has not), so a genuine, unrelated
+ * failure inside `storage`/`dashboard` (a real bug) is never misreported as
+ * a Node-version problem — only this one, specific, well-known shape is.
+ */
+export function isNodeSqliteUnavailable(error) {
+  if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_UNKNOWN_BUILTIN_MODULE') {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /node:sqlite/i.test(message);
 }
 
-function buildProjectSnapshot(projectPath) {
-  const db = resolveDbHandle(projectPath);
+/**
+ * Lazily loads the `storage`/`dashboard` module cluster — see the module doc
+ * comment above the (deliberately static) imports for why this is dynamic
+ * rather than a top-level `import`. Mirrors `loadCiModules()` exactly: the
+ * same "not built" friendly check (a marker file existence probe, so a repo
+ * that never ran `npm run build` gets one clear line instead of
+ * `ERR_MODULE_NOT_FOUND`), and — new here, because this cluster is the one
+ * that can genuinely fail on a Node version this project no longer
+ * supports — a SECOND friendly message specifically for that case, so
+ * `status`/`dashboard` on Node < 22.13 fail with "this command requires
+ * Node.js >= 22.13" rather than a raw `ERR_UNKNOWN_BUILTIN_MODULE` stack
+ * trace. Only `status`/`dashboard` ever call this; every other subcommand
+ * never touches `node:sqlite`, on any Node version — see the note above the
+ * static imports.
+ */
+async function loadDashboardModules() {
+  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'index.js');
+  if (!existsSync(marker)) {
+    process.stderr.write(
+      `dev-guardian: MCP server not built (missing ${marker}).\n` +
+        'Run once:  cd mcp && npm install && npm run build\n',
+    );
+    process.exit(USAGE_ERROR_EXIT);
+  }
   try {
-    runMigrations(db);
-    const storage = new Storage(db);
-    return buildSnapshot(storage, projectPath, Date.now());
+    const [storage, migrations, snapshot, statusRenderer, dashboardRenderer] = await Promise.all([
+      import('../mcp/dist/storage/index.js'),
+      import('../mcp/dist/storage/migrations/runner.js'),
+      import('../mcp/dist/dashboard/snapshot.js'),
+      import('../mcp/dist/dashboard/renderStatus.js'),
+      import('../mcp/dist/dashboard/renderHtml.js'),
+    ]);
+    return {
+      openDatabase: storage.openDatabase,
+      openDatabaseAtPath: storage.openDatabaseAtPath,
+      resolveFallbackDbPath: storage.resolveFallbackDbPath,
+      Storage: storage.Storage,
+      runMigrations: migrations.runMigrations,
+      buildSnapshot: snapshot.buildSnapshot,
+      renderStatus: statusRenderer.renderStatus,
+      renderDashboard: dashboardRenderer.renderDashboard,
+    };
+  } catch (e) {
+    if (isNodeSqliteUnavailable(e)) {
+      process.stderr.write(
+        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
+          `Current: ${process.version}.\n`,
+      );
+      process.exit(USAGE_ERROR_EXIT);
+    }
+    throw e;
+  }
+}
+
+function resolveDbHandle(mods, projectPath) {
+  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
+  if (existsSync(primaryPath)) return mods.openDatabase({ projectPath }).db;
+
+  const fallbackPath = mods.resolveFallbackDbPath(projectPath);
+  if (existsSync(fallbackPath)) return mods.openDatabaseAtPath(fallbackPath);
+
+  return mods.openDatabase({ projectPath, inMemory: true }).db;
+}
+
+function buildProjectSnapshot(mods, projectPath) {
+  const db = resolveDbHandle(mods, projectPath);
+  try {
+    mods.runMigrations(db);
+    const storage = new mods.Storage(db);
+    // Rows are keyed by the canonical spelling every MCP tool stores
+    // (resolveProjectPath); the database FILE is still located from
+    // `projectPath` as given, as the server itself does.
+    return mods.buildSnapshot(storage, canonicalPath(projectPath), Date.now());
   } finally {
     db.close();
   }
@@ -1304,16 +2223,17 @@ async function cmdStatus(argv) {
   const opts = parsed.value;
 
   const projectPath = resolveProjectOrExit(opts.project);
-  const snapshot = buildProjectSnapshot(projectPath);
+  const mods = await loadDashboardModules();
+  const snapshot = buildProjectSnapshot(mods, projectPath);
 
   const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
-  const text = renderStatus(snapshot, { color });
+  const text = mods.renderStatus(snapshot, { color });
   process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
 
   // `process.exitCode = 0; return;`, never `process.exit(0)` — see the
   // matching comment at the end of cmdScan: stdout to a pipe is
   // asynchronous on POSIX, and the line above scales with finding count
-  // (design doc §8's findings cap is 2000), so it is not guaranteed to fit
+  // (the design of record's findings cap is 2000), so it is not guaranteed to fit
   // inside one synchronous flush.
   process.exitCode = 0;
   return;
@@ -1324,30 +2244,43 @@ async function cmdStatus(argv) {
  * the OS default browser — pure, no I/O, and exported so a test can assert
  * on the exact argv shape without ever launching anything.
  *
- * **win32 — fix-round-1 correction.** `start` is a `cmd.exe` BUILT-IN, not a
- * standalone executable: spawning the bare string `'start'` with
- * `shell: false` fails ENOENT (confirmed directly on Windows — there is no
- * `start.exe` on PATH, so `dashboard` never opened a browser on the very
- * platform this feature targets). `cmd.exe` itself IS a real, spawnable
- * executable, so IT is what gets spawned, with `/c start` as its own
- * arguments — that is what actually invokes the builtin. `target` still
- * reaches `spawn` as its own, discrete array element, exactly as on the
- * other two platforms below: nothing here is ever concatenated into a
- * command STRING, so `shell: false`'s security property — no shell
- * metacharacter interpretation of `target` (spaces, `&`, `|`, …) — holds
- * exactly as before; only the EXECUTABLE being spawned changed, not the
- * "argv stays an array" contract. The `'""'` immediately after `start` is
- * `start`'s OWN empty window-title argument: `start`'s argument grammar
- * treats the first quoted token after it as a title whenever what follows
- * is itself quoted or contains spaces, so an explicit empty title has to be
- * supplied, or `start` would treat `target` itself as the title and open
- * nothing.
+ * **win32 — fix-round-2 correction.** The fix-round-1 version spawned
+ * `cmd.exe /c start "" <target>`, fixing the ENOENT from spawning the bare
+ * `'start'` builtin directly (no `start.exe` on PATH) — but it traded that
+ * bug for a second, subtler one this task exists to fix: `spawn(..., {shell:
+ * false})` keeps `target` as its own untouched argv ELEMENT only up to
+ * `CreateProcess` itself. `cmd.exe /c <rest>` does not treat `<rest>` as an
+ * already-split argv — it re-parses the WHOLE remaining command line as
+ * cmd's own script syntax, where `&` (and `|`, `&&`, `||`, `%VAR%`, …) are
+ * live METACHARACTERS regardless of any quoting `spawn` applied when
+ * building the underlying command line, because that quoting only has to
+ * satisfy `CreateProcess`'s C-runtime argv split, not cmd's SEPARATE,
+ * SECOND parse of its own `/c` argument. A dashboard path containing `&` —
+ * plausible on Windows, where `&` is a legal filename character and this
+ * project's own repo path contains a space for the same kind of reason —
+ * would silently split into two commands under the OLD implementation;
+ * `shell: false` never protected against this, because the danger was never
+ * in how Node invoked `cmd.exe`, only in what `cmd.exe` itself does once
+ * running.
+ *
+ * `explorer.exe <target>` sidesteps the whole problem: it is a real,
+ * standalone executable (like `open`/`xdg-open` below), so `target` reaches
+ * it as one argv element with no SECOND parse by anything that treats `&` as
+ * syntax. (`explorer.exe` is also what Windows itself invokes for "open
+ * with default application" on a file passed as a bare argument, so this is
+ * not a repurposing of some other tool's argument grammar — it is that
+ * grammar.) The `rundll32 url.dll,FileProtocolHandler <target>` alternative
+ * named in the task brief was measured to behave identically for this one
+ * argument shape and was not chosen only because `explorer.exe` needs no
+ * DLL entry-point name to get right.
  *
  * **darwin/other — unchanged.** `open`/`xdg-open` ARE standalone
- * executables, spawned directly with `target` as their one argument.
+ * executables, spawned directly with `target` as their one argument — never
+ * shared this class of bug, because neither re-parses its own argument for
+ * shell metacharacters.
  */
 export function resolveOpenerCommand(platform, target) {
-  if (platform === 'win32') return { command: 'cmd.exe', args: ['/c', 'start', '""', target] };
+  if (platform === 'win32') return { command: 'explorer.exe', args: [target] };
   if (platform === 'darwin') return { command: 'open', args: [target] };
   return { command: 'xdg-open', args: [target] };
 }
@@ -1392,8 +2325,9 @@ async function cmdDashboard(argv) {
   const projectPath = resolveProjectOrExit(opts.project);
   const outPath = resolve(opts.out ?? join(projectPath, '.guardian', 'dashboard.html'));
 
-  const snapshot = buildProjectSnapshot(projectPath);
-  const html = renderDashboard(snapshot);
+  const mods = await loadDashboardModules();
+  const snapshot = buildProjectSnapshot(mods, projectPath);
+  const html = mods.renderDashboard(snapshot);
 
   // Both calls below can throw (an unwritable --out, a destination that is
   // itself a directory, a disk full) and are DELIBERATELY left to propagate
@@ -1433,8 +2367,8 @@ async function cmdDashboard(argv) {
  * — an unreadable database file, an --out write failure, anything not
  * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
- * exactly the kind of stray noise the pristine-output requirement (design
- * doc §8, and this task's e2e) exists to keep out of a CI log.
+ * exactly the kind of stray noise the pristine-output requirement (the
+ * design of record, and this task's e2e) exists to keep out of a CI log.
  */
 function fatal(e) {
   process.stderr.write(`dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);
@@ -1475,6 +2409,18 @@ function main() {
   if (cmd === 'check') return cmdCheck(argv.slice(1));
   if (cmd === 'scan') return void cmdScan(argv.slice(1)).catch(fatal);
   if (cmd === 'baseline') return void cmdBaseline(argv.slice(1)).catch(fatal);
+  if (cmd === 'ci-init') {
+    // cmdCiInit is synchronous (no scan runs — see its own module doc), so
+    // this is the sync equivalent of the `.catch(fatal)` every async
+    // subcommand below uses: a write failure this function did not already
+    // turn into a clean usageError (ENOTDIR, a read-only filesystem, …)
+    // must not crash with a raw Node stack trace either.
+    try {
+      return cmdCiInit(argv.slice(1));
+    } catch (e) {
+      return fatal(e);
+    }
+  }
   if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
 
@@ -1483,21 +2429,48 @@ function main() {
   process.exit(1);
 }
 
-// Entry-point guard (fix-round-1 addition): `main()` runs when this file is
-// executed directly (`node cli/dev-guardian.mjs ...` — every real user
-// invocation, and every existing e2e test, which spawns exactly that as a
-// subprocess) but NOT when it is `import`ed, e.g. by
-// `test/unit/cli/browserOpener.test.ts` to reach `resolveOpenerCommand` as a
-// plain function. Without this, that import alone would run the full CLI
-// against the TEST RUNNER's own argv/exit lifecycle — `main()` calls
-// `process.exit()` on more than one path — which would tear down the whole
-// vitest worker rather than merely fail one test. `pathToFileURL` (not a
-// raw string comparison against `process.argv[1]`) is what this project's
-// own test files already use for the equivalent path<->URL conversion (see
-// `ciCliFixture.test.ts`'s `fileURLToPath`) — required on Windows, where a
-// bare `import.meta.url === process.argv[1]` string compare would never
-// match (`file:///C:/...` vs `C:\...`).
-const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+/**
+ * Entry-point guard (fix-round-1 addition, fix-round-2 correction below):
+ * `main()` runs when this file is executed directly (`node
+ * cli/dev-guardian.mjs ...` — every real user invocation, and every existing
+ * e2e test, which spawns exactly that as a subprocess) but NOT when it is
+ * `import`ed, e.g. by `test/unit/cli/browserOpener.test.ts` to reach
+ * `resolveOpenerCommand` as a plain function. Without this, that import alone
+ * would run the full CLI against the TEST RUNNER's own argv/exit lifecycle —
+ * `main()` calls `process.exit()` on more than one path — which would tear
+ * down the whole vitest worker rather than merely fail one test.
+ *
+ * **Compares REALPATHS, not raw paths (fix-round-2 correction).** The
+ * fix-round-1 version compared `import.meta.url` against
+ * `pathToFileURL(process.argv[1]).href` directly — right for the
+ * file-URL-vs-Windows-drive-letter mismatch it was written for, but it
+ * assumed `process.argv[1]` and the module Node actually loaded name the
+ * SAME path, which is false through a symlink or (Windows) junction: Node's
+ * ESM loader resolves `import.meta.url` to the link's REAL target, while
+ * `process.argv[1]` still holds the path the user typed — the link itself.
+ * Two different strings naming the same file compared unequal, `isEntryPoint`
+ * came back `false`, and `main()` silently never ran: reproduced directly —
+ * `check --bash 'rm -rf /'` through a symlink to this file printed nothing
+ * and exited 0, the same as a clean/ok command, on a catastrophic one.
+ * `realpathSync` resolves symlinks/junctions on both sides before comparing,
+ * so a link and its target compare equal regardless of which one was
+ * invoked. Wrapped in try/catch: `process.argv[1]` can in principle name a
+ * path `realpathSync` cannot resolve (already deleted, a dangling link) —
+ * that must read as "not the entry point" (`main()` does not run) rather
+ * than crash the module-load itself before a single line of user-facing
+ * output is produced.
+ */
+function isRunAsEntryPoint() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    const thisFile = realpathSync(fileURLToPath(import.meta.url));
+    const invoked = realpathSync(process.argv[1]);
+    return thisFile === invoked;
+  } catch {
+    return false;
+  }
+}
+const isEntryPoint = isRunAsEntryPoint();
 if (isEntryPoint) {
   main();
 }

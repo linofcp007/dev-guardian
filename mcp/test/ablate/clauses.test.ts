@@ -18,11 +18,25 @@
  *    behind.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
 import { AblationError, ablate, ablateAll, clauseLabel, enumerateClauses, roundTrip } from './clauses.js';
+
+// Fix round 2, item 2 (2026-09-25 full review, Task 5): "every enumerated
+// clause either ablates cleanly or says why it cannot" (below) enumerates
+// and round-trips EVERY clause across all nine shipped rule packs
+// synchronously — measured at 3.3s alone, 7.3s under v8 coverage
+// instrumentation, and over the unit-test default of 10s once a parallel
+// coverage run adds CPU contention from other workers. Not a Semgrep
+// subprocess call (so it isn't one of the nine `test/integration/*Rules*`
+// files this same fix already applies to), but the identical mechanism:
+// synchronous, CPU-heavy work that vitest's default per-test budget was
+// never sized for. See `test/integration/baseRules.test.ts`'s matching
+// comment for the full reasoning on why this is a per-file override, not a
+// change to the global default.
+vi.setConfig({ testTimeout: 180_000 });
 import { REPO_ROOT } from './packs.js';
 
 const SAMPLE = `rules:
@@ -265,8 +279,8 @@ describe('the rule inventory', () => {
       // Jenkins, 45 read by hand, five defensible defects — and 88%/97% of
       // them carrying no guard anywhere near the dereference, which is what
       // made narrowing unavailable. It took 42 of the pack's 91
-      // `pattern-not-inside` clauses with it. See `packs.ts` and section 12 of
-      // the Java design doc.
+      // `pattern-not-inside` clauses with it. See `packs.ts` and the Java design
+      // of record.
       'bugfix-java': { rules: 7, withClauses: 7 },
       // 11 since `null-safety-as-cast-deref` was deleted: it fired 6490 times
       // on 11 800 files of dotnet/runtime with no true positives, and this
@@ -274,6 +288,11 @@ describe('the rule inventory', () => {
       // `packs.ts` and the deletion note in the pack.
       'bugfix-cs': { rules: 11, withClauses: 10 },
       routes: { rules: 64, withClauses: 44 },
+      // 8 of 8: every RGPD rule has at least one guard or branch to ablate.
+      // The YouTube rule's only ablatable clause is its JSX consent guard;
+      // its data-src exclusion is structural (a space before `src`), not a
+      // clause. See the pack header.
+      rgpd: { rules: 8, withClauses: 8 },
     };
     for (const [name, want] of Object.entries(expected)) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
@@ -447,7 +466,7 @@ describe('roundTrip', () => {
     // The harness runs a live Semgrep control on top of this; the cheap
     // structural version belongs here so a serialiser regression fails in
     // milliseconds instead of six minutes into an ablation run.
-    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'routes']) {
+    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'routes', 'rgpd']) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
       const source = readFileSync(path, 'utf8');
       const before: unknown = parse(source);
@@ -459,7 +478,7 @@ describe('roundTrip', () => {
 
 describe('the shipped packs', () => {
   it('every enumerated clause either ablates cleanly or says why it cannot', () => {
-    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java']) {
+    for (const name of ['base', 'bugfix-js', 'bugfix-py', 'bugfix-go', 'bugfix-java', 'rgpd']) {
       const path = resolve(REPO_ROOT, 'configs', 'semgrep', `${name}.yml`);
       const source = readFileSync(path, 'utf8');
       const { clauses, ruleIds } = enumerateClauses(source);

@@ -122,7 +122,7 @@ const WRITE_ROUTE_METHOD = 'DELETE';
 const ROUTES: RouteRecord[] = [
   routeAt('/public', { file: 'src/routes/public.ts', line: 5 }),
   // Paired with the OpenAPI-derived `auth_hint: 'required'` this tool needs
-  // to confirm an anonymous-exposure bug — see design doc §6.
+  // to confirm an anonymous-exposure bug — see the design of record.
   routeAt('/admin/secrets', { file: 'src/routes/admin.ts', line: 12, auth_hint: 'required' }),
   routeAt(WRITE_ROUTE_PATH, {
     method: WRITE_ROUTE_METHOD,
@@ -189,7 +189,7 @@ describe('E2E — scan_dast against a deliberately vulnerable fixture', () => {
       missing_tools: [],
       spec_files: [],
       // No spec diff seeded: `reachability` needs one to have any candidate
-      // at all (design doc §6 / `checkStatus.ts`), and its deliberate
+      // at all (the design of record / `checkStatus.ts`), and its deliberate
       // absence from run A's expected set is part of this file's contract.
       spec_diff: null,
       imports: [],

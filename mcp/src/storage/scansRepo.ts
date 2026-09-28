@@ -28,14 +28,66 @@
  * `getLatestForProject` / `listHistoryForProject` need no such exclusion:
  * they are already scoped to an exact `project_path`, which a worktree's
  * path can never equal.
+ *
+ * Since then every history reader of the resources and of `risk_score`,
+ * `diff_scans`, `regression_alert`, `set_baseline`, `report_export`,
+ * `suggest_fix`, `create_github_issues`, `triage_findings`,
+ * `prioritize_findings` and `validate_finding` moved to the project- AND
+ * type-scoped `listCompletedOfTypes` (through `history/openSet.ts`): "the
+ * latest scan of type X" is one SQL query per project, never a search of the
+ * 50 (or 200) newest rows of the whole database. Task 24 moved the rest —
+ * `health_status`, `audit_executive`, `compliance_evidence`, the WordPress
+ * and .NET describe/check tools, and the CI pipeline — so `getLatest` /
+ * `listHistory` have NO production caller left. They stay for the storage
+ * tests and for `create_fix_pr`'s own regression test, which proves a dry
+ * run's verification re-scan never repoints this unscoped view (I3). A new
+ * caller that has a project in scope must not use them.
  */
 
+import { hostname } from 'node:os';
 import type { DB, Statement } from './db.js';
 import type { ScanRecord, ScanStatus, ScanType, ToolRun } from '../types.js';
 import { nowIso, parseJsonArray } from './repoUtil.js';
 
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
+
+/**
+ * How old a `running` scan with an UNKNOWN owner must be before the startup
+ * reaper fails it. Unknown means the owner cannot be checked from here: a row
+ * written before owners were recorded (migration 004), or one started on
+ * another host — a shared network drive, a container with its own hostname —
+ * whose pid means nothing on this machine. Long enough that no real scan is
+ * still running; short enough that a crashed one does not linger for days.
+ */
+export const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How old a `running` scan must be before the reaper fails it even though its
+ * owner pid on this host still looks alive. Pids are reused — quickly on
+ * Windows — so "a process with that pid exists" does not prove it is the
+ * process that started the scan. Every scanner run is capped (10 min by
+ * default, `GUARDIAN_SCAN_TIMEOUT_MS`), so a day is far beyond any real scan.
+ */
+export const LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1000;
+
+export interface ReapOptions {
+  /** Epoch ms to measure age against. Default: `Date.now()`. */
+  now?: number;
+  /** This machine's name, compared with `owner_host`. Default: `os.hostname()`. */
+  host?: string;
+  /** This process's pid — see {@link ScansRepo.reapRunning}. Default: `process.pid`. */
+  ownPid?: number;
+  /** Whether a pid on this host is still running. Default: `process.kill(pid, 0)`. */
+  isAlive?: (pid: number) => boolean;
+}
+
+interface RunningRow {
+  id: string;
+  started_at: string;
+  owner_pid: number | null;
+  owner_host: string | null;
+}
 
 interface ScanRow {
   id: string;
@@ -60,6 +112,11 @@ export interface InsertScanInput {
   tree_hash: string;
   report_dir?: string;
   meta?: Record<string, unknown>;
+  /**
+   * What the run was computed from — `treeHash/cacheKey.ts#scanCacheKey`.
+   * Omitted (NULL) for a scan that must never be served from the cache.
+   */
+  cache_key?: string;
 }
 
 export interface FinalizeScanInput {
@@ -74,28 +131,33 @@ export interface FinalizeScanInput {
 
 export class ScansRepo {
   private readonly insertStmt: Statement<[
-    string, string, string, string, string, string, string, string, string | null, string
+    string, string, string, string, string, string, string, string, string | null, string,
+    number, string, string | null,
   ]>;
   private readonly finalizeStmt: Statement<[
     string, string, string, string, string | null, string | null, string | null, string
   ]>;
   private readonly markCancelledStmt: Statement<[string, string]>;
-  private readonly reapRunningStmt: Statement<[string]>;
+  private readonly listRunningStmt: Statement<[], RunningRow>;
+  private readonly reapOneStmt: Statement<[string, string, string]>;
   private readonly getByIdStmt: Statement<[string], ScanRow>;
   private readonly getLatestStmt: Statement<[], ScanRow>;
   private readonly getLatestForProjectStmt: Statement<[string], ScanRow>;
   private readonly listHistoryStmt: Statement<[number], ScanRow>;
   private readonly listHistoryForProjectStmt: Statement<[string, number], ScanRow>;
-  private readonly findCacheStmt: Statement<[string, string, string], ScanRow>;
+  private readonly findCacheStmt: Statement<[string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
+  private readonly countForProjectStmt: Statement<[string], { n: number }>;
+  private readonly completedOfTypesCache = new Map<string, Statement<(string | number)[], ScanRow>>();
 
-  constructor(db: DB) {
+  constructor(private readonly db: DB) {
     this.insertStmt = db.prepare(`
       INSERT INTO scans (
         id, scan_type, project_path, tree_hash,
-        started_at, status, tools_run, missing_tools, report_dir, meta
+        started_at, status, tools_run, missing_tools, report_dir, meta,
+        owner_pid, owner_host, cache_key
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.finalizeStmt = db.prepare(`
@@ -112,10 +174,16 @@ export class ScansRepo {
       WHERE id = ? AND status = 'running'
     `);
 
-    this.reapRunningStmt = db.prepare(`
+    this.listRunningStmt = db.prepare<[], RunningRow>(`
+      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
+    `);
+
+    // `AND status = 'running'`: the owner may have finalized the scan between
+    // listRunningStmt and this update; a finished scan is never overwritten.
+    this.reapOneStmt = db.prepare(`
       UPDATE scans
-      SET status = 'failed', finished_at = ?, error = 'reaped on startup'
-      WHERE status = 'running'
+      SET status = 'failed', finished_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
     `);
 
     this.getByIdStmt = db.prepare<[string], ScanRow>(`SELECT * FROM scans WHERE id = ?`);
@@ -170,9 +238,12 @@ export class ScansRepo {
       LIMIT ?
     `);
 
-    this.findCacheStmt = db.prepare<[string, string, string], ScanRow>(`
+    // Matched on the whole key, never on the tree hash: see
+    // `treeHash/cacheKey.ts` for what the tree hash alone let through. A NULL
+    // key (every row written before migration 006) never equals anything.
+    this.findCacheStmt = db.prepare<[string, string], ScanRow>(`
       SELECT * FROM scans
-      WHERE tree_hash = ? AND scan_type = ? AND status = 'completed' AND started_at >= ?
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -181,6 +252,10 @@ export class ScansRepo {
       INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
       VALUES (?, ?, ?, ?)
     `);
+
+    this.countForProjectStmt = db.prepare<[string], { n: number }>(
+      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`,
+    );
   }
 
   insert(input: InsertScanInput): ScanRecord {
@@ -196,6 +271,9 @@ export class ScansRepo {
       '[]',
       input.report_dir ?? null,
       JSON.stringify(input.meta ?? {}),
+      process.pid,
+      hostname(),
+      input.cache_key ?? null,
     );
     return {
       scan_id: input.scan_id,
@@ -211,10 +289,12 @@ export class ScansRepo {
     };
   }
 
-  finalize(input: FinalizeScanInput): void {
+  /** Returns the `finished_at` it wrote, so a caller can report the row's real time. */
+  finalize(input: FinalizeScanInput): string {
+    const finishedAt = nowIso();
     this.finalizeStmt.run(
       input.status,
-      nowIso(),
+      finishedAt,
       JSON.stringify(input.tools_run),
       JSON.stringify(input.missing_tools),
       input.report_dir ?? null,
@@ -222,6 +302,7 @@ export class ScansRepo {
       input.meta !== undefined ? JSON.stringify(input.meta) : null,
       input.scan_id,
     );
+    return finishedAt;
   }
 
   markCancelled(scanId: string): void {
@@ -229,12 +310,36 @@ export class ScansRepo {
   }
 
   /**
-   * Sweeps any scan left in `running` state by a previous server lifetime
-   * (crash, kill -9). Called once on startup.
+   * Fails scans left in `running` by a process that is gone (crash, kill -9).
+   *
+   * **Call it only at startup, before this process starts any scan** — the
+   * rule for this process's own pid below depends on that.
+   *
+   * Only DEAD owners' scans: several servers share one database, and the old
+   * sweep (`every running scan`) killed whatever another live server was
+   * scanning at the time. For a scan whose owner is on this host:
+   *   - the owner pid is THIS process's pid → reaped. This process has not
+   *     started a scan yet, so an earlier process with the same pid wrote the
+   *     row: a container restarted as pid 1 under the same hostname, or a pid
+   *     Windows handed out again;
+   *   - the pid no longer exists → reaped;
+   *   - the pid exists → left alone, until the scan is older than
+   *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
+   * A scan whose owner cannot be checked from here (none recorded, or another
+   * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
    */
-  reapRunning(): number {
-    const info = this.reapRunningStmt.run(nowIso());
-    return info.changes;
+  reapRunning(options: ReapOptions = {}): number {
+    const now = options.now ?? Date.now();
+    const host = options.host ?? hostname();
+    const ownPid = options.ownPid ?? process.pid;
+    const isAlive = options.isAlive ?? pidIsAlive;
+    let reaped = 0;
+    for (const row of this.listRunningStmt.all()) {
+      const reason = reapReason(row, { host, ownPid, now, isAlive });
+      if (reason === null) continue;
+      reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
+    }
+    return reaped;
   }
 
   getById(scanId: string): ScanRecord | null {
@@ -243,15 +348,11 @@ export class ScansRepo {
   }
 
   /**
-   * The latest completed scan in the WHOLE database, from ANY project — no
-   * `project_path` filter. Correct for a caller with no project in scope
-   * (most resources and tools here take no `project_path` input at all and
-   * report on "whatever this server last scanned"). A caller that DID
-   * resolve a `project_path` and attributes something to the scan it names
-   * (e.g. `validate_finding`'s `findings_from_scan`) must use
-   * `getLatestForProject` instead — see that method and
-   * `findingsRepo.ts`'s `listOpen`/`listOpenForProject` for the identical
-   * split.
+   * The latest completed scan in the WHOLE database, from ANY project and of
+   * ANY type — no `project_path` filter. Only for a caller with genuinely no
+   * project in scope; a reader answering for a project uses
+   * `history/openSet.ts` (the open set, or the latest usable scan of a type),
+   * and one that wants that project's history uses `getLatestForProject`.
    */
   getLatest(): ScanRecord | null {
     const row = this.getLatestStmt.get();
@@ -290,21 +391,199 @@ export class ScansRepo {
   }
 
   /**
-   * Returns the most recent completed scan of the given type whose tree_hash
-   * matches and which started no earlier than `freshThreshold`. The factory
-   * uses this to honour US-8 AC-2 (5-minute cache window).
+   * Every pass name the completed scans of `type` for `projectPath` ever
+   * recorded in `tools_run`, and whether one of them recorded no bookkeeping
+   * at all — the widest holder the open set's carry-forward walk has to
+   * allow for before it can stop (`runCompare.ts#StillCarry`).
    */
-  findCacheHit(args: {
-    tree_hash: string;
-    scan_type: ScanType;
-    freshThreshold: string;
-  }): ScanRecord | null {
-    const row = this.findCacheStmt.get(args.tree_hash, args.scan_type, args.freshThreshold);
+  runNamesOfType(projectPath: string, type: string): { names: string[]; anyEmpty: boolean } {
+    const names = this.db
+      .prepare<[string, string], { name: string | null }>(
+        `SELECT DISTINCT json_extract(je.value, '$.name') AS name
+           FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`,
+      )
+      .all(projectPath, type)
+      .map((r) => r.name)
+      .filter((n): n is string => typeof n === 'string');
+    const empty = this.db
+      .prepare<[string, string], { n: number }>(
+        `SELECT COUNT(*) AS n FROM scans
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+            AND (tools_run IS NULL OR tools_run IN ('', '[]'))
+            AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`,
+      )
+      .get(projectPath, type);
+    return { names, anyEmpty: (empty?.n ?? 0) > 0 };
+  }
+
+  /**
+   * Completed scans of `types` for ONE project, newest first, as one SQL
+   * query — the latest scan of a type is found however many other scans
+   * (of other types, or of other projects) were written after it. Every
+   * "find the latest scan of type X" used to search `listHistory(50)`, a
+   * window of the 50 newest rows in the whole database, and read "no such
+   * scan" once 50 others had run since.
+   *
+   * `beforeScanId` keeps only scans strictly older than that one, and
+   * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
+   * order — how "the previous scan" is found, and how a search that only
+   * matters above some scan stops there. `excludeWithChildScans` drops rows
+   * whose `meta.child_scans` is an array (an orchestrated
+   * `security_scan_full` parent) in SQL, so a search for script-era rows does
+   * not page through every orchestrated run to find none. Paged by `limit` /
+   * `offset` for callers that skip some rows (a scan with coverage none, a
+   * scoped run) and must keep looking.
+   */
+  listCompletedOfTypes(
+    projectPath: string,
+    types: readonly string[],
+    opts: {
+      limit: number;
+      offset?: number;
+      beforeScanId?: string;
+      afterScanId?: string;
+      excludeWithChildScans?: boolean;
+    },
+  ): ScanRecord[] {
+    if (types.length === 0) return [];
+    const shape = {
+      before: opts.beforeScanId !== undefined,
+      after: opts.afterScanId !== undefined,
+      noParents: opts.excludeWithChildScans === true,
+    };
+    const stmt = this.completedOfTypesStmt(types.length, shape);
+    const params: (string | number)[] = [projectPath, ...types];
+    if (opts.beforeScanId !== undefined) params.push(opts.beforeScanId);
+    if (opts.afterScanId !== undefined) params.push(opts.afterScanId);
+    params.push(opts.limit, opts.offset ?? 0);
+    return stmt.all(...params).map(rowToRecord);
+  }
+
+  /**
+   * `scanIds`, newest first in the one order every "latest" query here uses
+   * — `started_at DESC, rowid DESC` — so two scans started in the same
+   * millisecond still sort the way SQL picked them. Unknown ids are dropped.
+   */
+  sortNewestFirst(scanIds: readonly string[]): string[] {
+    if (scanIds.length === 0) return [];
+    const placeholders = scanIds.map(() => '?').join(', ');
+    return this.db
+      .prepare<string[], { id: string }>(
+        `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`,
+      )
+      .all(...scanIds)
+      .map((r) => r.id);
+  }
+
+  /** How many scans (any status, any type) one project has recorded. */
+  countForProject(projectPath: string): number {
+    return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+  }
+
+  private completedOfTypesStmt(
+    arity: number,
+    shape: { before: boolean; after: boolean; noParents: boolean },
+  ): Statement<(string | number)[], ScanRow> {
+    const key = `${arity}:${shape.before ? 'b' : '-'}${shape.after ? 'a' : '-'}${shape.noParents ? 'p' : '-'}`;
+    const cached = this.completedOfTypesCache.get(key);
+    if (cached !== undefined) return cached;
+    const placeholders = Array.from({ length: arity }, () => '?').join(', ');
+    // Row values: "strictly before/after" in exactly the ORDER BY below, so
+    // two scans started in the same millisecond still have a defined order.
+    const beforeClause = shape.before
+      ? 'AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)'
+      : '';
+    const afterClause = shape.after
+      ? 'AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)'
+      : '';
+    // CASE, not AND: SQLite does not promise to evaluate json_valid first,
+    // and json_type throws on malformed JSON — which rowToRecord tolerates.
+    const parentClause = shape.noParents
+      ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'"
+      : '';
+    const stmt = this.db.prepare<(string | number)[], ScanRow>(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+        ${beforeClause} ${afterClause} ${parentClause}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ? OFFSET ?
+    `);
+    this.completedOfTypesCache.set(key, stmt);
+    return stmt;
+  }
+
+  /**
+   * Returns the most recent completed scan stored under exactly `cache_key`
+   * which started no earlier than `freshThreshold`. The factory uses this to
+   * honour US-8 AC-2 (5-minute cache window); the key is built by
+   * `treeHash/cacheKey.ts#scanCacheKey`.
+   */
+  findCacheHit(args: { cache_key: string; freshThreshold: string }): ScanRecord | null {
+    const row = this.findCacheStmt.get(args.cache_key, args.freshThreshold);
     return row ? rowToRecord(row) : null;
   }
 
   attachTreeCache(args: { tree_hash: string; scan_id: string; scan_type: ScanType }): void {
     this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
+  }
+}
+
+/**
+ * Whether a `running` scan's owner is gone, by the reaper's own rule
+ * ({@link ScansRepo.reapRunning}) — for a reader that must not wait on a scan
+ * nobody will finish (`storage/localRuleIds.ts`, which runs before the
+ * reaper does). A live owner, or one that cannot be judged yet, is not.
+ */
+export function runningScanIsOrphan(
+  row: { started_at: string; owner_pid: number | null; owner_host: string | null },
+  options: ReapOptions = {},
+): boolean {
+  const ctx: Required<ReapOptions> = {
+    now: options.now ?? Date.now(),
+    host: options.host ?? hostname(),
+    ownPid: options.ownPid ?? process.pid,
+    isAlive: options.isAlive ?? pidIsAlive,
+  };
+  return reapReason({ id: '', ...row }, ctx) !== null;
+}
+
+/** Why `row` should be reaped, or null to leave it running. */
+function reapReason(row: RunningRow, ctx: Required<ReapOptions>): string | null {
+  // A timestamp that does not parse was not written by a live scan of ours.
+  const started = Date.parse(row.started_at);
+  const olderThan = (ms: number): boolean => Number.isNaN(started) || ctx.now - started > ms;
+
+  const pid = row.owner_pid;
+  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
+    if (pid === ctx.ownPid) {
+      return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
+    }
+    if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
+    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+      return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
+    }
+    return null;
+  }
+  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
+    return 'owner unknown on this host and the scan started more than 6 h ago';
+  }
+  return null;
+}
+
+/**
+ * `process.kill(pid, 0)` sends nothing; it only asks whether `pid` exists.
+ * ESRCH is the one answer that means "gone". EPERM means it exists but
+ * belongs to someone else — alive — and anything unexpected is treated as
+ * alive too: wrongly leaving a scan `running` is recoverable, wrongly failing
+ * a live one is not.
+ */
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
   }
 }
 

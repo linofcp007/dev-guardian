@@ -1,6 +1,16 @@
 /**
- * `detect_stack` — runs `scripts/detect/detect-stack.sh` and persists the
- * parsed JSON to the `stack_snapshots` table.
+ * `detect_stack` — detects the project's stack in-process (see
+ * `runners/stackDetect.ts`) and persists the result to the `stack_snapshots`
+ * table.
+ *
+ * Used to shell out to `scripts/detect/detect-stack.sh`, which meant a host
+ * with no bash/WSL got `no_bash_shell` for a tool that never actually needs
+ * one. It also read manifests at the project root only (a repo whose
+ * manifest lives a directory down — this repo's own `mcp/package.json` — got
+ * `languages: []`) and detected PHP only through `composer.json` (a typical
+ * WordPress site/theme/plugin ships none). All three are fixed in
+ * `stackDetect.ts`; this file is now just the tool wrapper: detect, enrich
+ * with .NET signals, persist, respond.
  *
  * Standalone (no factory): the output is structured stack metadata, not
  * Findings. Other tools (`init_project`, `observability_setup`,
@@ -12,7 +22,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { runShellScript } from '../runners/shellRunner.js';
+import { detectStack } from '../runners/stackDetect.js';
 import { ProjectPath } from '../schemas.js';
 import type {
   DomainError,
@@ -21,15 +31,16 @@ import type {
 } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
-const SCRIPT_REL_PATH = ['detect', 'detect-stack.sh'];
-
 const tool: ToolModule = {
   name: 'detect_stack',
   title: 'Detect project stack',
   description:
-    'Run scripts/detect/detect-stack.sh against the project and return the parsed stack info ' +
-    '(languages, package managers, frameworks, existing tools, IaC, CI). The snapshot is also ' +
-    'persisted to .guardian/guardian.db for stack-aware downstream tools.',
+    'Detect the project stack in-process (no shell involved): languages, package managers, ' +
+    'frameworks, existing tools, IaC (has_iac), CI. Nested manifests are read up to 3 directories ' +
+    'deep (excluding node_modules/vendor/.git/dist/build); each is also reported individually in ' +
+    '`projects`, keyed by its path. PHP and WordPress (incl. WooCommerce, Kadence) are detected even ' +
+    'with no composer.json: by *.php files, wp-config.php, wp-content/, or a theme/plugin header. ' +
+    'The snapshot is also persisted to .guardian/guardian.db for stack-aware downstream tools.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -48,42 +59,12 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
-  if (ctx.shell === null) {
-    return failDomain(
-      'no_bash_shell',
-      'No usable bash shell found. Install Git Bash or WSL, then restart.',
-    );
-  }
+  const parsed: StackSnapshot = detectStack(projectPath);
 
-  const scriptPath = join(ctx.scriptsDir, ...SCRIPT_REL_PATH);
-  const result = await runShellScript({
-    shell: ctx.shell,
-    scriptPath,
-    args: [projectPath],
-    cwd: projectPath,
-  });
-
-  if (result.outcome !== 'completed') {
-    return failDomain(
-      'scanner_failed',
-      `detect-stack.sh exited with outcome=${result.outcome}, code=${result.exitCode ?? '?'}: ${
-        result.stderr.split(/\r?\n/)[0] ?? ''
-      }`,
-    );
-  }
-
-  let parsed: StackSnapshot;
-  try {
-    parsed = JSON.parse(result.stdout) as StackSnapshot;
-  } catch (e) {
-    return failDomain(
-      'scanner_failed',
-      `detect-stack.sh output was not valid JSON: ${(e as Error).message}`,
-    );
-  }
-
-  // .NET / C# / F# enrichment — kept in TS so we don't mutate the shared
-  // shell script (forbidden by US-12 AC-1 in the original spec).
+  // .NET / C# / F# enrichment — kept separate from stackDetect.ts's manifest
+  // walk, which only recognizes the manifest names in MANIFEST_FILES; .NET's
+  // *.csproj/*.fsproj/*.sln naming does not fit that list (a name reused
+  // between projects), so it keeps its own bounded walk here.
   enrichDotnet(parsed, projectPath);
 
   const persisted = ctx.storage.stack.insert({ project_path: projectPath, snapshot: parsed });

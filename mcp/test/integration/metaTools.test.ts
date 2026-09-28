@@ -10,7 +10,6 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
-  mkdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -46,6 +45,7 @@ import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
@@ -113,7 +113,6 @@ function makePlugin(projectPath: string): PluginContext {
 const semgrepFx = () => readFileSync(join(FIX, 'semgrep.json'), 'utf8');
 const trivyFsFx = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
 const gitleaksFx = () => readFileSync(join(FIX, 'gitleaks.json'), 'utf8');
-const banditFx = () => readFileSync(join(FIX, 'bandit.json'), 'utf8');
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -130,12 +129,13 @@ afterEach(() => {
 // ---------------------------------------------------------------------- set_baseline
 
 describe('set_baseline', () => {
-  it('defaults to the latest completed scan when scan_id is omitted', async () => {
-    const plugin = makePlugin(tempProject());
+  it("defaults to the project's latest completed scan when scan_id is omitted", async () => {
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
     plugin.storage.scans.insert({
       scan_id: 'scan-A',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: project,
       tree_hash: 'h',
     });
     plugin.storage.scans.finalize({
@@ -145,7 +145,7 @@ describe('set_baseline', () => {
       missing_tools: [],
     });
 
-    const r = (await getTool('set_baseline').handler({}, plugin)) as {
+    const r = (await getTool('set_baseline').handler({ project_path: project }, plugin)) as {
       ok: true;
       scan_id: string;
     };
@@ -155,8 +155,9 @@ describe('set_baseline', () => {
   });
 
   it('errors when no completed scan exists yet', async () => {
-    const plugin = makePlugin(tempProject());
-    const r = (await getTool('set_baseline').handler({}, plugin)) as
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    const r = (await getTool('set_baseline').handler({ project_path: project }, plugin)) as
       | { ok: true }
       | { ok: false; error: { code: string } };
     expect(r.ok).toBe(false);
@@ -167,11 +168,12 @@ describe('set_baseline', () => {
 
 describe('suppress_finding', () => {
   it('inserts a suppression and hides the finding from listOpen', async () => {
-    const plugin = makePlugin(tempProject());
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
     plugin.storage.scans.insert({
       scan_id: 's1',
       scan_type: 'sast',
-      project_path: '/p',
+      project_path: project,
       tree_hash: 'h',
     });
     const finding = makeFinding({
@@ -190,12 +192,64 @@ describe('suppress_finding', () => {
     });
 
     const r = (await getTool('suppress_finding').handler(
-      { finding_fingerprint: finding.fingerprint, reason: 'fp' },
+      { project_path: project, finding_fingerprint: finding.fingerprint, reason: 'fp' },
       plugin,
     )) as { ok: true; suppression_id: number };
     expect(r.ok).toBe(true);
     expect(r.suppression_id).toBeGreaterThan(0);
     expect(plugin.storage.findings.listOpen()).toHaveLength(0);
+    // Written with the caller's own resolved project (migration 011), so it
+    // is scoped at match time rather than matching every project sharing
+    // this server's storage.
+    expect(plugin.storage.suppressions.listAll()[0]?.project_path).toBe(project);
+  });
+
+  it('rejects a fingerprint no scan of this project ever reported with unknown_finding', async () => {
+    const project = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(project);
+
+    const r = (await getTool('suppress_finding').handler(
+      { project_path: project, finding_fingerprint: 'a'.repeat(64), reason: 'fp' },
+      plugin,
+    )) as { ok: false; error: { code: string } } | { ok: true };
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('unknown_finding');
+  });
+
+  it('scopes suppression to one project: a fingerprint that only exists in ANOTHER project is unknown here', async () => {
+    const projectA = resolveProjectPath(tempProject()).path;
+    const projectB = resolveProjectPath(tempProject()).path;
+    const plugin = makePlugin(projectA);
+
+    // The finding was reported only in project B's scan, in the SAME
+    // storage (one server can scan several projects across its life).
+    plugin.storage.scans.insert({
+      scan_id: 'b-scan',
+      scan_type: 'sast',
+      project_path: projectB,
+      tree_hash: 'h',
+    });
+    const finding = makeFinding({
+      tool: 'mock',
+      severity: 'high',
+      category: 'security',
+      title: 't',
+      file_path: 'a.ts',
+    });
+    plugin.storage.findings.bulkInsert([{ ...finding, scan_id: 'b-scan' }]);
+    plugin.storage.scans.finalize({
+      scan_id: 'b-scan',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+    });
+
+    const r = (await getTool('suppress_finding').handler(
+      { project_path: projectA, finding_fingerprint: finding.fingerprint, reason: 'fp' },
+      plugin,
+    )) as { ok: false; error: { code: string } } | { ok: true };
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('unknown_finding');
   });
 });
 
@@ -274,7 +328,7 @@ describe('diff_scans', () => {
       resolved_findings: Array<{ fingerprint: string }>;
     };
     expect(r.ok).toBe(true);
-    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1 });
+    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
     expect(r.new_findings[0]?.fingerprint).toBe(fNew.fingerprint);
     expect(r.resolved_findings[0]?.fingerprint).toBe(fOld.fingerprint);
   });
@@ -340,63 +394,46 @@ describe('diff_scans', () => {
 
 // ---------------------------------------------------------------------- audit_executive
 
+/**
+ * The scanners every audit sub-tool runs, answered by command: each writes
+ * its fixture where the tool asked for it. `security_scan_full` and
+ * `quality_check` run their scanners directly now, not through a script.
+ */
+function fakeScanners(semgrepReport: () => string) {
+  return async (opts: { command: string; args?: string[] }) => {
+    const args = opts.args ?? [];
+    const after = (flag: string): string | undefined => {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    if (opts.command === 'semgrep') {
+      const out = after('--output');
+      if (out) writeFileSync(out, semgrepReport(), 'utf8');
+      return { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    }
+    if (opts.command === 'gitleaks') {
+      const report = args.find((a) => a.startsWith('--report-path='));
+      if (report) writeFileSync(report.slice('--report-path='.length), gitleaksFx(), 'utf8');
+      return { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    }
+    const out = after('--output');
+    if (out) writeFileSync(out, trivyFsFx(), 'utf8');
+    return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+  };
+}
+
 describe('audit_executive', () => {
-  it('sequences the 4 sub-tools and aggregates counts', async () => {
+  it('sequences the 4 sub-tools and aggregates counts — with no bash shell on the host', async () => {
     const project = tempProject();
+    writeFileSync(join(project, 'app.js'), 'res.send(req.query.q);\n', 'utf8');
     const plugin = makePlugin(project);
+    // None of the sub-tools runs a shell script any more.
+    plugin.shell = null;
 
-    // Mock scannerAvailable so deps_audit / compliance_check see Trivy.
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
-
-    // security_scan_full uses runShellScript with full-security-scan.sh and
-    // drops a reports directory containing 5 JSON files. We also handle
-    // quality_check (the same mock fires) by detecting its scriptPath via
-    // the args.
-    vi.mocked(runShellScript).mockImplementation(async (opts) => {
-      if (opts.scriptPath.endsWith('full-security-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `security-${Date.now()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        writeFileSync(join(reportDir, 'sast.json'), semgrepFx(), 'utf8');
-        writeFileSync(join(reportDir, 'secrets.json'), gitleaksFx(), 'utf8');
-        writeFileSync(join(reportDir, 'deps.json'), trivyFsFx(), 'utf8');
-        writeFileSync(join(reportDir, 'bandit.json'), banditFx(), 'utf8');
-      } else if (opts.scriptPath.endsWith('quality-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `quality-${Date.now()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        // No reports → quality_check surfaces tools as missing.
-      }
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    // deps_audit + compliance_check both spawn `trivy fs ...` via runProcess.
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const outIdx = opts.args?.findIndex((a) => a === '--output');
-      const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
-      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+    );
+    vi.mocked(runProcess).mockImplementation(fakeScanners(semgrepFx));
 
     const r = (await getTool('audit_executive').handler(
       { project_path: project },
@@ -425,46 +462,18 @@ describe('audit_executive', () => {
 
     // The audit scan row exists and is completed.
     expect(plugin.storage.scans.getById(r.scan_id)?.status).toBe('completed');
+    expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
   });
 
   it('emits deltas on the second consecutive audit', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+    );
 
     let semgrepFindings = semgrepFx();
-
-    vi.mocked(runShellScript).mockImplementation(async (opts) => {
-      if (opts.scriptPath.endsWith('full-security-scan.sh')) {
-        const reportDir = join(
-          project,
-          '.guardian',
-          'reports',
-          `security-${Date.now()}-${Math.random()}`,
-        );
-        mkdirSync(reportDir, { recursive: true });
-        writeFileSync(join(reportDir, 'sast.json'), semgrepFindings, 'utf8');
-      }
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const outIdx = opts.args?.findIndex((a) => a === '--output');
-      const path = outIdx !== undefined && outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
-      if (path) writeFileSync(path, '{}', 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
+    vi.mocked(runProcess).mockImplementation(fakeScanners(() => semgrepFindings));
 
     const r1 = (await getTool('audit_executive').handler(
       { project_path: project },

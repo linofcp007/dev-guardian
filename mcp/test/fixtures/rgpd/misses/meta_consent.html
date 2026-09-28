@@ -1,0 +1,16 @@
+<!doctype html>
+<!--
+  Meta's own consent API: the pixel is revoked before it is initialised, and
+  the banner calls fbq('consent', 'grant') later. NOTHING here may fire (the
+  Meta-consent guard).
+-->
+<html lang="pt-PT">
+<head>
+  <script>
+    fbq('consent', 'revoke');
+    fbq('init', '123456789012345');
+    fbq('track', 'PageView');
+  </script>
+</head>
+<body></body>
+</html>

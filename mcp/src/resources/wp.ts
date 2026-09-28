@@ -7,10 +7,15 @@
  * These read the structured wp_audit data persisted by `wp_audit` into
  * `scans.meta`. Returning them as a dedicated resource gives the model a
  * cleaner shape than reading the generic `guardian://scans/{id}` blob.
+ *
+ * The `latest` ones answer for the server's working-directory project.
  */
 
 import type { PluginContext } from '../context.js';
+import { findLatestUsable } from '../history/openSet.js';
+import type { ScanRecord, ScanType } from '../types.js';
 import { registerResourceModule } from './index.js';
+import { serverProjectPath } from './paging.js';
 
 registerResourceModule({
   name: 'guardian-wp-audit-latest',
@@ -76,17 +81,19 @@ registerResourceModule({
   },
 });
 
-function findLatestWpAudit(ctx: PluginContext): ReturnType<typeof ctx.storage.scans.getById> {
+function findLatestWpAudit(ctx: PluginContext): ScanRecord | null {
   return findLatestOfType(ctx, 'wp_audit');
 }
 
-function findLatestOfType(
-  ctx: PluginContext,
-  type: string,
-): ReturnType<typeof ctx.storage.scans.getById> {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
+/**
+ * The server's project's newest completed scan of `type` — a project-scoped
+ * SQL query. It searched the 50 newest scans of the whole database, so
+ * another project's audit answered, and one 51 scans back was "not found".
+ * These audits report through `meta`, so a run's scanner coverage does not
+ * disqualify it.
+ */
+function findLatestOfType(ctx: PluginContext, type: ScanType): ScanRecord | null {
+  return findLatestUsable(ctx.storage, serverProjectPath(), [type], { skipCoverageNone: false }).scan;
 }
 
 interface JsonRpcError extends Error {

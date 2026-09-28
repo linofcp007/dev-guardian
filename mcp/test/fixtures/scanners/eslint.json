@@ -1,0 +1,55 @@
+[
+  {
+    "filePath": "C:\\proj\\src\\app.js",
+    "messages": [
+      {
+        "ruleId": "no-unused-vars",
+        "severity": 2,
+        "message": "'x' is assigned a value but never used.",
+        "line": 3,
+        "column": 7,
+        "endLine": 3,
+        "endColumn": 8
+      },
+      {
+        "ruleId": "camelcase",
+        "severity": 1,
+        "message": "Identifier 'snake_name' is not in camel case.",
+        "line": 5,
+        "column": 7
+      },
+      {
+        "ruleId": "complexity",
+        "severity": 1,
+        "message": "Function 'big' has a complexity of 25. Maximum allowed is 20.",
+        "line": 10,
+        "column": 1,
+        "endLine": 60,
+        "endColumn": 2
+      }
+    ],
+    "errorCount": 1,
+    "warningCount": 2
+  },
+  {
+    "filePath": "C:\\proj\\src\\broken.js",
+    "messages": [
+      {
+        "ruleId": null,
+        "fatal": true,
+        "severity": 2,
+        "message": "Parsing error: Unexpected token )",
+        "line": 1,
+        "column": 9
+      }
+    ],
+    "errorCount": 1,
+    "warningCount": 0
+  },
+  {
+    "filePath": "C:\\proj\\src\\clean.js",
+    "messages": [],
+    "errorCount": 0,
+    "warningCount": 0
+  }
+]

@@ -1,0 +1,10 @@
+@* A Blazor component. The single BUG fires
+   rgpd-youtube-embed-without-nocookie exactly once. *@
+<div class="video">
+    @* BUG *@
+    <iframe width="560" height="315" src="https://www.youtube.com/embed/@VideoId" title="Video"></iframe>
+</div>
+
+@code {
+    [Parameter] public string VideoId { get; set; } = "";
+}

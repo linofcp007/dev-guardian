@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  Google Consent Mode v2 with DENIED defaults, declared before the tag: the
+  loader may be present, and gtag.js sets no analytics cookie until the
+  banner sends gtag('consent', 'update', ...). NOTHING here may fire
+  (the consent-mode guard).
+-->
+<html lang="pt-PT">
+<head>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('consent', 'default', {
+      'ad_storage': 'denied',
+      'ad_user_data': 'denied',
+      'ad_personalization': 'denied',
+      'analytics_storage': 'denied',
+      'wait_for_update': 500
+    });
+  </script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-AAAA1111"></script>
+  <script>
+    gtag('js', new Date());
+    gtag('config', 'G-AAAA1111');
+  </script>
+</head>
+<body></body>
+</html>

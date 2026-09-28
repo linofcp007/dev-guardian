@@ -14,16 +14,31 @@
  *
  * The model then proposes the patch in its response. This separation
  * keeps us LLM-agnostic and free.
+ *
+ * The finding is looked up in `project_path`'s own completed scans, newest
+ * first — not only in the single latest scan of the whole database, which
+ * could not find a SAST finding once any other scan (a secrets run, an SBOM,
+ * another project's scan) had completed after it. The related suppressions
+ * are those of the same tool AND rule_id; it used to list any ten active
+ * suppressions, whatever they were about.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+
+const ROTATION_GUIDANCE =
+  'This finding flags a credential (a password, key or token), not a code-shape bug — suggest_fix ' +
+  'withholds surrounding source for it so the value is never echoed back into this response. Do not ' +
+  'ask for or paste the secret value into further tooling. Rotate/revoke it at its source (the ' +
+  'provider dashboard or secret manager), remove it from the file, and replace it with a reference to ' +
+  'a secret store or an environment variable placeholder.';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -45,8 +60,10 @@ const tool: ToolModule = {
   title: 'Gather fix context for the model',
   description:
     'Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, ' +
-    'prior suppressions for the same rule_id) so the calling model can propose a patch. This tool ' +
-    'never calls an external LLM — the model that invoked it does the synthesis.',
+    'prior suppressions for the same tool and rule_id) so the calling model can propose a patch. ' +
+    "The finding is found in project_path's (default: the server's working directory) newest " +
+    'scan that reported it. This tool never calls an external LLM — the model that invoked it ' +
+    'does the synthesis.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -71,22 +88,25 @@ async function handler(
   }
   const contextLines = inp.context_lines ?? 20;
 
-  // Locate the finding via the latest scan that carries it.
-  const latest = ctx.storage.scans.getLatest();
-  const finding = latest
-    ? ctx.storage.findings
-        .listByScan(latest.scan_id)
-        .find((f) => f.fingerprint === inp.finding_fingerprint)
-    : null;
-  if (!finding) {
-    return failDomain('unknown_scan_id', `Finding ${inp.finding_fingerprint} not in the latest scan.`);
+  // Locate the finding in this project's newest scan that carries it.
+  const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
+  if (!located) {
+    return failDomain(
+      'unknown_finding',
+      `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`,
+    );
   }
+  const finding = located.finding;
+  const credential = isCredentialFinding(finding);
 
-  // Pull the surrounding source.
+  // Pull the surrounding source — never for a credential finding. Reading it
+  // from disk would put the secret's own line back into this response, the
+  // exact leak `--redact` and the persisted snippet's own redaction exist to
+  // prevent; `rotation_guidance` below stands in its place instead.
   let surrounding_source: string | null = null;
   let source_start_line = 0;
   let source_end_line = 0;
-  if (finding.file_path) {
+  if (!credential && finding.file_path) {
     const abs = join(projectPath, finding.file_path);
     if (existsSync(abs)) {
       try {
@@ -113,18 +133,24 @@ async function handler(
     }
   }
 
-  // Prior suppressions for the same rule_id (historical "we've decided this
-  // is fine" pattern) — useful for the model to know "the team has
-  // suppressed similar findings; consider that pattern".
+  // Prior suppressions of the same tool + rule_id (historical "we've decided
+  // this is fine" pattern) — useful for the model to know "the team has
+  // suppressed similar findings; consider that pattern". Never the finding's
+  // own suppression, by either key.
   const priorSuppressions = finding.rule_id
     ? ctx.storage.suppressions
-        .listActive()
-        .filter((s) => s.finding_fingerprint !== finding.fingerprint)
+        .listActiveForRule(finding.tool, finding.rule_id, 20, projectPath)
+        .filter(
+          (s) =>
+            s.finding_fingerprint !== finding.fingerprint &&
+            (finding.identity === undefined || s.finding_identity !== finding.identity),
+        )
         .slice(0, 10)
     : [];
 
   return {
     ok: true,
+    scan_id: located.scan_id,
     finding: {
       fingerprint: finding.fingerprint,
       tool: finding.tool,
@@ -143,6 +169,7 @@ async function handler(
     surrounding_source,
     source_start_line,
     source_end_line,
+    rotation_guidance: credential ? ROTATION_GUIDANCE : null,
     prior_related_suppressions: priorSuppressions.map((s) => ({
       reason: s.reason,
       created_at: s.created_at,
@@ -150,10 +177,13 @@ async function handler(
     })),
     docs_hint:
       'If the rule_id or message references CWE/OWASP, link to the official write-up in the proposed fix.',
-    instructions_for_model:
-      'Propose a unified-diff patch (or describe the minimal edit) that addresses this finding ' +
-      'without changing unrelated behaviour. Reference the line range, explain the fix, and call out ' +
-      'any side effects the maintainer should review.',
+    instructions_for_model: credential
+      ? 'Do not propose a patch that echoes, logs or re-derives the credential value — none was given ' +
+        'here on purpose. Recommend removing the hardcoded value, referencing a secret store or an ' +
+        'environment variable instead, and rotating the credential at its source; see rotation_guidance.'
+      : 'Propose a unified-diff patch (or describe the minimal edit) that addresses this finding ' +
+        'without changing unrelated behaviour. Reference the line range, explain the fix, and call out ' +
+        'any side effects the maintainer should review.',
   };
 }
 

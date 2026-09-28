@@ -21,8 +21,14 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Fix round 1, item 4 (2026-09-25 full review) — see baseRules.test.ts's
+// identical comment for the full reasoning: real, synchronous `semgrep`
+// calls in this file's own `run()` are never bounded by vitest's default
+// testTimeout, so this file opts into a longer one explicitly.
+vi.setConfig({ testTimeout: 180_000 });
+import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,10 +42,6 @@ const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'bugfix-go.yml');
 const FIXTURES = resolve(REPO_ROOT, 'mcp', 'test', 'fixtures', 'bugfix-go');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult {
@@ -59,11 +61,7 @@ interface SemgrepRun {
 function run(config: string, dir: string): SemgrepRun {
   const work = makeTempDir('guardian-bugfix-go-');
   cpSync(dir, work, { recursive: true });
-  const out = execFileSync(
-    'semgrep',
-    ['--config', config, '--json', '--quiet', '--no-git-ignore', work],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  );
+  const out = semgrepStdout(['--config', config, '--json', '--quiet', '--no-git-ignore', work]);
   const parsed: unknown = JSON.parse(out);
   const results = (parsed as { results?: unknown[] }).results ?? [];
   const scanned = (parsed as { paths?: { scanned?: unknown[] } }).paths?.scanned ?? [];

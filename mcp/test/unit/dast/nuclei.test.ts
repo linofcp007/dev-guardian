@@ -43,7 +43,7 @@ describe('buildNucleiArgs', () => {
   // Addition beyond the brief's given tests: `allowIntrusive` must narrow the
   // exclude list by exactly the `intrusive` tag. A wrong implementation that
   // also drops 'dos' or 'fuzz' once intrusive templates are allowed would
-  // reopen the fuzzing/DoS-shaped templates the design doc's non-goals
+  // reopen the fuzzing/DoS-shaped templates the design of record's non-goals
   // permanently rule out of this tool (real fuzzing stays behind nuclei's own
   // `-dast` mode, which this integration never enables).
   it('keeps dos and fuzz excluded even when intrusive templates are allowed', () => {

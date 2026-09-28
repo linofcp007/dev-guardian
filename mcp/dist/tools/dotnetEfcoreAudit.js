@@ -19,6 +19,7 @@ import { join, relative } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { makeFinding, } from '../runners/scannerParsers/index.js';
+import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import { registerToolModule } from './index.js';
 const RULES = [
     {
@@ -107,7 +108,12 @@ async function handler(input, ctx) {
                             rule_id: rule.id,
                             severity: rule.severity,
                             category: rule.id === 'efcore-raw-sql-creds' ? 'security' : 'bug',
-                            subcategory: 'migration-risk',
+                            // 'secret' rather than the generic 'migration-risk' for
+                            // efcore-raw-sql-creds: it is what makes `isCredentialFinding`
+                            // (and so this file's own redaction below) recognise the
+                            // finding — `-creds` does not match the credential-word list
+                            // that classifier tests rule_id against.
+                            subcategory: rule.id === 'efcore-raw-sql-creds' ? 'secret' : 'migration-risk',
                             title: rule.description,
                             file_path: relative(projectPath, abs).replace(/\\/g, '/'),
                             line_start: i + 1,
@@ -120,6 +126,10 @@ async function handler(input, ctx) {
             }
         }
     }
+    // efcore-raw-sql-creds's snippet is the raw migration line — the SQL
+    // string with the embedded password/secret/key, whole — so it is redacted
+    // here, once, before the response and the DB both read `findings` again.
+    const redacted = redactCredentialSnippets(findings);
     const scanId = randomUUID();
     ctx.storage.scans.insert({
         scan_id: scanId,
@@ -127,22 +137,22 @@ async function handler(input, ctx) {
         project_path: projectPath,
         tree_hash: '',
     });
-    if (findings.length > 0) {
-        ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
+    if (redacted.length > 0) {
+        ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
     }
     ctx.storage.scans.finalize({
         scan_id: scanId,
         status: 'completed',
         tools_run: [{ name: 'dotnet_efcore_audit', status: 'ok' }],
         missing_tools: [],
-        meta: { migration_dirs_scanned: migrationDirs.length, findings_count: findings.length },
+        meta: { migration_dirs_scanned: migrationDirs.length, findings_count: redacted.length },
     });
     return {
         ok: true,
         scan_id: scanId,
         migration_dirs_scanned: migrationDirs.length,
-        findings_count: findings.length,
-        findings,
+        findings_count: redacted.length,
+        findings: redacted,
         hint: findings.length === 0
             ? migrationDirs.length === 0
                 ? 'No Migrations/ directory found.'

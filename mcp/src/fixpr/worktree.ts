@@ -1,12 +1,13 @@
 /**
  * `createWorktree` — the isolation `create_fix_pr` runs every fix inside
- * (design doc the design of record
- * §3).
+ * (the design of record).
  *
  * Two properties this module exists to hold:
  *
  *   1. The user's working tree is never touched. The worktree branches from
- *      committed HEAD, in a fresh directory, on a fresh branch — uncommitted
+ *      committed HEAD, in a fresh directory, on a fresh branch — or, with
+ *      `branch: null`, DETACHED at HEAD, writing no ref at all (a dry run,
+ *      and the base-commit tree of the test differential) — uncommitted
  *      work in the caller's own checkout is irrelevant and stays exactly as
  *      it was, because nothing here ever reads it.
  *   2. The worktree is removed on every path, including every failure path.
@@ -24,16 +25,16 @@
  * throws — outcomes are inspected, not caught.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 
 export interface Worktree {
   /** Absolute path to the worktree directory. */
   path: string;
-  /** The branch created inside it. */
-  branch: string;
+  /** The branch created inside it; null for a detached worktree. */
+  branch: string | null;
   /** Idempotent. Removes the worktree and prunes. Safe to call twice. */
   remove(): Promise<{ removed: boolean; warning: string | null }>;
 }
@@ -50,7 +51,12 @@ export async function createWorktree(opts: {
   /** Expected already resolved/absolute, as every other tool in this repo
    *  hands `resolveProjectPath()`'s output around rather than a raw input. */
   projectPath: string;
-  branch: string;
+  /**
+   * The branch to create, or null for a DETACHED worktree at HEAD — what a
+   * dry run uses (Task 11 item 1): `-b` writes a branch into the user's
+   * refs, and a dry run must not change anything outside its worktree.
+   */
+  branch: string | null;
   timeoutMs?: number;
 }): Promise<{ ok: true; worktree: Worktree } | { ok: false; reason: string }> {
   let dir: string;
@@ -69,7 +75,10 @@ export async function createWorktree(opts: {
 
   const add = await runProcess({
     command: 'git',
-    args: ['-C', opts.projectPath, 'worktree', 'add', '-b', opts.branch, dir, 'HEAD'],
+    args:
+      opts.branch === null
+        ? ['-C', opts.projectPath, 'worktree', 'add', '--detach', dir, 'HEAD']
+        : ['-C', opts.projectPath, 'worktree', 'add', '-b', opts.branch, dir, 'HEAD'],
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs,
   });
@@ -113,7 +122,7 @@ export async function createWorktree(opts: {
   // different platform's equivalent (e.g. a macOS `/tmp` -> `/private/tmp`
   // symlink) would otherwise additionally require guessing at.
   const canonicalPath =
-    (await resolveRegisteredPath(opts.projectPath, opts.branch, opts.timeoutMs)) ?? dir;
+    (await resolveRegisteredPath(opts.projectPath, opts.branch, dir, opts.timeoutMs)) ?? dir;
 
   return {
     ok: true,
@@ -124,7 +133,7 @@ export async function createWorktree(opts: {
 function makeWorktree(
   projectPath: string,
   path: string,
-  branch: string,
+  branch: string | null,
   timeoutMs: number | undefined,
 ): Worktree {
   // A shared IN-FLIGHT PROMISE, not a boolean flag set before the first
@@ -202,7 +211,8 @@ interface WorktreeListEntry {
  *  never happen right after a successful `add` — no entry matched). */
 async function resolveRegisteredPath(
   projectPath: string,
-  branch: string,
+  branch: string | null,
+  dir: string,
   timeoutMs: number | undefined,
 ): Promise<string | null> {
   const list = await runProcess({
@@ -212,10 +222,35 @@ async function resolveRegisteredPath(
     timeoutMs,
   });
   if (list.outcome !== 'completed') return null;
-  for (const entry of parseWorktreeList(list.stdout)) {
-    if (entry.branch === branch) return entry.path;
+  const entries = parseWorktreeList(list.stdout);
+  if (branch !== null) {
+    for (const entry of entries) {
+      if (entry.branch === branch) return entry.path;
+    }
+    return null;
+  }
+  // Detached: no branch names it, and several may exist at once (a dry run's
+  // fix tree and its base tree), so it is found by its directory — compared
+  // in canonical long form, since `dir` may be an 8.3 short path (see the
+  // comment in `createWorktree`).
+  const wanted = samePathKey(dir);
+  for (const entry of entries) {
+    if (samePathKey(entry.path) === wanted) return entry.path;
   }
   return null;
+}
+
+/** A path as a comparison key: real (long) form, `/` separators, and
+ *  case-folded on Windows. */
+function samePathKey(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync.native(path);
+  } catch {
+    real = resolve(path);
+  }
+  const posix = real.replace(/\\/g, '/');
+  return process.platform === 'win32' ? posix.toLowerCase() : posix;
 }
 
 /**

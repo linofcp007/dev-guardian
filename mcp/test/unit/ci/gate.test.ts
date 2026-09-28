@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { evaluateGate, exitCodeForCoverage } from '../../../src/ci/gate.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
 import { CI_EXIT } from '../../../src/ci/types.js';
-import type { Finding, Severity } from '../../../src/types.js';
+import type { Finding, Severity, ToolRun } from '../../../src/types.js';
 import type { ScanStepResult } from '../../../src/ci/types.js';
 
 function finding(over: Partial<Finding> = {}): Finding {
@@ -144,6 +144,108 @@ describe('evaluateGate — coverage gaps beyond "missing" (guards computeCoverag
     expect(v.coverageGaps.some((g) => g.includes('scan_sast'))).toBe(true);
   });
 
+  it('says a scanner that ran with reduced coverage did so — not that it is "not installed"', () => {
+    // The convention scanCoverage.ts documents: an `ok` entry whose name is
+    // also in missing_tools ran, but did not cover everything (e.g. files
+    // gitleaks could not read). The gap must be reported — and truthfully.
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [{ name: 'gitleaks-working-tree', status: 'ok', reason: '1 file(s) could not be read' }],
+          missing_tools: ['gitleaks-working-tree'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps).toEqual([
+      'security_scan_full: gitleaks-working-tree ran with reduced coverage (1 file(s) could not be read)',
+    ]);
+  });
+
+  it('says a Trivy ecosystem gap is reduced coverage of an installed Trivy, never "not installed"', () => {
+    // The exact bookkeeping scan_deps writes when Trivy ran, covered npm, and
+    // recognised nothing for a root .csproj (no packages.lock.json), as
+    // security_scan_full merges it: `trivy` ok, `trivy:<ecosystem>` missing.
+    // The gate used to look the pseudo-name up as if it were a scanner of its
+    // own, find no `ok` run named `trivy:dotnet`, and print "not installed".
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'ok', reason: 'no_supported_manifest' },
+            { name: 'trivy-config', status: 'ok' },
+          ],
+          missing_tools: ['trivy:dotnet'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverage).toBe('partial');
+    expect(v.coverageGaps).toEqual([
+      'security_scan_full: trivy ran with reduced coverage — dotnet not covered (no_supported_manifest)',
+    ]);
+  });
+
+  it('says a Trivy that recognised no manifest at all was skipped, with its reason — not "not installed"', () => {
+    // scan_deps' other shape: Trivy ran and its report had no Results at all
+    // for a manifest that declares dependencies, so its entry is `skipped` and
+    // the bare name is listed missing. Installed, so never "not installed".
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' },
+            { name: 'trivy-config', status: 'ok' },
+          ],
+          missing_tools: ['trivy'],
+        }),
+      ],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps).toEqual(['security_scan_full: trivy skipped (no_supported_manifest)']);
+  });
+
+  it('reports a tool that failed AND is listed missing once, as failed — not also as "not installed"', () => {
+    // deps_audit lists a failed `npm audit` in missing_tools as well; the
+    // failed line already names it, and it is installed.
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'deps_audit',
+          tools_run: [
+            { name: 'trivy', status: 'ok' },
+            { name: 'npm', status: 'failed', reason: 'ran but produced no audit report (missing lockfile?)' },
+          ],
+          missing_tools: ['npm'],
+        }),
+      ],
+    }));
+    expect(v.coverageGaps).toEqual([
+      'deps_audit: npm failed (ran but produced no audit report (missing lockfile?))',
+    ]);
+  });
+
+  it('still says "not installed" for a scanner that is not installed', () => {
+    const v = evaluateGate(input({
+      steps: [
+        step({
+          tool: 'security_scan_full',
+          tools_run: [
+            { name: 'semgrep', status: 'ok' },
+            { name: 'trivy', status: 'skipped', reason: 'not_installed' },
+          ],
+          missing_tools: ['trivy'],
+        }),
+      ],
+    }));
+    expect(v.coverageGaps).toEqual(['security_scan_full: trivy not installed']);
+  });
+
   it('reports a failed tool without a parenthetical when no reason is given', () => {
     // Companion to the "reason given" failed-tool case above: pins the other
     // side of the `run.reason ? ... : ''` branch so both are exercised.
@@ -201,7 +303,7 @@ describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 r
 
 describe('evaluateGate — baselineAbsent (carried forward from Task 3 review)', () => {
   // Task 3's `renderHuman` needs to tell a reader "no baseline file was
-  // found yet, run `baseline update`" — a fact design doc §4 says the CLI
+  // found yet, run `baseline update`" — a fact the design of record says the CLI
   // must state on a first run. That fact lives one layer up from here:
   // `GateInput.baseline` is `null` precisely when Task 1's `parseBaseline`
   // could not read a file at all (see baseline.ts's module doc, the three
@@ -296,5 +398,158 @@ describe('exitCodeForCoverage (carried forward from Task 5 coordinator review)',
     );
     expect(none.coverage).toBe('none');
     expect(none.exitCode).toBe(exitCodeForCoverage('none'));
+  });
+});
+
+/**
+ * Follow-up X1 — `--accept-partial-parse <path>`. A Semgrep step the shared
+ * judge found `partial` (some files only partly parsed: `ok` AND missing)
+ * carries those files in `partial_parses` (runScans.ts). When EVERY one is
+ * accepted, the gap prints as accepted and does not force exit 2; coverage
+ * itself stays `partial` — in the verdict, and so in JSON and SARIF. Skipped,
+ * failed, scanned-nothing and unlisted files still exit 2. Paths are
+ * project-relative and matched exactly: no globs.
+ */
+describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
+  const WP = 'wp/rest-controller.php';
+  const partialRun = (files: readonly string[]): ToolRun => ({
+    name: 'semgrep',
+    status: 'ok',
+    reason: `partial: ${files.length} file(s) only partly parsed — findings in the unparsed spans may be missing`,
+    partially_parsed: files.map((file) => ({ file, type: 'PartialParsing', message: 'Syntax error' })),
+  });
+  const partialStep = (files: readonly string[] = [WP], over: Partial<ScanStepResult> = {}): ScanStepResult =>
+    step({
+      tool: 'security_scan_full',
+      tools_run: [partialRun(files)],
+      missing_tools: ['semgrep'],
+      partial_parses: { semgrep: files.map((file) => ({ file, type: 'PartialParsing' })) },
+      ...over,
+    });
+
+  it('not accepted: exit 2, coverage partial, the gap names the file and the flag', () => {
+    const v = evaluateGate(input({ steps: [partialStep()] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverage).toBe('partial');
+    expect(v.acceptedGaps).toEqual([]);
+    expect(v.coverageGaps).toHaveLength(1);
+    expect(v.coverageGaps[0]).toMatch(/^security_scan_full: semgrep ran with reduced coverage/);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: wp\/rest-controller\.php .*--accept-partial-parse/);
+  });
+
+  it('every file accepted: exit 0, printed as accepted, coverage stays partial', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverage).toBe('partial');
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.acceptedGaps).toEqual([
+      'security_scan_full: semgrep only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
+    expect(v.unusedPartialParseAcceptances).toEqual([]);
+  });
+
+  it('an accepted path that is not the one partially parsed: exit 2, and the acceptance is reported unused', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: ['wp/other.php'] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: wp\/rest-controller\.php/);
+    expect(v.unusedPartialParseAcceptances).toEqual(['wp/other.php']);
+  });
+
+  it('one of two files accepted: exit 2, naming only the unaccepted one', () => {
+    const v = evaluateGate(input({ steps: [partialStep([WP, 'b.js'])], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: b\.js /);
+    expect(v.coverageGaps[0]).not.toMatch(/not accepted: .*rest-controller/);
+  });
+
+  it('matched exactly: backslashes and a leading ./ normalise; case, globs, directories and prefixes do not', () => {
+    for (const spelling of ['wp\\rest-controller.php', './wp/rest-controller.php']) {
+      expect(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [spelling] })).exitCode).toBe(CI_EXIT.PASS);
+    }
+    for (const spelling of ['WP/rest-controller.php', 'wp/*.php', 'wp/**', 'wp', 'wp/', 'rest-controller.php', '/wp/rest-controller.php']) {
+      expect(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [spelling] })).exitCode).toBe(
+        CI_EXIT.INCOMPLETE_SCAN,
+      );
+    }
+  });
+
+  it('accepts per step: the SAST and the surface step each need their files accepted', () => {
+    const steps = [partialStep(), partialStep(['app/routes.php'], { tool: 'map_attack_surface' })];
+    expect(evaluateGate(input({ steps, acceptedPartialParses: [WP] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const both = evaluateGate(input({ steps, acceptedPartialParses: [WP, 'app/routes.php'] }));
+    expect(both.exitCode).toBe(CI_EXIT.PASS);
+    expect(both.acceptedGaps).toHaveLength(2);
+  });
+
+  it('never accepts a skipped, failed or scanned-nothing Semgrep, even with a file of the step accepted', () => {
+    const skipped: ToolRun = { name: 'semgrep', status: 'skipped', reason: 'semgrep scanned 0 files' };
+    const failed: ToolRun = { name: 'semgrep', status: 'failed', reason: 'exit 7' };
+    for (const other of [skipped, failed]) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { tools_run: [partialRun([WP]), other] })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(v.acceptedGaps).toEqual([]);
+    }
+    // A step with no partial_parses at all (scanned nothing, not installed).
+    const nothing = evaluateGate(input({
+      steps: [step({ tools_run: [skipped], missing_tools: ['semgrep'] })],
+      acceptedPartialParses: [WP],
+    }));
+    expect(nothing.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(nothing.unusedPartialParseAcceptances).toEqual([WP]);
+  });
+
+  it('another gap beside an accepted one still exits 2; a blocking finding still exits 1', () => {
+    const gap = evaluateGate(input({
+      steps: [partialStep(), step({ tool: 'scan_deps', tools_run: [], missing_tools: ['trivy'] })],
+      acceptedPartialParses: [WP],
+    }));
+    expect(gap.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(gap.acceptedGaps).toHaveLength(1);
+    const blocking = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP], findings: [finding()] }));
+    expect(blocking.exitCode).toBe(CI_EXIT.GATE_FAILED);
+  });
+
+  // Fix round 1: only a PARSE problem can be accepted. A per-file Timeout
+  // (Semgrep gave up on the file) is per-file too, and the shared judge
+  // calls it partial — but accepting a file's parse gap never means
+  // accepting that it was not analysed at all.
+  it('a per-file Timeout on an accepted file still exits 2, naming the type', () => {
+    for (const types of [['Timeout'], ['PartialParsing', 'Timeout']]) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: types.map((type) => ({ file: WP, type })) } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(v.acceptedGaps).toEqual([]);
+      expect(v.coverageGaps[0]).toMatch(/not accepted: Timeout on wp\/rest-controller\.php/);
+      expect(v.coverageGaps[0]).toMatch(/PartialParsing, Syntax error, Lexical error/);
+      expect(v.unusedPartialParseAcceptances).toEqual([]);
+    }
+    for (const type of ['Syntax error', 'Lexical error']) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type }] } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.PASS);
+    }
+  });
+
+  it("the DAST step's partial-surface gap is accepted with the surface's files", () => {
+    const dast = step({
+      tool: 'scan_dast',
+      tools_run: [{ name: 'guardian-dast', status: 'ok' }],
+      missing_tools: ['guardian-dast:partial-surface'],
+      partial_parses: { 'guardian-dast:partial-surface': [{ file: WP, type: 'PartialParsing' }] },
+    });
+    expect(evaluateGate(input({ steps: [dast] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const v = evaluateGate(input({ steps: [dast], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.acceptedGaps).toEqual([
+      'scan_dast: guardian-dast:partial-surface only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
   });
 });

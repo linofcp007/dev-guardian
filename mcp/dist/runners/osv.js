@@ -22,7 +22,8 @@ export async function queryOsv(packages, opts = {}) {
     if (queryable.length === 0) {
         return { online: true, queried: 0, vulnerable_packages: [] };
     }
-    if (typeof fetch !== 'function') {
+    const fetchImpl = opts.fetchImpl ?? (typeof fetch === 'function' ? fetch : undefined);
+    if (fetchImpl === undefined) {
         return { online: false, queried: 0, vulnerable_packages: [], error: 'no_fetch' };
     }
     const vulnerable = [];
@@ -35,7 +36,7 @@ export async function queryOsv(packages, opts = {}) {
                     ...(p.version ? { version: p.version } : {}),
                 })),
             };
-            const json = await postJson(OSV_BATCH_URL, body, opts);
+            const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
             const results = Array.isArray(json.results)
                 ? (json.results)
                 : [];
@@ -69,7 +70,7 @@ export async function queryOsv(packages, opts = {}) {
     }
     return { online: true, queried: queryable.length, vulnerable_packages: vulnerable };
 }
-async function postJson(url, body, opts) {
+async function postJson(url, body, opts, fetchImpl) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     if (opts.signal) {
@@ -79,7 +80,7 @@ async function postJson(url, body, opts) {
             opts.signal.addEventListener('abort', () => controller.abort(), { once: true });
     }
     try {
-        const res = await fetch(url, {
+        const res = await fetchImpl(url, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(body),

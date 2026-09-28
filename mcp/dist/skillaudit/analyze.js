@@ -26,6 +26,8 @@ import { detectTaint } from './taint.js';
 import { THREAT_CATEGORIES } from './taxonomy.js';
 import { matchSignatures } from './yaraSignatures.js';
 const TOOL = 'guardian-scanskill';
+/** The same words every other `GUARDIAN_OFFLINE` caller reports. */
+export const OSV_OFFLINE_REASON = 'network disabled (GUARDIAN_OFFLINE=1)';
 export async function analyzeSkill(files, opts = {}) {
     const findings = [];
     const signals = [];
@@ -35,6 +37,27 @@ export async function analyzeSkill(files, opts = {}) {
         findings.push(f);
         signals.push({ severity: f.severity, isExecutable });
     };
+    // 0. Symlinks/junctions the ingester refused to follow. Reported here
+    // (never as a raw ingested "file") so the pattern/YARA/taint passes below
+    // never see a link's target string as if it were reviewable source — see
+    // `SymlinkEntry`: the target is a path, never content.
+    for (const link of opts.symlinks ?? []) {
+        const escaped = link.kind === 'escaped_directory';
+        push(makeFinding({
+            tool: TOOL,
+            rule_id: escaped ? 'skill-directory-escapes-root' : 'skill-symlink',
+            severity: 'medium',
+            category: 'security',
+            subcategory: 'privilege_escalation',
+            title: escaped ? 'Directory escapes the skill package root' : 'Symlink in skill package',
+            message: escaped
+                ? `${link.relPath} resolves outside the ingested package root (${link.target}) and ` +
+                    'was not entered.'
+                : `${link.relPath} is a symlink to ${link.target}. It was not followed and its target ` +
+                    'was never read — review whether it is intended to reach outside the package.',
+            file_path: link.relPath,
+        }), false);
+    }
     for (const file of files) {
         if (file.isExecutable)
             executableFiles += 1;
@@ -118,7 +141,12 @@ export async function analyzeSkill(files, opts = {}) {
     let osv = null;
     if (opts.checkDeps !== false) {
         const deps = extractDependencies(files.map((f) => ({ relPath: f.relPath, content: f.content })));
-        if (deps.length > 0) {
+        const offline = opts.offline ?? process.env['GUARDIAN_OFFLINE'] === '1';
+        if (deps.length > 0 && offline) {
+            // Unknown, never clean: scan_skill records `osv.dev: skipped` with this reason.
+            osv = { online: false, queried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON };
+        }
+        else if (deps.length > 0) {
             const osvOpts = {};
             if (opts.signal)
                 osvOpts.signal = opts.signal;

@@ -1,10 +1,9 @@
 /**
- * `scan_sast` — Semgrep-only static analysis (plus Bandit when Python is
- * present).
+ * `scan_sast` — Semgrep static analysis, plus Bandit when Python is present
+ * and the .NET SDK's security analyzers when the project is .NET.
  *
  * Invokes Semgrep directly (no shell script), writing the JSON report to
- * `.guardian/reports/sast-<short-scan-id>/sast.json`. Bandit, if installed
- * and Python sources are detected, is run in the same pass.
+ * `.guardian/reports/sast-<short-scan-id>/sast.json`.
  *
  * ---- The project's own rules are part of the scan --------------------
  *
@@ -13,59 +12,127 @@
  * `--config=auto` and nothing else, and `--config=auto` does not load it —
  * measured on semgrep 1.164.0 against a project holding that pack plus one
  * line of `<?php echo $_GET['name'];`, `--config=auto` reports 0 findings
- * where `--config=<the file>` reports 1. Thirteen shipped security rules had
- * no consumer anywhere in the product, which is how `wp-unescaped-output`
- * managed to be dead twice over for independent reasons.
+ * where `--config=<the file>` reports 1.
  *
- * `platform/projectSemgrepConfig.ts` resolves those configs (from the
- * provenance manifest, falling back to the conventional filenames) and
- * refuses any that Semgrep could not load, because a `--config` that fails to
- * resolve aborts the WHOLE run — `paths.scanned: []`, exit 7 — not just that
- * pack. `test/e2e/projectRulesFixture.test.ts` is the end-to-end proof that
- * the rules `init_project` installs are the rules this tool runs.
+ * The rule sources come from ONE plan (`runners/semgrepConfigs.ts`,
+ * `planSemgrepConfigs`), used for both the argv and the cache key — they were
+ * built separately, and could drift.
+ *
+ * ---- Global Constraint 3, for every Semgrep run -----------------------
+ *
+ * An exit code of 0 or 1 is necessary and never sufficient
+ * (`runners/semgrepReport.ts`): a config that did not load scans nothing, a
+ * file that did not parse is only partly analysed. Every run — native or the
+ * Docker fallback — is judged by its report (the shared judge's verdict): no
+ * report, `paths.scanned` empty, or a non-empty `errors[]` is not complete. A
+ * run that scanned nothing at all (no file any rule applies to) is `skipped`
+ * and listed in `missing_tools`. A run whose only errors are per-file ones (a
+ * warn-level `PartialParsing` — PHP's `const NAMESPACE` on 1.176.1 — a syntax
+ * error in one file) is PARTIAL: `ok` and listed missing, the files named in
+ * its reason and `partially_parsed` (what the CI gate's
+ * `--accept-partial-parse` matches). Anything fatal is `failed` with the
+ * errors as its reason — except rules that did not load while the others
+ * ran (a typo'd pattern in the project's `.semgrep.yml` or a registered
+ * rule: exit 2, `paths.scanned` filled, the judge's `rules_not_loaded`).
+ * That is a narrower gap, as in bug_hunt: `ok` and missing, the rules in
+ * `failed_rules`, never coverage none and "install semgrep" for a Semgrep
+ * that ran, and never a row the open set skips; the other rules' findings
+ * resolve and the broken rule's earlier ones stay open, not re-measured
+ * (`history/runCompare.ts`). The findings such a run did report are still
+ * recorded — they are real.
+ *
+ * ---- .NET: the SDK's own security analyzers, read from SARIF -----------
+ *
+ * .NET SAST used to exist only for projects referencing the unmaintained
+ * Security Code Scan, and scraped `dotnet build --verbosity:diag` stdout —
+ * which exceeds the 5 MB output cap on real projects and killed the run. It
+ * now restores every root solution/project in locked mode, builds it with the
+ * SDK's own security analyzers switched on, and reads the compiler's SARIF
+ * per project and target framework (`dotnetSarif.ts`) — see
+ * `runDotnetAnalyzers` for the measured reasons behind each switch. Security
+ * Code Scan, when the project references it, reports through the same
+ * SARIF. `dotnet restore`/`build` EXECUTE the project's MSBuild — the
+ * description says so.
  *
  * ---- Telemetry, and `local_only` -------------------------------------
  *
  * `--config=auto` fetches its rule set from the Semgrep registry and **sends
  * usage metrics to Semgrep Inc. as a condition of doing so**: passing
- * `--metrics=off` alongside it fails outright with "Cannot create auto config
- * when metrics are off". So every default scan this tool has ever run
- * reported telemetry, and it could not have done otherwise.
+ * `--metrics=off` alongside it fails outright. `local_only: true` is the
+ * alternative — no registry, `--metrics=off`, and only rules already on disk.
+ * The choice is recorded on the scan (`local_only`), so `create_fix_pr` can
+ * re-scan a fix with the same rules that found the target.
  *
- * That is a defensible default and an indefensible silent one in a security
- * tool, so it is stated in the tool description, the README and the skill.
- * `local_only: true` is the alternative — no registry, `--metrics=off`, and
- * only rules already on disk. It became a coherent mode rather than an empty
- * one the moment the project's own `.semgrep.yml` started being loaded.
+ * ---- `scope`, and `.guardianignore` -------------------------------------
+ *
+ * With `scope` (`platform/scope.ts`), Semgrep and Bandit get the scoped files
+ * as explicit targets (`runners/fileBatchScan.ts`: batched below the command-
+ * line limit, every batch judged on its own report). The Docker fallback
+ * mounts the whole project, so without a native Semgrep a scoped scan is a
+ * named gap rather than a silently widened one. The .NET analyzers run inside
+ * a build of the whole project: for a scope they are `skipped` as
+ * project-level, and a gap whenever .NET sources are in the scope. Unscoped,
+ * the project's `.guardianignore` reaches Semgrep as `--exclude` and Bandit as
+ * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, projectsForTarget, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
+import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { ScanScopeInput } from '../platform/scope.js';
+import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
-import { securityCodeScanParser } from '../runners/scannerParsers/securityCodeScan.js';
+import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
+import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
-import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
+import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
+import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, fromContainerPath, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
-import { resolveCustomSemgrepConfigs } from '../platform/customRules.js';
-import { inspectProjectSemgrepConfigs, } from '../platform/projectSemgrepConfig.js';
+import { hasFileWithExtension } from '../runners/projectFiles.js';
+import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
+import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
+/** How long one `dotnet build` of one target may take. */
+const DOTNET_BUILD_TIMEOUT_MS = 10 * 60_000;
 registerToolModule(makeScanTool({
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description: 'Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset ' +
         "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-        '.dev-guardian/configs.json records as its target) and any rules added with ' +
-        'register_custom_rules. Also runs Bandit when Python files are present and the CLI is ' +
-        'installed. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into ' +
-        'Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends ' +
-        'usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics ' +
-        'off, so this is unavoidable in the default mode. Pass local_only=true for a scan that ' +
-        'contacts nothing and runs with --metrics=off, using only rules already on disk.',
+        '.dev-guardian/configs.json records as its target) and any rules registered for this ' +
+        'project with register_custom_rules. Also runs Bandit when Python files are present, and ' +
+        'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
+        'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
+        '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
+        "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
+        'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
+        'did not load, is partial coverage, named. Output JSON is written to ' +
+        '.guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads ' +
+        'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
+        'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
+        'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
+        'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
+        'changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
+        'Semgrep and Bandit where they can be named exactly.',
     scan_type: 'sast',
     category: 'security',
+    supportsScope: true,
+    // The cache key and the argv read the SAME plan (see the module comment).
+    // `rulesProjectPath` is the scanned path, except when create_fix_pr
+    // re-scans a worktree and needs the original project's rules.
+    rulePacks: (input, { rulesProjectPath, plugin }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    // 2.0.x custom rules outside the project are not run any more: say so on
+    // every response, cached or not, not only in tools_run.
+    configWarnings: (_input, { rulesProjectPath, plugin }) => {
+        const note = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, rulesProjectPath));
+        return note === null ? [] : [note];
+    },
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,
@@ -80,6 +147,7 @@ registerToolModule(makeScanTool({
             '--metrics=off so no telemetry leaves the machine. Fewer rules than the default. ' +
             'When the project has no local rules the scan is reported as skipped rather than ' +
             'as a clean result. Default: false.'),
+        scope: ScanScopeInput,
     },
     invoke: async (input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
@@ -87,311 +155,601 @@ registerToolModule(makeScanTool({
         const missing_tools = [];
         const parser_inputs = [];
         const autoFix = input.auto_fix === true;
-        // --- Semgrep -----------------------------------------------------
-        // C# / .NET signal: when csproj exists, also pin p/csharp rule pack.
-        const hasCsproj = anyCsprojInProject(ctx.projectPath);
-        const outFile = join(reportDir, 'sast.json');
         const localOnly = input.local_only === true;
-        // The project's OWN rules: the pack `init_project` installed, plus
-        // anything `register_custom_rules` added. Both resolvers drop paths that
-        // no longer exist, because a --config that fails to resolve aborts the
-        // WHOLE semgrep run (`paths.scanned: []`, exit 7), not just that pack;
-        // `inspectProjectSemgrepConfigs` additionally refuses a file whose
-        // CONTENTS would do the same, which is newly load-bearing now that a
-        // file the user owns and edits is on this list.
-        const projectRules = inspectProjectSemgrepConfigs(ctx.projectPath);
-        const localConfigs = [
-            ...projectRules.usable.map((c) => c.path),
-            ...resolveCustomSemgrepConfigs(ctx.plugin),
-        ];
-        // A dropped config means the user's own rules silently stopped running.
-        // Carried into `tools_run.reason` on success as well as on failure.
-        const configNotes = projectRules.unusable.map((u) => `${u.target} not loaded (${u.reason})`);
-        // local_only with nothing on disk to run is not a clean scan, it is no
-        // scan at all. Saying so beats reporting zero findings from zero rules.
-        const nothingToRun = localOnly && localConfigs.length === 0;
-        const semgrepBin = nothingToRun ? null : await scannerAvailable('semgrep');
-        if (nothingToRun) {
-            tools_run.push({
-                name: 'semgrep',
-                status: 'skipped',
-                reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
-                    'nothing registered with register_custom_rules. Run init_project, or drop ' +
-                    'local_only to use the Semgrep registry.',
-            });
-            missing_tools.push('semgrep');
-        }
-        else if (semgrepBin) {
-            const args = [];
-            if (localOnly) {
-                // Only ever safe once --config=auto is gone: Semgrep refuses to
-                // build an auto config with metrics off.
-                args.push('--metrics=off');
-            }
-            else {
-                args.push('--config=auto');
-                if (hasCsproj)
-                    args.push('--config=p/csharp');
-            }
-            for (const cfg of localConfigs) {
-                args.push(`--config=${cfg}`);
-            }
-            args.push('--json', '--quiet', '--output', outFile);
-            if (autoFix)
-                args.push('--autofix');
-            args.push(ctx.projectPath);
-            const result = await runProcess({
-                command: 'semgrep',
-                args,
-                cwd: ctx.projectPath,
-                env: ctx.scriptEnv,
-                signal: ctx.signal,
-                onLog: ctx.onLog,
-            });
-            const raw = readJsonSafe(outFile);
-            if (raw) {
-                parser_inputs.push({ parser: semgrepParser, input: raw });
-            }
-            // exit 0 = no findings; exit 1 = findings present; exit 2 = errors
-            // were raised but the scan still ran. The third case only became
-            // reachable when we started loading the user's own rules: one rule of
-            // theirs that fails to compile must cost that rule, not the whole
-            // scan's status and its coverage rating with it. Measured: a rule with
-            // an uncompilable pattern gives exit 2 with `paths.scanned` non-empty,
-            // where a config Semgrep cannot load at all gives exit 7 and scans
-            // nothing — so the scanned list, not the exit code, is what separates
-            // "lost a rule" from "lost the scan".
-            const ok = result.outcome === 'completed' ||
-                result.exitCode === 1 ||
-                (result.exitCode === 2 && semgrepScannedFiles(raw));
-            const semgrepRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
-            const notes = [...configNotes];
-            if (result.exitCode === 2) {
-                notes.push('semgrep raised rule errors (exit 2) — at least one rule did not load');
-            }
-            if (!ok && result.stderr) {
-                // Surface the first stderr line for diagnostics. Held as a local
-                // rather than re-indexed off the end of the array, which needed an
-                // assertion to restate what `push` had just guaranteed.
-                notes.push(result.stderr.split(/\r?\n/)[0] ?? 'unknown');
-            }
-            if (notes.length > 0)
-                semgrepRun.reason = notes.join('; ');
-            tools_run.push(semgrepRun);
+        if (ctx.scope !== null) {
+            const files = ctx.scope.files;
+            await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
+            await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
+            dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
         }
         else {
-            // Semgrep not on PATH — fall back to the official Docker image when a
-            // daemon is reachable. This is what makes a SAST scan actually run on
-            // hosts where the user only has Semgrep via Docker. If the Docker
-            // attempt fails (no image, offline, daemon down), we record it as
-            // failed + missing so coverage is honestly 'none' rather than a silent
-            // "0 findings".
-            const dockerBin = await scannerAvailable('docker');
-            if (dockerBin) {
-                const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
-                // The container cannot see host paths, so a project config has to be
-                // named by where it sits inside the /src mount. Registered custom
-                // rules are deliberately absent: they can point anywhere on the host,
-                // including outside the project, and a path the container cannot
-                // resolve would abort the whole containerised run.
-                const dockerConfigs = localOnly ? [] : ['auto'];
-                for (const cfg of projectRules.usable) {
-                    dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
-                }
-                const args = buildSemgrepDockerArgs({
-                    projectPath: ctx.projectPath,
-                    outFileHost: outFile,
-                    hasCsproj: hasCsproj && !localOnly,
-                    autoFix,
-                    image,
-                    configs: dockerConfigs,
-                    metricsOff: localOnly,
-                });
-                const result = await runProcess({
-                    command: 'docker',
-                    args,
-                    cwd: ctx.projectPath,
-                    env: ctx.scriptEnv,
-                    signal: ctx.signal,
-                    onLog: ctx.onLog,
-                });
-                const raw = readJsonSafe(outFile);
-                if (raw)
-                    parser_inputs.push({ parser: semgrepParser, input: raw });
-                // exit 0/1 AND a report file means Semgrep actually ran in the
-                // container. Anything else (image pull failed, daemon down) is a
-                // real coverage gap, not a clean scan.
-                const ranInDocker = (result.outcome === 'completed' || result.exitCode === 1) && raw !== null;
-                if (ranInDocker) {
-                    tools_run.push({
-                        name: 'semgrep',
-                        status: 'ok',
-                        reason: `ran via docker (${image})`,
-                    });
-                }
-                else {
-                    const reason = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ??
-                        'docker fallback failed';
-                    tools_run.push({ name: 'semgrep', status: 'failed', reason: `docker: ${reason}` });
-                    missing_tools.push('semgrep');
-                }
-            }
-            else {
-                tools_run.push({
-                    name: 'semgrep',
-                    status: 'skipped',
-                    reason: 'not_installed (no docker fallback available)',
-                });
-                missing_tools.push('semgrep');
-            }
+            await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
+            await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+            await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
         }
-        // --- Bandit ------------------------------------------------------
-        // Only attempt Bandit when the project obviously has Python sources.
-        const looksPython = existsSync(join(ctx.projectPath, 'pyproject.toml')) ||
-            existsSync(join(ctx.projectPath, 'requirements.txt')) ||
-            existsSync(join(ctx.projectPath, 'setup.py'));
-        if (looksPython) {
-            const banditBin = await scannerAvailable('bandit');
-            if (banditBin) {
-                const outFile = join(reportDir, 'bandit.json');
-                const result = await runProcess({
-                    command: 'bandit',
-                    args: ['-r', ctx.projectPath, '-f', 'json', '-o', outFile, '-q'],
-                    cwd: ctx.projectPath,
-                    env: ctx.scriptEnv,
-                    signal: ctx.signal,
-                    onLog: ctx.onLog,
-                });
-                const raw = readJsonSafe(outFile);
-                if (raw)
-                    parser_inputs.push({ parser: banditParser, input: raw });
-                // Bandit returns 1 when issues are found; treat as ok.
-                const ok = result.outcome === 'completed' || result.exitCode === 1;
-                tools_run.push({ name: 'bandit', status: ok ? 'ok' : 'failed' });
-            }
-            else {
-                tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
-                missing_tools.push('bandit');
-            }
-        }
-        // --- security-code-scan (Roslyn analyzer) -----------------------
-        // Only fires when csproj refs `security-code-scan` already — we never
-        // mutate user .csproj files. If the project opted-in, run dotnet build
-        // and harvest the SCS#### lines from the log.
-        if (hasCsproj && csprojReferencesScs(ctx.projectPath)) {
-            const dotnetBin = await scannerAvailable('dotnet');
-            if (dotnetBin) {
-                const result = await runProcess({
-                    command: 'dotnet',
-                    args: ['build', '--no-incremental', '--verbosity:diag', ctx.projectPath],
-                    cwd: ctx.projectPath,
-                    env: ctx.scriptEnv,
-                    signal: ctx.signal,
-                    onLog: ctx.onLog,
-                    timeoutMs: 10 * 60_000,
-                });
-                // Parse SCS lines from stdout (build log).
-                parser_inputs.push({ parser: securityCodeScanParser, input: result.stdout });
-                tools_run.push({
-                    name: 'security-code-scan',
-                    status: result.outcome === 'completed' || result.exitCode === 1 ? 'ok' : 'failed',
-                    reason: result.outcome === 'completed'
-                        ? undefined
-                        : (result.stderr.split(/\r?\n/)[0] ?? 'dotnet build failed'),
-                });
-            }
-            else {
-                tools_run.push({
-                    name: 'security-code-scan',
-                    status: 'skipped',
-                    reason: 'dotnet SDK not installed',
-                });
-                missing_tools.push('dotnet-sdk');
-            }
-        }
+        // `failed` only when something failed and nothing ran: a scope with
+        // no file in it skips every scanner, which is not a failure.
         const anyOk = tools_run.some((t) => t.status === 'ok');
-        const outcome = anyOk ? 'completed' : missing_tools.length > 0 ? 'completed' : 'failed';
+        const anyFailed = tools_run.some((t) => t.status === 'failed');
+        const outcome = anyOk || missing_tools.length > 0 || !anyFailed ? 'completed' : 'failed';
         return {
             outcome,
             tools_run,
             missing_tools,
             parser_inputs,
             report_paths: [reportDir],
+            extras: { local_only: localOnly },
         };
     },
 }));
-function anyCsprojInProject(projectPath) {
+async function runSemgrep(args) {
+    const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
+    const outFile = join(reportDir, 'sast.json');
+    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+    // local_only with nothing on disk to run is not a clean scan, it is no
+    // scan at all. Saying so beats reporting zero findings from zero rules.
+    if (plan.nothingToRun) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
+                'nothing registered with register_custom_rules. Run init_project, or drop ' +
+                'local_only to use the Semgrep registry.',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const semgrepBin = await scannerAvailable('semgrep');
+    if (semgrepBin) {
+        const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
+        if (autoFix)
+            argv.push('--autofix');
+        argv.push(ctx.projectPath);
+        const result = await runProcess({
+            command: 'semgrep',
+            args: argv,
+            cwd: ctx.projectPath,
+            // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
+            // write its report on Windows (see runners/semgrepReport.ts).
+            env: pythonUtf8Env(ctx.scriptEnv),
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+        });
+        recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, tools_run, missing_tools, parser_inputs });
+        return;
+    }
+    // Semgrep not on PATH — fall back to the official Docker image when a
+    // daemon is reachable. The container cannot see host paths, so a project
+    // config is named by where it sits inside the /src mount; registered
+    // custom rules (which may live anywhere on the host) are not passed.
+    const dockerBin = await scannerAvailable('docker');
+    if (!dockerBin) {
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
+    const dockerConfigs = localOnly ? [] : ['auto'];
+    for (const cfg of inspectProjectSemgrepConfigs(ctx.projectPath).usable) {
+        dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
+    }
+    if (dockerConfigs.length === 0) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'local_only=true and the Docker fallback sees no local Semgrep rules in the project',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const result = await runProcess({
+        command: 'docker',
+        args: buildSemgrepDockerArgs({
+            projectPath: ctx.projectPath,
+            outFileHost: outFile,
+            hasCsproj: hasDotnetProject(ctx.projectPath) && !localOnly,
+            autoFix,
+            image,
+            configs: dockerConfigs,
+            metricsOff: localOnly,
+        }),
+        cwd: ctx.projectPath,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+    });
+    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
+}
+/**
+ * One Semgrep run's `tools_run` entry, judged by its report (Global
+ * Constraint 3) — never by the exit code alone. See the module comment.
+ */
+function recordSemgrepRun(args) {
+    const { ctx, result, outFile, notes, via, configs, tools_run, missing_tools, parser_inputs } = args;
+    const raw = readJsonSafe(outFile);
+    // Whatever the verdict, the findings the report holds are real. The
+    // container's configs are named inside its /src mount, where it runs.
+    const rules = via !== null
+        ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT }
+        : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
+    if (raw)
+        parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
+    const check = checkSemgrepReport({
+        raw,
+        exitCode: result.exitCode,
+        outcome: result.outcome,
+        targets: 1,
+        // The container fallback reports paths under its mount, not the host's.
+        projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
+        // A rule that did not load is named as its findings are stored.
+        ruleIdOf: localRuleIdNormalizer(configs, rules),
+    });
+    const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes];
+    if (check.verdict === 'ok') {
+        const run = { name: 'semgrep', status: 'ok' };
+        if (reasons.length > 0)
+            run.reason = reasons.join('; ');
+        tools_run.push(run);
+        return;
+    }
+    if (check.verdict === 'partial' && check.partial !== undefined) {
+        // Partial coverage (the module comment): ran, with a narrower gap inside
+        // it — `ok` AND missing, the files named on the run for the CI gate's
+        // --accept-partial-parse.
+        tools_run.push({
+            name: 'semgrep',
+            status: 'ok',
+            reason: [...reasons, describePartialParse(check.partial, 'findings in the unparsed spans may be missing')].join('; '),
+            partially_parsed: check.partial,
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    if (check.verdict === 'scanned_nothing') {
+        // No file in the project is one any loaded rule applies to: a gap, not
+        // a clean result — and not a broken scanner either.
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: [...reasons, 'semgrep scanned 0 files — nothing here is a language its rules cover'].join('; '),
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const notLoaded = check.rules_not_loaded;
+    // The container's configs are read on the host (`/src/…` is the project).
+    const readAt = (config) => (via !== null ? fromContainerPath(ctx.projectPath, config) : config);
+    if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules, readAt)) {
+        // Every local rule failed and no registry pack ran: nothing was scanned
+        // for (M-1) — failed, the rules named, never "install semgrep".
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: [...reasons, describeNoRuleLoaded(notLoaded)].join('; '),
+            failed_rules: notLoaded,
+            rule_config_error: true,
+        });
+        return;
+    }
+    if (notLoaded !== undefined && notLoaded.length > 0) {
+        // Rules that did not load while the others ran (the module comment): a
+        // narrower gap — ran, `ok` AND missing, the rules named.
+        const run = {
+            name: 'semgrep',
+            status: 'ok',
+            reason: [
+                ...reasons,
+                describeRulesNotLoaded(notLoaded, check.scanned),
+                ...(check.partial !== undefined ? [describePartialParse(check.partial, 'findings in the unparsed spans may be missing')] : []),
+            ].join('; '),
+            failed_rules: notLoaded,
+        };
+        if (check.partial !== undefined)
+            run.partially_parsed = check.partial;
+        tools_run.push(run);
+        missing_tools.push('semgrep');
+        return;
+    }
+    const detail = check.reason ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? 'semgrep failed';
+    if (check.rule_config_error !== undefined) {
+        // Semgrep refused the rule configuration (an unknown language: exit 8):
+        // installed, and the rules are what to fix.
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: [...reasons, `the rule configuration did not load — ${check.rule_config_error} (semgrep exit ${String(result.exitCode)})`].join('; '),
+            rule_config_error: true,
+        });
+        return;
+    }
+    tools_run.push({ name: 'semgrep', status: 'failed', reason: [...reasons, detail].join('; ') });
+}
+async function runBandit(args) {
+    const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = args;
+    // Only attempt Bandit when the project has Python sources: a manifest,
+    // or any `.py` file (a walk that stops at the first).
+    const looksPython = existsSync(join(ctx.projectPath, 'pyproject.toml')) ||
+        existsSync(join(ctx.projectPath, 'requirements.txt')) ||
+        existsSync(join(ctx.projectPath, 'setup.py')) ||
+        hasFileWithExtension(ctx.projectPath, ['.py']);
+    if (!looksPython)
+        return;
+    const banditBin = await scannerAvailable('bandit');
+    if (!banditBin) {
+        tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('bandit');
+        return;
+    }
+    const outFile = join(reportDir, 'bandit.json');
+    const result = await runProcess({
+        command: 'bandit',
+        args: ['-r', ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), '-f', 'json', '-o', outFile, '-q'],
+        cwd: ctx.projectPath,
+        env: pythonUtf8Env(ctx.scriptEnv),
+        signal: ctx.signal,
+        onLog: ctx.onLog,
+    });
+    const raw = readJsonSafe(outFile);
+    if (raw)
+        parser_inputs.push({ parser: banditParser, input: raw });
+    // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
+    const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
+    tools_run.push(check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' });
+}
+const isPython = (f) => f.toLowerCase().endsWith('.py');
+/** Sources the .NET analyzers read when they compile the project. */
+const DOTNET_SOURCE = /\.(cs|fs|vb|razor|cshtml)$/i;
+/**
+ * Semgrep over a scope's files, as explicit targets (see the module comment).
+ * Same rule plan as a whole-project run; `.guardianignore` needs no flag here
+ * — the scope never holds an excluded file.
+ */
+async function runSemgrepOnScope(args) {
+    const { ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs } = args;
+    if (files.length === 0) {
+        // Nothing asked for: not a gap (the scope's own warning says 0 files).
+        tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
+        return;
+    }
+    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+    if (plan.nothingToRun) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
+                'nothing registered with register_custom_rules.',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    if (!(await scannerAvailable('semgrep'))) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: 'not_installed — the Docker fallback mounts and scans the whole project, so it cannot run a ' +
+                'scoped scan; install Semgrep, or drop scope',
+        });
+        missing_tools.push('semgrep');
+        return;
+    }
+    const run = await semgrepOnFiles({
+        configArgs: [...plan.args, ...(autoFix ? ['--autofix'] : [])],
+        files,
+        cwd: ctx.projectPath,
+        reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+        rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
+    });
+    const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
+    for (const raw of run.reports)
+        parser_inputs.push({ parser, input: raw });
+    const entry = { ...run.toolRun };
+    if (plan.notes.length > 0)
+        entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
+    tools_run.push(entry);
+    // No rule applied to any file in scope: a gap, not a clean result. Files
+    // only partly parsed, rules that did not load: ran, with a narrower gap
+    // inside it (`ok` + missing).
+    const narrower = run.partial.length > 0 || run.failedRules.length > 0;
+    if (run.nothingScanned || (entry.status === 'ok' && narrower))
+        missing_tools.push('semgrep');
+}
+/** Bandit over a scope's `.py` files; no entry at all when it holds none. */
+async function runBanditOnScope(args) {
+    const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+    if (files.length === 0)
+        return;
+    if (!(await scannerAvailable('bandit'))) {
+        tools_run.push({ name: 'bandit', status: 'skipped', reason: 'not_installed' });
+        missing_tools.push('bandit');
+        return;
+    }
+    const run = await banditOnFiles({
+        files,
+        cwd: ctx.projectPath,
+        reportDir,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    });
+    for (const raw of run.reports)
+        parser_inputs.push({ parser: banditParser, input: raw });
+    tools_run.push(run.toolRun);
+}
+/**
+ * The .NET analyzers compile the whole project — there is no "build these
+ * three files". For a scope they are `skipped` as project-level, never run
+ * and never reported as covering it; when the scope holds .NET sources that
+ * only they would have read, that is a named gap (`missing_tools`).
+ */
+function dotnetNotApplicableToScope(args) {
+    const { ctx, files, tools_run, missing_tools } = args;
+    if (!hasRootDotnetSignal(ctx.projectPath))
+        return;
+    const sources = files.filter((f) => DOTNET_SOURCE.test(f)).length;
+    const reason = 'project-level: the .NET analyzers run inside a build of the whole project, not over a file scope' +
+        (sources > 0
+            ? ` — ${sources} .NET source file(s) in the scope were not analysed by them (Semgrep's were); run ` +
+                'scan_sast without scope for that'
+            : '');
+    tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason });
+    if (projectReferencesScs(ctx.projectPath))
+        tools_run.push({ name: 'security-code-scan', status: 'skipped', reason });
+    if (sources > 0)
+        missing_tools.push('dotnet-analyzers');
+}
+/**
+ * The .NET pass — see the module comment. Per root target
+ * (`findDotnetTargets`: the root solution, else every project file):
+ *
+ *   1. `dotnet restore --locked-mode`, planned by `../deps/dotnetRestore.ts`
+ *      exactly as deps_audit does — it never creates or rewrites a
+ *      `packages.lock.json`. A plain `dotnet build` restores implicitly and
+ *      WITHOUT locked mode: it rewrote an out-of-date lock (and created one
+ *      for an opted-in project) in the user's tree on every scan, and in
+ *      create_fix_pr's re-scan the created lock went into the pull request.
+ *      A restore that fails (`NU1004`: the lock is out of sync) is a named
+ *      gap, and that target is not built.
+ *   2. `dotnet build --no-restore` with the SDK's analyzers switched ON
+ *      (`EnableNETAnalyzers=true` — they are off by default below .NET 5:
+ *      measured, a netstandard2.0 library using MD5 built clean with an empty
+ *      SARIF) at the latest security level, in security-all mode.
+ *   3. The SARIF is written per project AND per target framework into a
+ *      temp directory, by an imported targets file
+ *      (`CustomAfterMicrosoftCommonTargets`): a global `-p:ErrorLog=` is not
+ *      expanded (`$(TargetFramework)` stays literal), so every inner build of
+ *      a multi-targeted project overwrote one file and only the last
+ *      framework's results survived (measured: `net10.0;netstandard2.0`).
+ *   4. A SARIF whose rule metadata lists no security rule means the
+ *      analyzers did not load: a gap, never an ok with 0 findings.
+ *
+ * `CustomAfterMicrosoftCommonTargets` is a global property: a project that
+ * sets its own is built without it for this scan, and the reason says so
+ * (`customAfterTargetsSetters`) as reduced coverage.
+ */
+async function runDotnetAnalyzers(args) {
+    const { ctx, tools_run, missing_tools, parser_inputs } = args;
+    if (!hasRootDotnetSignal(ctx.projectPath))
+        return;
+    const referencesScs = projectReferencesScs(ctx.projectPath);
+    const dotnetBin = await scannerAvailable('dotnet');
+    if (!dotnetBin) {
+        tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason: 'dotnet SDK not installed' });
+        if (referencesScs) {
+            tools_run.push({ name: 'security-code-scan', status: 'skipped', reason: 'dotnet SDK not installed' });
+        }
+        missing_tools.push('dotnet-sdk');
+        return;
+    }
+    const work = mkdtempSync(join(tmpdir(), 'guardian-sast-dotnet-'));
+    const sarifDir = join(work, 'sarif');
+    mkdirSync(sarifDir);
+    const targetsFile = join(work, 'dev-guardian-sarif.targets');
+    writeFileSync(targetsFile, SARIF_TARGETS, 'utf8');
+    const failures = [];
+    // Parsed together, so a result every target framework reports is one finding.
+    const sarifs = [];
+    let reports = 0;
     try {
-        return readdirSync(projectPath).some((n) => n.endsWith('.csproj') || n.endsWith('.fsproj'));
+        for (const target of findDotnetTargets(ctx.projectPath)) {
+            const rel = relative(ctx.projectPath, target) || basename(target);
+            const plan = planDotnetRestore(ctx.projectPath, target);
+            if (plan.blocked) {
+                failures.push(`${rel}: ${plan.blocked.reason}`);
+                continue;
+            }
+            const restore = await runProcess({
+                command: 'dotnet',
+                args: plan.args,
+                cwd: ctx.projectPath,
+                env: ctx.scriptEnv,
+                signal: ctx.signal,
+                onLog: ctx.onLog,
+                timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
+            });
+            const created = removeCreatedLockFiles(plan);
+            if (created.length > 0) {
+                failures.push(`${rel}: restore created ${created.map((c) => relative(ctx.projectPath, c) || c).join(', ')} ` +
+                    '(a RestorePackagesWithLockFile opt-in this scan could not see) — deleted again, not built');
+                continue;
+            }
+            if (restore.outcome !== 'completed') {
+                // Never retried without --locked-mode — that is the lock rewrite
+                // this sequence exists to prevent.
+                failures.push(`${rel}: ${classifyRestoreFailure(restore.stdout, restore.stderr).reason}`);
+                continue;
+            }
+            const before = new Set(listSarif(sarifDir));
+            const build = await runProcess({
+                command: 'dotnet',
+                args: [
+                    'build',
+                    target,
+                    '--no-restore',
+                    '--no-incremental',
+                    '--verbosity:minimal',
+                    '-nologo',
+                    '-p:EnableNETAnalyzers=true',
+                    '-p:AnalysisLevelSecurity=latest',
+                    '-p:AnalysisModeSecurity=All',
+                    `-p:CustomAfterMicrosoftCommonTargets=${targetsFile}`,
+                    `-p:DevGuardianSarifDir=${sarifDir}${sep}`,
+                ],
+                cwd: ctx.projectPath,
+                env: ctx.scriptEnv,
+                signal: ctx.signal,
+                onLog: ctx.onLog,
+                timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
+            });
+            // Every project and framework the build compiled wrote its own SARIF.
+            // Read what exists — a failed build's compiled projects still
+            // reported real diagnostics.
+            for (const name of listSarif(sarifDir).filter((n) => !before.has(n))) {
+                let raw;
+                try {
+                    raw = readFileSync(join(sarifDir, name), 'utf8');
+                }
+                catch {
+                    failures.push(`${rel}: SARIF ${name} unreadable`);
+                    continue;
+                }
+                if (sarifSecurityRuleCount(raw) === 0) {
+                    failures.push(`${rel}: ${sarifLabel(name)} — the security analyzers did not load (its SARIF lists no security rule)`);
+                    continue;
+                }
+                sarifs.push(raw);
+                reports += 1;
+            }
+            if (build.outcome !== 'completed' || build.exitCode !== 0) {
+                failures.push(`${rel}: ${describeBuildFailure(build)}`);
+            }
+        }
+    }
+    finally {
+        rmSync(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+    if (sarifs.length > 0)
+        parser_inputs.push({ parser: dotnetSarifParser, input: sarifs });
+    if (failures.length === 0 && reports === 0)
+        failures.push('the build wrote no analyzer report (SARIF)');
+    const run = failures.length === 0
+        ? { name: 'dotnet-analyzers', status: 'ok', reason: `${reports} SARIF report(s) read (one per project and target framework)` }
+        : { name: 'dotnet-analyzers', status: 'failed', reason: failures.join('; ') };
+    const ownTargets = customAfterTargetsSetters(ctx.projectPath);
+    if (ownTargets.length > 0) {
+        run.reason =
+            `${run.reason ?? ''}; reduced coverage: ${ownTargets.join(', ')} set CustomAfterMicrosoftCommonTargets, ` +
+                "which this scan's build replaces — the project's own imported targets did not run";
+    }
+    tools_run.push(run);
+    if (referencesScs) {
+        // Security Code Scan is an analyzer of the same build: it reports through
+        // the same SARIF, so it ran exactly as well as the build did.
+        tools_run.push({ ...run, name: 'security-code-scan' });
+    }
+}
+/**
+ * Imported after the SDK's own targets (see `runDotnetAnalyzers`): the
+ * ErrorLog path is evaluated per project instance, so `$(TargetFramework)`
+ * and a fresh GUID make every inner build's SARIF its own file.
+ */
+const SARIF_TARGETS = [
+    '<Project>',
+    '  <PropertyGroup>',
+    '    <ErrorLog>$(DevGuardianSarifDir)$(MSBuildProjectName)-$(TargetFramework)-$([System.Guid]::NewGuid().ToString(\'N\')).sarif,version=2.1</ErrorLog>',
+    '  </PropertyGroup>',
+    '</Project>',
+    '',
+].join('\n');
+/**
+ * Project files that set `CustomAfterMicrosoftCommonTargets` themselves —
+ * every project a root target builds, and the `Directory.Build.props` /
+ * `.targets` between it and the scanned root. The scan's build passes that
+ * property globally (see `runDotnetAnalyzers`), which replaces theirs, so the
+ * build it analyses is not quite theirs: named as reduced coverage.
+ * Project-relative paths, POSIX, sorted.
+ */
+function customAfterTargetsSetters(projectPath) {
+    const sets = /<CustomAfterMicrosoftCommonTargets\b/i;
+    const out = new Set();
+    const check = (file) => {
+        try {
+            if (sets.test(readFileSync(file, 'utf8')))
+                out.add(relative(projectPath, file).split(sep).join('/'));
+        }
+        catch {
+            /* absent or unreadable — nothing set there */
+        }
+    };
+    const root = resolve(projectPath);
+    for (const target of findDotnetTargets(projectPath)) {
+        for (const project of projectsForTarget(target)) {
+            check(project);
+            for (let dir = dirname(resolve(project));; dir = dirname(dir)) {
+                check(join(dir, 'Directory.Build.props'));
+                check(join(dir, 'Directory.Build.targets'));
+                if (dir === root || dirname(dir) === dir || relative(root, dir).startsWith('..'))
+                    break;
+            }
+        }
+    }
+    return [...out].sort();
+}
+function listSarif(dir) {
+    try {
+        return readdirSync(dir).filter((n) => n.endsWith('.sarif'));
+    }
+    catch {
+        return [];
+    }
+}
+/** `App-net8.0-<guid>.sarif` → `App (net8.0)`. */
+function sarifLabel(name) {
+    const m = /^(.*)-([^-]*)-[0-9a-f]{32}\.sarif$/.exec(name);
+    return m === null ? name : `${m[1] ?? name} (${m[2] || 'no target framework'})`;
+}
+/** The first `error` line of a failed build, else its outcome. */
+function describeBuildFailure(result) {
+    if (result.outcome !== 'completed' && result.outcome !== 'failed')
+        return `dotnet build ${result.outcome}`;
+    const line = `${result.stdout}\n${result.stderr}`
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => /\berror\b/i.test(l));
+    return line ?? `dotnet build exited ${String(result.exitCode)}`;
+}
+/** A `.csproj` / `.fsproj` / `.sln` / `.slnx` at the project root. */
+function hasRootDotnetSignal(projectPath) {
+    try {
+        return readdirSync(projectPath).some((n) => /\.(csproj|fsproj|sln|slnx)$/i.test(n));
     }
     catch {
         return false;
     }
 }
-function csprojReferencesScs(projectPath) {
-    // Cheap check: scan the first-level *.csproj files for the
-    // security-code-scan package name. We don't recurse — projects opting in
-    // typically put the analyzer ref at the root csproj or a Directory.Build.props.
-    let csprojs;
+/**
+ * Whether the project references Security Code Scan: a root project file or
+ * `Directory.Build.props` naming the package. We never add it to a project.
+ */
+function projectReferencesScs(projectPath) {
+    let files;
     try {
-        csprojs = readdirSync(projectPath).filter((n) => n.endsWith('.csproj'));
+        files = readdirSync(projectPath).filter((n) => /\.(csproj|fsproj)$/i.test(n) || n === 'Directory.Build.props');
     }
     catch {
         return false;
     }
-    for (const file of csprojs) {
+    for (const file of files) {
         try {
-            const xml = readFileSync(join(projectPath, file), 'utf8');
-            if (/security[-_]?code[-_]?scan/i.test(xml))
+            if (/security[-_.]?code[-_.]?scan/i.test(readFileSync(join(projectPath, file), 'utf8')))
                 return true;
         }
         catch {
-            /* ignore */
-        }
-    }
-    // Also check Directory.Build.props if present.
-    const dbProps = join(projectPath, 'Directory.Build.props');
-    if (existsSync(dbProps)) {
-        try {
-            const xml = readFileSync(dbProps, 'utf8');
-            if (/security[-_]?code[-_]?scan/i.test(xml))
-                return true;
-        }
-        catch {
-            /* ignore */
+            /* unreadable — not a reference */
         }
     }
     return false;
-}
-/**
- * Did Semgrep actually look at any files?
- *
- * `paths.scanned` is what separates the two failure shapes that share an
- * angry exit code. A rule whose pattern will not compile exits 2 with a
- * populated `scanned` list — every file was analysed, one rule was lost. A
- * `--config` Semgrep cannot load at all exits 7 with `scanned: []` — nothing
- * was analysed and a "0 findings" result would be a lie. Reading the report
- * is the only way to tell them apart.
- *
- * Takes the raw report text `readJsonSafe` returns; never throws, and answers
- * `false` for anything it cannot make sense of, so an unparseable report can
- * never be mistaken for a successful scan.
- */
-function semgrepScannedFiles(raw) {
-    if (raw === null)
-        return false;
-    try {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed !== 'object' || parsed === null)
-            return false;
-        const paths = parsed['paths'];
-        if (typeof paths !== 'object' || paths === null)
-            return false;
-        const scanned = paths['scanned'];
-        return Array.isArray(scanned) && scanned.length > 0;
-    }
-    catch {
-        return false;
-    }
 }
 //# sourceMappingURL=scanSast.js.map

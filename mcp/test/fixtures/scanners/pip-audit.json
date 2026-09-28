@@ -1,0 +1,28 @@
+{
+  "dependencies": [
+    {
+      "name": "django",
+      "version": "2.0.1",
+      "vulns": [
+        {
+          "id": "PYSEC-2019-1234",
+          "fix_versions": ["1.11.27", "2.2.9", "3.0.1"],
+          "aliases": ["CVE-2019-19844", "GHSA-8x94-hmjh-97hq"],
+          "description": "Django before 1.11.27, 2.x before 2.2.9, and 3.x before 3.0.1 allows account takeover."
+        }
+      ]
+    },
+    {
+      "name": "requests",
+      "version": "2.20.0",
+      "vulns": [
+        {
+          "id": "PYSEC-2018-5678",
+          "fix_versions": [],
+          "aliases": [],
+          "description": "Requests before 2.20.0 sends an Authorization header to a redirected http URI."
+        }
+      ]
+    }
+  ]
+}

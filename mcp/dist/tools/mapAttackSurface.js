@@ -14,12 +14,30 @@
  * never let a parse exception escape uncaught (there is no try/catch at the
  * MCP dispatch site), and we never treat garbage output as zero routes.
  *
- * The one case where a non-zero Semgrep exit DOES get persisted: Semgrep
- * exits 1 when it *finds* matches (see `buildToolRun` in `surface/scanSemgrep.ts`) — that is
- * success, not failure. A genuine failure (crash, bad config, timeout) still
- * blocks persistence only when it also failed to leave parseable JSON behind;
- * if it left partial-but-parseable JSON, that partial data is persisted with
- * a `failed` tools_run entry carrying the diagnostic.
+ * A project with no file in any routes-pack language is NOT APPLICABLE:
+ * Semgrep is not run, reads `skipped` with a "not applicable" reason and is
+ * never listed missing (compliance_check's `semgrep-rgpd` precedent), and the
+ * snapshot — ports, specs — is persisted; a Terraform-only project must not
+ * read as incomplete because of the surface.
+ *
+ * Otherwise a readable report is judged, not trusted (Global Constraint 3),
+ * by the same Semgrep judge every other call site uses — see
+ * `judgeSurfaceReport` in `surface/scanSemgrep.ts` — against the count of
+ * route-language files. Exit 1 is success (Semgrep exits 1 when it *finds*
+ * matches). Per the controller's ruling on I3:
+ *   - a file Semgrep could only partly parse (a warn-level `PartialParsing`
+ *     — PHP's legal `const NAMESPACE` on current Semgrep —, a syntax error
+ *     confined to one file) is PARTIAL coverage: persisted, Semgrep `ok` and
+ *     listed missing (ran, with a narrower gap inside it), the files named in
+ *     `partially_parsed`;
+ *   - targets that exist but none scanned (a `.semgrepignore` over the
+ *     sources, a rule file the locale codec could not read) is a gap:
+ *     `skipped`, Semgrep missing, nothing persisted;
+ *   - anything fatal — an unclean exit, a rule or config error, an error tied
+ *     to no single target — is `failed`, nothing persisted; its routes are
+ *     still returned, unpersisted, with a note saying so.
+ * A snapshot is served for 24 h and read by scan_dast as the surface, which
+ * is why only the first two outcomes may be persisted.
  *
  * The same guarantee covers a fourth failure mode: Semgrep reporting matches
  * whose content we cannot read. Current versions redact `extra.metavars`
@@ -40,16 +58,25 @@ import { extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
-import { invokeSemgrep } from '../surface/scanSemgrep.js';
+import { countRouteTargets, invokeSemgrep, judgeSurfaceReport } from '../surface/scanSemgrep.js';
 import { dedupeResolved, discoverSpecs, MAX_SPEC_BYTES, MAX_SPEC_FILES, } from '../surface/specDiscover.js';
 import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
+import { resolveVersion } from '../platform/version.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
+/**
+ * How long a snapshot may be reused for an unchanged key. Everything a
+ * snapshot depends on inside the project is in the tree hash, but a spec
+ * resolved from outside it, the stack snapshot behind `coverage[]` and the
+ * Semgrep binary are not; a day bounds how long any of those can go stale.
+ */
+const SURFACE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /** Languages the rule pack covers, for honest `no_rules` reporting. */
 const COVERED_LANGUAGES = new Set([
     'javascript', 'typescript', 'python', 'php', 'go', 'rust', 'ruby', 'java', 'csharp',
@@ -130,26 +157,75 @@ async function handler(input, ctx) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
     const treeHash = await computeTreeHash(projectPath);
-    // The cache key is the project's tree hash, which says nothing about which
-    // document an explicit `spec_paths` argument names — an out-of-tree spec
-    // path in particular can change without the tree hash moving at all.
-    // Serving a cached snapshot in that case would silently diff against the
-    // wrong document (or the auto-discovered one) and misattribute shadow
-    // endpoints / dead documentation. So `spec_paths` bypasses the cache read
-    // exactly like `force` does. (`include_env_vars` has an analogous,
-    // narrower gap — a cache hit can return env_vars collected under a
-    // different value of that flag — but that only omits data, never
-    // misattributes a finding, so it is left as-is here.)
+    const includeEnvVars = inp.include_env_vars !== false;
+    const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
+    // The cache key: this project, this tree, this routes.yml (by content),
+    // this plugin version, and whether env vars were collected — see
+    // `surfaceCacheKey`. It used to be the tree hash alone, which served one
+    // project's routes to another whose tree hashed the same and kept a
+    // snapshot mapped with a since-fixed rule pack forever. Reuse is also
+    // bounded in time (SURFACE_CACHE_TTL_MS).
+    //
+    // It still says nothing about which document an explicit `spec_paths`
+    // argument names — an out-of-tree spec path in particular can change
+    // without the tree hash moving at all. Serving a cached snapshot in that
+    // case would silently diff against the wrong document (or the
+    // auto-discovered one) and misattribute shadow endpoints / dead
+    // documentation. So `spec_paths` bypasses the cache read exactly like
+    // `force` does.
+    const cacheKey = surfaceCacheKey({
+        projectPath,
+        treeHash,
+        routesPackHash: hashRulePacks([rulesPath]),
+        pluginVersion: resolveVersion(),
+        includeEnvVars,
+    });
     if (inp.force !== true && inp.spec_paths === undefined) {
-        const cached = ctx.storage.surface.getByTreeHash(treeHash);
+        const cached = ctx.storage.surface.findCacheHit({
+            cache_key: cacheKey,
+            project_path: projectPath,
+            tree_hash: treeHash,
+            freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
+        });
         if (cached) {
-            return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx);
+            return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx, projectPath);
         }
     }
-    const includeEnvVars = inp.include_env_vars !== false;
+    // An explicit `spec_paths` snapshot must never become "latest for this
+    // tree hash": it answers the caller's one-off question about a document
+    // THEY named, not a claim about what this project's own spec layout is. If
+    // it were persisted, a later PLAIN call (no spec_paths) on the same
+    // unchanged tree would read it back from the tree-hash cache and report
+    // the explicitly-named document as if auto-discovery had found it —
+    // exactly the "silently attributed to the wrong document" failure the
+    // spec_paths-bypasses-cache-read fix above exists to prevent, just
+    // triggered from the write side instead of the read side. Skipping the
+    // insert closes it at the source: nothing is ever there to be inherited.
+    const persistAndSummarize = (snapshot, toolsRun) => {
+        if (inp.spec_paths !== undefined)
+            return summarize(snapshot, null, toolsRun, ctx, projectPath);
+        const persisted = ctx.storage.surface.insert({
+            project_path: projectPath,
+            tree_hash: treeHash,
+            snapshot,
+            cache_key: cacheKey,
+        });
+        return summarize(snapshot, persisted.id, toolsRun, ctx, projectPath);
+    };
+    // Semgrep's targets: the project's files in a language the routes pack has
+    // rules for. None at all is NOT APPLICABLE — nothing for the pack to read,
+    // as compliance_check's `semgrep-rgpd` reports it — never a gap: Semgrep is
+    // not run (nor needed), and the snapshot (ports, specs) is persisted with
+    // Semgrep `skipped`. A Terraform-only project must not read as an
+    // incomplete scan because of the surface.
+    const targets = await countRouteTargets(projectPath);
+    if (targets === 0) {
+        const toolsRun = [{ name: 'semgrep', status: 'skipped', reason: NOT_APPLICABLE_REASON }];
+        const snapshot = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun, includeEnvVars, [], inp.spec_paths);
+        return persistAndSummarize(snapshot, toolsRun);
+    }
     const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
     const outFile = join(reportDir, 'surface.json');
-    const rulesPath = join(ctx.scriptsDir, '..', 'configs', 'semgrep', 'routes.yml');
     const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
     if (invocation === null) {
         return degradedResult([
@@ -159,9 +235,14 @@ async function handler(input, ctx) {
                 reason: 'not_installed (no docker fallback available)',
             },
         ], ['semgrep'], 'Semgrep is not installed and no Docker fallback is available, so no surface was ' +
-            'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx);
+            'mapped and nothing was persisted. Run install_toolchain, then retry.', ctx, projectPath);
     }
-    const { toolRun } = invocation;
+    const { toolRun, run, via } = invocation;
+    if (run === null) {
+        // The Docker fallback could not even stage the rules: nothing ran, and a
+        // report on disk would be an earlier run's.
+        return degradedResult([toolRun], [], 'Semgrep could not be run through Docker; no surface was mapped and nothing was persisted.', ctx, projectPath);
+    }
     // `readJsonSafe` returns null only for a missing/unreadable file (see
     // scanHelpers.ts) — never for unparseable content. A file that exists but
     // holds truncated/garbage JSON (mid-write timeout, stale partial file from
@@ -174,7 +255,7 @@ async function handler(input, ctx) {
             status: 'failed',
             reason: toolRun.reason ?? 'no_output',
         };
-        return degradedResult([failedToolRun], [], 'Semgrep produced no readable output file; nothing was persisted.', ctx);
+        return degradedResult([failedToolRun], [], 'Semgrep produced no readable output file; nothing was persisted.', ctx, projectPath);
     }
     let parsed;
     try {
@@ -191,37 +272,54 @@ async function handler(input, ctx) {
             status: 'failed',
             reason: `unparseable output: ${e.message}`,
         };
-        return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx);
+        return degradedResult([failedToolRun], [], 'Semgrep output was not valid JSON; nothing was persisted.', ctx, projectPath);
+    }
+    // Parseable is not scanned: judge the report (exit code, paths.scanned,
+    // errors[]) before a single route is believed.
+    const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
+    if (judged.verdict === 'scanned_nothing') {
+        return degradedResult([judged.toolRun], ['semgrep'], `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
+            'surface was mapped and nothing was persisted — an empty result here is a gap, not an ' +
+            'application that exposes nothing. Check .semgrepignore.', ctx, projectPath);
     }
     // Rebuild the captures modern Semgrep redacts, before anything downstream
     // looks for them. Reading the files is the impure half and belongs here;
     // `recoverMetavars` itself is pure and takes the text.
     const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
     if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
-        return degradedResult([toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx);
+        return degradedResult([judged.toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
     }
-    const toolsRun = [toolRun, ...recoveryToolRun(recovery)];
+    const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
     const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
-    // An explicit `spec_paths` snapshot must never become "latest for this
-    // tree hash": it answers the caller's one-off question about a document
-    // THEY named, not a claim about what this project's own spec layout is. If
-    // it were persisted, a later PLAIN call (no spec_paths) on the same
-    // unchanged tree would read it back from the tree-hash cache and report
-    // the explicitly-named document as if auto-discovery had found it —
-    // exactly the "silently attributed to the wrong document" failure the
-    // spec_paths-bypasses-cache-read fix above exists to prevent, just
-    // triggered from the write side instead of the read side. Skipping the
-    // insert closes it at the source: nothing is ever there to be inherited.
-    if (inp.spec_paths !== undefined) {
-        return summarize(snapshot, null, toolsRun, ctx);
+    // A failed run is never the project's surface: shown, never persisted.
+    if (judged.verdict === 'failed') {
+        return withNote(summarize(snapshot, null, toolsRun, ctx, projectPath), `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? 'failed'}). The routes ` +
+            'above are what it did read, and they may be incomplete; nothing was persisted, so ' +
+            'scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.');
     }
-    const persisted = ctx.storage.surface.insert({
-        project_path: projectPath,
-        tree_hash: treeHash,
-        snapshot,
-    });
-    return summarize(snapshot, persisted.id, toolsRun, ctx);
+    // Partial coverage: a file Semgrep could only partly parse. The snapshot is
+    // the surface, minus whatever the unparsed spans held — persisted, with
+    // Semgrep both `ok` and missing (ran, with a narrower gap inside it) and
+    // the files named in the snapshot and the result.
+    if (judged.verdict === 'partial') {
+        // Already project-relative: the judge was given projectPath.
+        const partiallyParsed = judged.partial ?? [];
+        const partialSnapshot = {
+            ...snapshot,
+            missing_tools: ['semgrep'],
+            partially_parsed: partiallyParsed,
+        };
+        return withNote(persistAndSummarize(partialSnapshot, toolsRun), `Semgrep only partly parsed ${partiallyParsed.map((p) => p.file).join(', ')} ` +
+            '(see partially_parsed): routes in the unparsed spans may be missing from this surface, ' +
+            'so coverage is partial. Everything else was mapped and persisted.');
+    }
+    return persistAndSummarize(snapshot, toolsRun);
 }
+/** Why Semgrep did not run on a project with no file in a routes-pack language. */
+const NOT_APPLICABLE_REASON = 'not applicable: no file in a language the routes rules cover (JS/TS, Python, PHP, Go, Rust, ' +
+    'Ruby, Java, C#) — nothing to map';
+/** The report of a Semgrep run that had nothing to read, for building a snapshot without one. */
+const EMPTY_SEMGREP_REPORT = { results: [], errors: [], paths: { scanned: [] } };
 /** Name used for the recovery step in `tools_run`; it is not a real binary. */
 const RECOVERY_STEP = 'semgrep-metavar-recovery';
 /**
@@ -321,14 +419,13 @@ function unreadableMatchesNote(recovery) {
 /**
  * What a cache hit reports as `tools_run`.
  *
- * The cache marker must not erase the run that produced the snapshot. There
- * is exactly one case where a failing run still persists — Semgrep exited
- * non-zero but left parseable JSON, persisted with a `failed` entry carrying
- * the diagnostic. Reporting a bare `{semgrep, skipped, cached}` on every
- * later call for the same tree hash would let that warning survive one call
- * and then vanish, so a snapshot that is empty *because the scan died* would
- * read as "this application exposes nothing" — verbatim the falsehood this
- * tool exists to prevent (see the module doc comment).
+ * The cache marker must not erase the run that produced the snapshot. A
+ * failed run is never persisted, but a persisted one can still carry a gap:
+ * a partial parse (Semgrep `ok` with its reason, `missing_tools`), a failed
+ * metavariable recovery, Semgrep skipped as not applicable. Reporting a bare
+ * `{semgrep, skipped, cached}` on every later call for the same tree hash
+ * would let that survive one call and then vanish, so a partial surface
+ * would read as a complete one (see the module doc comment).
  */
 function cachedToolsRun(snapshot) {
     const marker = { name: 'semgrep', status: 'skipped', reason: 'cached' };
@@ -381,7 +478,7 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
         env_vars: includeEnvVars ? collectEnvVars(parsed) : [],
         ports: collectPorts(projectPath),
         webhooks: resolved.filter((r) => WEBHOOK_PATTERN.test(r.path_resolved)),
-        coverage: buildCoverage(resolved, ctx, unreadableRouteFiles, unresolvedEdges),
+        coverage: buildCoverage(resolved, ctx, projectPath, unreadableRouteFiles, unresolvedEdges),
         tools_run: toolsRun,
         missing_tools: [],
         spec_files: specFiles,
@@ -666,13 +763,16 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
  * is not valid UTF-8, or offsets that land past end-of-file. Rare, and still
  * not something to round down to zero.
  */
-function buildCoverage(routes, ctx, unreadableRouteFiles, unresolvedEdges) {
+function buildCoverage(routes, ctx, projectPath, unreadableRouteFiles, unresolvedEdges) {
     // `coverage[]` is a per-language report about source code. Spec routes carry
     // `language: 'spec'`, which is not a language the rule pack could ever cover —
     // including them would create a phantom entry reading `status: 'no_rules'`,
     // literally true and completely meaningless.
     const codeRoutes = routes.filter((r) => r.provenance === 'code');
-    const detected = ctx.storage.stack.getLatest()?.snapshot.languages ?? [];
+    // THIS project's detected languages — `stack.getLatest()` was the newest
+    // detection of any project, so another project's languages were reported
+    // as this one's `no_rules` gaps (Task 24).
+    const detected = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot.languages ?? [];
     // One entry per lost route, so the count is routes-not-shown, not files.
     const unreadableByLanguage = new Map();
     for (const file of unreadableRouteFiles) {
@@ -720,7 +820,7 @@ function summarize(snapshot,
 // `null` for an explicit-`spec_paths` run that was deliberately not
 // persisted (see the call site in `handler`) — there is no row to point
 // to, the same reason `degradedResult` uses `null` for "nothing written".
-snapshotId, toolsRun, ctx) {
+snapshotId, toolsRun, ctx, projectPath) {
     // `by_language` is a report about source code, same reasoning as
     // `buildCoverage`'s `codeRoutes` filter above: spec routes all carry
     // `language: 'spec'`, which is not a language the rule pack could ever
@@ -747,7 +847,8 @@ snapshotId, toolsRun, ctx) {
     const specSample = [...specRoutesList]
         .sort((a, b) => a.path_resolved.localeCompare(b.path_resolved))
         .slice(0, SAMPLE_SIZE);
-    const stackDetected = ctx.storage.stack.getLatest() !== null;
+    // "For this project", as NO_STACK_NOTE says — never another project's.
+    const stackDetected = ctx.storage.stack.getLatestForProject(projectPath) !== null;
     return {
         ok: true,
         // Code routes only — a consumer reading `routes_total` today must get the
@@ -769,6 +870,8 @@ snapshotId, toolsRun, ctx) {
         spec_sample: specSample,
         spec_diff_summary: specDiffSummary(snapshot.spec_diff),
         shadow_sample: shadowSample(snapshot.spec_diff),
+        // Partial coverage names its files on every read, a cache hit included.
+        ...(snapshot.partially_parsed !== undefined ? { partially_parsed: snapshot.partially_parsed } : {}),
         ...(stackDetected ? {} : { note: NO_STACK_NOTE }),
     };
 }
@@ -795,6 +898,13 @@ function shadowSample(diff) {
         return [];
     return [...diff.code_only].sort((a, b) => a.path.localeCompare(b.path)).slice(0, SAMPLE_SIZE);
 }
+/** `note` first, then whatever note `result` already carried. */
+function withNote(result, note) {
+    if (!result.ok)
+        return result;
+    const prior = result['note'];
+    return { ...result, note: typeof prior === 'string' ? `${note} ${prior}` : note };
+}
 /**
  * Shared shape for every "Semgrep could not produce a usable result" exit —
  * unavailable, no output, unparseable output. All three must persist
@@ -802,7 +912,7 @@ function shadowSample(diff) {
  * as `summarize` so a consumer never sees `undefined` on the fields it reads
  * hardest (e.g. `webhooks_total`) just because this run happened to degrade.
  */
-function degradedResult(toolsRun, missingTools, note, ctx) {
+function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
     return {
         ok: true,
         routes_total: 0,
@@ -815,7 +925,7 @@ function degradedResult(toolsRun, missingTools, note, ctx) {
         webhooks_total: 0,
         tools_run: toolsRun,
         missing_tools: missingTools,
-        stack_detected: ctx.storage.stack.getLatest() !== null,
+        stack_detected: ctx.storage.stack.getLatestForProject(projectPath) !== null,
         spec_routes_total: 0,
         spec_files: [],
         spec_sample: [],

@@ -15,10 +15,39 @@
  * package for exactly this (draft-04-dialect schemas under ajv8), so this
  * suite imports `Ajv` from `ajv-draft-04`, not from `ajv` directly, unlike
  * the brief's own illustrative snippet.
+ *
+ * `ajv-formats` (task 4 brief, item 5) is applied on top: measured by hand
+ * before wiring it in, plain `ajv`/`ajv-draft-04` does NOT enforce the
+ * `format` keyword at all — `{ type: 'string', format: 'uri-reference' }`
+ * accepted a raw space, `%`, and `#` with no complaint, because format
+ * validation moved into this separate, opt-in package starting at ajv@7.
+ * That means every `expectValidSarif` call below this comment ran with
+ * `uri-reference` silently unchecked until now — the SARIF-shaped assertions
+ * were real, but the one property that would have caught `toSarif`'s
+ * unescaped-URI bug was not. `ajv-formats` was already resolved
+ * transitively (via `ajv-draft-04`'s own tree) before this task promoted it
+ * to an explicit devDependency.
+ *
+ * Loaded with `createRequire`, not `import addFormats from 'ajv-formats'`:
+ * confirmed by hand that the ordinary default import does not type-check
+ * under this project's `moduleResolution: "NodeNext"` — `ajv-formats` ships
+ * no `"type"`/`"exports"` field, and its `.d.ts` uses ESM `export default`
+ * syntax for what Node16/NodeNext resolution treats as a CommonJS module;
+ * `tsc` infers the MODULE NAMESPACE type for the import instead of the
+ * default export and rejects calling it ("not callable"). `ajv-draft-04`,
+ * imported the ordinary way two lines below, does not hit this — only
+ * `ajv-formats` lacks the `export =` a CommonJS `.d.ts` needs for
+ * `esModuleInterop` to unwrap it correctly here. `createRequire` sidesteps
+ * the broken VALUE-level interop entirely (a plain runtime `require`, which
+ * is what `ajv-formats` truly is); the TYPE still comes from the package's
+ * own `.d.ts` via `FormatsPlugin`, so this is a loader workaround, not a
+ * type escape hatch.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import Ajv from 'ajv-draft-04';
+import type { FormatsPlugin } from 'ajv-formats';
 import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { evaluateGate } from '../../../src/ci/gate.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
@@ -68,11 +97,34 @@ function input(over: Partial<Parameters<typeof evaluateGate>[0]> = {}) {
 
 const PROJECT = '/proj';
 
+/** A security_scan_full step whose Semgrep only partly parsed one file (follow-up X1). */
+const WP = 'wp/rest-controller.php';
+function partialStep(): ScanStepResult {
+  return step({
+    tool: 'security_scan_full',
+    tools_run: [
+      {
+        name: 'semgrep',
+        status: 'ok',
+        reason: 'partial: 1 file(s) only partly parsed',
+        partially_parsed: [{ file: WP, type: 'PartialParsing', message: 'Syntax error' }],
+      },
+    ],
+    missing_tools: ['semgrep'],
+    partial_parses: { semgrep: [{ file: WP, type: 'PartialParsing' }] },
+  });
+}
+
+// See the module doc comment above for why this is `require`d rather than
+// imported.
+const addFormats = createRequire(import.meta.url)('ajv-formats') as FormatsPlugin;
+
 describe('renderSarif', () => {
   const schema = JSON.parse(
     readFileSync('test/fixtures/sarif/sarif-schema-2.1.0.json', 'utf8'),
   ) as object;
   const ajv = new Ajv({ strict: false, allErrors: true, logger: false });
+  addFormats(ajv);
   const validate = ajv.compile(schema);
 
   function expectValidSarif(doc: unknown): void {
@@ -109,7 +161,7 @@ describe('renderSarif', () => {
   it('includes a new finding below the fail-on threshold, not only blocking ones', () => {
     // Names the plausible-wrong implementation: rendering `v.blocking`
     // instead of `v.newFindings`. SARIF is meant to annotate everything new
-    // on the PR diff (design doc §6), not just what fails the gate — a
+    // on the PR diff (the design of record), not just what fails the gate — a
     // `low` finding under a `critical` threshold is new but never blocking,
     // and a reviewer should still see it on the line it touched.
     const v = evaluateGate(input({ findings: [finding({ severity: 'low' })], failOn: 'critical' }));
@@ -250,7 +302,7 @@ describe('renderSarif', () => {
   });
 
   it('sets executionSuccessful: false when coverage is not full, even with no baseline gap', () => {
-    // The SARIF-native way to say "this run was incomplete" (design doc §9,
+    // The SARIF-native way to say "this run was incomplete" (the design of record,
     // as amended): a consumer reading only the SARIF upload can now tell a
     // clean scan from an incomplete one from `executionSuccessful` alone,
     // without cross-referencing the exit code. Guards an implementation
@@ -261,6 +313,14 @@ describe('renderSarif', () => {
     expect(v.coverage).not.toBe('full'); // sanity on the fixture
     const doc = JSON.parse(renderSarif(v, PROJECT));
     expect(doc.runs[0].invocations).toHaveLength(1);
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(false);
+    expectValidSarif(doc);
+  });
+
+  it('keeps executionSuccessful: false for an accepted partial parse — coverage stays partial (follow-up X1)', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS); // sanity: accepted
+    const doc = JSON.parse(renderSarif(v, PROJECT));
     expect(doc.runs[0].invocations[0].executionSuccessful).toBe(false);
     expectValidSarif(doc);
   });
@@ -288,8 +348,8 @@ describe('renderSarif', () => {
     expectValidSarif(doc);
   });
 
-  it('does not leak a generic scanner-coverage gap\'s text into SARIF (design doc §9, as amended)', () => {
-    // design doc §9 (original): "SARIF carries findings, not the coverage
+  it('does not leak a generic scanner-coverage gap\'s text into SARIF (the design of record, as amended)', () => {
+    // the design of record (original): "SARIF carries findings, not the coverage
     // signal." As amended per review: the coarse *boolean* signal
     // (executionSuccessful — see the test above) is now deliberately part
     // of SARIF, closing the "a SARIF-only consumer can't tell" gap §9
@@ -304,6 +364,36 @@ describe('renderSarif', () => {
     expect(v.coverageGaps.some((g) => g.includes('semgrep'))).toBe(true); // sanity on the fixture
     const doc = JSON.parse(renderSarif(v, PROJECT));
     expect(JSON.stringify(doc)).not.toMatch(/semgrep/);
+  });
+
+  // Task 4 brief, item 5: the three characters this schema test could not
+  // actually catch before `ajv-formats` was wired in above. Each is a
+  // project-relative path (`renderSarif`'s own relativisation — tested
+  // elsewhere in this file — is orthogonal to the encoding fixed here), so
+  // this is exercising exactly the shape `toSarif`/`toUri` receives from a
+  // real scan.
+  it('produces a schema-valid document for a file path containing a space', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/my file.ts' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).toBe('src/my%20file.ts');
+  });
+
+  it('produces a schema-valid document for a file path containing a percent sign', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/100%.ts' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).toBe('src/100%25.ts');
+  });
+
+  it('produces a schema-valid document for a file path containing #, without corrupting it into a fragment', () => {
+    const v = evaluateGate(input({ findings: [finding({ file_path: 'src/notes#3.md' })] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expectValidSarif(doc);
+    const uri = doc.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri;
+    expect(uri).not.toContain('#');
   });
 });
 
@@ -400,6 +490,16 @@ describe('renderHuman', () => {
     expect(text).not.toMatch(/undefined/);
   });
 
+  it('prints an accepted partial parse as accepted — never as a gap — with coverage partial (follow-up X1)', () => {
+    const text = renderHuman(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP, 'x.php'] })));
+    expect(text).toMatch(/^dev-guardian CI: PASS \(exit code 0\)$/m);
+    expect(text).toMatch(/^coverage: partial$/m);
+    expect(text).not.toMatch(/coverage gaps/i);
+    expect(text).toMatch(/^accepted \(--accept-partial-parse\):$/m);
+    expect(text).toMatch(/^ {2}- security_scan_full: semgrep only partly parsed wp\/rest-controller\.php — accepted/m);
+    expect(text).toMatch(/--accept-partial-parse x\.php: no step reported it partly parsed/);
+  });
+
   it('reads as a clean pass when there are no findings and coverage is full', () => {
     const v = evaluateGate(input());
     const text = renderHuman(v);
@@ -432,6 +532,17 @@ describe('renderJson', () => {
     expect(o.coverage).toBe('full');
     expect(o.exit_code).toBe(CI_EXIT.PASS);
     expect(o.coverage_gaps).toEqual([]);
+  });
+
+  it('carries accepted partial parses apart from the gaps, and coverage stays partial (follow-up X1)', () => {
+    const o = JSON.parse(renderJson(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP, 'x.php'] }))));
+    expect(o.exit_code).toBe(CI_EXIT.PASS);
+    expect(o.coverage).toBe('partial');
+    expect(o.coverage_gaps).toEqual([]);
+    expect(o.accepted_gaps).toEqual([
+      'security_scan_full: semgrep only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
+    expect(o.unused_partial_parse_acceptances).toEqual(['x.php']);
   });
 
   it('carries baseline_absent, distinctly from an empty baseline', () => {

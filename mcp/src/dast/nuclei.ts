@@ -39,7 +39,7 @@ export const DEFAULT_NUCLEI_RATE_LIMIT = 10;
  * Tag families excluded from every nuclei run regardless of `allowIntrusive`.
  * The design's non-goals rule out injection and fuzzing payloads from this
  * tool entirely — real fuzzing stays behind nuclei's own `-dast` mode, which
- * this integration never enables (design doc §7) — so `dos` and `fuzz` are
+ * this integration never enables (the design of record) — so `dos` and `fuzz` are
  * never on the table. `allowIntrusive` only ever widens the envelope to admit
  * `intrusive`-tagged templates; it must never touch these two.
  */

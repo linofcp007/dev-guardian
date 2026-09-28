@@ -12,7 +12,7 @@
  * package the project must install (`npm i pino`, `pip install structlog`,
  * etc.) — actual install is left to the user / their package manager.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -85,8 +85,9 @@ async function handler(input, ctx) {
     };
 }
 function inferStack(projectPath, ctx) {
-    // Prefer the latest stack snapshot when available — it understands frameworks too.
-    const snap = ctx.storage.stack.getLatest()?.snapshot;
+    // Prefer this project's latest stack snapshot when available — it
+    // understands frameworks too. Never another project's (Task 24).
+    const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
     if (snap) {
         if (snap.languages?.includes('javascript') || snap.languages?.includes('typescript'))
             return 'node';
@@ -122,7 +123,7 @@ function inferStack(projectPath, ctx) {
     if (existsSync(join(projectPath, 'Gemfile')))
         return 'ruby';
     try {
-        const entries = require('node:fs').readdirSync(projectPath);
+        const entries = readdirSync(projectPath);
         if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
             return 'dotnet';
     }

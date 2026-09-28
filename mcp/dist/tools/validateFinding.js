@@ -13,7 +13,7 @@
  * run could not see.
  *
  * Report-only, by design and without an opt-out: no suppression is ever
- * written and no `Finding.severity` is ever touched (design §1 non-goals). A
+ * written and no `Finding.severity` is ever touched (the design of record's non-goals). A
  * verdict is a judgment ABOUT a finding, so it lands in its own table
  * (`finding_validations`), never on the finding itself.
  *
@@ -29,7 +29,7 @@
  *                                correct state and not a failure. It still
  *                                must not read as "everything is fine".
  *
- * Staleness (design §8): the verdict's `tree_hash` is the SNAPSHOT's, not the
+ * Staleness (the design of record): the verdict's `tree_hash` is the SNAPSHOT's, not the
  * working tree's. A verdict derived from a snapshot of tree N describes tree
  * N no matter when it was computed; stamping the current hash instead would
  * make a verdict built on stale route data read as fresh forever — the
@@ -40,6 +40,7 @@
  * moment it was written.
  */
 import { z } from 'zod';
+import { openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
@@ -48,14 +49,6 @@ import { buildImportGraph } from '../validate/importGraph.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary } from '../validate/summary.js';
 import { registerToolModule } from './index.js';
-/**
- * `scans.listHistory` is the only project-scoped window onto past runs, so the
- * DAST cross-reference searches a bounded slice of it. The bound is reported
- * (`summary.dast.scans_searched`) rather than applied silently: "no DAST scan
- * in the last 200 runs" and "no DAST scan ever" are different statements, and
- * neither is "nothing is exposed".
- */
-const DAST_SCAN_SEARCH_LIMIT = 200;
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
 const ANONYMOUS_EXPOSURE = 'anonymous_exposure';
@@ -84,27 +77,27 @@ const tool = {
     // the honest limits, not just the capability: the ways a caller misuses
     // this tool are trusting `unreachable` in a stack where it cannot be
     // earned, and expecting it to close findings.
+    //
+    // At most 1500 characters (descriptionLimits.test.ts). Shortened from 1809
+    // by tightening wording only: every limit below survived, each one tested
+    // in validateFinding.test.ts.
     description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding ' +
         'lives in. Builds a file-level import graph from the latest map_attack_surface snapshot, ' +
-        'roots it at the route-declaring files, and returns one verdict per finding — reachable / ' +
-        'unreachable / unknown — with concrete evidence (nearest route and its hop count, how many ' +
-        'routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind ' +
-        'it. REQUIRES a prior map_attack_surface run and refuses with no_surface_snapshot when there ' +
-        'is none. Validates every open finding by default; pass a fingerprint for one, and an ' +
-        'unknown fingerprint is an error rather than an empty result. REPORT ONLY: it never ' +
-        'suppresses a finding, never writes a suppression, and never changes a severity — closing a ' +
-        'finding stays a human decision. Honest limits, every one of them load-bearing: granularity ' +
-        'is the file, not the function, so "reachable" means a route imports the file and NOT that ' +
-        'the vulnerable line is called; "unreachable" is never emitted for Ruby, Java, C# or PHP, ' +
-        'which resolve code at runtime (autoload, annotation injection, DI/service container) rather ' +
-        'than by import; reachability is measured from HTTP route entry points only, so a file ' +
-        'reached solely by a CLI, a cron job or a queue consumer reads as unreachable-by-route, ' +
-        'which is not a claim that the code never runs; and NOTHING here detects dynamic imports — ' +
-        'import(expr), require(variable), reflection, plugin registries — so IN A CODEBASE USING ' +
-        'THEM "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts persist ' +
-        'against the snapshot id and tree hash they were computed from and come back flagged stale ' +
-        'once the working tree moves. Read summary.coverage_gaps beside the counts: a verdict count ' +
-        'without them is not an answer.',
+        'rooted at the route-declaring files, and returns reachable / unreachable / unknown per ' +
+        'finding with evidence (nearest route and hop count, how many routes reach the file, any ' +
+        'live-confirmed anonymous exposure) plus the coverage gaps behind it. REQUIRES a prior ' +
+        'map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by ' +
+        'default; a fingerprint validates one, and an unknown fingerprint is an error, not an empty ' +
+        'result. REPORT ONLY: it never suppresses a finding and never changes a severity — closing a ' +
+        'finding stays a human decision. Limits: granularity is the file, not the function ' +
+        '("reachable" means a route imports the file, NOT that the vulnerable line runs); ' +
+        '"unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime ' +
+        '(autoload, annotation injection, DI container); only HTTP routes are entry points, so a ' +
+        'file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and ' +
+        'NOTHING detects dynamic imports (import(expr), require(variable), reflection, plugin ' +
+        'registries) — where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU ' +
+        'WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree ' +
+        'moves. Read summary.coverage_gaps beside the counts.',
     inputSchema: {
         project_path: ProjectPath,
         fingerprint: Fingerprint,
@@ -120,9 +113,9 @@ function fail(code, message, retryWith) {
     };
 }
 const NO_OPEN_FINDINGS_NOTE = 'No open findings to validate, so nothing was computed and nothing was persisted. This is NOT ' +
-    'a statement that the project is clean — it means the latest completed scan recorded no ' +
-    'unsuppressed findings. Run security_scan_full (or scan_sast) first, then re-run ' +
-    'validate_finding.';
+    "a statement that the project is clean — it means no usable scan of this project's " +
+    'finding-producing types left an unsuppressed finding open. Run security_scan_full (or ' +
+    'scan_sast) first, then re-run validate_finding.';
 async function handler(input, ctx) {
     // `providers` is validated by the schema and deliberately not read here.
     // `z.enum(['static'])` makes `['static']` the only value that can arrive,
@@ -163,8 +156,11 @@ async function handler(input, ctx) {
     // listOpen() answers with the latest completed scan in the WHOLE
     // database, from any project, which would validate a different project's
     // findings under this run whenever that project's scan happened to
-    // complete more recently.
-    const open = ctx.storage.findings.listOpenForProject(projectPath);
+    // complete more recently. And the project's OPEN SET, not its single
+    // latest scan: that one could be an SBOM, or a DAST run standing in for
+    // the SAST findings the caller meant (`history/openSet.ts`).
+    const openSet = openSetForProject(ctx.storage, projectPath);
+    const open = openSet.findings;
     const selected = inp.fingerprint === undefined ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
     if (inp.fingerprint !== undefined && selected.length === 0) {
         return fail('target_not_found', `No OPEN finding carries the fingerprint '${inp.fingerprint}'. It may never have existed, ` +
@@ -198,12 +194,18 @@ async function handler(input, ctx) {
             graph,
             validations,
             dast,
-            // The scan `listOpenForProject()` drew from — see `sourceScanOf`.
-            sourceScan: sourceScanOf(ctx, projectPath),
+            // The newest scan the open set read findings from, taken from the set
+            // itself so it cannot drift from it (each finding also carries its
+            // own `scan_id`). Present even when nothing was selected — the case
+            // where a reader most needs to know which scans came back empty.
+            sourceScan: openSet.newestSource,
             workingTreeHash,
             now: Date.now(),
         }),
         ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
+        // Newer scans the open set passed over because their scanners did not
+        // run: the findings validated come from the scan before each of them.
+        ...(openSet.skipped.count > 0 ? { skipped_scans: openSet.skipped } : {}),
     };
 }
 /**
@@ -233,33 +235,7 @@ function languageOfPath(filePath) {
     return language === 'unknown' ? null : language;
 }
 /**
- * The scan whose findings this batch validated.
- *
- * `findings.listOpenForProject(projectPath)` selects from the latest
- * COMPLETED scan FOR THIS PROJECT, and `scans.getLatestForProject(
- * projectPath)` returns that same row — identical predicate (`status =
- * 'completed' AND project_path = ?`, identical `ORDER BY started_at DESC,
- * rowid DESC LIMIT 1`), both scoped to the same project. The two must stay in
- * lockstep: if one ever changes its ordering or its project filter, this
- * summary starts naming a scan the findings did not come from, which is worse
- * than naming none — including naming another project's scan entirely, which
- * `getLatest()` (no project filter) could do silently. Kept as a lookup
- * rather than derived from the selected findings because a finding carries no
- * scan id in its domain type, and because the answer must exist even when
- * zero findings were selected — the case where a reader most needs to know
- * WHICH scan came back empty.
- *
- * This is what makes the documented hazard detectable: `validate_finding`
- * validates whatever the latest completed scan left open FOR THIS PROJECT, so
- * running it immediately after `scan_dast` validates the DAST findings rather
- * than the SAST ones. The tool cannot know which the caller meant — it can,
- * and now does, say which it used.
- */
-function sourceScanOf(ctx, projectPath) {
-    return ctx.storage.scans.getLatestForProject(projectPath);
-}
-/**
- * The liveness cross-reference (design §7): a persisted `scan_dast` finding
+ * The liveness cross-reference (the design of record): a persisted `scan_dast` finding
  * whose subcategory is `anonymous_exposure` fires only on a route the spec
  * declared auth-required and the live server served anonymously, so it is
  * evidence rather than inference.
@@ -272,16 +248,19 @@ function sourceScanOf(ctx, projectPath) {
  * one evidence clause the design calls out by name.
  */
 function collectAnonymousExposures(ctx, projectPath) {
-    const history = ctx.storage.scans.listHistory(DAST_SCAN_SEARCH_LIMIT);
-    const scan = history.find((s) => s.scan_type === 'dast' && s.status === 'completed' && s.project_path === projectPath) ?? null;
+    // A project-scoped SQL query over ALL of this project's scans — it
+    // searched the 200 newest scans of the whole database, so enough scans of
+    // other projects hid this project's DAST run.
+    const scan = ctx.storage.scans.listCompletedOfTypes(projectPath, ['dast'], { limit: 1 })[0] ?? null;
+    const scansSearched = ctx.storage.scans.countForProject(projectPath);
     if (scan === null)
-        return { scan: null, files: new Set(), scansSearched: history.length };
+        return { scan: null, files: new Set(), scansSearched };
     const files = new Set();
     for (const f of ctx.storage.findings.listByScan(scan.scan_id)) {
         if (f.subcategory !== ANONYMOUS_EXPOSURE || f.file_path === undefined)
             continue;
         files.add(f.file_path);
     }
-    return { scan, files, scansSearched: history.length };
+    return { scan, files, scansSearched };
 }
 //# sourceMappingURL=validateFinding.js.map

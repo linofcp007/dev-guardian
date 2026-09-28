@@ -1,16 +1,16 @@
-# dev-guardian — context for Gemini CLI
+# dev-guardian
 
-This repository has the **dev-guardian MCP server** registered (see
-`~/.gemini/settings.json` or `.gemini/settings.json`). It exposes 54 tools and
-18 resources for security, quality, bugfix, deps, compliance, observability,
-performance, plus first-class WordPress and .NET (C#/F#) support. All scanners
-run locally, no telemetry; results persist in `.guardian/guardian.db`.
+This project has the **dev-guardian MCP server** registered. It exposes
+54 tools and 18 resources for security, quality, bugfix, deps,
+compliance, observability, performance, plus first-class WordPress and
+.NET (C#/F#) support. All scanners run locally. dev-guardian sends no
+telemetry of its own; Semgrep's registry mode sends metrics — pass
+`local_only: true` to avoid it. Results persist in `.guardian/guardian.db`.
 
-When the user's request matches an intent below, **prefer invoking the
-dev-guardian MCP tool over running the scanner directly via shell**. The MCP
-layer adds regression diffing, baselines, suppressions, severity-weighted risk
-scoring, and a cache that avoids re-running unchanged scans. Run `/memory show`
-to confirm this file is loaded, `/memory refresh` after editing it.
+When working in this project, **prefer invoking dev-guardian MCP tools over
+running scanners directly via shell**. The MCP layer adds: regression
+diffing, baselines, suppressions, severity-weighted risk scoring, and a
+cache that avoids re-running unchanged scans.
 
 ## Intent → MCP tool
 
@@ -19,7 +19,8 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - "secrets leaked?" → `scan_secrets`
 - "vulnerable deps?" / "CVEs?" → `scan_deps` or `deps_audit`
 - "Dockerfile / container" → `scan_containers`
-- "Terraform / K8s / IaC" → `scan_iac`
+- "Terraform / K8s / IaC" / "are my GitHub Actions workflows safe?" → `scan_iac`
+  (Trivy config, plus zizmor + actionlint on `.github/workflows/*.yml` when present)
 - "deep bug hunt" → `bug_hunt`
 - "is this AI skill / MCP server / agent safe to install?" → `scan_skill`
   (directory, file, .zip or git/HTTP(S) URL; prompt injection, exfiltration,
@@ -54,6 +55,9 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 
 **Ops**
 - "bootstrap project" → `init_project`
+- "my dev-guardian configs are out of date" / a scan warned about config drift →
+  `init_project` with `refresh=true` (`apply=false` first — it reports what would
+  change; `apply=true` never overwrites a config the user edited)
 - "install scanners" → `install_toolchain`
 - "which scanners are installed?" → `check_toolchain`
 - "detect stack" → `detect_stack`
@@ -63,7 +67,8 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 **WordPress**
 - "scan WP code" → `scan_wordpress`
 - "audit live WP install" → `wp_audit`
-- "any WP CVEs?" → `wp_vuln_check`
+- "any WP CVEs?" → `wp_vuln_check` (live URL, WPScan)
+- "WP CVEs from source, no live URL / offline?" → `wp_vuln_check_source` (Wordfence feed + wp.org)
 - "WP cron / backdoor check" → `wp_cron_audit`
 - "WP REST API exposed?" → `wp_rest_audit`
 - "WP posture overview" → `wp_describe_setup`
@@ -103,10 +108,10 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 - "health check" → `health_status`
 - "regression check" → `regression_alert`
 - "SBOM diff" → `sbom_diff`
-- "project health at a glance?" → `node cli/dev-guardian.mjs status` (CLI,
+- "project health at a glance?" → `node {{DEV_GUARDIAN_CLI}} status` (CLI,
   one-screen summary) or `dashboard` (CLI, same data as a self-contained HTML
   page) — both read-only, report rather than gate
-- "set up another AI host" → run `node cli/dev-guardian.mjs mcp-config <host>` (CLI)
+- "set up another AI host" → run `node {{DEV_GUARDIAN_CLI}} mcp-config <host>` (CLI)
 
 ## Resources
 
@@ -116,10 +121,10 @@ to confirm this file is loaded, `/memory refresh` after editing it.
   `guardian://scans/{scan_id}`
 - Other: `guardian://cves/active`, `guardian://sbom`, `guardian://stack`,
   `guardian://compliance/status`, `guardian://baseline`
-- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{id}`,
+- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`,
   `guardian://wp/cron`
 - .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
-- Attack surface: `guardian://surface/latest`, `guardian://surface/{id}`
+- Attack surface: `guardian://surface/latest`, `guardian://surface/{scan_id}`
 
 ## Typical sequences
 
@@ -142,9 +147,9 @@ to confirm this file is loaded, `/memory refresh` after editing it.
 
 ## CI (headless, no MCP connection)
 
-For a pipeline, not a conversation: `node cli/dev-guardian.mjs scan` runs the same
+For a pipeline, not a conversation: `node {{DEV_GUARDIAN_CLI}} scan` runs the same
 scan pipeline as the MCP tools, gated against a committed `.guardian/baseline.json`;
-`dev-guardian baseline update` is the only command that writes it. Exit codes: `0`
+`node {{DEV_GUARDIAN_CLI}} baseline update` is the only command that writes it. Exit codes: `0`
 pass, `1` gate failed, `2` incomplete scan (a scanner didn't run — never read as a
 pass), `3` usage error. Distribution is `git clone --depth 1` at a pinned tag (not
 `npx`) plus `npm ci` in `mcp/` — see the README's "Run scans in CI" section for a
@@ -152,17 +157,18 @@ copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAS
 pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository
 file declaring it is refused outright, because a fork's pull request could otherwise
 run arbitrary code on the runner. A CI run leaves `.guardian/reports/` in the working
-tree (only the SQLite database is ephemeral) — add `.guardian/` to `.gitignore` by
-hand; the MCP server does this automatically every time it starts against a
-project, but the CLI never starts that server.
+tree (only the SQLite database is ephemeral) — add `**/.guardian/*` and
+`!**/.guardian/baseline.json` to `.gitignore` by hand (never a bare `.guardian/`: git
+cannot re-include the baseline below an ignored directory; `**/` covers a sub-project's too); the MCP server writes
+them every time it starts against a project, but the CLI never starts that server.
 
 ## Local dashboard (offline, read-only)
 
 For a developer at their own laptop, not a CI artifact and not a client
-deliverable: `node cli/dev-guardian.mjs status` prints a one-screen summary
+deliverable: `node {{DEV_GUARDIAN_CLI}} status` prints a one-screen summary
 (risk score and band, open findings/CVEs by severity, both deltas, up to 3
 hotspots ranked by finding count, missing-scanner consequences, active
-suppressions); `dev-guardian dashboard` writes the same snapshot as a
+suppressions); `node {{DEV_GUARDIAN_CLI}} dashboard` writes the same snapshot as a
 self-contained `.guardian/dashboard.html` (no CDN, no network call of any
 kind), opened automatically only when stdout is a TTY — `--no-open`
 suppresses that, `--out <path>` relocates the file. Neither runs a scan,
@@ -171,8 +177,8 @@ render — including over a project full of criticals, or one never scanned —
 because they report; `scan` is what gates. `3` is the only other exit code,
 on a usage error. The page is a **snapshot, not live**: it does not update
 when a later scan runs, so regenerate it to see one. The window itself is
-bounded too — the latest scan plus two deltas, no multi-week trend
-(`/guardian-trend` still asks for history nothing here computes).
+bounded too — the latest scan plus two deltas, no multi-week trend (the
+plugin's own trend command still asks for history nothing here computes).
 
 ## Anti-patterns
 
@@ -184,6 +190,11 @@ bounded too — the latest scan plus two deltas, no multi-week trend
 - Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
 - Don't run `scan_dast` before `map_attack_surface` — it refuses with
   `no_surface_snapshot` and has no route inventory to probe.
+- Don't read a scan's `severity_min` as "the rest was not found". It filters
+  the response only: the scan records everything it saw, so a baseline taken
+  from a filtered scan is complete and `diff_scans` against it will not call
+  the below-floor findings new. Read `severity_filter` on the result for how
+  many were held back and which floor recovers them.
 - Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
   the own engine sends no injection payloads at all; that class is delegated
   to an opt-in nuclei pass whose default templates test the origin, not this
@@ -197,7 +208,14 @@ bounded too — the latest scan plus two deltas, no multi-week trend
   and a Semgrep rule with no `fix:` field can't be autofixed either; only
   `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
   won't open a PR unless you pass `apply: true` — the default run is a
-  dry run that proves the fix and reports it, nothing more.
+  dry run that proves the fix and reports it, nothing more. When it acts on
+  fewer findings than you expected, read `filtered` / `filtered_reason` on
+  the result rather than guessing: they count every open finding it skipped,
+  split by reason (below `severity_min`, no scanner-produced fix, no
+  requested source), and name a lower `severity_min` only when one would
+  genuinely recover something. `create_github_issues` reports the same two
+  fields for its own `severity_min` (default `high`) and `max_issues`
+  (default 10).
 - Three more `create_fix_pr` limits worth knowing before you rely on it:
   maven and gradle bumps are out of reach (inherited from
   `deps_update_plan`'s own ecosystem gap); a second hit of the same rule

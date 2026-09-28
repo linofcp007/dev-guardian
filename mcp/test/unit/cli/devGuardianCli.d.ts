@@ -16,4 +16,7 @@ declare module '*/cli/dev-guardian.mjs' {
     platform: string,
     target: string,
   ): { command: string; args: string[] };
+  export function isNodeSqliteUnavailable(error: unknown): boolean;
+  /** ci-init's template substitution — see ciInitRender.test.ts for why the leftover-placeholder check needed its own coverage. */
+  export function renderCiTemplate(text: string, vars: Record<string, string>): string;
 }

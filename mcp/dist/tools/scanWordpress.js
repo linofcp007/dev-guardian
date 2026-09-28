@@ -13,11 +13,14 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { gitleaksParser } from '../runners/scannerParsers/gitleaks.js';
+import { historyState } from '../runners/git.js';
+import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { hasFileWithExtension } from '../runners/projectFiles.js';
+import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -31,6 +34,8 @@ registerToolModule(makeScanTool({
         'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
         'for live-install scenarios.',
     scan_type: 'wordpress',
+    // Its secrets pass reads git history: HEAD and every ref join the key.
+    cacheState: (_input, { projectPath }) => historyState(projectPath),
     category: 'security',
     inputSchema: {
         project_path: ProjectPath,
@@ -60,9 +65,8 @@ registerToolModule(makeScanTool({
         }
         // The 4 scanners are independent: separate report files, separate
         // CLIs. Run in parallel — wall-clock drops from sum to max.
-        const [semgrepBin, gitleaksBin, trivyBin, phpcsBin] = await Promise.all([
+        const [semgrepBin, trivyBin, phpcsBin] = await Promise.all([
             scannerAvailable('semgrep'),
-            scannerAvailable('gitleaks'),
             scannerAvailable('trivy'),
             scannerAvailable('phpcs'),
         ]);
@@ -92,44 +96,40 @@ registerToolModule(makeScanTool({
                 const raw = readJsonSafe(outFile);
                 if (raw)
                     parser_inputs.push({ parser: semgrepParser, input: raw });
-                const ok = r.outcome === 'completed' || r.exitCode === 1;
-                tools_run.push({ name: 'semgrep-wp', status: ok ? 'ok' : 'failed' });
+                recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
             })());
         }
         else {
             tools_run.push({ name: 'semgrep-wp', status: 'skipped', reason: 'not_installed' });
             missing_tools.push('semgrep');
         }
-        if (gitleaksBin) {
-            tasks.push((async () => {
-                const outFile = join(reportDir, 'secrets.json');
-                const r = await runProcess({
-                    command: 'gitleaks',
-                    args: [
-                        'detect',
-                        '--no-banner',
-                        '--report-format=json',
-                        `--report-path=${outFile}`,
-                        '--redact',
-                        '-s',
-                        ctx.projectPath,
-                    ],
-                    cwd: ctx.projectPath,
+        // Secrets: history AND uncommitted files (or the whole directory when
+        // this is not a git repository — the common case for a WordPress site
+        // copied off a server). See runners/gitleaksScan.ts.
+        tasks.push((async () => {
+            // Inside Promise.all with the other scanners: an exception here
+            // must cost the secrets pass, never Semgrep's or Trivy's results.
+            try {
+                const secrets = await runGitleaksScan({
+                    projectPath: ctx.projectPath,
+                    reportDir,
+                    scope: { kind: 'project' },
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     onLog: ctx.onLog,
                 });
-                const raw = readJsonSafe(outFile);
-                if (raw)
-                    parser_inputs.push({ parser: gitleaksParser, input: raw });
-                const ok = r.outcome === 'completed' || r.exitCode === 1;
-                tools_run.push({ name: 'gitleaks', status: ok ? 'ok' : 'failed' });
-            })());
-        }
-        else {
-            tools_run.push({ name: 'gitleaks', status: 'skipped', reason: 'not_installed' });
-            missing_tools.push('gitleaks');
-        }
+                tools_run.push(...secrets.tools_run);
+                missing_tools.push(...secrets.missing_tools);
+                parser_inputs.push(...secrets.parser_inputs);
+            }
+            catch (e) {
+                tools_run.push({
+                    name: 'gitleaks',
+                    status: 'failed',
+                    reason: `secret scan failed: ${e instanceof Error ? e.message : String(e)}`,
+                });
+            }
+        })());
         if (trivyBin) {
             tasks.push((async () => {
                 const outFile = join(reportDir, 'deps.json');
@@ -210,4 +210,57 @@ registerToolModule(makeScanTool({
         };
     },
 }));
+/**
+ * The `semgrep-wp` entry, judged by the shared Semgrep judge
+ * (`runners/semgrepReport.ts`) — never by the exit code alone, which read a
+ * partly parsed file and a run that scanned no file as `ok`, coverage full
+ * (follow-up X, fix round 1). The gap is named `semgrep-wp`, the same name as
+ * the run, so a partial run reads "ran, with a narrower gap"
+ * (`history/runNames.ts` maps it to Semgrep's findings); only a Semgrep that
+ * is not installed is listed as `semgrep`.
+ *
+ *   - partial → `ok`, the files named in `partially_parsed`, and missing;
+ *   - scanned nothing → `skipped`: not applicable when the project holds no
+ *     `.php` file (nothing for p/php or p/wordpress to read), a gap when it
+ *     does;
+ *   - anything fatal → `failed`, the errors as its reason (the findings the
+ *     report holds were already kept).
+ */
+function recordSemgrepWp(args) {
+    const { raw, run, projectPath, tools_run, missing_tools } = args;
+    const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1, projectPath });
+    if (check.verdict === 'ok') {
+        tools_run.push({ name: 'semgrep-wp', status: 'ok' });
+        return;
+    }
+    if (check.verdict === 'partial' && check.partial !== undefined) {
+        tools_run.push({
+            name: 'semgrep-wp',
+            status: 'ok',
+            reason: describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
+            partially_parsed: check.partial,
+        });
+        missing_tools.push('semgrep-wp');
+        return;
+    }
+    if (check.verdict === 'scanned_nothing') {
+        if (!hasFileWithExtension(projectPath, ['.php'])) {
+            tools_run.push({
+                name: 'semgrep-wp',
+                status: 'skipped',
+                reason: 'not applicable: no .php file here for p/php or p/wordpress to read',
+            });
+            return;
+        }
+        tools_run.push({
+            name: 'semgrep-wp',
+            status: 'skipped',
+            reason: 'semgrep scanned 0 files although .php files exist — excluded (.semgrepignore) or the rules loaded nothing',
+        });
+        missing_tools.push('semgrep-wp');
+        return;
+    }
+    const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+    tools_run.push({ name: 'semgrep-wp', status: 'failed', reason: check.reason ?? stderr ?? 'semgrep failed' });
+}
 //# sourceMappingURL=scanWordpress.js.map

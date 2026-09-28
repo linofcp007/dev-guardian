@@ -11,14 +11,15 @@
  */
 
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ALL_HOSTS,
   effectiveScope,
@@ -31,19 +32,99 @@ import {
   buildManualSnippet,
   buildServerEntry,
   mergeJsonConfig,
+  mergeOwnedRulesFile,
+  mergeRulesBlock,
   mergeTomlConfig,
   resolveMcpConfigPath,
+  RULES_BLOCK_BEGIN,
+  RULES_BLOCK_END,
   type ResolveEnv,
 } from './mcpConfig.js';
+import { substituteCliPath } from './rulesTemplate.js';
+
+/**
+ * Directory of KNOWN, byte-exact legacy rules-template snapshots. Fix round
+ * 3, item 2: named non-magically on purpose — `agents-2.0.0.md.txt`, not
+ * `AGENTS.md` — because Gemini CLI and other AGENTS.md-aware tools treat a
+ * NESTED file with that literal name as live, directory-scoped instructions
+ * of their own; a contributor's own agent would otherwise pick up this
+ * project's stale, pre-item-7 bodies (the unqualified "no telemetry" claim,
+ * `guardian://wp/audit/{id}`) merely by having this repo checked out.
+ *
+ * Currently holds ONLY the 2.0.0 shared-host bodies (`AGENTS.md`/codex,
+ * `GEMINI.md`/gemini, copilot instructions, `clinerules`) — NOT "every
+ * version this project has ever shipped": only 2.0.0's own text was
+ * captured (from this repo's own git history, `git show
+ * 158ae41:host-rules/<file>`). An installed copy from an OLDER release that
+ * happens to differ from 2.0.0's own wording will not match here; that is
+ * an accepted gap, not a bug — `mergeRulesBlock` falls through to
+ * `manual_merge_required` for it (safe: nothing is ever guessed at or
+ * silently rewritten), never anything worse. Extend this directory with
+ * more `<host>-<version>.md.txt` snapshots if an earlier release's own
+ * wording turns out to matter in practice.
+ *
+ * Sits next to this module's own compiled location
+ * (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
+ * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`)
+ * so it resolves correctly whether this file is running from `dist/`
+ * (production) or `src/` (dev, via tsx) without either needing to know
+ * which.
+ */
+const LEGACY_TEMPLATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'legacyRulesTemplates');
+
+/**
+ * Loads every known legacy template body, cached after the first call —
+ * `installRulesOne` runs once per host in `setupHost`'s own `.map()`, and
+ * re-reading a handful of small files from disk that many times has no
+ * value. Returns `[]` (never throws) when the directory is missing — a
+ * build that skipped `copy-assets.mjs` degrades to `mergeRulesBlock`'s own
+ * safe defaults (no known templates to match against — a file that mentions
+ * dev-guardian falls through to `manual_merge_required` rather than
+ * anything being silently rewritten), not a crash.
+ */
+let cachedLegacyTemplates: string[] | null = null;
+function loadKnownLegacyTemplates(): string[] {
+  if (cachedLegacyTemplates) return cachedLegacyTemplates;
+  try {
+    const files = readdirSync(LEGACY_TEMPLATES_DIR);
+    cachedLegacyTemplates = files.map((f) => readFileSync(join(LEGACY_TEMPLATES_DIR, f), 'utf8'));
+  } catch {
+    cachedLegacyTemplates = [];
+  }
+  return cachedLegacyTemplates;
+}
+
+/**
+ * Hosts whose rules file dev-guardian owns EXCLUSIVELY — nothing else is
+ * ever expected to write to `.cursor/rules/dev-guardian.mdc` or
+ * `.windsurf/rules/dev-guardian.md`, unlike `AGENTS.md`/`GEMINI.md`/the
+ * copilot instructions file/`clinerules`, which are general-purpose files
+ * dev-guardian is a GUEST in. Fix round 1, item 1 (CRITICAL): both of these
+ * also require YAML frontmatter as the file's literal first bytes to be
+ * recognised by their host at all — wrapping them in a
+ * `<!-- dev-guardian:begin -->` marker (item 6b's delimited-block scheme,
+ * correct for the shared files) put that marker BEFORE the frontmatter,
+ * silently disabling the rule (`alwaysApply`/`trigger`) on every install.
+ * These two route through `mergeOwnedRulesFile` instead, which writes the
+ * whole file — frontmatter first, always.
+ */
+const OWNED_WHOLE_FILE_HOSTS: ReadonlySet<HostName> = new Set(['cursor', 'windsurf']);
 
 export type RulesStatus =
   | 'written'
-  | 'already_exists'
+  | 'merged'
+  | 'already_present'
+  | 'needs_update'
   | 'would_write'
+  | 'would_merge'
   | 'template_missing'
   | 'failed'
   | 'skipped'
-  | 'unsupported';
+  | 'unsupported'
+  // Fix round 2, item 1: the target file mentions dev-guardian but matches
+  // no known legacy template — see `mergeRulesBlock`'s own doc comment in
+  // mcpConfig.ts. Never written; force-independent.
+  | 'manual_merge_required';
 
 export interface RulesResult {
   template_file?: string;
@@ -91,6 +172,15 @@ export interface SetupOptions {
   projectPath: string;
   hostsDir: string;
   serverJsPath: string;
+  /**
+   * Absolute path to `cli/dev-guardian.mjs` for THIS install (item 6a). A
+   * rules file used to hard-code `node cli/dev-guardian.mjs` — a path that
+   * exists only inside the dev-guardian repo itself — so an installed rules
+   * file in another project told the agent to run a script that was never
+   * there. `installRulesOne` substitutes this into every
+   * `{{DEV_GUARDIAN_CLI}}` placeholder in the template before writing.
+   */
+  cliPath: string;
   env: ResolveEnv;
   scope: McpScope;
   registerMcp: boolean;
@@ -99,21 +189,45 @@ export interface SetupOptions {
   force: boolean;
 }
 
+/**
+ * True when `host` is a global-only host (Windsurf, Claude Desktop —
+ * `spec.mcp.forceScope === 'global'`) being swept in via `hosts: ['all']`
+ * at a NON-global requested scope. Item 6d (2026-09-25 full review):
+ * `mcp-config all --write` at the default (project) scope used to silently
+ * write the GLOBAL Windsurf and Claude Desktop configs anyway — surprising,
+ * cross-project side effects nobody asked for — because both hosts force
+ * their own scope regardless of what was requested. Naming a SINGLE
+ * global-only host explicitly (`mcp-config windsurf --write`) is unaffected:
+ * the user asked for that host by name, so there is nothing surprising about
+ * it landing in its only possible location.
+ */
+function isForceGlobalSkippedUnderAll(spec: HostSpec, requestedAll: boolean, requestedScope: McpScope): boolean {
+  return requestedAll && spec.mcp.forceScope === 'global' && requestedScope !== 'global';
+}
+
 /** Write/merge MCP config + rules for one or more hosts. */
 export function setupHost(opts: SetupOptions): HostResult[] {
-  const hosts: HostName[] = opts.hosts.includes('all')
-    ? [...ALL_HOSTS]
-    : (opts.hosts as HostName[]);
+  const requestedAll = opts.hosts.includes('all');
+  const hosts: HostName[] = requestedAll ? [...ALL_HOSTS] : (opts.hosts as HostName[]);
 
   return hosts.map((host) => {
     const spec = HOST_SPECS[host];
     const scope = effectiveScope(spec, opts.scope);
     const rules: RulesResult = opts.installRules
-      ? installRulesOne(spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force)
+      ? installRulesOne(host, spec, opts.hostsDir, opts.projectPath, opts.apply, opts.force, opts.cliPath)
       : { status: 'skipped', reason: 'install_rules=false' };
-    const mcp: McpResult = opts.registerMcp
-      ? registerMcpOne(host, spec, scope, opts.serverJsPath, opts.env, opts.apply, opts.force)
-      : { status: 'skipped', reason: 'register_mcp=false' };
+    const skipGlobal = isForceGlobalSkippedUnderAll(spec, requestedAll, opts.scope);
+    const mcp: McpResult = !opts.registerMcp
+      ? { status: 'skipped', reason: 'register_mcp=false' }
+      : skipGlobal
+        ? {
+            status: 'skipped',
+            scope,
+            reason:
+              "global-only host skipped under 'all' at project scope, to avoid an unexpected write " +
+              "to your global config — pass --global (or --scope global) to include it",
+          }
+        : registerMcpOne(host, spec, scope, opts.serverJsPath, opts.env, opts.apply, opts.force);
     return { host, scope, ...rules, mcp };
   });
 }
@@ -167,12 +281,28 @@ export function previewMcpConfig(
   };
 }
 
+/**
+ * Renders the template at `src` (substituting `{{DEV_GUARDIAN_CLI}}` with
+ * `cliPath` — item 6a) and installs it at `dst`.
+ *
+ * Two different merge strategies, chosen by `host` (fix round 1, item 1):
+ *   - `OWNED_WHOLE_FILE_HOSTS` (Cursor, Windsurf): `mergeOwnedRulesFile`
+ *     writes the file whole, frontmatter first, always — see that
+ *     function's own doc comment in `mcpConfig.ts`.
+ *   - Every other host: `mergeRulesBlock` manages a delimited block inside
+ *     a shared file (item 6b), never a whole-file overwrite — see ITS doc
+ *     comment for the full written/merged/already_present/needs_update
+ *     contract, including the legacy-unmarked-copy detection added in fix
+ *     round 1, item 2.
+ */
 function installRulesOne(
+  host: HostName,
   spec: HostSpec,
   hostsDir: string,
   projectPath: string,
   apply: boolean,
   force: boolean,
+  cliPath: string,
 ): RulesResult {
   const rules = spec.rules;
   if (!rules) {
@@ -191,20 +321,62 @@ function installRulesOne(
   };
 
   if (!existsSync(src)) return { ...base, status: 'template_missing', reason: `${src} missing` };
-  if (existsSync(dst) && !force) {
-    return { ...base, status: 'already_exists', reason: 'force=false; not overwriting' };
+
+  let templateText: string;
+  let existingText: string | null = null;
+  try {
+    templateText = readFileSync(src, 'utf8');
+    if (existsSync(dst)) existingText = readFileSync(dst, 'utf8');
+  } catch (e) {
+    return { ...base, status: 'failed', reason: (e as Error).message };
   }
+
+  const rendered = substituteCliPath(templateText, cliPath);
+  const merged = OWNED_WHOLE_FILE_HOSTS.has(host)
+    ? mergeOwnedRulesFile(existingText, rendered)
+    : mergeRulesBlock(existingText, rendered, force, loadKnownLegacyTemplates());
+
+  if (merged.status === 'already_present') return { ...base, status: 'already_present' };
+  if (merged.status === 'needs_update') {
+    return {
+      ...base,
+      status: 'needs_update',
+      reason: 'the installed rules block differs from the current template; pass --update-mcp to refresh it',
+    };
+  }
+  if (merged.status === 'manual_merge_required') {
+    return {
+      ...base,
+      status: 'manual_merge_required',
+      reason:
+        `this file mentions dev-guardian but its content does not match a known dev-guardian template ` +
+        `exactly (whole, or as a leading/trailing region), so it will NOT be merged automatically — doing ` +
+        `so could destroy content that only coincidentally sits near the mention. Add the managed block ` +
+        `yourself at ${dst}, between ${RULES_BLOCK_BEGIN} and ${RULES_BLOCK_END}.`,
+    };
+  }
+
+  // Narrowed (Global Constraint 1: no `as` casts standing in for a runtime
+  // check), not `merged.content as string` — `written`/`merged` are the only
+  // two statuses left at this point, and both mergers' own contracts
+  // guarantee `content` is set for them; this makes that guarantee an
+  // explicit, checked one rather than an assumed one.
+  const { content } = merged;
+  if (content === undefined) {
+    return { ...base, status: 'failed', reason: 'internal error: merge produced no content to write' };
+  }
+
   if (!apply) {
-    try {
-      return { ...base, status: 'would_write', bytes: statSync(src).size };
-    } catch {
-      return { ...base, status: 'would_write' };
-    }
+    return {
+      ...base,
+      status: merged.status === 'written' ? 'would_write' : 'would_merge',
+      bytes: Buffer.byteLength(content, 'utf8'),
+    };
   }
   try {
     mkdirSync(dirname(dst), { recursive: true });
-    copyFileSync(src, dst);
-    return { ...base, status: 'written', bytes: statSync(dst).size };
+    writeFileSync(dst, content, 'utf8');
+    return { ...base, status: merged.status, bytes: statSync(dst).size };
   } catch (e) {
     return { ...base, status: 'failed', reason: (e as Error).message };
   }
@@ -268,7 +440,7 @@ function registerMcpOne(
       config_path: configPath,
       key: m.serverKey,
       scope,
-      reason: 'an entry named "dev-guardian" exists but differs; pass --force to update it',
+      reason: 'an entry named "dev-guardian" exists but differs; pass --update-mcp to update it',
     };
   }
   if (!apply) {
@@ -279,9 +451,23 @@ function registerMcpOne(
       scope,
     };
   }
+  // Narrowed (Global Constraint 1), not `merged.content as string` — see the
+  // identical narrowing in `installRulesOne` above for why: `written`/
+  // `merged` are the only statuses reachable here, and both `mergeJsonConfig`/
+  // `mergeTomlConfig` guarantee `content` is set for them.
+  const { content } = merged;
+  if (content === undefined) {
+    return {
+      status: 'failed',
+      config_path: configPath,
+      key: m.serverKey,
+      scope,
+      reason: 'internal error: merge produced no content to write',
+    };
+  }
   try {
     mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, merged.content as string, 'utf8');
+    writeFileSync(configPath, content, 'utf8');
     return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
   } catch (e) {
     return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: (e as Error).message };

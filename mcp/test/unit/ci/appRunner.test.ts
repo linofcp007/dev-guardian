@@ -1,6 +1,6 @@
 /**
  * `startApp`/`RunningApp.stop` tested against REAL child processes — small
- * `node -e` programs, never a mock (design doc §8, task brief). What this
+ * `node -e` programs, never a mock (the design of record, task brief). What this
  * module exists to prove is PROCESS BEHAVIOUR — did the tree actually die,
  * did a metacharacter actually reach the child as inert data — and a mock
  * proves none of that.
@@ -26,11 +26,12 @@
  * `detached` comment.
  */
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startApp } from '../../../src/ci/appRunner.js';
+import { rmDirOrDefer } from '../../helpers/tempDir.js';
 
 /* ------------------------------------------------------------------ */
 /* Fixture scripts — plain `node -e` programs, no dependencies.        */
@@ -70,6 +71,12 @@ import { startApp } from '../../../src/ci/appRunner.js';
  * Job Object; POSIX needs `detached: false` (default) to STAY in the
  * parent's process group, because that is the one `killTree` can reach and
  * the one a real `npm start` grandchild is actually in.
+ *
+ * Every long-lived process these fixtures start ends by itself after ten
+ * minutes (`setTimeout`, not an endless `setInterval`): the longest test here
+ * takes three, and a test that times out kills nothing — its detached
+ * grandchild used to live on for good, holding its temp directory open (two
+ * were found running hours later, on 2026-09-27).
  */
 const GOOD_APP_SCRIPT = `
 const { createServer } = require('node:http');
@@ -78,7 +85,7 @@ const { writeFileSync } = require('node:fs');
 const port = Number(process.argv[1]);
 const pidfile = process.argv[2];
 const delayMs = Number(process.argv[3] || '0');
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
@@ -91,18 +98,18 @@ gc.on('spawn', () => {
 /**
  * Spawns a grandchild immediately (platform-conditional `detached` — see
  * GOOD_APP_SCRIPT's comment on why), reports pids to `argv[1]`, then never
- * listens anywhere and never exits on its own — for the timeout tests.
+ * listens anywhere and does not exit on its own for ten minutes — for the timeout tests.
  */
 const NEVER_ANSWERS_SCRIPT = `
 const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const pidfile = process.argv[1];
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
 });
-setInterval(() => {}, 60000);
+setTimeout(() => {}, 600000);
 `;
 
 /**
@@ -340,7 +347,17 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<void> {
+/**
+ * How long a killed process may take to disappear, and a pidfile to appear.
+ * Measured: Windows `taskkill /T` took up to ~60 s under parallel-agent load,
+ * so the old 5 s bound failed a correct kill. Polling every 25 ms keeps the
+ * common case as fast as before; only a slow machine waits longer.
+ */
+const PROCESS_POLL_BOUND_MS = 60_000;
+/** Per-test budget for a test that waits on two such polls (parent + grandchild). */
+const KILL_TEST_TIMEOUT_MS = 3 * PROCESS_POLL_BOUND_MS;
+
+async function waitUntilDead(pid: number, timeoutMs = PROCESS_POLL_BOUND_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (isAlive(pid)) {
     if (Date.now() >= deadline) {
@@ -364,7 +381,7 @@ function isPidPair(x: unknown): x is PidPair {
 /** Polls for the fixture's pidfile rather than assuming a fixed delay —
  *  spawning the grandchild is a single OS call, not the thing under test,
  *  so it is always ready long before any of this suite's timeouts. */
-async function waitForPidfile(path: string, timeoutMs = 5_000): Promise<PidPair> {
+async function waitForPidfile(path: string, timeoutMs = PROCESS_POLL_BOUND_MS): Promise<PidPair> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (existsSync(path)) {
@@ -408,14 +425,9 @@ describe('startApp', () => {
     workDir = mkdtempSync(join(tmpdir(), 'guardian-app-runner-'));
   });
 
-  afterEach(() => {
-    try {
-      rmSync(workDir, { recursive: true, force: true });
-    } catch {
-      /* best-effort — a locked handle here is a leak to notice, not a
-       * reason to fail an unrelated test */
-    }
-  });
+  // A locked handle here is no reason to fail an unrelated test; the
+  // directory is removed at the end of the run instead.
+  afterEach(() => rmDirOrDefer(workDir));
 
   it('resolves once the health url answers', async () => {
     const port = await getFreePort();
@@ -521,7 +533,7 @@ describe('startApp', () => {
     // proves nothing about either process.
     await waitUntilDead(pids.parent);
     await waitUntilDead(pids.grandchild);
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('rejects immediately — not after the full timeout — when the process exits before ever answering', async () => {
     // Guards a DIFFERENT wrong implementation than the timeout test above:
@@ -669,7 +681,7 @@ describe('startApp', () => {
     // have run once on a timeout path. Must not throw, hang, or attempt to
     // re-signal an already-dead pid in a way that surfaces as a rejection.
     await expect(app.stop()).resolves.toBeUndefined();
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('a concurrent second stop() does not resolve before the tree is actually gone', async () => {
     // Guards the wrong implementation this module shipped with initially: a
@@ -702,7 +714,7 @@ describe('startApp', () => {
     // Let the real teardown finish before this test (and its `afterEach`)
     // ends, rather than leaving a dangling handle.
     await first;
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('an aborted signal cancels an in-progress health-check wait and kills whatever was already spawned', async () => {
     // The CLI's SIGINT/SIGTERM handling (coordinator review, Finding 3)
@@ -746,7 +758,7 @@ describe('startApp', () => {
     // was already spawned, including the grandchild, not merely reject.
     await waitUntilDead(pids.parent);
     await waitUntilDead(pids.grandchild);
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('never uses a shell — a metacharacter in an argument is passed literally', async () => {
     // Guards the wrong implementation that joins argv into a string (and,

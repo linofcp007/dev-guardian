@@ -32,7 +32,7 @@ import { languageFromPath } from './extract.js';
  * Cargo.toml, no composer.json here either — go.mod's `module` prefix and
  * Cargo workspace layout are out of scope too, see resolveGo's comment).
  *
- * This is also exactly the set where design §5.3 already makes the negative
+ * This is also exactly the set where the design of record already makes the negative
  * (`unreachable`) verdict unavailable, so an edge in one of the other four
  * costs nothing that was ever promised — but it is still extracted and
  * counted in `unresolved`, never silently dropped.

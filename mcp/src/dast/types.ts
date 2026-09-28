@@ -31,7 +31,7 @@ export const DAST_CHECKS = [
   'open_redirect',
   'rate_limit',
   // Not one of the own engine's nine checks above — nuclei is a separate
-  // scanning engine (design doc §7) whose hits are normalised in
+  // scanning engine (the design of record) whose hits are normalised in
   // `normalizeNuclei.ts`. It still needs a `DastCheck` value of its own:
   // `DastFinding.check` is this closed union, and reusing an existing own-
   // engine value (e.g. tagging a nuclei hit `info_disclosure`) would make
@@ -63,7 +63,7 @@ export type CheckStatus =
   | 'scanner_missing'
   | 'target_error';
 
-export type SkipReason = 'partial_path' | 'method_envelope' | 'duplicate' | 'cap';
+export type SkipReason = 'partial_path' | 'method_envelope' | 'duplicate' | 'cap' | 'off_origin';
 
 export type ProbeVariant =
   | 'anonymous'

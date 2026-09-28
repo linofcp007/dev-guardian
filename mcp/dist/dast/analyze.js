@@ -27,7 +27,7 @@ export function dastRuleId(check, method, path) {
 }
 /**
  * Fingerprint for a DAST finding. Stable over (check, method, path, file) —
- * design doc §8 — and deliberately excludes the HTTP status and response
+ * the design of record — and deliberately excludes the HTTP status and response
  * body: a fixed app restarting and flipping 500 -> 200 must not spawn a "new"
  * finding, and surviving exactly that is this function's whole job.
  *
@@ -206,15 +206,47 @@ function checkReachability(input, findings) {
  * credential, the credential is not being checked. Equality only, never a
  * similarity score — timestamps and CSRF tokens make near-duplicates cheap to
  * produce, and that noise must cost a missed finding, never a fabricated one.
+ *
+ * Equality alone is NOT enough to call this `high`, though — a byte-identical
+ * response is exactly what every public route (`/health`, `/`, `/docs`) gives
+ * too, and firing `high` unconditionally accused every one of them of a
+ * broken auth check that was never there. `high` requires one of two things
+ * FIRST:
+ *   - the route is KNOWN to require auth (`auth_hint: 'required'` — from a
+ *     spec `security` declaration or a code auth hint), independent of any
+ *     other evidence; or
+ *   - the SAME credential is proven to change some OTHER route's response
+ *     somewhere in this scan (`credentialProvenLive` below) — proof the
+ *     credential is live and the server does distinguish requests carrying
+ *     it, which is what makes THIS route's silence meaningful rather than
+ *     "this whole app doesn't gate on auth" or "the credential is invalid".
+ * Neither present: still reported (an identical response is still worth a
+ * look), but capped at `info` — the same accusation a genuinely public route
+ * deserves and no more.
  */
 function checkDifferentialAuthz(input, findings) {
     if (!input.hasCredentials)
         return;
     const anonByKey = new Map();
+    const authedByKey = new Map();
     for (const r of input.results) {
         if (r.request.variant === 'anonymous')
             anonByKey.set(`${r.request.method} ${r.request.path}`, r);
+        if (r.request.variant === 'authenticated')
+            authedByKey.set(`${r.request.method} ${r.request.path}`, r);
     }
+    // Computed once for the whole scan, not per finding: a route that is
+    // itself the byte-identical pair below can never also be the evidence for
+    // "some OTHER route differs" (by definition its own anon/authed pair does
+    // NOT differ), so nothing here double-counts a route against itself.
+    const credentialProvenLive = [...authedByKey.entries()].some(([key, authed]) => {
+        if (authed.outcome !== 'completed' || authed.status === null)
+            return false;
+        const anon = anonByKey.get(key);
+        if (anon === undefined || anon.outcome !== 'completed' || anon.status === null)
+            return false;
+        return anon.status !== authed.status || anon.body_hash !== authed.body_hash;
+    });
     for (const authed of input.results) {
         if (authed.request.variant !== 'authenticated' || authed.outcome !== 'completed')
             continue;
@@ -226,12 +258,23 @@ function checkDifferentialAuthz(input, findings) {
         if (anon.status !== authed.status || anon.body_hash !== authed.body_hash)
             continue;
         const route = routeFor(input.plan.routes, anon.request.route_index);
+        const authKnownRequired = route?.auth_hint === 'required';
+        const severity = authKnownRequired || credentialProvenLive ? 'high' : 'info';
         findings.push(buildFinding({
             check: 'differential_authz',
-            severity: 'high',
-            title: 'Anonymous response matches the authenticated response',
+            severity,
+            title: severity === 'high'
+                ? 'Anonymous response matches the authenticated response'
+                : 'Anonymous response matches the authenticated response on a route with no known auth requirement',
             message: `${anon.request.method} ${anon.request.path} returns a byte-identical response ` +
-                `(status ${anon.status}) with and without credentials.`,
+                `(status ${anon.status}) with and without credentials.` +
+                (severity === 'high'
+                    ? authKnownRequired
+                        ? ' This route is documented or marked as requiring authentication.'
+                        : ' The same credential visibly changes the response on another route in this scan, ' +
+                            'so it is live and this silence is meaningful.'
+                    : ' Neither the route inventory nor any other route in this scan shows this credential ' +
+                        'is checked, so this may simply be a public route.'),
             route,
             request: anon.request,
         }));
@@ -403,7 +446,7 @@ export function analyzeRoutes(input) {
  * Headers expected on every response. HSTS is deliberately not in this
  * baseline — see `expectedSecurityHeaders` — because it only means anything
  * on a connection that is already TLS. `frame-ancestors` from the design
- * doc's check table is represented here as the `X-Frame-Options` header: the
+ * of record's check table is represented here as the `X-Frame-Options` header: the
  * concrete, single-header signal for clickjacking defence, rather than
  * parsing the (already separately-required) CSP value for a directive.
  */
@@ -451,7 +494,7 @@ function checkSecurityHeaders(input, findings) {
         return;
     findings.push(buildFinding({
         check: 'security_headers',
-        // Per the design doc (section 8): severity is a property of the check,
+        // Per the design of record: severity is a property of the check,
         // and a missing security header is explicitly called out as low there —
         // unlike a confirmed auth bypass, a missing header is a hardening gap,
         // not proof anything has actually been exploited.

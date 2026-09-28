@@ -15,12 +15,27 @@
  *   - probably_safe (path-based hint)
  *   - keep (no heuristic fired — model should review)
  *
+ * Reads `project_path`'s open set (default: the server's working directory)
+ * — every finding-producing scan type's newest usable scan, suppressions
+ * removed (`history/openSet.ts`). It used to read the single latest scan in
+ * the whole database: another project's, or an SBOM with no findings.
+ *
+ * Response size: `summary` carries the true counts; each bucket carries at
+ * most {@link ITEMS_PER_BUCKET} entries and `truncated` says which were cut.
+ *
  * Resource cost: zero scanners, no I/O beyond storage queries.
  */
 
 import type { PluginContext } from '../context.js';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
+import { describeOpenSet, openSetForProject } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
 import type { Finding, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+
+/** Entries returned per bucket; `summary` counts are never capped. */
+const ITEMS_PER_BUCKET = 50;
 
 const TEST_PATTERNS = [
   /(^|\/)tests?\//i,
@@ -50,11 +65,14 @@ const tool: ToolModule = {
   name: 'triage_findings',
   title: 'Heuristic triage of findings',
   description:
-    'Bucket the latest scan\'s open findings into likely_false_positive / probably_safe / keep ' +
-    'using path-based heuristics (test files, generated code, fixtures). No LLM call — the model ' +
-    'that invoked the tool decides whether to call suppress_finding on the suggestions.',
-  inputSchema: {},
-  handler: async (_input, ctx) => handler(ctx),
+    "Bucket one project's open findings (project_path, default: the server's working directory; " +
+    'the newest usable scan of every finding-producing type, suppressions removed) into ' +
+    'likely_false_positive / probably_safe / keep using path-based heuristics (test files, ' +
+    'generated code, fixtures). True counts in `summary`, at most 50 entries per bucket, ' +
+    '`truncated` naming the buckets that were cut. No LLM call — the model that invoked the tool ' +
+    'decides whether to call suppress_finding on the suggestions.',
+  inputSchema: { project_path: ProjectPath },
+  handler: async (input, ctx) => handler(input, ctx),
 };
 
 registerToolModule(tool);
@@ -69,13 +87,33 @@ interface Bucket {
   suggested_suppression_reason: string;
 }
 
-async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, unknown>>> {
-  const open = ctx.storage.findings.listOpen();
+async function handler(
+  input: Record<string, unknown>,
+  ctx: PluginContext,
+): Promise<ToolResult<Record<string, unknown>>> {
+  const inp = input as { project_path?: string };
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
+  const set = openSetForProject(ctx.storage, projectPath);
+  const open = set.findings;
   const likely_false_positive: Bucket[] = [];
   const probably_safe: Bucket[] = [];
   const keep: Bucket[] = [];
 
   for (const f of open) {
+    // A leaked credential is never suggested for suppression, whatever path
+    // it sits under — a "test fixture" full of real secrets is exactly the
+    // shape a path-based heuristic cannot tell apart from a decoy, and
+    // getting this one wrong means training a maintainer to batch-suppress
+    // an exposed secret instead of rotating it.
+    if (isCredentialFinding(f)) {
+      keep.push(toBucket(f, 'credential finding — suppression is never suggested; rotate the secret instead'));
+      continue;
+    }
     const path = f.file_path ?? '';
     const bucket = classifyByPath(f, path);
     if (bucket === 'likely_fp') {
@@ -95,9 +133,15 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
       probably_safe: probably_safe.length,
       keep: keep.length,
     },
-    likely_false_positive,
-    probably_safe,
-    keep_sample: keep.slice(0, 20),
+    likely_false_positive: likely_false_positive.slice(0, ITEMS_PER_BUCKET),
+    probably_safe: probably_safe.slice(0, ITEMS_PER_BUCKET),
+    keep: keep.slice(0, ITEMS_PER_BUCKET),
+    truncated: {
+      likely_false_positive: likely_false_positive.length > ITEMS_PER_BUCKET,
+      probably_safe: probably_safe.length > ITEMS_PER_BUCKET,
+      keep: keep.length > ITEMS_PER_BUCKET,
+    },
+    open_set: describeOpenSet(set),
     instructions_for_model:
       'For each entry in `likely_false_positive`, consider calling `suppress_finding` with the ' +
       'suggested_suppression_reason. Be more conservative with `probably_safe` — review one before ' +

@@ -5,10 +5,10 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -99,6 +99,37 @@ describe('scan_skill', () => {
     expect(TOOLS.map((t) => t.name)).toContain('scan_skill');
   });
 
+  // Final review I9: every other network caller (intel, pkgvet,
+  // secrets/verify, scan_secrets) honours GUARDIAN_OFFLINE=1; scan_skill's
+  // OSV lookup still posted the skill's dependency list to api.osv.dev.
+  it('GUARDIAN_OFFLINE=1: the OSV lookup sends nothing and reads osv.dev skipped, with the reason', async () => {
+    const plugin = makePlugin();
+    const dir = cleanSkill();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { lodash: '4.17.4' } }), 'utf8');
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ results: [{}] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.stubEnv('GUARDIAN_OFFLINE', '1');
+    try {
+      const r = (await getTool('scan_skill').handler({ target: dir, write_reports: false }, plugin)) as {
+        ok: true;
+        scan_id: string;
+        osv: { online: boolean; error?: string } | null;
+      };
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(r.osv).toMatchObject({ online: false, error: 'network disabled (GUARDIAN_OFFLINE=1)' });
+      const row = plugin.storage.scans.getById(r.scan_id);
+      expect(row?.tools_run.find((t) => t.name === 'osv.dev')).toEqual({
+        name: 'osv.dev',
+        status: 'skipped',
+        reason: 'network disabled (GUARDIAN_OFFLINE=1)',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('flags a malicious skill as DO_NOT_INSTALL with high-severity findings', async () => {
     const plugin = makePlugin();
     const dir = maliciousSkill();
@@ -157,6 +188,34 @@ describe('scan_skill', () => {
       plugin,
     )) as { ok: true; passed: boolean };
     expect(r.passed).toBe(false);
+  });
+
+  // Measured defect (task 4 brief, item 4): `docs/.aws/credentials` ingested
+  // and echoed into findings — a symlink inside the skill directory pointed
+  // outside it, and the old `statSync`-based walk followed it, reading the
+  // linked file's content as if it were part of the package being audited.
+  it('never leaks the content of a file reached through a symlink escaping the skill directory', async () => {
+    const plugin = makePlugin();
+    const outside = makeTempDir('outside-secret-');
+    writeFileSync(join(outside, 'credentials'), 'AKIA-SUPER-SECRET-DO-NOT-LEAK', 'utf8');
+
+    const dir = cleanSkill();
+    mkdirSync(join(dir, 'docs'));
+    symlinkSync(join(outside, 'credentials'), join(dir, 'docs', 'credentials'), 'file');
+
+    const r = (await getTool('scan_skill').handler(
+      { target: dir, check_deps: false, write_reports: false },
+      plugin,
+    )) as {
+      ok: true;
+      top_findings: Array<{ message?: string; title: string; file_path?: string }>;
+    };
+    expect(r.ok).toBe(true);
+    expect(JSON.stringify(r)).not.toContain('AKIA-SUPER-SECRET');
+    // The link is reported as a finding, not silently dropped.
+    expect(
+      r.top_findings.some((f) => (f.file_path ?? '').includes('credentials')),
+    ).toBe(true);
   });
 
   it('returns target_not_found for a missing path', async () => {

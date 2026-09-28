@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  Consent Mode defaults that deny the ADS signals but grant analytics_storage
+  are not a guard for Google Analytics: gtag.js sets _ga regardless. The
+  loader below must fire rgpd-tracker-ga4-without-consent (BUG, exactly once).
+-->
+<html lang="pt-PT">
+<head>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('consent', 'default', {
+      ad_storage: 'denied',
+      ad_user_data: 'denied',
+      ad_personalization: 'denied',
+      analytics_storage: 'granted'
+    });
+  </script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-FFFF6666"></script>
+</head>
+<body></body>
+</html>

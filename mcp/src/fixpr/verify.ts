@@ -1,6 +1,6 @@
 /**
  * `judgeScan` / `judgeTests` / `mayOpenPr` — the two differentials that
- * decide whether an applied fix gets a pull request (design doc
+ * decide whether an applied fix gets a pull request (the design of record).
  * A fix is never applied-and-hoped; it is applied and then proved, twice,
  * and either proof failing means no pull request.
  *
@@ -10,14 +10,29 @@
  * decoration. A version bump that trades CVE-A for CVE-B is not a fix, and
  * reporting it as one is exactly the "something that did not happen
  * acquiring the appearance of having happened" this whole project exists to
- * eliminate (design §4.1).
+ * eliminate (the design of record).
  *
  * **The two halves compare by different keys, on purpose, per an amendment
- * to design §4.1 and §10 (2026-08-17, after task-7-review.md's I4).**
- * "Every target resolved" compares by fingerprint — plain set membership
- * against `targets`, since there we are asking about SPECIFIC findings we
- * set out to fix. "No new finding" compares by `(rule_id, file_path)`
- * instead. Fingerprints hash `line_start`/`line_end`/the snippet
+ * to the design of record (2026-08-17, after task-7-review.md's I4).**
+ *
+ * "Every target resolved" asks whether the SPECIFIC findings we set out to
+ * fix are gone, and a target is resolved only when NO after-finding has its
+ * `resolutionKey` (`../fingerprint/findingIdentity.ts`): the same (tool,
+ * rule_id, path, content) for a finding in source code, the same (CVE or
+ * rule, package) for a dependency. It used to be fingerprint set membership,
+ * and the fingerprint hashes the line: an autofix of a DIFFERENT finding
+ * above the target moved the unfixed target down one line, gave it a new
+ * fingerprint, and it was judged resolved (reproduced: `passed: true` with
+ * the bug still in the file). The key leaves out the occurrence on purpose —
+ * with it, fixing the first of two identical lines renumbers the second into
+ * the first one's identity — and, for a dependency, the installed version,
+ * which is exactly what an upgrade changes: an upgrade that is not enough
+ * must still read as present. A target stored before identities existed has
+ * no content key and is still compared by fingerprint; an after-finding with
+ * the target's fingerprint keeps it present either way.
+ *
+ * "No new finding" compares by `(rule_id, file_path)`. Fingerprints hash
+ * `line_start`/`line_end`/the snippet
  * (`../fingerprint/findingFingerprint.ts`), so ANY autofix pass that shifts a
  * line — or rewrites the matched line, changing the snippet — gives every
  * OTHER finding in that file a fresh fingerprint, measured at 4 of 4 on a
@@ -40,8 +55,10 @@
  * correctness property, not an optimisation.** A project whose tests already
  * fail will fail after the fix too, and blaming the fix for that would be
  * the same dishonesty in another costume. So the derived command runs once,
- * in the worktree; only when THAT run fails does it run a second time, in
- * `projectPath` (the base commit), to find out who is actually responsible.
+ * in the worktree; only when THAT run fails does it run a second time, in a
+ * disposable tree of the base commit prepared the same way minus the fix
+ * (never the user's own working tree — Task 11 item 1), to find out who is
+ * actually responsible.
  * `outcome !== 'completed'` and `exitCode !== 0` are both checked, and
  * neither subsumes the other: a process can complete normally and still exit
  * non-zero (a real test failure), and a process can fail to complete at all
@@ -51,6 +68,7 @@
  * hit that exact shape of bug five times before.
  */
 
+import { resolutionKey } from '../fingerprint/findingIdentity.js';
 import { runProcess } from '../runners/processRunner.js';
 import type { Finding } from '../types.js';
 import type { DerivedTestCommand } from './testCommand.js';
@@ -65,16 +83,26 @@ export function judgeScan(
   before: { scan_id: string; findings: readonly Finding[] },
   after: { scan_id: string; findings: readonly Finding[] },
 ): ScanVerdict {
-  // Set membership against `targets` — never "everything that disappeared",
-  // which would answer "how many" over ALL of `before`, not "which of MY
-  // targets". A fingerprint that disappeared but was never a target is
-  // neither resolved nor still_present here; it is simply not this
-  // differential's business.
+  // Decided per target — never "everything that disappeared", which would
+  // answer "how many" over ALL of `before`, not "which of MY targets". A
+  // finding that disappeared but was never a target is neither resolved nor
+  // still_present here; it is simply not this differential's business. The
+  // target's own Finding comes from `before` (targets are its fingerprints);
+  // see the module comment for the key it is looked for by.
+  const beforeByFingerprint = new Map(before.findings.map((finding) => [finding.fingerprint, finding]));
   const afterFingerprints = new Set(after.findings.map((finding) => finding.fingerprint));
+  const afterKeys = new Set<string>();
+  for (const finding of after.findings) {
+    const key = resolutionKey(finding);
+    if (key !== null) afterKeys.add(key);
+  }
   const resolved: string[] = [];
   const still_present: string[] = [];
   for (const target of targets) {
-    if (afterFingerprints.has(target)) still_present.push(target);
+    const targetFinding = beforeByFingerprint.get(target);
+    const key = targetFinding === undefined ? null : resolutionKey(targetFinding);
+    const present = afterFingerprints.has(target) || (key !== null && afterKeys.has(key));
+    if (present) still_present.push(target);
     else resolved.push(target);
   }
 
@@ -131,18 +159,34 @@ function ruleFileKey(finding: Finding): string {
   return JSON.stringify([finding.rule_id ?? null, finding.file_path ?? null]);
 }
 
+/**
+ * A pristine tree of the base commit, prepared exactly like the fix's tree
+ * minus the fix, built only when needed and disposed after. See
+ * {@link judgeTests}.
+ */
+export type BaseTreeProvider = () => Promise<
+  { ok: true; path: string; dispose: () => Promise<void> } | { ok: false; reason: string }
+>;
+
 export async function judgeTests(opts: {
   derived: DerivedTestCommand | null;
   worktreePath: string;
-  projectPath: string;
+  /**
+   * Where the base-commit run happens: a disposable tree of the base
+   * commit, NEVER the user's project (Task 11 item 1). The comparison run
+   * used to happen in `projectPath` — the user's working tree, dirty or not,
+   * where a test run writes caches, coverage and snapshots, during a dry run
+   * — and it compared against uncommitted work instead of the base commit.
+   */
+  baseTree: BaseTreeProvider;
   /** Injected so tests can supply a fake. Defaults to the real runProcess. */
   run?: typeof runProcess;
   timeoutMs?: number;
 }): Promise<TestVerdict> {
-  const { derived, worktreePath, projectPath, timeoutMs } = opts;
+  const { derived, worktreePath, timeoutMs } = opts;
 
   // No command derived: state the absence, touch nothing. Never inferred
-  // from silence downstream — design §4.2's last table row.
+  // from silence downstream — the design of record's last table row.
   if (derived === null) {
     return { outcome: 'not_run', command: null, origin: null, output_head: null };
   }
@@ -162,15 +206,32 @@ export async function judgeTests(opts: {
 
   // Lazy: this second run — the whole cost of the test differential — is
   // only ever paid once the worktree run has already produced a failure that
-  // needs an owner. It runs in `projectPath`, the base commit, NEVER
-  // `worktreePath` again — asking the same question of the tree that
-  // existed before the fix.
-  const baseResult = await run({
-    command: derived.command,
-    args: derived.args,
-    cwd: projectPath,
-    timeoutMs,
-  });
+  // needs an owner. It runs in a fresh tree of the base commit, NEVER
+  // `worktreePath` again and never the user's own project — asking the same
+  // question of the tree that existed before the fix.
+  const baseTree = await opts.baseTree();
+  if (!baseTree.ok) {
+    // Nobody can say whether the fix broke the suite. Not a pass, and not
+    // "already failing": unattributed, and `mayOpenPr` refuses it.
+    const head = headOf(worktreeResult.stdout, worktreeResult.stderr);
+    return {
+      outcome: 'unattributed',
+      command,
+      origin: derived.origin,
+      output_head: `could not build the base-commit tree to compare against (${baseTree.reason})${head !== null ? `\n${head}` : ''}`,
+    };
+  }
+  let baseResult: Awaited<ReturnType<typeof run>>;
+  try {
+    baseResult = await run({
+      command: derived.command,
+      args: derived.args,
+      cwd: baseTree.path,
+      timeoutMs,
+    });
+  } finally {
+    await baseTree.dispose();
+  }
 
   return {
     outcome: hasFailed(baseResult) ? 'already_failing' : 'broken_by_fix',
@@ -184,7 +245,7 @@ export async function judgeTests(opts: {
 
 /** A PR may be opened only when this is true. */
 export function mayOpenPr(scan: ScanVerdict, tests: TestVerdict): boolean {
-  return scan.passed && tests.outcome !== 'broken_by_fix';
+  return scan.passed && tests.outcome !== 'broken_by_fix' && tests.outcome !== 'unattributed';
 }
 
 // --------------------------------------------------------------- internal

@@ -1,6 +1,6 @@
 ---
 name: guardian-security
-description: Complete security scan using open-source tools (Semgrep, Trivy, gitleaks, nuclei). EN triggers — use when the user asks "guardian scan", "audit security", "check for vulnerabilities", "scan for secrets", "any security holes?", "SAST scan", "DAST scan", "check dependencies", "check the container", "check IaC", "is this safe?", "quick pen test", "I'm worried about security", "smells bad", "is this publishable?", "is this safe to ship?", or any request related to finding security problems before they reach production. PT triggers — usa quando pedirem "guardian scan", "audita segurança", "vê se há vulnerabilidades", "scan de secrets", "tem buracos de segurança?", "scan de SAST/DAST", "verifica deps", "verifica container", "verifica IaC", "vê se isto está safe", "pen test rápido", "preocupado com a segurança", "isto cheira-me mal", "publica-se isto?", "isto pode ir para produção?". ES triggers — úsala cuando pidan "guardian scan", "auditoría de seguridad", "comprueba vulnerabilidades", "escaneo de secretos", "¿hay agujeros de seguridad?", "escaneo SAST/DAST", "comprueba deps", "comprueba el contenedor", "comprueba IaC", "¿esto es seguro?", "pen test rápido", "preocupado por la seguridad", "huele mal", "¿se puede publicar esto?", "¿es seguro lanzarlo?". Trilingual EN/PT/ES — respond in the user's language.
+description: Security scan and triage through the dev-guardian MCP tools — SAST (Semgrep, Bandit, .NET analyzers), secrets (gitleaks), dependency CVEs and IaC (Trivy), optional DAST and reachability — with real-severity triage and false-positive demotion. EN triggers — "audit security", "check for vulnerabilities", "scan for secrets", "any security holes?", "SAST / DAST scan", "is this safe to ship?", "quick pen test", "this smells bad". PT — "audita a segurança", "vê se há vulnerabilidades", "scan de secrets", "tem buracos de segurança?", "scan de SAST / DAST", "isto pode ir para produção?", "pen test rápido", "isto cheira-me mal". ES — "auditoría de seguridad", "comprueba vulnerabilidades", "escaneo de secretos", "¿hay agujeros de seguridad?", "escaneo SAST / DAST", "¿es seguro lanzarlo?", "pen test rápido", "huele mal". Respond in the user's language.
 ---
 
 # Guardian Security
@@ -9,37 +9,38 @@ Scan profundo de segurança. Combina vários scanners open-source e contextualiz
 
 ## Tipos de scan
 
-A skill suporta quatro tipos. Pergunta ao utilizador qual (ou faz `--all` se ele disser "tudo"):
+Pergunta ao utilizador qual (ou corre tudo se ele disser "tudo"). Cada tipo é uma tool MCP:
 
-| Tipo                    | O que faz                                                        | Ferramenta                       |
-| ----------------------- | ---------------------------------------------------------------- | -------------------------------- |
-| **SAST**                | Análise estática de código aplicacional                          | Semgrep + bandit/brakeman/gosec  |
-| **Secrets**             | Procura API keys, tokens, passwords no código e histórico Git    | gitleaks                         |
-| **Dependencies**        | CVEs em bibliotecas/packages                                     | Trivy                            |
-| **Container/IaC**       | Dockerfile, imagens, Terraform, Kubernetes                       | Trivy + Checkov                  |
-| **DAST** (opcional)     | Scan runtime contra app JÁ a correr                              | `scan_dast` (+ nuclei)           |
+| Tipo                | O que faz                                                      | Tool MCP (o que corre)                                                 |
+| ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **SAST**            | Análise estática de código aplicacional                        | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)      |
+| **Secrets**         | API keys, tokens, passwords no código e no histórico Git       | `scan_secrets` (gitleaks)                                              |
+| **Dependencies**    | CVEs em bibliotecas/packages                                   | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit     |
+| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm      | `scan_containers` (Trivy + hadolint), `scan_iac` (Trivy)               |
+| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                        | `scan_dast` (+ nuclei)                                                 |
+
+Não há brakeman, gosec nem Checkov no que as tools correm — não os anuncies como corridos.
 
 ## Fluxo
 
 ### 1. Pré-requisitos
 
-Antes de scanar, garante que as ferramentas estão instaladas. Se não estiverem, sugere correr `guardian init` primeiro. Verifica com:
-
-```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/check-tools.sh
-```
+Verifica o toolchain com `check_toolchain {}` (versão de cada scanner, versões comprometidas conhecidas e o comando de instalação para este sistema). Se faltar algo, `install_toolchain { dry_run: true }` mostra o plano; num projeto ainda sem configs, a skill `guardian-init` vem primeiro.
 
 ### 2. Executar scans
 
-Corre `bash ${CLAUDE_PLUGIN_ROOT}/scripts/scan/full-security-scan.sh <project-path>`. Este script orquestra todos os scanners e produz output JSON unificado em `.guardian/reports/security-<timestamp>.json`.
+Corre `security_scan_full { project_path: "<project>" }` (`local_only: true` para não usar o registry do Semgrep). Ela corre `scan_sast`, `scan_secrets`, `scan_deps` e `scan_iac`, cada um como um scan próprio (`meta.parent_scan_id`), e guarda os findings fundidos no scan pai, com a lista em `child_scans`. Um scanner que não correu ou falhou aparece como tal em `tools_run` e a cobertura fica `partial`/`none` — nunca "0 findings" limpo.
 
-Internamente:
+Para só uma parte do projeto (o diff, uma branch, um ficheiro), usa o comando `/guardian-scan` com as flags dele — passa `scope` a `scan_sast`, `scan_secrets` e `bug_hunt`.
+
+Fallback **só quando o servidor MCP não está disponível** — diz ao utilizador que assim não há baseline, delta nem histórico:
 
 ```bash
 # SAST — repara nos DOIS --config: ver a nota abaixo
 semgrep --config=auto --config=.semgrep.yml --json --output=.guardian/sast.json .
 
-# Secrets (incluindo histórico Git)
+# Secrets: histórico Git E ficheiros ainda por commitar (a ferramenta copia-os
+# para um diretório temporário e corre `gitleaks detect --no-git` lá)
 gitleaks detect --no-banner --report-format=json --report-path=.guardian/secrets.json
 
 # Dependências
@@ -148,7 +149,8 @@ Sempre nesta estrutura, em ordem decrescente de prioridade:
 
 Para coisas óbvias e reversíveis, oferece aplicar:
 
-- Bumping de versão de deps com patch disponível (`npm update`, `pip install -U`, etc.)
+- Upgrades de dependências com versão corrigida: `/guardian-fix --pr` (`create_fix_pr` com `sources: ["deps"]`, dry run primeiro) — aplica o plano do `deps_update_plan` numa worktree isolada e prova-o com re-scan e testes
+- Autofixes que a própria regra Semgrep traz: `/guardian-fix --pr` (`sources: ["semgrep"]`)
 - Substituir `crypto.createCipher` → `crypto.createCipheriv` (com diff a mostrar antes)
 - Mover secret para `.env` + `.env.example` + atualizar `.gitignore`
 
@@ -167,12 +169,14 @@ Depois voltamos a configurar tudo.
 
 Se o utilizador pedir explicitamente "paranoid" ou "full deep":
 
-- Inclui histórico Git completo no gitleaks (`gitleaks detect` sobre todo o histórico, não só staged)
-- Corre regras Semgrep adicionais: `p/r2c-security-audit`, `p/cwe-top-25`, `p/insecure-transport`
-- Lista também CVEs com CVSS ≥ 4.0 (em vez do default ≥ 7.0)
-- Adiciona threat modeling rápido com STRIDE para os entry-points principais
-- Inclui análise de licenças (GPL em projeto comercial, etc.)
-- Sugere DAST (`scan_dast`) se a app for web **e estiver a correr**
+- Secrets no histórico de **todas** as refs, não só da branch atual: `scan_secrets { project_path: "<project>", log_opts: "--all" }`
+- Um secret encontrado ainda funciona? `scan_secrets { project_path: "<project>", verify_live: true }` envia cada secret GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm ou SendGrid à API de leitura do **próprio** fornecedor (e a mais nenhum sítio) e marca o finding `live` (sobe a critical), `revoked` ou `unknown`. **Desligado por omissão**: o secret sai da máquina, por isso pede confirmação ao utilizador antes. `security_scan_full` nunca verifica; `unknown` nunca quer dizer revogado.
+- Packs de segurança Semgrep por linguagem além do default: `bug_hunt { project_path: "<project>", include_language_packs: true }` (`p/typescript` ou `p/javascript`, `p/python`, `p/java`, `p/golang`)
+- Nenhum `severity_min` na resposta — mostra também os médios e baixos
+- Configs mais estritas no projeto: `init_project { project_path: "<project>", profile: "paranoid", apply: false }` mostra o que mudaria (gitleaks sem allowlists de conteúdo; Renovate sem automerge e com 7 dias de idade mínima)
+- Licenças: `compliance_check { project_path: "<project>" }` e depois `license_compatibility { project_path: "<project>" }` (GPL em projeto comercial, etc.)
+- Threat modeling rápido com STRIDE para os entry-points que `map_attack_surface` encontrar — isto é raciocínio teu, nenhuma tool o faz
+- DAST (`scan_dast`) se a app for web **e estiver a correr**
 
 ## DAST (runtime) — `scan_dast`
 
@@ -247,8 +251,8 @@ Limites a respeitar sempre que apresentares um `unreachable`:
 
 - Em commits triviais (1-2 linhas): só hooks pre-commit chegam
 - Em ramos experimentais/spike: avisar que pode ser ruído
-- Em monorepos enormes: oferecer scan parcial (só o diff vs main)
+- Em monorepos enormes: oferecer scan parcial — `/guardian-scan --branch` (só o diff contra a branch base)
 
 ## Output persistente
 
-Todos os relatórios ficam em `.guardian/reports/` (cria a pasta se não existir; adiciona ao `.gitignore`). Útil para comparar evolução temporal e medir se a postura de segurança está a melhorar.
+As tools guardam cada scan em `.guardian/guardian.db` e os relatórios brutos em `.guardian/reports/`. Para medir a evolução, `diff_scans { project_path: "<project>", from: "baseline" }` compara com a baseline e `/guardian-report trend` mostra a tendência — não compares ficheiros JSON à mão.

@@ -6,14 +6,26 @@
  * attach to a deliverable, or hand to a client/auditor. The framework
  * tag (gdpr / soc2 / iso27001) just shapes the section labels — the data
  * sources are the same DB rows.
+ *
+ * **The evidence is ONE project's** (`project_path`, default: the server's
+ * working directory — Task 24): its newest usable compliance, dependency
+ * and SBOM scans, its own active baseline, and the suppressions that apply
+ * to it (its own and the legacy ones scoped to no project). It used to take
+ * each from the 50 newest scans of the whole database, the newest baseline
+ * of any project and every active suppression — an evidence pack handed to
+ * an auditor that could describe a different project than the one it named.
  */
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import type { ToolResult } from '../types.js';
+import { findLatestUsable } from '../history/openSet.js';
+import { resolveProjectPath } from '../platform/projectPath.js';
+import { ProjectPath } from '../schemas.js';
+import { CVE_SOURCE_SCAN_TYPES, type ScanRecord, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
+  project_path: ProjectPath,
   framework: z
     .enum(['gdpr', 'soc2', 'iso27001', 'generic'])
     .optional()
@@ -24,9 +36,10 @@ const tool: ToolModule = {
   name: 'compliance_evidence',
   title: 'Compliance evidence pack (Markdown)',
   description:
-    'Generate a Markdown evidence document from accumulated state: latest compliance scan, ' +
-    'license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a ' +
-    'framework (gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.',
+    "Generate a Markdown evidence document from one project's accumulated state (project_path, " +
+    "default: the server's working directory): latest compliance scan, license summary, CVE " +
+    'counts, baseline status, suppressions, policy docs found. Tag with a framework ' +
+    '(gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -37,18 +50,35 @@ async function handler(
   input: Record<string, unknown>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { framework?: 'gdpr' | 'soc2' | 'iso27001' | 'generic' };
+  const inp = input as { project_path?: string; framework?: 'gdpr' | 'soc2' | 'iso27001' | 'generic' };
   const framework = inp.framework ?? 'generic';
+  let projectPath: string;
+  try {
+    projectPath = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+  }
 
-  const compliance = findLatest(ctx, 'compliance');
-  const deps = findLatest(ctx, 'deps') ?? findLatest(ctx, 'security_full');
-  const sbom = findLatest(ctx, 'sbom');
-  const baseline = ctx.storage.baselines.getActive();
-  const suppressions = ctx.storage.suppressions.listActive();
+  const storage = ctx.storage;
+  // Policy documents and licenses are read from files, not scanner output,
+  // so a compliance run's scanner coverage does not disqualify it (risk_score
+  // reads it the same way).
+  const compliance = findLatestUsable(storage, projectPath, ['compliance'], { skipCoverageNone: false }).scan;
+  // The newest scan that actually measured dependencies — a security_full
+  // row judged on its Trivy half — the same CVE source risk_score uses.
+  const deps = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
+  const sbom = findLatestUsable(storage, projectPath, ['sbom']).scan;
+  const baseline = storage.baselines.getActiveForProject(projectPath);
+  // Every suppression that hides a finding of THIS project: its own, and
+  // the ones scoped to no project (NULL — rows written before migration
+  // 011), exactly the rule `history/openSet.ts#suppressionMatcher` applies.
+  const suppressions = storage.suppressions
+    .listActive()
+    .filter((s) => s.project_path === undefined || s.project_path === projectPath);
 
   const md = build({
     framework,
-    project_path: deps?.project_path ?? compliance?.project_path ?? '(unknown)',
+    project_path: projectPath,
     generated_at: new Date().toISOString(),
     compliance,
     deps,
@@ -60,6 +90,7 @@ async function handler(
 
   return {
     ok: true,
+    project_path: projectPath,
     framework,
     markdown: md,
     size_bytes: Buffer.byteLength(md, 'utf8'),
@@ -70,15 +101,141 @@ async function handler(
 }
 
 interface BuildArgs {
-  framework: string;
+  framework: 'gdpr' | 'soc2' | 'iso27001' | 'generic';
   project_path: string;
   generated_at: string;
-  compliance: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  deps: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  sbom: ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>>;
-  baseline: ReturnType<NonNullable<PluginContext['storage']['baselines']['getActive']>>;
+  compliance: ScanRecord | null;
+  deps: ScanRecord | null;
+  sbom: ScanRecord | null;
+  baseline: ReturnType<NonNullable<PluginContext['storage']['baselines']['getActiveForProject']>>;
   suppressionsCount: number;
   ctx: PluginContext;
+}
+
+interface ComplianceScanMeta {
+  licenses_summary?: Array<{ license: string; risk: string }>;
+  risky_licenses?: Array<{ license: string }>;
+  policy_documents_found?: Record<string, boolean | string[]>;
+}
+
+function complianceMeta(compliance: BuildArgs['compliance']): ComplianceScanMeta | undefined {
+  return compliance?.meta as ComplianceScanMeta | undefined;
+}
+
+const FRAMEWORK_LABEL: Record<'gdpr' | 'soc2' | 'iso27001', string> = {
+  gdpr: 'GDPR',
+  soc2: 'SOC 2',
+  iso27001: 'ISO 27001',
+};
+
+interface ControlMapping {
+  /** The article/criterion/control id, e.g. "Article 25". */
+  id: string;
+  /** What the control is about, e.g. "privacy by design". */
+  description: string;
+  /** Whether a scan in THIS document actually backs the claim. */
+  evidenced: boolean;
+  /** Evidenced: where to find it above. Not evidenced: what was never run. */
+  note: string;
+}
+
+/**
+ * What each framework's mapping used to claim unconditionally, now gated on
+ * whether a scan present in THIS document actually backs it. GDPR Article 5
+ * (data minimisation) is not in this list at all: "SBOM components and
+ * license posture" was never evidence of minimising personal data collected
+ * — a wrong mapping, not an uncovered one, so it is dropped rather than
+ * listed as missing. "Scan cadence" and "dep update plan" are dropped for
+ * the same reason: neither is tracked by any scan this tool reads, so
+ * claiming they were covered — or even naming them as a gap to fill — would
+ * promise evidence this tool has no way to produce.
+ */
+function frameworkControls(
+  framework: 'gdpr' | 'soc2' | 'iso27001',
+  args: Pick<BuildArgs, 'compliance' | 'deps' | 'baseline' | 'sbom'>,
+): ControlMapping[] {
+  const meta = complianceMeta(args.compliance);
+  const hasPolicyDocs = meta?.policy_documents_found !== undefined;
+  const hasLicenses = meta?.licenses_summary !== undefined;
+  const hasDeps = args.deps !== null;
+  const hasBaseline = args.baseline !== null;
+  const hasSbom = args.sbom !== null;
+
+  switch (framework) {
+    case 'gdpr':
+      return [
+        {
+          id: 'Article 25',
+          description: 'privacy by design and by default',
+          evidenced: hasPolicyDocs,
+          note: hasPolicyDocs
+            ? 'privacy and security policy presence — see "Latest compliance scan" above'
+            : 'no `compliance_check` scan on file — policy-document presence was never checked',
+        },
+        {
+          id: 'Article 32',
+          description: 'security of processing',
+          evidenced: hasDeps,
+          note: hasDeps
+            ? 'dependency CVE posture — see "Dependency vulnerability posture" above'
+            : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+        },
+      ];
+    case 'soc2':
+      return [
+        {
+          id: 'CC7.1 / CC7.2',
+          description: 'vulnerability management',
+          evidenced: hasDeps,
+          note: hasDeps
+            ? 'CVE counts — see "Dependency vulnerability posture" above'
+            : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+        },
+        {
+          id: 'CC8.1',
+          description: 'change management',
+          evidenced: hasBaseline,
+          note: hasBaseline
+            ? 'baseline + suppressions traceability — see "Change-tracking / baseline" above'
+            : 'no baseline set — run `set_baseline`',
+        },
+        {
+          id: 'CC9.1',
+          description: 'risk mitigation',
+          evidenced: hasLicenses,
+          note: hasLicenses
+            ? 'license posture — see "Latest compliance scan" above'
+            : 'no `compliance_check` scan on file — license posture was never measured',
+        },
+      ];
+    case 'iso27001':
+      return [
+        {
+          id: 'A.8.8',
+          description: 'management of technical vulnerabilities',
+          evidenced: hasDeps,
+          note: hasDeps
+            ? 'CVE counts — see "Dependency vulnerability posture" above'
+            : 'no `scan_deps`/`deps_audit` scan on file — vulnerability posture was never measured',
+        },
+        {
+          id: 'A.5.20',
+          description: 'supplier relationships',
+          evidenced: hasSbom,
+          note: hasSbom
+            ? 'SBOM — see "Software Bill of Materials (SBOM)" above'
+            : 'no SBOM on file — run `generate_sbom`',
+        },
+        {
+          id: 'A.5.32',
+          description: 'intellectual property',
+          evidenced: hasLicenses,
+          note: hasLicenses
+            ? 'license compatibility findings — see "Latest compliance scan" above'
+            : 'no `compliance_check` scan on file — license posture was never measured',
+        },
+      ];
+  }
 }
 
 function build(args: BuildArgs): string {
@@ -100,13 +257,7 @@ function build(args: BuildArgs): string {
   if (args.compliance) {
     out.push(`- Scan id: \`${args.compliance.scan_id}\``);
     out.push(`- Run at: ${args.compliance.started_at}`);
-    const meta = args.compliance.meta as
-      | {
-          licenses_summary?: Array<{ license: string; risk: string }>;
-          risky_licenses?: Array<{ license: string }>;
-          policy_documents_found?: Record<string, boolean | string[]>;
-        }
-      | undefined;
+    const meta = complianceMeta(args.compliance);
     if (meta?.licenses_summary) {
       out.push(`- Licenses observed: ${meta.licenses_summary.length}`);
       const risky = meta.risky_licenses ?? [];
@@ -167,46 +318,37 @@ function build(args: BuildArgs): string {
   out.push('');
 
   out.push('## Frameworks');
-  switch (args.framework) {
-    case 'gdpr':
-      out.push(
-        '### GDPR mapping\n- Article 5 (data minimisation): see SBOM components and license posture.\n' +
-          '- Article 25 (privacy by design): privacy policy + security policy presence above.\n' +
-          '- Article 32 (security of processing): CVE posture + scan cadence (see scan history).',
-      );
-      break;
-    case 'soc2':
-      out.push(
-        '### SOC 2 trust services criteria\n- CC7.1 / CC7.2 (vulnerability mgmt): CVE counts + baseline above.\n' +
-          '- CC8.1 (change mgmt): baseline + suppressions traceability.\n' +
-          '- CC9.1 (risk mitigation): license posture + dep update plan.',
-      );
-      break;
-    case 'iso27001':
-      out.push(
-        '### ISO 27001 Annex A controls\n- A.8.8 (technical vulnerabilities): scan cadence + CVE counts.\n' +
-          '- A.5.20 (supplier relationships): SBOM + license posture.\n' +
-          '- A.5.32 (intellectual property): license compatibility findings.',
-      );
-      break;
-    default:
-      out.push(
-        'No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping.',
-      );
+  if (args.framework === 'generic') {
+    out.push(
+      'No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping.',
+    );
+  } else {
+    const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+    const controls = frameworkControls(args.framework, args);
+    const evidenced = controls.filter((c) => c.evidenced);
+    const notCovered = controls.filter((c) => !c.evidenced);
+
+    out.push(`### ${label} controls evidenced by this document`);
+    if (evidenced.length === 0) {
+      out.push('(none — see "not covered" below)');
+    } else {
+      for (const c of evidenced) out.push(`- ${c.id} (${c.description}): ${c.note}`);
+    }
+    out.push('');
+    out.push(`### ${label} controls NOT covered by this document`);
+    if (notCovered.length === 0) {
+      out.push('(none)');
+    } else {
+      for (const c of notCovered) out.push(`- ${c.id} (${c.description}): NOT COVERED — ${c.note}`);
+    }
   }
   out.push('');
 
   out.push('---');
-  out.push('_Generated by dev-guardian. All scans local, no telemetry._');
+  out.push(
+    '_Generated by dev-guardian. dev-guardian sends no telemetry of its own; ' +
+      "Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it._",
+  );
   return out.join('\n');
-}
-
-function findLatest(
-  ctx: PluginContext,
-  type: string,
-): ReturnType<NonNullable<PluginContext['storage']['scans']['getById']>> {
-  const history = ctx.storage.scans.listHistory(50);
-  const row = history.find((s) => s.scan_type === type && s.status === 'completed');
-  return row ? ctx.storage.scans.getById(row.scan_id) : null;
 }
 

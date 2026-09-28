@@ -174,6 +174,43 @@ describe('importSpec — OpenAPI 3', () => {
     );
     expect(routes.map((r) => r.method)).toEqual(['GET']);
   });
+
+  // Task 4 brief, item 2: a spec path KEY (not just the server/basePath) can
+  // itself be missing the leading slash a real OpenAPI/Swagger path key must
+  // have — either a malformed document or one crafted to redirect a probe:
+  // `@evil.example/x` or `.evil.example/x` concatenated onto an empty base
+  // reaches `dast/plan.ts` looking exactly like a normal relative path.
+  // `path_partial: true` here is the honest answer — this module cannot
+  // resolve a path it does not recognise — and `dast/plan.ts#buildProbeUrl`
+  // (task 4, item 1) is the layer that would refuse to SEND such a request
+  // even if this check were somehow bypassed.
+  it('is partial when a path key is missing its leading slash', () => {
+    const { routes } = importSpec('o.yaml', 'openapi: "3.0.0"\npaths:\n  x:\n    get: {}\n');
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.path_resolved).toBe('x');
+  });
+
+  it('is partial when a path key without a leading slash looks like a host-confusion payload', () => {
+    // `@evil.example/x` and `.evil.example/x` are exactly the shapes
+    // `dast/plan.ts#buildProbeUrl` (item 1) treats as off-origin — the same
+    // leading-slash rule catches them here at extraction time, before a
+    // route is ever handed to the planner as resolved.
+    const { routes } = importSpec(
+      'o.yaml',
+      'openapi: "3.0.0"\npaths:\n  "@evil.example/x":\n    get: {}\n',
+    );
+    expect(routes[0]?.path_partial).toBe(true);
+  });
+
+  it('still resolves a normal, leading-slash path key alongside a partial one', () => {
+    const text =
+      'openapi: "3.0.0"\npaths:\n  /users:\n    get: {}\n  x:\n    get: {}\n';
+    const { routes } = importSpec('o.yaml', text);
+    const users = routes.find((r) => r.path_raw === '/users');
+    const bad = routes.find((r) => r.path_raw === 'x');
+    expect(users?.path_partial).toBe(false);
+    expect(bad?.path_partial).toBe(true);
+  });
 });
 
 describe('importSpec — Swagger 2', () => {
@@ -183,6 +220,31 @@ describe('importSpec — Swagger 2', () => {
     expect(report.format).toBe('swagger-2');
     expect(routes[0]?.path_resolved).toBe('/api/pets');
     expect(routes[0]?.framework).toBe('swagger-2');
+  });
+
+  it('is not partial when basePath is absent — the default base is empty', () => {
+    const text = 'swagger: "2.0"\npaths:\n  /pets:\n    get: {}\n';
+    const { routes } = importSpec('swagger.yaml', text);
+    expect(routes[0]?.path_partial).toBe(false);
+    expect(routes[0]?.path_resolved).toBe('/pets');
+  });
+
+  // Measured defect (task 4 brief, item 2): unlike `openapiBasePath`, the
+  // Swagger branch applied `basePath` with no leading-slash check at all —
+  // a malformed or crafted `basePath: "@evil.example"` produced
+  // `path_partial: false` at `confidence: 'high'`, indistinguishable from a
+  // genuinely resolved base path.
+  it('is partial when basePath is missing its leading slash', () => {
+    const text = 'swagger: "2.0"\nbasePath: api\npaths:\n  /pets:\n    get: {}\n';
+    const { routes } = importSpec('swagger.yaml', text);
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.path_resolved).toBe('/pets');
+  });
+
+  it('is partial when basePath without a leading slash looks like a host-confusion payload', () => {
+    const text = 'swagger: "2.0"\nbasePath: "@evil.example"\npaths:\n  /pets:\n    get: {}\n';
+    const { routes } = importSpec('swagger.yaml', text);
+    expect(routes[0]?.path_partial).toBe(true);
   });
 });
 

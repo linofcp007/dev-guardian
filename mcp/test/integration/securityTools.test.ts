@@ -14,6 +14,7 @@
  * right parser, and surface tools_run / missing_tools correctly?
  */
 
+import { execa } from 'execa';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import {
   cpSync,
@@ -102,7 +103,6 @@ const trivyFsFixture = () => readFileSync(join(FIX, 'trivy-fs.json'), 'utf8');
 const trivyDockerFixture = () =>
   readFileSync(join(FIX, 'trivy-dockerfile.json'), 'utf8');
 const gitleaksFixture = () => readFileSync(join(FIX, 'gitleaks.json'), 'utf8');
-const banditFixture = () => readFileSync(join(FIX, 'bandit.json'), 'utf8');
 
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
@@ -243,8 +243,10 @@ describe('scan_sast (Semgrep)', () => {
 describe('scan_secrets (gitleaks)', () => {
   it('runs with --redact and persists secret findings', async () => {
     const project = tempProject();
+    writeFileSync(join(project, 'settings.ini'), 'x=1\n', 'utf8');
     const plugin = makePlugin(project);
 
+    let scannedFrom: string | undefined;
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
@@ -254,6 +256,11 @@ describe('scan_secrets (gitleaks)', () => {
       }
       // Verify gitleaks is invoked with --redact.
       expect(opts.args).toContain('--redact');
+      // Not a git repository: the directory is scanned in place, never
+      // through `gitleaks detect` on git history ("0 commits scanned").
+      expect(opts.args).toContain('--no-git');
+      expect(opts.args?.slice(opts.args.indexOf('-s'), opts.args.indexOf('-s') + 2)).toEqual(['-s', '.']);
+      scannedFrom = opts.cwd;
       return fakeRunSuccess({ exitCode: 1 }); // gitleaks exits 1 when leaks found
     });
 
@@ -264,6 +271,166 @@ describe('scan_secrets (gitleaks)', () => {
     };
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.high).toBe(2); // 2 secret findings in fixture
+    expect(scannedFrom).toBe(project);
+  });
+
+  it('scans uncommitted files from a temporary copy that is gone once the scan is', async () => {
+    const project = tempProject();
+    await execa('git', ['init', '-q'], { cwd: project });
+    writeFileSync(join(project, '.gitignore'), '.guardian/\n', 'utf8');
+    await execa('git', ['add', '.gitignore'], { cwd: project });
+    await execa(
+      'git',
+      ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x'],
+      { cwd: project },
+    );
+    writeFileSync(join(project, 'settings.ini'), 'x=1\n', 'utf8');
+    const plugin = makePlugin(project);
+    let copy: string | undefined;
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+      if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), '[]', 'utf8');
+      if (opts.args?.includes('--no-git')) {
+        copy = opts.cwd;
+        expect(existsSync(join(opts.cwd, 'settings.ini'))).toBe(true);
+      }
+      return { ...fakeRunSuccess(), stderr: 'INF 1 commits scanned.' };
+    });
+    const r = await getTool('scan_secrets').handler({ project_path: project }, plugin);
+    expect(r.ok).toBe(true);
+    expect(copy).toBeDefined();
+    expect(copy).not.toBe(project);
+    expect(existsSync(copy ?? project)).toBe(false);
+  });
+
+  it('a history pass that reports "0 commits scanned" in a repository with commits is failed, never clean', async () => {
+    const project = tempProject();
+    await execa('git', ['init', '-q'], { cwd: project });
+    writeFileSync(join(project, 'a.txt'), 'a\n', 'utf8');
+    await execa('git', ['add', 'a.txt'], { cwd: project });
+    await execa(
+      'git',
+      ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x'],
+      { cwd: project },
+    );
+    const plugin = makePlugin(project);
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+      if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), '[]', 'utf8');
+      // What gitleaks prints when git could not be read — and it exits 0.
+      return { ...fakeRunSuccess(), stderr: '\u001b[32mINF\u001b[0m 0 commits scanned.\nINF no leaks found\n' };
+    });
+
+    const r = (await getTool('scan_secrets').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+    expect(r.ok).toBe(true);
+    const history = r.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('failed');
+    expect(history?.reason).toMatch(/0 commits scanned/);
+    expect(r.coverage).not.toBe('full');
+  });
+
+  it('a commit or a moved ref that changes no file is a new scan, never a stale cache hit', async () => {
+    const project = tempProject();
+    const git = (...a: string[]) =>
+      execa('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], {
+        cwd: project,
+      });
+    await git('init', '-q');
+    writeFileSync(join(project, '.gitignore'), '.guardian/\n', 'utf8');
+    await git('add', '.gitignore');
+    await git('commit', '-q', '-m', 'x');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+      if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), '[]', 'utf8');
+      return { ...fakeRunSuccess(), stderr: 'INF 1 commits scanned.' };
+    });
+    const tool = getTool('scan_secrets');
+    const run = async () =>
+      (await tool.handler({ project_path: project }, plugin)) as { ok: true; coverage: string; cached?: boolean };
+
+    const first = await run();
+    expect(first.coverage).toBe('full');
+    expect((await run()).cached).toBe(true);
+
+    // History grew; the tree did not.
+    await git('commit', '-q', '--allow-empty', '-m', 'empty');
+    expect((await run()).cached).toBeUndefined();
+    expect((await run()).cached).toBe(true);
+
+    // A ref moved (what a fetch does), HEAD and tree untouched.
+    const tree = (await execa('git', ['rev-parse', 'HEAD^{tree}'], { cwd: project })).stdout.trim();
+    const commit = (await git('commit-tree', tree, '-m', 'fetched')).stdout.trim();
+    await git('update-ref', 'refs/remotes/origin/main', commit);
+    expect((await run()).cached).toBeUndefined();
+  });
+
+  it('a history pass whose report was never written is failed even on exit 0', async () => {
+    const project = tempProject();
+    await execa('git', ['init', '-q'], { cwd: project });
+    writeFileSync(join(project, 'a.txt'), 'a\n', 'utf8');
+    await execa('git', ['add', 'a.txt'], { cwd: project });
+    await execa(
+      'git',
+      ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'x'],
+      { cwd: project },
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/gitleaks');
+    vi.mocked(runProcess).mockResolvedValue({ ...fakeRunSuccess(), stderr: 'INF 1 commits scanned.' });
+
+    const r = (await getTool('scan_secrets').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+    expect(r.tools_run.find((t) => t.name === 'gitleaks')?.status).toBe('failed');
+    expect(r.tools_run.find((t) => t.name === 'gitleaks')?.reason).toMatch(/no report/);
+    expect(r.coverage).toBe('none');
+  });
+});
+
+describe('scan_wordpress secrets pass', () => {
+  it('scans the files of a site that is not a git repository instead of reporting "0 commits" clean', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'wp-config.php'), "<?php define('DB_PASSWORD', 'x');\n", 'utf8');
+    const plugin = makePlugin(project);
+    await import('../../src/tools/scanWordpress.js');
+
+    const gitleaksCalls: string[][] = [];
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'gitleaks' ? '/fake/bin/gitleaks' : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'gitleaks') {
+        gitleaksCalls.push(opts.args ?? []);
+        const reportArg = opts.args?.find((a) => a.startsWith('--report-path='));
+        if (reportArg) writeFileSync(reportArg.replace('--report-path=', ''), gitleaksFixture(), 'utf8');
+        return fakeRunSuccess({ exitCode: 1 });
+      }
+      return fakeRunSuccess();
+    });
+
+    const r = (await getTool('scan_wordpress').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      scan_id: string;
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+    expect(r.ok).toBe(true);
+    expect(gitleaksCalls).toHaveLength(1);
+    expect(gitleaksCalls[0]).toContain('--no-git');
+    const secrets = plugin.storage.findings.listByScan(r.scan_id).filter((f) => f.tool === 'gitleaks');
+    expect(secrets).toHaveLength(2);
+    expect(secrets.every((f) => /location: directory/.test(f.message ?? ''))).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'gitleaks')?.status).toBe('ok');
   });
 });
 
@@ -303,7 +470,10 @@ describe('scan_containers (Trivy Dockerfile)', () => {
     writeFileSync(join(project, 'Dockerfile'), 'FROM node:20\n', 'utf8');
     const plugin = makePlugin(project);
 
-    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    // Only trivy — hadolint sits behind the same `dockerfile !== undefined`
+    // gate and would otherwise also run (task 15), tripping the `args?.[0]
+    // === 'config'` assertion below with its own, differently-shaped call.
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'trivy' ? '/fake/bin/trivy' : null));
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       expect(opts.args?.[0]).toBe('config');
       const outIdx = opts.args?.findIndex((a) => a === '--output');
@@ -316,11 +486,12 @@ describe('scan_containers (Trivy Dockerfile)', () => {
     const r = (await tool.handler({ project_path: project }, plugin)) as {
       ok: true;
       findings_count_by_severity: Record<string, number>;
-      tools_run: { name: string }[];
+      tools_run: { name: string; status: string }[];
     };
     expect(r.ok).toBe(true);
     expect(r.findings_count_by_severity.high).toBe(1);
     expect(r.tools_run.some((t) => t.name === 'trivy-dockerfile')).toBe(true);
+    expect(r.tools_run.find((t) => t.name === 'hadolint')).toMatchObject({ status: 'skipped' });
   });
 
   it('reports skipped when neither Dockerfile nor image is provided', async () => {
@@ -360,88 +531,7 @@ describe('scan_iac (Trivy config)', () => {
   });
 });
 
-describe('security_scan_full', () => {
-  it('routes each scanner output file in the script report dir to its parser', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-
-    // The script (when running for real) would create
-    // .guardian/reports/security-<TS>/ with the JSON files. Our mock does
-    // that and returns success.
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const reportsRoot = join(project, '.guardian', 'reports');
-      const reportDir = join(reportsRoot, 'security-20260526-120000');
-      mkdirSync(reportDir, { recursive: true });
-      writeFileSync(join(reportDir, 'sast.json'), semgrepFixture(), 'utf8');
-      writeFileSync(join(reportDir, 'secrets.json'), gitleaksFixture(), 'utf8');
-      writeFileSync(join(reportDir, 'deps.json'), trivyFsFixture(), 'utf8');
-      writeFileSync(join(reportDir, 'dockerfile.json'), trivyDockerFixture(), 'utf8');
-      writeFileSync(join(reportDir, 'bandit.json'), banditFixture(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    const tool = getTool('security_scan_full');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
-      ok: true;
-      scan_id: string;
-      findings_count_by_severity: Record<string, number>;
-      tools_run: { name: string; status: string }[];
-      report_paths: string[];
-    };
-
-    expect(r.ok).toBe(true);
-    // 3 semgrep + 2 gitleaks + 3 trivy fs + 1 trivy dockerfile + 2 bandit = 11 findings
-    const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
-    expect(total).toBe(11);
-    expect(r.tools_run.map((t) => t.name).sort()).toEqual([
-      'bandit',
-      'gitleaks',
-      'semgrep',
-      'trivy',
-      'trivy-dockerfile',
-    ]);
-    expect(r.tools_run.every((t) => t.status === 'ok')).toBe(true);
-    expect(r.report_paths[0]).toContain('security-');
-  });
-
-  it('surfaces missing tools when the report file is absent', async () => {
-    const project = tempProject();
-    const plugin = makePlugin(project);
-
-    vi.mocked(runShellScript).mockImplementation(async () => {
-      const reportsRoot = join(project, '.guardian', 'reports');
-      const reportDir = join(reportsRoot, 'security-no-tools');
-      mkdirSync(reportDir, { recursive: true });
-      // Only Semgrep's output present.
-      writeFileSync(join(reportDir, 'sast.json'), semgrepFixture(), 'utf8');
-      return {
-        outcome: 'completed' as const,
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-        truncated: false,
-      };
-    });
-
-    const tool = getTool('security_scan_full');
-    const r = (await tool.handler({ project_path: project }, plugin)) as {
-      ok: true;
-      missing_tools: string[];
-    };
-
-    expect(r.ok).toBe(true);
-    expect(r.missing_tools).toContain('gitleaks');
-    expect(r.missing_tools).toContain('trivy');
-    expect(r.missing_tools).not.toContain('trivy-dockerfile'); // conditional
-    expect(r.missing_tools).not.toContain('bandit'); // conditional
-  });
-});
+// security_scan_full: see securityScanFull.test.ts.
 
 // Suppress an unused-import warning when the helpers aren't used.
 void cpSync;

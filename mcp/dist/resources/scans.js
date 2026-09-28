@@ -1,8 +1,13 @@
 /**
  * Scans resources:
- *   - guardian://scans/latest      → latest completed scan (any type)
- *   - guardian://scans/history     → 50 most recent scans
+ *   - guardian://scans/latest      → the server's project's latest completed
+ *                                    scan (any type — this is history, not
+ *                                    the open set: see guardian://findings/open)
+ *   - guardian://scans/history     → that project's 50 most recent scans
  *   - guardian://scans/{scan_id}   → full ScanResult by id
+ *
+ * The first two used to answer from the whole database, i.e. from whichever
+ * project had scanned last.
  *
  * The `{scan_id}` template returns enriched data (findings counts +
  * top_findings) so it lines up with the response shape the scan tools
@@ -10,13 +15,15 @@
  */
 import { SEVERITY_ORDER } from '../types.js';
 import { registerResourceModule } from './index.js';
+import { boundFinding, serverProjectPath } from './paging.js';
 registerResourceModule({
     name: 'guardian-scans-latest',
     uri: 'guardian://scans/latest',
-    description: 'Latest completed scan of any type, with severity counts and the top-10 findings inlined. ' +
-        'Returns `{ last_run: null }` when no scan has run yet.',
+    description: "Latest completed scan of any type of the server's working-directory project, with severity " +
+        'counts and the top-10 findings inlined. Returns `{ last_run: null }` when no scan has run ' +
+        'yet. For what is open across every scan type, read guardian://findings/open.',
     handler: async (_uri, _params, ctx) => {
-        const latest = ctx.storage.scans.getLatest();
+        const latest = ctx.storage.scans.getLatestForProject(serverProjectPath());
         if (!latest)
             return { json: { last_run: null } };
         return { json: enrich(latest.scan_id, ctx) };
@@ -25,11 +32,13 @@ registerResourceModule({
 registerResourceModule({
     name: 'guardian-scans-history',
     uri: 'guardian://scans/history',
-    description: 'Up to 50 most-recent scans across every type, ordered by start time descending. Records are ' +
-        'sparse — call `guardian://scans/{scan_id}` for the full ScanResult.',
+    description: "Up to 50 most-recent scans of the server's working-directory project, across every type, " +
+        'ordered by start time descending. Records are sparse — call `guardian://scans/{scan_id}` for ' +
+        'the full ScanResult.',
     handler: async (_uri, _params, ctx) => {
-        const scans = ctx.storage.scans.listHistory(50);
-        return { json: { scans } };
+        const projectPath = serverProjectPath();
+        const scans = ctx.storage.scans.listHistoryForProject(projectPath, 50);
+        return { json: { project_path: projectPath, scans } };
     },
 });
 registerResourceModule({
@@ -61,7 +70,7 @@ function enrich(scanId, ctx) {
     return {
         ...record,
         findings_count_by_severity: counts,
-        top_findings: top,
+        top_findings: top.map(boundFinding),
     };
 }
 function countBySeverity(findings) {

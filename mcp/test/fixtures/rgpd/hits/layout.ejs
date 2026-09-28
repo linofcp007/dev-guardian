@@ -1,0 +1,12 @@
+<%# An Express/EJS layout. The single BUG fires
+    rgpd-tracker-meta-pixel-without-consent exactly once. %>
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <script>
+    fbq('init', '<%= pixelId %>'); // BUG
+    fbq('track', 'PageView');
+  </script>
+</head>
+<body><%- body %></body>
+</html>

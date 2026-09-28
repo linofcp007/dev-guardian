@@ -110,13 +110,27 @@ describe('summariseExclusions', () => {
     expect(reason).toContain('semgrep');
   });
 
+  it('Task 11 fix round 1: a finding in a file with uncommitted changes is uncommitted_changes, and the reason says what to do', () => {
+    const dirty = finding({ file_path: 'src/dirty.ts' });
+    const clean = finding({ file_path: 'src/clean.ts' });
+    const low = finding({ file_path: 'src/dirty.ts', severity: 'low' });
+    const findings = [dirty, clean, low];
+    const uncommitted = (f: Finding): boolean => f.file_path === 'src/dirty.ts';
+    const groups = buildGroups({ findings, upgradeSteps: [], sources: ['semgrep'], severityMin: 'high', rescannable: (f) => !uncommitted(f) });
+    const exclusions = summariseExclusions({ findings, groups, severityMin: 'high', uncommitted });
+    expect(exclusions.candidates).toBe(1);
+    // The severity floor is reported first: lowering it alone would not help.
+    expect(exclusions.by_reason).toMatchObject({ uncommitted_changes: 1, below_severity_min: 1, no_fix_source: 0 });
+    expect(describeExclusions(exclusions, 'high', ['semgrep'])).toMatch(/uncommitted changes .*commit or stash/);
+  });
+
   it('counts an eligible deps finding with no matching upgrade step as no_fix_source, not as a candidate', () => {
     // It passes fix_available and the floor, and `deps` IS a requested
     // source — buildGroups still cannot act on it, because deps_update_plan
     // offered no upgrade for that package. Silence here reads as "nothing
     // was wrong", which is the whole defect this report closes.
     const { exclusions } = report({
-      findings: [finding({ tool: 'trivy', title: 'axios vulnerable' })],
+      findings: [finding({ tool: 'trivy', title: 'axios vulnerable', subcategory: 'cve', snippet: 'axios@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined })],
       upgradeSteps: [step()],
       sources: ['deps'],
     });
@@ -127,7 +141,7 @@ describe('summariseExclusions', () => {
   it('reports a partial run, not only an empty one', () => {
     // A run that fixes 2 of 42 is nearly as opaque as one that fixes 0.
     const findings = [
-      finding({ tool: 'trivy', title: 'lodash vulnerable' }),
+      finding({ tool: 'trivy', title: 'lodash vulnerable', subcategory: 'cve', snippet: 'lodash@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined }),
       ...Array.from({ length: 40 }, () => finding({ severity: 'low' })),
     ];
     const { exclusions, reason } = report({ findings, upgradeSteps: [step()], sources: ['deps'] });
@@ -138,7 +152,7 @@ describe('summariseExclusions', () => {
 
   it('counts findings, not fingerprints, when two groups share none', () => {
     const findings = [
-      finding({ tool: 'trivy', title: 'lodash vulnerable' }),
+      finding({ tool: 'trivy', title: 'lodash vulnerable', subcategory: 'cve', snippet: 'lodash@1.0.0->1.0.1', file_path: 'package-lock.json', line_start: undefined, line_end: undefined }),
       finding({ tool: 'semgrep' }),
     ];
     const { exclusions } = report({ findings, upgradeSteps: [step()] });

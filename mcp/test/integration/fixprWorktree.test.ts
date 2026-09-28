@@ -1,6 +1,5 @@
 /**
- * Integration tests for `createWorktree` (design doc
- * the design of record §3) against a
+ * Integration tests for `createWorktree` (the design of record) against a
  * REAL throwaway git repository in the system temp directory — a mock proves
  * nothing about `git worktree`'s actual behaviour.
  *
@@ -184,6 +183,29 @@ describe('createWorktree', () => {
     const r = await createWorktree({ projectPath: notRepo, branch: 'x' });
     expect(r.ok).toBe(false);
     rmDir(notRepo);
+  });
+
+  it('Task 11 item 1: a detached worktree (the dry run\'s) creates no branch or ref at all, and is removed like any other', async () => {
+    // A dry run must not mutate anything outside its worktree: `-b` wrote a
+    // branch into the user's refs (deleted again afterwards, or left behind
+    // by a crash in between).
+    const refsBefore = git('for-each-ref', '--format=%(refname)');
+    const a = await createWorktree({ projectPath: repo, branch: null });
+    const b = await createWorktree({ projectPath: repo, branch: null });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    ownWorktreePaths.push(a.worktree.path, b.worktree.path);
+    expect(git('for-each-ref', '--format=%(refname)')).toBe(refsBefore);
+    expect(a.worktree.branch).toBeNull();
+    // Two detached worktrees at once each resolve to their OWN registered path.
+    expect(a.worktree.path).not.toBe(b.worktree.path);
+    expect(existsSync(join(a.worktree.path, 'a.txt'))).toBe(true);
+    expect(git('worktree', 'list')).toContain(a.worktree.path);
+    expect(git('worktree', 'list')).toContain(b.worktree.path);
+    expect((await a.worktree.remove()).removed).toBe(true);
+    expect((await b.worktree.remove()).removed).toBe(true);
+    expect(git('worktree', 'list')).not.toContain(a.worktree.path);
+    expect(git('for-each-ref', '--format=%(refname)')).toBe(refsBefore);
   });
 
   it('refuses when the branch already exists, rather than reusing it', async () => {

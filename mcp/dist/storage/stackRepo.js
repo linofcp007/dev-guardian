@@ -11,6 +11,7 @@ export class StackRepo {
     insertStmt;
     getLatestStmt;
     listRecentStmt;
+    getLatestForProjectStmt;
     constructor(db) {
         this.insertStmt = db.prepare(`
       INSERT INTO stack_snapshots (project_path, captured_at, json)
@@ -18,6 +19,9 @@ export class StackRepo {
     `);
         this.getLatestStmt = db.prepare(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT 1
+    `);
+        this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM stack_snapshots WHERE project_path = ? ORDER BY captured_at DESC, id DESC LIMIT 1
     `);
         this.listRecentStmt = db.prepare(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT ?
@@ -34,8 +38,19 @@ export class StackRepo {
             snapshot: input.snapshot,
         };
     }
+    /**
+     * The newest snapshot of ANY project. No production caller since Task 24:
+     * `bug_hunt`, `audit_executive`, `init_project`, `map_attack_surface` and
+     * `observability_setup` each took ANOTHER project's languages from it
+     * whenever that project was detected last. Use `getLatestForProject`.
+     */
     getLatest() {
         const row = this.getLatestStmt.get();
+        return row ? rowToSnapshot(row) : null;
+    }
+    /** The newest snapshot of ONE project — what `guardian://stack` serves. */
+    getLatestForProject(projectPath) {
+        const row = this.getLatestForProjectStmt.get(projectPath);
         return row ? rowToSnapshot(row) : null;
     }
     listRecent(limit = 10) {

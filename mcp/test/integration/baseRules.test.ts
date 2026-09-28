@@ -137,11 +137,25 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turns that absence into a hard failure.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Fix round 1, item 4 (2026-09-25 full review): this file invokes real
+// `semgrep` SYNCHRONOUSLY (`runSemgrep` inside `run()`, never
+// awaited) across every rule pack / hit fixture in the suite below —
+// genuinely slow under load (measured 41-90s for a single such call) and,
+// critically, never actually bounded by vitest's default `testTimeout`:
+// that timeout fires via a timer on the event loop, which cannot preempt a
+// blocking synchronous call. `mcp/vitest.config.ts`'s own default stays at
+// the unit-test-appropriate 10s; this file (and its siblings across the
+// other rule packs) opts into a longer budget explicitly, rather than
+// raising the ceiling for the other 130+ files that do not need it. The
+// spawn itself is bounded by `test/helpers/semgrep.ts` (120 s, SIGKILL), since
+// this timeout cannot interrupt it.
+vi.setConfig({ testTimeout: 180_000 });
 import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runSemgrep, semgrepAvailable } from '../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -151,10 +165,6 @@ const RULES = resolve(REPO_ROOT, 'configs', 'semgrep', 'base.yml');
 const FIXTURES = resolve(REPO_ROOT, 'mcp', 'test', 'fixtures', 'base');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
-function semgrepAvailable(): boolean {
-  try { execFileSync('semgrep', ['--version'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
-}
 const AVAILABLE = semgrepAvailable();
 
 interface SemgrepResult {
@@ -182,17 +192,13 @@ interface SemgrepRun {
 function run(config: string, dir: string): SemgrepRun {
   const work = makeTempDir('guardian-base-rules-');
   cpSync(dir, work, { recursive: true });
-  const proc = spawnSync(
-    'semgrep',
-    ['--config', config, '--json', '--quiet', '--no-git-ignore', work],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  );
+  const proc = runSemgrep(['--config', config, '--json', '--quiet', '--no-git-ignore', work]);
   const parsed: unknown = proc.stdout === '' ? {} : JSON.parse(proc.stdout);
   const results = (parsed as { results?: unknown[] }).results ?? [];
   const scanned = (parsed as { paths?: { scanned?: unknown[] } }).paths?.scanned ?? [];
-  // `spawnSync` rather than `execFileSync`, and the difference is the failure
-  // MESSAGE. A rule that does not compile makes semgrep exit 2, and
-  // `execFileSync` reports that as a bare "Command failed: semgrep --config …"
+  // `runSemgrep` rather than `semgrepStdout`, and the difference is the failure
+  // MESSAGE. A rule that does not compile makes semgrep exit 2, and a throwing
+  // spawn (`execFileSync` here once) reports that as a bare "Command failed: semgrep --config …"
   // — measured against the pre-fix `wp-unescaped-output`, that is exactly what
   // four of these tests printed, and not one of them named the rule.
   //

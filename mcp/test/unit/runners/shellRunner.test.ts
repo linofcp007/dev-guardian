@@ -9,6 +9,14 @@ import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
 afterAll(cleanupTempDirs);
 
 /**
+ * A kill on Windows is a `taskkill /T` (the tree kill), and taskkill was
+ * measured at ~2.5 s and up to ~5 s on a machine running several suites at
+ * once — well past vitest's 10 s default once two of them stack. The
+ * assertions are about the outcome, not the latency.
+ */
+const KILL_TEST_TIMEOUT_MS = 30_000;
+
+/**
  * These tests use Node itself (process.execPath) as the "shell". The
  * ShellRunner spawns `node script.js`, which gives us a portable way to
  * verify outcomes, stdout/stderr capture, timeouts, abort, and oversize
@@ -91,7 +99,7 @@ describe('runShellScript', () => {
     setTimeout(() => controller.abort(), 100);
     const result = await promise;
     expect(result.outcome).toBe('cancelled');
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('returns outcome=timed_out when the timeout fires', async () => {
     const { path, dir } = writeScript(`setTimeout(() => process.exit(0), 30000);`);
@@ -102,7 +110,7 @@ describe('runShellScript', () => {
       timeoutMs: 250,
     });
     expect(result.outcome).toBe('timed_out');
-  });
+  }, KILL_TEST_TIMEOUT_MS);
 
   it('forwards stderr lines through onLog', async () => {
     const { path, dir } = writeScript(

@@ -8,12 +8,12 @@
  * That is `host-rules/AGENTS.md`'s own rule — "invoke the MCP tools rather
  * than shelling out to the scanners" — applied to the CLI itself: there is
  * no second implementation of any scan, so when e.g. `scan_sast` changes, CI
- * changes with it (design doc §3).
+ * changes with it (the design of record).
  *
- * Order is not cosmetic (design doc §3): `map_attack_surface` persists the
+ * Order is not cosmetic (the design of record): `map_attack_surface` persists the
  * route inventory that `scan_dast` and `validate_finding` both refuse
  * without. `SCAN_SEQUENCE` documents the full order; `scan_dast` is included
- * only when the caller supplies a base url (design doc §7 — starting the
+ * only when the caller supplies a base url (the design of record — starting the
  * application is a separate, explicit capability, deliberately withheld from
  * the MCP tool itself).
  *
@@ -22,6 +22,11 @@
  * steps still execute, and the gap feeds the coverage signal `gate.ts`
  * reads. Stopping at the first gap would report less than continuing and
  * saying what was missed.
+ *
+ * The files a step's scanner could read only in part travel with the step
+ * (`ScanStepResult.partial_parses`, see {@link partialParsesOf}), keyed by
+ * the `missing_tools` name they cause, so the gate can match
+ * `--accept-partial-parse` against exactly that gap.
  *
  * Findings are read back OUT of the ephemeral database after every step has
  * run, never out of a step's own return payload — the tools that produce
@@ -32,7 +37,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isScopedScan } from '../history/scanRoles.js';
+import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
+import { dedupeFindings } from '../runners/findingMerge.js';
 import { probeShell } from '../platform/shellProbe.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
@@ -43,7 +51,7 @@ import { TOOLS } from '../tools/index.js';
 // and this module needs the same full registry to look tools up by name.
 import '../registerAll.js';
 /**
- * The full documented order (design doc §3). `scan_dast` always appears
+ * The full documented order (the design of record). `scan_dast` always appears
  * here: it is `buildSequence` below that removes it for a run with no base
  * url, never this constant — so `SCAN_SEQUENCE` always names "the order" in
  * full, and any given run's actual sequence is a sub-sequence of it.
@@ -61,10 +69,6 @@ export const SCAN_SEQUENCE = [
     'scan_dast',
     'validate_finding',
 ];
-/** Far more than the at-most-two scan rows (security_scan_full, scan_dast)
- *  this pipeline can create in one run — generous on purpose so a future
- *  step that persists additional scan rows doesn't silently truncate. */
-const SCAN_HISTORY_LIMIT = 50;
 const TEMP_DIR_PREFIX = 'dev-guardian-ci-';
 export async function runScans(opts) {
     const tmpDir = await mkdtemp(join(tmpdir(), TEMP_DIR_PREFIX));
@@ -86,7 +90,7 @@ export async function runScans(opts) {
             for (const name of buildSequence(opts)) {
                 steps.push(await runStep(name, buildInput(name, opts), ctx));
             }
-            return { findings: collectFindings(storage), steps };
+            return { findings: collectFindings(storage, opts.projectPath), steps };
         }
         finally {
             try {
@@ -113,8 +117,11 @@ function buildSequence(opts) {
     return SCAN_SEQUENCE.filter((name) => name !== 'scan_dast');
 }
 /** Every step shares `project_path`; `scan_dast` additionally needs the
- *  target it is meant to probe. */
+ *  target it is meant to probe, and `security_scan_full` `local_only`. */
 function buildInput(name, opts) {
+    if (name === 'security_scan_full' && opts.localOnly === true) {
+        return { project_path: opts.projectPath, local_only: true };
+    }
     if (name !== 'scan_dast')
         return { project_path: opts.projectPath };
     const input = {
@@ -141,11 +148,15 @@ async function runStep(name, input, ctx) {
         if (!result.ok) {
             return refusedStep(name, `${result.error.code}: ${result.error.message}`);
         }
+        const tools_run = toToolRunArray(result.tools_run);
+        const missing_tools = toStringArray(result.missing_tools);
+        const partial_parses = partialParsesOf(name, result, tools_run, missing_tools);
         return {
             tool: name,
             ran: true,
-            tools_run: toToolRunArray(result.tools_run),
-            missing_tools: toStringArray(result.missing_tools),
+            tools_run,
+            missing_tools,
+            ...(partial_parses !== null ? { partial_parses } : {}),
         };
     }
     catch (e) {
@@ -161,26 +172,112 @@ function toToolRunArray(value) {
 function toStringArray(value) {
     return Array.isArray(value) ? value : [];
 }
+/** `{ file, type }` of every well-formed entry of a `partially_parsed` list (type `unknown` when absent). */
+function partialFiles(value) {
+    if (!Array.isArray(value))
+        return [];
+    const out = [];
+    for (const entry of value) {
+        if (entry === null || typeof entry !== 'object')
+            continue;
+        const { file, type } = entry;
+        if (typeof file !== 'string' || file.length === 0)
+            continue;
+        out.push({ file, type: typeof type === 'string' && type.length > 0 ? type : 'unknown' });
+    }
+    return out;
+}
+/** The DAST partial-surface marker, as scan_dast writes it (`${DAST_ENGINE}:partial-surface`). */
+const DAST_PARTIAL_SURFACE = 'guardian-dast:partial-surface';
 /**
- * Findings this run actually persisted, read back out of the ephemeral
- * database rather than out of any step's return payload (see the module doc
- * comment). The database was created moments ago in a fresh `mkdtemp`
- * directory, so every scan row it holds belongs to this one run — no
- * project-path or "latest scan" filtering is needed to keep another run's
- * data out, unlike the equivalent reads inside an interactive MCP session.
+ * Per `missing_tools` name whose whole cause is files only partly parsed —
+ * `ScanStepResult.partial_parses` — or null when there is none:
  *
- * Deduplicated by fingerprint across scan rows (`security_scan_full` and
- * `scan_dast` each create their own): fingerprints are shared/stable across
- * scans by design (`findingsRepo.ts`'s own doc comment), so the same issue
- * reported by two steps must not be double-counted by the gate.
+ *   - an `ok` run that carries `partially_parsed` (the shared Semgrep judge's
+ *     `partial` verdict: scan_sast inside security_scan_full, and
+ *     map_attack_surface) and whose name the step lists missing;
+ *   - scan_dast's `guardian-dast:partial-surface`, when the surface it probed
+ *     was partial for no other reason than its partly parsed files: nothing
+ *     but `semgrep` missing from the surface and no failed step of its run
+ *     (a lost route recovery is a gap no file acceptance covers).
+ *
+ * Anything else stays a plain gap: the gate can only accept what is listed.
  */
-function collectFindings(storage) {
-    const byFingerprint = new Map();
-    for (const scan of storage.scans.listHistory(SCAN_HISTORY_LIMIT)) {
-        for (const finding of storage.findings.listByScan(scan.scan_id)) {
-            byFingerprint.set(finding.fingerprint, finding);
+function partialParsesOf(name, result, toolsRun, missingTools) {
+    const out = {};
+    const add = (key, refs) => {
+        const list = out[key] ?? [];
+        for (const ref of refs) {
+            if (!list.some((r) => r.file === ref.file && r.type === ref.type))
+                list.push(ref);
+        }
+        if (list.length > 0)
+            out[key] = list;
+    };
+    for (const run of toolsRun) {
+        if (run.status !== 'ok' || !missingTools.includes(run.name))
+            continue;
+        add(run.name, partialFiles(run.partially_parsed));
+    }
+    if (name === 'scan_dast' && missingTools.includes(DAST_PARTIAL_SURFACE)) {
+        const summary = result['summary'];
+        const gaps = summary !== null && typeof summary === 'object' ? summary['surface_gaps'] : undefined;
+        if (gaps !== null && typeof gaps === 'object') {
+            const g = gaps;
+            const failed = Array.isArray(g['failed_steps']) ? g['failed_steps'].length : 0;
+            const onlySemgrep = toStringArray(g['missing_tools']).every((t) => t === 'semgrep');
+            if (failed === 0 && onlySemgrep)
+                add(DAST_PARTIAL_SURFACE, partialFiles(g['partially_parsed']));
         }
     }
-    return [...byFingerprint.values()];
+    return Object.keys(out).length > 0 ? out : null;
+}
+/**
+ * Every finding this run persisted for the scanned project, read back out of
+ * the ephemeral database rather than out of any step's return payload (see
+ * the module doc comment): each UNSCOPED row of THIS project, whatever its
+ * status.
+ *
+ * - Project-scoped (Task 24): it used to be every row of `listHistory(50)`,
+ *   whatever project each belonged to. The database being fresh narrows what
+ *   can be in it, not what a step may write there — a row filed under
+ *   another path is not this project's measurement. Resolved the way every
+ *   step resolved the `project_path` it was given, so both sides compare the
+ *   same spelling.
+ * - Never a scoped row (`meta.scope`): part of the project, whose silence
+ *   about the rest is not evidence — and whose findings the whole-project
+ *   rows already hold.
+ * - Status-agnostic, deliberately NOT the interactive open set (fix round 1,
+ *   I1): the open set reads completed rows only and falls back to an older
+ *   one, which a throwaway database never has. A `failed` row often carries
+ *   real findings — scan_iac fails the whole row when one pass exits
+ *   non-zero, yet keeps Trivy's results — and `gate.ts`'s rule is that a
+ *   real regression (GATE_FAILED) outranks a coverage gap (INCOMPLETE_SCAN),
+ *   never hides behind it. The gap itself still reaches the gate through
+ *   each step's `tools_run` / `missing_tools`.
+ *
+ * Deduplicated across rows by `runners/findingMerge.ts` (an orchestrated
+ * `security_full` parent repeats its children's findings; two scanners can
+ * report one issue): the same issue must not be counted twice by the gate.
+ */
+function collectFindings(storage, projectPath) {
+    const project = scannedProject(projectPath);
+    const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+    const all = [];
+    for (const scan of rows) {
+        if (isScopedScan(scan))
+            continue;
+        all.push(...storage.findings.listByScan(scan.scan_id));
+    }
+    return dedupeFindings(all);
+}
+/** `resolveProjectPath`'s spelling of `projectPath`, or its canonical form when it no longer resolves. */
+function scannedProject(projectPath) {
+    try {
+        return resolveProjectPath(projectPath).path;
+    }
+    catch {
+        return canonicalPath(projectPath);
+    }
 }
 //# sourceMappingURL=runScans.js.map

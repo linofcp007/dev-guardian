@@ -1,109 +1,181 @@
 /**
  * `check_toolchain` — surface installed / missing scanner state.
  *
- * Invokes `scripts/scan/check-tools.sh`, which already returns a JSON map
- * of `{toolName: versionString}`. We enrich each entry with:
- *   - `installed` (bool)
- *   - `version` (string from check-tools or "")
- *   - `expected_version_floor` (from the catalogue)
+ * Probes every catalogue entry directly: its binary and version command
+ * (`installCatalog.ts` → `probe`), run through `runProcess` — argv, no shell,
+ * so it works with no bash at all. For each tool it reports:
+ *   - `installed` (bool) and `version` (parsed, or "")
+ *   - `expected_version_floor` and `meets_version_floor`
  *   - `required_by` (which MCP tools need it)
  *   - `install_command` (string suggestion per current OS)
+ *   - `compromised` (+ `advisory`) for a known-malicious release
+ *   - `provided_by` when another entry satisfies it (dotnet-format ← SDK)
+ *   - `probe_error` when the binary exists but could not report a version
  *
- * No installation happens here — that's `install_toolchain`'s job. This
- * tool is read-only.
+ * It used to run `scripts/scan/check-tools.sh`, which knew 11 of the 17
+ * catalogue entries — nine were ALWAYS "not installed", including a .NET SDK
+ * that was sitting right there — and whose raw output broke the JSON on a
+ * real Windows host (see `runners/toolProbe.ts`).
+ *
+ * No installation happens here — that's `install_toolchain`'s job. This tool
+ * is read-only.
  */
-import { join } from 'node:path';
 import { detectOs } from '../platform/osDetect.js';
-import { meetsFloor } from '../platform/semverCompare.js';
-import { runShellScript } from '../runners/shellRunner.js';
-import { TOOL_CATALOG, suggestedInstallCommandString, } from '../runners/installCatalog.js';
+import { compareSemver, meetsFloor } from '../platform/semverCompare.js';
+import { TOOL_CATALOG, knownCompromise, suggestedInstallCommandString, } from '../runners/installCatalog.js';
+import { runVersionProbe } from '../runners/toolProbe.js';
 import { registerToolModule } from './index.js';
-const SCRIPT_REL_PATH = ['scan', 'check-tools.sh'];
+/**
+ * Not scanners, but what the scanners and scripts stand on. Reported for
+ * information only, as the bash probe did; never counted in the summary.
+ * Python is tried as `python3` first, then `python` — on Windows `python3`
+ * is often the Microsoft Store stub, which exits 9009.
+ */
+const INFORMATIONAL = [
+    { name: 'node', probes: [{ command: 'node', args: ['--version'] }] },
+    {
+        name: 'python',
+        probes: [
+            { command: 'python3', args: ['--version'] },
+            { command: 'python', args: ['--version'] },
+        ],
+    },
+    { name: 'docker', probes: [{ command: 'docker', args: ['--version'] }] },
+];
+/** Probes run a few at a time: 20 interpreters starting at once is its own
+ *  load test on a busy machine, and the slowest probe bounds the call. */
+const PROBE_CONCURRENCY = 6;
 const tool = {
     name: 'check_toolchain',
     title: 'Check toolchain status',
-    description: 'Run scripts/scan/check-tools.sh and report per-scanner status: installed, version, expected ' +
-        'version floor, the MCP tools that depend on it, and the suggested install command for this OS.',
+    description: 'Probe every catalogued scanner directly (its binary and version command; no bash needed) and ' +
+        'report per-scanner status: installed, version, expected version floor, known-compromised ' +
+        'releases (with the advisory id), the MCP tools that depend on it, and the suggested install ' +
+        'command for this OS.',
     inputSchema: {},
     handler: async (_input, ctx) => handler(ctx),
 };
 registerToolModule(tool);
 async function handler(ctx) {
-    if (ctx.shell === null) {
-        return failDomain('no_bash_shell', 'No usable bash shell found. Install Git Bash or WSL, then restart.');
-    }
-    const scriptPath = join(ctx.scriptsDir, ...SCRIPT_REL_PATH);
-    const result = await runShellScript({
-        shell: ctx.shell,
-        scriptPath,
-        cwd: ctx.scriptsDir,
-    });
-    if (result.outcome !== 'completed') {
-        return failDomain('scanner_failed', `check-tools.sh exited with outcome=${result.outcome}: ${result.stderr.split(/\r?\n/)[0] ?? ''}`);
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(result.stdout);
-    }
-    catch (e) {
-        return failDomain('scanner_failed', `check-tools.sh output not JSON: ${e.message}`);
-    }
     const os = detectOs();
+    const cwd = ctx.scriptsDir;
+    const catalogue = Object.values(TOOL_CATALOG);
+    const probed = await mapLimited(catalogue, PROBE_CONCURRENCY, (meta) => runVersionProbe(meta.probe, cwd));
+    const extras = await mapLimited(INFORMATIONAL, PROBE_CONCURRENCY, (x) => firstFound(x.probes, cwd));
+    const byName = new Map();
+    catalogue.forEach((meta, i) => {
+        const r = probed[i];
+        if (r !== undefined)
+            byName.set(meta.name, r);
+    });
     const tools = [];
-    // Cover every catalog entry plus anything check-tools surfaced that we
-    // do not know about — the latter is informational only.
-    const seen = new Set();
-    for (const [toolName, meta] of Object.entries(TOOL_CATALOG)) {
-        const version = (parsed[toolName] ?? '').trim();
-        const installed = version.length > 0;
-        tools.push({
-            name: toolName,
-            installed,
-            version,
+    for (const meta of catalogue) {
+        let result = byName.get(meta.name) ?? { installed: false, version: '' };
+        let providedBy;
+        // `dotnet format` has shipped inside the SDK since .NET 6; the global
+        // tool is only needed on older SDKs.
+        if (meta.name === 'dotnet-format' && !result.installed) {
+            const sdk = byName.get('dotnet-sdk');
+            if (sdk?.installed && (compareSemver(sdk.version, '6.0.0') ?? -1) >= 0) {
+                result = { installed: true, version: sdk.version };
+                providedBy = 'dotnet-sdk';
+            }
+        }
+        const compromise = result.installed ? knownCompromise(meta.name, result.version) : null;
+        const status = {
+            name: meta.name,
+            installed: result.installed,
+            version: result.version,
             expected_version_floor: meta.version_floor,
-            meets_version_floor: installed ? meetsFloor(version, meta.version_floor) : null,
+            meets_version_floor: result.installed ? meetsFloor(result.version, meta.version_floor) : null,
             required_by: meta.required_by,
-            install_command: suggestedInstallCommandString(toolName, os),
-        });
-        seen.add(toolName);
+            install_command: suggestedInstallCommandString(meta.name, os),
+            compromised: compromise !== null,
+        };
+        if (compromise) {
+            status.advisory = {
+                id: compromise.advisory,
+                ...(compromise.cve ? { cve: compromise.cve } : {}),
+                url: compromise.url,
+                action: compromise.action,
+            };
+        }
+        if (providedBy)
+            status.provided_by = providedBy;
+        if (result.error && !result.installed)
+            status.probe_error = result.error;
+        tools.push(status);
     }
-    for (const [toolName, versionRaw] of Object.entries(parsed)) {
-        if (seen.has(toolName))
-            continue;
-        const version = (versionRaw ?? '').trim();
-        tools.push({
-            name: toolName,
-            installed: version.length > 0,
-            version,
+    INFORMATIONAL.forEach((x, i) => {
+        const r = extras[i] ?? { installed: false, version: '' };
+        const status = {
+            name: x.name,
+            installed: r.installed,
+            version: r.version,
             expected_version_floor: '',
             meets_version_floor: null,
             required_by: [],
             install_command: null,
-        });
-    }
-    // Sort: missing required tools first, then everything else, alphabetical.
+            compromised: false,
+        };
+        if (r.error && !r.installed)
+            status.probe_error = r.error;
+        tools.push(status);
+    });
+    // Sort: compromised first, then missing, then required, alphabetical.
     tools.sort((a, b) => {
         const aRequired = a.required_by.length > 0 ? 0 : 1;
         const bRequired = b.required_by.length > 0 ? 0 : 1;
         const aMissing = a.installed ? 1 : 0;
         const bMissing = b.installed ? 1 : 0;
-        return (aMissing - bMissing ||
+        const aBad = a.compromised ? 0 : 1;
+        const bBad = b.compromised ? 0 : 1;
+        return (aBad - bBad ||
+            aMissing - bMissing ||
             aRequired - bRequired ||
             a.name.localeCompare(b.name));
     });
+    const compromised = tools.filter((t) => t.compromised);
+    const warnings = compromised.map((t) => `${t.name} ${t.version} is a known-compromised release (${t.advisory?.id ?? 'advisory'}): ` +
+        `${t.advisory?.action ?? ''} ${t.advisory?.url ?? ''}`.trim());
     return {
         ok: true,
         os,
         tools,
         summary: {
-            total_catalogued: Object.keys(TOOL_CATALOG).length,
+            total_catalogued: catalogue.length,
             installed: tools.filter((t) => t.installed && TOOL_CATALOG[t.name]).length,
             missing: tools.filter((t) => !t.installed && TOOL_CATALOG[t.name]).length,
             below_floor: tools.filter((t) => t.meets_version_floor === false).length,
+            compromised: compromised.length,
         },
+        ...(warnings.length > 0 ? { warnings } : {}),
     };
 }
-function failDomain(code, message) {
-    return { ok: false, error: { code, message } };
+/** The first probe that finds its tool; the last result when none does. */
+async function firstFound(probes, cwd) {
+    let last = { installed: false, version: '' };
+    for (const probe of probes) {
+        last = await runVersionProbe(probe, cwd);
+        if (last.installed)
+            return last;
+    }
+    return last;
+}
+/** `Promise.all(items.map(fn))`, at most `limit` at a time, order kept. */
+async function mapLimited(items, limit, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const i = next++;
+            const item = items[i];
+            if (item === undefined)
+                continue;
+            out[i] = await fn(item);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return out;
 }
 //# sourceMappingURL=checkToolchain.js.map

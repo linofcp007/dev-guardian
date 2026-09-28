@@ -13,7 +13,16 @@
  * each arg is a single argv element — no shell quoting needed.
  */
 
+import { join } from 'node:path';
+
 export const DEFAULT_SEMGREP_IMAGE = 'semgrep/semgrep';
+
+/**
+ * Where the project is mounted inside the container. Semgrep run there
+ * reports paths under it (`/src/app.js`); the Semgrep parser strips it so a
+ * Docker run and a native run of the same tree give the same relative paths.
+ */
+export const CONTAINER_PROJECT_ROOT = '/src';
 
 export interface SemgrepDockerOptions {
   /** Host absolute path to the project root (mounted at /src). */
@@ -57,9 +66,9 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
     'run',
     '--rm',
     '--mount',
-    `type=bind,source=${opts.projectPath},target=/src`,
+    `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
     '-w',
-    '/src',
+    CONTAINER_PROJECT_ROOT,
     image,
     'semgrep',
   ];
@@ -68,7 +77,7 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
   if (opts.metricsOff) args.push('--metrics=off');
   args.push('--json', '--quiet', '--output', containerOut);
   if (opts.autoFix) args.push('--autofix');
-  args.push('/src');
+  args.push(CONTAINER_PROJECT_ROOT);
   return args;
 }
 
@@ -79,6 +88,22 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
  * root if the host path is unexpectedly outside the project.
  */
 export function toContainerPath(projectPath: string, outFileHost: string): string {
+  return toContainerPathImpl(projectPath, outFileHost);
+}
+
+/**
+ * The host file behind a path the container sees (`/src/<rel>` →
+ * `<projectPath>/<rel>`) — {@link toContainerPath} in reverse. Any other
+ * path is returned as it is.
+ */
+export function fromContainerPath(projectPath: string, containerPath: string): string {
+  const prefix = `${CONTAINER_PROJECT_ROOT}/`;
+  if (containerPath === CONTAINER_PROJECT_ROOT) return projectPath;
+  if (!containerPath.startsWith(prefix)) return containerPath;
+  return join(projectPath, ...containerPath.slice(prefix.length).split('/'));
+}
+
+function toContainerPathImpl(projectPath: string, outFileHost: string): string {
   const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '');
   const root = norm(projectPath);
   let rel = norm(outFileHost);
@@ -86,5 +111,5 @@ export function toContainerPath(projectPath: string, outFileHost: string): strin
     rel = rel.slice(root.length);
   }
   rel = rel.replace(/^\/+/, '');
-  return rel ? `/src/${rel}` : '/src';
+  return rel ? `${CONTAINER_PROJECT_ROOT}/${rel}` : CONTAINER_PROJECT_ROOT;
 }

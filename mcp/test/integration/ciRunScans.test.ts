@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runScans, SCAN_SEQUENCE } from '../../src/ci/runScans.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
@@ -193,6 +194,82 @@ describe('runScans', () => {
     });
   });
 
+  it('passes local_only to security_scan_full when asked, and only then', async () => {
+    const inputs: Array<Record<string, unknown>> = [];
+    mockTool('security_scan_full', async (input) => {
+      inputs.push(input);
+      return ok();
+    });
+    await runScans({ projectPath: makeProjectDir(), localOnly: true });
+    await runScans({ projectPath: makeProjectDir() });
+    expect(inputs[0]?.['local_only']).toBe(true);
+    expect(inputs[1]?.['local_only']).toBeUndefined();
+  });
+
+  // Follow-up X1: the files a step's scanner only partly parsed travel to the
+  // gate — per missing name, so `--accept-partial-parse` can be matched
+  // against exactly the gap they cause.
+  it('carries each step\'s partly parsed files into partial_parses, per missing name', async () => {
+    const partial = (file: string) => ({ file, type: 'PartialParsing', message: 'Syntax error' });
+    mockTool('security_scan_full', async () =>
+      ok({
+        tools_run: [
+          { name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [partial('wp/a.php'), partial('b.js')] },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      }),
+    );
+    mockTool('map_attack_surface', async () =>
+      ok({
+        tools_run: [{ name: 'semgrep', status: 'ok', partially_parsed: [partial('wp/a.php')] }],
+        missing_tools: ['semgrep'],
+        partially_parsed: [partial('wp/a.php')],
+      }),
+    );
+    mockTool('scan_dast', async () =>
+      ok({
+        tools_run: [{ name: 'guardian-dast', status: 'ok' }],
+        missing_tools: ['guardian-dast:partial-surface'],
+        summary: { surface_gaps: { missing_tools: ['semgrep'], partially_parsed: [partial('wp/a.php')] } },
+      }),
+    );
+    mockTool('license_compatibility', async () =>
+      ok({
+        // Not missing: a partial list on a run whose name is not a gap names no gap.
+        tools_run: [{ name: 'trivy', status: 'ok', partially_parsed: [partial('x')] }],
+        missing_tools: [],
+      }),
+    );
+
+    const { steps } = await runScans({ projectPath: makeProjectDir(), baseUrl: 'https://example.test' });
+    const of = (tool: string) => steps.find((s) => s.tool === tool);
+    const pp = (file: string, type = 'PartialParsing') => ({ file, type });
+    expect(of('security_scan_full')?.partial_parses).toEqual({ semgrep: [pp('wp/a.php'), pp('b.js')] });
+    expect(of('map_attack_surface')?.partial_parses).toEqual({ semgrep: [pp('wp/a.php')] });
+    expect(of('scan_dast')?.partial_parses).toEqual({ 'guardian-dast:partial-surface': [pp('wp/a.php')] });
+    expect(of('license_compatibility')?.partial_parses).toBeUndefined();
+    expect(of('detect_stack')?.partial_parses).toBeUndefined();
+  });
+
+  it('never carries a DAST surface gap that is more than a partial parse', async () => {
+    const partial = { file: 'wp/a.php', type: 'PartialParsing', message: 'x' };
+    for (const surface_gaps of [
+      // Its route recovery failed too: routes were lost to something no one accepted.
+      { missing_tools: ['semgrep'], partially_parsed: [partial], failed_steps: [{ name: 'semgrep-metavar-recovery', status: 'failed' }] },
+      // Another scanner missing from the surface.
+      { missing_tools: ['semgrep', 'other'], partially_parsed: [partial] },
+      // No file at all.
+      { missing_tools: ['semgrep'], partially_parsed: [] },
+    ]) {
+      mockTool('scan_dast', async () =>
+        ok({ tools_run: [{ name: 'guardian-dast', status: 'ok' }], missing_tools: ['guardian-dast:partial-surface'], summary: { surface_gaps } }),
+      );
+      const { steps } = await runScans({ projectPath: makeProjectDir(), baseUrl: 'https://example.test' });
+      expect(steps.find((s) => s.tool === 'scan_dast')?.partial_parses).toBeUndefined();
+    }
+  });
+
   it('does NOT abort when a step refuses — it records and continues', async () => {
     // The wrong implementation stops at the first refusal and reports LESS
     // than one that continues and says what it missed — every step after
@@ -374,5 +451,56 @@ describe('runScans', () => {
     const result = await runScans({ projectPath, baseUrl: 'https://example.test' });
 
     expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-dast-1', 'fp-sast-1']);
+  });
+
+  it("gates on every unscoped row of the scanned project, whatever its status — never another path's, never a scoped one", async () => {
+    // Task 24: the findings used to be every scan row in the database, up to
+    // 50, whatever project each belonged to and scoped or not. They are this
+    // project's unscoped rows now — and ANY status (fix round 1, I1): a
+    // `failed` row often carries real findings (scan_iac fails the whole row
+    // when one pass exits non-zero, yet keeps Trivy's results), and the gate's
+    // rule is that a real regression outranks a coverage gap, never hides
+    // behind it. The throwaway database has no older row to fall back on.
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const elsewhere = resolveProjectPath(makeProjectDir()).path;
+    const finding = (fingerprint: string, severity: Finding['severity'] = 'high'): Finding => ({
+      fingerprint, tool: 'semgrep', severity, category: 'security', title: fingerprint, fix_available: false,
+    });
+
+    mockTool('security_scan_full', async (_input, ctx) => {
+      const persist = (
+        scanId: string,
+        project: string,
+        fp: Finding,
+        extra: { type?: 'sast' | 'iac'; meta?: Record<string, unknown>; failed?: boolean } = {},
+      ): void => {
+        ctx.storage.scans.insert({
+          scan_id: scanId, scan_type: extra.type ?? 'sast', project_path: project, tree_hash: 't',
+          ...(extra.meta !== undefined ? { meta: extra.meta } : {}),
+        });
+        ctx.storage.findings.bulkInsert([{ ...fp, scan_id: scanId }]);
+        ctx.storage.scans.finalize({
+          scan_id: scanId,
+          status: extra.failed === true ? 'failed' : 'completed',
+          tools_run: extra.failed === true
+            ? [{ name: 'trivy-config', status: 'ok' }, { name: 'actionlint', status: 'failed' }]
+            : [{ name: 'semgrep', status: 'ok' }],
+          missing_tools: [],
+        });
+      };
+      persist('other-project', elsewhere, finding('fp-elsewhere'));
+      // scan_iac's shape: Trivy found a critical misconfiguration, actionlint
+      // failed, so the row is `failed` — and the misconfiguration is real.
+      persist('failed-iac', projectPath, { ...finding('fp-failed', 'critical'), tool: 'trivy' }, { type: 'iac', failed: true });
+      persist('whole', projectPath, finding('fp-project'));
+      // Last, so it is the NEWEST row: what keeps it out is that it is
+      // scoped, not that something newer superseded it.
+      persist('scoped', projectPath, finding('fp-scoped'), { meta: { scope: { kind: 'paths', paths: ['src'] } } });
+      return ok();
+    });
+
+    const result = await runScans({ projectPath });
+
+    expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-failed', 'fp-project']);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

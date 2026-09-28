@@ -3,10 +3,18 @@
  *
  * Each successful `map_attack_surface` run persists one row. The resources
  * `guardian://surface/latest` and `guardian://surface/{id}` read from here,
- * and `getByTreeHash` backs the tool's cache check.
+ * and `findCacheHit` backs the tool's cache check.
  *
  * Mirrors `stackRepo.ts`; the additions are `getById` (the templated
- * resource needs it) and `getByTreeHash` (the cache).
+ * resource needs it) and `findCacheHit` (the cache).
+ *
+ * The cache used to be `getByTreeHash`: the newest snapshot with that tree
+ * hash, from ANY project, of ANY age, mapped with ANY rule pack. Two projects
+ * whose trees hash the same (two empty directories, two checkouts of one
+ * commit) were served each other's routes, and a snapshot taken with a
+ * routes.yml that has since been fixed was served forever. A snapshot is now
+ * stored under a `cache_key` (`treeHash/cacheKey.ts#surfaceCacheKey`) and
+ * reused only under that exact key, within a freshness window.
  */
 import { nowIso, parseJsonObject } from './repoUtil.js';
 const EMPTY_SNAPSHOT = {
@@ -26,12 +34,12 @@ export class SurfaceRepo {
     getLatestStmt;
     getLatestForProjectStmt;
     getByIdStmt;
-    getByTreeHashStmt;
+    findCacheStmt;
     listRecentStmt;
     constructor(db) {
         this.insertStmt = db.prepare(`
-      INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json, cache_key)
+      VALUES (?, ?, ?, ?, ?)
     `);
         this.getLatestStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT 1
@@ -42,8 +50,13 @@ export class SurfaceRepo {
         this.getByIdStmt = db.prepare(`
       SELECT * FROM surface_snapshots WHERE id = ?
     `);
-        this.getByTreeHashStmt = db.prepare(`
-      SELECT * FROM surface_snapshots WHERE tree_hash = ? ORDER BY id DESC LIMIT 1
+        // The key already covers project and tree; both are matched again
+        // explicitly so the statement says what it means. A NULL key (rows
+        // written before migration 006) never equals anything.
+        this.findCacheStmt = db.prepare(`
+      SELECT * FROM surface_snapshots
+      WHERE cache_key = ? AND project_path = ? AND tree_hash = ? AND captured_at >= ?
+      ORDER BY id DESC LIMIT 1
     `);
         this.listRecentStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT ?
@@ -51,7 +64,7 @@ export class SurfaceRepo {
     }
     insert(input) {
         const capturedAt = nowIso();
-        const info = this.insertStmt.run(input.project_path, capturedAt, input.tree_hash, JSON.stringify(input.snapshot));
+        const info = this.insertStmt.run(input.project_path, capturedAt, input.tree_hash, JSON.stringify(input.snapshot), input.cache_key ?? null);
         return {
             id: Number(info.lastInsertRowid),
             project_path: input.project_path,
@@ -61,11 +74,9 @@ export class SurfaceRepo {
         };
     }
     /**
-     * The newest snapshot in the database, from ANY project.
-     *
-     * Correct for exactly one caller: the `guardian://surface/latest` resource,
-     * whose contract really is "whatever this server last mapped" and which
-     * claims nothing about a project.
+     * The newest snapshot in the database, from ANY project. No production
+     * caller: the `guardian://surface/latest` resource answers for the
+     * server's own project (`getLatestForProject(serverProjectPath())`).
      *
      * Any consumer that relativizes paths against a specific project root,
      * keys anything by one, or TELLS THE CALLER it answered about their
@@ -96,8 +107,12 @@ export class SurfaceRepo {
         const row = this.getByIdStmt.get(id);
         return row ? rowToSnapshot(row) : null;
     }
-    getByTreeHash(treeHash) {
-        const row = this.getByTreeHashStmt.get(treeHash);
+    /**
+     * The newest snapshot stored under exactly `cache_key` for this project and
+     * tree, captured no earlier than `freshThreshold` — see the module comment.
+     */
+    findCacheHit(args) {
+        const row = this.findCacheStmt.get(args.cache_key, args.project_path, args.tree_hash, args.freshThreshold);
         return row ? rowToSnapshot(row) : null;
     }
     listRecent(limit = 10) {

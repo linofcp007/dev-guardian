@@ -1,921 +1,188 @@
 # dev-guardian
 
-[English](#english) · [Português](#português) · [Español](#español)
+**English** · [Português (pt-PT)](README.pt-PT.md) · [Español](README.es.md)
 
----
+An open-source security, bug-finding, code-quality, dependency, compliance, observability and performance toolkit for Claude Code and Cowork — and, through its MCP server, for any MCP-capable AI host. It drives open-source scanners (Semgrep, Trivy, gitleaks, Syft, …), keeps every result in a local SQLite database so baselines, deltas and suppressions survive between sessions, and says so when a scanner did not run instead of reporting "0 findings". It also vets third-party AI skills and MCP servers, and the packages an agent is about to install, before they reach your machine.
 
-## English
+Trilingual: the skills and commands answer in English, Portuguese or Spanish, whichever you write in.
 
-All-in-one **100% open-source** plugin for Claude Code / Cowork. Handles security, bug detection and fixing, code quality, dependency management, observability, performance and compliance for any dev project. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), trilingual triggers (EN + PT + ES) — responds in the user's language.
+## What's inside
 
-Under the hood it ships a Claude Code plugin (13 skills + 48 slash commands) **and** an MCP server with **54 tools and 18 resources**, with persistent SQLite state for baselines, deltas and suppressions. It also vets **third-party AI skills / MCP servers / agents before you install them** — the supply-chain check for the agent ecosystem.
+- **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
+- An **MCP server** with **57 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
+- **142 Semgrep rules in 10 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, and a route-inventory pack for nine languages — see [docs/rule-packs.md](docs/rule-packs.md).
+- **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
+- A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
 
-### Skills (Claude Code front-end)
+## Requirements
 
-| Skill                    | Slash command          | What it does                                              |
-| ------------------------ | ---------------------- | --------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Main router — dispatches to the right module              |
-| `guardian-init`          | `/guardian-init`       | Initial bootstrap — installs and configures everything    |
-| `guardian-security`      | `/guardian-scan`       | SAST + secrets + CVEs + container + IaC                   |
-| `guardian-bugfix`        | `/guardian-fix`        | Hunts and fixes implementation bugs                       |
-| `guardian-quality`       | `/guardian-quality`    | Complexity, duplication, tech debt                        |
-| `guardian-review`        | `/guardian-review`     | Deep pre-PR / pre-deploy review                           |
-| `guardian-deps`          | `/guardian-deps`       | Renovate setup + CVE scan + supply chain                  |
-| `guardian-observability` | `/guardian-observe`    | Structured logging, metrics, error tracking               |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                       |
-| `guardian-compliance`    | `/guardian-compliance` | GDPR, licenses, SBOM, privacy policy                      |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet a 3rd-party skill / MCP server / agent before install |
-| `guardian-grill`         | `/guardian-grill`      | Understanding gate — grills you on the diff before merge  |
-| `guardian-improve`       | `/guardian-improve`    | Turns measured tech debt into improvement specs           |
-| (combines 3 of them)     | `/guardian-audit`      | Executive report: security + quality + deps               |
+- **Node.js ≥ 22.13.** The database is Node's built-in `node:sqlite`, used without any flag. On an older Node the server exits with `dev-guardian requires Node.js >= 22.13 (node:sqlite)`.
+- **git.**
+- **The scanners you want to use**, installed separately. `check_toolchain` reports what is present (and flags the compromised Trivy 0.69.4–0.69.6); `install_toolchain` or `/guardian-init` installs the rest. A scanner that is missing is reported as a coverage gap, never as a clean result.
+- **Optional: Docker.** Without a native `semgrep`, `scan_sast` and `map_attack_surface` fall back to the `semgrep/semgrep` image.
+- **Windows:** every scan runs natively, with no shell. A bash is needed only for `init_project`'s first-pass status report and for `install_toolchain`'s WSL fallback when none of winget, scoop or choco is present. dev-guardian looks for Git Bash first, then WSL, then any `bash` on `PATH`.
 
-You can also trigger everything via **natural language** (EN, PT or ES). Skills fire on descriptions — *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
+Nothing needs `npm install`: `mcp/dist/server.js` is committed as a self-contained bundle. Only the CLI's `scan` and `baseline update` need `npm ci --omit=dev` in `mcp/` once, for their runtime packages.
 
-### MCP server (54 tools, 18 resources)
-
-The plugin registers an MCP server on stdio that Claude Code launches automatically. The tools group into:
-
-- **Cross-stack security** (10) — `security_scan_full`, `scan_sast` (Semgrep — runs the registry ruleset **and the project’s own rules**: `.semgrep.yml`, or whatever `.dev-guardian/configs.json` records as its target, plus anything added with `register_custom_rules`. Loading the project’s own file is new; `--config=auto` does **not** pick it up, so for as long as the tool ran only `--config=auto` the thirteen rules `init_project` installs had no consumer at all. A config Semgrep cannot load is dropped and named in `tools_run`, never passed through — one that fails to resolve aborts the *whole* run. **PRIVACY:** `--config=auto` downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so the default mode cannot avoid it. **`local_only=true`** drops the registry, passes `--metrics=off` and runs only rules already on disk — nothing leaves the machine, at the cost of the registry’s rules; with no local rules it reports the scan as skipped rather than as a clean result), `scan_deps`, `scan_secrets`, `scan_containers`, `scan_iac`, `deps_audit`, `bug_hunt` (Semgrep `p/r2c-bug-scan` + `p/security-audit`, plus an always-on local rule pack for JS/TS — `configs/semgrep/bugfix-js.yml`, thirteen hand-authored rules covering all six bug subcategories the tool classifies: race conditions, null/undefined safety, off-by-one, memory leaks, swallowed error handling, and two edge cases. `/guardian-fix` also names "broken happy paths" as a focus; that's a category of consequence, not a syntactic shape, so only its commonest concrete form is covered — an un-awaited mutating call inside an async function (declarations, arrow functions, class/object methods — NOT async function expressions, a Semgrep engine limitation) — and nothing covers the rest. These are Semgrep OSS pattern rules: they match syntax, not dataflow, so a bug two functions from its guard stays invisible to them. In 1.9.0 an independent audit read the pack against ~600 lines of JS/TS nobody who wrote the rules had seen, and found ~40 false positives across 14 rules — among them `$A.find(...).$PROP` firing at ERROR on every Mongoose query and every jQuery `.find()` (nine reproductions, zero true positives), `floating-mutation` firing on `res.send(rows)` and on `void repo.save(a)` (the fix its own message prescribes), and a `<= .length` loop that never indexes anything being told it reads past the end. Those are closed: `unchecked-find` now requires a literal callback argument, which is the one thing that distinguishes `Array#find` from a Mongoose Query or a jQuery collection without type inference; `floating-mutation` now requires the RECEIVER name to look like a persistence boundary as well as the method name, and excludes `void`, `Promise.all`, `.catch`/`.then`/`.finally` and capture-then-await; and `loop-lte-length` now matches the out-of-range READ rather than the loop header. Severity was re-derived from one question asked of the OUTPUT — is what the rule emits ALWAYS a bug? — which the self-scan described below then answered with real numbers rather than with reasoning. That matters downstream: ERROR maps to `high`, WARNING to `medium`, and `create_fix_pr` defaults to `severity_min: high`, so a caller who wants this pack's findings fixed has to ask for `medium`. What remains, stated rather than implied: a named predicate (`users.find(byId).name`) is now invisible, the price of not flagging every Mongoose query; a repository whose variable is not named like one is invisible to `floating-mutation`, and so is `const p = repo.save(a)` that is never awaited; `while`/`do-while` loops and cached lengths are outside `loop-lte-length`; and the listener/subscribe rules cannot tell a cleanup that removes nothing from one that works, nor see a second uncleaned registration beside a cleaned one. A follow-up scan of this repo's own `mcp/src` — 183 files of TypeScript nobody wrote as a fixture — then measured the wave and changed two more things. It confirmed the `floating-mutation` fix (20 findings → 0) and caught a regression the wave had introduced (`unchecked-match` 0 → 13, because the new `exec` branch did not inherit the optional-chaining exclusion the `match` branch already had; every one of the 13 was correct, guarded `exec(...)?.[1]` code). Two rules changed status on that evidence. **`catch-returns-null` was DELETED**: 25 findings on `mcp/src`, every one correct code, on top of zero true positives in the audit corpus — INFO is not a tier for a rule that has never been right, it is a quieter way to keep being wrong. **`empty-catch` and `empty-promise-catch` moved ERROR → WARNING**: they produce 45 findings on `mcp/src` and all 45 are deliberate, comment-documented fail-open (`catch { }` with a comment saying the process is already dead, the handle already closed). They ARE marked — with a comment, which Semgrep cannot read — so a declaration of intent the rule cannot recognise is exactly the criterion. Java's equivalent held at ERROR on the claim that it CAN read its ecosystem's marker (the Checkstyle `ignore`/`ignored`/`expected` binding name), and that claim was later measured against OpenJDK and failed: the marker covers 8.0% of the corpus's empty catches while 56.8% of the rule's 1589 findings declare intent in a **comment** instead, so Java is WARNING too, and C# is WARNING with a harder number still — 0 occurrences of the marker in 11 800 files of `dotnet/runtime`, 93% of its 402 findings written `catch (Type) { }` or `catch { }` with nothing to name, and `dotnet build` emitting **CS0168** on the very spelling the rule prescribes. JS/TS has no equivalent of comparable standing either, structurally, because ES2019 optional catch binding removed the identifier a naming convention attaches to — 41 of those 42 are written `catch {`, with nothing to name. The `_`/`ignored` escape hatch is honoured anyway so one case can be silenced in code rather than with `// nosemgrep`, and it is stated plainly that it removed zero of the 42. That leaves ONE rule at ERROR (`index-at-length`, which finds nothing on `mcp/src`, the right number for a rule that narrow), eleven at WARNING and one at INFO. Python has its own pack too — `configs/semgrep/bugfix-py.yml`, ten hand-authored rules across the same six classes, each measured against the 32 Python rules `p/r2c-bug-scan` already runs and confirmed to fire where those do not. Its known gaps are stated rather than implied: there is no general "coroutine not awaited" rule (that is not expressible in Semgrep OSS — only the four named `asyncio` primitives are covered, so a forgotten `await` on your own `async def` is not caught), the Django N+1 rule matches `for` statements but not list comprehensions, does not know SQLAlchemy or Peewee, and requires the queryset inline in the `for` header — `qs = Book.objects.all()` followed by `for book in qs:` is silent, arguably the commoner shape; `toctou-exists-open` now covers `os.path.exists`, `os.path.isfile`, `os.access`, `pathlib.Path.exists()` and the negated guard (`if not exists(p): return`), but only for READ modes, because testing before a *write* guards against clobbering rather than against a vanished file — `none-deref-match` covers `.group()`, `.groups()`, `.groupdict()`, `.start()`, `.end()`, `.span()` and subscripting, but only on the module-level `re.*` functions — the compiled-pattern form the `re` docs recommend, `PAT.match(t).group(1)`, needs cross-statement dataflow and is silent; `none-deref-dict-get` no longer excludes HTTP clients by receiver-name *substring* (which made real dict bugs like `session.get("user_id")` and `client_config.get("timeout")` false negatives) and instead requires the KEY to be a string literal, so a lookup with a variable key — `cfg.get(key).strip()` — is the false negative it trades for; and `queryset-n-plus-one` requires the traversed relation to end in an ATTRIBUTE, so `book.author.get_name()` is silent, which is the price of no longer accusing `book.title.strip()` and `ev.created_at.isoformat()`, one query each. After the 2026-08 audit only one of the ten Python rules is `ERROR` — `none-deref-match` — because the criterion is what a rule EMITS, not the bug class it belongs to: if correctness depends on the rule having recognised a guard, it emits a false positive on the first guard shape nobody enumerated. Two exclusions are worth naming as false negatives rather than leaving implied: `get-without-doesnotexist` counts a broad `except Exception:` as a guard, so an `.objects.get()` wrapped in `except Exception: pass` is silent here even though that is worse code than an unguarded `get` (the swallowing is caught separately by `except-pass`, but nothing joins the two up); and `open-without-context` never flags attribute targets, so `self.handle = open(path)` is skipped by design — its `close()` usually lives in another method, out of a syntactic rule's reach — which means a class that genuinely never closes its handle is missed, and that is the commonest way a long-lived file leak really looks. Go has one too — `configs/semgrep/bugfix-go.yml`, nine hand-authored rules across the same six classes, and Go is the language where the registry pack leaves the biggest hole: `p/r2c-bug-scan` ships 5 Go rules and only 2 land in a bug class, both integer-overflow, so `error_handling` — in the language where `if err != nil` *is* the error model — `race_condition`, `null_safety`, `memory_leak` and `edge_case` were all empty. Its gaps are stated rather than implied: there is **no goroutine-leak rule**, and **no loop-variable-capture rule** — that one was built and verified working, then deliberately excluded, because Go 1.22 made loop variables per-iteration and Semgrep cannot read `go.mod`, so on any modern module it would accuse correct code; and the pack shipped a **tenth rule that was deleted** in the 2026-08 audit — `edge-case-append-discarded` matched `append(xs, 1)` in statement position, which the Go spec forbids and the compiler rejects, so its true-positive set was empty in any project that compiles and everything it emitted in a real repository was a false positive (for the bug that *does* compile — `xs = append(xs, v)` on a parameter whose result never leaves the function — use `staticcheck`/`ineffassign`, which have the dataflow a syntactic rule does not). Of what remains: `nil-map-write` catches a locally `var`-declared map and a map field of a struct built with `&T{}` — the classic — but not a nil map arriving as a function parameter or returned by a constructor, neither of which is *always* a bug since it depends on the caller; `type-assert-no-ok` still fires on `var s, ok = v.(string)`, because the pattern `var $X, $OK = ...` matches nothing in Semgrep 1.164's Go parser (verified as a bare positive pattern); `err-discarded` cannot tell a project function returning `(T, bool)` from a discarded error, and only the standard-library shapes (`sync.Map`, `strings.Cut*`, `utf8.Decode*`) are excluded; and `err-blank-assign` fires on deliberate discards like `_ = os.Remove(tmp)` in a cleanup path, which is why it is `WARNING`. Only one of the nine Go rules is `ERROR` — `empty-err-block`, whose output is a literally empty error branch with no guard to recognise. Every Go fixture in the pack is compiled with `go build ./...` in Docker as part of the change process; that check is what caught the deleted rule. Java has one too — `configs/semgrep/bugfix-java.yml`, seven hand-authored rules across the same six classes: `p/r2c-bug-scan` ships 4 Java rules and **none** of them lands in a bug class — all four are equality and comparison style — so every subcategory was at zero, in the language whose most famous defect is the `NullPointerException`. **C# is emptier still, and the number is zero** — `configs/semgrep/bugfix-cs.yml`, eleven hand-authored rules across the same six classes. Measured with positive controls: `p/r2c-bug-scan` reports `paths.scanned = 0` on C# because it ships **no C# rules at all**, and `p/csharp` and `p/security-audit` scan every file and find nothing. Every C# rule is additive by measurement rather than assumption. **Rust gets exactly one rule, and one rule is the whole answer** — `configs/semgrep/bugfix-rs.yml` holds `blocking-sleep-in-async` and nothing else: a `std::thread::sleep` inside an `async fn`, which blocks the executor *thread* and stalls every other task scheduled on it. Read that as one rule, not as partial Rust coverage. A probe measured thirteen candidates and killed twelve, because four of the six bug classes are **compile errors** in Rust (E0502, E0515, E0373, E0599) and for the rest the answer is `cargo clippy`, whose type-aware lints beat every Semgrep equivalent measured — default already catches `await_holding_lock`, and the `restriction` group adds `unwrap_used`, `mem_forget`, `indexing_slicing`. Configure clippy; dev-guardian adds the one rule clippy has no equivalent for, at `WARNING`, because the blocking work can legitimately be handed to another thread and the wrappers that do so cannot all be enumerated. Two candidates that passed their own fixtures were killed by scanning 1200 files of the real standard library: `mem-forget` scored 43 findings and **zero** true positives, and `unwrap-in-drop` flagged `if !thread::panicking() { r.unwrap(); }` — the canonical mitigation its own message prescribes. **Ruby gets nothing, also by measurement**: Semgrep's Ruby frontend erases `&.` and the `..`/`...` distinction, so a nil-safety or off-by-one rule matches the correct code and the buggy code identically — use RuboCop and the registry's `p/ruby`, which is genuinely live. One of the eleven C# rules sits at `ERROR`, because C# contains one defect — `throw ex;` inside a `catch` — whose *correct* form (`throw;`) is a different AST node, so there is no guard to recognise. `empty-catch` sat beside it until it was measured on `dotnet/runtime` and demoted (see above). That rule duplicates a **compiler warning** (`CA2200`), not a registry rule; it earns its place because dev-guardian scans without building, and a warning that scrolls past is not a fingerprinted, baselined finding. `CA2200` also served as an independent oracle for it, and `CA2002` for the `lock` rule — both agree exactly with the fixtures. `memory_leak` is carried by a single rule: the `IDisposable` one is **not expressible**, because Semgrep's C# frontend erases the `using` modifier from a using-declaration, making the Microsoft-recommended idiom byte-identical to a leak. Its gaps are stated rather than implied: there is **no `Integer ==` rule**, because expressing it needs type inference Semgrep OSS does not have and the attempt fired on `v == null` and on primitive comparison — a rule that flags `v == null` would be uninstalled within a day; `stream-not-closed` only recognises `new FileInputStream(...)` — and only by that simple name, so `FileOutputStream`, `FileReader`, `Socket` and every other closeable leak identically and are not covered, and so does a fully-qualified `new java.io.FileInputStream(...)`, which the pattern does not see (measured); `static-dateformat` only recognises `SimpleDateFormat`, so a shared `Calendar` or `Matcher` in a static field is not covered — but it now ships a single **fully-qualified** pattern, so a `static final java.text.SimpleDateFormat` field in a file with no import is seen, which it was not before (measured across four import shapes: the qualified pattern also matches the short forms whenever an import lets Semgrep resolve them, while the short pattern never matched the qualified one, so the short branch was inert and was deleted); `modify-during-iteration` only matches the enhanced-for form, so an indexed loop removing from the list it indexes has the same defect and is missed. `modify-during-iteration` restricts the receiver by DECLARED type, which buys precision and costs recall: `metavariable-type` matches the exact declared type with no subtyping — measured, `type: List` does **not** match a `CopyOnWriteArrayList`, which is precisely what keeps the rule off it. The rule, which enumerates `List`, `ArrayList`, `LinkedList`, `Set`, `HashSet`, `LinkedHashSet` and `Collection`, is silent on a `Deque`, a `Queue`, a `SortedSet` or a project collection type . The rule binds the receiver through a `metavariable-pattern` that accepts a bare name **or** a `this.`-qualified one; before that, `cache.get(k).trim()` fired while `this.cache.get(k).trim()` was invisible — same class, same field, same bug (measured). An eighth rule, `null-safety-map-get-deref`, was **deleted** by the application-corpus round, and the reasoning is kept because the same rule will be proposed again. It shipped with **no guard exclusion at all**, so the canonical Java guard `if (m.containsKey(k)) { … m.get(k).trim() … }` fired at ERROR and advised `getOrDefault` on already-guarded code; ten waves then enumerated the shapes that prove a key present — inline `containsKey` and `get() != null`, the same tests as expressions and as De Morgan duals, chains, all four ternary polarities, early exits, population by `put`/`putIfAbsent`/`computeIfAbsent`, and iteration over the map's own `keySet()` — every one arm-scoped, every one added because correct code was firing. Measured against OpenJDK and Spring it gave **55 findings and zero live defects**, and it was kept anyway, on the argument written into the rule itself: both are *library* code, where a dereferenced map is nearly always one the reading class filled, and **application** Java was a different distribution nobody had measured. That corpus was then run — Jenkins 1 finding / 1 274 files, Kafka 224 / 3 892, Elasticsearch 749 / 20 485 — with **45 read by hand** and **five** defensible defects. The count decided nothing; this did: **88% of the Elasticsearch findings and 97% of the Kafka ones carry no guard anywhere near the dereference**. They are correct for *semantic* reasons — parallel maps kept in sync, a map the class filled in another method, a constant key, an API contract — and no exclusion clause reaches any of that, so narrowing was never available (measured before deciding: the one closable family, Elasticsearch's `containsKey(k) == false` negation style, is 34 of 749 and zero on Kafka). Two things outlive the rule: it was **blind to the more dangerous idiom**, `X v = m.get(k); v.foo();`, because the dereference is not chained — so it flagged the safe derived lookup and missed the risky original beside it; and all five true positives had **one shape**, a map parsed from external input (HTTP JSON, `/sys/fs/cgroup`, JVM output) read with a literal key, which is provenance rather than syntax and is outside Semgrep OSS. Deleted on the same criterion as C#'s `as-cast-deref`, with one difference recorded on purpose: this rule's true-positive rate was **not zero, it was about 1%**. `modify-during-iteration` had a false negative worth more than any of its false positives — a `remove()` inside a `switch` followed by `break;` is a real `ConcurrentModificationException`, because that `break` leaves the *switch* and not the loop, and the paired `remove(); break;` exclusion swallowed it whole; the plain-`break` exclusion now applies only when the removal sits inside a `switch` that is itself **inside the for-each over that collection**. The **nesting order** is what the clause tests, and it used to test mere lexical containment — any removal anywhere inside a `case` re-armed the rule, including one inside a **loop** written in that case, where a plain `break` exits the loop and the code is correct; a `switch` dispatching a command with a search-and-remove loop in one arm fired three times on correct Java. `return`, `throw` and a **labelled** `break` do leave the method or the loop from inside a `switch` and stay excluded everywhere. `loop-lte-length` restricts its array metavariable to an **array type**, because `$A.length` otherwise matches any `int` field named `length` and fired at ERROR on a domain object's deliberately inclusive loop; measured, that restriction costs no recall — parameter, local, field, `this.`-qualified field and `var`-inferred local arrays are all still matched. The exit-terminated exclusions in `optional-get-no-ispresent` and `modify-during-iteration` tolerate exactly **one** statement between the guard (or the removal) and the exit rather than an arbitrary ellipsis: measured, the ellipsis form matches *deep*, so `if (!m.containsKey(k)) { if (strict) { return ""; } }` and `items.remove(s); if (done) { break; }` both stop firing — and both are real bugs. `empty-catch` honours the Checkstyle / IntelliJ convention and never fires when the exception variable is named `ignore`, `ignored` or `expected` — the flip side being that a genuinely swallowed exception escapes the rule simply by being named `ignored`. The same trade has a second edge: the JUnit expected-exception idiom (call the code, `throw new AssertionError` if it did not throw, empty `catch`) fires when the caught variable is named `e`, and is silent when it is named `expected` — the test idiom has to use the conventional name. `empty-catch` was the last Java rule at ERROR, and it moved to WARNING once an external corpus was finally scanned: on 12 593 OpenJDK files it produces **1589 findings**, **903 of them (56.8%) carrying an explanatory comment inside the empty catch** that Semgrep cannot read, plus 27 more declaring intent in a name the rule does not carry (`cannotHappen` ×13, `_` ×10 — Java 21's unnamed variable — `unused` ×2); an inverted-regex probe puts the recognised spelling at 139, i.e. **8.0%** of the corpus's 1728 empty catches. 45 findings were read individually and about 39 were deliberate. **Read this before you wonder why your Java fix PR is empty: all eight of these rules are `WARNING`, and `create_fix_pr` defaults `severity_min` to `high`.** So the Java pack contributes *nothing at all* to the *default* fix-PR set, and you have to ask for it — `severity_min: "medium"`. `bug_hunt` itself does not filter by default, so nothing disappears from a **scan**; only the fix PR is affected. That default was deliberately not changed here, because it affects all four language packs and is a separate decision. The tier split follows the pack's own criterion, applied cold and stated as a question about the *output* rather than the pattern — **is what the rule emits always a bug?** A rule whose correctness depends on having recognised a **guard** emits a false positive every time it meets a guard shape nobody enumerated, and no exclusion list closes that, because the guard can always be one method away. Nothing clears that bar in Java. `empty-catch` held it longest for a reason worth naming: its escape hatch is not a guard but a *declaration of intent the rule itself reads* (the Checkstyle / IntelliJ `ignore` / `ignored` / `expected` convention), so what it emits afterwards would be an **unmarked** silent swallow — and the OpenJDK measurement above refutes the "unmarked" half, because the mark is a comment. Zero rules in seven is the honest result for a syntactic matcher with no dataflow, not a failure of the pack. `modify-during-iteration`, `static-dateformat` and `loop-lte-length` were demoted on that criterion; `loop-lte-length` only after the obvious tightening was measured and rejected (requiring the body to index `a[i]` fixes the loop that never indexes `a`, does **not** fix the sentinel loop that fills a longer array, and loses a real bug where the index is passed to a helper — a false positive traded for a false negative). `optional-get-no-ispresent` is **WARNING** for the same reason, a round earlier: ERROR is for a pattern that is a bug regardless of intent, and `o.get()` is a bug only when *unguarded*. The rule recognises exactly these guard shapes, enumerated rather than summarised because the summary that stood here — "inline against the same `Optional` variable" — was falsifiable and was falsified by a compound condition, a multi-statement exit, a `while` and an `Optional.of`: `if (o.isPresent())` alone **or as either operand of a conjunction**, **in the condition of an `if`**, with the `get()` in the **then** branch, braced or braceless — the `else` arm is a guaranteed `NoSuchElementException` and still fires; `while (o.isPresent())`; the same test used as an **expression** rather than as the condition of anything, `return o.isPresent() && o.get().isEmpty();`, plus the negative-first disjunctions `!o.isPresent() || …` and `o.isEmpty() || …`, which short-circuit the same way; an early `return` / `throw` / `continue` / `break` under `!isPresent()` or `isEmpty()`, with or without one statement before the exit; the three ternary forms, with the `get()` in the arm the condition proves safe (a ternary needing its own clauses because it is a conditional *expression*, a different AST node from an `if` statement); `if (o.filter(p).isPresent())`; and an `Optional<T> o = Optional.of(…)` construction, which cannot be empty — `ofNullable` can, and still fires. It misses **any guard that reaches the check through another method**, and it deliberately does not treat `a.isPresent() || b` as a guard — that proves nothing about `a`, unlike the negative-first form above. The concrete case is a guard delegated to a helper, `if (!present(o)) { return d; }`, which needs interprocedural analysis Semgrep OSS does not do: that shape is a false positive and always will be, which is exactly why the rule sits at WARNING instead of carrying an ever-longer exclusion list. Eleven limitations are accepted rather than fixed, each reproduced against the review fixtures, and each states its DIRECTION — for six waves this list had nine entries and all nine were false positives, which is the asymmetry that let a wave close a false positive, silently delete recall, and still go green; one entry then LEFT the list when it was re-measured, the conjunction chain, which was never a limitation but an unexamined metavariable. False positives: (1) `stream-not-closed` on `open(); try { … } finally { close(); }` (already the stated reason it is WARNING); (2) `static-dateformat` on a `static final SimpleDateFormat` whose every access goes through a `synchronized` method (proving *all* accesses are synchronized is whole-program analysis, which Semgrep OSS does not do, and a shared formatter serialises every caller anyway); (3) `loop-lte-length` on `i <= a.length` where the body guards with `i < a.length` or never indexes `a`; (4) `printstacktrace-only` on the one place the call is right — the fallback when the logger itself threw; (5) `optional-get-no-ispresent` and `modify-during-iteration` where **two or more** statements sit between the guard (or the removal) and the exit — `if (o.isEmpty()) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` — the deliberate price of not using a deep-matching ellipsis, which would hide real bugs instead; (6) both of those rules on any guard reached **through a helper method**, `if (!present(o)) { return d; }`, which needs interprocedural analysis; and (7) `optional-get-no-ispresent` on a guard held in a **local boolean**, `boolean present = o.isPresent(); if (!present) { return ""; }`, which is dataflow rather than syntax and outside Semgrep OSS. **False negatives**, the direction nobody was writing down: (9) the **invalidated-guarantee** class — a guarantee the guard establishes and the code then destroys *inside* the region the exclusion covers, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` and four more measured shapes, all guaranteed throws, all silent, and the whole-node problem on the **temporal** axis rather than the branch axis; and (10) the same two rules on a guard held in a **local boolean**, the recall mirror of (8). **PHP has its own pack** — `configs/semgrep/bugfix-php.yml`, **six** hand-authored rules, and it is the first round measured against a real external corpus from the start (WordPress 6.9, 1467 files), which changed four verdicts. Six candidates were killed by that corpus rather than by argument: an error-suppression rule at 420 findings, `preg_match` groups at 132, `in_array` looseness at 117, a `foreach`-by-reference rule at 46 that was style and not bugs, an `fopen` leak rule that is **inexpressible** (with escape exclusions it finds nothing; without them it fires on correct code — both ends measured), and one whose bug **does not exist in PHP at all**: `foreach` iterates a copy, confirmed in the interpreter. So **`memory_leak` is an empty class in this pack** — resource tracking needs escape analysis Semgrep OSS does not have — and the six that ship are off-by-one, TOCTOU, empty catch, `strpos()` truthiness and two null-safety rules. **Zero of the six sit at `ERROR`**, and the reason indicts two shipped packs: the closest candidate was `empty-catch`, which Java and C# both shipped at `ERROR` at the time, and all **ten** of its findings on WordPress are deliberate empty catches carrying an explanatory comment — Semgrep cannot read comments. That premise had never been measured against external code for either, because a real corpus was unavailable for both; both have since been measured against one, and both were demoted — Java to **0 of 8** at `ERROR`, C# to **1 of 11**. PHP-specific traps are stated in the pack: a **fully-qualified type name in a pattern matches nothing, silently** (`catch (\RuntimeException $E)` found zero), `?->` and `->` are the **same AST node** so the safe idiom can only be excluded by text, and the PHP 8 non-capturing `catch (\Foo) { }` is unmatchable — which also makes it self-exempting, since that is how modern PHP declares deliberate silence. **JS/TS, Python, Go, Java, C# and PHP**, plus Rust's single rule: the remaining languages have no local pack yet. A hand-broken local rule file degrades instead of failing the whole scan, whether the break is invalid YAML or a single bad rule pattern), `suggest_fix`, `register_custom_rules`
-- **WordPress** (9) — `scan_wordpress` (Semgrep PHP + WP rule pack + Trivy + gitleaks + PHPCS-WPCS), `wp_audit` (live install: checksums + admins + config flags via WP-CLI), `wp_vuln_check` (WPScan DB), `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites`
-- **C# / .NET** (4 dedicated + branches) — `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup`; `scan_sast` runs `p/csharp` + parses security-code-scan output; `deps_update_plan` runs `dotnet list package --outdated`; `observability_setup` emits Serilog + prometheus-net templates
-- **Quality, deps, prioritisation** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
-- **Compliance & SBOM** (5) — `compliance_check` (GDPR/RGPD), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
-- **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / governance** (11) — `init_project` (stamps every config it copies into `.dev-guardian/configs.json` — target, source, plugin version and a content hash — so a later scan can tell you, in **one non-blocking warning line** that is never a finding and never changes an exit code, when a shipped config has been fixed since yours was installed; a config you edited yourself is reported as nothing at all, because that is the expected case. **`refresh=true`** re-syncs against the current baselines: `apply=false` only reports what would change, and `apply=true` updates a file you have provably never touched while writing the new baseline for every other one as `<name>.new` **beside** your file — no flag, ever, overwrites a config you modified), `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `create_fix_pr` (applies fixes a scanner already produced — `deps_update_plan` pinned bumps, Semgrep `--autofix` — inside an isolated git worktree, proves each with a scan differential and a test run, and opens one pull request per ecosystem/scanner via the local `gh` CLI; **`apply` defaults to `false`** — a dry run still creates the worktree, applies the fix and runs both differentials, but opens no PR and leaves nothing behind, not even a branch, and its own verification scan never becomes the project's latest scan, so previewing can't repoint `guardian://findings/open` or `risk_score` either; maven and gradle bumps are out of reach, inherited from `deps_update_plan`'s own ecosystem gap; a second hit of the same rule in a file it already fixed is not seen as new — the no-new-finding check compares `(rule_id, file_path)`, not fingerprint, since a fingerprint moves whenever the fix shifts a line; and `fix_applied` never flips to `1`, a dead column on `findings` — the opened pull request is the record instead), `suppress_finding`, `audit_executive`
-- **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
-- **Attack surface** (1) — `map_attack_surface`: static inventory of routes, env vars and declared ports across all 8 stacks, with per-language coverage reporting. Also discovers and imports OpenAPI 3.x and Swagger 2.0 documents (JSON or YAML — **Postman collections are not supported**), tags every route with its provenance (`code` or `spec`), and diffs the two: **shadow endpoints** (in the code, undocumented), **dead documentation** (documented, no code implements it) and matched routes. No spec found means no diff — `spec_diff: null`, never a diff that reports every route as undocumented — and a route whose full path cannot be resolved is never reported as a shadow endpoint or as dead documentation; how many findings were withheld for that reason is reported alongside the diff
-- **Active DAST** (1) — `scan_dast`: the follow-up to `map_attack_surface` — sends real HTTP requests to an **already-running** application (never starts, builds or stops it) and checks the route inventory for reachability, anonymous access to auth-required routes, differential authorization, CORS, security headers, information disclosure, undocumented HTTP methods and off-origin redirects, plus an opt-in rate-limit burst and an optional **nuclei** pass. Safety envelope: **loopback-only** unless the caller attests `authorized_target: true`; **read-only** methods (GET/HEAD/OPTIONS) unless `allow_write_methods` is set, and even then with empty bodies, plus the opt-in `probe_rate_limit` burst — the one exception — which sends POST to exactly one route; no injection payloads, no credential guessing. The own engine does **not** test for injection — that's delegated to nuclei's `-dast` fuzzing mode, excluded by default — so **a clean result is not evidence of injection safety**, and nuclei's default template set exercises the origin, not this project's specific routes
-- **Reachability** (1) — `validate_finding`: the other follow-up to `map_attack_surface` — answers, per finding, whether anything outside the process can reach the file it lives in, from a file-level import graph rooted at the route-declaring files. Returns `reachable` / `unreachable` / `unknown` per finding with concrete evidence (nearest reaching route, hop count, how many routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind it. **Report-only**: never suppresses a finding and never touches severity. `unreachable` is never emitted for Ruby, Java, C#, or PHP (all four resolve code at runtime, not by import). It **is** emitted — and can be wrong — for a file reached only by a CLI/cron/queue entry point, or wherever a dynamic import — `import(expr)`, `require(variable)`, reflection, a plugin registry — cannot be resolved
-- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
-
-**Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
-
-**Storage** — SQLite at `.guardian/guardian.db`. Tables: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Enables baseline tracking, scan-to-scan deltas, time-bounded suppressions, regression alerts.
-
-### Guardrail hooks (auto-active)
-
-With the plugin enabled, Claude Code auto-loads `hooks/hooks.json` — three **dependency-free, fail-open** guardrails that run in milliseconds (no native modules, never break your workflow):
-
-- **SessionStart** — briefs the agent with the project's security posture: branch, uncommitted changes, last-scan age, and whether the project is guardian-initialized.
-- **PostToolUse (Write/Edit/MultiEdit)** — scans the text just written for hard-coded secrets (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, private keys, …) and warns with a **redacted** preview. The authoritative full-history scan stays `scan_secrets` (gitleaks) via `/guardian-scan`.
-- **PreToolUse (Bash)** — **denies catastrophic commands by default** (`rm -rf /`, `curl … | sh`, raw-disk `dd`/`mkfs`, fork bombs); **warns** on merely risky ones (force-push, hard reset, `sudo`, `chmod 777`).
-
-Blocking secret *writes* is **opt-in**: set `"secrets": { "block": true }` in `.guardian/hooks.config.json`. Tune every behaviour there, allowlist false positives in `.guardian/hooks-allowlist.json`, or kill all hooks with `GUARDIAN_HOOKS=off`. The same detectors run on the CLI for terminal / CI use: `node cli/dev-guardian.mjs check --file <path>` and `--bash "<command>"` (exit 1 on a finding).
-
-### Open-source tools orchestrated
-
-Semgrep · Trivy · OSV.dev · gitleaks · Renovate · nuclei · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
-
-### Plugin installation
-
-#### A) Via marketplace (recommended) — Claude Code CLI
+## Quick start (Claude Code)
 
 ```text
 /plugin marketplace add https://github.com/linofcp007/dev-guardian
 /plugin install dev-guardian@dev-guardian
 ```
 
-Works with any git URL (HTTPS or SSH) or local folder path containing [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
-
-> ⚠️ **Claude Desktop app limitation.** The Desktop client currently rejects third-party marketplaces with `External plugin sources are not yet supported` (the feature is gated server-side). This is a Claude Desktop limitation, not a problem with this plugin — installing from any GitHub-hosted marketplace fails the same way today. Tracking issues: [anthropics/claude-code#41653](https://github.com/anthropics/claude-code/issues/41653) (remote sources), [anthropics/claude-code#52147](https://github.com/anthropics/claude-code/issues/52147) (local paths). Until parity ships, use option **B** below or install via the Claude Code CLI.
-
-#### B) Manual folder copy (works everywhere)
-
-Copy the whole folder to:
-
-- **Linux / macOS**: `~/.claude/plugins/dev-guardian/`
-- **Windows**: `%USERPROFILE%\.claude\plugins\dev-guardian\`
-
-Then inside Claude Code, run `/plugin` and enable `dev-guardian`. Alternatively, add to your `~/.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": { "dev-guardian@dev-guardian": true }
-}
-```
-
-> The MCP server runs from `mcp/dist/`. On first install run `cd mcp && npm install && npm run build` once. The plugin manifest then launches it automatically via `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
->
-> `.sh` scripts in `scripts/` run natively on Linux/macOS. On Windows native you need **WSL2** or Git Bash; the skills/commands themselves work on any OS.
-
-### Other AI hosts (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
-
-The real engine is the **MCP server**, so any MCP-capable host can use dev-guardian — not just Claude Code. The **`mcp-config` CLI** wires a host up from a plain terminal — no MCP connection needed (no chicken-and-egg). It fills in the absolute path to the server for you, and either prints the block to paste or, with `--write`, merges it into the project and drops the rules file. Idempotent.
-
-From a terminal in your project (after `cd mcp && npm install && npm run build` once):
+Then, in your project:
 
 ```text
-node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
-node cli/dev-guardian.mjs mcp-config all             # every host
-node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
-node cli/dev-guardian.mjs mcp-config all --scope global
+/guardian-init        detect the stack, install scanners, write configs and pre-commit hooks
+/guardian-scan        full security scan (or --staged, --branch, --since …)
+/guardian-status      one-screen health view
 ```
 
-| Host | MCP config file (project / global) | Rules file |
-| ---- | ---------------------------------- | ---------- |
-| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
-| **GitHub Copilot** | `.vscode/mcp.json` (`servers` key, `type:"stdio"`) | `.github/copilot-instructions.md` |
-| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
-| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
-| **Cline** | manual — the tool returns a snippet to paste | `.clinerules` |
-| **Claude Desktop** | `claude_desktop_config.json` (OS-specific, global) | — (paste `AGENTS.md` into a Project's instructions) |
+From a local clone instead: `claude --plugin-dir /path/to/dev-guardian` for one session, or `/plugin marketplace add /path/to/dev-guardian` to install it. Every skill also fires on plain language — "audit the project", "is this safe to ship?", "vê se há vulnerabilidades", "¿hay agujeros de seguridad?".
 
-**Manual fallback** (if you'd rather not let the tool edit configs): paste one of the blocks below, replacing the path with the **absolute** path to `mcp/dist/server.js`.
+## Slash commands
 
-```jsonc
-// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
-{ "mcpServers": { "dev-guardian": {
-  "command": "node", "args": ["/abs/path/to/dev-guardian/mcp/dist/server.js"], "env": {}
-} } }
-```
+| Command | Modes | What it does |
+| --- | --- | --- |
+| `/guardian-scan` | none, `--staged`, `--uncommitted`, `--unpushed`, `--branch [base]`, `--since <ref>`, `--incoming`, paths | Security scan of the whole project, or only of what changed |
+| `/guardian-fix` | hint, fingerprint, `--pr [--apply]`, `--verify` | Find and fix bugs, open verified fix PRs, prove a fix with a re-scan |
+| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Reports from the scan history |
+| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Incident response |
+| `/guardian-release` | `predeploy`, `prerelease` | Go / no-go gates |
+| `/guardian-status` | optional focus (e.g. "only security") | Latest scan, deltas, baseline, expiring suppressions |
+| `/guardian-infra` | `docker`, `iac` | Dockerfile, image, compose, Terraform, Kubernetes, CloudFormation, Helm |
+| `/guardian-wp` | install path or site URL | WordPress audit |
+| `/guardian-dotnet` | project or solution path | C# / .NET audit |
+| `/g` | what you want checked | Alias of the `guardian` router skill |
 
-```jsonc
-// GitHub Copilot  (.vscode/mcp.json — note the "servers" key + type)
-{ "servers": { "dev-guardian": {
-  "type": "stdio", "command": "node", "args": ["/abs/path/to/dev-guardian/mcp/dist/server.js"]
-} } }
-```
+Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacement.
 
-```toml
-# Codex CLI  (~/.codex/config.toml — single-quoted path avoids Windows escaping)
-[mcp_servers.dev-guardian]
-command = "node"
-args = ['/abs/path/to/dev-guardian/mcp/dist/server.js']
-enabled = true
-```
+## Skills
 
-> Claude Desktop has no rules-file mechanism — paste the contents of `host-rules/AGENTS.md` (or `GEMINI.md`) into a **Project's custom instructions**. Claude Code / Cowork need none of this: the plugin registers the server automatically.
+| Skill | For |
+| --- | --- |
+| `/guardian` | Router: picks the right command or skill |
+| `/guardian-security` | SAST, secrets, dependency CVEs, IaC, DAST and reachability, with triage |
+| `/guardian-bugfix` | Implementation bugs, found and fixed methodically |
+| `/guardian-init` | First run in a project: toolchain, configs, pre-commit |
+| `/guardian-review` | Senior-style review before a PR, merge or deploy |
+| `/guardian-deps` | CVE audit, upgrade plan and PRs, install vetting, licences, SBOM |
+| `/guardian-quality` | Duplication, complexity, tech debt, `.guardian/budgets.yml` |
+| `/guardian-compliance` | RGPD/GDPR, licences, SBOM, audit evidence, cookie banner and privacy policy templates |
+| `/guardian-observability` | Structured logging and metrics |
+| `/guardian-performance` | Lighthouse, k6, performance budgets |
+| `/guardian-grill` | Grills you on a diff's decisions before merge |
+| `/guardian-improve` | Turns measured tech debt into improvement specs |
+| `/guardian-scanskill` | Vets a third-party skill, MCP server or agent before install |
 
-### Run scans in CI (headless, no MCP host needed)
+## The MCP server
 
-`node cli/dev-guardian.mjs scan` runs the same scan pipeline as an interactive session — no Claude Code, no MCP connection — and gates the result against a **committed baseline**. `dev-guardian baseline update` is the only command that writes that baseline, and only on request:
+| Area | Tools |
+| --- | --- |
+| Security scans | `security_scan_full`, `scan_sast`, `scan_secrets`, `scan_deps`, `scan_containers`, `scan_iac`, `review_pr` |
+| Bugs and quality | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
+| Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
+| Attack surface | `map_attack_surface`, `scan_dast`, `validate_finding` |
+| History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
+| Reports | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
+| Setup and ops | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
+| WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
+| C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
+
+Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed.
+
+## What each stack gets
+
+| Stack | Detected | Bug rules (`bug_hunt`) | Routes (`map_attack_surface`) | Dependency CVEs | Reachability (`validate_finding`) |
+| --- | --- | --- | --- | --- | --- |
+| JavaScript / TypeScript | yes | 13 rules | Express, NestJS | Trivy, `npm audit` | reachable / unreachable |
+| Python | yes | 10 rules | Flask, FastAPI, Django | Trivy, `pip-audit` | reachable / unreachable |
+| Go | yes | 9 rules | net/http, gin, chi | Trivy | reachable / unreachable |
+| Rust | yes | 1 rule (blocking sleep in `async fn`) | actix-web | Trivy | reachable / unreachable |
+| Java | yes | 7 rules | Spring | Trivy (Maven; Gradle only with a `gradle.lockfile`) | reachable / unknown only |
+| C# / .NET | yes | 11 rules | ASP.NET Core | Trivy, `dotnet list package --vulnerable` | reachable / unknown only |
+| PHP | yes, also without `composer.json` | 6 rules | Laravel | Trivy (`composer.lock`) | reachable / unknown only |
+| WordPress | yes, with WooCommerce and Kadence | the PHP rules, plus `p/wordpress` in `scan_wordpress` | REST routes | WPScan (live URL), Wordfence feed (from source) | as PHP |
+| Ruby | yes | none — use RuboCop | Rails-style routes | Trivy (`Gemfile.lock`) | reachable / unknown only |
+| Kotlin | **detection only** | — | — | — | — |
+
+Beyond the table, `scan_sast` runs Semgrep's registry ruleset (`--config=auto`), which picks rules for whatever languages it finds — Kotlin included — and gitleaks scans every project for secrets. Containers and IaC (Dockerfile, images, compose, Terraform, Kubernetes, CloudFormation, Helm, GitHub Actions workflows) are covered by `scan_containers` and `scan_iac`. "Reachable / unknown only" means the tool never claims code is unreachable in a language that resolves code at runtime (autoload, annotations, DI containers). `.NET` also has four dedicated tools; WordPress has ten. Trivy reads a Gradle lock file for any project, Kotlin included, and a Gradle build it could not read is a named coverage gap; no bug rule or route extractor exists for Kotlin.
+
+**Gradle and Python need a lock file for Trivy.** Trivy reads Gradle dependencies only from `gradle.lockfile`, and Python ones only from `poetry.lock`, `uv.lock`, `Pipfile.lock` or a pinned `requirements.txt`. A `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` or `requirements*.txt` it could not read is reported as a coverage gap (`trivy:gradle`, `trivy:python`, or `trivy` skipped when it read nothing else), never as a clean scan. Generate the lock file to close it. For Gradle, first enable `dependencyLocking { lockAllConfigurations() }` in the build — without it `gradle dependencies --write-locks` writes nothing — then run that command. For Python, run `poetry lock`, `uv lock` or `pipenv lock`, or pin every dependency in `requirements.txt`.
+
+## Guardrail hooks
+
+Loaded automatically with the plugin, dependency-free and fail-open:
+
+- **SessionStart** — a short security-posture briefing.
+- **PostToolUse** on writes — warns, with a redacted preview, when a secret is written.
+- **PreToolUse** on Bash and PowerShell — denies catastrophic commands (`rm -rf /`, `curl … | sh`, `iwr … | iex`, raw-disk writes, fork bombs), warns on risky ones, and vets packages before `npm`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `poetry`, `composer` or `dotnet add package` installs them: a malicious package is denied, a nonexistent one is denied only in a plain, single install command.
+- **PreToolUse** on writes — denies an assistant's edit of the hook configuration itself; optionally blocks writing a provider token.
+
+A project's `.guardian/hooks.config.json` can only make these stricter; switching one off takes the user-level config or an environment variable.
+
+Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). The same detectors run from a terminal with `node cli/dev-guardian.mjs check --file <path>` or `--bash "<command>"`.
+
+## Other AI hosts
+
+Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline and Claude Desktop get the MCP server and a rules file (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-node cli/dev-guardian.mjs baseline update --project .      # adopt current findings once
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
+git clone --depth 1 --branch v3.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
+node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-Exit codes: `0` pass, `1` gate failed (a finding new to the baseline, at or above `--fail-on`), `2` **incomplete scan** (an expected scanner did not run — never read this as a pass), `3` usage/configuration error. For the DAST pass, `--start-command <cmd>` starts the app under test — it requires `--base-url` alongside it (the same URL is both the health-check target and the `scan_dast` origin) — and it is accepted **only on the command line, never from `.guardian/ci.json`**: a pull request from a fork could otherwise edit that file and run arbitrary code on the runner. Run the CLI with no arguments for the full flag reference.
+The clone above pins 3.0.0; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
 
-> **Distribution is `git clone`, not `npx`.** This ships as a Claude Code plugin repository, not an npm package, so there is no one-line installer yet (a publishable form is being investigated separately, gated on it actually passing the Claude Desktop plugin validator). Clone at a pinned tag with `--depth 1` — `v1.9.0` here, or whichever release you want to track — then run `npm ci` once inside `mcp/`: `mcp/dist/` is committed so nothing needs *building*, but `mcp/node_modules` is gitignored like everywhere else in this repo, and `scan`/`baseline update` still import a couple of runtime packages (`execa`, `yaml`) the committed build does not bundle.
-
-A copy-pasteable job — findings land as annotations on the pull request diff, not buried in a log. **`ubuntu-latest` ships none of Semgrep, gitleaks or Trivy**, so the job installs them itself; skip that step (or let it fail) and every run reports `coverage: none` / exit `2` — not a malfunction, that is the designed response to a scan that did not actually scan anything:
-
-```yaml
-name: dev-guardian
-
-on:
-  pull_request:
-
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      # Cloned OUTSIDE the checkout so dev-guardian's own source is never
-      # itself part of the scan.
-      - name: Clone dev-guardian
-        run: |
-          git clone --depth 1 --branch v1.9.0 \
-            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
-          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
-
-      # None of these ship on ubuntu-latest. Semgrep alone has a Docker
-      # fallback inside dev-guardian's own scanners, but gitleaks and Trivy
-      # do not, so skipping this step still caps every run below coverage:
-      # full. pipx is preinstalled on ubuntu-latest; sudo is passwordless
-      # for the runner user.
-      - name: Install scanners (Semgrep, gitleaks, Trivy)
-        run: |
-          pipx install semgrep
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
-          GL_TAG=$(basename "$GL_TAG")
-          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin gitleaks
-
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
-          sudo apt-get update -qq && sudo apt-get install -y trivy
-
-      - name: Scan
-        id: scan
-        run: |
-          set +e
-          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-
-      # Upload whatever SARIF exists even when the step above "failed" — a
-      # gate failure and an incomplete scan both still produce a report.
-      # SARIF's own executionSuccessful flag says WHETHER coverage was full;
-      # it can't say WHICH scanner was missing — that's exit 2 and the log above.
-      # Requires the repository to be public, or GitHub Code Security on a
-      # private one — otherwise drop this step and use --format json instead.
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('results.sarif') != ''
-        with:
-          sarif_file: results.sarif
-
-      - name: Fail the build on a real gate failure or a usage error
-        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
-        run: exit 1
-
-      - name: Warn (don't fail) on incomplete coverage
-        if: steps.scan.outputs.exit_code == '2'
-        run: echo "::warning::dev-guardian scan was incomplete — see the step log above for which scanner did not run"
-```
-
-Three things this snippet cannot hide from you:
-
-- **A CI run leaves `.guardian/` in the workspace.** `security_scan_full` and `map_attack_surface` write their raw scanner output under `.guardian/reports/` in the project being scanned, exactly as they do interactively — only the SQLite database is ephemeral. The MCP server adds `.guardian/` to `.gitignore` automatically every time it starts against a project (an interactive session, any host) — that never happens from the CLI, so a repository that only ever scans through CI must add the line by hand, or a later pipeline step that asserts a clean working tree will fail for a reason that looks like nothing:
-
-  ```text
-  .guardian/
-  ```
-
-- **SARIF alone cannot tell you *which* scanner is missing.** Its `invocation.executionSuccessful` flag flips to `false` whenever coverage isn't full — so a consumer reading only the upload can already tell an incomplete run from a clean one — but SARIF has no *general-purpose* field for this prose, so the scanner name and reason live only in exit code `2` and the step's own human/JSON output. Treat an uploaded SARIF with zero results as inconclusive, not clean, until you've checked the exit code.
-
-- **Code-scanning upload needs a public repository, or GitHub Code Security on a private one.** Without either, the `upload-sarif` step fails the job for a reason that has nothing to do with findings. On a private repository without that licence, drop the upload step and use `--format json` plus the exit code instead.
-
-### Local dashboard (`status`, `dashboard`)
-
-Two read-only views over the same `.guardian/guardian.db`, for a developer at their own laptop — not a CI artifact (that's the SARIF above) and not a client deliverable (that's `report_export`'s branded HTML):
+## CI
 
 ```text
-node cli/dev-guardian.mjs status --project .        # one terminal screen
-node cli/dev-guardian.mjs dashboard --project .      # self-contained HTML, opens in a browser
+npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # once: runtime packages for scan
+node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # also gitlab, bitbucket
+node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # commit .guardian/baseline.json
+node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`status` prints the risk score and band, open findings and CVEs by severity, both deltas (since the previous scan of the same type, since the active baseline), up to 3 finding hotspots (ranked by count, not severity), which scanners are missing and what that leaves out of the numbers, and active suppressions — one screen, no more. `dashboard` renders the identical snapshot as `.guardian/dashboard.html` — no CDN, no font fetch, no network call of any kind — with client-side filtering and column sorting; it opens automatically only when stdout is a TTY (`--no-open` suppresses that, `--out <path>` relocates the file). Neither command runs a scan, mutates the database, or opens a socket, and **both always exit `0` once they render** — including over a project full of criticals, or one that's never been scanned (`3` on a usage error only). They report; `scan` is what gates.
+`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
 
-Worth knowing before trusting what's on screen: **the page is a snapshot, not live** — it reflects the scan that had completed when you ran the command and does not update when a later scan runs, so regenerate it to see one — and the window itself is just as bounded: the latest scan plus two deltas, never a multi-week trend (`/guardian-trend` still asks for history nothing here computes). A clean screen is also only as clean as `missing_tools` says: a scanner that ran and silently produced nothing looks identical, at this layer, to one that found nothing wrong.
+## Privacy and network
 
-### Philosophy
+dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it) and its version check, Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
 
-- **Pragmatic by default** — doesn't block work over cosmetics
-- **Paranoid when critical** — prod secrets, RCE, SQLi → halt and alert
-- **Stack-aware** — detects your language and only configures what's relevant
-- **Cross-platform** — Linux, macOS, Windows (with WSL)
-- **Zero lock-in** — every tool used is open-source and self-hostable
-- **Idempotent** — running `guardian init` twice doesn't duplicate anything
-- **Graceful degradation** — missing scanners are reported, never crash a scan
+## Troubleshooting
 
-### Supported stacks
+**The MCP server does not connect.** `/mcp` in Claude Code shows the server's state. Claude Code logs each server's stderr under its cache directory: `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-<server>\` on Windows (the plugin's is `mcp-logs-plugin-dev-guardian-dev-guardian`), and — by the same convention, not verified here — `~/.cache/claude-cli-nodejs/…` on Linux and `~/Library/Caches/claude-cli-nodejs/…` on macOS. The usual causes:
 
-JavaScript / TypeScript (Node, Next, React, Vue, Svelte, Angular), Python (Django, Flask, FastAPI), PHP (Laravel, Symfony, **WordPress + Kadence + WooCommerce + Tutor LMS**), **C# / .NET (ASP.NET Core, EF Core, central package management)**, Go, Rust, Ruby, Java / Kotlin, Docker, Terraform, Kubernetes, Ansible, GitHub Actions.
+- Node older than 22.13 (see Requirements).
+- A project `.mcp.json` that uses `${CLAUDE_PROJECT_DIR}`: Claude Code does not expand it there, so `node` receives the literal string. Use a relative path; project servers start in the project root.
 
-For languages not explicitly supported, the skills fall back to Semgrep `--config=auto` (covers 30+ languages) and generic secret rules.
+**`no_bash_shell`.** Only `install_toolchain`'s default install on Linux and macOS needs bash, plus `init_project`'s status report. On Windows, install Git for Windows. From PowerShell, `bash` may resolve to the WSL launcher stub rather than Git Bash; dev-guardian probes Git Bash first on its own, but a command you type yourself may not.
 
-### Repository structure
+**Coverage `none` or `partial`, or `scan` exits 2.** A scanner was missing, failed, or scanned nothing. `tools_run` and `missing_tools` in the response name it; `check_toolchain` shows what is installed. Fix that and re-run — a scan with a gap is never served from the cache.
+
+**`install_toolchain` with `elevation_allowed: true` fails with "sudo: a terminal is required to read the password".** Install steps run detached, with no terminal, so on Linux and macOS elevation only works with passwordless sudo for those commands. Otherwise run the commands listed under `requires_elevation` yourself. The .NET SDK is never installed automatically.
+
+**Semgrep sends metrics.** The default `scan_sast` uses `--config=auto`, which Semgrep only allows with metrics on. Pass `local_only: true` (or `--local-only` on the CLI) to run only the rules on disk with `--metrics=off`.
+
+## Repository layout
 
 ```text
-dev-guardian/
-├── .claude-plugin/
-│   ├── plugin.json              # declares the MCP server + plugin metadata
-│   └── marketplace.json
-├── commands/                    # 48 slash commands
-├── skills/                      # 13 skills (one per router target)
-├── hooks/                       # hooks.json + guardian-hook.mjs (auto-active guardrails)
-├── cli/                         # dev-guardian.mjs CLI (mcp-config, check, scan, baseline)
-├── mcp/                         # MCP server (TypeScript + SQLite)
-│   ├── src/                     # tools/, resources/, runners/, storage/, platform/, hooks/
-│   ├── test/                    # 1094 unit + integration + e2e tests
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
-│   └── dist/                    # built artifact (node dist/server.js)
-├── scripts/
-│   ├── detect/detect-stack.sh   # language/framework detection
-│   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
-├── configs/
-│   ├── renovate/, gitleaks/, semgrep/, pre-commit/
-├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
-└── README.md
+.claude-plugin/   plugin.json + marketplace.json
+commands/         the 10 slash commands
+skills/           the 13 skills
+hooks/            hooks.json + guardian-hook.mjs
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard)
+mcp/              the MCP server: src/, test/, dist/ (committed)
+configs/          Semgrep packs, CI templates, gitleaks/Renovate/pre-commit configs, compliance templates
+host-rules/       rules templates for other hosts
+docs/             tools, rule packs, hooks, CI, hosts, environment
+scripts/          install-linux.sh, install-macos.sh, initial-scan.sh
 ```
 
-### License
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md). Security reports: [SECURITY.md](SECURITY.md).
 
-MIT — use it, modify it, share it freely.
+## License
 
-### Author
-
-Carlos Pereira · prodigitalkey.com
-
----
-
-## Português
-
-Plugin all-in-one **100% open-source** para Claude Code / Cowork. Faz segurança, deteção e correção de bugs, qualidade de código, gestão de dependências, observability, performance e compliance em qualquer projeto de desenvolvimento. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingues (EN + PT + ES) — responde no idioma do utilizador.
-
-Por baixo do capot fornece um plugin Claude Code (13 skills + 48 slash commands) **e** um servidor MCP com **54 tools e 18 resources**, com estado persistente em SQLite para baselines, deltas e supressões. Também faz **vet de skills / MCP servers / agentes de terceiros antes de os instalares** — a verificação de supply-chain do ecossistema de agentes.
-
-### Skills (front-end Claude Code)
-
-| Skill                    | Slash command          | O que faz                                                |
-| ------------------------ | ---------------------- | -------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Router principal — encaminha para o módulo certo         |
-| `guardian-init`          | `/guardian-init`       | Bootstrap inicial — instala e configura tudo             |
-| `guardian-security`      | `/guardian-scan`       | SAST + secrets + CVEs + container + IaC                  |
-| `guardian-bugfix`        | `/guardian-fix`        | Caça e corrige bugs de implementação                     |
-| `guardian-quality`       | `/guardian-quality`    | Complexidade, duplicação, tech debt                      |
-| `guardian-review`        | `/guardian-review`     | Revisão profunda pré-PR / pré-deploy                     |
-| `guardian-deps`          | `/guardian-deps`       | Renovate setup + scan de CVEs + supply chain             |
-| `guardian-observability` | `/guardian-observe`    | Logging estruturado, métricas, error tracking            |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
-| `guardian-compliance`    | `/guardian-compliance` | RGPD, licenças, SBOM, privacy policy                     |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / MCP / agente antes de instalar            |
-| `guardian-grill`         | `/guardian-grill`      | Sabatina de compreensão ao diff antes do merge           |
-| `guardian-improve`       | `/guardian-improve`    | Transforma dívida técnica medida em specs de melhoria    |
-| (combina os 3)           | `/guardian-audit`      | Relatório executivo: security + quality + deps           |
-
-Também podes invocar tudo em **linguagem natural** (PT, EN ou ES). As skills disparam por descrição — *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*.
-
-### Servidor MCP (54 tools, 18 resources)
-
-O plugin regista um servidor MCP em stdio que o Claude Code arranca automaticamente. As tools agrupam-se em:
-
-- **Segurança transversal** (10) — `security_scan_full`, `scan_sast` (Semgrep — corre o ruleset do registry **e as regras do próprio projeto**: `.semgrep.yml`, ou o que `.dev-guardian/configs.json` registar como destino, mais o que tenha sido adicionado com `register_custom_rules`. Carregar o ficheiro do projeto é novo; `--config=auto` **não** o apanha, por isso enquanto a tool correu só `--config=auto` as treze regras que o `init_project` instala não tinham consumidor nenhum. Uma config que o Semgrep não consiga carregar é descartada e nomeada em `tools_run`, nunca passada à frente — uma que falhe a resolver aborta a corrida *inteira*. **PRIVACIDADE:** `--config=auto` descarrega regras do registry do Semgrep e envia métricas de uso à Semgrep Inc.; o Semgrep recusa construir uma auto config com as métricas desligadas, por isso o modo por defeito não o consegue evitar. **`local_only=true`** dispensa o registry, passa `--metrics=off` e corre apenas regras já em disco — nada sai da máquina, ao custo das regras do registry; sem regras locais reporta o scan como skipped em vez de como um resultado limpo), `scan_deps`, `scan_secrets`, `scan_containers`, `scan_iac`, `deps_audit`, `bug_hunt` (Semgrep `p/r2c-bug-scan` + `p/security-audit`, mais um pack local sempre ativo para JS/TS — `configs/semgrep/bugfix-js.yml`, treze regras hand-authored que cobrem as seis subcategorias de bug que a ferramenta classifica: race conditions, null/undefined safety, off-by-one, memory leaks, error handling engolido, e dois edge cases. O `/guardian-fix` também nomeia "broken happy paths" como foco; isso é uma categoria de consequência, não uma forma sintática, por isso só a sua forma concreta mais comum é coberta — uma chamada que muta estado sem `await` numa função async (declarações, arrow functions, métodos de classe/objeto — NÃO cobre function expressions async, uma limitação do motor do Semgrep) — e mais nada cobre o resto. São regras Semgrep OSS: casam sintaxe, não fazem dataflow, por isso um bug a duas funções do guard continua invisível para elas. Na 1.9.0 uma auditoria independente leu o pack contra ~600 linhas de JS/TS que ninguém que escreveu as regras tinha visto, e encontrou ~40 falsos positivos em 14 regras — entre eles `$A.find(...).$PROP` a disparar em ERROR em todas as queries Mongoose e em todos os `.find()` de jQuery (nove reproduções, zero verdadeiros positivos), `floating-mutation` a disparar em `res.send(rows)` e em `void repo.save(a)` (a correção que a sua própria mensagem prescreve), e um ciclo `<= .length` que nunca indexa nada a ser acusado de ler para além do fim. Estão fechados: a `unchecked-find` exige agora um callback literal como argumento, que é a única coisa que distingue `Array#find` de uma Query Mongoose ou de uma coleção jQuery sem inferência de tipos; a `floating-mutation` exige agora que o nome do RECETOR também pareça uma fronteira de persistência, e exclui `void`, `Promise.all`, `.catch`/`.then`/`.finally` e capturar-para-esperar-depois; e a `loop-lte-length` casa agora a LEITURA fora de alcance em vez do cabeçalho do ciclo. As severidades foram rederivadas de uma única pergunta feita ao OUTPUT — o que a regra emite é SEMPRE um bug? — a que o self-scan descrito a seguir respondeu com números reais em vez de com raciocínio. Isto tem consequências a jusante: ERROR mapeia para `high`, WARNING para `medium`, e o `create_fix_pr` assume `severity_min: high`, por isso quem quiser estes findings corrigidos tem de pedir `medium`. O que fica, dito e não insinuado: um predicado nomeado (`users.find(byId).name`) é agora invisível, o preço de não acusar todas as queries Mongoose; um repositório cuja variável não tem nome de repositório é invisível à `floating-mutation`, tal como `const p = repo.save(a)` que nunca é esperado; ciclos `while`/`do-while` e comprimentos em cache ficam fora da `loop-lte-length`; e as regras de listener/subscribe não distinguem um cleanup que não remove nada de um que funciona, nem veem um segundo registo por limpar ao lado de um limpo. Um scan posterior contra o próprio `mcp/src` deste repositório — 183 ficheiros de TypeScript que ninguém escreveu como fixture — mediu depois a ronda e mudou mais duas coisas. Confirmou a correção da `floating-mutation` (20 findings → 0) e apanhou uma regressão introduzida pela própria ronda (`unchecked-match` 0 → 13, porque o novo ramo `exec` não herdou a exclusão de optional chaining que o ramo `match` já tinha; os 13 eram todos código correto e guardado, `exec(...)?.[1]`). Duas regras mudaram de estado com essa evidência. **A `catch-returns-null` foi APAGADA**: 25 findings em `mcp/src`, todos código correto, somados a zero verdadeiros positivos no corpus da auditoria — INFO não é um tier para uma regra que nunca teve razão, é uma maneira mais silenciosa de continuar errada. **A `empty-catch` e a `empty-promise-catch` passaram de ERROR a WARNING**: produzem 45 findings em `mcp/src` e os 45 são fail-open deliberado e documentado por comentário. **Estão** marcados — com um comentário, que o Semgrep não lê — e uma declaração de intenção que a regra não consegue reconhecer é exatamente o critério. A equivalente em Java aguentou-se em ERROR sobre a alegação de que **consegue** ler o marcador do seu ecossistema (o nome `ignore`/`ignored`/`expected` do Checkstyle), e essa alegação foi depois medida contra o OpenJDK e falhou: o marcador cobre 8,0% dos catch vazios do corpus, enquanto 56,8% dos 1589 findings da regra declaram a intenção num **comentário** — por isso o Java também é WARNING, e o C# é WARNING com um número ainda mais duro: 0 ocorrências do marcador em 11 800 ficheiros do `dotnet/runtime`, 93% dos seus 402 findings escritos `catch (Type) { }` ou `catch { }` sem nada a que dar nome, e o `dotnet build` a emitir **CS0168** sobre a própria grafia que a regra prescreve; JS/TS também não tem equivalente com o mesmo peso, e a razão é estrutural: o optional catch binding do ES2019 tirou o identificador a que uma convenção de nomes se agarra — 41 dos 42 estão escritos `catch {`, sem nada para nomear. A saída `_`/`ignored` é honrada na mesma, para que um caso possa ser calado em código em vez de com `// nosemgrep`, e fica dito que removeu zero dos 42. Sobra UMA regra em ERROR (`index-at-length`, que não encontra nada em `mcp/src`), onze em WARNING e uma em INFO. Python tem também o seu pack — `configs/semgrep/bugfix-py.yml`, dez regras hand-authored nas mesmas seis classes, cada uma medida contra as 32 regras Python que o `p/r2c-bug-scan` já corre e confirmada a disparar onde essas não disparam. As lacunas conhecidas são ditas em vez de subentendidas: não há regra geral de "corotina não aguardada" (não é exprimível em Semgrep OSS — só os quatro primitivos `asyncio` nomeados são cobertos, por isso um `await` esquecido numa `async def` do próprio projeto não é apanhado), a regra de N+1 do Django casa ciclos `for` mas não list comprehensions, não conhece SQLAlchemy nem Peewee, e exige o queryset dentro do próprio cabeçalho do `for` — `qs = Book.objects.all()` seguido de `for book in qs:` fica silencioso, e essa forma ligada a variável é provavelmente a mais comum na prática — a `toctou-exists-open` passou a cobrir `os.path.exists`, `os.path.isfile`, `os.access`, o `.exists()` de um `pathlib.Path` e a guarda NEGADA (`if not exists(p): return`), mas só em modos de LEITURA, porque testar antes de *escrever* protege contra sobreposição e não contra um ficheiro que desapareceu; a `none-deref-match` cobre `.group()`, `.groups()`, `.groupdict()`, `.start()`, `.end()`, `.span()` e o subscrito, mas só nas funções de módulo `re.*` — a forma com padrão compilado que a documentação recomenda, `PAT.match(t).group(1)`, exige dataflow entre instruções e fica silenciosa; a `none-deref-dict-get` deixou de excluir clientes HTTP pela SUBSTRING do nome do receiver (o que tornava bugs reais como `session.get("user_id")` e `client_config.get("timeout")` falsos negativos) e passou a exigir que a CHAVE seja um literal de string, trocando isso por um falso negativo quando a chave está numa variável (`cfg.get(key).strip()`); e a `queryset-n-plus-one` exige que a relação atravessada termine num ATRIBUTO, por isso `book.author.get_name()` fica silenciosa — foi o preço de deixar de acusar `book.title.strip()` e `ev.created_at.isoformat()`, que são uma query cada. Depois da auditoria de 2026-08 só uma das dez regras Python é `ERROR` — a `none-deref-match` — porque o critério é o que a regra EMITE e não a classe de bug: se a correção depender de a regra ter reconhecido uma guarda, ela emite um falso positivo na primeira guarda que ninguém enumerou. Há duas exclusões que vale a pena nomear como falsos negativos em vez de as deixar subentendidas: a `get-without-doesnotexist` conta um `except Exception:` largo como guarda, por isso um `.objects.get()` dentro de `except Exception: pass` fica silencioso aqui, apesar de ser pior código do que um `get` sem guarda nenhuma (o engolir do erro é apanhado à parte pela `except-pass`, mas nada liga as duas coisas); e a `open-without-context` nunca marca targets que são atributos, por isso `self.handle = open(path)` é ignorado de propósito — o `close()` vive normalmente noutro método, fora do alcance de uma regra sintática — o que significa que uma classe que nunca fecha mesmo o handle passa despercebida, e é essa a forma mais comum de um leak de ficheiro de longa duração. O Go também tem o seu — `configs/semgrep/bugfix-go.yml`, nove regras hand-authored nas mesmas seis classes, e o Go é a linguagem onde o pack do registo deixa o maior buraco: o `p/r2c-bug-scan` traz 5 regras Go e só 2 caem numa classe de bug, ambas de integer overflow, por isso `error_handling` — na linguagem em que `if err != nil` É o modelo de erros — `race_condition`, `null_safety`, `memory_leak` e `edge_case` estavam todas vazias. As lacunas são ditas em vez de subentendidas: **não há regra para goroutines que ficam penduradas** nem **regra para a captura da variável do ciclo** — essa foi construída e verificada a funcionar, e depois deliberadamente excluída, porque o Go 1.22 passou a dar a cada iteração a sua própria variável e o Semgrep não lê o `go.mod`, por isso em qualquer módulo moderno acusaria código correto; e o pack trazia uma **décima regra que foi apagada** na auditoria de 2026-08 — a `edge-case-append-discarded` procurava `append(xs, 1)` em posição de instrução, que a spec do Go proíbe e o compilador rejeita, por isso o seu conjunto de verdadeiros positivos era vazio em qualquer projeto que compile e tudo o que ela emitia num repositório real era falso positivo (para o bug que de facto compila — `xs = append(xs, v)` sobre um parâmetro cujo resultado nunca sai da função — use `staticcheck`/`ineffassign`, que têm o dataflow que uma regra sintática não tem). Do que resta: a `nil-map-write` apanha o mapa declarado com `var` e o campo de mapa de um struct criado com `&T{}` — o clássico — mas não um mapa nil que chega como parâmetro nem um devolvido por um construtor, porque nenhum dos dois é *sempre* um bug, depende do chamador; a `type-assert-no-ok` continua a acusar `var s, ok = v.(string)`, porque o padrão `var $X, $OK = ...` não casa nada no parser Go do Semgrep 1.164 (verificado como padrão positivo isolado); a `err-discarded` não distingue uma função do próprio projeto que devolva `(T, bool)` de um erro descartado, e só as formas da biblioteca padrão (`sync.Map`, `strings.Cut*`, `utf8.Decode*`) estão excluídas; e a `err-blank-assign` dispara em descartes deliberados como `_ = os.Remove(tmp)` numa limpeza, e é por isso que é `WARNING`. Só uma das nove regras Go é `ERROR` — a `empty-err-block`, cuja saída é um ramo de erro literalmente vazio, sem guarda nenhuma a reconhecer. Todas as fixtures Go do pack são compiladas com `go build ./...` em Docker como parte do processo de alteração; foi esse teste que apanhou a regra apagada. O Java tem um tambem — `configs/semgrep/bugfix-java.yml`, sete regras hand-authored nas mesmas seis classes: o `p/r2c-bug-scan` traz 4 regras Java e **nenhuma** cai numa classe de bug, por isso todas as subcategorias estavam a zero, na linguagem cujo defeito mais famoso é o `NullPointerException`. **O C# é ainda mais vazio, e o número é zero** — `configs/semgrep/bugfix-cs.yml`, onze regras hand-authored nas mesmas seis classes. Medido com controlos positivos: o `p/r2c-bug-scan` reporta `paths.scanned = 0` em C# porque não traz **regra nenhuma de C#**, e o `p/csharp` e o `p/security-audit` varrem todos os ficheiros e não encontram nada. **O Rust leva exatamente uma regra, e uma regra é a resposta toda** — o `configs/semgrep/bugfix-rs.yml` tem a `blocking-sleep-in-async` e mais nada: um `std::thread::sleep` dentro de uma `async fn`, que bloqueia a *thread* do executor e deixa paradas todas as outras tarefas agendadas nela. Leia-se como uma regra, e não como cobertura parcial de Rust. Uma sondagem mediu treze candidatas e matou doze, porque quatro das seis classes de bug são **erros de compilação** em Rust (E0502, E0515, E0373, E0599) e para o resto a resposta é o `cargo clippy`, cujos lints com consciência de tipos ganham a todos os equivalentes de Semgrep medidos — por omissão já apanha o `await_holding_lock`, e o grupo `restriction` acrescenta `unwrap_used`, `mem_forget`, `indexing_slicing`. Configure o clippy; o dev-guardian acrescenta a única regra para a qual o clippy não tem equivalente, em `WARNING`, porque o trabalho bloqueante pode legitimamente ser entregue a outra thread e os invólucros que o fazem não são todos enumeráveis. Duas candidatas que passaram as próprias fixtures foram mortas ao varrer 1200 ficheiros da biblioteca padrão real: a `mem-forget` deu 43 achados e **zero** verdadeiros positivos, e a `unwrap-in-drop` acusava `if !thread::panicking() { r.unwrap(); }`, que é a mitigação canónica que a própria mensagem prescreve. **O Ruby não leva nada, também por medição**: o frontend de Ruby do Semgrep apaga o `&.` e a distinção entre `..` e `...`, por isso uma regra de nil-safety ou de off-by-one casa o código correto e o código com bug de forma idêntica — use o RuboCop e o `p/ruby` do registry, que é genuinamente vivo. Uma das onze regras de C# está em `ERROR`, porque o C# tem um defeito — `throw ex;` dentro de um `catch` — cuja forma *correta* (`throw;`) é outro nó da AST, por isso não há guarda para reconhecer. A `empty-catch` esteve ao lado dela até ser medida no `dotnet/runtime` e descer de tier (ver acima). Essa regra duplica um **aviso do compilador** (`CA2200`), não uma regra do registry, e ganha o lugar porque o dev-guardian varre sem construir. O `CA2200` serviu também de oráculo independente, e o `CA2002` para a regra do `lock` — os dois concordam exatamente com as fixtures. O `memory_leak` é carregado por uma única regra: a do `IDisposable` **não é exprimível**, porque o frontend de C# do Semgrep apaga o modificador `using` de uma using-declaration. As lacunas são ditas em vez de subentendidas: **não há regra para `Integer ==`**, porque exprimi-la exige inferência de tipos que o Semgrep OSS não tem e a tentativa disparava em `v == null` e em comparação de primitivos — uma regra que acusa `v == null` seria desinstalada no primeiro dia; a `stream-not-closed` só reconhece `new FileInputStream(...)` — e só por esse nome simples, por isso `FileOutputStream`, `FileReader`, `Socket` e todos os outros closeables perdem descritores da mesma maneira e não são apanhados, e o mesmo acontece a um `new java.io.FileInputStream(...)` totalmente qualificado, que o padrão não vê (medido); a `static-dateformat` só reconhece `SimpleDateFormat`, por isso um `Calendar` ou um `Matcher` partilhados num campo estático não são apanhados — mas passou a trazer um único padrão **totalmente qualificado**, por isso um campo `static final java.text.SimpleDateFormat` num ficheiro sem import passa a ser visto, o que antes não acontecia (medido nas quatro formas de import: o padrão qualificado casa também as formas curtas sempre que um import deixa o Semgrep resolver o nome, enquanto o curto nunca casou a qualificada, por isso o ramo curto era inerte e foi apagado); e a `modify-during-iteration` só casa a forma for-each, por isso um ciclo indexado que remove da lista que indexa tem o mesmo defeito e escapa. Duas regras restringem o recetor pelo TIPO DECLARADO, o que compra precisão e custa recall: o `metavariable-type` casa o tipo declarado exato, sem subtipagem — medido, `type: List` **não** casa uma `CopyOnWriteArrayList`, e é exatamente isso que mantém a regra afastada dela — por isso a `modify-during-iteration`, que enumera `List`, `ArrayList`, `LinkedList`, `Set`, `HashSet`, `LinkedHashSet` e `Collection`, fica silenciosa sobre um `Deque`, uma `Queue`, um `SortedSet` ou uma coleção do próprio projeto . A regra passou a ligar o recetor por um `metavariable-pattern` que aceita um nome simples **ou** um qualificado com `this.`; antes disso, `cache.get(k).trim()` disparava e `this.cache.get(k).trim()` era invisível — mesma classe, mesmo campo, mesmo bug (medido). Houve uma oitava regra, a `null-safety-map-get-deref`, **apagada** pela ronda do corpus de aplicação, e o raciocínio fica registado porque a mesma regra vai voltar a ser proposta. Vinha **sem uma única exclusão de guarda**, por isso a guarda canónica de Java `if (m.containsKey(k)) { … m.get(k).trim() … }` disparava em ERROR a aconselhar `getOrDefault` sobre código já guardado; dez rondas enumeraram depois as formas que provam a chave presente — `containsKey` e `get() != null` inline, as mesmas usadas como expressão e as duais de De Morgan, as cadeias, as quatro polaridades do ternário, as saídas antecipadas, a população por `put`/`putIfAbsent`/`computeIfAbsent`, e a iteração sobre o próprio `keySet()` — cada uma limitada ao ramo que a guarda prova, cada uma acrescentada porque código correto estava a disparar. Medida contra o OpenJDK e o Spring deu **55 findings e zero defeitos vivos**, e ficou mesmo assim, com o argumento escrito na própria regra: os dois são código de *biblioteca*, em que um mapa dereferenciado é quase sempre um mapa que a classe que o lê preencheu, e faltava medir Java de **aplicação**. Esse corpus foi corrido — Jenkins 1 finding / 1 274 ficheiros, Kafka 224 / 3 892, Elasticsearch 749 / 20 485 — com **45 lidos à mão** e **cinco** defeitos defensáveis. A contagem não decidiu nada; isto decidiu: **88% dos findings do Elasticsearch e 97% dos do Kafka não têm guarda nenhuma perto do deref**. São corretos por razões *semânticas* — mapas paralelos mantidos em sincronia, um mapa que a classe preencheu noutro método, chave constante, contrato de API — e nenhuma cláusula de exclusão lá chega, por isso estreitar nunca esteve disponível (medido antes de decidir: a única família fechável, o estilo `containsKey(k) == false` do Elasticsearch, vale 34 dos 749 e zero no Kafka). Duas coisas sobrevivem à regra: era **cega ao idioma mais perigoso**, `X v = m.get(k); v.foo();`, porque o deref não está encadeado — assinalava a leitura derivada, que é segura, e não via a original ao lado, que é a que arrisca; e os cinco verdadeiros positivos tinham **a mesma forma**, um mapa vindo de parsing de entrada externa (JSON de HTTP, `/sys/fs/cgroup`, output da JVM) lido com chave literal, o que é proveniência e não sintaxe, fora do alcance do Semgrep OSS. Apagada pelo mesmo critério que apagou a `as-cast-deref` do pack de C#, com uma diferença registada de propósito: a taxa de verdadeiros positivos desta **não era zero, era cerca de 1%**. A `modify-during-iteration` tinha um falso negativo que vale mais do que qualquer dos seus falsos positivos — um `remove()` dentro de um `switch` seguido de `break;` é uma `ConcurrentModificationException` real, porque esse `break` sai do *switch* e não do ciclo, e a exclusão emparelhada `remove(); break;` engolia-a inteira; a exclusão do `break` simples passou a aplicar-se só quando a remoção está dentro de um `switch` que por sua vez está **dentro do for-each sobre essa coleção**. A **ordem do aninhamento** é o que a cláusula testa, e antes testava mera contenção léxica — qualquer remoção dentro de um `case` reativava a regra, incluindo uma dentro de um **ciclo** escrito nesse `case`, onde o `break` simples sai do ciclo e o código está correto; um `switch` que despacha um comando com um ciclo de procurar-e-remover num dos ramos disparava três vezes sobre Java correto. `return`, `throw` e um `break` **etiquetado** saem mesmo do método ou do ciclo a partir de dentro de um `switch` e continuam excluídos em todo o lado. A `loop-lte-length` restringe a metavariável do array a um **tipo array**, porque `$A.length` casava qualquer campo `int` chamado `length` e disparava em ERROR sobre o ciclo deliberadamente inclusivo de um objeto de domínio; medido, essa restrição não custa recall — parâmetro, local, campo, campo qualificado com `this.` e local inferido com `var` continuam todos a ser vistos. As exclusões terminadas em saída, nas duas regras `optional-get-no-ispresent` e `modify-during-iteration`, toleram exatamente **uma** instrução entre a guarda (ou a remoção) e a saída, em vez de uma reticência arbitrária: medido, a forma com reticências casa em PROFUNDIDADE, por isso `if (!m.containsKey(k)) { if (strict) { return ""; } }` e `items.remove(s); if (done) { break; }` deixavam os dois de disparar — e os dois são bugs reais. A `empty-catch` respeita a convenção do Checkstyle / IntelliJ e nunca dispara quando a variável da exceção se chama `ignore`, `ignored` ou `expected` — o reverso é que uma exceção genuinamente engolida escapa à regra só por se chamar `ignored`. A mesma troca tem um segundo gume: o idioma JUnit de exceção esperada (chamar o código, `throw new AssertionError` se não lançou, `catch` vazio) dispara quando a variável apanhada se chama `e`, e fica calada quando se chama `expected` — o idioma de teste tem de usar o nome convencional. A `empty-catch` foi a última regra Java em ERROR, e desceu a WARNING assim que um corpus externo foi finalmente varrido: em 12 593 ficheiros do OpenJDK produz **1589 findings**, **903 deles (56,8%) com um comentário explicativo dentro do catch vazio** que o Semgrep não lê, mais 27 a declarar a intenção num nome que a regra não conhece (`cannotHappen` ×13, `_` ×10 — a variável sem nome do Java 21 — `unused` ×2); uma sonda com regex invertida põe a grafia reconhecida em 139, ou seja **8,0%** dos 1728 catch vazios do corpus. 45 findings foram lidos um a um e cerca de 39 eram deliberados. **Leia isto antes de estranhar que o seu fix PR de Java venha vazio: as sete regras são todas `WARNING`, e o `create_fix_pr` tem `severity_min` a `high` por omissão.** O pack de Java não contribui *rigorosamente nada* para o conjunto de fixes *por omissão*, e tem de ser pedido — `severity_min: "medium"`. O `bug_hunt` não filtra por omissão, por isso nada desaparece de um **scan**; o que muda é só o fix PR. Essa omissão não foi alterada aqui de propósito, porque afeta os quatro packs de linguagem e é uma decisão à parte. A divisão de tiers aplica o critério do próprio pack a frio, e enunciado como uma pergunta sobre o *output* em vez de sobre o padrão — **aquilo que a regra emite é sempre um bug?** Uma regra cuja correção depende de ter reconhecido uma **guarda** emite um falso positivo sempre que encontra uma forma de guarda que ninguém enumerou, e nenhuma lista de exclusões fecha isso, porque a guarda pode estar sempre a um método de distância. Nada passa nessa barra em Java. A `empty-catch` aguentou-se mais tempo por uma razão que vale a pena nomear: a sua válvula de escape não é uma guarda mas uma *declaração de intenção que a própria regra lê* (a convenção `ignore` / `ignored` / `expected` do Checkstyle / IntelliJ), por isso o que ela emite a seguir seria um engolir de exceção **não declarado** — e a medição no OpenJDK acima refuta a metade do «não declarado», porque a marca é um comentário. Zero regras em sete é o resultado honesto para um matcher sintático sem dataflow, não uma falha do pack. A `modify-during-iteration`, a `static-dateformat` e a `loop-lte-length` desceram por esse critério; a `loop-lte-length` só depois de o aperto óbvio ter sido medido e rejeitado (exigir que o corpo indexe `a[i]` corrige o ciclo que nunca indexa `a`, **não** corrige o ciclo-sentinela que preenche um array maior, e perde um bug real em que o índice é passado a um helper — um falso positivo trocado por um falso negativo). A `optional-get-no-ispresent` é **WARNING** pela mesma razão, uma ronda antes: ERROR é para o padrão que é bug independentemente da intenção, e um `o.get()` só é bug quando está *sem guarda*. A regra reconhece exatamente estas formas de guarda, enumeradas em vez de resumidas porque o resumo que aqui esteve — "inline sobre a mesma variável `Optional`" — era falsificável e foi falsificado por uma condição composta, uma saída com mais do que uma instrução, um `while` e um `Optional.of`: `if (o.isPresent())` sozinho **ou como qualquer dos operandos de uma conjunção**, **na condição de um `if`**, com o `get()` no ramo **verdadeiro**, com ou sem chavetas — o ramo `else` é um `NoSuchElementException` garantido e continua a disparar; `while (o.isPresent())`; o mesmo teste usado como **expressão** e não como condição de coisa nenhuma, `return o.isPresent() && o.get().isEmpty();`, mais as disjunções negativa-primeiro `!o.isPresent() || …` e `o.isEmpty() || …`, que fazem curto-circuito da mesma maneira; um `return` / `throw` / `continue` / `break` antecipado sob `!isPresent()` ou `isEmpty()`, com ou sem uma instrução antes da saída; as três formas ternárias, com o `get()` no ramo que a condição prova seguro (o ternário precisou de cláusulas próprias por ser uma *expressão* condicional, um nó da AST diferente de um `if`); `if (o.filter(p).isPresent())`; e uma construção `Optional<T> o = Optional.of(…)`, que não pode estar vazia — `ofNullable` pode, e continua a disparar. Falha **qualquer guarda que chegue ao teste através de outro método**, e deliberadamente não trata `a.isPresent() || b` como guarda — isso não prova nada sobre `a`, ao contrário da forma negativa-primeiro acima. O caso concreto é a guarda delegada a um helper, `if (!present(o)) { return d; }`, que exige análise interprocedimental que o Semgrep OSS não faz: essa forma é falso positivo e vai continuar a ser, e é precisamente por isso que a regra está em WARNING em vez de carregar uma lista de exclusões sem fim. Onze limitações são aceites em vez de corrigidas, cada uma reproduzida contra as fixtures de revisão, e cada uma diz a sua DIREÇÃO — durante seis rondas esta lista teve nove entradas e as nove eram falsos positivos, que é a assimetria que permitiu a uma ronda fechar um falso positivo, apagar recall em silêncio, e continuar verde; depois uma entrada SAIU da lista ao ser remedida, a cadeia de conjunção, que nunca foi uma limitação mas uma metavariável que ninguém tinha examinado. Falsos positivos: (1) a `stream-not-closed` em `open(); try { … } finally { close(); }` (já é a razão declarada para ser WARNING); (2) a `static-dateformat` num `static final SimpleDateFormat` cujos acessos passam todos por um método `synchronized` (provar que *todos* os acessos estão sincronizados é análise do programa inteiro, que o Semgrep OSS não faz, e um formatter partilhado serializa todos os chamadores de qualquer maneira); (3) a `loop-lte-length` em `i <= a.length` quando o corpo se protege com `i < a.length` ou nunca indexa `a`; (4) a `printstacktrace-only` no único sítio onde a chamada está certa — o fallback quando foi o próprio logger que lançou; (5) a `optional-get-no-ispresent` e a `modify-during-iteration` quando há **duas ou mais** instruções entre a guarda (ou a remoção) e a saída — `if (o.isEmpty()) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` — o preço deliberado de não usar uma reticência que casa em profundidade e que, essa sim, esconderia bugs reais; (6) as mesmas duas regras em qualquer guarda que chegue **através de um método helper**, `if (!present(o)) { return d; }`, que exige análise interprocedimental; e (7) a `optional-get-no-ispresent` sobre uma guarda guardada num **booleano local**, `boolean present = o.isPresent(); if (!present) { return ""; }`, que é dataflow e não sintaxe, fora do alcance do Semgrep OSS. **Falsos negativos**, a direção que ninguém estava a escrever: (9) a classe da **garantia invalidada** — uma garantia que a guarda estabelece e o código depois destrói *dentro* da região que a exclusão cobre, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` e mais quatro formas medidas, todas exceções garantidas, todas em silêncio, e é o problema do nó inteiro no eixo **temporal** em vez do eixo dos ramos; e (10) as mesmas duas regras sobre uma guarda guardada num **booleano local**, o espelho de recall de (8). **PHP tem pack próprio** — `configs/semgrep/bugfix-php.yml`, **seis** regras hand-authored, e é a primeira ronda medida contra um corpus externo real desde o início (WordPress 6.9, 1467 ficheiros), o que mudou quatro veredictos. Seis candidatas foram mortas por esse corpus e não por argumento: uma regra do operador de supressão de erros com 420 ocorrências, grupos de `preg_match` com 132, `in_array` solto com 117, uma regra de `foreach` por referência com 46 que era estilo e não bugs, uma regra de fuga de `fopen` que é **inexprimível** (com as exclusões de escape não encontra nada; sem elas dispara sobre código correto — as duas pontas medidas), e uma cujo bug **não existe em PHP**: o `foreach` itera uma cópia, confirmado no interpretador. Por isso **`memory_leak` é uma classe vazia neste pack** — seguir recursos exige análise de escape que o Semgrep OSS não tem — e as seis que saem são off-by-one, TOCTOU, catch vazio, veracidade de `strpos()` e duas de null-safety. **Zero das seis estão em `ERROR`**, e a razão acusa dois packs já enviados: a candidata mais próxima era a `empty-catch`, que Java e C# enviavam em `ERROR` à data, e as **dez** ocorrências dela no WordPress são silêncios deliberados com comentário a explicar — o Semgrep não lê comentários. Essa premissa nunca tinha sido medida contra código externo, porque nenhum dos dois tinha corpus real disponível; entretanto os dois foram medidos contra um, e os dois desceram — o Java para **0 de 8** em `ERROR`, o C# para **1 de 11**. As armadilhas específicas do PHP estão escritas no pack: um **nome de tipo qualificado num padrão não casa nada, em silêncio** (`catch (\RuntimeException $E)` encontrou zero), `?->` e `->` são **o mesmo nó da AST**, pelo que o idioma seguro só se exclui por texto, e o `catch (\Foo) { }` sem variável do PHP 8 é inalcançável — o que também o torna auto-isento, já que é assim que o PHP moderno declara silêncio deliberado. **JS/TS, Python, Go, Java, C# e PHP**, mais a única regra de Rust: as restantes linguagens ainda não têm pack local. Um ficheiro de regras local partido à mão degrada em vez de fazer falhar o scan inteiro, seja a quebra um YAML inválido ou um único padrão de regra mal formado), `suggest_fix`, `register_custom_rules`
-- **WordPress** (9) — `scan_wordpress` (Semgrep PHP + rule pack WP + Trivy + gitleaks + PHPCS-WPCS), `wp_audit` (instalação viva: checksums + admins + flags de config via WP-CLI), `wp_vuln_check` (WPScan DB), `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites`
-- **C# / .NET** (4 dedicadas + branches) — `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup`; `scan_sast` corre `p/csharp` + parse da saída do security-code-scan; `deps_update_plan` corre `dotnet list package --outdated`; `observability_setup` gera templates Serilog + prometheus-net
-- **Qualidade, deps, priorização** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
-- **Compliance & SBOM** (5) — `compliance_check` (RGPD/GDPR), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
-- **Observability & perf** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / governance** (11) — `init_project` (regista cada config que copia em `.dev-guardian/configs.json` — destino, origem, versão do plugin e hash do conteúdo — para que um scan posterior te diga, numa **única linha de aviso não bloqueante** que nunca é um finding nem altera um exit code, quando uma config distribuída foi corrigida depois de a tua ter sido instalada; uma config que tu próprio editaste não gera aviso nenhum, porque é o caso esperado. **`refresh=true`** volta a sincronizar com as baselines atuais: `apply=false` limita-se a reportar o que mudaria, e `apply=true` atualiza um ficheiro em que comprovadamente nunca tocaste, escrevendo a nova baseline de todos os outros como `<nome>.new` **ao lado** do teu ficheiro — nenhuma flag, em circunstância alguma, sobrepõe uma config que modificaste), `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `create_fix_pr` (aplica fixes que um scanner já produziu — bumps do `deps_update_plan`, `--autofix` do Semgrep — dentro de uma worktree git isolada, prova cada um com um differential de scan e uma corrida de testes, e abre um pull request por ecossistema/scanner via `gh` local; **`apply` tem valor por defeito `false`** — um dry run continua a criar a worktree, a aplicar o fix e a correr os dois differentials, mas não abre PR nenhum e não deixa nada para trás, nem sequer um branch, e o seu próprio scan de verificação nunca se torna o scan mais recente do projeto, pelo que um preview não pode redirecionar `guardian://findings/open` nem `risk_score`; os bumps de maven e gradle estão fora de alcance, uma lacuna herdada do próprio `deps_update_plan`; uma segunda ocorrência da mesma regra num ficheiro já corrigido não é vista como nova — a verificação "no new finding" compara `(rule_id, file_path)`, não o fingerprint, porque o fingerprint muda sempre que o fix desloca uma linha; e `fix_applied` nunca passa a `1`, uma coluna morta em `findings` — o pull request aberto é o registo), `suppress_finding`, `audit_executive`
-- **AI-agent supply chain** (1) — `scan_skill`: vet a third-party **skill / MCP server / agent before you install it**. Accepts a directory, file, `.zip`, or git/HTTP(S) URL and runs 16 threat categories (prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system-prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code, taint, signatures, MCP least-privilege, MCP tool poisoning), a **YARA-style signature engine**, taint-light source→sink, hidden-Unicode detection, and **OSV.dev** CVE lookups — rolled up into a **0-100 risk score** and a **SAFE → DO NOT INSTALL** verdict
-- **Superfície de ataque** (1) — `map_attack_surface`: inventário estático de rotas, variáveis de ambiente e portas declaradas nas 8 stacks suportadas, com relatório de cobertura por linguagem. Também descobre e importa documentos OpenAPI 3.x e Swagger 2.0 (JSON ou YAML — **coleções Postman não são suportadas**), marca cada rota com a sua proveniência (`code` ou `spec`) e compara as duas: **endpoints shadow** (existem no código, não documentados), **documentação morta** (documentada, sem código que a implemente) e rotas correspondidas. Sem spec encontrada não há diff — `spec_diff: null`, nunca um diff que reporta todas as rotas como não documentadas — e uma rota cujo caminho completo não pode ser resolvido nunca é reportada como endpoint shadow nem como documentação morta; quantos resultados foram retidos por esse motivo é reportado junto do diff
-- **DAST ativo** (1) — `scan_dast`: o passo seguinte ao `map_attack_surface` — envia pedidos HTTP reais a uma aplicação **já em execução** (nunca a arranca, constrói ou pára) e verifica o inventário de rotas quanto a acessibilidade, acesso anónimo a rotas que exigem autenticação, autorização diferencial, CORS, cabeçalhos de segurança, divulgação de informação, métodos HTTP não documentados e redirecionamentos fora da origem, mais um burst opcional de rate-limit e uma passagem opcional de **nuclei**. Envelope de segurança: **apenas loopback** salvo se quem chama atestar `authorized_target: true`; métodos **só de leitura** (GET/HEAD/OPTIONS) salvo se `allow_write_methods` estiver ativo, e mesmo assim com corpo vazio, mais o burst opcional `probe_rate_limit` — a única exceção — que envia POST a exatamente uma rota; sem payloads de injeção, sem adivinhar credenciais. O motor próprio **não** testa injeção — isso fica a cargo do modo `-dast` do nuclei, excluído por defeito — pelo que **um resultado limpo não é prova de segurança contra injeção**, e o conjunto de templates por defeito do nuclei testa a origem, não as rotas específicas deste projeto
-- **Alcançabilidade** (1) — `validate_finding`: o outro passo seguinte ao `map_attack_surface` — responde, por finding, se algo fora do processo consegue alcançar o ficheiro onde este vive, a partir de um grafo de imports ao nível do ficheiro, com raiz nos ficheiros que declaram rotas. Devolve `reachable` / `unreachable` / `unknown` por finding com evidência concreta (rota mais próxima, número de saltos, quantas rotas alcançam o ficheiro, exposição anónima confirmada em live) e os coverage gaps por trás dela. **Apenas relatório**: nunca suprime um finding nem altera a severidade. `unreachable` nunca é emitido para Ruby, Java, C# ou PHP (os quatro resolvem código em runtime, não por import). **É** emitido — e pode estar errado — para um ficheiro alcançado apenas por um CLI/cron/queue, ou sempre que um import dinâmico — `import(expr)`, `require(variable)`, reflection, um registo de plugins — não possa ser resolvido
-- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
-
-**Resources** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
-
-**Storage** — SQLite em `.guardian/guardian.db`. Tabelas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Permite tracking de baseline, deltas scan-a-scan, supressões com expiração, alertas de regressão.
-
-### Hooks de proteção (auto-ativos)
-
-Com o plugin ativo, o Claude Code carrega automaticamente `hooks/hooks.json` — três guardrails **dependency-free e fail-open**, em milissegundos (sem módulos nativos, nunca quebram o teu workflow):
-
-- **SessionStart** — informa o agente da postura de segurança do projeto: branch, alterações não commitadas, idade do último scan e se o projeto está guardian-initialized.
-- **PostToolUse (Write/Edit/MultiEdit)** — analisa o texto acabado de escrever à procura de secrets hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, chaves privadas, …) e avisa com pré-visualização **redigida**. O scan completo do histórico continua em `scan_secrets` (gitleaks) via `/guardian-scan`.
-- **PreToolUse (Bash)** — **bloqueia por defeito comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` em disco cru, fork bombs); **avisa** nos apenas arriscados (force-push, hard reset, `sudo`, `chmod 777`).
-
-O bloqueio da *escrita* de secrets é **opt-in**: define `"secrets": { "block": true }` em `.guardian/hooks.config.json`. Ajusta tudo aí, faz allowlist de falsos positivos em `.guardian/hooks-allowlist.json`, ou desliga todos os hooks com `GUARDIAN_HOOKS=off`. Os mesmos detetores correm no CLI para terminal / CI: `node cli/dev-guardian.mjs check --file <path>` e `--bash "<command>"` (exit 1 ao encontrar algo).
-
-### Ferramentas open-source orquestradas
-
-Semgrep · Trivy · OSV.dev · gitleaks · Renovate · nuclei · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
-
-### Instalação do plugin
-
-#### A) Via marketplace (recomendado) — Claude Code CLI
-
-```text
-/plugin marketplace add https://github.com/linofcp007/dev-guardian
-/plugin install dev-guardian@dev-guardian
-```
-
-Funciona com qualquer URL git (HTTPS ou SSH) ou caminho local de uma pasta que contenha [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
-
-> ⚠️ **Limitação da app Claude Desktop.** O cliente Desktop rejeita atualmente marketplaces de terceiros com `External plugin sources are not yet supported` (a feature está bloqueada server-side). É uma limitação do Claude Desktop, não um problema deste plugin — qualquer marketplace alojado no GitHub falha hoje da mesma forma. Issues a acompanhar: [anthropics/claude-code#41653](https://github.com/anthropics/claude-code/issues/41653) (fontes remotas), [anthropics/claude-code#52147](https://github.com/anthropics/claude-code/issues/52147) (paths locais). Até a paridade chegar, usa a opção **B** abaixo ou instala via Claude Code CLI.
-
-#### B) Cópia manual da pasta (funciona em qualquer lado)
-
-Copia a pasta inteira para:
-
-- **Linux / macOS**: `~/.claude/plugins/dev-guardian/`
-- **Windows**: `%USERPROFILE%\.claude\plugins\dev-guardian\`
-
-Depois, dentro do Claude Code, corre `/plugin` e ativa o `dev-guardian`. Em alternativa, adiciona ao teu `~/.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": { "dev-guardian@dev-guardian": true }
-}
-```
-
-> O servidor MCP corre a partir de `mcp/dist/`. Na primeira instalação corre uma vez `cd mcp && npm install && npm run build`. Depois o plugin arranca-o automaticamente via `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
->
-> Os scripts `.sh` em `scripts/` correm direto em Linux/macOS. No Windows nativo precisas de **WSL2** ou Git Bash; as skills/commands em si funcionam em qualquer SO.
-
-### Outros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
-
-O motor real é o **servidor MCP**, por isso qualquer host com suporte MCP pode usar o dev-guardian — não só o Claude Code. A **CLI `mcp-config`** liga um host a partir de um terminal normal — sem precisar de ligação MCP (sem ovo-e-galinha). Preenche o caminho absoluto do servidor por ti e ou imprime o bloco para colar ou, com `--write`, funde-o no projeto e deixa o ficheiro de regras. Idempotente.
-
-A partir de um terminal no teu projeto (depois de `cd mcp && npm install && npm run build` uma vez):
-
-```text
-node cli/dev-guardian.mjs mcp-config cursor          # imprime o bloco para colar
-node cli/dev-guardian.mjs mcp-config all             # todos os hosts
-node cli/dev-guardian.mjs mcp-config codex --write   # escreve + funde no projeto
-node cli/dev-guardian.mjs mcp-config all --scope global
-```
-
-| Host | Ficheiro de config MCP (projeto / global) | Ficheiro de regras |
-| ---- | ----------------------------------------- | ------------------ |
-| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
-| **GitHub Copilot** | `.vscode/mcp.json` (chave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
-| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
-| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
-| **Cline** | manual — a tool devolve um snippet para colar | `.clinerules` |
-| **Claude Desktop** | `claude_desktop_config.json` (específico do SO, global) | — (cola o `AGENTS.md` nas instruções de um Project) |
-
-**Fallback manual** (se preferires não deixar a tool editar configs): cola um dos blocos abaixo, substituindo o caminho pelo caminho **absoluto** para `mcp/dist/server.js`.
-
-```jsonc
-// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
-{ "mcpServers": { "dev-guardian": {
-  "command": "node", "args": ["/caminho/abs/para/dev-guardian/mcp/dist/server.js"], "env": {}
-} } }
-```
-
-```jsonc
-// GitHub Copilot  (.vscode/mcp.json — repara na chave "servers" + type)
-{ "servers": { "dev-guardian": {
-  "type": "stdio", "command": "node", "args": ["/caminho/abs/para/dev-guardian/mcp/dist/server.js"]
-} } }
-```
-
-```toml
-# Codex CLI  (~/.codex/config.toml — path em aspas simples evita escape no Windows)
-[mcp_servers.dev-guardian]
-command = "node"
-args = ['/caminho/abs/para/dev-guardian/mcp/dist/server.js']
-enabled = true
-```
-
-> O Claude Desktop não tem mecanismo de ficheiro de regras — cola o conteúdo de `host-rules/AGENTS.md` (ou `GEMINI.md`) nas **instruções personalizadas de um Project**. O Claude Code / Cowork não precisam disto: o plugin regista o servidor automaticamente.
-
-### Corre scans em CI (headless, sem host MCP)
-
-`node cli/dev-guardian.mjs scan` corre o mesmo pipeline de scan de uma sessão interativa — sem Claude Code, sem ligação MCP — e faz gate do resultado contra uma **baseline committed**. `dev-guardian baseline update` é o único comando que escreve essa baseline, e só quando pedido:
-
-```text
-node cli/dev-guardian.mjs baseline update --project .      # adota os findings atuais uma vez
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
-```
-
-Exit codes: `0` passou, `1` gate falhou (finding novo na baseline, severidade >= `--fail-on`), `2` **scan incompleto** (um scanner esperado não correu — nunca leias isto como um passe), `3` erro de uso/configuração. Para o passo DAST, `--start-command <cmd>` arranca a app a testar — exige `--base-url` ao lado (o mesmo URL é o alvo do health-check e a origem do `scan_dast`) — e só é aceite **na linha de comandos, nunca a partir de `.guardian/ci.json`**: um pull request de um fork podia editar esse ficheiro e correr código arbitrário no runner. Corre a CLI sem argumentos para veres a referência completa de flags.
-
-> **A distribuição é `git clone`, não `npx`.** Isto é distribuído como um repositório de plugin Claude Code, não como um pacote npm, por isso ainda não há instalador de uma linha (uma forma publicável está a ser investigada à parte, condicionada a passar de facto no validador de plugins do Claude Desktop). Faz clone a um tag fixo com `--depth 1` — `v1.9.0` aqui, ou o release que quiseres seguir — depois corre `npm ci` uma vez dentro de `mcp/`: o `mcp/dist/` vem committed, por isso não há nada para *compilar*, mas `mcp/node_modules` está no gitignore como o resto deste repo, e `scan`/`baseline update` continuam a importar alguns pacotes de runtime (`execa`, `yaml`) que o build committed não empacota.
-
-Um job pronto a colar — os findings aparecem como anotações no diff do pull request, não perdidos num log. **O `ubuntu-latest` não traz Semgrep, gitleaks nem Trivy**, por isso o job instala-os ele próprio; salta esse passo (ou deixa-o falhar) e todos os runs reportam `coverage: none` / exit `2` — não é uma avaria, é a resposta desenhada para um scan que não scaneou nada:
-
-```yaml
-name: dev-guardian
-
-on:
-  pull_request:
-
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      # Clonado FORA do checkout para o próprio código do dev-guardian nunca
-      # entrar no scan.
-      - name: Clone dev-guardian
-        run: |
-          git clone --depth 1 --branch v1.9.0 \
-            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
-          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
-
-      # Nenhum destes vem no ubuntu-latest. O Semgrep sozinho tem fallback
-      # via Docker dentro dos scanners do próprio dev-guardian, mas gitleaks
-      # e Trivy não têm, por isso saltar este passo continua a limitar todos
-      # os runs abaixo de coverage: full. O pipx já vem instalado no
-      # ubuntu-latest; o sudo é sem password para o utilizador runner.
-      - name: Install scanners (Semgrep, gitleaks, Trivy)
-        run: |
-          pipx install semgrep
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
-          GL_TAG=$(basename "$GL_TAG")
-          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin gitleaks
-
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
-          sudo apt-get update -qq && sudo apt-get install -y trivy
-
-      - name: Scan
-        id: scan
-        run: |
-          set +e
-          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-
-      # Faz upload do SARIF que existir mesmo quando o passo acima "falhou" —
-      # um gate falhado e um scan incompleto continuam a produzir relatório.
-      # O executionSuccessful do SARIF diz SE a cobertura foi total; não diz
-      # QUAL scanner faltou — isso é o exit 2 e o log acima.
-      # Exige que o repositório seja público, ou GitHub Code Security num
-      # privado — caso contrário tira este passo e usa --format json.
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('results.sarif') != ''
-        with:
-          sarif_file: results.sarif
-
-      - name: Falha o build num gate falhado ou erro de uso real
-        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
-        run: exit 1
-
-      - name: Avisa (sem falhar) numa cobertura incompleta
-        if: steps.scan.outputs.exit_code == '2'
-        run: echo "::warning::dev-guardian scan incompleto — vê o log do passo acima para saber qual scanner faltou"
-```
-
-Três coisas que este snippet não te consegue esconder:
-
-- **Um scan em CI deixa `.guardian/` na working tree.** `security_scan_full` e `map_attack_surface` escrevem a saída bruta dos scanners em `.guardian/reports/` dentro do projeto scaneado, exatamente como fazem numa sessão interativa — só a base de dados SQLite é efémera. O servidor MCP adiciona `.guardian/` ao `.gitignore` automaticamente sempre que arranca contra um projeto (uma sessão interativa, qualquer host) — isso nunca acontece a partir da CLI, por isso um repositório que só corre a CLI em CI tem de adicionar a linha à mão, ou um passo posterior da pipeline que verifica uma working tree limpa vai falhar por um motivo que parece nada:
-
-  ```text
-  .guardian/
-  ```
-
-- **O SARIF sozinho não te diz *qual* scanner falta.** A flag `invocation.executionSuccessful` muda para `false` sempre que a cobertura não é total — por isso quem lê só o upload já consegue distinguir um run incompleto de um limpo — mas o SARIF não tem campo de *uso geral* para este texto, por isso o nome do scanner e o motivo só vivem no exit code `2` e na saída humana/JSON do próprio passo. Trata um SARIF carregado com zero resultados como inconclusivo, não como limpo, até verificares o exit code.
-
-- **O upload de code-scanning exige um repositório público, ou GitHub Code Security num privado.** Sem um dos dois, o passo `upload-sarif` falha o job por um motivo que nada tem a ver com findings. Num repositório privado sem essa licença, tira o passo de upload e usa `--format json` mais o exit code.
-
-### Dashboard local (`status`, `dashboard`)
-
-Duas vistas read-only sobre o mesmo `.guardian/guardian.db`, para quem desenvolve no seu próprio portátil — não é um artefacto de CI (isso é o SARIF acima) nem um entregável para cliente (isso é o HTML branded do `report_export`):
-
-```text
-node cli/dev-guardian.mjs status --project .        # um ecrã de terminal
-node cli/dev-guardian.mjs dashboard --project .      # HTML autocontido, abre no browser
-```
-
-O `status` imprime o risk score e a banda, os findings abertos e os CVEs por severidade, os dois deltas (desde o scan anterior do mesmo tipo, desde a baseline ativa), até 3 hotspots de findings (ordenados por contagem, não por severidade), quais scanners faltam e o que isso deixa de fora dos números, e as supressões ativas — um ecrã, nada mais. O `dashboard` renderiza o mesmo snapshot como `.guardian/dashboard.html` — sem CDN, sem fetch de fontes, sem nenhuma chamada de rede — com filtragem e ordenação de colunas no client-side; abre automaticamente só quando o stdout é um TTY (`--no-open` suprime isso, `--out <path>` muda o destino do ficheiro). Nenhum dos dois comandos corre um scan, altera a base de dados ou abre um socket, e **ambos terminam sempre com exit `0` assim que renderizam** — mesmo num projeto cheio de críticos, ou nunca scaneado (`3` só num erro de uso). Eles reportam; quem faz gate é o `scan`.
-
-Vale a pena saber antes de confiar no que está no ecrã: **a página é um snapshot, não é ao vivo** — reflete o scan que tinha terminado quando correste o comando, e não atualiza quando um scan posterior corre, por isso volta a gerá-la para veres um novo — e a janela em si é igualmente limitada: o último scan mais dois deltas, nunca uma tendência de várias semanas (`/guardian-trend` continua a pedir um histórico que nada aqui calcula). Um ecrã limpo também só é tão fiável quanto o `missing_tools` que o acompanha: um scanner que correu e não produziu nada em silêncio parece, a este nível, idêntico a um que não encontrou nada de errado.
-
-### Filosofia
-
-- **Pragmático por defeito** — não bloqueia trabalho por nada cosmético
-- **Paranoid quando crítico** — secrets em produção, RCE, SQLi → interrompe e alerta
-- **Stack-aware** — detecta a tua linguagem e configura só o relevante
-- **Cross-platform** — Linux, macOS, Windows (com WSL)
-- **Zero lock-in** — todas as ferramentas usadas são open-source e self-hostable
-- **Idempotente** — correr `guardian init` 2 vezes não duplica nada
-- **Degradação graciosa** — scanners em falta são reportados, nunca crasham um scan
-
-### Stacks suportadas
-
-JavaScript / TypeScript (Node, Next, React, Vue, Svelte, Angular), Python (Django, Flask, FastAPI), PHP (Laravel, Symfony, **WordPress + Kadence + WooCommerce + Tutor LMS**), **C# / .NET (ASP.NET Core, EF Core, central package management)**, Go, Rust, Ruby, Java / Kotlin, Docker, Terraform, Kubernetes, Ansible, GitHub Actions.
-
-Para linguagens não suportadas explicitamente, as skills caiem para Semgrep `--config=auto` (cobre 30+ linguagens) e regras genéricas para secrets.
-
-### Estrutura do repositório
-
-```text
-dev-guardian/
-├── .claude-plugin/
-│   ├── plugin.json              # declara o servidor MCP + metadata
-│   └── marketplace.json
-├── commands/                    # 48 slash commands
-├── skills/                      # 13 skills (uma por destino do router)
-├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-ativos)
-├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
-├── mcp/                         # Servidor MCP (TypeScript + SQLite)
-│   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 1094 testes unit + integration + e2e
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
-│   └── dist/                    # artefacto compilado (node dist/server.js)
-├── scripts/
-│   ├── detect/detect-stack.sh   # deteção de linguagens/frameworks
-│   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
-├── configs/
-│   ├── renovate/, gitleaks/, semgrep/, pre-commit/
-├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
-└── README.md
-```
-
-### Licença
-
-MIT — usa, modifica, partilha à vontade.
-
-### Autor
-
-Carlos Pereira · prodigitalkey.com
-
----
-
-## Español
-
-Plugin todo-en-uno **100% open-source** para Claude Code / Cowork. Cubre seguridad, detección y corrección de bugs, calidad de código, gestión de dependencias, observabilidad, rendimiento y cumplimiento para cualquier proyecto de desarrollo. Stack-aware (Node, Python, PHP/WordPress, Go, Rust, Ruby, Java, **C# / .NET**), triggers trilingües (EN + PT + ES) — responde en el idioma del usuario.
-
-Bajo el capó incluye un plugin Claude Code (13 skills + 48 slash commands) **y** un servidor MCP con **54 herramientas y 18 recursos**, con estado persistente en SQLite para baselines, deltas y supresiones. También hace **vet de skills / MCP servers / agentes de terceros antes de instalarlos** — la verificación de supply-chain del ecosistema de agentes.
-
-### Skills (front-end de Claude Code)
-
-| Skill                    | Slash command          | Qué hace                                                 |
-| ------------------------ | ---------------------- | -------------------------------------------------------- |
-| `guardian`               | `/guardian`            | Router principal — dirige al módulo adecuado             |
-| `guardian-init`          | `/guardian-init`       | Bootstrap inicial — instala y configura todo             |
-| `guardian-security`      | `/guardian-scan`       | SAST + secretos + CVEs + contenedor + IaC                |
-| `guardian-bugfix`        | `/guardian-fix`        | Caza y corrige bugs de implementación                    |
-| `guardian-quality`       | `/guardian-quality`    | Complejidad, duplicación, deuda técnica                  |
-| `guardian-review`        | `/guardian-review`     | Revisión profunda pre-PR / pre-despliegue                |
-| `guardian-deps`          | `/guardian-deps`       | Setup de Renovate + escaneo de CVEs + supply chain       |
-| `guardian-observability` | `/guardian-observe`    | Logging estructurado, métricas, error tracking           |
-| `guardian-performance`   | `/guardian-perf`       | Performance budgets, k6, Lighthouse                      |
-| `guardian-compliance`    | `/guardian-compliance` | RGPD/LOPD, licencias, SBOM, política de privacidad       |
-| `guardian-scanskill`     | `/guardian-scanskill`  | Vet de skill / servidor MCP / agente antes de instalar   |
-| `guardian-grill`         | `/guardian-grill`      | Interrogatorio de comprensión del diff antes del merge   |
-| `guardian-improve`       | `/guardian-improve`    | Convierte deuda técnica medida en specs de mejora        |
-| (combina 3 de ellas)     | `/guardian-audit`      | Informe ejecutivo: seguridad + calidad + deps            |
-
-También puedes invocarlo todo en **lenguaje natural** (ES, EN o PT). Las skills se disparan por descripción — *"audita el proyecto"*, *"comprueba vulnerabilidades"*, *"antes del merge"*, *"audit the project"*, *"check for vulnerabilities"*, *"before merge"*, *"audita o projeto"*, *"vê se há vulnerabilidades"*, *"antes de fazer merge"*.
-
-### Servidor MCP (54 herramientas, 18 recursos)
-
-El plugin registra un servidor MCP en stdio que Claude Code arranca automáticamente. Las herramientas se agrupan en:
-
-- **Seguridad transversal** (10) — `security_scan_full`, `scan_sast` (Semgrep — ejecuta el ruleset del registry **y las reglas del propio proyecto**: `.semgrep.yml`, o lo que `.dev-guardian/configs.json` registre como destino, más lo añadido con `register_custom_rules`. Cargar el archivo del proyecto es nuevo; `--config=auto` **no** lo recoge, así que mientras la tool ejecutó solo `--config=auto` las trece reglas que instala `init_project` no tenían consumidor alguno. Una config que Semgrep no pueda cargar se descarta y se nombra en `tools_run`, nunca se pasa — una que no resuelva aborta la ejecución *entera*. **PRIVACIDAD:** `--config=auto` descarga reglas del registry de Semgrep y envía métricas de uso a Semgrep Inc.; Semgrep se niega a construir una auto config con las métricas apagadas, así que el modo por defecto no puede evitarlo. **`local_only=true`** prescinde del registry, pasa `--metrics=off` y ejecuta solo reglas ya en disco — nada sale de la máquina, a costa de las reglas del registry; sin reglas locales informa el escaneo como skipped en lugar de como un resultado limpio), `scan_deps`, `scan_secrets`, `scan_containers`, `scan_iac`, `deps_audit`, `bug_hunt` (Semgrep `p/r2c-bug-scan` + `p/security-audit`, más un pack local siempre activo para JS/TS — `configs/semgrep/bugfix-js.yml`, trece reglas hand-authored que cubren las seis subcategorías de bug que la herramienta clasifica: race conditions, null/undefined safety, off-by-one, memory leaks, manejo de errores silenciado, y dos edge cases. `/guardian-fix` también nombra "broken happy paths" como foco; eso es una categoría de consecuencia, no una forma sintáctica, así que solo se cubre su forma concreta más común — una llamada que muta estado sin `await` dentro de una función async (declaraciones, funciones flecha, métodos de clase/objeto — NO cubre function expressions async, una limitación del motor de Semgrep) — y nada cubre el resto. Son reglas Semgrep OSS: casan sintaxis, no hacen dataflow, así que un bug a dos funciones de su guard sigue siendo invisible para ellas. En 1.9.0 una auditoría independiente leyó el pack contra ~600 líneas de JS/TS que nadie de quienes escribieron las reglas había visto, y encontró ~40 falsos positivos en 14 reglas — entre ellos `$A.find(...).$PROP` disparando en ERROR en cada query de Mongoose y en cada `.find()` de jQuery (nueve reproducciones, cero verdaderos positivos), `floating-mutation` disparando en `res.send(rows)` y en `void repo.save(a)` (el arreglo que su propio mensaje prescribe), y un bucle `<= .length` que nunca indexa nada acusado de leer más allá del final. Están cerrados: `unchecked-find` exige ahora un callback literal como argumento, que es lo único que distingue `Array#find` de una Query de Mongoose o de una colección jQuery sin inferencia de tipos; `floating-mutation` exige ahora que el nombre del RECEPTOR también parezca una frontera de persistencia, y excluye `void`, `Promise.all`, `.catch`/`.then`/`.finally` y capturar-para-esperar-después; y `loop-lte-length` casa ahora la LECTURA fuera de rango en vez de la cabecera del bucle. Las severidades se rederivaron de una sola pregunta hecha a la SALIDA — ¿lo que la regla emite es SIEMPRE un bug? — a la que el self-scan descrito a continuación respondió con números reales en vez de con razonamiento. Esto importa aguas abajo: ERROR mapea a `high`, WARNING a `medium`, y `create_fix_pr` asume `severity_min: high`, así que quien quiera estos hallazgos corregidos tiene que pedir `medium`. Lo que queda, dicho y no insinuado: un predicado con nombre (`users.find(byId).name`) es ahora invisible, el precio de no acusar cada query de Mongoose; un repositorio cuya variable no se llama como tal es invisible para `floating-mutation`, igual que `const p = repo.save(a)` que nunca se espera; los bucles `while`/`do-while` y las longitudes cacheadas quedan fuera de `loop-lte-length`; y las reglas de listener/subscribe no distinguen un cleanup que no quita nada de uno que funciona, ni ven un segundo registro sin limpiar junto a uno limpio. Un escaneo posterior contra el propio `mcp/src` de este repositorio — 183 ficheros de TypeScript que nadie escribió como fixture — midió después la ronda y cambió dos cosas más. Confirmó el arreglo de `floating-mutation` (20 hallazgos → 0) y detectó una regresión introducida por la propia ronda (`unchecked-match` 0 → 13, porque la nueva rama `exec` no heredó la exclusión de optional chaining que la rama `match` ya tenía; los 13 eran código correcto y guardado, `exec(...)?.[1]`). Dos reglas cambiaron de estado con esa evidencia. **`catch-returns-null` fue ELIMINADA**: 25 hallazgos en `mcp/src`, todos código correcto, sumados a cero verdaderos positivos en el corpus de la auditoría — INFO no es un nivel para una regla que nunca ha tenido razón, es una forma más silenciosa de seguir equivocada. **`empty-catch` y `empty-promise-catch` pasaron de ERROR a WARNING**: producen 45 hallazgos en `mcp/src` y los 45 son fail-open deliberado y documentado con comentario. **Sí** están marcados — con un comentario, que Semgrep no puede leer — y una declaración de intención que la regla no puede reconocer es exactamente el criterio. La equivalente en Java se sostuvo en ERROR sobre la afirmación de que **sí** puede leer el marcador de su ecosistema (el nombre `ignore`/`ignored`/`expected` de Checkstyle), y esa afirmación se midió después contra OpenJDK y falló: el marcador cubre el 8,0% de los catch vacíos del corpus, mientras que el 56,8% de los 1589 hallazgos de la regla declaran la intención en un **comentario** — así que Java también es WARNING, y C# es WARNING con un número aún más duro: 0 apariciones del marcador en 11 800 ficheros de `dotnet/runtime`, el 93% de sus 402 hallazgos escritos `catch (Type) { }` o `catch { }` sin nada que nombrar, y `dotnet build` emitiendo **CS0168** sobre la misma grafía que la regla prescribe; JS/TS tampoco tiene equivalente de peso comparable, y la razón es estructural: el optional catch binding de ES2019 quitó el identificador al que se agarra una convención de nombres — 41 de esos 42 se escriben `catch {`, sin nada que nombrar. La salida `_`/`ignored` se honra igualmente, para que un caso pueda silenciarse en código en vez de con `// nosemgrep`, y se dice que eliminó cero de los 42. Queda UNA regla en ERROR (`index-at-length`, que no encuentra nada en `mcp/src`), once en WARNING y una en INFO. Python tiene también su propio pack — `configs/semgrep/bugfix-py.yml`, diez reglas hand-authored en las mismas seis clases, cada una medida contra las 32 reglas Python que `p/r2c-bug-scan` ya ejecuta y confirmada que dispara donde esas no lo hacen. Sus carencias conocidas se dicen en vez de insinuarse: no hay regla general de "corrutina no esperada" (no es expresable en Semgrep OSS — solo se cubren los cuatro primitivos `asyncio` nombrados, así que un `await` olvidado en un `async def` propio no se detecta), la regla de N+1 de Django casa bucles `for` pero no list comprehensions, no conoce SQLAlchemy ni Peewee, y exige el queryset dentro de la propia cabecera del `for` — `qs = Book.objects.all()` seguido de `for book in qs:` queda en silencio, y esa forma ligada a variable es probablemente la más común en la práctica — `toctou-exists-open` pasó a cubrir `os.path.exists`, `os.path.isfile`, `os.access`, el `.exists()` de un `pathlib.Path` y la guarda NEGADA (`if not exists(p): return`), pero solo en modos de LECTURA, porque comprobar antes de *escribir* protege contra sobrescritura y no contra un fichero que desapareció; `none-deref-match` cubre `.group()`, `.groups()`, `.groupdict()`, `.start()`, `.end()`, `.span()` y el subíndice, pero solo en las funciones de módulo `re.*` — la forma con patrón compilado que la documentación recomienda, `PAT.match(t).group(1)`, exige dataflow entre sentencias y queda en silencio; `none-deref-dict-get` dejó de excluir clientes HTTP por la SUBCADENA del nombre del receptor (lo que convertía bugs reales como `session.get("user_id")` y `client_config.get("timeout")` en falsos negativos) y ahora exige que la CLAVE sea un literal de cadena, a cambio de un falso negativo cuando la clave está en una variable (`cfg.get(key).strip()`); y `queryset-n-plus-one` exige que la relación recorrida termine en un ATRIBUTO, así que `book.author.get_name()` queda en silencio — el precio de dejar de acusar `book.title.strip()` y `ev.created_at.isoformat()`, que son una consulta cada uno. Tras la auditoría de 2026-08 solo una de las diez reglas Python es `ERROR` — `none-deref-match` — porque el criterio es lo que la regla EMITE y no la clase de bug: si la corrección depende de que la regla haya reconocido una guarda, emite un falso positivo en la primera guarda que nadie enumeró. Hay dos exclusiones que conviene nombrar como falsos negativos en vez de dejarlas implícitas: `get-without-doesnotexist` cuenta un `except Exception:` amplio como guarda, así que un `.objects.get()` dentro de `except Exception: pass` queda en silencio aquí, aunque sea peor código que un `get` sin guarda (el tragarse el error lo detecta aparte `except-pass`, pero nada une ambas cosas); y `open-without-context` nunca marca destinos que son atributos, así que `self.handle = open(path)` se omite a propósito — su `close()` suele vivir en otro método, fuera del alcance de una regla sintáctica — lo que significa que una clase que de verdad nunca cierra su handle se pierde, y esa es la forma más común de una fuga de fichero de larga duración. Go también tiene el suyo — `configs/semgrep/bugfix-go.yml`, nueve reglas hand-authored en las mismas seis clases, y Go es el lenguaje donde el pack del registro deja el mayor hueco: `p/r2c-bug-scan` trae 5 reglas Go y solo 2 caen en una clase de bug, ambas de integer overflow, así que `error_handling` — en el lenguaje donde `if err != nil` ES el modelo de errores — `race_condition`, `null_safety`, `memory_leak` y `edge_case` estaban todas vacías. Sus carencias se dicen en vez de insinuarse: **no hay regla para goroutines colgadas** ni **regla para la captura de la variable del bucle** — esa se construyó, se verificó funcionando y luego se excluyó deliberadamente, porque Go 1.22 pasó a dar a cada iteración su propia variable y Semgrep no lee el `go.mod`, así que en cualquier módulo moderno acusaría código correcto; y el pack traía una **décima regla que fue eliminada** en la auditoría de 2026-08 — `edge-case-append-discarded` buscaba `append(xs, 1)` en posición de sentencia, que la spec de Go prohíbe y el compilador rechaza, así que su conjunto de verdaderos positivos era vacío en cualquier proyecto que compile y todo lo que emitía en un repositorio real era falso positivo (para el bug que sí compila — `xs = append(xs, v)` sobre un parámetro cuyo resultado nunca sale de la función — use `staticcheck`/`ineffassign`, que tienen el dataflow que una regla sintáctica no tiene). De lo que queda: `nil-map-write` detecta el mapa declarado con `var` y el campo de mapa de un struct creado con `&T{}` — el clásico — pero no un mapa nil que llega como parámetro ni uno devuelto por un constructor, porque ninguno de los dos es *siempre* un bug, depende de quien llama; `type-assert-no-ok` sigue acusando `var s, ok = v.(string)`, porque el patrón `var $X, $OK = ...` no casa nada en el parser Go de Semgrep 1.164 (verificado como patrón positivo aislado); `err-discarded` no distingue una función del propio proyecto que devuelva `(T, bool)` de un error descartado, y solo las formas de la biblioteca estándar (`sync.Map`, `strings.Cut*`, `utf8.Decode*`) están excluidas; y `err-blank-assign` dispara en descartes deliberados como `_ = os.Remove(tmp)` en una limpieza, y por eso es `WARNING`. Solo una de las nueve reglas Go es `ERROR` — `empty-err-block`, cuya salida es una rama de error literalmente vacía, sin guarda alguna que reconocer. Todas las fixtures Go del pack se compilan con `go build ./...` en Docker como parte del proceso de cambio; fue esa comprobación la que detectó la regla eliminada. Java tiene uno también — `configs/semgrep/bugfix-java.yml`, siete reglas hand-authored en las mismas seis clases: `p/r2c-bug-scan` trae 4 reglas Java y **ninguna** cae en una clase de bug, así que todas las subcategorías estaban a cero, en el lenguaje cuyo defecto más famoso es el `NullPointerException`. **C# está aún más vacío, y el número es cero** — `configs/semgrep/bugfix-cs.yml`, once reglas hand-authored en las mismas seis clases. Medido con controles positivos: `p/r2c-bug-scan` reporta `paths.scanned = 0` en C# porque no trae **ninguna regla de C#**, y `p/csharp` y `p/security-audit` escanean todos los ficheros y no encuentran nada. **Rust lleva exactamente una regla, y una regla es toda la respuesta** — `configs/semgrep/bugfix-rs.yml` contiene `blocking-sleep-in-async` y nada más: un `std::thread::sleep` dentro de una `async fn`, que bloquea el *hilo* del executor y deja paradas todas las demás tareas programadas en él. Léase como una regla, no como cobertura parcial de Rust. Un sondeo midió trece candidatas y mató doce, porque cuatro de las seis clases de bug son **errores de compilación** en Rust (E0502, E0515, E0373, E0599) y para el resto la respuesta es `cargo clippy`, cuyos lints con conciencia de tipos ganan a todos los equivalentes de Semgrep medidos — por defecto ya detecta `await_holding_lock`, y el grupo `restriction` añade `unwrap_used`, `mem_forget`, `indexing_slicing`. Configure clippy; dev-guardian añade la única regla para la que clippy no tiene equivalente, en `WARNING`, porque el trabajo bloqueante puede legítimamente entregarse a otro hilo y los envoltorios que lo hacen no son todos enumerables. Dos candidatas que pasaron sus propias fixtures fueron matadas al escanear 1200 ficheros de la biblioteca estándar real: `mem-forget` dio 43 hallazgos y **cero** verdaderos positivos, y `unwrap-in-drop` señalaba `if !thread::panicking() { r.unwrap(); }`, que es la mitigación canónica que su propio mensaje prescribe. **Ruby no lleva nada, también por medición**: el frontend de Ruby de Semgrep borra `&.` y la distinción entre `..` y `...`, así que una regla de nil-safety o de off-by-one casa el código correcto y el código con bug de forma idéntica — use RuboCop y el `p/ruby` del registry, que sí está vivo. Una de las once reglas de C# está en `ERROR`, porque C# tiene un defecto — `throw ex;` dentro de un `catch` — cuya forma *correcta* (`throw;`) es otro nodo del AST, así que no hay guarda que reconocer. `empty-catch` estuvo a su lado hasta que se midió sobre `dotnet/runtime` y bajó de tier (ver arriba). Esa regla duplica un **aviso del compilador** (`CA2200`), no una regla del registry, y se gana el sitio porque dev-guardian escanea sin compilar. `CA2200` sirvió además de oráculo independiente, y `CA2002` para la regla del `lock` — ambos coinciden exactamente con las fixtures. `memory_leak` lo lleva una sola regla: la de `IDisposable` **no es expresable**, porque el frontend de C# de Semgrep borra el modificador `using` de una using-declaration. Sus carencias se dicen en vez de insinuarse: **no hay regla para `Integer ==`**, porque expresarla exige inferencia de tipos que Semgrep OSS no tiene y el intento disparaba en `v == null` y en comparación de primitivos — una regla que señala `v == null` se desinstalaría el primer día; `stream-not-closed` solo reconoce `new FileInputStream(...)` — y solo por ese nombre simple, así que `FileOutputStream`, `FileReader`, `Socket` y los demás closeables filtran igual y no se cubren, y lo mismo le pasa a un `new java.io.FileInputStream(...)` totalmente cualificado, que el patrón no ve (medido); `static-dateformat` solo reconoce `SimpleDateFormat`, así que un `Calendar` o un `Matcher` compartidos en un campo estático no se cubren — pero ahora trae un único patrón **totalmente cualificado**, así que un campo `static final java.text.SimpleDateFormat` en un fichero sin import sí se ve, cosa que antes no ocurría (medido en las cuatro formas de import: el patrón cualificado casa también las formas cortas siempre que un import deja a Semgrep resolver el nombre, mientras que el corto nunca casó la cualificada, así que la rama corta era inerte y se borró); y `modify-during-iteration` solo casa la forma for-each, así que un bucle indexado que elimina de la lista que indexa tiene el mismo defecto y se escapa. Dos reglas restringen el receptor por el TIPO DECLARADO, lo que compra precisión y cuesta recall: `metavariable-type` casa el tipo declarado exacto, sin subtipado — medido, `type: List` **no** casa un `CopyOnWriteArrayList`, que es precisamente lo que mantiene la regla apartada de él — así que `modify-during-iteration`, que enumera `List`, `ArrayList`, `LinkedList`, `Set`, `HashSet`, `LinkedHashSet` y `Collection`, queda en silencio ante un `Deque`, una `Queue`, un `SortedSet` o una colección del propio proyecto . La regla liga ahora el receptor con un `metavariable-pattern` que acepta un nombre simple **o** uno cualificado con `this.`; antes de eso, `cache.get(k).trim()` disparaba y `this.cache.get(k).trim()` era invisible — misma clase, mismo campo, mismo bug (medido). Hubo una octava regla, `null-safety-map-get-deref`, **borrada** por la ronda del corpus de aplicación, y el razonamiento queda registrado porque la misma regla se volverá a proponer. Venía **sin una sola exclusión de guarda**, así que la guarda canónica de Java `if (m.containsKey(k)) { … m.get(k).trim() … }` disparaba en ERROR y aconsejaba `getOrDefault` sobre código ya guardado; diez rondas enumeraron después las formas que prueban la clave presente — `containsKey` y `get() != null` inline, las mismas usadas como expresión y sus duales de De Morgan, las cadenas, las cuatro polaridades del ternario, las salidas anticipadas, la población por `put`/`putIfAbsent`/`computeIfAbsent`, y la iteración sobre el propio `keySet()` — cada una limitada a la rama que la guarda prueba, cada una añadida porque código correcto estaba disparando. Medida contra OpenJDK y Spring dio **55 findings y cero defectos vivos**, y se mantuvo igualmente, con el argumento escrito en la propia regla: ambos son código de *biblioteca*, donde un mapa desreferenciado es casi siempre uno que la clase que lo lee llenó, y faltaba medir Java de **aplicación**. Ese corpus se ejecutó — Jenkins 1 finding / 1 274 ficheros, Kafka 224 / 3 892, Elasticsearch 749 / 20 485 — con **45 leídos a mano** y **cinco** defectos defendibles. El recuento no decidió nada; esto sí: **el 88% de los findings de Elasticsearch y el 97% de los de Kafka no tienen guarda alguna cerca del desreferenciado**. Son correctos por razones *semánticas* — mapas paralelos mantenidos en sincronía, un mapa que la clase llenó en otro método, clave constante, contrato de API — y ninguna cláusula de exclusión llega a eso, así que estrechar nunca estuvo disponible (medido antes de decidir: la única familia cerrable, el estilo `containsKey(k) == false` de Elasticsearch, vale 34 de 749 y cero en Kafka). Dos cosas sobreviven a la regla: era **ciega al idioma más peligroso**, `X v = m.get(k); v.foo();`, porque el desreferenciado no está encadenado — señalaba la lectura derivada, que es segura, y no veía la original al lado, que es la que arriesga; y los cinco verdaderos positivos tenían **la misma forma**, un mapa venido de parsing de entrada externa (JSON de HTTP, `/sys/fs/cgroup`, salida de la JVM) leído con clave literal, lo que es procedencia y no sintaxis, fuera del alcance de Semgrep OSS. Borrada por el mismo criterio que borró `as-cast-deref` del pack de C#, con una diferencia registrada a propósito: la tasa de verdaderos positivos de esta **no era cero, era en torno al 1%**. `modify-during-iteration` tenía un falso negativo que vale más que cualquiera de sus falsos positivos — un `remove()` dentro de un `switch` seguido de `break;` es una `ConcurrentModificationException` real, porque ese `break` sale del *switch* y no del bucle, y la exclusión emparejada `remove(); break;` se la tragaba entera; la exclusión del `break` simple ahora solo se aplica cuando la eliminación está dentro de un `switch` que a su vez está **dentro del for-each sobre esa colección**. El **orden del anidamiento** es lo que la cláusula comprueba, y antes comprobaba mera contención léxica — cualquier eliminación dentro de un `case` rearmaba la regla, incluida una dentro de un **bucle** escrito en ese `case`, donde el `break` simple sale del bucle y el código es correcto; un `switch` que despacha un comando con un bucle de buscar-y-eliminar en una de sus ramas disparaba tres veces sobre Java correcto. `return`, `throw` y un `break` **etiquetado** sí salen del método o del bucle desde dentro de un `switch` y siguen excluidos en todas partes. `loop-lte-length` restringe su metavariable de array a un **tipo array**, porque `$A.length` casaba cualquier campo `int` llamado `length` y disparaba en ERROR sobre el bucle deliberadamente inclusivo de un objeto de dominio; medido, esa restricción no cuesta recall — parámetro, local, campo, campo cualificado con `this.` y local inferido con `var` se siguen viendo todos. Las exclusiones terminadas en salida, en las dos reglas `optional-get-no-ispresent` y `modify-during-iteration`, toleran exactamente **una** instrucción entre la guarda (o la eliminación) y la salida, en vez de una elipsis arbitraria: medido, la forma con elipsis casa en PROFUNDIDAD, así que `if (!m.containsKey(k)) { if (strict) { return ""; } }` y `items.remove(s); if (done) { break; }` dejaban ambos de dispararse — y ambos son bugs reales. `empty-catch` respeta la convención de Checkstyle / IntelliJ y nunca dispara cuando la variable de la excepción se llama `ignore`, `ignored` o `expected` — el reverso es que una excepción genuinamente tragada escapa a la regla solo por llamarse `ignored`. La misma compensación tiene un segundo filo: el idioma JUnit de excepción esperada (llamar al código, `throw new AssertionError` si no lanzó, `catch` vacío) dispara cuando la variable capturada se llama `e`, y calla cuando se llama `expected` — el idioma de prueba tiene que usar el nombre convencional. `empty-catch` fue la última regla Java en ERROR, y pasó a WARNING en cuanto por fin se escaneó un corpus externo: sobre 12 593 ficheros de OpenJDK produce **1589 hallazgos**, **903 de ellos (56,8%) con un comentario explicativo dentro del catch vacío** que Semgrep no puede leer, más 27 que declaran la intención en un nombre que la regla no conoce (`cannotHappen` ×13, `_` ×10 — la variable sin nombre de Java 21 — `unused` ×2); una sonda con regex invertida sitúa la grafía reconocida en 139, es decir el **8,0%** de los 1728 catch vacíos del corpus. 45 hallazgos se leyeron uno a uno y unos 39 eran deliberados. **Lea esto antes de extrañarse de que su fix PR de Java salga vacío: las siete reglas son `WARNING`, y `create_fix_pr` tiene `severity_min` en `high` por defecto.** El pack de Java no contribuye *nada en absoluto* al conjunto de fixes *por defecto*, y hay que pedirlo — `severity_min: "medium"`. `bug_hunt` no filtra por defecto, así que nada desaparece de un **escaneo**; lo que cambia es solo el fix PR. Ese valor por defecto no se cambió aquí a propósito, porque afecta a los cuatro packs de lenguaje y es una decisión aparte. La división de tiers aplica el criterio del propio pack en frío, y enunciado como una pregunta sobre la *salida* en vez de sobre el patrón — **¿lo que la regla emite es siempre un bug?** Una regla cuya corrección depende de haber reconocido una **guarda** emite un falso positivo cada vez que encuentra una forma de guarda que nadie enumeró, y ninguna lista de exclusiones cierra eso, porque la guarda siempre puede estar a un método de distancia. Nada pasa esa barra en Java. `empty-catch` se sostuvo más tiempo por una razón que conviene nombrar: su válvula de escape no es una guarda sino una *declaración de intención que la propia regla lee* (la convención `ignore` / `ignored` / `expected` de Checkstyle / IntelliJ), así que lo que emite después sería un tragarse la excepción **sin declarar** — y la medición sobre OpenJDK de arriba refuta la mitad del «sin declarar», porque la marca es un comentario. Cero reglas de siete es el resultado honesto para un matcher sintáctico sin dataflow, no un fallo del pack. `modify-during-iteration`, `static-dateformat` y `loop-lte-length` bajaron por ese criterio; `loop-lte-length` solo después de medir y rechazar el ajuste obvio (exigir que el cuerpo indexe `a[i]` corrige el bucle que nunca indexa `a`, **no** corrige el bucle centinela que llena un array más largo, y pierde un bug real donde el índice se pasa a un helper — un falso positivo cambiado por un falso negativo). `optional-get-no-ispresent` es **WARNING** por la misma razón, una ronda antes: ERROR es para el patrón que es bug independientemente de la intención, y un `o.get()` solo es bug cuando está *sin guarda*. La regla reconoce exactamente estas formas de guarda, enumeradas en vez de resumidas porque el resumen que estaba aquí — "inline sobre la misma variable `Optional`" — era falsable y fue falsado por una condición compuesta, una salida con más de una instrucción, un `while` y un `Optional.of`: `if (o.isPresent())` solo **o como cualquiera de los operandos de una conjunción**, **en la condición de un `if`**, con el `get()` en la rama **verdadera**, con o sin llaves — la rama `else` es un `NoSuchElementException` garantizado y sigue disparando; `while (o.isPresent())`; la misma prueba usada como **expresión** y no como condición de nada, `return o.isPresent() && o.get().isEmpty();`, más las disyunciones negativa-primero `!o.isPresent() || …` y `o.isEmpty() || …`, que cortocircuitan igual; un `return` / `throw` / `continue` / `break` anticipado bajo `!isPresent()` o `isEmpty()`, con o sin una instrucción antes de la salida; las tres formas ternarias, con el `get()` en la rama que la condición prueba segura (el ternario necesitó cláusulas propias por ser una *expresión* condicional, un nodo de la AST distinto de un `if`); `if (o.filter(p).isPresent())`; y una construcción `Optional<T> o = Optional.of(…)`, que no puede estar vacía — `ofNullable` sí puede, y sigue disparando. Falla **cualquier guarda que llegue a la comprobación a través de otro método**, y deliberadamente no trata `a.isPresent() || b` como guarda — eso no prueba nada sobre `a`, a diferencia de la forma negativa-primero de arriba. El caso concreto es la guarda delegada a un helper, `if (!present(o)) { return d; }`, que exige análisis interprocedimental que Semgrep OSS no hace: esa forma es falso positivo y lo seguirá siendo, y por eso justamente la regla está en WARNING en vez de cargar una lista de exclusiones sin fin. Once limitaciones se aceptan en vez de corregirse, cada una reproducida contra las fixtures de revisión, y cada una indica su DIRECCIÓN — durante seis rondas esta lista tuvo nueve entradas y las nueve eran falsos positivos, que es la asimetría que permitió a una ronda cerrar un falso positivo, borrar recall en silencio, y seguir en verde; luego una entrada SALIÓ de la lista al remedirse, la cadena de conjunción, que nunca fue una limitación sino una metavariable que nadie había examinado. Falsos positivos: (1) `stream-not-closed` en `open(); try { … } finally { close(); }` (ya es la razón declarada de que sea WARNING); (2) `static-dateformat` en un `static final SimpleDateFormat` cuyos accesos pasan todos por un método `synchronized` (probar que *todos* los accesos están sincronizados es análisis de programa completo, que Semgrep OSS no hace, y un formatter compartido serializa a todos los llamadores de todos modos); (3) `loop-lte-length` en `i <= a.length` cuando el cuerpo se protege con `i < a.length` o nunca indexa `a`; (4) `printstacktrace-only` en el único sitio donde la llamada es correcta — el fallback cuando fue el propio logger el que lanzó; (5) `optional-get-no-ispresent` y `modify-during-iteration` cuando hay **dos o más** instrucciones entre la guarda (o la eliminación) y la salida — `if (o.isEmpty()) { log(); metric(); return ""; }`, `items.remove(s); log(s); n++; break;` — el precio deliberado de no usar una elipsis que casa en profundidad y que sí escondería bugs reales; (6) las mismas dos reglas en cualquier guarda que llegue **a través de un método helper**, `if (!present(o)) { return d; }`, que exige análisis interprocedimental; y (7) `optional-get-no-ispresent` sobre una guarda guardada en un **booleano local**, `boolean present = o.isPresent(); if (!present) { return ""; }`, que es dataflow y no sintaxis, fuera del alcance de Semgrep OSS. **Falsos negativos**, la dirección que nadie estaba escribiendo: (9) la clase de la **garantía invalidada** — una garantía que la guarda establece y el código luego destruye *dentro* de la región que la exclusión cubre, `if (m.containsKey(k)) { m.remove(k); return m.get(k).trim(); }` y cuatro formas medidas más, todas excepciones garantizadas, todas en silencio, y es el problema del nodo entero en el eje **temporal** en vez del eje de las ramas; y (10) las mismas dos reglas sobre una guarda guardada en un **booleano local**, el espejo de recall de (8). **PHP tiene su propio pack** — `configs/semgrep/bugfix-php.yml`, **seis** reglas hand-authored, y es la primera ronda medida contra un corpus externo real desde el principio (WordPress 6.9, 1467 archivos), lo que cambió cuatro veredictos. Seis candidatas murieron por ese corpus y no por argumento: una regla del operador de supresión de errores con 420 hallazgos, grupos de `preg_match` con 132, `in_array` suelto con 117, una regla de `foreach` por referencia con 46 que era estilo y no bugs, una regla de fuga de `fopen` que es **inexpresable** (con las exclusiones de escape no encuentra nada; sin ellas dispara sobre código correcto — ambos extremos medidos), y una cuyo bug **no existe en PHP**: el `foreach` itera una copia, confirmado en el intérprete. Por eso **`memory_leak` es una clase vacía en este pack** — seguir recursos exige análisis de escape que Semgrep OSS no tiene — y las seis que salen son off-by-one, TOCTOU, catch vacío, veracidad de `strpos()` y dos de null-safety. **Cero de las seis están en `ERROR`**, y la razón acusa a dos packs ya publicados: la candidata más cercana era `empty-catch`, que Java y C# publicaban en `ERROR` entonces, y los **diez** hallazgos suyos en WordPress son silencios deliberados con un comentario que lo explica — Semgrep no lee comentarios. Esa premisa nunca se había medido contra código externo, porque ninguno de los dos tenía corpus real disponible; desde entonces ambos se han medido contra uno, y ambos bajaron — Java a **0 de 8** en `ERROR`, C# a **1 de 11**. Las trampas específicas de PHP están escritas en el pack: un **nombre de tipo cualificado en un patrón no encuentra nada, en silencio** (`catch (\RuntimeException $E)` encontró cero), `?->` y `->` son **el mismo nodo de la AST**, así que el idioma seguro solo se excluye por texto, y el `catch (\Foo) { }` sin variable de PHP 8 es inalcanzable — lo que también lo vuelve auto-exento, ya que así es como el PHP moderno declara silencio deliberado. **JS/TS, Python, Go, Java, C# y PHP**, más la única regla de Rust: los demás lenguajes aún no tienen pack local. Un archivo de reglas local roto a mano degrada en vez de hacer fallar todo el escaneo, ya sea la rotura un YAML inválido o un único patrón de regla mal formado), `suggest_fix`, `register_custom_rules`
-- **WordPress** (9) — `scan_wordpress` (Semgrep PHP + rule pack WP + Trivy + gitleaks + PHPCS-WPCS), `wp_audit` (instalación en vivo: checksums + admins + flags de configuración vía WP-CLI), `wp_vuln_check` (WPScan DB), `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites`
-- **C# / .NET** (4 dedicadas + ramas) — `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup`; `scan_sast` corre `p/csharp` + parsea la salida de security-code-scan; `deps_update_plan` corre `dotnet list package --outdated`; `observability_setup` genera plantillas Serilog + prometheus-net
-- **Calidad, deps, priorización** (5) — `quality_check`, `deps_update_plan`, `triage_findings`, `prioritize_findings`, `risk_score`
-- **Compliance & SBOM** (5) — `compliance_check` (RGPD/GDPR), `compliance_evidence`, `generate_sbom` (Syft), `sbom_diff`, `license_compatibility`
-- **Observabilidad & rendimiento** (3) — `observability_setup` (Pino/structlog/Monolog/Serilog + Prometheus), `health_status`, `perf_check` (k6 / Lighthouse)
-- **Lifecycle / PR / gobierno** (11) — `init_project` (registra cada config que copia en `.dev-guardian/configs.json` — destino, origen, versión del plugin y hash del contenido — para que un escaneo posterior te diga, en **una sola línea de aviso no bloqueante** que nunca es un finding ni altera un exit code, cuándo una config distribuida se corrigió después de instalarse la tuya; una config que tú mismo editaste no genera aviso alguno, porque es el caso esperado. **`refresh=true`** vuelve a sincronizar contra las baselines actuales: `apply=false` solo informa de lo que cambiaría, y `apply=true` actualiza un archivo que demostrablemente nunca tocaste, escribiendo la nueva baseline de todos los demás como `<nombre>.new` **junto** a tu archivo — ninguna flag, bajo ninguna circunstancia, sobrescribe una config que modificaste), `precommit_install`, `review_pr`, `set_baseline`, `diff_scans`, `regression_alert`, `report_export` (Markdown default / branded **HTML** with dark/light toggle / **SARIF 2.1.0** / JSON), `create_github_issues`, `create_fix_pr` (aplica fixes que un escáner ya produjo — bumps de `deps_update_plan`, `--autofix` de Semgrep — dentro de un worktree de git aislado, prueba cada uno con un differential de escaneo y una corrida de pruebas, y abre un pull request por ecosistema/escáner vía `gh` local; **`apply` tiene valor por defecto `false`** — un dry run sigue creando el worktree, aplicando el fix y corriendo los dos differentials, pero no abre ningún PR y no deja nada atrás, ni siquiera un branch, y su propio escaneo de verificación nunca se convierte en el escaneo más reciente del proyecto, así que una vista previa no puede redirigir `guardian://findings/open` ni `risk_score`; los bumps de maven y gradle quedan fuera de alcance, una brecha heredada del propio `deps_update_plan`; una segunda aparición de la misma regla en un archivo ya corregido no se ve como nueva — la comprobación "no new finding" compara `(rule_id, file_path)`, no el fingerprint, porque el fingerprint cambia cada vez que el fix desplaza una línea; y `fix_applied` nunca pasa a `1`, una columna muerta en `findings` — el pull request abierto es el registro), `suppress_finding`, `audit_executive`
-- **Cadena de suministro de agentes IA** (1) — `scan_skill`: audita una **skill / servidor MCP / agente de terceros antes de instalarlo**. Acepta un directorio, archivo, `.zip` o URL git/HTTP(S) y corre 16 categorías de amenaza (prompt injection, exfiltración de datos, escalada de privilegios, supply chain, agencia excesiva, manejo de salida, fuga del system-prompt, envenenamiento de memoria, mal uso de tools, agente rogue, abuso de triggers, código peligroso, taint, firmas, MCP least-privilege, MCP tool poisoning), un motor de **firmas estilo YARA**, taint-light source→sink, detección de Unicode oculto y lookups de CVE en **OSV.dev** — todo agregado en una **puntuación de riesgo 0-100** y un veredicto **SAFE → DO NOT INSTALL**
-- **Superficie de ataque** (1) — `map_attack_surface`: inventario estático de rutas, variables de entorno y puertos declarados en las 8 stacks soportadas, con informe de cobertura por lenguaje. También descubre e importa documentos OpenAPI 3.x y Swagger 2.0 (JSON o YAML — **las colecciones de Postman no son compatibles**), etiqueta cada ruta con su procedencia (`code` o `spec`) y compara ambas: **endpoints shadow** (existen en el código, no documentados), **documentación muerta** (documentada, sin código que la implemente) y rutas coincidentes. Sin spec encontrada no hay diff — `spec_diff: null`, nunca un diff que reporte todas las rutas como no documentadas — y una ruta cuyo camino completo no se puede resolver nunca se reporta como endpoint shadow ni como documentación muerta; cuántos resultados se retuvieron por ese motivo se reporta junto al diff
-- **DAST activo** (1) — `scan_dast`: el paso siguiente a `map_attack_surface` — envía peticiones HTTP reales a una aplicación **ya en ejecución** (nunca la arranca, construye ni detiene) y comprueba el inventario de rutas en cuanto a accesibilidad, acceso anónimo a rutas que exigen autenticación, autorización diferencial, CORS, cabeceras de seguridad, divulgación de información, métodos HTTP no documentados y redirecciones fuera del origen, más un burst opcional de rate-limit y una pasada opcional de **nuclei**. Envolvente de seguridad: **solo loopback** salvo que quien llama certifique `authorized_target: true`; métodos **de solo lectura** (GET/HEAD/OPTIONS) salvo que `allow_write_methods` esté activo, y aun así con cuerpo vacío, más el burst opcional `probe_rate_limit` — la única excepción — que envía POST a exactamente una ruta; sin payloads de inyección, sin adivinar credenciales. El motor propio **no** prueba inyección — eso queda delegado al modo `-dast` de nuclei, excluido por defecto — así que **un resultado limpio no es evidencia de seguridad frente a inyección**, y el conjunto de plantillas por defecto de nuclei prueba el origen, no las rutas específicas de este proyecto
-- **Alcanzabilidad** (1) — `validate_finding`: el otro paso siguiente a `map_attack_surface` — responde, por finding, si algo fuera del proceso puede alcanzar el archivo donde vive, a partir de un grafo de imports a nivel de archivo, con raíz en los archivos que declaran rutas. Devuelve `reachable` / `unreachable` / `unknown` por finding con evidencia concreta (ruta más cercana, número de saltos, cuántas rutas alcanzan el archivo, exposición anónima confirmada en vivo) y los coverage gaps detrás de ella. **Solo informe**: nunca suprime un finding ni cambia la severidad. `unreachable` nunca se emite para Ruby, Java, C# o PHP (los cuatro resuelven código en runtime, no por import). **Se** emite — y puede estar equivocado — para un archivo alcanzado solo por un CLI/cron/queue, o siempre que un import dinámico — `import(expr)`, `require(variable)`, reflection, un registro de plugins — no se pueda resolver
-- **Meta / host** (3) — `detect_stack`, `check_toolchain`, `install_toolchain`
-
-**Recursos** — `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`, `guardian://wp/cron`, `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`, `guardian://surface/latest`, `guardian://surface/{id}`.
-
-**Almacenamiento** — SQLite en `.guardian/guardian.db`. Tablas: `scans`, `findings`, `cves`, `baselines`, `suppressions`, `stack_snapshots`, `surface_snapshots`, `finding_validations`. Permite tracking de baseline, deltas scan-a-scan, supresiones con caducidad, alertas de regresión.
-
-### Hooks de protección (auto-activos)
-
-Con el plugin activo, Claude Code carga automáticamente `hooks/hooks.json` — tres guardrails **sin dependencias y fail-open**, en milisegundos (sin módulos nativos, nunca rompen tu flujo):
-
-- **SessionStart** — informa al agente de la postura de seguridad del proyecto: rama, cambios sin commitear, antigüedad del último escaneo y si el proyecto está guardian-initialized.
-- **PostToolUse (Write/Edit/MultiEdit)** — analiza el texto recién escrito buscando secretos hardcoded (AWS, GitHub, GitLab, Anthropic, OpenAI, Stripe, Google, Slack, claves privadas, …) y avisa con vista previa **redactada**. El escaneo completo del historial sigue en `scan_secrets` (gitleaks) vía `/guardian-scan`.
-- **PreToolUse (Bash)** — **bloquea por defecto comandos catastróficos** (`rm -rf /`, `curl … | sh`, `dd`/`mkfs` en disco crudo, fork bombs); **avisa** en los meramente arriesgados (force-push, hard reset, `sudo`, `chmod 777`).
-
-El bloqueo de la *escritura* de secretos es **opt-in**: define `"secrets": { "block": true }` en `.guardian/hooks.config.json`. Ajusta todo ahí, allowlist de falsos positivos en `.guardian/hooks-allowlist.json`, o desactiva todos los hooks con `GUARDIAN_HOOKS=off`. Los mismos detectores corren en el CLI para terminal / CI: `node cli/dev-guardian.mjs check --file <ruta>` y `--bash "<command>"` (exit 1 al encontrar algo).
-
-### Herramientas open-source orquestadas
-
-Semgrep · Trivy · OSV.dev · gitleaks · Renovate · nuclei · Playwright · Pino / structlog / Monolog / Serilog · Prometheus + Grafana · GlitchTip · Uptime Kuma · k6 · Artillery · Lighthouse · Syft · WPScan · WP-CLI · PHPCS + WPCS · security-code-scan · dotnet-outdated · ruff · bandit · jscpd · eslint · hadolint · shellcheck.
-
-### Instalación del plugin
-
-#### A) Vía marketplace (recomendado) — Claude Code CLI
-
-```text
-/plugin marketplace add https://github.com/linofcp007/dev-guardian
-/plugin install dev-guardian@dev-guardian
-```
-
-Funciona con cualquier URL git (HTTPS o SSH) o ruta local de una carpeta que contenga [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
-
-> ⚠️ **Limitación de la app Claude Desktop.** El cliente Desktop rechaza actualmente marketplaces de terceros con `External plugin sources are not yet supported` (la funcionalidad está bloqueada server-side). Es una limitación de Claude Desktop, no un problema de este plugin — cualquier marketplace alojado en GitHub falla hoy de la misma forma. Issues a seguir: [anthropics/claude-code#41653](https://github.com/anthropics/claude-code/issues/41653) (fuentes remotas), [anthropics/claude-code#52147](https://github.com/anthropics/claude-code/issues/52147) (rutas locales). Hasta que llegue la paridad, usa la opción **B** abajo o instala vía el Claude Code CLI.
-
-#### B) Copia manual de carpeta (funciona en todas partes)
-
-Copia la carpeta entera a:
-
-- **Linux / macOS**: `~/.claude/plugins/dev-guardian/`
-- **Windows**: `%USERPROFILE%\.claude\plugins\dev-guardian\`
-
-Luego, dentro de Claude Code, ejecuta `/plugin` y activa `dev-guardian`. Alternativamente, añade a tu `~/.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": { "dev-guardian@dev-guardian": true }
-}
-```
-
-> El servidor MCP corre desde `mcp/dist/`. En la primera instalación ejecuta una vez `cd mcp && npm install && npm run build`. Después el plugin lo arranca automáticamente vía `node ${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.js`.
->
-> Los scripts `.sh` en `scripts/` corren directamente en Linux/macOS. En Windows nativo necesitas **WSL2** o Git Bash; las skills/commands en sí funcionan en cualquier SO.
-
-### Otros hosts de IA (Cursor · Windsurf · Copilot · Codex · Gemini · Cline · Claude Desktop)
-
-El motor real es el **servidor MCP**, así que cualquier host compatible con MCP puede usar dev-guardian — no solo Claude Code. La **CLI `mcp-config`** conecta un host desde una terminal normal — sin necesidad de conexión MCP (sin huevo-y-gallina). Rellena la ruta absoluta del servidor por ti y o imprime el bloque para pegar o, con `--write`, lo fusiona en el proyecto y coloca el archivo de reglas. Idempotente.
-
-Desde una terminal en tu proyecto (tras `cd mcp && npm install && npm run build` una vez):
-
-```text
-node cli/dev-guardian.mjs mcp-config cursor          # imprime el bloque para pegar
-node cli/dev-guardian.mjs mcp-config all             # todos los hosts
-node cli/dev-guardian.mjs mcp-config codex --write   # escribe + fusiona en el proyecto
-node cli/dev-guardian.mjs mcp-config all --scope global
-```
-
-| Host | Archivo de config MCP (proyecto / global) | Archivo de reglas |
-| ---- | ----------------------------------------- | ----------------- |
-| **Cursor** | `.cursor/mcp.json` / `~/.cursor/mcp.json` | `.cursor/rules/dev-guardian.mdc` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
-| **GitHub Copilot** | `.vscode/mcp.json` (clave `servers`, `type:"stdio"`) | `.github/copilot-instructions.md` |
-| **Codex CLI** | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
-| **Gemini CLI** | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
-| **Cline** | manual — la herramienta devuelve un snippet para pegar | `.clinerules` |
-| **Claude Desktop** | `claude_desktop_config.json` (específico del SO, global) | — (pega `AGENTS.md` en las instrucciones de un Project) |
-
-**Fallback manual** (si prefieres no dejar que la herramienta edite configs): pega uno de los bloques de abajo, sustituyendo la ruta por la ruta **absoluta** a `mcp/dist/server.js`.
-
-```jsonc
-// Cursor / Windsurf / Gemini / Claude Desktop  (mcpServers)
-{ "mcpServers": { "dev-guardian": {
-  "command": "node", "args": ["/ruta/abs/a/dev-guardian/mcp/dist/server.js"], "env": {}
-} } }
-```
-
-```jsonc
-// GitHub Copilot  (.vscode/mcp.json — fíjate en la clave "servers" + type)
-{ "servers": { "dev-guardian": {
-  "type": "stdio", "command": "node", "args": ["/ruta/abs/a/dev-guardian/mcp/dist/server.js"]
-} } }
-```
-
-```toml
-# Codex CLI  (~/.codex/config.toml — ruta entre comillas simples evita el escape en Windows)
-[mcp_servers.dev-guardian]
-command = "node"
-args = ['/ruta/abs/a/dev-guardian/mcp/dist/server.js']
-enabled = true
-```
-
-> Claude Desktop no tiene mecanismo de archivo de reglas — pega el contenido de `host-rules/AGENTS.md` (o `GEMINI.md`) en las **instrucciones personalizadas de un Project**. Claude Code / Cowork no necesitan nada de esto: el plugin registra el servidor automáticamente.
-
-### Ejecuta escaneos en CI (headless, sin host MCP)
-
-`node cli/dev-guardian.mjs scan` corre el mismo pipeline de escaneo que una sesión interactiva — sin Claude Code, sin conexión MCP — y hace gate del resultado contra una **baseline committeada**. `dev-guardian baseline update` es el único comando que escribe esa baseline, y solo cuando se pide:
-
-```text
-node cli/dev-guardian.mjs baseline update --project .      # adopta los findings actuales una vez
-node cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
-```
-
-Códigos de salida: `0` pasó, `1` el gate falló (finding nuevo en la baseline, severidad >= `--fail-on`), `2` **escaneo incompleto** (un scanner esperado no corrió — nunca leas esto como un pase), `3` error de uso/configuración. Para el paso DAST, `--start-command <cmd>` arranca la app a probar — exige `--base-url` junto a él (la misma URL es el objetivo del health-check y el origen de `scan_dast`) — y solo se acepta **en la línea de comandos, nunca desde `.guardian/ci.json`**: un pull request de un fork podría editar ese archivo y ejecutar código arbitrario en el runner. Ejecuta la CLI sin argumentos para ver la referencia completa de flags.
-
-> **La distribución es `git clone`, no `npx`.** Esto se distribuye como un repositorio de plugin de Claude Code, no como un paquete npm, así que todavía no hay instalador de una línea (una forma publicable se está investigando aparte, condicionada a pasar de verdad el validador de plugins de Claude Desktop). Clona a un tag fijo con `--depth 1` — `v1.9.0` aquí, o el release que quieras seguir — luego ejecuta `npm ci` una vez dentro de `mcp/`: `mcp/dist/` viene committeado, así que no hay nada que *compilar*, pero `mcp/node_modules` está en el gitignore como el resto de este repo, y `scan`/`baseline update` siguen importando un par de paquetes de runtime (`execa`, `yaml`) que el build committeado no empaqueta.
-
-Un job listo para copiar y pegar — los findings aparecen como anotaciones en el diff del pull request, no perdidos en un log. **`ubuntu-latest` no trae Semgrep, gitleaks ni Trivy**, así que el job los instala él mismo; sáltate ese paso (o deja que falle) y cada run reporta `coverage: none` / exit `2` — no es una avería, es la respuesta diseñada para un escaneo que no escaneó nada:
-
-```yaml
-name: dev-guardian
-
-on:
-  pull_request:
-
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      # Clonado FUERA del checkout para que el propio código de dev-guardian
-      # nunca entre en el escaneo.
-      - name: Clone dev-guardian
-        run: |
-          git clone --depth 1 --branch v1.9.0 \
-            https://github.com/linofcp007/dev-guardian.git "$RUNNER_TEMP/dev-guardian"
-          cd "$RUNNER_TEMP/dev-guardian/mcp" && npm ci
-
-      # Ninguno de estos viene en ubuntu-latest. Semgrep solo tiene fallback
-      # vía Docker dentro de los propios scanners de dev-guardian, pero
-      # gitleaks y Trivy no, así que saltarse este paso igual limita cada
-      # run por debajo de coverage: full. pipx ya viene instalado en
-      # ubuntu-latest; sudo es sin contraseña para el usuario runner.
-      - name: Install scanners (Semgrep, gitleaks, Trivy)
-        run: |
-          pipx install semgrep
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-          GL_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/gitleaks/gitleaks/releases/latest)
-          GL_TAG=$(basename "$GL_TAG")
-          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_TAG#v}_linux_x64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin gitleaks
-
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
-          sudo apt-get update -qq && sudo apt-get install -y trivy
-
-      - name: Scan
-        id: scan
-        run: |
-          set +e
-          node "$RUNNER_TEMP/dev-guardian/cli/dev-guardian.mjs" scan --project . --sarif results.sarif
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-
-      # Sube el SARIF que exista aunque el paso de arriba haya "fallado" — un
-      # gate fallido y un escaneo incompleto igual producen informe. El
-      # executionSuccessful del SARIF dice SI la cobertura fue completa; no
-      # dice QUÉ scanner faltó — eso es el exit 2 y el log de arriba.
-      # Exige que el repositorio sea público, o GitHub Code Security en uno
-      # privado — si no, quita este paso y usa --format json.
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('results.sarif') != ''
-        with:
-          sarif_file: results.sarif
-
-      - name: Falla el build en un gate fallido o error de uso real
-        if: steps.scan.outputs.exit_code == '1' || steps.scan.outputs.exit_code == '3'
-        run: exit 1
-
-      - name: Avisa (sin fallar) en cobertura incompleta
-        if: steps.scan.outputs.exit_code == '2'
-        run: echo "::warning::dev-guardian scan incompleto — mira el log del paso de arriba para saber qué scanner faltó"
-```
-
-Tres cosas que este snippet no te puede esconder:
-
-- **Un escaneo en CI deja `.guardian/` en el workspace.** `security_scan_full` y `map_attack_surface` escriben la salida cruda de los scanners en `.guardian/reports/` dentro del proyecto escaneado, igual que hacen en una sesión interactiva — solo la base de datos SQLite es efímera. El servidor MCP añade `.guardian/` al `.gitignore` automáticamente cada vez que arranca contra un proyecto (una sesión interactiva, cualquier host) — eso nunca pasa desde la CLI, así que un repositorio que solo escanea vía CI tiene que añadir la línea a mano, o un paso posterior del pipeline que comprueba un working tree limpio fallará por un motivo que no parece nada:
-
-  ```text
-  .guardian/
-  ```
-
-- **El SARIF por sí solo no te dice *qué* scanner falta.** Su flag `invocation.executionSuccessful` pasa a `false` siempre que la cobertura no sea completa — así que quien lea solo el upload ya puede distinguir un run incompleto de uno limpio — pero el SARIF no tiene campo de *uso general* para este texto, así que el nombre del scanner y el motivo solo viven en el exit code `2` y en la salida humana/JSON del propio paso. Trata un SARIF subido con cero resultados como inconcluso, no como limpio, hasta que compruebes el exit code.
-
-- **La subida de code-scanning exige un repositorio público, o GitHub Code Security en uno privado.** Sin ninguno de los dos, el paso `upload-sarif` falla el job por un motivo que no tiene nada que ver con los findings. En un repositorio privado sin esa licencia, quita el paso de subida y usa `--format json` más el exit code.
-
-### Panel local (`status`, `dashboard`)
-
-Dos vistas de solo lectura sobre el mismo `.guardian/guardian.db`, para quien desarrolla en su propio portátil — no es un artefacto de CI (eso es el SARIF de arriba) ni un entregable para cliente (eso es el HTML de marca de `report_export`):
-
-```text
-node cli/dev-guardian.mjs status --project .        # una pantalla de terminal
-node cli/dev-guardian.mjs dashboard --project .      # HTML autocontenido, se abre en el navegador
-```
-
-`status` imprime la puntuación de riesgo y su banda, los findings abiertos y los CVEs por severidad, ambos deltas (desde el escaneo anterior del mismo tipo, desde la baseline activa), hasta 3 hotspots de findings (ordenados por recuento, no por severidad), qué escáneres faltan y qué deja eso fuera de los números, y las supresiones activas — una pantalla, nada más. `dashboard` renderiza el mismo snapshot como `.guardian/dashboard.html` — sin CDN, sin fetch de fuentes, sin ninguna llamada de red — con filtrado y ordenación de columnas en el cliente; se abre automáticamente solo cuando stdout es un TTY (`--no-open` lo suprime, `--out <path>` reubica el archivo). Ninguno de los dos comandos ejecuta un escaneo, modifica la base de datos ni abre un socket, y **ambos siempre terminan con exit `0` en cuanto renderizan** — incluso en un proyecto lleno de críticos, o uno nunca escaneado (`3` solo ante un error de uso). Informan; quien hace de gate es `scan`.
-
-Vale la pena saber antes de confiar en lo que hay en pantalla: **la página es un snapshot, no algo en vivo** — refleja el escaneo que había terminado cuando ejecutaste el comando, y no se actualiza cuando corre un escaneo posterior, así que vuelve a generarla para ver uno nuevo — y la ventana en sí está igual de acotada: el último escaneo más dos deltas, nunca una tendencia de varias semanas (`/guardian-trend` sigue pidiendo un historial que nada aquí calcula). Una pantalla limpia también es solo tan fiable como el `missing_tools` que la acompaña: un escáner que corrió y no produjo nada en silencio se ve, a este nivel, idéntico a uno que no encontró nada erróneo.
-
-### Filosofía
-
-- **Pragmático por defecto** — no bloquea el trabajo por cuestiones cosméticas
-- **Paranoico cuando es crítico** — secretos en producción, RCE, SQLi → detiene y alerta
-- **Stack-aware** — detecta tu lenguaje y configura solo lo relevante
-- **Multiplataforma** — Linux, macOS, Windows (con WSL)
-- **Cero lock-in** — todas las herramientas usadas son open-source y self-hostable
-- **Idempotente** — ejecutar `guardian init` dos veces no duplica nada
-- **Degradación elegante** — escáneres ausentes se reportan, nunca tumban un scan
-
-### Stacks soportados
-
-JavaScript / TypeScript (Node, Next, React, Vue, Svelte, Angular), Python (Django, Flask, FastAPI), PHP (Laravel, Symfony, **WordPress + Kadence + WooCommerce + Tutor LMS**), **C# / .NET (ASP.NET Core, EF Core, central package management)**, Go, Rust, Ruby, Java / Kotlin, Docker, Terraform, Kubernetes, Ansible, GitHub Actions.
-
-Para lenguajes no soportados explícitamente, las skills recurren a Semgrep `--config=auto` (cubre más de 30 lenguajes) y reglas genéricas para secretos.
-
-### Estructura del repositorio
-
-```text
-dev-guardian/
-├── .claude-plugin/
-│   ├── plugin.json              # declara el servidor MCP + metadatos
-│   └── marketplace.json
-├── commands/                    # 48 slash commands
-├── skills/                      # 13 skills (una por destino del router)
-├── hooks/                       # hooks.json + guardian-hook.mjs (guardrails auto-activos)
-├── cli/                         # CLI dev-guardian.mjs (mcp-config, check, scan, baseline)
-├── mcp/                         # Servidor MCP (TypeScript + SQLite)
-│   ├── src/                     # tools/, resources/, runners/, storage/, platform/
-│   ├── test/                    # 1094 tests unit + integration + e2e
-│   ├── scripts/                 # smoke.mjs, smoke-wp-dotnet.mjs
-│   └── dist/                    # artefacto compilado (node dist/server.js)
-├── scripts/
-│   ├── detect/detect-stack.sh   # detección de lenguajes/frameworks
-│   ├── install/                 # install-linux.sh, install-macos.sh
-│   └── scan/                    # full-security-scan, review-scan, etc.
-├── configs/
-│   ├── renovate/, gitleaks/, semgrep/, pre-commit/
-├── host-rules/                  # AGENTS.md, cursor.mdc, copilot-instructions.md, …
-└── README.md
-```
-
-### Licencia
-
-MIT — úsalo, modifícalo, compártelo libremente.
-
-### Autoría
-
-Carlos Pereira · prodigitalkey.com
+MIT. Carlos Pereira · [prodigitalkey.com](https://prodigitalkey.com)

@@ -1,0 +1,11 @@
+# Paths dev-guardian's own scans never scan or report (gitignore syntax;
+# see mcp/src/platform/guardianIgnore.ts). Every scan response says how many
+# files and findings this excluded.
+#
+# These trees are deliberately vulnerable: every rule pack ships a hits/ corpus
+# whose whole purpose is to be flagged, the scanner fixtures carry fake secrets
+# and known-vulnerable lockfiles, and the e2e fixture is an eval() on purpose.
+# A self-scan used to report all of it as critical and high findings of this
+# project.
+mcp/test/fixtures/
+mcp/test/e2e/eval-vuln-fixture/

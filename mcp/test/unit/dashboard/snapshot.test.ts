@@ -127,7 +127,13 @@ describe('buildSnapshot', () => {
   // the REAL TOOL_CATEGORIES branch, not the unknown-tool fallback.
   it("maps bug_hunt's config-pack gap through TOOL_CATEGORIES like any other semgrep gap, not as an unknown tool", () => {
     const { storage, db } = fresh();
-    completedScan(storage, '/p', { missing_tools: ['semgrep'] });
+    // trivy ran: a security_full row only speaks for CVEs when its trivy
+    // half ran (history/openSet.ts judges it per scanner), and this test is
+    // about the semgrep gap alone.
+    completedScan(storage, '/p', {
+      tools_run: [{ name: 'semgrep', status: 'ok' }, { name: 'trivy', status: 'ok' }],
+      missing_tools: ['semgrep'],
+    });
     const snap = buildSnapshot(storage, '/p', NOW);
     expect(snap.coverage.missing_tools).toEqual(['semgrep']);
     expect(snap.coverage.omitted_categories).toEqual(['static-analysis']);
@@ -229,6 +235,30 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  // Coordinator fix round 2: the suppression PANEL (active_count,
+  // expiring_soon) filtered only by expiry, never by project — a
+  // suppression belonging to a completely different project counted toward
+  // THIS project's panel, even though (since fix round 1)
+  // `suppressionMatcher` already stopped it from hiding a finding here.
+  it("does not count another project's suppression toward active_count / expiring_soon", () => {
+    const { storage, db } = fresh();
+    const scan = completedScan(storage, '/p');
+    insertFinding(storage, scan, 'visible', 'high', 'a.ts');
+    insertFinding(storage, scan, 'hidden', 'critical', 'b.ts');
+    storage.suppressions.insert({
+      finding_fingerprint: 'hidden', reason: 'suppressed in a different project',
+      created_by: 'test', project_path: '/other',
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    // Not suppressed here (fix round 1): both findings are open.
+    expect(snap.findings.total).toBe(2);
+    expect(snap.findings.by_severity.critical).toBe(1);
+    // Not counted in THIS project's panel either (fix round 2).
+    expect(snap.suppressions.active_count).toBe(0);
+    expect(snap.suppressions.expiring_soon).toEqual([]);
+    db.close();
+  });
+
   it('excludes a suppressed finding from a since_previous delta too, on both sides', () => {
     // The brief's own suppression test only has one scan, so it cannot
     // exercise "suppressed on both sides of a delta" — this closes that gap.
@@ -282,7 +312,11 @@ describe('buildSnapshot', () => {
     // ['secrets', 'secrets'] instead of ['secrets'] — a reader would see the
     // consequence stated twice for no reason.
     const { storage, db } = fresh();
-    completedScan(storage, '/p', { missing_tools: ['gitleaks', 'gitleaks'] });
+    // trivy ran, so the CVE side is measured — see the bug_hunt test above.
+    completedScan(storage, '/p', {
+      tools_run: [{ name: 'semgrep', status: 'ok' }, { name: 'trivy', status: 'ok' }],
+      missing_tools: ['gitleaks', 'gitleaks'],
+    });
     const snap = buildSnapshot(storage, '/p', NOW);
     expect(snap.coverage.omitted_categories).toEqual(['secrets']);
     db.close();
@@ -454,6 +488,35 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  it('reads the bot signal from a deps_audit scan, and a later scan_deps run does not shadow it', () => {
+    // deps_audit writes its own scan type now; scan_deps writes 'deps' and
+    // never records bot_configured, so picking "the latest 'deps' scan"
+    // silently dropped the signal deps_audit had measured.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'deps_audit',
+      meta: { bot_configured: { renovate: false, dependabot: false } },
+    });
+    completedScan(storage, '/p', { scan_type: 'deps' });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.risk.components.compliance).toEqual({ score: 6, policies_missing: 0 });
+    db.close();
+  });
+
+  it('sources CVEs from a deps_audit scan too', () => {
+    const { storage, db } = fresh();
+    const audit = completedScan(storage, '/p', { scan_type: 'deps_audit' });
+    storage.cves.upsert({
+      cve_id: 'CVE-2026-9', package_name: 'lodash', severity: 'high', scan_id: audit,
+    });
+    completedScan(storage, '/p', {
+      scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.cves.items.map((c) => c.cve_id)).toEqual(['CVE-2026-9']);
+    db.close();
+  });
+
   it('leaves compliance signals at "no penalty" when this project has no compliance/deps scan at all', () => {
     // The other half of finding 1: an absent signal must stay "not
     // measured, no penalty" (risk_score's own accepted fallback), never a
@@ -544,6 +607,83 @@ describe('buildSnapshot', () => {
     expect(snap.baseline.active?.note).toBe('my real baseline');
     expect(snap.baseline.age_days).not.toBeNull();
     expect(snap.risk.components.baseline.has_active_baseline).toBe(true);
+    db.close();
+  });
+
+  it('hides a suppressed finding by its identity on BOTH sides of a delta, after a line shift', () => {
+    // The suppression was written against an older line number (fingerprint
+    // F0) but carries the finding's line-independent identity. `findings/open`
+    // already matched on either key; the dashboard's delta filter matched
+    // fingerprints only, so the previous scan's copy (fingerprint F1) leaked
+    // back in as "resolved".
+    const { storage, db } = fresh();
+    const older = completedScan(storage, '/p', { scan_type: 'security_full' });
+    storage.findings.bulkInsert([{
+      scan_id: older, fingerprint: 'F1', tool: 'semgrep', rule_id: 'r', severity: 'high',
+      category: 'security', title: 't', file_path: 'a.ts', line_start: 5, line_end: 5,
+      fix_available: false, identity: 'ID-1', content_key: 'ck',
+    }]);
+    storage.suppressions.insert({
+      finding_fingerprint: 'F0', finding_identity: 'ID-1', reason: 'fp', created_by: 'test',
+    });
+    const newest = completedScan(storage, '/p', { scan_type: 'security_full' });
+    storage.findings.bulkInsert([{
+      scan_id: newest, fingerprint: 'F2', tool: 'semgrep', rule_id: 'r', severity: 'high',
+      category: 'security', title: 't', file_path: 'a.ts', line_start: 9, line_end: 9,
+      fix_available: false, identity: 'ID-1', content_key: 'ck',
+    }]);
+
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.findings.total).toBe(0);
+    expect(snap.deltas.since_previous?.resolved_count).toBe(0);
+    expect(snap.deltas.since_previous?.new_count).toBe(0);
+    db.close();
+  });
+
+  it("does not count a security_full run whose trivy never ran as a CVE source", () => {
+    const { storage, db } = fresh();
+    const deps = completedScan(storage, '/p', { scan_type: 'deps', tools_run: [{ name: 'trivy', status: 'ok' }] });
+    storage.cves.upsert({ cve_id: 'CVE-2026-7', package_name: 'lodash', severity: 'high', scan_id: deps });
+    completedScan(storage, '/p', {
+      scan_type: 'security_full',
+      tools_run: [{ name: 'semgrep', status: 'ok' }, { name: 'trivy', status: 'skipped', reason: 'not_installed' }],
+      missing_tools: ['trivy'],
+    });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.cves.items.map((c) => c.cve_id)).toEqual(['CVE-2026-7']);
+    db.close();
+  });
+
+  it("judges a script-era security_full's coverage by the part of it that is a source, not all its bookkeeping", () => {
+    // Its gitleaks was missing, but a newer scan_secrets measured secrets:
+    // the numbers on screen lack nothing, so no 'secrets' gap may show.
+    const { storage, db } = fresh();
+    completedScan(storage, '/p', {
+      scan_type: 'security_full',
+      tools_run: [
+        { name: 'semgrep', status: 'ok' },
+        { name: 'gitleaks', status: 'skipped', reason: 'not_installed' },
+        { name: 'trivy', status: 'ok' },
+      ],
+      missing_tools: ['gitleaks'],
+    });
+    completedScan(storage, '/p', { scan_type: 'secrets', tools_run: [{ name: 'gitleaks', status: 'ok' }] });
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.coverage.missing_tools).not.toContain('gitleaks');
+    expect(snap.coverage.omitted_categories).not.toContain('secrets');
+    expect(snap.coverage.level).toBe('full');
+    db.close();
+  });
+
+  it('ignores a newer SBOM: the scan and findings stay those of the state scans', () => {
+    const { storage, db } = fresh();
+    const sast = completedScan(storage, '/p', { scan_type: 'sast' });
+    insertFinding(storage, sast, 'kept', 'high', 'a.ts');
+    completedScan(storage, '/p', { scan_type: 'sbom', tools_run: [{ name: 'syft', status: 'ok' }] });
+
+    const snap = buildSnapshot(storage, '/p', NOW);
+    expect(snap.scan?.scan_id).toBe(sast);
+    expect(snap.findings.total).toBe(1);
     db.close();
   });
 

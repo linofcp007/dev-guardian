@@ -133,16 +133,21 @@ describe('isLiteralPath', () => {
   ];
 
   // Real route syntax across the stacks the pack covers. `items` is a valid
-  // WordPress route (no leading slash) and the (?P<id>\d+) form is a valid WP
-  // regex route — parentheses, ?, <, > and a backslash are all legitimate.
+  // WordPress route (no leading slash) — parentheses, ?, < and > are all
+  // legitimate. The `(?P<id>\d+)` regex-group shape (a backslash escape
+  // inside it) used to live in this list too; it now lives in the
+  // host-confusion describe block below, next to why it moved.
   const REAL_PATHS = [
     '/users/:id',
     '/items',
     'items',
-    '/items/(?P<id>\\d+)',
     '/users/{id}',
     '/opt/:id?',
     '/items/<int:item_id>',
+    // A dot NOT at the start, and a slash-containing path with no other
+    // punctuation, are both ordinary and must stay accepted — only a
+    // LEADING dot is the host-confusion shape (see below).
+    '/files/report.pdf',
   ];
 
   for (const value of CODE_EXPRESSIONS) {
@@ -166,6 +171,46 @@ describe('isLiteralPath', () => {
     expect(isLiteralPath('basePath + /users')).toBe(false);
     expect(isLiteralPath('prefix()/users')).toBe(false);
     expect(isLiteralPath('routes[0]/users')).toBe(false);
+  });
+
+  // Task 4 brief, item 2: a captured "path" that reaches `dast/plan.ts` as
+  // `path_partial: false` is treated as a VERIFIED, probeable URL. These
+  // four shapes turn a naive `${origin}${path}` (or even a careless
+  // `new URL` call elsewhere that is not `plan.ts#buildProbeUrl`) into a
+  // request at a DIFFERENT host — see that file's rule 5 for the mechanism.
+  // `isLiteralPath` is the extraction-time backstop: reject them here so
+  // nothing downstream of the extractor ever has to reason about whether a
+  // "resolved, high-confidence" route might secretly be one of these.
+  describe('rejects host-confusion shapes even when a slash is present', () => {
+    const HOST_CONFUSION = [
+      // `@` reads as a URL userinfo separator ahead of a host when the
+      // origin and this path are concatenated naively.
+      '/redirect/@evil.example/x',
+      '@evil.example/x',
+      // A leading `.` can resolve as a relative reference against a
+      // different base than the one intended.
+      '.evil.example/x',
+      // A leading `//` is a protocol-relative (network-path) reference — it
+      // names a NEW HOST, never a path on the current one.
+      '//evil.example/x',
+      // A backslash is accepted as a path separator synonym by the WHATWG
+      // URL algorithm for http(s) — `/\evil.example/x` parses to host
+      // `evil.example` exactly like `//evil.example/x` does. This is also
+      // the one REAL WordPress shape this rejects: `(?P<id>\d+)`, a
+      // legitimate PCRE-escape regex route. Losing that one case (it now
+      // reads `path_partial: true` instead of a resolved, high-confidence
+      // route) is the accepted cost — this module's own header already
+      // states the rule this follows: "a false 'partial' costs a consumer
+      // one skipped probe; a false 'resolved' costs it a request to a path
+      // that never existed — and hides the one that does."
+      '/items/(?P<id>\\d+)',
+      '/redirect\\evil.example/x',
+    ];
+    for (const value of HOST_CONFUSION) {
+      it(`rejects ${JSON.stringify(value)}`, () => {
+        expect(isLiteralPath(value)).toBe(false);
+      });
+    }
   });
 });
 
@@ -202,9 +247,22 @@ describe('extractSurface path-literal guard', () => {
   });
 
   it('leaves a real path resolved and at its rule confidence', () => {
-    const { routes } = extractSurface(routeFrom('/items/(?P<id>\\d+)'));
+    const { routes } = extractSurface(routeFrom('/users/{id}'));
     expect(routes[0]?.path_partial).toBe(false);
     expect(routes[0]?.confidence).toBe('medium');
+  });
+
+  // Task 4 brief, item 2: `(?P<id>\d+)`'s backslash is the one real
+  // WordPress shape `isLiteralPath`'s host-confusion check costs — see its
+  // own doc comment. Pinned here as understood, deliberate behaviour: a
+  // route this module cannot verify is safe to resolve as a URL is kept
+  // (still evidence of surface) but never marked `path_partial: false`.
+  it('flags a regex-group path partial for its own backslash, even with no namespace involved', () => {
+    const { routes } = extractSurface(routeFrom('/items/(?P<id>\\d+)'));
+    expect(routes[0]?.path_partial).toBe(true);
+    expect(routes[0]?.confidence).toBe('low');
+    // Still knowable, and still reported — see `looksLikePathSyntax`.
+    expect(routes[0]?.params).toEqual(['id']);
   });
 
   it('still reports params when the path is literal but the namespace is not', () => {

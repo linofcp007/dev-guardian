@@ -22,17 +22,12 @@
  * passed, when the toolchain is not on PATH, and `GUARDIAN_REQUIRE_SEMGREP=1`
  * turns that absence into a hard failure instead of a quiet skip.
  *
- * ---- Why `gitleaks detect` forces the fixture to be a real git repo -------
+ * ---- Why the fixture is a real git repo ------------------------------------
  *
- * `scripts/scan/full-security-scan.sh` runs `gitleaks detect`, which (unlike
- * `gitleaks dir`) scans git history and errors on a non-repository. Without
- * `git init` + a commit, gitleaks would fail to produce `secrets.json`,
- * `security_scan_full` would record it as a missing tool it is NOT, and
- * `coverage` would read 'partial' even with every scanner installed —
- * exactly the kind of false negative this project's own tests exist to
- * catch, not produce. `map_attack_surface`'s `computeTreeHash` does not
- * share this requirement (it falls back to a filesystem walk outside git),
- * but building the fixture as a real repo once covers both.
+ * It is what a CI checkout is. `security_scan_full`'s secrets pass reads git
+ * history AND the uncommitted files of a repository (a directory that is not
+ * one is scanned as plain files — see `runners/gitleaksScan.ts`), so the
+ * fixture exercises the history pass a pipeline actually runs.
  */
 
 import { execa } from 'execa';
@@ -41,7 +36,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -52,6 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, beforeAll } from 'vitest';
 
 import { detectOs } from '../../src/platform/osDetect.js';
+import { rmDirOrDefer } from '../helpers/tempDir.js';
 import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -138,15 +133,18 @@ async function resolveBinDir(bin: string): Promise<string | null> {
   }
 }
 
-// security_scan_full unconditionally expects semgrep, gitleaks and trivy
-// (deps) on a project with no Dockerfile/Python — see securityScanFull.ts's
-// ROUTES table, where only 'trivy-dockerfile' and 'bandit' are conditional.
-// All three genuinely installed is what "coverage: full" requires here.
+// security_scan_full's children expect semgrep (scan_sast), gitleaks
+// (scan_secrets) and trivy (scan_deps, scan_iac) on a project with no
+// Python; bandit and the .NET analyzers are conditional. All three genuinely
+// installed is what "coverage: full" requires here.
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const GITLEAKS_INSTALLED = await isInstalled('gitleaks');
 const TRIVY_INSTALLED = await isInstalled('trivy');
 const TOOLCHAIN_AVAILABLE = SEMGREP_INSTALLED && GITLEAKS_INSTALLED && TRIVY_INSTALLED;
 const SEMGREP_DIR = SEMGREP_INSTALLED ? await resolveBinDir('semgrep') : null;
+// scan_sast falls back to the Semgrep Docker image when semgrep is not on
+// PATH, so a run meant to be missing Semgrep must not see docker either.
+const DOCKER_DIR = await resolveBinDir('docker');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 /* ------------------------------------------------------------------ */
@@ -167,7 +165,8 @@ function runCli(
 }
 
 /**
- * `process.env` with `SEMGREP_DIR` filtered out of PATH — everything else
+ * `process.env` with `SEMGREP_DIR` (and `DOCKER_DIR`, which would otherwise
+ * run Semgrep from its image) filtered out of PATH — everything else
  * (gitleaks, Trivy, node itself) stays reachable, so the resulting run has a
  * genuine, targeted gap (semgrep specifically), not a wholesale broken
  * environment. `PATH`/`Path` casing: Node normalises env var name lookups
@@ -177,11 +176,11 @@ function runCli(
 function envWithoutSemgrep(): NodeJS.ProcessEnv {
   if (!SEMGREP_DIR) return process.env;
   const sep = detectOs() === 'win32' ? ';' : ':';
-  const target = resolve(SEMGREP_DIR);
+  const targets = new Set([resolve(SEMGREP_DIR), ...(DOCKER_DIR ? [resolve(DOCKER_DIR)] : [])]);
   const currentPath = process.env['PATH'] ?? '';
   const filtered = currentPath
     .split(sep)
-    .filter((segment) => segment.length === 0 || resolve(segment) !== target)
+    .filter((segment) => segment.length === 0 || !targets.has(resolve(segment)))
     .join(sep);
   return { ...process.env, PATH: filtered };
 }
@@ -227,13 +226,9 @@ function rmDir(dir: string): void {
   // result — an exception raised inside `finally` replaces an in-flight
   // failure from the `try` block above it, which would turn a correctly
   // failing assertion into a confusing, unrelated EPERM instead. A directory
-  // left behind because cleanup itself failed is a leak to notice later,
-  // not a reason to hide what the test actually found.
-  try {
-    rmSync(dir, { recursive: true, force: true });
-  } catch {
-    /* best-effort; see above */
-  }
+  // left behind because cleanup itself failed is removed at the end of the
+  // run (`rmDirOrDefer`), never a reason to hide what the test found.
+  rmDirOrDefer(dir);
 }
 
 /* ------------------------------------------------------------------ */
@@ -484,6 +479,24 @@ describe('dev-guardian scan — usage and safety (no real scanner reached)', () 
     }
   });
 
+  it.each([['scan'], ['baseline', 'update']])(
+    'accepts --local-only on `%s` (a flag, not an unknown one) and documents it',
+    (...cmd) => {
+      // Paired with an invalid --fail-on / an unknown flag so the run stops at
+      // validation: if --local-only were not a known flag, parsing would fail
+      // on IT first and the message would name it.
+      const r =
+        cmd[0] === 'scan'
+          ? runCli(['scan', '--local-only', '--fail-on', 'totally-bogus'])
+          : runCli(['baseline', 'update', '--local-only', '--nope']);
+      expect(r.status).toBe(3);
+      expect(r.stderr).not.toMatch(/--local-only/);
+      expect(runCli(['scan', '--help']).stdout).toMatch(/--local-only/);
+    },
+    // Two CLI subprocesses; each is bounded by FAST_TIMEOUT_MS itself.
+    FAST_TIMEOUT_MS * 2 + 5_000,
+  );
+
   it('exits 3 on an invalid --fail-on value, naming it', () => {
     const r = runCli(['scan', '--fail-on', 'urgent']);
     expect(r.status).toBe(3);
@@ -585,7 +598,9 @@ const CRASHES_IMMEDIATELY_SCRIPT = `process.exit(9);`;
  * then listens on `argv[1]` — for the "scan throws while the app is
  * healthy" test below, where proving the started TREE (not just the
  * direct process) is torn down is the whole point, same reasoning as
- * `appRunner.test.ts`'s own fixtures.
+ * `appRunner.test.ts`'s own fixtures — including the grandchild ending by
+ * itself after ten minutes, so a test that times out cannot leave it running
+ * for good.
  */
 const FIXTURE_APP_WITH_GRANDCHILD_SCRIPT = `
 const { createServer } = require('node:http');
@@ -593,7 +608,7 @@ const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const port = Number(process.argv[1]);
 const pidfile = process.argv[2];
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
+const gc = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600000);'], { stdio: 'ignore', detached: process.platform === 'win32' });
 gc.unref();
 gc.on('spawn', () => {
   writeFileSync(pidfile, JSON.stringify({ parent: process.pid, grandchild: gc.pid }));
@@ -672,7 +687,7 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       // real, not merely that --start-command was accepted) AND is gone by
       // the time this CLI subprocess has exited. A wrong implementation that
       // starts the app but never stops it would leave this pid alive
-      // indefinitely; this is the property design doc §7 and the brief both
+      // indefinitely; this is the property the design of record and the brief both
       // call the one that matters most.
       const pid = Number(readFileSync(pidfile, 'utf8').trim());
       expect(Number.isInteger(pid)).toBe(true);
@@ -832,7 +847,7 @@ describe('dev-guardian scan — against a real, clean fixture', () => {
   it('does not write .guardian/baseline.json — scan never mutates the baseline', () => {
     // The wrong implementation this guards against: `scan` silently folding
     // current findings into the baseline, which would turn the gate into
-    // decoration (design doc §4).
+    // decoration (the design of record).
     expect(existsSync(baselinePath)).toBe(false);
   });
 
@@ -922,7 +937,7 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
     expectCleanBaselineExit(r.status, r.stderr);
     expect(existsSync(baselinePath)).toBe(true);
     const doc = JSON.parse(readFileSync(baselinePath, 'utf8')) as { version?: number; entries?: unknown[] };
-    expect(doc.version).toBe(1);
+    expect(doc.version).toBe(1); // identity is an additive field, not a version bump
     expect(Array.isArray(doc.entries)).toBe(true);
   }, SCAN_TIMEOUT_MS);
 
@@ -982,7 +997,7 @@ describe('dev-guardian baseline update — against a real, clean fixture', () =>
         // against is refusing to write anything when coverage is short.
         expect(existsSync(gapBaselinePath)).toBe(true);
         const doc = JSON.parse(readFileSync(gapBaselinePath, 'utf8')) as { version?: number };
-        expect(doc.version).toBe(1);
+        expect(doc.version).toBe(1); // identity is an additive field, not a version bump
 
         // Names what was missing, on stdout — not just a bare "partial".
         expect(r.stdout).toMatch(/semgrep/i);

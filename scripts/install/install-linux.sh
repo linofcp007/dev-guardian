@@ -161,4 +161,4 @@ echo "  Se precisares: brew install k6 (macOS) ou ver https://k6.io/docs/getting
 echo ""
 g "=== Instalação concluída ==="
 echo "Ferramentas instaladas em /usr/local/bin (com sudo) ou ~/.local/bin (sem sudo)."
-echo "Para validar: bash $(dirname "$0")/../scan/check-tools.sh"
+echo "Para validar: corre a ferramenta MCP check_toolchain do dev-guardian."

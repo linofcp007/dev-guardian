@@ -17,6 +17,14 @@ export const CI_EXIT = {
 export type CiExitCode = (typeof CI_EXIT)[keyof typeof CI_EXIT];
 
 export interface BaselineEntry {
+  /**
+   * The finding's line-independent identity (`fingerprint/findingIdentity.ts`)
+   * — what an entry is matched on first. An additive field: absent from every
+   * entry 2.0.x wrote (and from one 2.0.x rewrote, since it drops keys it does
+   * not know), and from an entry whose finding came from a tool that computes
+   * none; those match by `fingerprint`.
+   */
+  identity?: string;
   fingerprint: string;
   severity: Severity;
   title: string;
@@ -26,8 +34,16 @@ export interface BaselineEntry {
   added: string;
 }
 
+/**
+ * `buildBaseline` writes 1 — `identity` rides on version-1 entries as an
+ * additive field, because 2.0.x rejects every other version (see
+ * `baseline.ts`). 2 is read only because development builds of that change
+ * briefly wrote it.
+ */
+export type BaselineVersion = 1 | 2;
+
 export interface BaselineFile {
-  version: 1;
+  version: BaselineVersion;
   generated_at: string;
   entries: BaselineEntry[];
 }
@@ -55,4 +71,20 @@ export interface ScanStepResult {
   reason?: string;
   tools_run: ToolRun[];
   missing_tools: string[];
+  /**
+   * Per `missing_tools` name whose whole cause is files a scanner could read
+   * only in part (project-relative, `/`-separated), each with Semgrep's error
+   * type: Semgrep's `partial` verdict (`runners/semgrepReport.ts`), or
+   * scan_dast's `guardian-dast:partial-surface` over a surface only partly
+   * parsed. What the gate matches `--accept-partial-parse` against — and only
+   * a parse type is acceptable there (`gate.ts`); built by `runScans.ts`.
+   * Absent when there are none.
+   */
+  partial_parses?: Record<string, PartialParseRef[]>;
+}
+
+/** One file a step's scanner could read only in part, and Semgrep's error type for it. */
+export interface PartialParseRef {
+  file: string;
+  type: string;
 }

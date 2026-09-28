@@ -7,6 +7,7 @@
  * `DashboardSnapshot` and its other parts.
  */
 
+import type { CveIntelResult } from '../intel/types.js';
 import type { Cve, Finding, Severity } from '../types.js';
 
 /**
@@ -20,6 +21,17 @@ export interface RiskInput {
   findings: readonly Finding[];
   /** Active CVEs for this project's latest deps-flavoured scan. */
   cves: readonly Cve[];
+  /**
+   * CISA KEV / FIRST EPSS intel for `cves`, keyed by `cve_id` (Task 19).
+   * Optional and additive: omitted entirely (never an empty `Map`), the CVE
+   * component scores exactly as it did before this field existed — that is
+   * what lets `dashboard/snapshot.ts` keep calling `scoreRisk` synchronously
+   * without itself doing the async network/cache work `intel/enrich.ts`
+   * needs. A CVE absent from the map, or present with `status:
+   * 'unavailable'`, contributes no bonus — never measured, never treated as
+   * "confirmed not exploited".
+   */
+  cve_intel?: ReadonlyMap<string, CveIntelResult>;
   /** 0–3: privacy_policy, terms_of_service, security_policy that are absent. */
   policies_missing: number;
   /** True when renovate OR dependabot is configured. */
@@ -63,7 +75,7 @@ export const TOOL_CATEGORIES: Readonly<Record<string, string>> = {
  * The fingerprint delta between two scans — produced by
  * `delta.ts#compareFindings`. `new` = in `to` not `from`, `resolved` = in
  * `from` not `to`, `unchanged` = in both, computed over fingerprint sets
- * (design §7).
+ * (the design of record).
  */
 export interface FindingDelta {
   from_scan_id: string;
@@ -75,13 +87,31 @@ export interface FindingDelta {
   new_count: number;
   resolved_count: number;
   unchanged_count: number;
+  /**
+   * Findings of `from` that `to` did not measure again: the scanner that
+   * reports each one did not run ok in `to` — per scanner, not per type, so a
+   * Semgrep exit 7 beside an ok Bandit, a failed `npm` beside an ok Trivy, a
+   * failed DAST pass, or a child of an orchestrated run that did not run at
+   * all. Counted here INSTEAD of as resolved: absence from a scan that did
+   * not look is not a fix. See `history/runCompare.ts`. Absent when there
+   * were none.
+   */
+  not_remeasured_count?: number;
+  /**
+   * Findings of `to` whose scanner `from` named and did not run ok — it
+   * failed, or was missing (a partial baseline, say). Counted here INSTEAD
+   * of as new: the reference tried to look and could not. A scanner `from`
+   * did not run at all (not applicable, or not requested, then) makes its
+   * findings new instead. Absent when there were none.
+   */
+  not_previously_measured_count?: number;
   /** Possibly capped for display — see `TruncationNotice`. */
   new_findings: Finding[];
 }
 
 /**
  * One file's finding count — produced by `hotspots.ts#rankFiles`. A plain
- * count, not severity-weighted (design §12): a file with 11 low findings
+ * count, not severity-weighted (the design of record): a file with 11 low findings
  * outranks one with 2 criticals by design.
  */
 export interface Hotspot {
@@ -91,7 +121,7 @@ export interface Hotspot {
 
 /**
  * Discloses that a list shown to the user is shorter than its true total,
- * and why — design §8's rule that no cap is ever silent. Present only when
+ * and why — the design of record's rule that no cap is ever silent. Present only when
  * a cap actually cut something; both views render it when it is not null.
  */
 export interface TruncationNotice {

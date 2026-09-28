@@ -43,5 +43,6 @@
       }
     }
   ],
-  "errors": []
+  "errors": [],
+  "paths": { "scanned": ["src/app.js", "lib/perf.py", "src/util.js"] }
 }

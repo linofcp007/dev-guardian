@@ -1,75 +1,69 @@
 /**
- * Findings resources:
- *   - guardian://findings/open                  → latest completed scan,
- *                                                  minus suppressed fingerprints
- *   - guardian://findings/critical              → as above, severity=critical
- *   - guardian://findings/by-severity/{level}   → as above, severity={level}
+ * Findings resources — the server's project's open set (see
+ * `history/openSet.ts`): the union of the newest usable scan of every
+ * finding-producing type, deduplicated, active suppressions removed.
+ *
+ *   - guardian://findings/open{?page,page_size}
+ *   - guardian://findings/critical{?page,page_size}
+ *   - guardian://findings/by-severity/{level}{?page,page_size}
+ *
+ * They used to read the single newest completed scan in the whole database,
+ * so `generate_sbom` after a SAST scan made every one of them read zero, and
+ * another project's scan answered for this one.
+ *
+ * Paged (default {@link DEFAULT_PAGE_SIZE}, at most {@link MAX_PAGE_SIZE}),
+ * each finding's message cut to {@link MESSAGE_MAX_CHARS} characters. Every
+ * response carries the true `total`, the `sources` it read, and the newer
+ * scans it `skipped` because they measured nothing.
  *
  * `{level}` must be one of {info, low, medium, high, critical}. Anything
  * else returns MCP -32602 (Invalid params).
  */
 
+import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { SEVERITIES, type Severity } from '../types.js';
 import { registerResourceModule } from './index.js';
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  MESSAGE_MAX_CHARS,
+  boundFinding,
+  paginate,
+  serverProjectPath,
+} from './paging.js';
+import type { PluginContext } from '../context.js';
+
+const SCOPE_NOTE =
+  "Scoped to the server's working-directory project: the newest usable scan of every " +
+  'finding-producing type (never an SBOM, stack detection or diff review; a scan whose scanners ' +
+  'did not run is skipped — `skipped` counts them and names the newest few), deduplicated, active ' +
+  'suppressions removed. ' +
+  `Paged with ?page=N&page_size=M (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}); messages ` +
+  `are cut to ${MESSAGE_MAX_CHARS} characters.`;
 
 registerResourceModule({
   name: 'guardian-findings-open',
-  uri: 'guardian://findings/open',
-  description:
-    'All findings from the latest completed scan, with active suppressions filtered out. ' +
-    'Returns `{ findings: [], last_run: null, scan_id: null }` when no scan has run.',
-  handler: async (uri, _params, ctx) => {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listOpen();
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id,
-      },
-    };
-  },
+  uri: 'guardian://findings/open{?page,page_size}',
+  isTemplate: true,
+  listAs: 'guardian://findings/open',
+  description: `All open findings. ${SCOPE_NOTE}`,
+  handler: async (uri, _params, ctx) => ({ json: respond(uri, ctx, () => true) }),
 });
 
 registerResourceModule({
   name: 'guardian-findings-critical',
-  uri: 'guardian://findings/critical',
-  description:
-    'Findings from the latest completed scan with severity=critical, suppressions filtered out.',
-  handler: async (uri, _params, ctx) => {
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listBySeverity('critical');
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id,
-      },
-    };
-  },
+  uri: 'guardian://findings/critical{?page,page_size}',
+  isTemplate: true,
+  listAs: 'guardian://findings/critical',
+  description: `Open findings with severity=critical. ${SCOPE_NOTE}`,
+  handler: async (uri, _params, ctx) => ({ json: respond(uri, ctx, (f) => f.severity === 'critical') }),
 });
 
 registerResourceModule({
   name: 'guardian-findings-by-severity',
-  uri: 'guardian://findings/by-severity/{level}',
+  uri: 'guardian://findings/by-severity/{level}{?page,page_size}',
   isTemplate: true,
-  description:
-    'Findings from the latest completed scan filtered by severity (info | low | medium | high | ' +
-    'critical), with active suppressions removed.',
+  description: `Open findings of one severity (info | low | medium | high | critical). ${SCOPE_NOTE}`,
   handler: async (uri, params, ctx) => {
     const raw = params['level'];
     const level = Array.isArray(raw) ? raw[0] : raw;
@@ -78,42 +72,35 @@ registerResourceModule({
         `level must be one of ${SEVERITIES.join('|')}, got '${level ?? '(missing)'}'`,
       );
     }
-    const latest = ctx.storage.scans.getLatest();
-    if (!latest) {
-      return { json: { findings: [], last_run: null, scan_id: null, total: 0 } };
-    }
-    const findings = ctx.storage.findings.listBySeverity(level as Severity);
-    const { items, total, page, page_size } = paginate(uri, findings);
-    return {
-      json: {
-        level,
-        findings: items,
-        total,
-        page,
-        page_size,
-        last_run: latest.started_at,
-        scan_id: latest.scan_id,
-      },
-    };
+    const severity = level as Severity;
+    return { json: { level, ...respond(uri, ctx, (f) => f.severity === severity) } };
   },
 });
 
-/**
- * Page findings via query-string params (`?page=N&page_size=M`). Defaults:
- * page=1, page_size=200, capped at 1000. Returning the totals as well lets
- * the model loop without ambiguity.
- */
-function paginate<T>(uri: URL, all: T[]): { items: T[]; total: number; page: number; page_size: number } {
-  const total = all.length;
-  const pageRaw = Number(uri.searchParams.get('page') ?? '1');
-  const sizeRaw = Number(uri.searchParams.get('page_size') ?? '200');
-  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
-  const page_size = Number.isFinite(sizeRaw) && sizeRaw > 0
-    ? Math.min(Math.floor(sizeRaw), 1000)
-    : 200;
-  const start = (page - 1) * page_size;
-  const items = all.slice(start, start + page_size);
-  return { items, total, page, page_size };
+function respond(
+  uri: URL,
+  ctx: PluginContext,
+  keep: (f: OpenFinding) => boolean,
+): Record<string, unknown> {
+  const set = openSetForProject(ctx.storage, serverProjectPath());
+  const { items, total, page, page_size } = paginate(uri, set.findings.filter(keep));
+  // `sources` is newest first. Not `newestSource`: that names an orchestrated
+  // run by its parent, which is never itself a source.
+  const newest = set.sources[0];
+  return {
+    project_path: set.project_path,
+    findings: items.map(boundFinding),
+    total,
+    page,
+    page_size,
+    // The newest scan the set was read from — kept for callers of the old
+    // single-scan shape. `sources` names every one.
+    last_run: newest?.started_at ?? null,
+    scan_id: newest?.scan_id ?? null,
+    coverage: set.coverage,
+    sources: set.sources,
+    skipped: set.skipped,
+  };
 }
 
 interface JsonRpcError extends Error {

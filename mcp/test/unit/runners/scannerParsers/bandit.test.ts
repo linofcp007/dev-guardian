@@ -45,4 +45,60 @@ describe('banditParser', () => {
     expect(findings[0]?.line_start).toBe(10);
     expect(findings[0]?.line_end).toBe(12);
   });
+
+  it('redacts the plaintext-password snippet of B105 (hardcoded_password_string)', () => {
+    const json = JSON.stringify({
+      results: [
+        {
+          test_id: 'B105',
+          test_name: 'hardcoded_password_string',
+          issue_severity: 'LOW',
+          issue_confidence: 'MEDIUM',
+          issue_text: 'Possible hardcoded password',
+          filename: 'app.py',
+          line_number: 12,
+          code: '12 password = "hunter2"\n',
+        },
+      ],
+    });
+    const { findings } = banditParser.parse(json);
+    expect(findings[0]?.snippet).toBeDefined();
+    expect(findings[0]?.snippet).not.toContain('hunter2');
+  });
+
+  it('redacts B106 (hardcoded_password_funcarg) and B107 (hardcoded_password_default) the same way', () => {
+    const json = JSON.stringify({
+      results: [
+        {
+          test_id: 'B106',
+          test_name: 'hardcoded_password_funcarg',
+          issue_severity: 'LOW',
+          issue_text: 'Possible hardcoded password',
+          filename: 'app.py',
+          line_number: 3,
+          code: '3 connect(password="hunter2")\n',
+        },
+        {
+          test_id: 'B107',
+          test_name: 'hardcoded_password_default',
+          issue_severity: 'LOW',
+          issue_text: 'Possible hardcoded password',
+          filename: 'app.py',
+          line_number: 7,
+          code: '7 def f(password="hunter2"):\n',
+        },
+      ],
+    });
+    const { findings } = banditParser.parse(json);
+    for (const f of findings) {
+      expect(f.snippet).not.toContain('hunter2');
+    }
+  });
+
+  it('does not redact a non-credential finding snippet', () => {
+    const { findings } = banditParser.parse(readFileSync(FIXTURE, 'utf8'));
+    const b605 = findings.find((f) => f.rule_id === 'B605');
+    expect(b605?.snippet).toBeDefined();
+    expect(b605?.snippet).not.toContain('redacted');
+  });
 });
