@@ -277,6 +277,10 @@ function renderOwaspLine(findings: FindingsSummary, coverage: CoverageState): st
   const partial = entries.filter((e) => e.status === 'partial').map((e) => short(e.id));
   if (notTested.length > 0) parts.push(`not tested: ${notTested.join(' ')}`);
   if (partial.length > 0) parts.push(`partial: ${partial.join(' ')}`);
+  const langs = coverage.owasp_languages?.languages;
+  if (langs !== undefined) {
+    parts.push(langs === null ? '(languages unknown)' : langs.length === 0 ? '(no source language)' : `for ${langs.join(', ')}`);
+  }
   return `  OWASP 2025   ${parts.join('   ')}`;
 }
 

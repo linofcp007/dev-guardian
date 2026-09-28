@@ -516,6 +516,19 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(res.tools_run.find((t) => t.name === 'trivy')?.status).toBe('ok');
   });
 
+  // OWASP coverage reads whether the registry ran from the scan row; a
+  // review row that did not say claimed the registry's categories even
+  // under local_only (frameworks/coverage.ts#registryRan).
+  it.each([true, false])('records local_only=%s on the scan row', async (localOnly) => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'a = 2\n');
+    await commitAll(dir);
+    const { r, p } = await review(dir, { base_ref: 'main', ...(localOnly ? { local_only: true } : {}) });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    expect(p.storage.scans.getById(res.scan_id)?.meta?.['local_only']).toBe(localOnly);
+  });
+
   it('an empty pull request runs no scanner and says why', async () => {
     const dir = await repo('main', { 'a.py': 'a = 1\n' });
     const { r } = await review(dir, { base_ref: 'main' });

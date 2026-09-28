@@ -366,6 +366,15 @@
 # O Semgrep não usa `metadata` para casar padrões, logo nada do que as
 # regras apanham muda (medido: as mesmas findings antes e depois, fixture a
 # fixture).
+#
+# Dados pessoais num log são CWE-532 (o Base exato: informação sensível
+# escrita num log), o que a OWASP arruma em A09. Um tracker ou um embed
+# carregado antes do consentimento é CWE-359, cuja própria definição fala de
+# informação pessoal exposta sem o consentimento da pessoa, e a OWASP
+# arruma-o em A01 — a categoria da finding é a oficial. Isso não faz deste
+# pack um teste de controlo de acessos: o cálculo de cobertura
+# (`frameworks/coverage.ts`) conta as regras por linguagem de código, e as
+# quatro regras `generic` sobre templates não contam para nenhuma.
 
 rules:
   # ---------------------------------------------------------------------------
@@ -462,10 +471,8 @@ rules:
   - id: rgpd-pii-in-log-js
     metadata:
       cwe:
-        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
         - "CWE-532: Insertion of Sensitive Information into Log File"
       owasp:
-        - "A01:2025 - Broken Access Control"
         - "A09:2025 - Security Logging and Alerting Failures"
     languages: [javascript, typescript]
     severity: WARNING
@@ -554,10 +561,8 @@ rules:
   - id: rgpd-pii-in-log-php
     metadata:
       cwe:
-        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
         - "CWE-532: Insertion of Sensitive Information into Log File"
       owasp:
-        - "A01:2025 - Broken Access Control"
         - "A09:2025 - Security Logging and Alerting Failures"
     languages: [php]
     severity: WARNING
@@ -655,10 +660,8 @@ rules:
   - id: rgpd-pii-in-log-py
     metadata:
       cwe:
-        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
         - "CWE-532: Insertion of Sensitive Information into Log File"
       owasp:
-        - "A01:2025 - Broken Access Control"
         - "A09:2025 - Security Logging and Alerting Failures"
     languages: [python]
     severity: WARNING
@@ -771,10 +774,8 @@ rules:
   - id: rgpd-pii-in-log-cs
     metadata:
       cwe:
-        - "CWE-359: Exposure of Private Personal Information to an Unauthorized Actor"
         - "CWE-532: Insertion of Sensitive Information into Log File"
       owasp:
-        - "A01:2025 - Broken Access Control"
         - "A09:2025 - Security Logging and Alerting Failures"
     languages: [csharp]
     severity: WARNING

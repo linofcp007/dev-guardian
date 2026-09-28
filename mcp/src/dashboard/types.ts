@@ -182,6 +182,12 @@ export interface CoverageState {
    * that predate it render nothing about OWASP rather than crash.
    */
   owasp?: OwaspCoverageEntry[];
+  /**
+   * The source languages `owasp` was judged against, and where they came
+   * from (`frameworks/projectLanguages.ts`) — "tested" is a claim about
+   * them. Set whenever `owasp` is.
+   */
+  owasp_languages?: { languages: string[] | null; source: string };
 }
 
 export interface OwaspCoverageEntry {
@@ -190,6 +196,8 @@ export interface OwaspCoverageEntry {
   status: 'tested' | 'partial' | 'not_tested';
   /** Open findings carrying this category. */
   findings: number;
+  /** Why it is partial or not tested (thin rule counts, uncovered languages, incomplete runs). */
+  reasons?: string[];
 }
 
 export interface ScanSummary {

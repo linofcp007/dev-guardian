@@ -253,15 +253,20 @@ function owaspSection(findings: FindingsSummary, coverage: CoverageState): strin
     .map(
       (e) => `<tr>
   <td>${escapeHtml(e.id)} ${escapeHtml(e.title)}</td>
-  <td>${e.status === 'not_tested' ? '<strong>not tested</strong>' : escapeHtml(OWASP_STATUS_TEXT[e.status])}</td>
+  <td>${e.status === 'not_tested' ? '<strong>not tested</strong>' : escapeHtml(OWASP_STATUS_TEXT[e.status])}${(e.reasons ?? []).length > 0 ? `<br><small>${escapeHtml((e.reasons ?? []).join('; '))}</small>` : ''}</td>
   <td>${findings.by_owasp?.[e.id] ?? 0}</td>
 </tr>`,
     )
     .join('');
   const unmapped = findings.owasp_unmapped ?? 0;
+  const langs = coverage.owasp_languages;
+  const langText =
+    langs === undefined
+      ? ''
+      : ` Judged for: ${langs.languages === null ? 'unknown languages' : langs.languages.length === 0 ? 'no source language' : langs.languages.join(', ')} (${langs.source}).`;
   return `<section>
   <h2>OWASP Top 10:2025</h2>
-  <p class="pdk-meta">A category is tested only when a scanner able to detect it ran ok in the scans behind these numbers — "not tested" is not clean.${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? '' : 's'} carry no OWASP 2025 category.` : ''}</p>
+  <p class="pdk-meta">${escapeHtml(`A category is tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it — "not tested" is not clean.${langText}`)}${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? '' : 's'} carry no OWASP 2025 category.` : ''}</p>
   <table><thead><tr><th>Category</th><th>Coverage</th><th>Open findings</th></tr></thead><tbody>${rows}</tbody></table>
 </section>`;
 }

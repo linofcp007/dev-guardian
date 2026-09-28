@@ -14,10 +14,13 @@
  *
  * Scan mode also states each finding's CWE / OWASP Top 10:2025 category and
  * an "OWASP Top 10:2025 coverage" table (`frameworks/coverage.ts`): a
- * category is tested only when a scanner able to detect it ran ok in THIS
- * scan — for an orchestrated security_full, in its child scans, whose rows
- * record what the parent's merged bookkeeping does not (whether scan_sast
- * ran `local_only`).
+ * category is tested only when, for every source language of the scanned
+ * project (`frameworks/projectLanguages.ts`), a scanner that ran fully ok in
+ * THIS scan has enough rules for it. For an orchestrated security_full the
+ * bookkeeping is its child scans', whose rows record what the parent's
+ * merged bookkeeping does not (whether scan_sast ran `local_only`); for an
+ * audit_executive row, its sub-scans' (and their children's), since the
+ * row itself lists sub-tools, not scanners.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -25,6 +28,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
+import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
 import { isOrchestratedFullScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -93,7 +97,8 @@ const tool: ToolModule = {
     'sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass ' +
     'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
     'format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: ' +
-    'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested. ' +
+    'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per ' +
+    'source language of the project. ' +
     'Local file only — no external services, no web fonts.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
@@ -177,7 +182,11 @@ async function handler(
     ? ctx.storage.cves.listActive(scanId)
     : [];
 
-  const owasp = owaspCoverage(coverageRunsOfScan(ctx, scan), findings);
+  const owasp = owaspCoverage(
+    coverageRunsOfScan(ctx, scan),
+    findings,
+    resolveProjectLanguages(ctx.storage.stack, scan.project_path),
+  );
   const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
   mkdirSync(outDir, { recursive: true });
@@ -199,28 +208,50 @@ async function handler(
 
 type ScanRecordT = NonNullable<ReturnType<PluginContext['storage']['scans']['getById']>>;
 
+/** The scan ids a row delegates to: an orchestrated security_full's children, an audit's sub-scans. */
+function delegatedScanIds(scan: ScanRecordT): string[] | null {
+  if (isOrchestratedFullScan(scan)) {
+    const children = scan.meta?.['child_scans'];
+    return (Array.isArray(children) ? (children as unknown[]) : []).flatMap((child) => {
+      const id = child !== null && typeof child === 'object' ? (child as { scan_id?: unknown }).scan_id : undefined;
+      return typeof id === 'string' ? [id] : [];
+    });
+  }
+  if (scan.scan_type === 'audit') {
+    const subs = scan.meta?.['sub_scan_ids'];
+    if (subs === null || typeof subs !== 'object' || Array.isArray(subs)) return [];
+    return Object.values(subs as Record<string, unknown>).filter((id): id is string => typeof id === 'string');
+  }
+  return null;
+}
+
 /**
- * The bookkeeping this report's coverage rests on: the scan itself, or — for
- * an orchestrated security_full — each child scan it names that still
- * exists. A child that is gone contributes nothing, so its categories read
- * "not tested" rather than borrowing the parent's merged bookkeeping.
+ * The bookkeeping this report's coverage rests on: the scan itself, or —
+ * for an orchestrated security_full or an audit_executive row — the scans
+ * it delegated to, followed down (an audit's security_full sub-scan to its
+ * own children). A delegated scan that is gone or did not complete
+ * contributes nothing, so its categories read "not tested" rather than
+ * borrowing the parent's merged bookkeeping.
  */
-function coverageRunsOfScan(ctx: PluginContext, scan: ScanRecordT): CoverageRun[] {
-  const asRun = (s: ScanRecordT): CoverageRun => ({
-    scan_id: s.scan_id,
-    scan_type: s.scan_type,
-    tools_run: s.tools_run,
-    missing_tools: s.missing_tools,
-    ...(s.meta !== undefined ? { meta: s.meta } : {}),
-  });
-  if (!isOrchestratedFullScan(scan)) return [asRun(scan)];
-  const children = scan.meta?.['child_scans'];
+function coverageRunsOfScan(ctx: PluginContext, scan: ScanRecordT, seen: Set<string> = new Set()): CoverageRun[] {
+  if (seen.has(scan.scan_id)) return [];
+  seen.add(scan.scan_id);
+  const delegated = delegatedScanIds(scan);
+  if (delegated === null) {
+    return [
+      {
+        scan_id: scan.scan_id,
+        scan_type: scan.scan_type,
+        tools_run: scan.tools_run,
+        missing_tools: scan.missing_tools,
+        ...(scan.meta !== undefined ? { meta: scan.meta } : {}),
+      },
+    ];
+  }
   const runs: CoverageRun[] = [];
-  for (const child of Array.isArray(children) ? (children as unknown[]) : []) {
-    const id = child !== null && typeof child === 'object' ? (child as { scan_id?: unknown }).scan_id : undefined;
-    if (typeof id !== 'string') continue;
+  for (const id of delegated) {
     const row = ctx.storage.scans.getById(id);
-    if (row !== null && row.status === 'completed') runs.push(asRun(row));
+    if (row !== null && row.status === 'completed') runs.push(...coverageRunsOfScan(ctx, row, seen));
   }
   return runs;
 }

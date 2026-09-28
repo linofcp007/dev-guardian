@@ -561,10 +561,11 @@ rules:
   # positivo que restava.
   - id: bugfix-py-race-condition-asyncio-not-awaited
     metadata:
-      cwe:
-        - "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')"
-      owasp:
-        - "A06:2025 - Insecure Design"
+      # Uma corotina que nunca corre não é uma race (CWE-362), e nenhum Base
+      # da MITRE descreve "o resultado de uma chamada assíncrona nunca é
+      # aguardado", por isso fica sem categoria.
+      cwe: []
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: asyncio.sleep(...)
@@ -700,8 +701,9 @@ rules:
   # select_related) em vez de por acidente.
   - id: bugfix-py-edge-case-queryset-n-plus-one
     metadata:
-      cwe:
-        - "CWE-1073: Non-SQL Invokable Control Element with Excessive Number of Data Resource Accesses"
+      # O CWE-1073 está proibido para mapeamento (MITRE, Prohibited), e
+      # nenhum outro descreve um N+1 com rigor.
+      cwe: []
       owasp: []
     patterns:
       - pattern-inside: |

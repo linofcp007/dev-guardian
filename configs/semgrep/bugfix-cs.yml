@@ -232,10 +232,10 @@ rules:
   # A regra e o oraculo concordam. §4c do desenho tem os números.
   - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
     metadata:
-      cwe:
-        - "CWE-755: Improper Handling of Exceptional Conditions"
-      owasp:
-        - "A10:2025 - Mishandling of Exceptional Conditions"
+      # O CWE-755 seria o candidato, mas a MITRE desaconselha-o (Class,
+      # Discouraged) e nenhum Base descreve a perda da stack trace.
+      cwe: []
+      owasp: []
     patterns:
       - pattern: throw $V;
       - pattern-either:
@@ -846,7 +846,7 @@ rules:
   - id: bugfix-cs-memory-leak-httpclient-per-call
     metadata:
       cwe:
-        - "CWE-400: Uncontrolled Resource Consumption"
+        - "CWE-770: Allocation of Resources Without Limits or Throttling"
       owasp: []
     patterns:
       - pattern: new HttpClient(...)

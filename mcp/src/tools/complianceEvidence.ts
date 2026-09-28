@@ -18,12 +18,14 @@
  * `owasp-top10-2025` and `nist-csf-2.0` are evidenced per category from the
  * project's OPEN SET (`history/openSet.ts`): its open findings, and the
  * bookkeeping of the scans behind them. An OWASP category is evidenced only
- * when a scanner able to detect it ran ok in those scans
- * (`frameworks/coverage.ts`); a CSF 2.0 category only through an OWASP
- * category that was, via dev-guardian's own OWASP → CSF mapping
- * (`frameworks/nistCsf2.ts`, labelled as ours in the document). CSF
- * categories no code scan can speak for are listed as not covered, never
- * left out.
+ * when it was `tested` — for every source language of the project, a
+ * scanner that ran fully ok has enough rules for it (`frameworks/coverage.ts`);
+ * a `partial` one is listed apart, never among the evidenced. A CSF 2.0
+ * category is evidenced only through an OWASP category that was tested, via
+ * dev-guardian's own OWASP → CSF mapping (`frameworks/nistCsf2.ts`,
+ * labelled as ours in the document), and partial when it is reached only
+ * through partial ones. CSF categories no code scan can speak for are
+ * listed as not covered, never left out.
  */
 
 import { z } from 'zod';
@@ -31,7 +33,8 @@ import type { PluginContext } from '../context.js';
 import { coverageRunsOf, owaspCoverage, type OwaspCategoryCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
 import { CSF_CATEGORIES, owaspForCsfCategory } from '../frameworks/nistCsf2.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { COVERAGE_RULE, partialReasons, testedByText, unmappedSentence } from '../report/owaspCoverage.js';
+import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedHint } from '../report/owaspCoverage.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type Finding, type ScanRecord, type ToolResult } from '../types.js';
@@ -60,7 +63,8 @@ const tool: ToolModule = {
     "default: the server's working directory): latest compliance scan, license summary, CVE " +
     'counts, baseline status, suppressions, policy docs found. Tag with a framework ' +
     '(gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for ' +
-    'per-category evidence: a category counts as covered only when a scanner able to detect it ran ok ' +
+    'per-category evidence: a category counts as covered only when, for every source language of the ' +
+    'project, a scanner that ran ok has enough rules for it; partial categories are listed apart ' +
     '(NIST CSF via dev-guardian\'s own OWASP mapping). Read-only.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
@@ -103,7 +107,11 @@ async function handler(
   if (framework === 'owasp-top10-2025' || framework === 'nist-csf-2.0') {
     const open = openSetForProject(storage, projectPath);
     owasp = {
-      coverage: owaspCoverage(coverageRunsOf(open.bookkeeping, open.scans), open.findings),
+      coverage: owaspCoverage(
+        coverageRunsOf(open.bookkeeping, open.scans),
+        open.findings,
+        resolveProjectLanguages(storage.stack, projectPath),
+      ),
       findings: open.findings,
     };
   }
@@ -178,6 +186,11 @@ interface ControlMapping {
   description: string;
   /** Whether a scan in THIS document actually backs the claim. */
   evidenced: boolean;
+  /**
+   * Backed only in part (the per-category frameworks): listed on its own,
+   * never among the evidenced. Set only with `evidenced: false`.
+   */
+  partial?: true;
   /** Evidenced: where to find it above. Not evidenced: what was never run. */
   note: string;
 }
@@ -290,8 +303,9 @@ function openFindings(n: number): string {
 }
 
 /** One control per OWASP 2025 category: evidenced only when a capable scanner ran ok. */
-function owaspControls(owasp: OwaspEvidence | null): ControlMapping[] {
-  if (owasp === null) return [];
+function owaspControls(evidence: OwaspEvidence | null): ControlMapping[] {
+  if (evidence === null) return [];
+  const owasp = evidence;
   return owasp.coverage.categories.map((c) => {
     const found = openFindings(c.findings);
     if (c.status === 'not_tested') {
@@ -300,21 +314,21 @@ function owaspControls(owasp: OwaspEvidence | null): ControlMapping[] {
         description: c.title,
         evidenced: false,
         note:
-          'no scanner able to detect it ran ok in the scans behind this document — run: ' +
-          `${c.could_be_tested_by.join('; ')}` +
+          `no scanner able to detect it ran ok in the scans behind this document — ${untestedHint(c, owasp.coverage)}` +
           (c.findings > 0 ? ` (${found} from other scanners)` : ''),
       };
     }
     const tested = `tested by ${testedByScans(c)}`;
-    return {
-      id: c.id,
-      description: c.title,
-      evidenced: true,
-      note:
-        c.status === 'partial'
-          ? `PARTIAL — ${tested}, but ${partialReasons(c).join('; ')}; ${found}`
-          : `${tested}; ${found}`,
-    };
+    if (c.status === 'partial') {
+      return {
+        id: c.id,
+        description: c.title,
+        evidenced: false,
+        partial: true,
+        note: `PARTIAL — ${tested}, but ${c.reasons.join('; ')}; ${found}`,
+      };
+    }
+    return { id: c.id, description: c.title, evidenced: true, note: `${tested}; ${found}` };
   });
 }
 
@@ -351,12 +365,15 @@ function csfControls(owasp: OwaspEvidence | null): ControlMapping[] {
         note: 'an organisational outcome no code scan evidences — not assessable by dev-guardian',
       };
     }
-    const tested = mapped.filter((m) => (byId.get(m.owasp)?.status ?? 'not_tested') !== 'not_tested');
-    const subcategories = [...new Set(tested.flatMap((m) => m.subcategories))].sort();
+    const statusOf = (id: string) => byId.get(id as OwaspCategoryCoverage['id'])?.status ?? 'not_tested';
+    const tested = mapped.filter((m) => statusOf(m.owasp) === 'tested');
+    const partial = mapped.filter((m) => statusOf(m.owasp) === 'partial');
+    const looked = [...tested, ...partial];
+    const subcategories = [...new Set(looked.flatMap((m) => m.subcategories))].sort();
     // Each finding once, however many of its categories this CSF category takes.
-    const testedIds = new Set<string>(tested.map((m) => m.owasp));
-    const findings = owasp.findings.filter((f) => (f.owasp ?? []).some((id) => testedIds.has(id))).length;
-    if (tested.length === 0) {
+    const lookedIds = new Set<string>(looked.map((m) => m.owasp));
+    const findings = owasp.findings.filter((f) => (f.owasp ?? []).some((id) => lookedIds.has(id))).length;
+    if (looked.length === 0) {
       return {
         id: csf.id,
         description: csf.title,
@@ -364,17 +381,15 @@ function csfControls(owasp: OwaspEvidence | null): ControlMapping[] {
         note: `none of the OWASP categories mapped here was tested: ${mapped.map((m) => m.owasp).join(', ')}`,
       };
     }
-    const via = tested.map((m) => `${m.owasp} (${byId.get(m.owasp)?.status === 'partial' ? 'partial' : 'tested'})`);
-    const untested = mapped.filter((m) => !tested.includes(m)).map((m) => m.owasp);
-    return {
-      id: csf.id,
-      description: csf.title,
-      evidenced: true,
-      note:
-        `via ${via.join(', ')} — subcategories ${subcategories.join(', ')}; ` +
-        `${findings} open finding${findings === 1 ? '' : 's'} in those categories` +
-        (untested.length > 0 ? `; not tested here: ${untested.join(', ')}` : ''),
-    };
+    const via = [...tested.map((m) => `${m.owasp} (tested)`), ...partial.map((m) => `${m.owasp} (partial)`)];
+    const untested = mapped.filter((m) => !looked.includes(m)).map((m) => m.owasp);
+    const note =
+      `via ${via.join(', ')} — subcategories ${subcategories.join(', ')}; ` +
+      `${findings} open finding${findings === 1 ? '' : 's'} in those categories` +
+      (untested.length > 0 ? `; not tested here: ${untested.join(', ')}` : '');
+    // Reached only through partial OWASP categories: partial, never evidenced.
+    if (tested.length === 0) return { id: csf.id, description: csf.title, evidenced: false, partial: true, note: `PARTIAL — ${note}` };
+    return { id: csf.id, description: csf.title, evidenced: true, note };
   });
 }
 
@@ -384,6 +399,10 @@ function frameworkPreamble(framework: LabelledFramework, evidence: OwaspEvidence
   if (framework !== 'owasp-top10-2025' && framework !== 'nist-csf-2.0') return [];
   const out: string[] = [];
   out.push(`${COVERAGE_RULE} Source of the categories and their CWEs: https://owasp.org/Top10/2025/.`);
+  if (owasp !== null) {
+    out.push('');
+    out.push(languagesLine(owasp));
+  }
   if (framework === 'nist-csf-2.0') {
     out.push('');
     out.push(
@@ -490,7 +509,9 @@ function build(args: BuildArgs): string {
     out.push(...frameworkPreamble(args.framework, args.owasp));
     const controls = frameworkControls(args.framework, args);
     const evidenced = controls.filter((c) => c.evidenced);
-    const notCovered = controls.filter((c) => !c.evidenced);
+    const partial = controls.filter((c) => !c.evidenced && c.partial === true);
+    const notCovered = controls.filter((c) => !c.evidenced && c.partial !== true);
+    const perCategory = args.framework === 'owasp-top10-2025' || args.framework === 'nist-csf-2.0';
 
     out.push(`### ${label} controls evidenced by this document`);
     if (evidenced.length === 0) {
@@ -499,6 +520,13 @@ function build(args: BuildArgs): string {
       for (const c of evidenced) out.push(`- ${c.id} (${c.description}): ${c.note}`);
     }
     out.push('');
+    // A partial category is not evidence of the control; it gets its own list.
+    if (perCategory) {
+      out.push(`### ${label} controls PARTIALLY covered by this document`);
+      if (partial.length === 0) out.push('(none)');
+      else for (const c of partial) out.push(`- ${c.id} (${c.description}): ${c.note}`);
+      out.push('');
+    }
     out.push(`### ${label} controls NOT covered by this document`);
     if (notCovered.length === 0) {
       out.push('(none)');

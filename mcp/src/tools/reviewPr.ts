@@ -189,6 +189,10 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         head_sha: head,
         scanned_tree: headIsCheckedOut ? 'working_tree' : 'head_checkout',
         changed_files: changed.length,
+        // Whether the Semgrep registry ran — OWASP coverage
+        // (`frameworks/coverage.ts`) claims registry categories only when
+        // the row says `false`, as scan_sast's rows always have.
+        local_only: input.local_only === true,
         ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
       },
     };

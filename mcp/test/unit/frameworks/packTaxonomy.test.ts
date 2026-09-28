@@ -14,7 +14,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-import { OWASP_DETECTORS } from '../../../src/frameworks/coverage.js';
+import { countRuleReach, OWASP_DETECTORS } from '../../../src/frameworks/coverage.js';
 import { owasp2025Category, parseOwasp2025Label } from '../../../src/frameworks/owaspTop10_2025.js';
 import { classifyTaxonomy, normalizeCwe } from '../../../src/frameworks/taxonomy.js';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
@@ -25,6 +25,7 @@ const FINDINGS_PACKS = ['base.yml', ...BUGFIX_PACKS, 'rgpd.yml'];
 
 interface Rule {
   id: string;
+  languages?: unknown;
   metadata?: Record<string, unknown>;
 }
 
@@ -82,26 +83,36 @@ describe('findings packs carry cwe/owasp metadata', () => {
 });
 
 describe("coverage claims for our own packs are the packs' metadata", () => {
-  const detector = (id: string) => OWASP_DETECTORS.find((d) => d.id === id);
-
-  it('bug_hunt claims only categories every bugfix pack but bugfix-rs carries', () => {
-    const claimed = detector('bugfix-packs')?.categories ?? [];
-    expect(claimed.length).toBeGreaterThan(0);
-    for (const id of claimed) {
-      const carriers = BUGFIX_PACKS.filter((p) => rulesOf(p).some((r) => owaspOf(r).includes(id)));
-      expect(carriers).toEqual(BUGFIX_PACKS.filter((p) => p !== 'bugfix-rs.yml'));
+  const reachOf = (id: string) => {
+    const d = OWASP_DETECTORS.find((x) => x.id === id);
+    const out: Record<string, Record<string, number>> = {};
+    for (const [cat, reach] of Object.entries(d?.reach ?? {})) {
+      if (reach?.kind === 'rules') out[cat] = { ...reach.perLanguage } as Record<string, number>;
     }
+    return out;
+  };
+
+  // The per-(category, language) rule counts `coverage.ts` records for the
+  // packs are recounted here from the YAML: a rule added, removed or
+  // re-labelled without updating the record fails this test.
+  it('bug_hunt: the recorded reach is a recount of every bugfix pack', () => {
+    const rules = BUGFIX_PACKS.flatMap((p) => rulesOf(p));
+    expect(reachOf('bugfix-packs')).toEqual(countRuleReach(rules));
   });
 
-  it('compliance_check claims A09 (personal data in logs, four languages) and A01 (every rule)', () => {
-    expect(detector('rgpd-pack')?.categories).toEqual(['A01:2025', 'A09:2025']);
-    const rules = rulesOf('rgpd.yml');
-    expect(rules.every((r) => owaspOf(r).includes('A01:2025'))).toBe(true);
-    expect(rules.filter((r) => owaspOf(r).includes('A09:2025')).map((r) => r.id)).toEqual([
-      'rgpd-pii-in-log-js',
-      'rgpd-pii-in-log-php',
-      'rgpd-pii-in-log-py',
-      'rgpd-pii-in-log-cs',
-    ]);
+  it('compliance_check: the recorded reach is a recount of rgpd.yml — A09 only, one rule per language', () => {
+    const recount = countRuleReach(rulesOf('rgpd.yml'));
+    expect(reachOf('rgpd-pack')).toEqual(recount);
+    expect(recount).toEqual({ 'A09:2025': { csharp: 1, javascript: 1, php: 1, python: 1, typescript: 1 } });
+  });
+
+  // The four tracker/embed rules are CWE-359, which OWASP files under A01,
+  // but they are `generic` rules over templates: they count for no source
+  // language, so the pack never claims A01 for a project.
+  it('the RGPD tracker rules carry A01 as a finding category but reach no source language', () => {
+    const trackers = rulesOf('rgpd.yml').filter((r) => !r.id.startsWith('rgpd-pii-in-log-'));
+    expect(trackers).toHaveLength(4);
+    for (const r of trackers) expect(owaspOf(r)).toEqual(['A01:2025']);
+    expect(countRuleReach(trackers)).toEqual({});
   });
 });

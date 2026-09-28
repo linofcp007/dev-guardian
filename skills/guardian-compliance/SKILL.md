@@ -105,7 +105,7 @@ Se não existe (o `compliance_check` diz em `policy_documents_found`), parte do 
 
 `compliance_evidence { project_path: "<project>", framework: "gdpr" }` — ou `framework: "soc2"` / `framework: "iso27001"` — gera um documento Markdown a partir do estado acumulado deste projeto: último scan de compliance, resumo de licenças, contagens de CVEs, baseline e supressões. Para o pacote completo de controlos, `/guardian-report soc2`.
 
-Com `framework: "owasp-top10-2025"` ou `framework: "nist-csf-2.0"` a evidência é por categoria: cada finding traz o seu CWE e a categoria OWASP Top 10:2025, e uma categoria só conta como testada quando correu `ok` um scanner capaz de a detetar. As linhas "NOT COVERED" são lacunas a reportar, não categorias limpas. O mapeamento OWASP → NIST CSF 2.0 é do dev-guardian, não da NIST nem da OWASP — diz isso ao utilizador.
+Com `framework: "owasp-top10-2025"` ou `framework: "nist-csf-2.0"` a evidência é por categoria: cada finding traz o seu CWE e a categoria OWASP Top 10:2025, e uma categoria só conta como testada quando, para cada linguagem de código do projeto, correu `ok` um scanner com pelo menos três regras dessa categoria nessa linguagem. As linhas "PARTIALLY covered" (poucas regras, uma linguagem sem nenhuma, uma passagem que falhou) e "NOT COVERED" são lacunas a reportar, não categorias limpas. O mapeamento OWASP → NIST CSF 2.0 é do dev-guardian, não da NIST nem da OWASP — diz isso ao utilizador.
 
 Preparação básica que nenhuma tool verifica (checklist):
 

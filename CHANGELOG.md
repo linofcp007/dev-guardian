@@ -12,12 +12,13 @@ version bump.
 
 - Findings carry `cwe` and `owasp` (OWASP Top 10:2025), migration 013; annotations, not part of the fingerprint or identity. Stored findings without them read as unknown, never as a category.
 - The 2025 categories and their 249 CWEs come from owasp.org (retrieved 2026-09-28, held to each page's own count); a scanner's OWASP label counts only when it is a 2025 label naming the same category.
-- Semgrep `metadata.cwe`/`metadata.owasp` are read as strings or lists (lists used to be dropped); Trivy `CweIDs`, Bandit `issue_cwe`; a vulnerable dependency is CWE-1395 and a committed secret CWE-798 (Trivy, npm audit, pip-audit, dotnet list package, gitleaks).
+- Semgrep `metadata.cwe`/`metadata.owasp` are read as strings or lists (lists used to be dropped); Trivy `CweIDs`, Bandit `issue_cwe`; a committed secret is CWE-798 (gitleaks, Trivy); a vulnerable dependency is CWE-1395 plus its advisory's CWEs and counts under A03 only (Trivy, npm audit, pip-audit, dotnet list package).
 - Every rule of `base`, `bugfix-*` and `rgpd` names its CWE and OWASP 2025 category; the nine packs match the same 516 fixture findings as before.
 - `report_export`: a CWE / OWASP column and an "OWASP Top 10:2025 coverage" table; SARIF results and rules carry `external/cwe/cwe-<n>` and `owasp-2025-a<nn>` tags (the CI SARIF too).
 - `compliance_evidence` frameworks `owasp-top10-2025` and `nist-csf-2.0`, with per-category evidence; the OWASP → CSF 2.0 mapping is dev-guardian's own and says so.
 - Dashboard: `findings.by_owasp`, `owasp_unmapped` and `coverage.owasp`; the status line lists the categories not tested.
-- An OWASP category counts as tested only when a scanner able to detect it ran ok in the scans the document covers; "not tested" is never clean.
+- An OWASP category counts as tested only when, for every source language of the project (detect_stack snapshot, else file extensions), a scanner that ran fully ok has at least three rules for it in that language; one or two is "thin" (partial), a language with none is partial, nothing at all is "not tested" — never clean. Rule counts per (category, language) are recorded with their measurement date: the registry's p/default, Bandit 1.9.4, and our own packs (recounted by test).
+- A multi-pass scanner is incomplete when any of its passes failed or is listed missing (`gitleaks` beside `gitleaks-working-tree`, the npm/pip-audit/dotnet auditors). `review_pr` records `local_only` on its scan row. `report_export` on an `audit_executive` row reads its sub-scans. `compliance_evidence` lists partial categories apart from the evidenced ones.
 
 ## [3.0.0] - 2026-09-28
 

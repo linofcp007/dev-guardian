@@ -6,9 +6,13 @@
  * Wording rules, all of them load-bearing:
  *   - a category no capable scanner ran for is "NOT TESTED", in capitals,
  *     and the table says outright that this is not a clean result;
+ *   - the languages the table was judged against, and where they came
+ *     from, are printed above it — "tested" is a claim about them;
  *   - a finding with no taxonomy shows "—" and is counted as unmapped,
  *     never under a category;
- *   - `partial` names why.
+ *   - `partial` names why (thin rule counts, uncovered languages,
+ *     incomplete runs), and a category nothing dev-guardian runs can test
+ *     in these languages says so instead of pointing at a scanner.
  */
 
 import type { OwaspCategoryCoverage, OwaspCoverage, OwaspTestedBy } from '../frameworks/coverage.js';
@@ -22,8 +26,10 @@ export function taxonomyCell(f: Pick<Finding, 'cwe' | 'owasp'>): string {
 }
 
 export const COVERAGE_RULE =
-  'A category counts as tested only when a scanner able to detect it ran ok in the scans this document ' +
-  'covers. "not tested" is not a clean result: nothing looked. A finding can map to more than one category.';
+  'A category counts as tested only when, for every source language of the project, a scanner that ran ' +
+  'fully ok has at least three rules for it in that language (or does not depend on the language). ' +
+  '"not tested" is not a clean result: nothing looked. A finding can map to more than one category; a ' +
+  'vulnerable dependency counts under A03 only — the CWEs of the flaw inside it are listed, not counted.';
 
 const STATUS_LABEL: Record<OwaspCategoryCoverage['status'], string> = {
   tested: 'tested',
@@ -48,9 +54,20 @@ export function testedByText(by: readonly OwaspTestedBy[]): string {
   return out.length > 0 ? out.join(', ') : '—';
 }
 
-/** Why a partial category is partial — every distinct reason, once. */
-export function partialReasons(c: OwaspCategoryCoverage): string[] {
-  return [...new Set(c.tested_by.map((e) => e.partial).filter((r): r is string => r !== undefined))];
+/** `Project languages: go, javascript (detect_stack snapshot of …)`. */
+export function languagesLine(cov: Pick<OwaspCoverage, 'languages' | 'languages_source'>): string {
+  const list = cov.languages === null ? 'unknown' : cov.languages.length === 0 ? 'none detected' : cov.languages.join(', ');
+  return `Project languages: ${list} (${cov.languages_source})`;
+}
+
+/**
+ * What would test a category that was not tested — or, when nothing
+ * dev-guardian runs reaches it in the project's languages, that sentence.
+ */
+export function untestedHint(c: OwaspCategoryCoverage, cov: Pick<OwaspCoverage, 'languages'>): string {
+  if (c.could_be_tested_by.length > 0) return `would be tested by: ${c.could_be_tested_by.join('; ')}`;
+  const langs = cov.languages === null || cov.languages.length === 0 ? 'these languages' : cov.languages.join(', ');
+  return `no scanner dev-guardian runs has rules for ${langs}`;
 }
 
 export function unmappedSentence(cov: OwaspCoverage, noun: 'findings' | 'open findings'): string {
@@ -67,6 +84,8 @@ export function owaspCoverageMarkdown(cov: OwaspCoverage): string[] {
   lines.push('');
   lines.push(`_${COVERAGE_RULE} Categories and CWE mapping: https://owasp.org/Top10/2025/_`);
   lines.push('');
+  lines.push(languagesLine(cov));
+  lines.push('');
   lines.push('| Category | Coverage | Tested by | Findings |');
   lines.push('| --- | --- | --- | --- |');
   for (const c of cov.categories) {
@@ -74,10 +93,14 @@ export function owaspCoverageMarkdown(cov: OwaspCoverage): string[] {
   }
   lines.push('');
   for (const c of cov.categories) {
-    if (c.status === 'partial') lines.push(`- ${c.id} partial: ${partialReasons(c).join('; ')}.`);
+    if (c.status === 'partial') lines.push(`- ${c.id} partial: ${c.reasons.join('; ')}.`);
   }
-  const untested = cov.categories.filter((c) => c.status === 'not_tested');
-  for (const c of untested) lines.push(`- ${c.id} would be tested by: ${c.could_be_tested_by.join('; ')}.`);
+  for (const c of cov.categories) {
+    if (c.status !== 'not_tested') continue;
+    lines.push(
+      c.could_be_tested_by.length > 0 ? `- ${c.id} ${untestedHint(c, cov)}.` : `- ${c.id}: ${untestedHint(c, cov)}.`,
+    );
+  }
   if (cov.findings_total > 0) lines.push(`- ${unmappedSentence(cov, 'findings')}`);
   return lines;
 }
@@ -88,9 +111,9 @@ export function owaspCoverageHtml(cov: OwaspCoverage): string {
     .map((c) => {
       const why =
         c.status === 'partial'
-          ? `<br><small>${escapeHtml(partialReasons(c).join('; '))}</small>`
+          ? `<br><small>${escapeHtml(c.reasons.join('; '))}</small>`
           : c.status === 'not_tested'
-            ? `<br><small>would be tested by: ${escapeHtml(c.could_be_tested_by.join('; '))}</small>`
+            ? `<br><small>${escapeHtml(untestedHint(c, cov))}</small>`
             : '';
       return `<tr>
   <td><a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(c.id)}</a> ${escapeHtml(c.title)}</td>
@@ -103,6 +126,7 @@ export function owaspCoverageHtml(cov: OwaspCoverage): string {
   const unmapped = cov.findings_total > 0 ? `<p>${escapeHtml(unmappedSentence(cov, 'findings'))}</p>` : '';
   return (
     `<h2>OWASP Top 10:2025 coverage</h2>\n<p class="pdk-meta">${escapeHtml(COVERAGE_RULE)}</p>\n` +
+    `<p class="pdk-meta">${escapeHtml(languagesLine(cov))}</p>\n` +
     `<table><thead><tr><th>Category</th><th>Coverage</th><th>Tested by</th><th>Findings</th></tr></thead><tbody>${rows}</tbody></table>\n` +
     unmapped
   );

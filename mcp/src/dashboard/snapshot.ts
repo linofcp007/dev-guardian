@@ -42,6 +42,7 @@
  */
 
 import { coverageRunsOf, owaspCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
+import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import {
   findLatestUsable,
   latestStateScan,
@@ -111,8 +112,14 @@ export function buildSnapshot(
   const cveGap = currentScan !== null && cveSourceScan === null;
   const openFindings = open.findings;
   // OWASP 2025: which categories the scans behind these numbers could and
-  // did test, over the same bookkeeping `buildCoverage` reads.
-  const owasp = owaspCoverage(coverageRunsOf(open.bookkeeping, open.scans), openFindings);
+  // did test, over the same bookkeeping `buildCoverage` reads, for the
+  // project's source languages — the one read here that is not storage:
+  // with no detect_stack snapshot, the languages come from the files.
+  const owasp = owaspCoverage(
+    coverageRunsOf(open.bookkeeping, open.scans),
+    openFindings,
+    resolveProjectLanguages(storage.stack, projectPath),
+  );
   const coverage = buildCoverage(open, cveGap, owasp);
 
   const findings = buildFindingsSummary(openFindings, truncation, owasp);
@@ -233,7 +240,14 @@ function buildCoverage(open: OpenSet, cveGap: boolean, owasp: OwaspCoverage): Co
     missing_tools: missingTools,
     partial_tools: partialTools,
     omitted_categories: omittedCategories,
-    owasp: owasp.categories.map((c) => ({ id: c.id, title: c.title, status: c.status, findings: c.findings })),
+    owasp: owasp.categories.map((c) => ({
+      id: c.id,
+      title: c.title,
+      status: c.status,
+      findings: c.findings,
+      ...(c.reasons.length > 0 ? { reasons: c.reasons } : {}),
+    })),
+    owasp_languages: { languages: owasp.languages, source: owasp.languages_source },
   };
 }
 
