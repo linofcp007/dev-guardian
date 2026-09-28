@@ -74235,7 +74235,7 @@ function readSbom(ctx, projectPath, unknowns) {
   const scan2 = ctx.storage.scans.listCompletedOfTypes(projectPath, ["sbom"], { limit: 1 })[0];
   if (scan2 === void 0) {
     unknowns.push(
-      "no SBOM for this project (run generate_sbom): the vulnerable packages carry no purl, and the product is identified by its directory name only"
+      "no SBOM for this project (run generate_sbom): the product is identified by its directory name only, and each package purl is built from its ecosystem, name and version"
     );
     return null;
   }

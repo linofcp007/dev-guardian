@@ -187,7 +187,9 @@ describe('export_vex', () => {
 
     expect(r.statements).toEqual({ total: 2, not_affected: 0, affected: 0, under_investigation: 2 });
     const unknowns = r.unknowns.join(' | ');
-    expect(unknowns).toMatch(/SBOM/);
+    expect(unknowns).toMatch(/no SBOM/);
+    // Packages are still named: purls are built from ecosystem, name and version.
+    expect(unknowns).not.toMatch(/carry no purl/);
     expect(unknowns).toMatch(/map_attack_surface/);
     expect(r.sbom).toBeNull();
     expect(r.surface_snapshot).toBeNull();
