@@ -39930,9 +39930,7 @@ var ValidationsRepo = class {
     `);
     this.getByFingerprintStmt = db.prepare(`
       SELECT * FROM finding_validations
-      WHERE project_path = ? AND fingerprint = ?
-      ORDER BY computed_at DESC
-      LIMIT 1
+      WHERE project_path = ? AND fingerprint = ? AND provider = ?
     `);
   }
   db;
@@ -39970,22 +39968,17 @@ var ValidationsRepo = class {
     return this.listByProjectStmt.all(projectPath).map(rowToValidation);
   }
   /**
-   * Returns one verdict for a finding, or `null` if none exists yet.
+   * One provider's verdict for a finding, or `null` if it has none.
    *
-   * The table's key is `(project_path, fingerprint, provider)`, not just
-   * `(project_path, fingerprint)`: once more than one provider has scored the
-   * same finding — `runtime`, `dependency`, both still to come — more than
-   * one row can match. This method takes no `provider` argument, so that
-   * case is resolved by returning the most recently computed row across all
-   * providers ("the latest answer, whoever gave it"), not by picking a
-   * preferred provider. A caller that wants a specific provider's verdict —
-   * e.g. "what did `static` say about this finding" — needs a different
-   * accessor; none exists yet because only `static` is implemented, and nothing
-   * today needs it. Recorded here for whoever adds `runtime` next, so this is
-   * a decision to revisit deliberately rather than a behaviour to rediscover.
+   * The table's key is `(project_path, fingerprint, provider)`, and a
+   * dependency finding carries a `static` AND a `dependency` verdict — two
+   * different questions. This used to take no provider and return "the newest
+   * row", which `validate_finding` made arbitrary: it mints one `computed_at`
+   * per batch, so both rows tie on it (review of the 3.0 additions, M5). The
+   * provider is the caller's to name.
    */
-  getByFingerprint(projectPath, fingerprint) {
-    const row = this.getByFingerprintStmt.get(projectPath, fingerprint);
+  getByFingerprint(projectPath, fingerprint, provider) {
+    const row = this.getByFingerprintStmt.get(projectPath, fingerprint, provider);
     return row ? rowToValidation(row) : null;
   }
 };
@@ -68271,10 +68264,10 @@ function buildSummary(input) {
   const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === "code");
   return {
     findings_selected: input.findingsSelected ?? new Set(validations.map((v) => v.fingerprint)).size,
-    // Every verdict returned, whichever provider gave it; split per provider
-    // right below, since a dependency finding carries one of each.
-    counts_by_verdict: countByVerdict(validations),
-    counts_by_provider: Object.fromEntries(
+    // Per provider, keyed by provider (review of the 3.0 additions, M4): a
+    // dependency finding carries a verdict from each, so one flat count
+    // counted it twice and mixed two different questions.
+    counts_by_verdict: Object.fromEntries(
       providersRun.map((p) => [p, countByVerdict(validations.filter((v) => v.provider === p))])
     ),
     coverage_gaps: collectGaps(input, stale, providersRun),
@@ -68356,11 +68349,30 @@ function ageHours(scan2, now) {
   if (Number.isNaN(stamp)) return null;
   return Math.round((now - stamp) / 36e5 * 100) / 100;
 }
-function collectGaps(input, stale, providersRun) {
-  const gaps = /* @__PURE__ */ new Set();
-  for (const validation of input.validations) {
-    for (const gap of validation.coverage_gaps) gaps.add(gap);
+function aggregateByKind(validations) {
+  const kinds = /* @__PURE__ */ new Map();
+  for (const validation of validations) {
+    for (const gap of validation.coverage_gaps) {
+      const kind = gap.replace(/'[^']*'/g, "'\u2026'");
+      const entry = kinds.get(kind) ?? { variants: /* @__PURE__ */ new Set(), findings: /* @__PURE__ */ new Set(), values: [] };
+      if (!entry.variants.has(gap)) {
+        entry.variants.add(gap);
+        entry.values.push(...(gap.match(/'[^']*'/g) ?? []).slice(0, 1));
+      }
+      entry.findings.add(validation.fingerprint);
+      kinds.set(kind, entry);
+    }
   }
+  return [...kinds].map(([kind, entry]) => {
+    const [only] = entry.variants;
+    if (entry.variants.size === 1 && only !== void 0) return only;
+    const shown = entry.values.slice(0, 3).join(", ");
+    const more = entry.values.length > 3 ? `, \u2026 ${entry.values.length - 3} more` : "";
+    return `${kind} \u2014 ${entry.findings.size} findings (${shown}${more})`;
+  });
+}
+function collectGaps(input, stale, providersRun) {
+  const gaps = new Set(aggregateByKind(input.validations));
   if (stale) {
     gaps.add(
       `the surface snapshot describes tree ${input.persisted.tree_hash} but the working tree is now ${input.workingTreeHash} \u2014 every verdict here was computed against the snapshot's tree, not the current one; re-run map_attack_surface to refresh it`

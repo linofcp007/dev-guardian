@@ -176,7 +176,7 @@ function seedScan(findings: Finding[], scanType: ScanType = 'sast'): string {
 
 interface Summary {
   findings_selected: number;
-  counts_by_verdict: Record<string, number>;
+  counts_by_verdict: Record<string, Record<string, number>>;
   coverage_gaps: string[];
   snapshot: {
     id: number;
@@ -514,7 +514,7 @@ describe('validate_finding persistence', () => {
     const r = expectOk(await run());
 
     expect(rawRows('finding_validations')).toHaveLength(r.validations.length);
-    const stored = ctx.storage.validations.getByFingerprint(projectPath, 'fp2');
+    const stored = ctx.storage.validations.getByFingerprint(projectPath, 'fp2', 'static');
     expect(stored?.verdict).toBe('unreachable');
     expect(stored?.provider).toBe('static');
   });
@@ -567,7 +567,7 @@ describe('validate_finding staleness', () => {
     expect(second.summary.working_tree_hash).not.toBe(treeHash);
     // The stored row keeps the tree it was computed against — the staleness
     // flag is derived at read time, never frozen into the row.
-    expect(ctx.storage.validations.getByFingerprint(projectPath, 'fp1')?.tree_hash).toBe(treeHash);
+    expect(ctx.storage.validations.getByFingerprint(projectPath, 'fp1', 'static')?.tree_hash).toBe(treeHash);
   });
 });
 
@@ -693,15 +693,18 @@ describe('validate_finding summary', () => {
     const r = expectOk(await run());
 
     expect(r.summary.counts_by_verdict).toEqual({
-      reachable: 1,
-      unreachable: 1,
-      unknown: 1,
-      // Present and zero, not absent: `confirmed` is not producible by
-      // `static`, and a reader must see that rather than infer it. Nor is
-      // `imported`, which only the dependency provider answers — and these
-      // three semgrep findings are not dependencies.
-      confirmed: 0,
-      imported: 0,
+      static: {
+        reachable: 1,
+        unreachable: 1,
+        unknown: 1,
+        // Present and zero, not absent: `confirmed` is not producible by
+        // `static`, and a reader must see that rather than infer it. Nor is
+        // `imported`, which only the dependency provider answers.
+        confirmed: 0,
+        imported: 0,
+      },
+      // These three semgrep findings are not dependencies: nothing to count.
+      dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
     });
   });
 
@@ -842,6 +845,20 @@ describe('validate_finding — the dependency provider', () => {
     // Both verdicts for the CVE are stored, one row per provider.
     const stored = rawRows('finding_validations').filter((row) => row['fingerprint'] === 'cve-lodash');
     expect(stored.map((row) => row['provider']).sort()).toEqual(['dependency', 'static']);
+  });
+
+  it('says each kind of gap once for a batch of 30 packages (review M4: it was 34 entries, 10 KB)', async () => {
+    seedSnapshot({ external_imports: externalImports([]) });
+    seedScan(Array.from({ length: 30 }, (_, i) => lodashCve({
+      fingerprint: `cve-${i}`, rule_id: `CVE-2024-${1000 + i}`, snippet: `pkg-${i}@1.0.${i}->1.1.0`,
+    })));
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.validations).toHaveLength(30);
+    expect(r.summary.coverage_gaps.filter((g) => /no project file imports the package/.test(g))).toHaveLength(1);
+    expect(r.summary.coverage_gaps.length).toBeLessThan(8);
+    expect(JSON.stringify(r.summary.coverage_gaps).length).toBeLessThan(3000);
   });
 
   it('runs alone when asked for alone', async () => {

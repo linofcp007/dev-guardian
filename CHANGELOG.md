@@ -23,8 +23,10 @@ version bump.
   `unreachable`. Only files under the finding's manifest directory count, and for npm only a file
   that loads exactly the vulnerable version (Node's lookup, read from `package-lock.json` or the
   installed `node_modules`); when that cannot be read, the answer is at most `imported`.
-  It runs by default beside `static`; `summary` gains `counts_by_provider`, and `counts_by_verdict`
-  the new `imported` verdict.
+  It runs by default beside `static`. The verdict set gains `imported`; `summary.counts_by_verdict` is
+  now keyed by provider (`{ static: {…}, dependency: {…} }` — a flat count counted a dependency
+  finding twice), and `summary.coverage_gaps` says each kind of gap once, with how many findings it
+  concerns. `ValidationsRepo.getByFingerprint` takes the provider explicitly.
 - `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /
   Track, the CISA SSVC Guide's Table 9): Exploitation from KEV (EPSS ≥ 0.1 approximates a public
   PoC; below it `poc` is assumed, since nothing dev-guardian has shows that no PoC exists),

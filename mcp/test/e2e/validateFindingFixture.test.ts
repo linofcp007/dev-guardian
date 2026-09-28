@@ -162,7 +162,7 @@ type ValidationWithStale = FindingValidation & { stale: boolean };
 interface ValidateOk {
   ok: true;
   validations: ValidationWithStale[];
-  summary: { counts_by_verdict: Record<string, number> };
+  summary: { counts_by_verdict: Record<string, Record<string, number>> };
 }
 
 interface ValidateErr {
@@ -305,11 +305,8 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       // these two findings and these two verdicts, catching a stray third
       // verdict (e.g. `unknown`) that per-finding assertions alone would miss.
       expect(result.summary.counts_by_verdict).toEqual({
-        reachable: 1,
-        unreachable: 1,
-        unknown: 0,
-        confirmed: 0,
-        imported: 0,
+        static: { reachable: 1, unreachable: 1, unknown: 0, confirmed: 0, imported: 0 },
+        dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
       });
     },
     6 * 60_000,
@@ -380,11 +377,8 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       ]);
 
       expect(result.summary.counts_by_verdict).toEqual({
-        reachable: 3,
-        unreachable: 1,
-        unknown: 0,
-        confirmed: 0,
-        imported: 0,
+        static: { reachable: 3, unreachable: 1, unknown: 0, confirmed: 0, imported: 0 },
+        dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
       });
     },
     6 * 60_000,

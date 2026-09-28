@@ -78,10 +78,10 @@ export function buildSummary(input: SummaryInput): Record<string, unknown> {
 
   return {
     findings_selected: input.findingsSelected ?? new Set(validations.map((v) => v.fingerprint)).size,
-    // Every verdict returned, whichever provider gave it; split per provider
-    // right below, since a dependency finding carries one of each.
-    counts_by_verdict: countByVerdict(validations),
-    counts_by_provider: Object.fromEntries(
+    // Per provider, keyed by provider (review of the 3.0 additions, M4): a
+    // dependency finding carries a verdict from each, so one flat count
+    // counted it twice and mixed two different questions.
+    counts_by_verdict: Object.fromEntries(
       providersRun.map((p) => [p, countByVerdict(validations.filter((v) => v.provider === p))]),
     ),
     coverage_gaps: collectGaps(input, stale, providersRun),
@@ -200,15 +200,43 @@ function ageHours(scan: ScanRecord, now: number): number | null {
  * provider has no clock, no filesystem and no storage, so it cannot know the
  * snapshot has aged or that no DAST scan exists.
  */
+/**
+ * The per-finding gaps, one line per KIND (review of the 3.0 additions, M4:
+ * 30 packages made 34 entries, 10 KB). Two gaps are one kind when they differ
+ * only in what they quote (`'src/a.x'` vs `'src/b.y'`): a kind seen once is
+ * kept verbatim — which is also why a per-finding gap still appears in the
+ * summary exactly as the finding carries it — and one seen with several
+ * values becomes one line naming how many findings and the first values.
+ */
+function aggregateByKind(validations: readonly FindingValidation[]): string[] {
+  const kinds = new Map<string, { variants: Set<string>; findings: Set<string>; values: string[] }>();
+  for (const validation of validations) {
+    for (const gap of validation.coverage_gaps) {
+      const kind = gap.replace(/'[^']*'/g, "'…'");
+      const entry = kinds.get(kind) ?? { variants: new Set<string>(), findings: new Set<string>(), values: [] };
+      if (!entry.variants.has(gap)) {
+        entry.variants.add(gap);
+        entry.values.push(...(gap.match(/'[^']*'/g) ?? []).slice(0, 1));
+      }
+      entry.findings.add(validation.fingerprint);
+      kinds.set(kind, entry);
+    }
+  }
+  return [...kinds].map(([kind, entry]) => {
+    const [only] = entry.variants;
+    if (entry.variants.size === 1 && only !== undefined) return only;
+    const shown = entry.values.slice(0, 3).join(', ');
+    const more = entry.values.length > 3 ? `, … ${entry.values.length - 3} more` : '';
+    return `${kind} — ${entry.findings.size} findings (${shown}${more})`;
+  });
+}
+
 function collectGaps(
   input: SummaryInput,
   stale: boolean,
   providersRun: readonly ImplementedProvider[],
 ): string[] {
-  const gaps = new Set<string>();
-  for (const validation of input.validations) {
-    for (const gap of validation.coverage_gaps) gaps.add(gap);
-  }
+  const gaps = new Set<string>(aggregateByKind(input.validations));
 
   if (stale) {
     gaps.add(
