@@ -13,12 +13,17 @@ version bump.
 - `cosign` in the toolchain catalogue (`check_toolchain` probes `cosign version`; `install_toolchain`
   installs v3.1.3 — winget and scoop pinned to it, Linux and macOS from the release binary checked
   against its sha256, Homebrew on macOS).
-- `scan_containers` checks the image's Sigstore signature with cosign. With `signer_identity` (or
-  `signer_identity_regexp`) and `signer_issuer` (or `signer_issuer_regexp`): a real `cosign verify`,
-  a rejection is a high finding. Without them: whether a signature and a signed SLSA provenance
-  attestation exist (`image-unsigned` low, `image-no-provenance` info), and `image_signature` says an
-  existing signature's signer was NOT verified. cosign missing or `GUARDIAN_OFFLINE=1`: `cosign`
-  skipped, in `missing_tools`. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
+- `scan_containers` checks the image's Sigstore signature with cosign (3.0+), on the digest it pins
+  the tag to (`image_signature.checked`). With `signer_identity` (or `signer_identity_regexp`) and
+  `signer_issuer` (or `signer_issuer_regexp`): a real `cosign verify`, a confirmed rejection is a high
+  finding, and the answer says what cosign accepted (an image signature or a signed attestation).
+  Without them: whether a signature and a signed SLSA provenance attestation exist (`image-unsigned`
+  low, `image-no-provenance` info), and `image_signature` says an existing signature's signer was NOT
+  verified. cosign swallows some registry errors, so every "absent" and every rejection is confirmed by
+  a call that fails loudly; a registry error is `unknown`, never absent. cosign missing, older than
+  3.0 or `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. A rejection is re-measured only by
+  a verification against the same signer (`ToolRun.signer`). An unanchored signer regexp is warned
+  about. New bookkeeping names `cosign-verify`, `cosign-tree`, `cosign`.
 - `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in

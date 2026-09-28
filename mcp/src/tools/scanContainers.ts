@@ -19,14 +19,18 @@
  *     `/var/run/docker.sock`, and an unpinned/`:latest` image tag — see
  *     `runners/composeChecks.ts`. This never depends on Trivy being
  *     installed: it is a pure text check.
- *   - For the `image`, when cosign is installed and `GUARDIAN_OFFLINE` is not
- *     `1`, its Sigstore signature (`runners/cosignCheck.ts`): with a signer
- *     identity and issuer, a real `cosign verify` (a rejection is a high
- *     finding); without them, only whether a signature and signed SLSA
- *     provenance exist (low / info findings when absent), and the response's
- *     `image_signature` says a signature that exists was NOT verified.
- *     cosign absent or offline: `cosign` skipped, in `missing_tools` — the
- *     image's signature was not looked at, which is a gap, not a pass.
+ *   - For the `image`, when cosign ≥ 3.0 is installed and `GUARDIAN_OFFLINE`
+ *     is not `1`, its Sigstore signature (`runners/cosignCheck.ts`), on the
+ *     digest the tag is pinned to first: with a signer identity and issuer,
+ *     a real `cosign verify` (a confirmed rejection is a high finding);
+ *     without them, only whether a signature and signed SLSA provenance
+ *     exist (low / info findings when absent — confirmed by calls that fail
+ *     loudly, since cosign swallows some registry errors), and the
+ *     response's `image_signature` says a signature that exists was NOT
+ *     verified. cosign absent, older than 3.0 or offline: `cosign` skipped,
+ *     in `missing_tools` — the image's signature was not looked at, which is
+ *     a gap, not a pass. An unanchored signer regexp is verified as asked,
+ *     with a warning.
  *   - All of the above can fire in the same call; outputs land in
  *     `.guardian/reports/containers-<scan>/`.
  *
@@ -54,8 +58,10 @@ import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { checkCompose } from '../runners/composeChecks.js';
 import {
+  cosignReadiness,
   detectImageSupplyChain,
   skippedSummary,
+  unanchoredSignerRegexps,
   verifyImage,
   type ImageSignatureSummary,
   type SignerPolicy,
@@ -97,8 +103,21 @@ const cosignParser: ScannerParser = {
   },
 };
 
-/** An image reference: non-empty, no whitespace, not starting with `-`. */
-const IMAGE_REF = /^(?!-)\S+$/;
+/**
+ * Characters no image reference, identity, issuer or regexp has a reason to
+ * hold, and that would reshape a reason, a note or a log line they flow
+ * into: C0 controls (ESC included), DEL, C1 controls (U+0085 included), the
+ * Unicode line and paragraph separators, and the bidi embedding / override /
+ * isolate controls.
+ */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+
+/**
+ * An image reference: non-empty, no whitespace, not starting with `-`, and
+ * none of {@link CONTROL_CHARS} — JavaScript's `\S` lets ESC and U+0085
+ * through, and the reference now flows into cosign's reasons and notes.
+ */
+const IMAGE_REF = /^(?!-)[^\s\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+$/;
 
 /** A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character. */
 const SignerValue = z.string().min(1).max(1024);
@@ -112,11 +131,12 @@ const scanContainers = makeScanTool({
       'Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file ' +
       '(docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for ' +
       'privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. ' +
-      "For the image, cosign checks its Sigstore signature (unless GUARDIAN_OFFLINE=1): with signer_identity " +
-      '(or signer_identity_regexp) AND signer_issuer (or signer_issuer_regexp), a real cosign verify — a ' +
-      'rejection is a high finding; without them, only whether a signature and a signed SLSA provenance ' +
-      'attestation exist (low / info findings when absent), and image_signature says an existing signature ' +
-      'was NOT verified. cosign missing or offline: skipped and in missing_tools, never a pass.',
+      'For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless ' +
+      'GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or ' +
+      'signer_issuer_regexp), a real cosign verify — a confirmed rejection is a high finding; without them, only ' +
+      'whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and ' +
+      'image_signature says an existing signature was NOT verified. A registry error is unknown, never absent. ' +
+      'cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.',
     scan_type: 'containers',
     category: 'security',
     supportsAutoFix: false,
@@ -129,7 +149,7 @@ const scanContainers = makeScanTool({
         .describe('Path to a Dockerfile to scan with `trivy config`.'),
       image: z
         .string()
-        .regex(IMAGE_REF, 'image must be an image reference: no whitespace, not starting with "-"')
+        .regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"')
         .optional()
         .describe('Container image reference to scan with `trivy image`.'),
       signer_identity: SignerValue.optional().describe(
@@ -154,6 +174,7 @@ const scanContainers = makeScanTool({
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'containers');
       const tools_run: ToolRun[] = [];
       const missing_tools: string[] = [];
+      const warnings: string[] = [];
       const parser_inputs: ScannerInvocation['parser_inputs'] = [];
       let anyOutcome: ScannerInvocation['outcome'] = 'completed';
 
@@ -264,17 +285,28 @@ const scanContainers = makeScanTool({
             ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
             onLog: ctx.onLog,
           };
-          const check =
-            policy !== null
-              ? await verifyImage(inp.image, policy, cosignCtx)
-              : await detectImageSupplyChain(inp.image, cosignCtx);
-          tools_run.push(check.run);
-          parser_inputs.push({ parser: cosignParser, input: check.findings });
-          imageSignature = check.summary;
-          // A cosign failure is this check's gap (its tools_run entry says
-          // so); only a cancellation is the whole scan's outcome.
-          if (check.cancelled) anyOutcome = 'cancelled';
+          // cosign 2.x cannot see OCI referrers in `tree`: it would read a
+          // signed image as unsigned, so it is not used at all.
+          const ready = await cosignReadiness(cosignCtx);
+          if (!ready.ok) {
+            tools_run.push({ name: 'cosign', status: ready.status, reason: ready.reason });
+            missing_tools.push('cosign');
+            imageSignature = skippedSummary(inp.image, ready.reason);
+          } else {
+            const check =
+              policy !== null
+                ? await verifyImage(inp.image, policy, cosignCtx)
+                : await detectImageSupplyChain(inp.image, cosignCtx);
+            tools_run.push(check.run);
+            parser_inputs.push({ parser: cosignParser, input: check.findings });
+            imageSignature = check.summary;
+            // A cosign failure is this check's gap (its tools_run entry says
+            // so); only a cancellation is the whole scan's outcome.
+            if (check.cancelled) anyOutcome = 'cancelled';
+          }
         }
+        // Said whether or not cosign ran: the policy itself is too loose.
+        if (policy !== null) warnings.push(...unanchoredSignerRegexps(policy));
       }
 
       if (dockerfile !== undefined) {
@@ -328,6 +360,7 @@ const scanContainers = makeScanTool({
         missing_tools,
         parser_inputs,
         report_paths: [reportDir],
+        ...(warnings.length > 0 ? { warnings } : {}),
         ...(imageSignature !== undefined ? { extras: { image_signature: imageSignature } } : {}),
       };
     },
@@ -400,7 +433,7 @@ function signerPolicy(inp: ContainersInput): SignerPolicy | null {
 /** Why the input cannot be scanned, or null when it can. */
 function invalidInput(projectPath: string, inp: ContainersInput): string | null {
   if (inp.image !== undefined && !IMAGE_REF.test(inp.image)) {
-    return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or start with "-".`;
+    return `image ${JSON.stringify(inp.image)} is not an image reference: it must not contain whitespace or control characters, or start with "-".`;
   }
   if (inp.dockerfile_path !== undefined && !isInside(projectPath, inp.dockerfile_path)) {
     return `dockerfile_path ${JSON.stringify(inp.dockerfile_path)} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
@@ -423,8 +456,8 @@ function invalidSigner(inp: ContainersInput): string | null {
   for (const field of given) {
     // A line break could smuggle a second line into a log or a report; no
     // identity, issuer or regexp has a reason to hold one.
-    if (/[\u0000-\u001f\u007f]/.test(inp[field] ?? '')) {
-      return `${field} contains a control character; an identity, issuer or regexp never needs one.`;
+    if (CONTROL_CHARS.test(inp[field] ?? '')) {
+      return `${field} contains a control character (or a Unicode line separator or bidi control); an identity, issuer or regexp never needs one.`;
     }
   }
   if (inp.signer_identity !== undefined && inp.signer_identity_regexp !== undefined) {

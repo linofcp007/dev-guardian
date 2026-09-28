@@ -302,11 +302,13 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   },
   cosign: {
     name: 'cosign',
-    // 2.0.0 made keyless verification require an explicit identity and
-    // issuer (`--certificate-identity[-regexp]`, `--certificate-oidc-issuer
-    // [-regexp]`), which is the only way scan_containers calls `verify`;
-    // `tree` and `download attestation` are older. Not enforced strictly.
-    version_floor: '2.0.0',
+    // 3.0.0, and scan_containers enforces it (runners/cosignCheck.ts
+    // COSIGN_MIN_VERSION, the same value): cosign 2.x's `tree` does not list
+    // OCI referrers — where every v3 signature and every GitHub provenance
+    // attestation lives — so it reads a signed image as unsigned (measured:
+    // 2.6.5 on a signed ghcr.io/sigstore/cosign/cosign:v3.1.3 prints "No …
+    // Artifacts found", exit 0).
+    version_floor: '3.0.0',
     probe: { command: 'cosign', args: ['version'] },
     required_by: ['scan_containers'],
     install: {

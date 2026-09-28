@@ -11,6 +11,7 @@ import {
   knownCompromise,
   suggestedInstallCommandString,
 } from '../../../src/runners/installCatalog.js';
+import { COSIGN_MIN_VERSION } from '../../../src/runners/cosignCheck.js';
 
 describe('install hints', () => {
   it('suggests the current .NET LTS SDK, not .NET 6 (out of support since 2024-11)', () => {
@@ -146,6 +147,11 @@ describe('cosign catalog entry', () => {
     expect(meta?.required_by).toEqual(['scan_containers']);
     expect(meta?.default).toBe(false);
     expect(COSIGN_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('floors at 3.0.0 — the same floor scan_containers enforces (cosign 2.x `tree` cannot see OCI referrers)', () => {
+    expect(meta?.version_floor).toBe('3.0.0');
+    expect(meta?.version_floor).toBe(COSIGN_MIN_VERSION);
   });
 
   it('pins the Windows installers to that version (winget and scoop both take an exact version)', () => {

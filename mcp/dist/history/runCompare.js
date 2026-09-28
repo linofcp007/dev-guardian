@@ -720,7 +720,13 @@ const PROJECT_FILES = 'project files';
 function targetOf(run) {
     if (runNameEntry(run.name)?.ownTarget !== true)
         return { pass: PROJECT_FILES };
-    return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: normalizeImageRef(run.target) } : { pass: run.name };
+    if (run.target === undefined || run.target === '')
+        return { pass: run.name };
+    // A verification's target is the image AND the signer it was verified
+    // against (`ToolRun.signer`): a pass for another signer did not ask the
+    // question the older verdict answered.
+    const signer = run.signer !== undefined ? `\0signer\0${run.signer}` : '';
+    return { pass: run.name, ref: `${normalizeImageRef(run.target)}${signer}` };
 }
 /**
  * One image reference in the one spelling Docker resolves it to, so that
@@ -772,7 +778,10 @@ function sameTarget(a, b) {
 }
 /** The name a pass that did not run again is reported under: `trivy-image (registry/app:1)`, as the run recorded it. */
 function passLabel(run, target) {
-    return target.ref === undefined ? run.name : `${run.name} (${run.target ?? target.ref})`;
+    if (target.ref === undefined)
+        return run.name;
+    const signer = run.signer !== undefined ? `, signer ${run.signer}` : '';
+    return `${run.name} (${run.target ?? target.ref}${signer})`;
 }
 /**
  * A pass `holder` ran ok that may have produced `f` (it measures `f`'s key)

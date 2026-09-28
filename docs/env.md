@@ -32,6 +32,7 @@ Read only by the test suite and `npm run ablate`; nothing at runtime looks at th
 
 | Variable | Read by | Effect |
 | --- | --- | --- |
+| `GUARDIAN_REQUIRE_COSIGN` | test suite | `1` turns a missing (or pre-3.0) cosign in `test/e2e/cosignRegistry.test.ts` — the real cosign against a registry that fails on purpose — from a visible skip into a hard failure. |
 | `GUARDIAN_REQUIRE_SEMGREP` | test suite | `1` turns a missing Semgrep (or Trivy, for the Trivy e2e) from a visible skip into a hard failure — set it when you need to know a rule pack was actually exercised. |
 | `GUARDIAN_SEMGREP` | `npm run ablate` | Semgrep binary to use (after `--semgrep=`, before `PATH`). |
 | `GUARDIAN_RUST_SRC`, `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`, `GUARDIAN_PHP_SRC` | `npm run ablate` | Real-code corpus for axis 3 of the `bugfix-rs`, `-cs`, `-java`, `-py`, `-go` and `-php` packs. Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
