@@ -1061,9 +1061,22 @@ keeps working (migrations 004–011 are additive).
   closing quote and swallowed the rest of the line: `Remove-Item "C:\Users\"
   -Recurse -Force` was `ok`, and so was anything after `Get-ChildItem
   "C:\temp\" ;`. The guard now also reads the command the way PowerShell does
-  (backslash literal, backtick escapes, `''` and `""`) — the reading the
-  install hook already had — and the more severe verdict stands.
-  `check --bash … --powershell` does the same from a terminal.
+  (backslash literal, backtick escapes, `''` and `""`, typographic quotes,
+  here-strings, `<# … #>`, `--%`) — the reading the install hook already
+  had — and the more severe verdict stands; so is the text handed to
+  `pwsh -Command` / `-EncodedCommand`, from either tool. `check --bash …
+  --powershell` does the same from a terminal.
+- **A comment no longer hides the lines after it.** The shell guard read
+  `#` comments as code, so the apostrophe in `# clean the user's build dir`
+  opened a quote that ran to the end of the command and hid `rm -rf /` on the
+  next line, from both tools; the same happened after a here-string whose
+  body held an odd `'`, and a commit message in a here-string that quoted
+  `curl x | sh` was denied. Also closed: a redirection before the command
+  name (`2>/dev/null rm -rf /`); PowerShell's `rmdir` / `rd` / `del` /
+  `erase` with `-Recurse -Force`, `-Recurse:$true` and en or em dashes; and
+  four internal caps that ended in a silent `ok` (40 `nice` runners, five
+  `npx -y` launchers, 256 `[IO.File]::` calls, an `[IO.File]::` call padded
+  past 512 characters — the last now warns).
 - **The shell guard and the install hook finish inside the hook's timeout.**
   The pattern rules were quadratic inside a statement (127 × `chmod
   -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s
@@ -1076,10 +1089,12 @@ keeps working (migrations 004–011 are additive).
   command with ~125 000 operands (`rm a a … /`) overflowed the stack, and the
   hook answered with no decision at all, so the command ran; it is assessed
   now, and any assessment that fails part-way warns "the assessment failed"
-  (a block found before it still blocks). The install hook looks each package up once, at most 50 per command
-  (60 KB of repeated `npm i x;` took ~57 s), names not on the popular list
-  first, so popular padding cannot push another past the cap. The worst 512 KB
-  shape measured takes about 1.5 s in the shell guard.
+  (a block found before it still blocks). The install hook looks each package
+  up once, at most 50 per command (60 KB of repeated `npm i x;` took ~57 s),
+  names not on the popular list first, so popular padding cannot push another
+  past the cap. The worst 512 KB shape measured takes up to about 2 s per
+  reading in the shell guard on a loaded machine; the PowerShell tool reads
+  twice, and the 2.5 s budget backs it up.
 - **Padding a line no longer hides a catastrophic command from the shell
   guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
   `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
