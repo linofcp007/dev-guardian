@@ -399,6 +399,30 @@ describe('ablate', () => {
     expect(() => ablate(solo, target)).toThrow(AblationError);
     expect(enumerateClauses(onlyClause).clauses.length).toBe(4);
   });
+
+  // The findings packs carry `metadata: {cwe: [...], owasp: []}` — an empty
+  // list is a statement ("this CWE is in no OWASP 2025 category"), written
+  // on purpose and never produced by a detach. Semgrep never matches on
+  // metadata, so the empty-collection guard must not read it as damage.
+  it('does not read an empty metadata list as something the ablation broke', () => {
+    const withMetadata = `rules:
+  - id: r
+    metadata:
+      cwe: []
+      owasp: []
+    patterns:
+      - pattern: f($X)
+      - pattern-not: f(1)
+    message: m
+    severity: INFO
+    languages: [javascript]
+`;
+    const target = clauseByBody(withMetadata, 'f(1)');
+    const after: unknown = parse(ablate(withMetadata, target));
+    const rule = (after as { rules: Array<{ metadata: unknown; patterns: unknown[] }> }).rules[0];
+    expect(rule?.metadata).toEqual({ cwe: [], owasp: [] });
+    expect(rule?.patterns).toHaveLength(1);
+  });
 });
 
 describe('ablateAll', () => {

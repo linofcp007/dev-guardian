@@ -40,6 +40,17 @@
 # sobra UMA: `error-handling-empty-err-block`, cuja saída é um ramo de erro
 # literalmente vazio — não há guarda nenhuma a reconhecer. A justificação
 # está no comentário de cada regra.
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # UMA branch, não duas. O `$X, _ := $F(...)` que aqui esteve era morto: o
   # Semgrep casa `$X, _ = $F(...)` também na forma `:=` — medido com as duas
@@ -67,6 +78,11 @@ rules:
   # strconv.Atoi(s)` com zero como fallback deliberado também dispara. Dois
   # dos quatro disparos que sobram no corpus do auditor são isso.
   - id: bugfix-go-error-handling-err-discarded
+    metadata:
+      cwe:
+        - "CWE-252: Unchecked Return Value"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $X, _ = $F(...)
       - pattern-not: $X, _ = $M.Load(...)
@@ -105,6 +121,11 @@ rules:
   # O que sobra é deliberado e é o preço conhecido: `_ = os.Remove(tmp)` num
   # caminho de limpeza vai disparar. É a razão de a regra ser WARNING.
   - id: bugfix-go-error-handling-err-blank-assign
+    metadata:
+      cwe:
+        - "CWE-252: Unchecked Return Value"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: _ = $F(...)
       - pattern-not: var _ = $F(...)
@@ -128,6 +149,11 @@ rules:
   # qualquer coisa, por isso `if p != nil { }` sobre um `*os.File` disparava.
   # CUSTO conhecido: um erro chamado `e` deixa de ser apanhado.
   - id: bugfix-go-error-handling-empty-err-block
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: |
           if $ERR != nil {
@@ -164,6 +190,11 @@ rules:
   # reconhecer a guarda (`, ok`, type switch, errors.As), e a forma `var`
   # acima é a prova de que há guardas que ela não reconhece.
   - id: bugfix-go-null-safety-type-assert-no-ok
+    metadata:
+      cwe:
+        - "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $V.($T)
       - pattern-not-inside: $X, $OK := $V.($T)
@@ -197,6 +228,10 @@ rules:
   # dentro do corpo (`if i < len(xs) { sum += xs[i] }`) é código correto e a
   # expressão profunda desce lá dentro e dispara. Medido aqui também.
   - id: bugfix-go-off-by-one-loop-lte-len
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     pattern: |
       for $I := 0; $I <= len($XS); $I++ {
         <... $XS[$I] ...>
@@ -234,6 +269,10 @@ rules:
   # um helper que receba a resposta inteira, um `httputil.DumpResponse`
   # seguido de fecho noutra função. A correção depende de as reconhecer.
   - id: bugfix-go-memory-leak-body-not-closed
+    metadata:
+      cwe:
+        - "CWE-772: Missing Release of Resource after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: $RESP, $ERR := http.Get(...)
@@ -275,6 +314,10 @@ rules:
   # `Stop()` dentro do closure. É a mesma descoberta que reduziu as sete
   # exclusões de fecho da `body-not-closed` a quatro.
   - id: bugfix-go-memory-leak-ticker-not-stopped
+    metadata:
+      cwe:
+        - "CWE-772: Missing Release of Resource after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern: $T := time.NewTicker(...)
       - pattern-not-inside: |
@@ -317,6 +360,10 @@ rules:
   # haja Unlock explícito depois do return, por isso o padrão positivo já não
   # casa.
   - id: bugfix-go-race-condition-lock-without-defer
+    metadata:
+      cwe:
+        - "CWE-667: Improper Locking"
+      owasp: []
     pattern-either:
       - pattern: |
           $MU.Lock()
@@ -357,6 +404,11 @@ rules:
   # inicialização, e as formas são muitas — reatribuição, endereço, um
   # helper `ensure()`, um `sync.Once`.
   - id: bugfix-go-edge-case-nil-map-write
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - patterns:
           - pattern: |

@@ -189,6 +189,17 @@
 # tem de pedir: `severity_min: "medium"`. O `bug_hunt` não filtra por omissão,
 # por isso nada desaparece de um scan — o que muda é só o fix-PR.
 # ---------------------------------------------------------------------------
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # WARNING desde a ronda do corpus externo, e ESTEVE em ERROR até lá — a
   # única do pack. O argumento era o do §4: esta regra não depende de
@@ -237,6 +248,11 @@ rules:
   # As três formas têm fixture própria em hits/EmptyCatch.java, porque "já
   # casava" é uma medição com data e as contagens são asseridas.
   - id: bugfix-java-error-handling-empty-catch
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: |
@@ -265,6 +281,11 @@ rules:
   # try-with-resources e o multi-catch já casavam aqui também, e estão pinados
   # em fixture pela mesma razão.
   - id: bugfix-java-error-handling-printstacktrace-only
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - pattern: |
           try { ... } catch ($E $V) { $V.printStackTrace(); }
@@ -344,6 +365,11 @@ rules:
   # `a.get()`, e isso é uma cadeia que prova duas coisas, não um problema de
   # comprimento.
   - id: bugfix-java-null-safety-optional-get-no-ispresent
+    metadata:
+      cwe:
+        - "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $O.get()
       - metavariable-type: {metavariable: $O, type: Optional}
@@ -573,6 +599,10 @@ rules:
   # a regra não tem findings reais para perder precisão — o que tinha eram
   # falsos negativos.
   - id: bugfix-java-off-by-one-loop-lte-length
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: |
@@ -632,6 +662,10 @@ rules:
   # e sensível à presença do finalizador, e as duas formas estão pinadas em
   # separado na fixture para o dia em que isso deixe de ser verdade.
   - id: bugfix-java-memory-leak-stream-not-closed
+    metadata:
+      cwe:
+        - "CWE-775: Missing Release of File Descriptor or Handle after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern: $T $V = new FileInputStream(...);
       - pattern-inside: |
@@ -696,6 +730,10 @@ rules:
   # inicializador e um método estático que DEVOLVE um `SimpleDateFormat`.
   # Locais não entram: uma variável local não pode ser `static`.
   - id: bugfix-java-race-condition-static-dateformat
+    metadata:
+      cwe:
+        - "CWE-567: Unsynchronized Access to Shared Data in a Multithreaded Context"
+      owasp: []
     pattern-either:
       - pattern: >-
           static java.text.SimpleDateFormat $N =
@@ -755,6 +793,10 @@ rules:
   # a alternativa (uma reticência de statement) esconde bugs reais. Uma regra
   # com um falso positivo conhecido, assumido e não corrigível não é ERROR.
   - id: bugfix-java-edge-case-modify-during-iteration
+    metadata:
+      # Nenhum CWE descreve esta falha com rigor, por isso fica sem categoria.
+      cwe: []
+      owasp: []
     patterns:
       - pattern-either:
           - patterns:

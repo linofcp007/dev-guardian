@@ -1,14 +1,37 @@
 # dev-guardian Semgrep config base.
 # Multi-linguagem. Detalhe em https://semgrep.dev/p/owasp-top-ten
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # ============== SECRETS COMMITED ==============
   - id: hardcoded-aws-key
+    metadata:
+      cwe:
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - "A07:2025 - Authentication Failures"
     pattern-regex: 'AKIA[0-9A-Z]{16}'
     message: Possível AWS Access Key hardcoded.
     severity: ERROR
     languages: [generic]
 
   - id: hardcoded-private-key
+    metadata:
+      cwe:
+        - "CWE-321: Use of Hard-coded Cryptographic Key"
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+        - "A07:2025 - Authentication Failures"
     pattern-regex: '-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----'
     message: Chave privada hardcoded no código.
     severity: ERROR
@@ -21,6 +44,11 @@ rules:
   # a única que `$X` apanhava — é a rara. Medido: 0 findings na forma de três
   # argumentos antes desta alteração.
   - id: js-eval-of-user-input
+    metadata:
+      cwe:
+        - "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern-either:
       - pattern: eval(...)
       - pattern: new Function(...)
@@ -29,12 +57,22 @@ rules:
     languages: [javascript, typescript]
 
   - id: js-insecure-randomness
+    metadata:
+      cwe:
+        - "CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
     pattern: Math.random()
     message: Math.random() não é criptograficamente seguro. Para tokens/IDs sensíveis usa crypto.randomBytes ou crypto.getRandomValues.
     severity: INFO
     languages: [javascript, typescript]
 
   - id: js-document-write
+    metadata:
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern-either:
       - pattern: document.write($X)
       - pattern: document.writeln($X)
@@ -43,6 +81,11 @@ rules:
     languages: [javascript, typescript]
 
   - id: js-dangerouslySetInnerHTML
+    metadata:
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern: |
       <$EL dangerouslySetInnerHTML={...} />
     message: dangerouslySetInnerHTML — verificar que o HTML é sanitizado (DOMPurify recomendado).
@@ -51,6 +94,11 @@ rules:
 
   # ============== Python ==============
   - id: py-eval-exec
+    metadata:
+      cwe:
+        - "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern-either:
       - pattern: eval(...)
       - pattern: exec(...)
@@ -59,6 +107,11 @@ rules:
     languages: [python]
 
   - id: py-shell-true
+    metadata:
+      cwe:
+        - "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern: subprocess.$F(..., shell=True, ...)
     message: subprocess com shell=True é injetável. Passa lista de args em vez de string.
     severity: WARNING
@@ -74,6 +127,11 @@ rules:
   # (`Loader=SafeLoader` depois de `from yaml import SafeLoader`) não precisam de
   # cláusula própria — medido, o Semgrep resolve-as pelo import.
   - id: py-yaml-load
+    metadata:
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      owasp:
+        - "A08:2025 - Software or Data Integrity Failures"
     patterns:
       - pattern-either:
           - pattern: yaml.load(...)
@@ -88,6 +146,11 @@ rules:
     languages: [python]
 
   - id: py-pickle-load
+    metadata:
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      owasp:
+        - "A08:2025 - Software or Data Integrity Failures"
     pattern-either:
       - pattern: pickle.load(...)
       - pattern: pickle.loads(...)
@@ -97,6 +160,11 @@ rules:
 
   # ============== PHP / WordPress ==============
   - id: php-eval
+    metadata:
+      cwe:
+        - "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern: eval($X)
     message: eval() em PHP — risco crítico de RCE.
     severity: ERROR
@@ -107,6 +175,11 @@ rules:
   # WordPress — `$wpdb->query("... " . $id)` — é uma superfície de API diferente
   # e pertence a uma regra própria, com o seu próprio conjunto de fixtures.
   - id: php-sql-injection-direct
+    metadata:
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "A05:2025 - Injection"
     pattern-either:
       - pattern: mysql_query($X . $Y)
       - pattern: mysqli_query($CONN, $X . $Y)
@@ -221,6 +294,11 @@ rules:
   #    `echo "x" . ($_GET['h']);` — disparam agora e os padrões de operando
   #    antigos não lhes chegavam.
   - id: wp-unescaped-output
+    metadata:
+      cwe:
+        - "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      owasp:
+        - "A05:2025 - Injection"
     patterns:
       - pattern-either:
           - pattern-inside: echo $SUPER[...];
