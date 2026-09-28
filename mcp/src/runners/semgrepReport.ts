@@ -86,6 +86,17 @@ export interface SemgrepReportCheck {
    * `ToolRun.failed_rules` ({@link describeRulesNotLoaded}).
    */
   rules_not_loaded?: RuleNotLoaded[];
+  /**
+   * `failed` only, when the run failed because its rule configuration was
+   * refused — every `errors[]` entry names a rule or a language
+   * (`UnknownLanguageError`, measured on 1.176.1: exit 8, nothing scanned;
+   * `InvalidRuleSchemaError`; a `Rule parse error` naming no rule), or is a
+   * `SemgrepError` beside one: what went wrong, for the reason. Semgrep is
+   * installed; the rules are the problem. Absent when `rules_not_loaded` is
+   * set (some rules ran) and for every other failure (a registry download,
+   * a crash, a target).
+   */
+  rule_config_error?: string;
 }
 
 /** A rule a Semgrep run did not load, by its stored id, and Semgrep's reason. */
@@ -154,11 +165,14 @@ export function checkSemgrepReport(args: {
     }
   }
   const failed: SemgrepReportCheck = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
+  const configError = ruleConfigError(errorEntries);
+  if (configError !== null) failed.rule_config_error = configError;
   if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
+      const { rule_config_error: _whole, ...someRan } = failed;
       return {
-        ...failed,
+        ...someRan,
         rules_not_loaded: ruleGap.rules,
         ...(ruleGap.files.length > 0 ? { partial: relative(ruleGap.files) } : {}),
       };
@@ -192,14 +206,54 @@ export function describeRulesNotLoaded(rules: readonly RuleNotLoaded[], scanned:
   );
 }
 
+/**
+ * The reason of a run in which no rule loaded (every local rule failed, no
+ * registry pack ran): nothing was scanned for.
+ */
+export function describeNoRuleLoaded(rules: readonly RuleNotLoaded[]): string {
+  const named = rules.map((r) => `${r.rule_id} — ${r.message}`).join('; ');
+  return (
+    `no rule loaded: Semgrep ran, but every one of its ${rules.length} rule(s) failed to load (${named}) — ` +
+    'nothing was scanned for; fix or remove the rules and re-run'
+  );
+}
+
+/**
+ * An `errors[]` entry's text: `message`, else `short_msg`, else `long_msg`
+ * — an `UnknownLanguageError` carries only the last two (1.176.1).
+ */
+function errorMessage(entry: unknown): string | undefined {
+  return getString(entry, 'message') ?? getString(entry, 'short_msg') ?? getString(entry, 'long_msg');
+}
+
 /** `type: message` per `errors[]` entry (`type` may be a string or `[name, …]`). */
 function describeErrors(errors: readonly unknown[]): string[] {
   return errors.map((entry) => {
     const rawType = getProp(entry, 'type');
     const type = typeof rawType === 'string' ? rawType : Array.isArray(rawType) ? String(rawType[0]) : 'error';
-    const message = getString(entry, 'message') ?? '(no message)';
+    const message = errorMessage(entry) ?? '(no message)';
     return `${type}: ${message.split(/\r?\n/)[0] ?? message}`;
   });
+}
+
+/** See `SemgrepReportCheck.rule_config_error`: the refused rule configuration, described, or null. */
+function ruleConfigError(errors: readonly unknown[]): string | null {
+  if (errors.length === 0) return null;
+  const described: string[] = [];
+  let rules = 0;
+  for (const entry of errors) {
+    const type = errorType(entry) ?? '';
+    const text = (errorMessage(entry) ?? '').split(/\r?\n/)[0] ?? '';
+    if (/rule|language/i.test(type)) {
+      rules += 1;
+      described.push(`${type}: ${text}`);
+    } else if (type === 'SemgrepError') {
+      described.push(`${type}: ${text}`);
+    } else {
+      return null;
+    }
+  }
+  return rules > 0 ? clip(described.join('; ')) : null;
 }
 
 /** An `errors[]` entry's type name (`type` may be a string or `[name, …]`), or null. */

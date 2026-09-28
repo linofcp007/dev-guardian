@@ -154,6 +154,36 @@ export function localRuleIdNormalizer(configs, ctx = {}) {
         return checkId;
     };
 }
+/**
+ * Whether NO rule of a run loaded: every config is a local rule file (no
+ * registry pack, no directory) and every rule those files declare — named as
+ * its findings are stored — is in `failed`. False whenever that cannot be
+ * told (a registry pack ran, a file cannot be read or declares nothing): the
+ * run then stays a narrower gap (fix round 3, M-1 — a scanner that ran on
+ * nothing is never ok).
+ */
+export function noRuleLoaded(configs, failed, ctx = {}) {
+    if (configs.length === 0 || failed.length === 0)
+        return false;
+    if (configs.some((c) => localKind(c) !== 'file'))
+        return false;
+    const normalize = localRuleIdNormalizer(configs, ctx);
+    const failedIds = new Set(failed.map((f) => f.rule_id));
+    const cwd = ctx.cwd ?? ctx.projectPath;
+    for (const config of configs) {
+        const fp = flavourOf(config, ctx.projectPath, cwd);
+        const file = fp.isAbsolute(config) ? config : cwd !== undefined ? fp.resolve(cwd, config) : config;
+        const ids = ruleIdsInFile(file);
+        if (ids.length === 0)
+            return false;
+        for (const id of ids) {
+            const prefix = semgrepConfigPrefix(file);
+            if (!failedIds.has(normalize(prefix.length > 0 ? `${prefix}.${id}` : id)))
+                return false;
+        }
+    }
+    return true;
+}
 /** Every rule id the YAML rule files of `dir` declare (not recursive); unreadable files are skipped. */
 export function ruleIdsInDir(dir) {
     const ids = new Set();

@@ -269,3 +269,63 @@ describe('checkSemgrepReport: rules that did not load while the others ran', () 
     expect(r.rules_not_loaded).toBeUndefined();
   });
 });
+
+/**
+ * Fix round 3: a run whose rule configuration Semgrep refused names the rule
+ * error (`rule_config_error`), so no caller says "install semgrep" for it.
+ */
+describe('checkSemgrepReport: a refused rule configuration', () => {
+  // Measured on 1.176.1: a rule with `languages: [klingon]` — exit 8, nothing
+  // scanned, an entry with no `message`, only short_msg / long_msg.
+  const UNKNOWN_LANGUAGE = {
+    code: 8,
+    level: 'error',
+    type: 'UnknownLanguageError',
+    long_msg: 'unsupported language: klingon. supported languages are: apex, bash, c\n\nYou may need to update your version of Semgrep.',
+    short_msg: 'invalid language: klingon',
+    spans: [],
+  };
+
+  it('an unknown language: failed, the rule error named — its text read from short_msg', () => {
+    const r = checkSemgrepReport({ raw: report({ errors: [UNKNOWN_LANGUAGE], paths: { scanned: [] } }), exitCode: 8, outcome: 'failed', targets: 1 });
+    expect(r.verdict).toBe('failed');
+    expect(r.rule_config_error).toBe('UnknownLanguageError: invalid language: klingon');
+    expect(r.reason).toContain('UnknownLanguageError: invalid language: klingon');
+    expect(r.reason).not.toContain('(no message)');
+  });
+
+  it('a rule missing a key (InvalidRuleSchemaError beside a SemgrepError) is one too', () => {
+    const r = checkSemgrepReport({
+      raw: report({
+        errors: [
+          { type: 'InvalidRuleSchemaError', level: 'error', message: 'One of these properties is missing: languages' },
+          { type: 'SemgrepError', level: 'error', message: 'invalid configuration file found (1 configs were invalid)' },
+        ],
+        paths: { scanned: [] },
+      }),
+      exitCode: 7,
+      outcome: 'failed',
+      targets: 1,
+    });
+    expect(r.rule_config_error).toMatch(/^InvalidRuleSchemaError: One of these properties is missing: languages/);
+  });
+
+  it.each([
+    ['a registry download', { errors: [{ type: 'SemgrepError', level: 'error', message: 'Failed to download configuration from https://semgrep.dev/c/auto' }], paths: { scanned: [] } }, 7],
+    ['a crash', { errors: [{ type: 'SomeOtherError', level: 'error', message: 'boom' }], paths: { scanned: [] } }, 3],
+    ['a file that did not parse', { errors: [{ type: 'Syntax error', level: 'error', message: 'x', path: 'a.js' }], paths: { scanned: [] } }, 3],
+  ])('never for %s', (_label, over, exitCode) => {
+    expect(checkSemgrepReport({ raw: report(over), exitCode, outcome: 'failed', targets: 1 }).rule_config_error).toBeUndefined();
+  });
+
+  it('not when some rules ran: that is rules_not_loaded', () => {
+    const r = checkSemgrepReport({
+      raw: report({ errors: [{ type: 'Rule parse error', level: 'error', rule_id: 'y', message: 'Rule parse error in rule y:\n bad' }], paths: { scanned: ['a.js'] } }),
+      exitCode: 2,
+      outcome: 'failed',
+      targets: 1,
+    });
+    expect(r.rules_not_loaded?.map((x) => x.rule_id)).toEqual(['y']);
+    expect(r.rule_config_error).toBeUndefined();
+  });
+});

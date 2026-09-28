@@ -1068,7 +1068,14 @@ keeps working (migrations 004–011 are additive).
   row the open set skips; the other rules' findings resolve as usual, and an
   earlier finding of the broken rule stays open as not re-measured.
   `bug_hunt`'s retry after a dead registry pack is judged the same way. A
-  rule error that names no rule stays `failed`. A comparison
+  rule error that names no rule stays `failed`. A run in which NO rule
+  loaded — every rule of the local rule files failed and no registry pack
+  ran — is `failed` (nothing was scanned for), the rules named; a rule
+  configuration Semgrep refuses outright (a rule with an unknown language:
+  exit 8, `UnknownLanguageError`) names that error instead of `(no
+  message)`. Both are marked `tools_run[].rule_config_error`, and the
+  coverage warning then says Semgrep ran and its rules did not load, never
+  "Install semgrep". A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
   Semgrep finding in a partly parsed file as not measured by that run —
   never resolved, never new — and names it `semgrep (partly parsed: …)`;

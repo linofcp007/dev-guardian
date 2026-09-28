@@ -38,7 +38,6 @@ import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
-import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -212,7 +211,7 @@ async function runSemgrep(ctx, input, out, args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot }),
+        rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } },
     });
     // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
     // project's rules by their absolute path; stored canonical, as scan_sast's.

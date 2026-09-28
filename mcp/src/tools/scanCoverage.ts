@@ -120,7 +120,16 @@ export function assessCoverage(
   if (coverage === 'full') return { coverage, warning: null };
 
   const failedTools = toolsRun.filter((t) => t.status === 'failed').map((t) => t.name);
-  const gaps = [...new Set([...missingTools, ...failedTools])];
+  // Installed and ran, but its rules did not load (`ToolRun.rule_config_error`):
+  // the advice is the rule, never "install it".
+  const ruleErrors = [
+    ...new Set(toolsRun.filter((t) => t.status === 'failed' && t.rule_config_error === true).map((t) => t.name)),
+  ].filter((name) => !toolsRun.some((t) => t.name === name && t.status === 'ok'));
+  const ruleClause =
+    ruleErrors.length > 0
+      ? `${ruleErrors.join(', ')} ran, but its rules did not load (a rule configuration error — see its tools_run reason); fix or remove the rule and re-run`
+      : null;
+  const gaps = [...new Set([...missingTools, ...failedTools])].filter((name) => !ruleErrors.includes(name));
   const list = gaps.length > 0 ? gaps.join(', ') : 'one or more scanners';
   const manifestGaps = parseManifestGaps(context.manifestGaps);
 
@@ -130,6 +139,15 @@ export function assessCoverage(
   );
 
   if (coverage === 'none') {
+    if (ruleClause !== null) {
+      return {
+        coverage,
+        warning:
+          `⚠️ ${scanType}: NOTHING was scanned — ${ruleClause}.` +
+          (gaps.length > 0 ? ` Also unavailable or failed: ${list} — install or fix it (or use the Docker fallback).` : '') +
+          ' A "0 findings" result is NOT a clean bill of health.',
+      };
+    }
     if (unreadable.length === 0) {
       return {
         coverage,
@@ -179,6 +197,7 @@ export function assessCoverage(
   const notRun = gaps.filter((name) => !ranOkNames.has(name) && !isPart(name) && !unreadable.includes(name));
   const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
   const clauses: string[] = [];
+  if (ruleClause !== null) clauses.push(ruleClause);
   if (notRun.length > 0) clauses.push(`${notRun.join(', ')} did not run`);
   if (unreadable.length > 0) {
     clauses.push(

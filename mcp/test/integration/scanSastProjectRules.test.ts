@@ -309,6 +309,73 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(out.findings_count_by_severity['medium']).toBe(1);
   });
 
+  // Fix round 3, M-1: when EVERY local rule failed and no registry pack ran,
+  // nothing was scanned for — failed (Global Constraint 3), never ok with a
+  // gap; and never "install semgrep", for a Semgrep that ran.
+  const ALL_FAILED = {
+    results: [],
+    errors: [{ code: 2, level: 'error', type: 'Rule parse error', rule_id: 'x', message: 'Rule parse error in rule x:\n Invalid pattern' }],
+    paths: { scanned: ['a.py'] },
+  };
+
+  it('local_only, and every rule of .semgrep.yml failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
+    const project = makeTempDir('sast-rules-none-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
+      | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 1 rule\(s\) failed to load \(x — Invalid pattern\)/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
+    expect(run?.rule_config_error).toBe(true);
+    const out = r as unknown as { coverage: string; warnings: string[] };
+    expect(out.coverage).toBe('none');
+    expect(out.warnings.join(' ')).toMatch(/semgrep ran, but its rules did not load/);
+    expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('the same failure with the registry ruleset in the run: the registry rules ran — partial stays', async () => {
+    const project = makeTempDir('sast-rules-none-auto-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
+  });
+
+  it('a scoped (batched) local_only run in which no rule loaded is failed too', async () => {
+    const project = makeTempDir('sast-rules-none-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project), { local_only: true, scope: { paths: ['a.py'] } });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/no rule loaded/);
+    expect(run?.rule_config_error).toBe(true);
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('a rule with an unknown language (Semgrep exit 8): the reason names the rule error, never "install semgrep"', async () => {
+    const project = makeTempDir('sast-rules-lang-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(8, {
+      results: [],
+      errors: [{ code: 8, level: 'error', type: 'UnknownLanguageError', short_msg: 'invalid language: klingon', long_msg: 'unsupported language: klingon.', spans: [] }],
+      paths: { scanned: [] },
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon/);
+    expect(run?.rule_config_error).toBe(true);
+    const warnings = (r as unknown as { warnings: string[] }).warnings.join(' ');
+    expect(warnings).toMatch(/semgrep ran, but its rules did not load/);
+    expect(warnings).not.toMatch(/install semgrep/i);
+  });
+
   it('a rule error that names no rule stays failed — it cannot be told from a broken config', async () => {
     const project = makeTempDir('sast-rules-');
     mockSemgrepOnPath(2, {

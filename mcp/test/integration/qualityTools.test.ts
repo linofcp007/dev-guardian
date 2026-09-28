@@ -699,6 +699,33 @@ describe('bug_hunt', () => {
     expect(r.coverage).not.toBe('full');
   });
 
+  it('a bugfix rule with an unknown language (Semgrep exit 8): failed, the rule error named, never "install semgrep"', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(
+        opts,
+        JSON.stringify({
+          results: [],
+          errors: [{ code: 8, level: 'error', type: 'UnknownLanguageError', short_msg: 'invalid language: klingon', long_msg: 'unsupported language: klingon.', spans: [] }],
+          paths: { scanned: [] },
+        }),
+      );
+      return { outcome: 'failed' as const, exitCode: 8, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; rule_config_error?: boolean }[];
+      warnings: string[];
+    };
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon/);
+    expect(run?.rule_config_error).toBe(true);
+    expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
   it(
     'a genuine failure with no recognisable errors[] shape still reports failed — the broadening ' +
       'does not turn every non-clean exit into "ok"',

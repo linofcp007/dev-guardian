@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { assignIdentities } from '../../src/fingerprint/findingIdentity.js';
 import { semgrepParserFor } from '../../src/runners/scannerParsers/semgrep.js';
-import { localRuleIdNormalizer, pluginPacksDir, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, noRuleLoaded, pluginPacksDir, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
 import { runSemgrep, semgrepAvailable } from '../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -160,6 +160,25 @@ describe('one stored id per rule', () => {
 
   it("the plugin's pack directory is the one bug_hunt and compliance_check load their packs from", () => {
     expect(resolve(dirname(pluginPacksDir()))).toBe(resolve(REPO_ROOT, 'configs'));
+  });
+});
+
+describe('noRuleLoaded: every local rule failed and no registry pack ran (M-1)', () => {
+  const rule = (id: string): string => `  - id: ${id}\n    languages: [javascript]\n    severity: ERROR\n    message: m\n    pattern: foo()\n`;
+  it('true only when every rule every local file declares is among those that failed, and nothing else ran', () => {
+    const project = makeTempDir('norule-');
+    const root = join(project, '.semgrep.yml');
+    const team = join(project, 'rules', 'team.yml');
+    mkdirSync(join(project, 'rules'));
+    writeFileSync(root, `rules:\n${rule('a')}${rule('b')}`);
+    writeFileSync(team, `rules:\n${rule('c')}`);
+    const ctx = { projectPath: project };
+    const failed = (...ids: string[]) => ids.map((rule_id) => ({ rule_id }));
+    expect(noRuleLoaded([root, team], failed('a', 'b', 'rules.c'), ctx)).toBe(true);
+    expect(noRuleLoaded([root, team], failed('a', 'rules.c'), ctx)).toBe(false); // b ran
+    expect(noRuleLoaded(['auto', root, team], failed('a', 'b', 'rules.c'), ctx)).toBe(false); // the registry ran
+    expect(noRuleLoaded([root, join(project, 'missing.yml')], failed('a', 'b'), ctx)).toBe(false); // cannot tell
+    expect(noRuleLoaded([root], [], ctx)).toBe(false);
   });
 });
 

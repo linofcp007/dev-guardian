@@ -25,7 +25,8 @@ import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from './semgrepReport.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, } from './semgrepReport.js';
+import { localRuleIdNormalizer, noRuleLoaded } from './semgrepRuleIds.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 export async function scanFileBatches(opts) {
     const probeReport = join(opts.reportDir, `${opts.reportPrefix}-000.json`);
@@ -36,6 +37,7 @@ export async function scanFileBatches(opts) {
     const reports = [];
     const reportFiles = [];
     const failures = [];
+    let configFailures = 0;
     const partial = [];
     const failedRules = [];
     let cancelled = false;
@@ -81,11 +83,30 @@ export async function scanFileBatches(opts) {
         if (!verdict.ok) {
             const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
             failures.push(`${label}${verdict.reason ?? 'failed'}`);
+            if (verdict.ruleConfigError === true)
+                configFailures += 1;
         }
         if (cancelled)
             break;
     }
     const described = `${opts.files.length} file(s)${batches.length > 1 ? ` in ${batches.length} batches` : ''}`;
+    if (failures.length === 0 && !cancelled && failedRules.length > 0 && opts.noRuleLoaded?.(failedRules) === true) {
+        return {
+            toolRun: {
+                name: opts.name,
+                status: 'failed',
+                reason: `${described}: ${describeNoRuleLoaded(failedRules)}`,
+                failed_rules: failedRules,
+                rule_config_error: true,
+            },
+            reports,
+            reportFiles,
+            cancelled,
+            nothingScanned: false,
+            partial,
+            failedRules,
+        };
+    }
     if (opts.requireScanned === true && !cancelled && failures.length === 0 && batches.length > 0 && scanned === 0) {
         return {
             toolRun: {
@@ -124,12 +145,16 @@ export async function scanFileBatches(opts) {
             status: 'failed',
             reason: cancelled && failures.length === 0 ? 'cancelled' : `${described}: ${failures.join('; ')}`,
         };
+        // Every batch failed on its rule configuration: installed, the rules are the problem.
+        if (!cancelled && failures.length > 0 && configFailures === failures.length)
+            toolRun.rule_config_error = true;
     }
     return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial, failedRules };
 }
 /** `scanFileBatches` for Semgrep: `--json --quiet --output <f> -- files`, UTF-8 mode, GC3 check. */
 export function semgrepOnFiles(args) {
-    const ruleIdOf = args.ruleIdOf;
+    const rules = args.rules;
+    const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
     return scanFileBatches({
         name: 'semgrep',
         command: 'semgrep',
@@ -152,9 +177,15 @@ export function semgrepOnFiles(args) {
             if (c.rules_not_loaded !== undefined && c.rules_not_loaded.length > 0) {
                 return { ok: true, scanned: c.scanned, partial: c.partial ?? [], failedRules: c.rules_not_loaded };
             }
-            return { ok: c.ok, scanned: c.scanned, ...(c.reason !== undefined ? { reason: c.reason } : {}) };
+            return {
+                ok: c.ok,
+                scanned: c.scanned,
+                ...(c.reason !== undefined ? { reason: c.rule_config_error !== undefined ? `the rule configuration did not load — ${c.reason}` : c.reason } : {}),
+                ...(c.rule_config_error !== undefined ? { ruleConfigError: true } : {}),
+            };
         },
         requireScanned: true,
+        ...(rules !== undefined ? { noRuleLoaded: (failed) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}),
     });
 }
 /** `scanFileBatches` for Bandit: `-f json -o <f> -q -- files`. */

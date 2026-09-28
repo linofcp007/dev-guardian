@@ -114,8 +114,8 @@ import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSem
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
-import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
+import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -724,6 +724,14 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
         };
     }
     const notLoaded = check.rules_not_loaded;
+    const rules = { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
+    if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(packs, notLoaded, rules)) {
+        // Every local rule failed and no registry pack ran (M-1): nothing was scanned for.
+        return {
+            toolRun: { name: 'semgrep', status: 'failed', reason: describeNoRuleLoaded(notLoaded), failed_rules: notLoaded, rule_config_error: true },
+            missing: false,
+        };
+    }
     if (notLoaded !== undefined && notLoaded.length > 0) {
         const toolRun = {
             name: 'semgrep',
@@ -738,10 +746,19 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
             toolRun.partially_parsed = check.partial;
         return { toolRun, missing: true };
     }
-    return {
-        toolRun: { name: 'semgrep', status: 'failed', reason: describeRawErrors(raw) ?? check.reason ?? 'semgrep failed' },
-        missing: false,
-    };
+    const reason = describeRawErrors(raw) ?? check.reason ?? 'semgrep failed';
+    if (check.rule_config_error !== undefined) {
+        return {
+            toolRun: {
+                name: 'semgrep',
+                status: 'failed',
+                reason: `the rule configuration did not load — ${check.rule_config_error}; ${reason}`,
+                rule_config_error: true,
+            },
+            missing: false,
+        };
+    }
+    return { toolRun: { name: 'semgrep', status: 'failed', reason }, missing: false };
 }
 /**
  * `bug_hunt` over a scope's files: the same packs, as explicit targets
@@ -767,7 +784,7 @@ async function invokeBugHuntOnScope(args) {
         return finish('completed');
     }
     const runOn = (use) => semgrepOnFiles({
-        ruleIdOf: localRuleIdNormalizer(use, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
+        rules: { configs: use, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
         configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
         files,
         cwd: ctx.projectPath,

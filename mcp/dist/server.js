@@ -23304,15 +23304,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage4 = "";
+  let errorMessage5 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage4 = map(fullIssue, { data, defaultError: errorMessage4 }).message;
+    errorMessage5 = map(fullIssue, { data, defaultError: errorMessage5 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage4
+    message: errorMessage5
   };
 };
 var EMPTY_PATH = [];
@@ -33150,19 +33150,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage4, refs) {
+function addErrorMessage(res, key, errorMessage5, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage4) {
+  if (errorMessage5) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage4
+      [key]: errorMessage5
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage4, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage5, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage4, refs);
+  addErrorMessage(res, key, errorMessage5, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -34473,8 +34473,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message3);
                   } else {
-                    const errorMessage4 = message3;
-                    const error2 = new McpError(errorMessage4.error.code, errorMessage4.error.message, errorMessage4.error.data);
+                    const errorMessage5 = message3;
+                    const error2 = new McpError(errorMessage5.error.code, errorMessage5.error.message, errorMessage5.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -35765,23 +35765,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage4 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage4}`);
+          const errorMessage5 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage5}`);
         }
         const { params } = validatedRequest.data;
         const result = await Promise.resolve(handler45(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
-            const errorMessage4 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage4}`);
+            const errorMessage5 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage5}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result);
         if (!validationResult.success) {
-          const errorMessage4 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage4}`);
+          const errorMessage5 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage5}`);
         }
         return validationResult.data;
       };
@@ -36497,12 +36497,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage4) {
+  createToolError(errorMessage5) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage4
+          text: errorMessage5
         }
       ],
       isError: true
@@ -36520,8 +36520,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage4 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage4}`);
+      const errorMessage5 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage5}`);
     }
     return parseResult.data;
   }
@@ -36545,8 +36545,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage4 = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage4}`);
+      const errorMessage5 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage5}`);
     }
   }
   /**
@@ -36758,8 +36758,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage4 = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage4}`);
+          const errorMessage5 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage5}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -37905,6 +37905,24 @@ function localRuleIdNormalizer(configs, ctx = {}) {
     }
     return checkId;
   };
+}
+function noRuleLoaded(configs, failed, ctx = {}) {
+  if (configs.length === 0 || failed.length === 0) return false;
+  if (configs.some((c3) => localKind(c3) !== "file")) return false;
+  const normalize = localRuleIdNormalizer(configs, ctx);
+  const failedIds = new Set(failed.map((f) => f.rule_id));
+  const cwd = ctx.cwd ?? ctx.projectPath;
+  for (const config2 of configs) {
+    const fp = flavourOf(config2, ctx.projectPath, cwd);
+    const file = fp.isAbsolute(config2) ? config2 : cwd !== void 0 ? fp.resolve(cwd, config2) : config2;
+    const ids2 = ruleIdsInFile(file);
+    if (ids2.length === 0) return false;
+    for (const id of ids2) {
+      const prefix = semgrepConfigPrefix(file);
+      if (!failedIds.has(normalize(prefix.length > 0 ? `${prefix}.${id}` : id))) return false;
+    }
+  }
+  return true;
 }
 function ruleIdsInDir(dir) {
   const ids2 = /* @__PURE__ */ new Set();
@@ -42604,13 +42622,23 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   const coverage = computeCoverage(toolsRun, missingTools);
   if (coverage === "full") return { coverage, warning: null };
   const failedTools = toolsRun.filter((t) => t.status === "failed").map((t) => t.name);
-  const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])];
+  const ruleErrors = [
+    ...new Set(toolsRun.filter((t) => t.status === "failed" && t.rule_config_error === true).map((t) => t.name))
+  ].filter((name) => !toolsRun.some((t) => t.name === name && t.status === "ok"));
+  const ruleClause = ruleErrors.length > 0 ? `${ruleErrors.join(", ")} ran, but its rules did not load (a rule configuration error \u2014 see its tools_run reason); fix or remove the rule and re-run` : null;
+  const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])].filter((name) => !ruleErrors.includes(name));
   const list2 = gaps.length > 0 ? gaps.join(", ") : "one or more scanners";
   const manifestGaps = parseManifestGaps(context.manifestGaps);
   const unreadable = gaps.filter(
     (name) => toolsRun.some((t) => t.name === name && t.status === "skipped" && t.reason === NO_SUPPORTED_MANIFEST)
   );
   if (coverage === "none") {
+    if (ruleClause !== null) {
+      return {
+        coverage,
+        warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${ruleClause}.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + ' A "0 findings" result is NOT a clean bill of health.'
+      };
+    }
     if (unreadable.length === 0) {
       return {
         coverage,
@@ -42639,6 +42667,7 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   const notRun = gaps.filter((name) => !ranOkNames.has(name) && !isPart(name) && !unreadable.includes(name));
   const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
   const clauses = [];
+  if (ruleClause !== null) clauses.push(ruleClause);
   if (notRun.length > 0) clauses.push(`${notRun.join(", ")} did not run`);
   if (unreadable.length > 0) {
     clauses.push(
@@ -43843,11 +43872,14 @@ function checkSemgrepReport(args) {
     }
   }
   const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
+  const configError = ruleConfigError(errorEntries);
+  if (configError !== null) failed.rule_config_error = configError;
   if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
+      const { rule_config_error: _whole, ...someRan } = failed;
       return {
-        ...failed,
+        ...someRan,
         rules_not_loaded: ruleGap.rules,
         ...ruleGap.files.length > 0 ? { partial: relative24(ruleGap.files) } : {}
       };
@@ -43864,13 +43896,38 @@ function describeRulesNotLoaded(rules, scanned) {
   const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
   return `Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ${scanned} file(s) are kept; fix or remove the rule and re-run`;
 }
+function describeNoRuleLoaded(rules) {
+  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
+  return `no rule loaded: Semgrep ran, but every one of its ${rules.length} rule(s) failed to load (${named}) \u2014 nothing was scanned for; fix or remove the rules and re-run`;
+}
+function errorMessage(entry) {
+  return getString(entry, "message") ?? getString(entry, "short_msg") ?? getString(entry, "long_msg");
+}
 function describeErrors(errors) {
   return errors.map((entry) => {
     const rawType = getProp(entry, "type");
     const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) ? String(rawType[0]) : "error";
-    const message3 = getString(entry, "message") ?? "(no message)";
+    const message3 = errorMessage(entry) ?? "(no message)";
     return `${type}: ${message3.split(/\r?\n/)[0] ?? message3}`;
   });
+}
+function ruleConfigError(errors) {
+  if (errors.length === 0) return null;
+  const described = [];
+  let rules = 0;
+  for (const entry of errors) {
+    const type = errorType(entry) ?? "";
+    const text = (errorMessage(entry) ?? "").split(/\r?\n/)[0] ?? "";
+    if (/rule|language/i.test(type)) {
+      rules += 1;
+      described.push(`${type}: ${text}`);
+    } else if (type === "SemgrepError") {
+      described.push(`${type}: ${text}`);
+    } else {
+      return null;
+    }
+  }
+  return rules > 0 ? clip(described.join("; ")) : null;
 }
 function errorType(entry) {
   const rawType = getProp(entry, "type");
@@ -43944,6 +44001,7 @@ async function scanFileBatches(opts) {
   const reports = [];
   const reportFiles = [];
   const failures = [];
+  let configFailures = 0;
   const partial3 = [];
   const failedRules = [];
   let cancelled = false;
@@ -43985,10 +44043,28 @@ async function scanFileBatches(opts) {
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i2 + 1}/${batches.length}: ` : "";
       failures.push(`${label}${verdict.reason ?? "failed"}`);
+      if (verdict.ruleConfigError === true) configFailures += 1;
     }
     if (cancelled) break;
   }
   const described = `${opts.files.length} file(s)${batches.length > 1 ? ` in ${batches.length} batches` : ""}`;
+  if (failures.length === 0 && !cancelled && failedRules.length > 0 && opts.noRuleLoaded?.(failedRules) === true) {
+    return {
+      toolRun: {
+        name: opts.name,
+        status: "failed",
+        reason: `${described}: ${describeNoRuleLoaded(failedRules)}`,
+        failed_rules: failedRules,
+        rule_config_error: true
+      },
+      reports,
+      reportFiles,
+      cancelled,
+      nothingScanned: false,
+      partial: partial3,
+      failedRules
+    };
+  }
   if (opts.requireScanned === true && !cancelled && failures.length === 0 && batches.length > 0 && scanned === 0) {
     return {
       toolRun: {
@@ -44023,11 +44099,13 @@ async function scanFileBatches(opts) {
       status: "failed",
       reason: cancelled && failures.length === 0 ? "cancelled" : `${described}: ${failures.join("; ")}`
     };
+    if (!cancelled && failures.length > 0 && configFailures === failures.length) toolRun.rule_config_error = true;
   }
   return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial: partial3, failedRules };
 }
 function semgrepOnFiles(args) {
-  const ruleIdOf = args.ruleIdOf;
+  const rules = args.rules;
+  const ruleIdOf = rules === void 0 ? void 0 : localRuleIdNormalizer(rules.configs, rules.ctx);
   return scanFileBatches({
     name: "semgrep",
     command: "semgrep",
@@ -44050,9 +44128,15 @@ function semgrepOnFiles(args) {
       if (c3.rules_not_loaded !== void 0 && c3.rules_not_loaded.length > 0) {
         return { ok: true, scanned: c3.scanned, partial: c3.partial ?? [], failedRules: c3.rules_not_loaded };
       }
-      return { ok: c3.ok, scanned: c3.scanned, ...c3.reason !== void 0 ? { reason: c3.reason } : {} };
+      return {
+        ok: c3.ok,
+        scanned: c3.scanned,
+        ...c3.reason !== void 0 ? { reason: c3.rule_config_error !== void 0 ? `the rule configuration did not load \u2014 ${c3.reason}` : c3.reason } : {},
+        ...c3.rule_config_error !== void 0 ? { ruleConfigError: true } : {}
+      };
     },
-    requireScanned: true
+    requireScanned: true,
+    ...rules !== void 0 ? { noRuleLoaded: (failed) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}
   });
 }
 function banditOnFiles(args) {
@@ -44564,6 +44648,16 @@ function recordSemgrepRun(args) {
     return;
   }
   const notLoaded = check2.rules_not_loaded;
+  if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules)) {
+    tools_run.push({
+      name: "semgrep",
+      status: "failed",
+      reason: [...reasons, describeNoRuleLoaded(notLoaded)].join("; "),
+      failed_rules: notLoaded,
+      rule_config_error: true
+    });
+    return;
+  }
   if (notLoaded !== void 0 && notLoaded.length > 0) {
     const run = {
       name: "semgrep",
@@ -44581,6 +44675,15 @@ function recordSemgrepRun(args) {
     return;
   }
   const detail = check2.reason ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "semgrep failed";
+  if (check2.rule_config_error !== void 0) {
+    tools_run.push({
+      name: "semgrep",
+      status: "failed",
+      reason: [...reasons, `the rule configuration did not load \u2014 ${check2.rule_config_error}`, detail].join("; "),
+      rule_config_error: true
+    });
+    return;
+  }
   tools_run.push({ name: "semgrep", status: "failed", reason: [...reasons, detail].join("; ") });
 }
 async function runBandit(args) {
@@ -44642,7 +44745,7 @@ async function runSemgrepOnScope(args) {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...ctx.onLog ? { onLog: ctx.onLog } : {},
-    ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath })
+    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
@@ -47565,6 +47668,13 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
     };
   }
   const notLoaded = check2.rules_not_loaded;
+  const rules = { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
+  if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(packs, notLoaded, rules)) {
+    return {
+      toolRun: { name: "semgrep", status: "failed", reason: describeNoRuleLoaded(notLoaded), failed_rules: notLoaded, rule_config_error: true },
+      missing: false
+    };
+  }
   if (notLoaded !== void 0 && notLoaded.length > 0) {
     const toolRun = {
       name: "semgrep",
@@ -47578,10 +47688,19 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
     if (check2.partial !== void 0) toolRun.partially_parsed = check2.partial;
     return { toolRun, missing: true };
   }
-  return {
-    toolRun: { name: "semgrep", status: "failed", reason: describeRawErrors(raw) ?? check2.reason ?? "semgrep failed" },
-    missing: false
-  };
+  const reason = describeRawErrors(raw) ?? check2.reason ?? "semgrep failed";
+  if (check2.rule_config_error !== void 0) {
+    return {
+      toolRun: {
+        name: "semgrep",
+        status: "failed",
+        reason: `the rule configuration did not load \u2014 ${check2.rule_config_error}; ${reason}`,
+        rule_config_error: true
+      },
+      missing: false
+    };
+  }
+  return { toolRun: { name: "semgrep", status: "failed", reason }, missing: false };
 }
 async function invokeBugHuntOnScope(args) {
   const { input, ctx, reportDir, packs, files } = args;
@@ -47600,7 +47719,7 @@ async function invokeBugHuntOnScope(args) {
     return finish("completed");
   }
   const runOn = (use) => semgrepOnFiles({
-    ruleIdOf: localRuleIdNormalizer(use, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
+    rules: { configs: use, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
     configArgs: [...use.map((pack) => `--config=${pack}`), ...input.auto_fix === true ? ["--autofix"] : []],
     files,
     cwd: ctx.projectPath,
@@ -48669,7 +48788,7 @@ async function runSemgrep2(ctx, input, out, args) {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...ctx.onLog ? { onLog: ctx.onLog } : {},
-    ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot })
+    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
@@ -67639,7 +67758,7 @@ async function prExists(opts) {
   } catch (e) {
     return {
       known: false,
-      reason: `'gh pr list' printed output that could not be parsed as JSON: ${errorMessage(e)}`
+      reason: `'gh pr list' printed output that could not be parsed as JSON: ${errorMessage2(e)}`
     };
   }
   if (!Array.isArray(rows)) {
@@ -67764,7 +67883,7 @@ function firstUrlLine(stdout) {
   }
   return null;
 }
-function errorMessage(e) {
+function errorMessage2(e) {
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -68130,7 +68249,7 @@ async function createWorktree(opts) {
   try {
     dir = mkdtempSync7(join70(tmpdir8(), WORKTREE_DIR_PREFIX));
   } catch (e) {
-    return { ok: false, reason: `could not create a temp directory: ${errorMessage2(e)}` };
+    return { ok: false, reason: `could not create a temp directory: ${errorMessage3(e)}` };
   }
   const add = await runProcess({
     command: "git",
@@ -68265,7 +68384,7 @@ function safeRmDir(dir) {
   } catch {
   }
 }
-function errorMessage2(e) {
+function errorMessage3(e) {
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -68404,7 +68523,7 @@ async function handler42(input, ctx, callMeta) {
         scan: null,
         tests: null,
         pr: null,
-        note: `internal_error: unexpected failure while processing this group \u2014 ${errorMessage3(e)}`
+        note: `internal_error: unexpected failure while processing this group \u2014 ${errorMessage4(e)}`
       });
     }
   }
@@ -68816,7 +68935,7 @@ function findingsForGroup(allFindings, group) {
   const targetSet = new Set(group.candidates.flatMap((c3) => c3.fingerprints));
   return allFindings.filter((f) => targetSet.has(f.fingerprint));
 }
-function errorMessage3(e) {
+function errorMessage4(e) {
   return e instanceof Error ? e.message : String(e);
 }
 function failDomain24(code, message3) {

@@ -87,12 +87,12 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
-import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
-import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
@@ -317,6 +317,18 @@ function recordSemgrepRun(args) {
         return;
     }
     const notLoaded = check.rules_not_loaded;
+    if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules)) {
+        // Every local rule failed and no registry pack ran: nothing was scanned
+        // for (M-1) — failed, the rules named, never "install semgrep".
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: [...reasons, describeNoRuleLoaded(notLoaded)].join('; '),
+            failed_rules: notLoaded,
+            rule_config_error: true,
+        });
+        return;
+    }
     if (notLoaded !== undefined && notLoaded.length > 0) {
         // Rules that did not load while the others ran (the module comment): a
         // narrower gap — ran, `ok` AND missing, the rules named.
@@ -337,6 +349,17 @@ function recordSemgrepRun(args) {
         return;
     }
     const detail = check.reason ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? 'semgrep failed';
+    if (check.rule_config_error !== undefined) {
+        // Semgrep refused the rule configuration (an unknown language: exit 8):
+        // installed, and the rules are what to fix.
+        tools_run.push({
+            name: 'semgrep',
+            status: 'failed',
+            reason: [...reasons, `the rule configuration did not load — ${check.rule_config_error}`, detail].join('; '),
+            rule_config_error: true,
+        });
+        return;
+    }
     tools_run.push({ name: 'semgrep', status: 'failed', reason: [...reasons, detail].join('; ') });
 }
 async function runBandit(args) {
@@ -415,7 +438,7 @@ async function runSemgrepOnScope(args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
+        rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
     });
     const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
     for (const raw of run.reports)
