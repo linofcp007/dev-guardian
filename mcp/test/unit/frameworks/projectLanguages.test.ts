@@ -6,7 +6,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { canonicalLanguage, languageOfFile } from '../../../src/frameworks/languages.js';
@@ -82,7 +82,13 @@ describe('languageOfFile / canonicalLanguage', () => {
 });
 
 describe('languagesFromFiles — the files the scanners would read', () => {
-  it('skips dependency, hidden, test, example, docs and vendored trees (M-e)', () => {
+  // Exactly what Semgrep 1.176.1 skips by default (measured: build/ vendor/
+  // dist/ node_modules/ test/ tests/ testsuite/ at any depth, *_test.go,
+  // *.min.js, .venv/ .env/ .tox/ .npm/ .yarn/ _opam/ _build/ _cargo/) — and
+  // nothing else: examples, docs, third-party code and hidden directories
+  // are scanned, so their languages count. Seen ONLY under a conventional
+  // non-product top-level directory, a language is marked peripheral.
+  it('excludes what Semgrep excludes, and marks languages seen only under non-product directories', () => {
     const dir = project({
       'src/main.rs': 'fn main() {}',
       'third_party/zlib/inflate.c': '',
@@ -95,9 +101,26 @@ describe('languagesFromFiles — the files the scanners would read', () => {
       'node_modules/x/index.js': '',
       '.venv/lib/a.py': '',
       'pkg/a_test.go': '',
+      '.github/scripts/release.ts': '',
       'web/index.html': '<p>x</p>',
     });
-    expect(languagesFromFiles(dir)).toEqual({ languages: ['rust'], listing: 'walk' });
+    expect(languagesFromFiles(dir)).toEqual({
+      languages: ['c', 'java', 'ruby', 'rust', 'swift', 'typescript'],
+      listing: 'walk',
+      peripheral: { c: ['third_party/'], java: ['docs/'], ruby: ['examples/'], swift: ['Pods/'] },
+    });
+  });
+
+  // R3-1: `com.example` is the Android Studio and Spring Initializr default
+  // package; a directory-name exclusion at any depth hid the whole app.
+  it('never hides code under a package segment named like a non-product directory', () => {
+    const dir = project({
+      'app/build.gradle': '',
+      'app/src/main/java/com/example/myapplication/MainActivity.kt': 'class MainActivity',
+      'src/main/java/com/acme/repository/spec/UserSpec.java': 'class UserSpec {}',
+      'src/generated/client.rs': '',
+    });
+    expect(languagesFromFiles(dir)).toEqual({ languages: ['java', 'kotlin', 'rust'], listing: 'walk' });
   });
 
   it('honours .guardianignore and a project .semgrepignore', () => {
@@ -128,6 +151,23 @@ describe('languagesFromFiles — the files the scanners would read', () => {
     expect(languagesFromFiles(project({ 'include/a.h': '', 'src/a.cpp': '' })).languages).toEqual(['cpp']);
   });
 
+  // Semgrep reads a .h as C: headers with no C++ file in the project are C.
+  it('.h files with no C++ file are C', () => {
+    expect(languagesFromFiles(project({ 'include/api.h': '', 'README.md': '' })).languages).toEqual(['c']);
+    expect(languagesFromFiles(project({ 'include/api.h': '', 'src/impl.hpp': '' })).languages).toEqual(['cpp']);
+  });
+
+  // A sparse checkout lists skip-worktree entries that are not on disk.
+  it('leaves out skip-worktree entries of a sparse checkout', () => {
+    const dir = project({ 'core/a.c': 'int a;', 'tools/b.py': 'x = 1' });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'x'], { cwd: dir });
+    execFileSync('git', ['update-index', '--skip-worktree', 'tools/b.py'], { cwd: dir });
+    rmSync(join(dir, 'tools'), { recursive: true });
+    expect(languagesFromFiles(dir)).toEqual({ languages: ['c'], listing: 'git' });
+  });
+
   // N2: 20 050 empty directories used to hide a Rust file and read complete.
   it('a walk stopped at its directory limit is incomplete, and says so', () => {
     const dir = project({ 'z/index.js': '', 'a/lib.rs': '', 'm/1/x': '', 'm/2/x': '', 'm/3/x': '' });
@@ -136,6 +176,12 @@ describe('languagesFromFiles — the files the scanners would read', () => {
   });
 
   // M-a: an unreadable directory used to be skipped silently.
+  it('the async walk honours the same limit', async () => {
+    const dir = project({ 'z/index.js': '', 'a/lib.rs': '', 'm/1/x': '', 'm/2/x': '', 'm/3/x': '' });
+    const r = await languagesFromFilesAsync(dir, { useGit: false, maxDirs: 3 });
+    expect(r.incomplete).toMatch(/the file walk stopped after 3 directories/);
+  });
+
   it('an unreadable subdirectory makes the walk incomplete, and is named', () => {
     const dir = project({ 'src/a.js': '', 'locked/b.rs': '' });
     const r = languagesFromFiles(dir, {
@@ -162,6 +208,14 @@ describe('resolveProjectLanguages — the snapshot AND the files (N1)', () => {
     expect(r.source).toMatch(/detect_stack snapshot of 2026-09-28T10:00:00\.000Z/);
     expect(r.source).toMatch(/kotlin found in the files but not in the snapshot/);
     expect(r.incomplete).toBeUndefined();
+  });
+
+  it('names a language seen only under a non-product directory in the source', () => {
+    const dir = project({ 'package.json': '{}', 'src/app.js': '', 'examples/demo/src/main.rs': '' });
+    const r = resolveProjectLanguages(NO_STACK, dir);
+    expect(r.languages).toEqual(['javascript', 'rust']);
+    expect(r.peripheral).toEqual({ rust: ['examples/'] });
+    expect(r.source).toMatch(/rust only under examples\//);
   });
 
   it('a stale snapshot does not hide a language added since', () => {
@@ -231,6 +285,22 @@ describe('languages recorded at scan time (M-b)', () => {
   it('ignores scans no OWASP detector reads (a quality run records nothing)', () => {
     const r = languagesOfRuns([run('sast', { project_languages: { languages: ['go'], source: 'x' } }), run('quality', {})], () => today);
     expect(r.languages).toEqual(['go']);
+  });
+
+  it('a language is peripheral only if every scan saw it only under non-product directories', () => {
+    const both = languagesOfRuns(
+      [
+        run('sast', { project_languages: { languages: ['javascript', 'rust'], source: 'x', peripheral: { rust: ['examples/'] } } }),
+        run('bugs', { project_languages: { languages: ['javascript', 'rust'], source: 'x' } }),
+      ],
+      () => today,
+    );
+    expect(both.peripheral).toBeUndefined();
+    const one = languagesOfRuns(
+      [run('sast', { project_languages: { languages: ['javascript', 'rust'], source: 'x', peripheral: { rust: ['examples/'] } } })],
+      () => today,
+    );
+    expect(one.peripheral).toEqual({ rust: ['examples/'] });
   });
 
   it('carries a recorded incomplete listing through', () => {

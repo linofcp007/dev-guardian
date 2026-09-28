@@ -355,6 +355,24 @@ describe('owaspCoverage — findings and hints', () => {
     expect(cat(cov, 'A05:2025').status).toBe('tested'); // 38 checks, 6 CWEs
   });
 
+  // R3-2: a language the scanners read only under examples/, docs/ … is
+  // still a language of the project, and no claim for it is complete.
+  it('a language seen only under a non-product directory makes rule-based claims for it partial, named', () => {
+    const cov = owaspCoverage([SAST()], [], {
+      languages: ['javascript', 'python'],
+      source: 's',
+      peripheral: { python: ['examples/'] },
+    });
+    // Both have >= 3 A05 rules and >= 2 CWEs; python is only an example.
+    expect(cat(cov, 'A05:2025').status).toBe('partial');
+    expect(cat(cov, 'A05:2025').reasons.join(' ')).toMatch(/python is seen only under examples\/: a claim for it is at most partial/);
+    expect(cat(cov, 'A05:2025').languages).toEqual([
+      { language: 'javascript', coverage: 'full' },
+      { language: 'python', coverage: 'peripheral' },
+    ]);
+    expect(cov.languages_peripheral).toEqual({ python: ['examples/'] });
+  });
+
   // N2: a truncated or unreadable listing may have missed a language.
   it('an incomplete language list caps every rule-based claim at partial, and says why', () => {
     const cov = owaspCoverage([SAST()], [], { languages: ['javascript'], source: 's', incomplete: 'the file walk stopped after 20000 directories' });

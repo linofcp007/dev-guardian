@@ -17,9 +17,11 @@
  *   - `partial` — some language has only 1–2 rules or one weakness
  *     ("thin"), some language has none (the covered and uncovered languages
  *     are named), the only run that reached it was incomplete, the only
- *     detector that reached it is NARROW, or the project's language list
+ *     detector that reached it is NARROW, the project's language list
  *     may be incomplete (a truncated or unreadable listing: a language it
- *     missed could have no rules at all);
+ *     missed could have no rules at all), or a language is seen only under
+ *     a conventional non-product directory (`examples/`, `docs/` — see
+ *     `projectLanguages.ts`: counted, named, never fully tested);
  *   - `not_tested` — no detector that ran reaches the category in any of
  *     the project's languages. Zero findings there are not a clean result.
  *
@@ -89,6 +91,14 @@ const rules = (perLanguage) => ({ kind: 'rules', perLanguage });
  * `classifyTaxonomy` gives its metadata (what its findings would carry).
  * `--config=auto` picks registry rulesets by language; p/default is the
  * measured stand-in.
+ *
+ * A cell's CWEs are ALL the CWEs its rules name, including ones OWASP maps
+ * to another category — a rule is counted under a category by its own
+ * metadata, and its weaknesses come with it. Two cells meet the two-CWE bar
+ * only that way: JavaScript and TypeScript A02, whose one A02 CWE is
+ * CWE-611 and whose other four are CWE-287 (A07), CWE-345 (A08), CWE-347
+ * (A04) and CWE-1333 (none) — rules the registry itself labels A02.
+ * Measured 2026-09-28, kept as counted.
  */
 const REGISTRY_RULES = {
     'A01:2025': rules({
@@ -464,6 +474,14 @@ function judge(contributions, project) {
             used.add(c);
         const cellOf = (c) => cellIn(c.reach, lang) ?? { rules: 0, weaknesses: 0 };
         const full = reaching.filter((c) => complete(c) && !narrow(c) && meetsBar(cellOf(c)));
+        const where = project.peripheral?.[lang];
+        if (full.length > 0 && where !== undefined) {
+            // The scanners read it, so it counts; it lives only in examples, docs
+            // or third-party code, so no claim for it is complete.
+            perLanguage.push({ language: lang, coverage: 'peripheral' });
+            reasons.push(`${lang} is seen only under ${where.join(', ')}: a claim for it is at most partial`);
+            continue;
+        }
         if (full.length > 0) {
             perLanguage.push({ language: lang, coverage: 'full' });
             continue;
@@ -515,7 +533,11 @@ export function owaspCoverage(runs, findings, project) {
         }
     }
     const languages = project.languages === null ? null : [...new Set(project.languages)].sort();
-    const judged = { languages, ...(project.incomplete !== undefined ? { incomplete: project.incomplete } : {}) };
+    const judged = {
+        languages,
+        ...(project.incomplete !== undefined ? { incomplete: project.incomplete } : {}),
+        ...(project.peripheral !== undefined ? { peripheral: project.peripheral } : {}),
+    };
     const out = {
         categories: OWASP_TOP10_2025.map((c) => {
             const verdict = judge(contributionsOf(runs, c.id), judged);
@@ -538,6 +560,8 @@ export function owaspCoverage(runs, findings, project) {
     };
     if (project.incomplete !== undefined)
         out.languages_incomplete = project.incomplete;
+    if (project.peripheral !== undefined)
+        out.languages_peripheral = project.peripheral;
     return out;
 }
 /**

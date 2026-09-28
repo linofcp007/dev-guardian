@@ -108,11 +108,16 @@ const reviewPr = makeScanTool({
             }
             const where = headIsCheckedOut ? 'the working tree' : `head ${head.slice(0, 12)}`;
             // The languages of the tree this review reads — the head's own when it
-            // is not checked out — listed before that tree is removed below.
+            // is not checked out — listed before that tree is removed below. A
+            // head that is not checked out and changes no file was never
+            // materialised: the working tree is not the head, so nothing is
+            // recorded rather than the wrong tree's languages.
             projectLanguages =
-                unavailable === null
-                    ? await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot })
-                    : { languages: null, source: `could not be determined (${unavailable})` };
+                unavailable !== null
+                    ? { languages: null, source: `could not be determined (${unavailable})` }
+                    : !headIsCheckedOut && tree === null
+                        ? { languages: null, source: `not recorded: head ${head.slice(0, 12)} was not checked out (no file changed)` }
+                        : await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot });
             if (unavailable !== null) {
                 // gitleaks reads commits, not files, and still runs below.
                 out.tools_run.push({ name: 'semgrep', status: 'failed', reason: unavailable });

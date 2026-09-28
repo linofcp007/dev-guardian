@@ -31,6 +31,7 @@ import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 beforeAll(async () => {
   await import('../../src/tools/reportExport.js');
   await import('../../src/tools/complianceEvidence.js');
+  await import('../../src/tools/detectStack.js');
 });
 afterAll(cleanupTempDirs);
 
@@ -180,6 +181,68 @@ describe('report_export', () => {
 
   // M-b: a report judges a scan against the languages it RECORDED, not
   // against whatever the working tree holds today.
+  // R3-1 (review round 3): a directory-name exclusion at any depth hid the
+  // code under `com/example/...`, the Android Studio / Spring Initializr
+  // default package — and the report read A01, A02, A04–A08 "tested".
+  it('Android template (Groovy build.gradle, Kotlin under com/example): Kotlin counts, nothing Kotlin lacks is tested', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({
+      'settings.gradle': "include ':app'\n",
+      'build.gradle': '',
+      'app/build.gradle': "plugins { id 'com.android.application' }\n",
+      'app/src/main/java/com/example/myapplication/MainActivity.kt':
+        'class MainActivity { fun run(c: String) { Runtime.getRuntime().exec(c) } }\n',
+    });
+    const detected = (await getTool('detect_stack').handler({ project_path: project }, plugin)) as { ok: boolean };
+    expect(detected.ok).toBe(true);
+    seedScan(plugin, { id: 'AND', type: 'sast', project, tools_run: SEMGREP_OK });
+    const md = await exportScan(plugin, project, 'AND', 'markdown');
+    expect(md).toMatch(/Project languages: [^\n]*kotlin/);
+    // The registry has no Kotlin A01, A06 or A08 rule and two A02 rules.
+    for (const id of ['A01', 'A02', 'A05', 'A06', 'A07', 'A08']) {
+      expect(md).not.toMatch(new RegExp(`\\| ${id}:2025 [^|]+\\| tested \\|`));
+    }
+  });
+
+  it('Spring Boot Kotlin + React, no snapshot: both languages count', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({
+      'build.gradle.kts': '',
+      'src/main/kotlin/com/example/demo/DemoApplication.kt': 'fun main() {}\n',
+      'frontend/package.json': '{}',
+      'frontend/src/App.js': 'export default function App() {}\n',
+    });
+    seedScan(plugin, { id: 'SPR', type: 'sast', project, tools_run: SEMGREP_OK });
+    const md = await exportScan(plugin, project, 'SPR', 'markdown');
+    expect(md).toMatch(/Project languages: javascript, kotlin/);
+    expect(md).toMatch(/\| A01:2025 Broken Access Control \| partial \|/);
+    expect(md).toMatch(/A01:2025 partial: [^\n]*covers javascript; nothing for kotlin/);
+  });
+
+  // R3-2: `spec` is a Spring Data package name, `src/generated` production
+  // code — the scanners read both.
+  it('Java under …/repository/spec/ and Rust under src/generated/ count as the project\'s own', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({
+      'src/app.js': '',
+      'src/main/java/com/acme/repository/spec/UserSpec.java': 'class UserSpec {}\n',
+      'src/generated/client.rs': '',
+    });
+    seedScan(plugin, { id: 'SPEC', type: 'sast', project, tools_run: SEMGREP_OK });
+    const md = await exportScan(plugin, project, 'SPEC', 'markdown');
+    expect(md).toMatch(/Project languages: java, javascript, rust \(/);
+    expect(md).not.toMatch(/only under/);
+  });
+
+  it('a Rust example crate beside a JavaScript app: counted, named as "only under examples/", and never tested', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({ 'src/app.js': '', 'examples/demo/src/main.rs': 'fn main() {}\n' });
+    seedScan(plugin, { id: 'EX', type: 'sast', project, tools_run: SEMGREP_OK });
+    const md = await exportScan(plugin, project, 'EX', 'markdown');
+    expect(md).toMatch(/Project languages: javascript, rust \([^\n]*rust only under examples\//);
+    expect(md).not.toMatch(/\| tested \|/);
+  });
+
   it('judges a scan against the languages recorded when it ran', async () => {
     const plugin = makePlugin();
     const project = tempProject({ 'src/app.js': '' }); // today: JavaScript only

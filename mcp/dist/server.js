@@ -8674,7 +8674,7 @@ var require_cross_spawn = __commonJS({
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
-    function spawnSync3(command, args, options) {
+    function spawnSync2(command, args, options) {
       const parsed = parse8(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
@@ -8682,7 +8682,7 @@ var require_cross_spawn = __commonJS({
     }
     module.exports = spawn2;
     module.exports.spawn = spawn2;
-    module.exports.sync = spawnSync3;
+    module.exports.sync = spawnSync2;
     module.exports._parse = parse8;
     module.exports._enoent = enoent;
   }
@@ -40596,7 +40596,7 @@ var SEMGREP_SEVERITIES = [
 ];
 function yamlFilesUnder(dir) {
   const out = [];
-  const walk5 = (d, depth) => {
+  const walk4 = (d, depth) => {
     if (depth > 8) return;
     let names;
     try {
@@ -40613,11 +40613,11 @@ function yamlFilesUnder(dir) {
       } catch {
         continue;
       }
-      if (isDir) walk5(abs, depth + 1);
+      if (isDir) walk4(abs, depth + 1);
       else if (/\.ya?ml$/i.test(name)) out.push(abs);
     }
   };
-  walk5(dir, 0);
+  walk4(dir, 0);
   return out;
 }
 function registeredEntries(ctx, projectPath) {
@@ -41715,6 +41715,12 @@ function judge(contributions, project) {
     for (const c3 of reaching) used.add(c3);
     const cellOf = (c3) => cellIn(c3.reach, lang) ?? { rules: 0, weaknesses: 0 };
     const full = reaching.filter((c3) => complete(c3) && !narrow(c3) && meetsBar(cellOf(c3)));
+    const where = project.peripheral?.[lang];
+    if (full.length > 0 && where !== void 0) {
+      perLanguage.push({ language: lang, coverage: "peripheral" });
+      reasons.push(`${lang} is seen only under ${where.join(", ")}: a claim for it is at most partial`);
+      continue;
+    }
     if (full.length > 0) {
       perLanguage.push({ language: lang, coverage: "full" });
       continue;
@@ -41760,7 +41766,11 @@ function owaspCoverage(runs, findings, project) {
     }
   }
   const languages = project.languages === null ? null : [...new Set(project.languages)].sort();
-  const judged = { languages, ...project.incomplete !== void 0 ? { incomplete: project.incomplete } : {} };
+  const judged = {
+    languages,
+    ...project.incomplete !== void 0 ? { incomplete: project.incomplete } : {},
+    ...project.peripheral !== void 0 ? { peripheral: project.peripheral } : {}
+  };
   const out = {
     categories: OWASP_TOP10_2025.map((c3) => {
       const verdict = judge(contributionsOf(runs, c3.id), judged);
@@ -41782,6 +41792,7 @@ function owaspCoverage(runs, findings, project) {
     languages_source: project.source
   };
   if (project.incomplete !== void 0) out.languages_incomplete = project.incomplete;
+  if (project.peripheral !== void 0) out.languages_peripheral = project.peripheral;
   return out;
 }
 function coverageRunsOf(bookkeeping, scans) {
@@ -41803,8 +41814,8 @@ function coverageRunsOf(bookkeeping, scans) {
 }
 
 // src/frameworks/projectLanguages.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
 import { readdirSync as readdirSync7, readFileSync as readFileSync12 } from "node:fs";
+import { readdir as readdir2 } from "node:fs/promises";
 import { join as join13 } from "node:path";
 
 // src/platform/guardianIgnore.ts
@@ -42302,32 +42313,28 @@ var SEMGREP_DEFAULT_IGNORE = [
   "testsuite/",
   "*_test.go"
 ].join("\n");
-var NOT_PRODUCT_DIRS = /* @__PURE__ */ new Set([
-  "__generated__",
+var PERIPHERAL_TOP_DIRS = /* @__PURE__ */ new Set([
   "__mocks__",
   "__tests__",
   "bower_components",
   "carthage",
+  "demo",
+  "demos",
   "doc",
   "docs",
   "example",
   "examples",
   "fixtures",
-  "generated",
-  "node_modules",
   "pods",
   "sample",
   "samples",
   "spec",
-  "test",
   "testdata",
-  "tests",
-  "testsuite",
   "third-party",
   "third_party",
-  "thirdparty",
-  "vendor"
+  "thirdparty"
 ]);
+var CPP_EXTENSIONS = /\.(cc|cpp|cxx|hpp|hh|hxx)$/i;
 function readText(path8) {
   try {
     return readFileSync12(path8, "utf8");
@@ -42335,51 +42342,78 @@ function readText(path8) {
     return null;
   }
 }
-function exclusions(root) {
+function scannerExclusions(root) {
   const semgrep = compileIgnore(readText(join13(root, ".semgrepignore")) ?? SEMGREP_DEFAULT_IGNORE);
   const guardianText = readText(join13(root, GUARDIAN_IGNORE_FILE));
   const guardian = guardianText === null ? null : compileIgnore(guardianText);
-  return (rel2) => {
-    const segments = rel2.split("/");
-    const dirs = segments.slice(0, -1);
-    if (dirs.some((d) => d.startsWith(".") || PROJECT_WALK_EXCLUDE.has(d) || NOT_PRODUCT_DIRS.has(d.toLowerCase()))) return true;
-    if (semgrep.ignores(rel2)) return true;
-    return guardian !== null && guardian.ignores(rel2);
+  return (rel2, isDir = false) => {
+    if (rel2.split("/").includes(".git")) return true;
+    if (semgrep.ignores(rel2, isDir)) return true;
+    return guardian !== null && guardian.ignores(rel2, isDir);
   };
 }
-function languagesOfList(root, files) {
-  const excluded = exclusions(root);
-  const found = /* @__PURE__ */ new Set();
+function languagesOfList(files, excluded) {
+  const product = /* @__PURE__ */ new Set();
+  const peripheralDirs = /* @__PURE__ */ new Map();
+  let hasCpp = false;
+  const note = (lang, rel2) => {
+    const top = rel2.includes("/") ? rel2.slice(0, rel2.indexOf("/")) : "";
+    if (top !== "" && PERIPHERAL_TOP_DIRS.has(top.toLowerCase())) {
+      const dirs = peripheralDirs.get(lang) ?? /* @__PURE__ */ new Set();
+      dirs.add(`${top}/`);
+      peripheralDirs.set(lang, dirs);
+    } else {
+      product.add(lang);
+    }
+  };
+  const headers = [];
   for (const rel2 of files) {
+    if (excluded(rel2)) continue;
+    if (/\.h$/i.test(rel2)) {
+      headers.push(rel2);
+      continue;
+    }
+    if (CPP_EXTENSIONS.test(rel2)) hasCpp = true;
     const lang = languageOfFile(rel2);
-    if (lang !== null && !found.has(lang) && !excluded(rel2)) found.add(lang);
+    if (lang !== null) note(lang, rel2);
   }
-  return SOURCE_LANGUAGES.filter((l) => found.has(l));
+  if (!hasCpp) for (const h2 of headers) note("c", h2);
+  const all = /* @__PURE__ */ new Set([...product, ...peripheralDirs.keys()]);
+  const languages = SOURCE_LANGUAGES.filter((l) => all.has(l));
+  const peripheral = {};
+  for (const lang of languages) {
+    const dirs = peripheralDirs.get(lang);
+    if (!product.has(lang) && dirs !== void 0) peripheral[lang] = [...dirs].sort();
+  }
+  return Object.keys(peripheral).length > 0 ? { languages, peripheral } : { languages };
 }
-var GIT_LIST_ARGS = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
-function gitListSync(root) {
-  try {
-    const r = spawnSync2("git", ["-C", root, ...GIT_LIST_ARGS], {
-      encoding: "utf8",
-      timeout: 3e4,
-      maxBuffer: 512 * 1024 * 1024,
-      windowsHide: true
-    });
-    return r.status === 0 && typeof r.stdout === "string" ? splitNul(r.stdout) : null;
-  } catch {
-    return null;
+var GIT_LIST_ARGS = ["ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard"];
+function parseGitList(stdout) {
+  const out = [];
+  for (const entry of splitNul(stdout)) {
+    const tag = entry.slice(0, 1);
+    const path8 = entry.slice(2);
+    if (tag !== "S" && path8 !== "") out.push(path8);
   }
+  return out;
 }
 async function gitListAsync(root) {
   const r = await git(root, GIT_LIST_ARGS, 3e4);
-  return r.exitCode === 0 ? splitNul(r.stdout) : null;
+  return r.exitCode === 0 ? parseGitList(r.stdout) : null;
 }
-function walk2(root, opts) {
-  const readDir2 = opts.readDir ?? ((abs) => readdirSync7(abs, { withFileTypes: true }));
-  const maxDirs = opts.maxDirs ?? MAX_DIRS;
+function walkReasons(stopped, maxDirs, unreadable) {
+  const reasons = [];
+  if (stopped) reasons.push(`the file walk stopped after ${maxDirs} directories`);
+  if (unreadable.length > 0) {
+    const shown = unreadable.slice(0, 3).join(", ");
+    reasons.push(`could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ""}`);
+  }
+  return reasons.length > 0 ? reasons.join("; ") : void 0;
+}
+async function walkWith(root, excluded, maxDirs, read2) {
   let top;
   try {
-    top = readDir2(root);
+    top = await read2(root);
   } catch {
     return null;
   }
@@ -42399,7 +42433,7 @@ function walk2(root, opts) {
     let entries2 = next.entries;
     if (entries2 === null) {
       try {
-        entries2 = readDir2(join13(root, next.rel));
+        entries2 = await read2(join13(root, next.rel));
       } catch {
         unreadable.push(next.rel);
         continue;
@@ -42408,36 +42442,32 @@ function walk2(root, opts) {
     for (const entry of entries2) {
       const rel2 = next.rel === "" ? entry.name : `${next.rel}/${entry.name}`;
       if (entry.isDirectory()) {
-        const name = entry.name;
-        if (!PROJECT_WALK_EXCLUDE.has(name) && !name.startsWith(".") && !NOT_PRODUCT_DIRS.has(name.toLowerCase())) {
-          stack.push({ rel: rel2, entries: null });
-        }
+        if (!excluded(rel2, true)) stack.push({ rel: rel2, entries: null });
       } else if (entry.isFile()) {
         files.push(rel2);
       }
     }
   }
-  const reasons = [];
-  if (stopped) reasons.push(`the file walk stopped after ${maxDirs} directories`);
-  if (unreadable.length > 0) {
-    const shown = unreadable.slice(0, 3).join(", ");
-    reasons.push(`could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ""}`);
-  }
-  return reasons.length > 0 ? { files, incomplete: reasons.join("; ") } : { files };
+  const incomplete = walkReasons(stopped, maxDirs, unreadable);
+  return incomplete !== void 0 ? { files, incomplete } : { files };
 }
-function fromListing(root, listed, opts) {
-  if (listed !== null) return { languages: languagesOfList(root, listed), listing: "git" };
-  const walked = walk2(root, opts);
-  if (walked === null) return { languages: null, listing: "walk" };
-  const out = { languages: languagesOfList(root, walked.files), listing: "walk" };
-  if (walked.incomplete !== void 0) out.incomplete = walked.incomplete;
+function fromFiles(listing, files, excluded, incomplete) {
+  if (files === null) return { languages: null, listing };
+  const out = { ...languagesOfList(files, excluded), listing };
+  if (incomplete !== void 0) out.incomplete = incomplete;
   return out;
 }
-function languagesFromFiles(root, opts = {}) {
-  return fromListing(root, opts.useGit === false ? null : gitListSync(root), opts);
-}
 async function languagesFromFilesAsync(root, opts = {}) {
-  return fromListing(root, opts.useGit === false ? null : await gitListAsync(root), opts);
+  const excluded = scannerExclusions(root);
+  const listed = opts.useGit === false ? null : await gitListAsync(root);
+  if (listed !== null) return fromFiles("git", listed, excluded);
+  const walked = await walkWith(
+    root,
+    excluded,
+    opts.maxDirs ?? MAX_DIRS,
+    opts.readDirAsync ?? ((abs) => readdir2(abs, { withFileTypes: true }))
+  );
+  return fromFiles("walk", walked?.files ?? null, excluded, walked?.incomplete);
 }
 function snapshotLanguages(snapshot) {
   if (snapshot === null || typeof snapshot !== "object") return null;
@@ -42454,6 +42484,10 @@ function readSnapshot(stack, projectPath) {
   } catch {
     return null;
   }
+}
+function peripheralText(peripheral) {
+  if (peripheral === void 0) return "";
+  return Object.entries(peripheral).map(([lang, dirs]) => `; ${lang} only under ${dirs.join(", ")}`).join("");
 }
 function combine(snapshot, files) {
   const how = files.listing === "git" ? "file extensions (git's listing)" : "file extensions (a walk of the directory)";
@@ -42476,53 +42510,85 @@ function combine(snapshot, files) {
       source: `detect_stack snapshot of ${snapshot.at} + ${how}` + (extra.length > 0 ? `; ${extra.join(", ")} found in the files but not in the snapshot` : "")
     };
   }
+  if (files.peripheral !== void 0) {
+    out.peripheral = files.peripheral;
+    out.source += peripheralText(files.peripheral);
+  }
   if (files.incomplete !== void 0) out.incomplete = files.incomplete;
   return out;
-}
-function resolveProjectLanguages(stack, projectPath, opts = {}) {
-  return combine(readSnapshot(stack, projectPath), languagesFromFiles(opts.walkRoot ?? projectPath, opts.walk));
 }
 async function resolveProjectLanguagesAsync(stack, projectPath, opts = {}) {
   return combine(readSnapshot(stack, projectPath), await languagesFromFilesAsync(opts.walkRoot ?? projectPath, opts.walk));
 }
 var PROJECT_LANGUAGES_META_KEY = "project_languages";
+function readPeripheral(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+  const out = {};
+  for (const [lang, dirs] of Object.entries(raw)) {
+    if (Array.isArray(dirs) && dirs.every((d) => typeof d === "string")) out[lang] = [...dirs];
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
 function recordedLanguages(meta) {
   const raw = meta?.[PROJECT_LANGUAGES_META_KEY];
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { languages, source, incomplete } = raw;
+  const { languages, source, incomplete, peripheral } = raw;
   if (typeof source !== "string") return null;
   if (languages !== null && !(Array.isArray(languages) && languages.every((l) => typeof l === "string"))) return null;
   const out = { languages: languages === null ? null : [...languages].sort(), source };
   if (typeof incomplete === "string") out.incomplete = incomplete;
+  const p = readPeripheral(peripheral);
+  if (p !== void 0) out.peripheral = p;
   return out;
 }
-function languagesOfRuns(runs, fallback) {
-  const considered = runs.filter((r) => OWASP_SCAN_TYPES.has(r.scan_type));
-  if (considered.length === 0) return fallback();
-  const recorded = considered.map((r) => recordedLanguages(r.meta));
+function considered(runs) {
+  const kept = runs.filter((r) => OWASP_SCAN_TYPES.has(r.scan_type));
+  return { runs: kept, needsFallback: kept.length === 0 || kept.some((r) => recordedLanguages(r.meta) === null) };
+}
+function unionOfRuns(runs, fallback) {
+  if (runs.length === 0) return fallback ?? { languages: null, source: "no scan in play" };
+  const recorded = runs.map((r) => recordedLanguages(r.meta));
   const known = recorded.filter((r) => r !== null);
   const older = recorded.length - known.length;
-  const parts = older > 0 ? [...known, fallback()] : known;
+  const parts = older > 0 && fallback !== null ? [...known, fallback] : known;
   const languages = /* @__PURE__ */ new Set();
   let anyKnown = false;
   const incomplete = [];
+  const peripheral = /* @__PURE__ */ new Map();
+  const product = /* @__PURE__ */ new Set();
   for (const p of parts) {
     if (p.languages === null) incomplete.push(`the languages of a scan could not be determined (${p.source})`);
     else {
       anyKnown = true;
-      for (const l of p.languages) languages.add(l);
+      for (const l of p.languages) {
+        languages.add(l);
+        const dirs = p.peripheral?.[l];
+        if (dirs === void 0) product.add(l);
+        else {
+          const set2 = peripheral.get(l) ?? /* @__PURE__ */ new Set();
+          for (const d of dirs) set2.add(d);
+          peripheral.set(l, set2);
+        }
+      }
     }
     if (p.incomplete !== void 0) incomplete.push(p.incomplete);
   }
   const sources = [...new Set(known.map((k) => k.source))];
   let source = known.length > 0 ? `recorded when the scan${known.length > 1 ? "s" : ""} ran: ${sources.join("; ")}` : "no scan recorded its languages";
   if (older > 0) {
-    const fb = parts[parts.length - 1];
-    source += `; ${older} older scan${older > 1 ? "s predate" : " predates"} that record and ${older > 1 ? "are" : "is"} judged against today's tree (${fb?.source ?? "unknown"})`;
+    source += `; ${older} older scan${older > 1 ? "s predate" : " predates"} that record and ${older > 1 ? "are" : "is"} judged against today's tree (${fallback?.source ?? "unknown"})`;
   }
   const out = { languages: anyKnown ? [...languages].sort() : null, source };
   if (incomplete.length > 0) out.incomplete = [...new Set(incomplete)].join("; ");
+  const onlyPeripheral = {};
+  for (const [l, dirs] of peripheral) if (!product.has(l)) onlyPeripheral[l] = [...dirs].sort();
+  if (Object.keys(onlyPeripheral).length > 0) out.peripheral = onlyPeripheral;
   return out;
+}
+async function languagesOfRunsAsync(runs, fallback) {
+  const c3 = considered(runs);
+  if (c3.runs.length === 0) return fallback();
+  return unionOfRuns(c3.runs, c3.needsFallback ? await fallback() : null);
 }
 
 // src/tools/scanToolFactory.ts
@@ -42752,7 +42818,7 @@ function expandGlob(root, pattern) {
   const re = globToRegExp(pattern);
   const out = [];
   let visited = 0;
-  const walk5 = (dir) => {
+  const walk4 = (dir) => {
     let names;
     try {
       names = readdirSync8(dir);
@@ -42770,10 +42836,10 @@ function expandGlob(root, pattern) {
         continue;
       }
       if (re.test(rel2)) out.push(abs);
-      if (isDir && !SKIP_DIRS.has(name)) walk5(abs);
+      if (isDir && !SKIP_DIRS.has(name)) walk4(abs);
     }
   };
-  walk5(root);
+  walk4(root);
   return out.sort();
 }
 function escapeRegExp2(text) {
@@ -43340,7 +43406,7 @@ function hashInput(input) {
 }
 function listFilesRecursive(dir) {
   const out = [];
-  const walk5 = (current) => {
+  const walk4 = (current) => {
     let entries2;
     try {
       entries2 = readdirSync9(current, { withFileTypes: true });
@@ -43349,11 +43415,11 @@ function listFilesRecursive(dir) {
     }
     for (const entry of entries2) {
       const abs = join17(current, entry.name);
-      if (entry.isDirectory()) walk5(abs);
+      if (entry.isDirectory()) walk4(abs);
       else if (entry.isFile()) out.push(relative6(dir, abs).split(sep6).join("/"));
     }
   };
-  walk5(dir);
+  walk4(dir);
   return out.sort();
 }
 function describePack(entry) {
@@ -44051,7 +44117,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   if (plugin.storageWarning) warnings.push(plugin.storageWarning);
   const driftAdvisory = configDriftAdvisory(plugin, projectPath);
   if (driftAdvisory) warnings.push(driftAdvisory);
-  let exclusions2 = null;
+  let exclusions = null;
   const loadedExclusions = await loadProjectExclusions(projectPath);
   if (loadedExclusions !== null) {
     if ("error" in loadedExclusions) {
@@ -44059,7 +44125,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
         `${GUARDIAN_IGNORE_FILE} could not be read (${loadedExclusions.error}) \u2014 NOTHING was excluded from this scan.`
       );
     } else {
-      exclusions2 = loadedExclusions;
+      exclusions = loadedExclusions;
     }
   }
   let scope = null;
@@ -44071,7 +44137,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     }
     if (parsed.data !== void 0) {
       try {
-        scope = await resolveScope(projectPath, parsed.data, { exclusions: exclusions2 });
+        scope = await resolveScope(projectPath, parsed.data, { exclusions });
       } catch (e) {
         if (e instanceof ScopeError) return failDomain(e.code, e.message);
         throw e;
@@ -44089,7 +44155,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     }
   }
   if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState["scope"] ?? "" };
-  if (exclusions2 !== null) cacheState = { ...cacheState, guardianignore: exclusions2.hash };
+  if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
   const cacheKey = buildCacheKey(config2, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
   if (config2.configWarnings) {
     try {
@@ -44167,7 +44233,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
       },
       rulesProjectPath,
       scope,
-      exclusions: exclusions2,
+      exclusions,
       ...parentScanId !== void 0 ? { parentScanId } : {}
     });
   } finally {
@@ -44321,7 +44387,7 @@ async function runScanBody(args) {
   }
   if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
   const placed = (f) => f.file_path === void 0 || f.file_path === "" ? null : f.file_path;
-  const { exclusions: exclusions2, scope } = args;
+  const { exclusions, scope } = args;
   const dropped = [];
   const keepIf = (test) => {
     const before = findings.length;
@@ -44334,7 +44400,7 @@ async function runScanBody(args) {
     return before - findings.length;
   };
   const inProject = projectPathTest(projectPath);
-  const findingsExcluded = exclusions2 === null ? 0 : keepIf((p) => !(exclusions2.ignores(p) && inProject(p)));
+  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject(p)));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
@@ -44371,10 +44437,10 @@ async function runScanBody(args) {
   const scopeMeta = scope !== null ? { ...scope.meta, findings_outside_scope: outsideScope, ...nothingInScope ? { nothing_in_scope: true } : {} } : null;
   if (scopeMeta !== null) meta["scope"] = scopeMeta;
   const excludedHere = config2.orchestrator === true ? findingsExcluded + childFindingsExcluded(plugin, invocation.extras) : findingsExcluded;
-  const exclusionReport = exclusions2 !== null ? {
+  const exclusionReport = exclusions !== null ? {
     file: GUARDIAN_IGNORE_FILE,
-    patterns: exclusions2.patterns,
-    excluded_files: exclusions2.excludedFileCount,
+    patterns: exclusions.patterns,
+    excluded_files: exclusions.excludedFileCount,
     findings_excluded: excludedHere
   } : null;
   if (exclusionReport !== null) meta["exclusions"] = exclusionReport;
@@ -44603,7 +44669,7 @@ function findDotnetTargets(projectPath) {
 }
 function findProjectFiles(projectPath) {
   const out = [];
-  const walk5 = (dir, depth) => {
+  const walk4 = (dir, depth) => {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
     let entries2;
     try {
@@ -44614,11 +44680,11 @@ function findProjectFiles(projectPath) {
     for (const entry of entries2) {
       if (SKIP_DIRS2.has(entry.name)) continue;
       const abs = join19(dir, entry.name);
-      if (entry.isDirectory()) walk5(abs, depth + 1);
+      if (entry.isDirectory()) walk4(abs, depth + 1);
       else if (entry.isFile() && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
     }
   };
-  walk5(projectPath, 0);
+  walk4(projectPath, 0);
   return out;
 }
 function resolveFromFile(file, written) {
@@ -48040,7 +48106,7 @@ function stripDotSlash(p) {
 // src/tools/scanIac.ts
 var WORKFLOWS_DIR = ".github/workflows";
 var WORKFLOW_EXTENSIONS = [".yml", ".yaml"];
-function listWorkflowFiles(projectPath, exclusions2) {
+function listWorkflowFiles(projectPath, exclusions) {
   const dir = join28(projectPath, WORKFLOWS_DIR);
   if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
@@ -48060,8 +48126,8 @@ function listWorkflowFiles(projectPath, exclusions2) {
     }
   }
   const relPaths = abs.map((a2) => toPosixPath(relative10(projectPath, a2))).sort();
-  if (exclusions2 === null) return relPaths;
-  return relPaths.filter((p) => !exclusions2.ignores(p));
+  if (exclusions === null) return relPaths;
+  return relPaths.filter((p) => !exclusions.ignores(p));
 }
 function realWithinProject(root, candidate, requireFile) {
   let real;
@@ -50153,7 +50219,7 @@ var reviewPr = makeScanTool({
         }
       }
       const where = headIsCheckedOut ? "the working tree" : `head ${head.slice(0, 12)}`;
-      projectLanguages = unavailable === null ? await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot }) : { languages: null, source: `could not be determined (${unavailable})` };
+      projectLanguages = unavailable !== null ? { languages: null, source: `could not be determined (${unavailable})` } : !headIsCheckedOut && tree === null ? { languages: null, source: `not recorded: head ${head.slice(0, 12)} was not checked out (no file changed)` } : await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot });
       if (unavailable !== null) {
         out.tools_run.push({ name: "semgrep", status: "failed", reason: unavailable });
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
@@ -52143,16 +52209,16 @@ function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
   const picked = [];
   const hits = [];
-  const considered = /* @__PURE__ */ new Map();
+  const considered2 = /* @__PURE__ */ new Map();
   for (const slot of STATE_SCAN_TYPES) {
     const found = slotSources(storage, projectPath, slot);
     for (const h2 of found.hits) {
       hits.push(h2);
-      considered.set(h2.scan.scan_id, h2.scan);
+      considered2.set(h2.scan.scan_id, h2.scan);
     }
     for (const p of found.picks) {
       picked.push({ slot, ...p });
-      considered.set(p.scan.scan_id, p.scan);
+      considered2.set(p.scan.scan_id, p.scan);
     }
   }
   const byScan = /* @__PURE__ */ new Map();
@@ -52169,10 +52235,10 @@ function openSetForProject(storage, projectPath, opts = {}) {
     if (p.slot === "security_full" || p.scan.scan_type !== p.slot) continue;
     for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, rowsOf(p.scan), isSuppressed)) {
       carried.push(c3);
-      considered.set(c3.scan.scan_id, c3.scan);
+      considered2.set(c3.scan.scan_id, c3.scan);
     }
   }
-  const order = storage.scans.sortNewestFirst([...considered.keys()]);
+  const order = storage.scans.sortNewestFirst([...considered2.keys()]);
   const rank = new Map(order.map((id, i2) => [id, i2]));
   const rankOf = (scanId) => rank.get(scanId) ?? order.length;
   picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
@@ -52231,7 +52297,7 @@ function openSetForProject(storage, projectPath, opts = {}) {
   );
   sources.sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
   const skipped2 = summarizeSkipped(hits);
-  const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
+  const scans = [...considered2.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
   const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full" || s.carried_for !== void 0) || skipped2.count > 0 ? "partial" : "full";
   const okInSlot = /* @__PURE__ */ new Map();
   for (const p of picked) {
@@ -53650,10 +53716,10 @@ function detectPolicyDocs(projectPath) {
 }
 function listShallowFiles(root, maxDepth) {
   const out = [];
-  walk3(root, root, 0, maxDepth, out);
+  walk2(root, root, 0, maxDepth, out);
   return out;
 }
-function walk3(root, dir, depth, maxDepth, out) {
+function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries2;
   try {
@@ -53669,7 +53735,7 @@ function walk3(root, dir, depth, maxDepth, out) {
     try {
       const s = statSync10(abs);
       if (s.isDirectory()) {
-        if (depth + 1 <= maxDepth) walk3(root, abs, depth + 1, maxDepth, out);
+        if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
         out.push(abs.slice(root.length + 1).replace(/\\/g, "/"));
       }
@@ -54361,7 +54427,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     "build",
     "packages"
   ]);
-  function walk5(dir, depth) {
+  function walk4(dir, depth) {
     if (depth > maxDepth) return false;
     let entries2;
     try {
@@ -54374,13 +54440,13 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join39(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync19(abs).length >= 0 && walk5(abs, depth + 1)) return true;
+        if (readdirSync19(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
     return false;
   }
-  return walk5(root, 0);
+  return walk4(root, 0);
 }
 
 // src/tools/initProject.ts
@@ -59232,7 +59298,7 @@ async function handler22(input, ctx) {
   const owasp = owaspCoverage(
     runs,
     findings,
-    languagesOfRuns(runs, () => resolveProjectLanguages(ctx.storage.stack, scan2.project_path))
+    await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan2.project_path))
   );
   const { content, fileName } = renderReport(format2, scan2, findings, cves, lang, owasp);
   const outDir = join49(projectPath, ".guardian", "reports", `export-${scanId.slice(0, 8)}`);
@@ -59504,7 +59570,7 @@ async function handler23(input, ctx) {
       coverage: owaspCoverage(
         runs,
         open.findings,
-        languagesOfRuns(runs, () => resolveProjectLanguages(storage.stack, projectPath))
+        await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(storage.stack, projectPath))
       ),
       findings: open.findings
     };
@@ -62588,7 +62654,7 @@ async function handler33(input, ctx) {
 }
 function collectConfigFiles(root, maxDepth) {
   const out = [];
-  function walk5(dir, depth) {
+  function walk4(dir, depth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
@@ -62606,13 +62672,13 @@ function collectConfigFiles(root, maxDepth) {
         continue;
       }
       if (stat2.isDirectory()) {
-        walk5(abs, depth + 1);
+        walk4(abs, depth + 1);
       } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync44(abs)) {
         out.push(abs);
       }
     }
   }
-  walk5(root, 0);
+  walk4(root, 0);
   return out;
 }
 
@@ -62731,7 +62797,7 @@ function unknownStatus(tfm) {
 var SKIP_DIRS4 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 function collectCsprojFiles(root, maxDepth) {
   const out = [];
-  function walk5(dir, depth) {
+  function walk4(dir, depth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
@@ -62744,13 +62810,13 @@ function collectCsprojFiles(root, maxDepth) {
       const abs = join58(dir, name);
       try {
         const s = statSync15(abs);
-        if (s.isDirectory()) walk5(abs, depth + 1);
+        if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
       }
     }
   }
-  walk5(root, 0);
+  walk4(root, 0);
   return out;
 }
 function failDomain23(code, message3) {
@@ -62891,7 +62957,7 @@ async function handler35(input, ctx) {
 function findMigrationsDirs(root) {
   const out = [];
   const SKIP = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
-  function walk5(dir, depth) {
+  function walk4(dir, depth) {
     if (depth > 6) return;
     let entries2;
     try {
@@ -62912,11 +62978,11 @@ function findMigrationsDirs(root) {
       if (name === "Migrations" && existsSync45(abs)) {
         out.push(abs);
       } else {
-        walk5(abs, depth + 1);
+        walk4(abs, depth + 1);
       }
     }
   }
-  walk5(root, 0);
+  walk4(root, 0);
   return out;
 }
 
@@ -66031,7 +66097,7 @@ var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"])
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
   const root = resolve14(projectPath);
-  const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk4(root, root).sort();
+  const candidates2 = explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk3(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
   const outcome = readCandidates(selected);
@@ -66072,7 +66138,7 @@ function readCandidates(paths) {
   }
   return { specs, oversized, truncated: false };
 }
-function walk4(root, dir) {
+function walk3(root, dir) {
   let entries2;
   try {
     entries2 = readdirSync26(dir, { withFileTypes: true });
@@ -66083,7 +66149,7 @@ function walk4(root, dir) {
   for (const entry of entries2) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk4(root, join64(dir, entry.name)));
+      out.push(...walk3(root, join64(dir, entry.name)));
     } else if (entry.isFile()) {
       if (isSpecCandidate(root, dir, entry.name)) {
         out.push(join64(dir, entry.name));
@@ -69592,13 +69658,13 @@ function summariseExclusions(input) {
     below_severity_min: severityShortfall(belowFloor, input.severityMin)
   };
 }
-function describeExclusions(exclusions2, severityMin, sources) {
-  if (exclusions2.excluded === 0) return null;
+function describeExclusions(exclusions, severityMin, sources) {
+  if (exclusions.excluded === 0) return null;
   const parts = [];
-  const { no_fix_available, below_severity_min, uncommitted_changes, upgrade_plan_failed, no_fix_source } = exclusions2.by_reason;
+  const { no_fix_available, below_severity_min, uncommitted_changes, upgrade_plan_failed, no_fix_source } = exclusions.by_reason;
   if (below_severity_min > 0) {
     parts.push(
-      `${below_severity_min} below severity_min "${severityMin}" (${describeShortfallTiers(exclusions2.below_severity_min)})`
+      `${below_severity_min} below severity_min "${severityMin}" (${describeShortfallTiers(exclusions.below_severity_min)})`
     );
   }
   if (no_fix_available > 0) {
@@ -69621,8 +69687,8 @@ function describeExclusions(exclusions2, severityMin, sources) {
       `${no_fix_source} that no requested source can act on or re-verify (sources: ${sources.join(", ")})`
     );
   }
-  const head = `${exclusions2.excluded} of ${exclusions2.considered} open finding(s) were excluded; ${exclusions2.candidates} remain as fix candidate(s). Excluded: ${parts.join("; ")}.`;
-  return head + severityHint(exclusions2.below_severity_min);
+  const head = `${exclusions.excluded} of ${exclusions.considered} open finding(s) were excluded; ${exclusions.candidates} remain as fix candidate(s). Excluded: ${parts.join("; ")}.`;
+  return head + severityHint(exclusions.below_severity_min);
 }
 function severityHint(shortfall2) {
   const suggested = shortfall2.suggested_severity_min;
@@ -72922,8 +72988,8 @@ function readText3(path8, maxBytes) {
 }
 function readSmallText(path8, maxBytes, under) {
   if (under !== void 0) {
-    const walk5 = walkLinksUnder(under, path8);
-    if (!walk5.ok) return { status: "refused", reason: walk5.reason };
+    const walk4 = walkLinksUnder(under, path8);
+    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
   }
   return readText3(path8, maxBytes);
 }

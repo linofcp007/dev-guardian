@@ -26,7 +26,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { owaspCoverage } from '../frameworks/coverage.js';
-import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
 import { isOrchestratedFullScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -141,9 +141,10 @@ async function handler(input, ctx) {
         ? ctx.storage.cves.listActive(scanId)
         : [];
     // Judged against the languages the scans recorded when they ran; a row
-    // written before that record falls back to today's tree, and says so.
+    // written before that record falls back to today's tree, and says so —
+    // listed without blocking the server (`git ls-files` can take seconds).
     const runs = coverageRunsOfScan(ctx, scan);
-    const owasp = owaspCoverage(runs, findings, languagesOfRuns(runs, () => resolveProjectLanguages(ctx.storage.stack, scan.project_path)));
+    const owasp = owaspCoverage(runs, findings, await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan.project_path)));
     const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
     const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
     mkdirSync(outDir, { recursive: true });

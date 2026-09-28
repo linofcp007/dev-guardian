@@ -31,7 +31,7 @@ import { z } from 'zod';
 import { coverageRunsOf, owaspCoverage } from '../frameworks/coverage.js';
 import { CSF_CATEGORIES, owaspForCsfCategory } from '../frameworks/nistCsf2.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedHint } from '../report/owaspCoverage.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -93,7 +93,7 @@ async function handler(input, ctx) {
         const open = openSetForProject(storage, projectPath);
         const runs = coverageRunsOf(open.bookkeeping, open.scans);
         owasp = {
-            coverage: owaspCoverage(runs, open.findings, languagesOfRuns(runs, () => resolveProjectLanguages(storage.stack, projectPath))),
+            coverage: owaspCoverage(runs, open.findings, await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(storage.stack, projectPath))),
             findings: open.findings,
         };
     }
