@@ -159,6 +159,17 @@
 # se distinguem pelo nome: o endereço de uma conta de bot (Zulip) e dois
 # endereços sinteticos num script de seed (Ghost).
 #
+# REVISAO DESTA MEDIÇAO (ronda de correção 1, 2026-09-27). A revisao achou
+# um guarda largo de mais — o `$V` da leitura de atributo engolia uma
+# chamada de log DENTRO de um callback — e tres pontos menores: o
+# `ElementAt` lido como uma data, uma base de `class Command` que nao era do
+# Django, e uma pasta de site com um ponto no nome saltada pelas exclusoes
+# de teste. O pack corrigido, re-corrido nas mesmas onze aplicações no mesmo
+# commit, da os MESMOS 38 resultados no mesmo ficheiro, linha e coluna — 35
+# verdadeiros, 3 falsos, 92,1 % — e nenhum resultado novo: nenhuma das
+# formas que a revisao encontrou aparece nestas onze, e a prova de cada uma
+# é a sua fixture em hits/.
+#
 # LEIA TAMBEM ESTE NUMERO COM CUIDADO: é pequeno (72 resultados), dois terços vêm
 # de uma aplicação, e as regras da Meta e do Hotjar nao dispararam em nenhuma
 # das onze — o seu falso positivo continua medido so nas fixtures. O C# tem
@@ -168,7 +179,7 @@
 # contra a arvore da sua linguagem (ver `mcp/test/ablate/packs.ts`).
 #
 # ---------------------------------------------------------------------------
-# A ABLAÇAO (`npm run ablate -- rgpd`) correu seis vezes, e as duas
+# A ABLAÇAO (`npm run ablate -- rgpd`) correu sete vezes, e as duas
 # primeiras mudaram o pack:
 #
 #   1. 75 clauses: 8/8 regras disparam em hits/, 67 vivos, 8 DEAD. Os DEAD
@@ -210,6 +221,17 @@
 #      contagem real; os eixos 2 e 3 so acusaram os tipos ja conhecidos (os
 #      regexes de nome, os guardas de valor derivado ao lado da sua linha
 #      `excluded:`, os ramos positivos e o regex `$MASK`).
+#   7. Ronda de correção 1 da medição em aplicações (a revisao): 113
+#      clauses, 134 resultados de base em hits/, e todas as regras
+#      re-abladas sozinhas contra as mesmas arvores de aplicação da corrida
+#      6: py 24/24 vivos sobre 22 resultados reais, js 18/18 sobre 6, php
+#      25/25 sobre 8, cs 17/17 sobre 1, rastreadores 17/17 e youtube 3/3
+#      sobre 2; 8/8 regras disparam em hits/, 0 DEAD, piso de ruido 0 em
+#      todas. Os clauses novos — o regex do `$V` nas quatro regras de log — e
+#      o `$BASE` mais estreito leram vivos, sem revelar nada em hits/ e sem
+#      subir a contagem real; os eixos 2 e 3 so acusaram os tipos ja
+#      conhecidos. A corrida do py deixou 7 ficheiros de fora por timeout
+#      (dito no relatorio); as outras, nenhum.
 #
 # Os 16 SUPPRESSES-TP do eixo 2 sao todos esperados, e a quarta corrida
 # confirmou-os linha a linha: 8 sao os regexes de nome dos ramos POSITIVOS
@@ -217,8 +239,8 @@
 # derivado por linguagem, cada um a revelar exatamente o vizinho
 # `(excluded: ...)` da penultima ou ultima linha de hits/. O eixo 3 é vacuo
 # em todas as regras sobre `mcp/src` (0 de base), e o relatorio diz isso
-# regra a regra; sobre as arvores de aplicação da corrida 6 deixou de o ser
-# nas regras de log e no youtube.
+# regra a regra; sobre as arvores de aplicação das corridas 6 e 7 deixou de
+# o ser nas regras de log e no youtube.
 #
 # ---------------------------------------------------------------------------
 # POR QUE NAO SE PROCURAM OS FORMATOS (`PT50` + 21 digitos, `+351 9xx`, nove
@@ -282,7 +304,18 @@
 #   o numero) seria excluido. O caso portugues mais provavel é o NIF: em
 #   codigo portugues o `id` de um contribuinte é muitas vezes o proprio NIF,
 #   e `log(contribuinte.id)` ou `log(nif.id)` sao excluidos como se fossem um
-#   id interno.
+#   id interno. Nenhuma mudança da regra separa os dois casos: o Django, o
+#   Rails, o Laravel e o EF dao a cada entidade um `id` substituto, e é esse
+#   id interno que a mensagem destas regras manda registar; um NIF guardado
+#   como chave chama-se quase sempre `nif`, e `log(contribuinte.nif)`
+#   continua a disparar. Do mesmo lado do guarda fica um metodo com um nome
+#   da lista que devolve o proprio elemento: so o `ElementAt` do LINQ é
+#   reconhecido, e `emails.findById(x)` ou o `objectAt` do Ember nao.
+# - Log: o limite do `$V` le o TEXTO. Um corpo de função sem `=>`,
+#   `function`, `lambda` ou `delegate` (no PHP, `fn` ou `function`) — o
+#   metodo abreviado de um objeto JS, `{ m() { ... } }` — continua a ser
+#   excluido, e um `$V` com uma dessas palavras numa string perde o guarda:
+#   um falso positivo possivel, nunca um achado escondido.
 # - Log: o `print()` de um comando de gestao do Django nao conta, mesmo num
 #   comando que corre como daemon e cuja saida vai para um ficheiro de log, e
 #   tambem nao conta com `file=sys.stderr` ou outro `file=`; um logger dentro
