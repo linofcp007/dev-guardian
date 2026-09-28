@@ -141,6 +141,7 @@ describe('buildSummary — caps and gaps', () => {
     expect(summary['counts_by_verdict']).toEqual({
       unreachable: 0,
       reachable: 0,
+      imported: 0,
       confirmed: 0,
       unknown: 0,
     });

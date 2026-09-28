@@ -308,6 +308,7 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
         unreachable: 1,
         unknown: 0,
         confirmed: 0,
+        imported: 0,
       });
     },
     6 * 60_000,
@@ -382,7 +383,59 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
         unreachable: 1,
         unknown: 0,
         confirmed: 0,
+        imported: 0,
       });
+    },
+    6 * 60_000,
+  );
+
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'answers reachable for a dependency CVE whose package a route file imports, from real Semgrep imports',
+    async () => {
+      const work = makeTempDir('guardian-validate-dep-');
+      cpSync(FIXTURE, work, { recursive: true });
+      const ctx = makeContext();
+
+      const surface = okResult<SurfaceResult>(
+        await tool('map_attack_surface').handler({ project_path: work, force: true }, ctx),
+      );
+      expect(surface.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
+      if (surface.snapshot_id === null) throw new Error('no snapshot persisted');
+
+      // The real snapshot records the package imports, project-relative.
+      const external = ctx.storage.surface.getById(surface.snapshot_id)?.snapshot.external_imports ?? [];
+      expect(external).toContainEqual({ file: 'node-express/server.js', specifier: 'express', language: 'javascript' });
+      expect(external).toContainEqual({ file: 'py-flask/app.py', specifier: 'flask', language: 'python' });
+
+      // A Trivy CVE on express, read from the npm lockfile. server.js both
+      // declares routes and imports express, so the package is reached at 0 hops.
+      const scanId = 'e2e-deps-scan';
+      ctx.storage.scans.insert({ scan_id: scanId, scan_type: 'deps', project_path: work, tree_hash: 'e2e' });
+      ctx.storage.findings.bulkInsert([
+        {
+          scan_id: scanId,
+          fingerprint: 'e2e-express-cve',
+          tool: 'trivy',
+          rule_id: 'CVE-2024-43796',
+          severity: 'medium',
+          category: 'security',
+          subcategory: 'cve',
+          title: 'express: XSS in response.redirect()',
+          file_path: 'node-express/package-lock.json',
+          snippet: 'express@4.18.2->4.20.0',
+          fix_available: true,
+        },
+      ]);
+      ctx.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+
+      const raw = await tool('validate_finding').handler(
+        { project_path: work, providers: ['dependency'] },
+        ctx,
+      );
+      const result = expectOk(raw as unknown as ValidateOk | ValidateErr);
+
+      expect(result.validations.map((v) => [v.provider, v.verdict])).toEqual([['dependency', 'reachable']]);
+      expect(result.validations[0]?.evidence[0]?.detail).toMatch(/imports 'express' and is reachable in 0 hops/);
     },
     6 * 60_000,
   );

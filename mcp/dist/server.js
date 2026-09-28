@@ -65339,7 +65339,7 @@ function summarize4(snapshot, snapshotId, toolsRun, ctx, projectPath) {
   for (const route of codeRoutes) {
     byLanguage.set(route.language, (byLanguage.get(route.language) ?? 0) + 1);
   }
-  const sample = [...codeRoutes].sort(
+  const sample2 = [...codeRoutes].sort(
     (a2, b) => a2.language.localeCompare(b.language) || a2.path_resolved.localeCompare(b.path_resolved)
   ).slice(0, SAMPLE_SIZE);
   const specRoutesList = snapshot.routes.filter((r) => r.provenance === "spec");
@@ -65354,7 +65354,7 @@ function summarize4(snapshot, snapshotId, toolsRun, ctx, projectPath) {
     by_language: [...byLanguage].map(([language, routes]) => ({ language, routes })),
     coverage: snapshot.coverage,
     snapshot_id: snapshotId,
-    sample,
+    sample: sample2,
     env_vars_total: snapshot.env_vars.length,
     ports: snapshot.ports,
     webhooks_total: snapshot.webhooks.length,
@@ -67170,6 +67170,9 @@ function outcomeCounts(results) {
   return out;
 }
 
+// src/validate/dependencyProvider.ts
+import { isBuiltin } from "node:module";
+
 // src/validate/importGraph.ts
 var MAX_GRAPH_EDGES = 2e4;
 function buildImportGraph(records) {
@@ -67417,18 +67420,298 @@ function hopWord(hops) {
   return hops === 1 ? "1 hop" : `${hops} hops`;
 }
 
+// src/validate/dependencyProvider.ts
+function prepareDependencyIndex(input) {
+  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
+  return {
+    external: input.snapshot.external_imports,
+    graph: input.graph,
+    roots: [...routesByFile.keys()],
+    routesByFile,
+    partiallyParsed: input.snapshot.partially_parsed?.length ?? 0,
+    reachCache: /* @__PURE__ */ new Map()
+  };
+}
+var PREDATES_GAP = "the surface snapshot was mapped before third-party imports were recorded (it has no external_imports), so no package can be matched \u2014 re-run map_attack_surface with force: true";
+var FILE_LEVEL_GAP = "file-level only: a file importing the package is not proof that the vulnerable function is called, or called with attacker-controlled input";
+function assessDependency(subject, index) {
+  const name = subject.package_name;
+  if (index.external === void 0) return unknown2([PREDATES_GAP]);
+  const matcher = matcherFor(subject);
+  if ("gap" in matcher) return unknown2([matcher.gap]);
+  const importing = [
+    ...new Set(
+      index.external.filter((entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier)).map((entry) => entry.file)
+    )
+  ].sort();
+  const parseGap = index.partiallyParsed > 0 ? [
+    `${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an import inside an unparsed span is missing`
+  ] : [];
+  if (importing.length === 0) {
+    return unknown2([
+      `no project file imports '${name}' directly. That is absence of evidence, not of use: a transitive dependency is never imported by the project itself, a dynamic import (import(expr), require(variable), importlib) matches no rule, and a package used through another package's re-export is invisible`,
+      ...parseGap
+    ]);
+  }
+  let nearest = null;
+  for (const file of importing) {
+    const reach = cachedReach(index, file);
+    const root = reach.reachingRoots[0];
+    if (reach.hops === null || root === void 0) continue;
+    if (nearest === null || reach.hops < nearest.hops) nearest = { file, hops: reach.hops, root };
+  }
+  const importedBy = `'${name}' is imported by ${importing.length} project file(s): ${sample(importing)}`;
+  if (nearest !== null) {
+    const route = mostInformative(index.routesByFile.get(nearest.root));
+    const via = route === void 0 ? nearest.root : `${routeLabel(route)} (${nearest.root})`;
+    return {
+      verdict: "reachable",
+      confidence: "medium",
+      evidence: [
+        { detail: `${nearest.file} imports '${name}' and is reachable in ${hopWord(nearest.hops)} via ${via}` },
+        { detail: importedBy }
+      ],
+      coverage_gaps: [FILE_LEVEL_GAP, ...parseGap],
+      importing_files: importing
+    };
+  }
+  return {
+    verdict: "imported",
+    confidence: "medium",
+    evidence: [{ detail: `${importedBy} \u2014 none of them is reached from a known route through the import graph` }],
+    coverage_gaps: [FILE_LEVEL_GAP, ...graphGaps(index), ...parseGap],
+    importing_files: importing
+  };
+}
+function graphGaps(index) {
+  const gaps = [
+    "only HTTP routes are entry points: a file run by a CLI, a cron job or a queue consumer, or loaded by a dynamic import, reads as reached by no route"
+  ];
+  if (index.graph.truncated) {
+    gaps.push("the import graph was truncated at its edge cap, so a path from a route may be missing");
+  }
+  if (index.roots.length === 0) gaps.push("the surface snapshot holds no code route to start from");
+  return gaps;
+}
+function cachedReach(index, file) {
+  const cached2 = index.reachCache.get(file);
+  if (cached2 !== void 0) return cached2;
+  const result = reachFrom(index.graph, index.roots, file);
+  index.reachCache.set(file, result);
+  return result;
+}
+function unknown2(gaps) {
+  return { verdict: "unknown", confidence: "low", evidence: [], coverage_gaps: gaps, importing_files: [] };
+}
+function sample(files) {
+  const shown = files.slice(0, 5).join(", ");
+  return files.length > 5 ? `${shown}, \u2026 (${files.length - 5} more)` : shown;
+}
+var JS_LANGUAGES = /* @__PURE__ */ new Set(["javascript", "typescript"]);
+var PYTHON_LANGUAGES = /* @__PURE__ */ new Set(["python"]);
+function matcherFor(subject) {
+  const name = subject.package_name;
+  switch (subject.ecosystem) {
+    case null:
+      return {
+        gap: `could not tell which ecosystem '${name}' belongs to (the finding's target is not a known lockfile or manifest), and a name alone matches packages of every ecosystem`
+      };
+    case "npm":
+      return { languages: JS_LANGUAGES, matches: (specifier) => npmSpecifierMatches(specifier, name) };
+    case "pypi": {
+      const modules = PYPI_MODULES[normalizePypiName(name)];
+      if (modules === void 0) {
+        return {
+          gap: `no known distribution-to-module mapping for the PyPI package '${name}': its import name cannot be derived from its name (PyYAML is imported as yaml), so no import is matched`
+        };
+      }
+      return {
+        languages: PYTHON_LANGUAGES,
+        matches: (specifier) => modules.some((m) => specifier === m || specifier.startsWith(`${m}.`))
+      };
+    }
+    default:
+      return {
+        gap: `import matching is implemented for npm and PyPI packages only, and '${name}' is a ${subject.ecosystem} package`
+      };
+  }
+}
+function npmSpecifierMatches(specifier, name) {
+  if (specifier.startsWith("node:") || isBuiltin(specifier)) return false;
+  return specifier === name || specifier.startsWith(`${name}/`);
+}
+function normalizePypiName(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+var PYPI_MODULES = {
+  aiohttp: ["aiohttp"],
+  attrs: ["attr", "attrs"],
+  babel: ["babel"],
+  beautifulsoup4: ["bs4"],
+  bleach: ["bleach"],
+  celery: ["celery"],
+  certifi: ["certifi"],
+  cryptography: ["cryptography"],
+  django: ["django"],
+  djangorestframework: ["rest_framework"],
+  dnspython: ["dns"],
+  ecdsa: ["ecdsa"],
+  fastapi: ["fastapi"],
+  flask: ["flask"],
+  gitpython: ["git"],
+  gunicorn: ["gunicorn"],
+  httplib2: ["httplib2"],
+  httpx: ["httpx"],
+  idna: ["idna"],
+  jinja2: ["jinja2"],
+  jsonpickle: ["jsonpickle"],
+  lxml: ["lxml"],
+  mako: ["mako"],
+  markdown: ["markdown"],
+  mysqlclient: ["MySQLdb"],
+  numpy: ["numpy"],
+  "opencv-python": ["cv2"],
+  "opencv-python-headless": ["cv2"],
+  pandas: ["pandas"],
+  paramiko: ["paramiko"],
+  pillow: ["PIL"],
+  pip: ["pip"],
+  protobuf: ["google.protobuf"],
+  psycopg2: ["psycopg2"],
+  "psycopg2-binary": ["psycopg2"],
+  pyasn1: ["pyasn1"],
+  pycryptodome: ["Crypto"],
+  pycryptodomex: ["Cryptodome"],
+  pydantic: ["pydantic"],
+  pyjwt: ["jwt"],
+  pymongo: ["pymongo", "bson", "gridfs"],
+  pymysql: ["pymysql"],
+  pyopenssl: ["OpenSSL"],
+  "python-dateutil": ["dateutil"],
+  "python-jose": ["jose"],
+  "python-multipart": ["multipart", "python_multipart"],
+  pyyaml: ["yaml"],
+  redis: ["redis"],
+  requests: ["requests"],
+  rsa: ["rsa"],
+  "scikit-learn": ["sklearn"],
+  scipy: ["scipy"],
+  setuptools: ["setuptools", "pkg_resources"],
+  sqlalchemy: ["sqlalchemy"],
+  starlette: ["starlette"],
+  tornado: ["tornado"],
+  twisted: ["twisted"],
+  ujson: ["ujson"],
+  urllib3: ["urllib3"],
+  waitress: ["waitress"],
+  werkzeug: ["werkzeug"],
+  wheel: ["wheel"]
+};
+var TOOL_ECOSYSTEMS = {
+  "npm-audit": "npm",
+  "pip-audit": "pypi",
+  wpscan: "wordpress"
+};
+function dependencySubjectOf(finding4) {
+  const coordinates = dependencyCoordinates(finding4);
+  if (coordinates === null || coordinates.name === "") return null;
+  return { package_name: coordinates.name, ecosystem: ecosystemOf(finding4) };
+}
+function ecosystemOf(finding4) {
+  const byTool = TOOL_ECOSYSTEMS[finding4.tool.toLowerCase()];
+  if (byTool !== void 0) return byTool;
+  return finding4.file_path === void 0 ? null : ecosystemOfManifest(finding4.file_path);
+}
+var MANIFEST_ECOSYSTEMS2 = {
+  "package-lock.json": "npm",
+  "npm-shrinkwrap.json": "npm",
+  "yarn.lock": "npm",
+  "pnpm-lock.yaml": "npm",
+  "package.json": "npm",
+  "bun.lock": "npm",
+  "bun.lockb": "npm",
+  "pipfile.lock": "pypi",
+  pipfile: "pypi",
+  "poetry.lock": "pypi",
+  "uv.lock": "pypi",
+  "pdm.lock": "pypi",
+  "pyproject.toml": "pypi",
+  "setup.py": "pypi",
+  "setup.cfg": "pypi",
+  "go.mod": "golang",
+  "go.sum": "golang",
+  "cargo.lock": "cargo",
+  "cargo.toml": "cargo",
+  "composer.lock": "composer",
+  "composer.json": "composer",
+  "pom.xml": "maven",
+  "gradle.lockfile": "maven",
+  "build.gradle": "maven",
+  "build.gradle.kts": "maven",
+  "packages.lock.json": "nuget",
+  "packages.config": "nuget",
+  "gemfile.lock": "gem",
+  gemfile: "gem",
+  "mix.lock": "hex",
+  "pubspec.lock": "pub"
+};
+var MANIFEST_PATTERNS = [
+  [/^requirements.*\.txt$/, "pypi"],
+  [/\.(cs|fs|vb)proj$/, "nuget"],
+  [/\.sln$/, "nuget"],
+  [/\.deps\.json$/, "nuget"],
+  [/\.gemspec$/, "gem"]
+];
+function ecosystemOfManifest(path8) {
+  const base = (path8.split(/[\\/]/).pop() ?? "").toLowerCase();
+  const exact = MANIFEST_ECOSYSTEMS2[base];
+  if (exact !== void 0) return exact;
+  for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
+    if (pattern.test(base)) return ecosystem;
+  }
+  return null;
+}
+function validateDependencies(input) {
+  const index = prepareDependencyIndex(input);
+  const out = [];
+  for (const finding4 of input.findings) {
+    const subject = dependencySubjectOf(finding4);
+    if (subject === null) continue;
+    const assessment = assessDependency(subject, index);
+    out.push({
+      fingerprint: finding4.fingerprint,
+      provider: "dependency",
+      verdict: assessment.verdict,
+      confidence: assessment.confidence,
+      evidence: assessment.evidence,
+      coverage_gaps: assessment.coverage_gaps,
+      snapshot_id: input.snapshotId,
+      tree_hash: input.treeHash,
+      computed_at: input.computedAt
+    });
+  }
+  return out;
+}
+
 // src/validate/types.ts
-var VERDICTS = ["unreachable", "reachable", "confirmed", "unknown"];
+var VERDICTS = ["unreachable", "reachable", "imported", "confirmed", "unknown"];
+var IMPLEMENTED_PROVIDERS = ["static", "dependency"];
 
 // src/validate/summary.ts
 function buildSummary(input) {
   const { persisted, graph, validations, dast } = input;
   const stale = persisted.tree_hash !== input.workingTreeHash;
+  const providersRun = input.providersRun ?? ["static"];
   const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === "code");
   return {
-    findings_selected: validations.length,
+    findings_selected: input.findingsSelected ?? new Set(validations.map((v) => v.fingerprint)).size,
+    // Every verdict returned, whichever provider gave it; split per provider
+    // right below, since a dependency finding carries one of each.
     counts_by_verdict: countByVerdict(validations),
-    coverage_gaps: collectGaps(input, stale),
+    counts_by_provider: Object.fromEntries(
+      providersRun.map((p) => [p, countByVerdict(validations.filter((v) => v.provider === p))])
+    ),
+    coverage_gaps: collectGaps(input, stale, providersRun),
     snapshot: {
       id: persisted.id,
       tree_hash: persisted.tree_hash,
@@ -67478,7 +67761,7 @@ function buildSummary(input) {
       anonymous_exposure_files: dast.files.size,
       scans_searched: dast.scansSearched
     },
-    providers_run: ["static"]
+    providers_run: [...providersRun]
   };
 }
 function describeSourceScan(input) {
@@ -67507,7 +67790,7 @@ function ageHours(scan2, now) {
   if (Number.isNaN(stamp)) return null;
   return Math.round((now - stamp) / 36e5 * 100) / 100;
 }
-function collectGaps(input, stale) {
+function collectGaps(input, stale, providersRun) {
   const gaps = /* @__PURE__ */ new Set();
   for (const validation of input.validations) {
     for (const gap of validation.coverage_gaps) gaps.add(gap);
@@ -67532,8 +67815,19 @@ function collectGaps(input, stale) {
       `no completed scan_dast run was found for this project among the ${input.dast.scansSearched} most recent scans, so no reaching route could be cross-referenced as confirmed anonymously exposed \u2014 that is a missing input, not evidence that nothing is exposed`
     );
   }
+  if (providersRun.includes("dependency") && input.persisted.snapshot.external_imports === void 0) {
+    gaps.add(
+      "the surface snapshot was mapped before third-party imports were recorded, so the 'dependency' provider could match no package \u2014 re-run map_attack_surface with force: true"
+    );
+  }
+  for (const provider of IMPLEMENTED_PROVIDERS) {
+    if (providersRun.includes(provider)) continue;
+    gaps.add(
+      provider === "dependency" ? "'dependency' was not requested, so no dependency finding was checked for an import of its package" : "'static' was not requested, so no finding's own file was checked for a path from a route"
+    );
+  }
   gaps.add(
-    "only the 'static' provider exists in this version \u2014 'runtime' (live confirmation) and 'dependency' are not implemented, so no verdict here can be 'confirmed'"
+    "'runtime' (live confirmation) is not implemented in this version, so no verdict here can be 'confirmed'"
   );
   return [...gaps];
 }
@@ -67543,8 +67837,8 @@ var ANONYMOUS_EXPOSURE = "anonymous_exposure";
 var Fingerprint = external_exports.string().min(1).optional().describe(
   "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
 );
-var Providers = external_exports.array(external_exports.enum(["static"])).min(1).optional().describe(
-  "Evidence providers to run. This version implements only 'static' (import graph + surface snapshot); 'runtime' and 'dependency' are planned and will widen this enum. Omit the field to run every provider available in this version, so a caller written today keeps working when the others land. Must be non-empty when supplied."
+var Providers = external_exports.array(external_exports.enum(IMPLEMENTED_PROVIDERS)).min(1).optional().describe(
+  "Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied."
 );
 var tool44 = {
   name: "validate_finding",
@@ -67557,7 +67851,7 @@ var tool44 = {
   // At most 1500 characters (descriptionLimits.test.ts). Shortened from 1809
   // by tightening wording only: every limit below survived, each one tested
   // in validateFinding.test.ts.
-  description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding lives in. Builds a file-level import graph from the latest map_attack_surface snapshot, rooted at the route-declaring files, and returns reachable / unreachable / unknown per finding with evidence (nearest route and hop count, how many routes reach the file, any live-confirmed anonymous exposure) plus the coverage gaps behind it. REQUIRES a prior map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by default; a fingerprint validates one, and an unknown fingerprint is an error, not an empty result. REPORT ONLY: it never suppresses a finding and never changes a severity \u2014 closing a finding stays a human decision. Limits: granularity is the file, not the function ("reachable" means a route imports the file, NOT that the vulnerable line runs); "unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime (autoload, annotation injection, DI container); only HTTP routes are entry points, so a file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and NOTHING detects dynamic imports (import(expr), require(variable), reflection, plugin registries) \u2014 where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree moves. Read summary.coverage_gaps beside the counts.',
+  description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding lives in: a file-level import graph from the latest map_attack_surface snapshot, rooted at the route files, gives reachable / unreachable / unknown with evidence (nearest route, hops, live-confirmed anonymous exposure) and coverage gaps. The dependency provider adds, per dependency CVE (npm, PyPI), reachable (a file a route reaches imports the package) / imported / unknown \u2014 never unreachable. REQUIRES a prior map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by default; an unknown fingerprint is an error, not an empty result. REPORT ONLY: it never suppresses a finding and never changes a severity. Limits: granularity is the file, not the function ("reachable" is NOT "the vulnerable line runs"); "unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime (autoload, DI container); only HTTP routes are entry points, so a file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and NOTHING detects dynamic imports (import(expr), require(variable), reflection) \u2014 where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree moves. Read summary.coverage_gaps beside the counts.',
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
@@ -67575,6 +67869,8 @@ function fail2(code, message3, retryWith) {
 var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means no usable scan of this project's finding-producing types left an unsuppressed finding open. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
 async function handler41(input, ctx) {
   const inp = input;
+  const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
+  const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -67601,20 +67897,37 @@ async function handler41(input, ctx) {
   const workingTreeHash = await computeTreeHash(projectPath);
   const graph = buildImportGraph(persisted.snapshot.imports);
   const dast = collectAnonymousExposures(ctx, projectPath);
-  const validations = validateStatically({
-    snapshot: persisted.snapshot,
-    snapshotId: persisted.id,
-    // The snapshot's tree, not the working tree — see the module doc comment.
-    treeHash: persisted.tree_hash,
-    graph,
-    findings: selected,
-    anonymouslyExposedRouteFiles: dast.files,
-    // Injected so the provider stays pure, and minted once so a whole batch
-    // carries one timestamp rather than N that drift across a long run.
-    computedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    languageOf: languageOfPath,
-    projectPath
-  });
+  const computedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const validations = [];
+  if (providersRun.includes("static")) {
+    validations.push(
+      ...validateStatically({
+        snapshot: persisted.snapshot,
+        snapshotId: persisted.id,
+        // The snapshot's tree, not the working tree — see the module doc comment.
+        treeHash: persisted.tree_hash,
+        graph,
+        findings: selected,
+        anonymouslyExposedRouteFiles: dast.files,
+        computedAt,
+        languageOf: languageOfPath,
+        projectPath
+      })
+    );
+  }
+  if (providersRun.includes("dependency")) {
+    validations.push(
+      ...validateDependencies({
+        snapshot: persisted.snapshot,
+        snapshotId: persisted.id,
+        treeHash: persisted.tree_hash,
+        graph,
+        findings: selected,
+        computedAt,
+        projectPath
+      })
+    );
+  }
   ctx.storage.validations.upsert(projectPath, validations);
   return {
     ok: true,
@@ -67630,7 +67943,9 @@ async function handler41(input, ctx) {
       // where a reader most needs to know which scans came back empty.
       sourceScan: openSet.newestSource,
       workingTreeHash,
-      now: Date.now()
+      now: Date.now(),
+      providersRun,
+      findingsSelected: selected.length
     }),
     ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {},
     // Newer scans the open set passed over because their scanners did not
@@ -72394,7 +72709,7 @@ function popularIndexFor(ecosystem, opts) {
 var pass = (detail) => detail === void 0 ? { status: "pass" } : { status: "pass", detail };
 var warn = (detail) => ({ status: "warn", detail });
 var fail3 = (detail) => ({ status: "fail", detail });
-var unknown2 = (detail) => ({ status: "unknown", detail });
+var unknown3 = (detail) => ({ status: "unknown", detail });
 var na = (detail) => detail === void 0 ? { status: "not_applicable" } : { status: "not_applicable", detail };
 function hoursAgo(iso, now) {
   const t = Date.parse(iso);
@@ -72475,7 +72790,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const info = lookup?.kind === "found" ? lookup.info : void 0;
   const extraWarn = [];
   const extraUnknown = [];
-  const typosquat = !w.popularLoaded ? unknown2("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
+  const typosquat = !w.popularLoaded ? unknown3("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
   const ids2 = osvIds(osv, w);
   const malIds = ids2.filter((id) => id.startsWith("MAL-"));
   const vulnIds = ids2.filter((id) => !id.startsWith("MAL-"));
@@ -72484,30 +72799,30 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   let malicious;
   let vulnerabilities;
   let publishAge;
-  let installScripts = eco === "npm" ? unknown2("not checked") : na("install-script check is npm-only");
+  let installScripts = eco === "npm" ? unknown3("not checked") : na("install-script check is npm-only");
   if (lookup === void 0) {
     const why = offlineReason ?? "registry not consulted";
-    exists = unknown2(why);
-    malicious = unknown2(why);
-    vulnerabilities = unknown2(why);
-    publishAge = unknown2(why);
-    if (eco === "npm") installScripts = unknown2(why);
+    exists = unknown3(why);
+    malicious = unknown3(why);
+    vulnerabilities = unknown3(why);
+    publishAge = unknown3(why);
+    if (eco === "npm") installScripts = unknown3(why);
   } else if (lookup.kind === "error") {
-    exists = unknown2(`${registry2} lookup failed: ${lookup.reason}`);
-    malicious = osvDown !== void 0 ? unknown2(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
-    vulnerabilities = unknown2(`version unknown: ${lookup.reason}`);
-    publishAge = unknown2(`version unknown: ${lookup.reason}`);
-    if (eco === "npm") installScripts = unknown2(`version unknown: ${lookup.reason}`);
+    exists = unknown3(`${registry2} lookup failed: ${lookup.reason}`);
+    malicious = osvDown !== void 0 ? unknown3(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
+    vulnerabilities = unknown3(`version unknown: ${lookup.reason}`);
+    publishAge = unknown3(`version unknown: ${lookup.reason}`);
+    if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup.reason}`);
   } else if (lookup.kind === "not_found") {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     if (w.custom !== null) {
       const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
       const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? w.custom.what === "workspace manifest" ? `workspace manifest at ${w.custom.source} could not be read \u2014 possibly a local workspace package` : w.custom.what === "directory" ? `directory ${w.custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
-      exists = unknown2(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
+      exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
+    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -72522,27 +72837,27 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (placeholder) {
       malicious = fail3(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
     } else if (osvDown !== void 0) {
-      malicious = unknown2(osvDown);
+      malicious = unknown3(osvDown);
     } else if (malIds.length > 0) {
       malicious = w.osvVersioned ? fail3(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
     } else {
       malicious = pass();
     }
-    if (osvDown !== void 0) vulnerabilities = unknown2(osvDown);
+    if (osvDown !== void 0) vulnerabilities = unknown3(osvDown);
     else if (vulnIds.length > 0) {
-      vulnerabilities = w.osvVersioned ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? "y" : "ies"} in ${v ?? "this version"}: ${vulnIds.slice(0, 5).join(", ")}${vulnIds.length > 5 ? ", \u2026" : ""}`) : unknown2(`${vulnIds.length} advisories exist for some versions \u2014 which version installs could not be determined`);
+      vulnerabilities = w.osvVersioned ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? "y" : "ies"} in ${v ?? "this version"}: ${vulnIds.slice(0, 5).join(", ")}${vulnIds.length > 5 ? ", \u2026" : ""}`) : unknown3(`${vulnIds.length} advisories exist for some versions \u2014 which version installs could not be determined`);
     } else vulnerabilities = pass();
-    if (versionUnknown !== void 0) publishAge = unknown2(versionUnknown);
+    if (versionUnknown !== void 0) publishAge = unknown3(versionUnknown);
     else if (w.publishedAt !== void 0) {
       const h2 = hoursAgo(w.publishedAt, now);
-      publishAge = h2 === void 0 ? unknown2("unparseable publish time") : h2 < FRESH_HOURS ? warn(
+      publishAge = h2 === void 0 ? unknown3("unparseable publish time") : h2 < FRESH_HOURS ? warn(
         `${v ?? ""} was published ${ageText(h2)} (< ${FRESH_HOURS} h) \u2014 fresh releases are how the 2025-26 npm/PyPI worms spread; consider pinning the previous version until this one has aged`
       ) : pass(`published ${ageText(h2)}`);
     } else if (w.quietSince !== void 0) {
       publishAge = pass(`no change to the package since ${w.quietSince.slice(0, 10)}`);
-    } else publishAge = unknown2(w.ageError ?? "publish time unavailable");
+    } else publishAge = unknown3(w.ageError ?? "publish time unavailable");
     if (eco === "npm") {
-      if (versionUnknown !== void 0) installScripts = unknown2(versionUnknown);
+      if (versionUnknown !== void 0) installScripts = unknown3(versionUnknown);
       else if (info?.installScript[v ?? ""] === true) {
         const names = w.scripts !== void 0 && w.scripts.length > 0 ? w.scripts.join(", ") : w.scriptsError !== void 0 ? `names unavailable (${w.scriptsError})` : "install (e.g. a native build)";
         installScripts = warn(`${v ?? ""} runs install scripts on install: ${names}`);

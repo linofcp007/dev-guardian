@@ -19,17 +19,21 @@
  */
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { MAX_GRAPH_EDGES } from './importGraph.js';
-import { VERDICTS } from './types.js';
+import { IMPLEMENTED_PROVIDERS, VERDICTS, } from './types.js';
 export function buildSummary(input) {
     const { persisted, graph, validations, dast } = input;
     const stale = persisted.tree_hash !== input.workingTreeHash;
+    const providersRun = input.providersRun ?? ['static'];
     // Code routes only, and their deduplicated files — the roots the provider
     // actually traverses from. See `routeRoots`.
     const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === 'code');
     return {
-        findings_selected: validations.length,
+        findings_selected: input.findingsSelected ?? new Set(validations.map((v) => v.fingerprint)).size,
+        // Every verdict returned, whichever provider gave it; split per provider
+        // right below, since a dependency finding carries one of each.
         counts_by_verdict: countByVerdict(validations),
-        coverage_gaps: collectGaps(input, stale),
+        counts_by_provider: Object.fromEntries(providersRun.map((p) => [p, countByVerdict(validations.filter((v) => v.provider === p))])),
+        coverage_gaps: collectGaps(input, stale, providersRun),
         snapshot: {
             id: persisted.id,
             tree_hash: persisted.tree_hash,
@@ -77,7 +81,7 @@ export function buildSummary(input) {
             anonymous_exposure_files: dast.files.size,
             scans_searched: dast.scansSearched,
         },
-        providers_run: ['static'],
+        providers_run: [...providersRun],
     };
 }
 /**
@@ -142,7 +146,7 @@ function ageHours(scan, now) {
  * provider has no clock, no filesystem and no storage, so it cannot know the
  * snapshot has aged or that no DAST scan exists.
  */
-function collectGaps(input, stale) {
+function collectGaps(input, stale, providersRun) {
     const gaps = new Set();
     for (const validation of input.validations) {
         for (const gap of validation.coverage_gaps)
@@ -174,8 +178,19 @@ function collectGaps(input, stale) {
             'most recent scans, so no reaching route could be cross-referenced as confirmed ' +
             'anonymously exposed — that is a missing input, not evidence that nothing is exposed');
     }
-    gaps.add("only the 'static' provider exists in this version — 'runtime' (live confirmation) and " +
-        "'dependency' are not implemented, so no verdict here can be 'confirmed'");
+    if (providersRun.includes('dependency') && input.persisted.snapshot.external_imports === undefined) {
+        gaps.add('the surface snapshot was mapped before third-party imports were recorded, so the ' +
+            "'dependency' provider could match no package — re-run map_attack_surface with force: true");
+    }
+    for (const provider of IMPLEMENTED_PROVIDERS) {
+        if (providersRun.includes(provider))
+            continue;
+        gaps.add(provider === 'dependency'
+            ? "'dependency' was not requested, so no dependency finding was checked for an import of its package"
+            : "'static' was not requested, so no finding's own file was checked for a path from a route");
+    }
+    gaps.add("'runtime' (live confirmation) is not implemented in this version, so no verdict here can be " +
+        "'confirmed'");
     return [...gaps];
 }
 //# sourceMappingURL=summary.js.map

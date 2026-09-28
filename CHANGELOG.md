@@ -13,6 +13,11 @@ version bump.
 - `map_attack_surface` persists the import specifiers it cannot resolve to a project file — the
   third-party packages — as `external_imports` on the snapshot; they were only counted. A cached
   snapshot without the field is recomputed rather than served.
+- `validate_finding` implements its `dependency` provider: a dependency CVE (npm; PyPI through a
+  table of known distribution-to-module names) reads `reachable` when a file a route reaches imports
+  the package, `imported` when only other files do, and `unknown` otherwise — never `unreachable`.
+  It runs by default beside `static`; `summary` gains `counts_by_provider`, and `counts_by_verdict`
+  the new `imported` verdict.
 
 ## [3.0.0] - 2026-09-28
 

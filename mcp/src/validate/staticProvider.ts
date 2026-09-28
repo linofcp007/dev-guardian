@@ -1,6 +1,7 @@
 /**
- * The `static` evidence provider — the only one of the three
- * (`static`/`runtime`/`dependency`) this cycle builds. Turns a surface
+ * The `static` evidence provider — the first of the three
+ * (`static`/`runtime`/`dependency`); `dependency` is `dependencyProvider.ts`,
+ * `runtime` is not built. Turns a surface
  * snapshot, its import graph, and a batch of findings into one
  * `FindingValidation` per finding: does anything outside the process reach
  * the file this finding lives in?
@@ -268,8 +269,10 @@ function relativizeSet(files: ReadonlySet<string>, projectPath: string): Readonl
  * as a root would be a category error — the same routes-vs-specs distinction
  * `buildCoverage` in mapAttackSurface.ts already makes, for the adjacent
  * reason that spec routes carry no language the rule pack could ever cover.
+ *
+ * Exported for the dependency provider, which roots at the same files.
  */
-function groupRoutesByRelFile(
+export function groupRoutesByRelFile(
   routes: readonly RouteRecord[],
   projectPath: string,
 ): Map<string, RouteRecord[]> {
@@ -550,7 +553,7 @@ function exposedEvidence(
  * on the choice — the verdict, the hop count and the route COUNTS are
  * computed from the whole set, not from this pick.
  */
-function mostInformative(routes: readonly RouteRecord[] | undefined): RouteRecord | undefined {
+export function mostInformative(routes: readonly RouteRecord[] | undefined): RouteRecord | undefined {
   if (routes === undefined) return undefined;
   return routes.find((r) => r.path_resolved !== '') ?? routes[0];
 }
@@ -566,11 +569,11 @@ function mostInformative(routes: readonly RouteRecord[] | undefined): RouteRecor
  * path should be, which reads as a bug in this line rather than as a fact
  * about the route. Say what is actually known instead.
  */
-function routeLabel(route: RouteRecord): string {
+export function routeLabel(route: RouteRecord): string {
   if (route.path_resolved !== '') return `${route.method} ${route.path_resolved}`;
   return `${route.method} (path inherited from the controller)`;
 }
 
-function hopWord(hops: number): string {
+export function hopWord(hops: number): string {
   return hops === 1 ? '1 hop' : `${hops} hops`;
 }

@@ -696,8 +696,11 @@ describe('validate_finding summary', () => {
       unreachable: 1,
       unknown: 1,
       // Present and zero, not absent: `confirmed` is not producible by
-      // `static`, and a reader must see that rather than infer it.
+      // `static`, and a reader must see that rather than infer it. Nor is
+      // `imported`, which only the dependency provider answers — and these
+      // three semgrep findings are not dependencies.
       confirmed: 0,
+      imported: 0,
     });
   });
 
@@ -791,6 +794,75 @@ describe('validate_finding summary', () => {
     expect(r.summary.providers_run).toEqual(['static']);
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/runtime/);
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/dependency/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The dependency provider                                             */
+/* ------------------------------------------------------------------ */
+
+describe('validate_finding — the dependency provider', () => {
+  /** A Trivy CVE on lodash, read from the npm lockfile. */
+  function lodashCve(over: Partial<Finding> = {}): Finding {
+    return finding({
+      fingerprint: 'cve-lodash',
+      tool: 'trivy',
+      rule_id: 'CVE-2021-23337',
+      subcategory: 'cve',
+      title: 'lodash: command injection',
+      file_path: 'package-lock.json',
+      line_start: undefined,
+      snippet: 'lodash@4.17.20->4.17.21',
+      ...over,
+    });
+  }
+
+  it('runs by default beside static, and answers reachable for a package a routed file imports', async () => {
+    seedSnapshot({
+      external_imports: [{ file: 'src/db.ts', specifier: 'lodash', language: 'typescript' }],
+    });
+    seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
+
+    const r = expectOk(await run());
+
+    expect(r.summary.providers_run).toEqual(['static', 'dependency']);
+    const dependency = r.validations.filter((v) => v.provider === 'dependency');
+    // Only the dependency finding gets a dependency verdict.
+    expect(dependency.map((v) => [v.fingerprint, v.verdict])).toEqual([['cve-lodash', 'reachable']]);
+    expect(dependency[0]?.evidence.map((e) => e.detail).join(' | ')).toMatch(/src\/db\.ts/);
+    // Both findings still get their static verdict, and the batch counts
+    // findings, not verdicts.
+    expect(r.validations.filter((v) => v.provider === 'static')).toHaveLength(2);
+    expect(r.summary.findings_selected).toBe(2);
+    // Both verdicts for the CVE are stored, one row per provider.
+    const stored = rawRows('finding_validations').filter((row) => row['fingerprint'] === 'cve-lodash');
+    expect(stored.map((row) => row['provider']).sort()).toEqual(['dependency', 'static']);
+  });
+
+  it('runs alone when asked for alone', async () => {
+    seedSnapshot({
+      external_imports: [{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }],
+    });
+    seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.summary.providers_run).toEqual(['dependency']);
+    expect(r.validations.map((v) => [v.provider, v.verdict])).toEqual([['dependency', 'imported']]);
+    expect(r.summary.coverage_gaps.join(' | ')).toMatch(/'static' was not requested/);
+  });
+
+  it('answers unknown on a snapshot mapped before third-party imports were recorded', async () => {
+    seedSnapshot({ external_imports: undefined });
+    seedScan([lodashCve()]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(only(r).provider).toBe('dependency');
+    expect(only(r).verdict).toBe('unknown');
+    // Not the staleness gap (the snapshot's tree is not the working tree
+    // here either): the one that names the missing field.
+    expect(r.summary.coverage_gaps.join(' | ')).toMatch(/before third-party imports were recorded/);
   });
 });
 
