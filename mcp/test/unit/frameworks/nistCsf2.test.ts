@@ -61,6 +61,14 @@ describe('OWASP_TO_CSF (dev-guardian mapping)', () => {
     }
   });
 
+  // Nothing here assesses authenticity or integrity (signatures,
+  // provenance) yet, so ID.RA-09 is not claimed through any category.
+  it('cites ID.RA-09 for no category', () => {
+    for (const refs of Object.values(OWASP_TO_CSF)) {
+      expect(refs.flatMap((r) => r.subcategories)).not.toContain('ID.RA-09');
+    }
+  });
+
   it('files every OWASP category under ID.RA-01 — a scan that looked for it identified vulnerabilities', () => {
     for (const id of OWASP_2025_IDS) {
       expect(OWASP_TO_CSF[id].some((r) => r.category === 'ID.RA' && r.subcategories.includes('ID.RA-01'))).toBe(true);

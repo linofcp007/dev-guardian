@@ -61,6 +61,9 @@ function cweNumber(cwe) {
  * both are kept, because each is a statement someone accountable made.
  *
  * Each field is present only when non-empty: unknown stays absent.
+ *
+ * `deriveOwasp: false` keeps the CWEs and takes the categories from the
+ * explicit labels alone — for a finding class whose category is fixed.
  */
 export function classifyTaxonomy(input) {
     const cwes = [
@@ -72,7 +75,9 @@ export function classifyTaxonomy(input) {
         if (id !== null)
             categories.add(id);
     }
-    for (const cwe of cwes) {
+    // `deriveOwasp: false` — the finding class fixes its category (a
+    // vulnerable dependency is A03 whatever flaw its advisory names).
+    for (const cwe of input.deriveOwasp === false ? [] : cwes) {
         const id = owaspCategoryOfCwe(cwe);
         if (id !== null)
             categories.add(id);

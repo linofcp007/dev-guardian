@@ -47,7 +47,7 @@ import { minCleanVersionAbove } from '../../deps/versionCompare.js';
 import type { Finding } from '../../types.js';
 import {
   asArray,
-  DEPENDENCY_CWE,
+  dependencyTaxonomy,
   getProp,
   getString,
   makeFinding,
@@ -94,7 +94,7 @@ export const pipAuditParser: ScannerParser = {
           fix_available: fixVersions.length > 0,
           file_path: filePath,
           snippet: `${name}@${version ?? ''}`,
-          taxonomy: { cwe: [DEPENDENCY_CWE] },
+          taxonomy: dependencyTaxonomy(),
         };
         if (description !== undefined) findingInput.message = description;
         findings.push(makeFinding(findingInput));

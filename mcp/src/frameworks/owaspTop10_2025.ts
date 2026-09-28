@@ -197,7 +197,8 @@ function titleWords(title: string): string {
  */
 export function parseOwasp2025Label(raw: unknown): Owasp2025Id | null {
   if (typeof raw !== 'string') return null;
-  const m = /^\s*A(\d{2})\s*:\s*2025\b\s*(?:[-–—:]\s*)?(.*)$/i.exec(raw);
+  // Trimmed first: `$` does not match before a trailing newline in JS.
+  const m = /^A(\d{2})\s*:\s*2025\b\s*(?:[-–—:]\s*)?(.*)$/i.exec(raw.trim());
   if (m === null || m[1] === undefined) return null;
   const id = `A${m[1]}:2025`;
   if (!isOwasp2025Id(id)) return null;

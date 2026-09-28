@@ -20,7 +20,7 @@
 import type { Finding } from '../../types.js';
 import {
   asArray,
-  DEPENDENCY_CWE,
+  dependencyTaxonomy,
   getNumber,
   getProp,
   getString,
@@ -105,7 +105,7 @@ function mapV2Advisory(
     file_path: 'package.json',
     fix_available: fixAvailable,
     snippet: `${pkg ?? ''}@${range ?? ''}`,
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, 'cwe'))] },
+    taxonomy: dependencyTaxonomy(cweList(getProp(via, 'cwe'))),
   };
   const message = composeMessage(pkg, range, url);
   if (message) input.message = message;
@@ -140,7 +140,7 @@ function mapV1Advisory(
     file_path: 'package.json',
     fix_available: recommendation ? /upgrad|updat/i.test(recommendation) : false,
     snippet: `${pkg ?? ''}@${range ?? ''}`,
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, 'cwe'))] },
+    taxonomy: dependencyTaxonomy(cweList(getProp(adv, 'cwe'))),
   };
   const message = composeMessage(pkg, range, url ?? recommendation);
   if (message) input.message = message;

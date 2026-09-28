@@ -36,7 +36,11 @@ export function toSarif(findings, opts = {}) {
         }
         // A rule is tagged with every CWE/OWASP 2025 tag any of its findings
         // carries — `external/cwe/cwe-89` is what GitHub code scanning reads.
-        const tags = sarifTaxonomyTags(f);
+        // Only a REAL rule: findings with no rule_id share the synthetic
+        // `tool/category` id, and unioning their tags would tag that "rule"
+        // with every weakness of every one of them. Their results keep their
+        // own tags.
+        const tags = f.rule_id === undefined ? [] : sarifTaxonomyTags(f);
         const rule = rulesById.get(id);
         if (tags.length > 0 && rule !== undefined) {
             rule.properties = { tags: [...new Set([...(rule.properties?.tags ?? []), ...tags])].sort() };

@@ -125,6 +125,16 @@ export function makeFinding(input) {
 export const DEPENDENCY_CWE = 'CWE-1395';
 export const SECRET_CWE = 'CWE-798';
 /**
+ * A known-vulnerable dependency's taxonomy: CWE-1395 plus whatever CWEs its
+ * advisory names (the flaw inside the package), and OWASP A03 ONLY. The
+ * advisory's CWE-79 is a flaw in someone else's code that the project
+ * inherits through its supply chain, not the project's own injection bug,
+ * so it is recorded in `cwe` and never counted under A05.
+ */
+export function dependencyTaxonomy(advisoryCwes = []) {
+    return { cwe: [DEPENDENCY_CWE, ...advisoryCwes], owasp: ['A03:2025'], deriveOwasp: false };
+}
+/**
  * Standard scanner severity strings → canonical `Severity`. Scanners differ
  * in casing and vocabulary; this is the lookup table they all bottom out
  * through.

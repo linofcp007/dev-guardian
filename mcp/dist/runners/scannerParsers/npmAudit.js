@@ -16,7 +16,7 @@
  * already populates the CVE table across stacks — npm audit's value here is
  * the GitHub-advisory coverage that turns into counted Findings.
  */
-import { asArray, DEPENDENCY_CWE, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
+import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
 export const NPM_AUDIT_TOOL_NAME = 'npm-audit';
 export const npmAuditParser = {
     name: NPM_AUDIT_TOOL_NAME,
@@ -83,7 +83,7 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
         file_path: 'package.json',
         fix_available: fixAvailable,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
-        taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, 'cwe'))] },
+        taxonomy: dependencyTaxonomy(cweList(getProp(via, 'cwe'))),
     };
     const message = composeMessage(pkg, range, url);
     if (message)
@@ -114,7 +114,7 @@ function mapV1Advisory(adv, seen) {
         file_path: 'package.json',
         fix_available: recommendation ? /upgrad|updat/i.test(recommendation) : false,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
-        taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, 'cwe'))] },
+        taxonomy: dependencyTaxonomy(cweList(getProp(adv, 'cwe'))),
     };
     const message = composeMessage(pkg, range, url ?? recommendation);
     if (message)

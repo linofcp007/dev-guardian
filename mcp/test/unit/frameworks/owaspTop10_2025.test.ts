@@ -112,6 +112,11 @@ describe('parseOwasp2025Label', () => {
     expect(parseOwasp2025Label('A07:2025 - Cross-Site Scripting')).toBeNull();
   });
 
+  it('trims surrounding whitespace, a trailing newline included', () => {
+    expect(parseOwasp2025Label('A05:2025 - Injection\n')).toBe('A05:2025');
+    expect(parseOwasp2025Label('  A05:2025 - Injection  ')).toBe('A05:2025');
+  });
+
   it('refuses anything that is not a string', () => {
     expect(parseOwasp2025Label(5)).toBeNull();
     expect(parseOwasp2025Label(null)).toBeNull();

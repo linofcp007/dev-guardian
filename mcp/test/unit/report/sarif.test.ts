@@ -134,6 +134,22 @@ describe('toSarif — CWE and OWASP Top 10:2025 tags', () => {
     ]);
   });
 
+  // Findings with no rule_id share one synthetic `tool/category` rule:
+  // unioning their tags would tag that "rule" with every CWE of every one.
+  it('a synthetic rule id (no rule_id) carries no tags; each result keeps its own', () => {
+    const doc = parse([
+      finding({ fingerprint: 'a', tool: 'semgrep', category: 'compliance', rule_id: undefined, cwe: ['CWE-22'], owasp: ['A01:2025'] }),
+      finding({ fingerprint: 'b', tool: 'semgrep', category: 'compliance', rule_id: undefined, cwe: ['CWE-89'], owasp: ['A05:2025'] }),
+    ]);
+    const run = doc.runs[0];
+    expect(run?.tool.driver.rules).toHaveLength(1);
+    expect(run?.tool.driver.rules[0]).not.toHaveProperty('properties');
+    expect(run?.results.map((r) => r.properties.tags)).toEqual([
+      ['external/cwe/cwe-22', 'owasp-2025-a01'],
+      ['external/cwe/cwe-89', 'owasp-2025-a05'],
+    ]);
+  });
+
   it('a finding without a taxonomy gets no tags at all — never an empty guess', () => {
     const doc = parse([finding({ rule_id: 'r' })]);
     expect(doc.runs[0]?.results[0]?.properties).not.toHaveProperty('tags');

@@ -42599,7 +42599,7 @@ function titleWords(title) {
 }
 function parseOwasp2025Label(raw) {
   if (typeof raw !== "string") return null;
-  const m = /^\s*A(\d{2})\s*:\s*2025\b\s*(?:[-–—:]\s*)?(.*)$/i.exec(raw);
+  const m = /^A(\d{2})\s*:\s*2025\b\s*(?:[-–—:]\s*)?(.*)$/i.exec(raw.trim());
   if (m === null || m[1] === void 0) return null;
   const id = `A${m[1]}:2025`;
   if (!isOwasp2025Id(id)) return null;
@@ -42641,7 +42641,7 @@ function classifyTaxonomy(input) {
     const id = parseOwasp2025Label(label);
     if (id !== null) categories.add(id);
   }
-  for (const cwe of cwes) {
+  for (const cwe of input.deriveOwasp === false ? [] : cwes) {
     const id = owaspCategoryOfCwe(cwe);
     if (id !== null) categories.add(id);
   }
@@ -42719,6 +42719,9 @@ function makeFinding(input) {
 }
 var DEPENDENCY_CWE = "CWE-1395";
 var SECRET_CWE = "CWE-798";
+function dependencyTaxonomy(advisoryCwes = []) {
+  return { cwe: [DEPENDENCY_CWE, ...advisoryCwes], owasp: ["A03:2025"], deriveOwasp: false };
+}
 function normalizeSeverity(raw) {
   if (!raw) return "medium";
   const normalized = raw.toString().trim().toLowerCase();
@@ -42824,9 +42827,9 @@ function mapVulnerability(raw, target, ctx) {
     title,
     fix_available: fixed !== void 0 && fixed.length > 0,
     file_path: toRelativeIfPossible(target, ctx.project_path),
-    // A vulnerable dependency is CWE-1395 whatever the flaw inside it; the
-    // advisory's own CweIDs name that flaw.
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...asArray(getProp(raw, "CweIDs"))] }
+    // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
+    // it; the advisory's own CweIDs name that flaw, in `cwe` only.
+    taxonomy: dependencyTaxonomy(asArray(getProp(raw, "CweIDs")))
   };
   if (description !== void 0) input.message = description;
   input.snippet = `${pkg}@${installed ?? ""}->${fixed ?? ""}`;
@@ -49603,7 +49606,7 @@ function mapPackage(raw, projectPath, framework, ctx) {
       fix_available: false,
       file_path: relPath,
       snippet: `${id}@${resolved ?? ""}`,
-      taxonomy: { cwe: [DEPENDENCY_CWE] }
+      taxonomy: dependencyTaxonomy()
     };
     if (url !== void 0) findingInput.message = url;
     out.push(makeFinding(findingInput));
@@ -49670,7 +49673,7 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
     file_path: "package.json",
     fix_available: fixAvailable,
     snippet: `${pkg ?? ""}@${range ?? ""}`,
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(via, "cwe"))] }
+    taxonomy: dependencyTaxonomy(cweList(getProp(via, "cwe")))
   };
   const message3 = composeMessage(pkg, range, url);
   if (message3) input.message = message3;
@@ -49698,7 +49701,7 @@ function mapV1Advisory(adv, seen) {
     file_path: "package.json",
     fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
     snippet: `${pkg ?? ""}@${range ?? ""}`,
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...cweList(getProp(adv, "cwe"))] }
+    taxonomy: dependencyTaxonomy(cweList(getProp(adv, "cwe")))
   };
   const message3 = composeMessage(pkg, range, url ?? recommendation2);
   if (message3) input.message = message3;
@@ -49830,7 +49833,7 @@ var pipAuditParser = {
           fix_available: fixVersions.length > 0,
           file_path: filePath,
           snippet: `${name}@${version2 ?? ""}`,
-          taxonomy: { cwe: [DEPENDENCY_CWE] }
+          taxonomy: dependencyTaxonomy()
         };
         if (description !== void 0) findingInput.message = description;
         findings.push(makeFinding(findingInput));
@@ -58414,7 +58417,7 @@ function toSarif(findings, opts = {}) {
       rule2.defaultConfiguration = { level: levelFor(f.severity) };
       rulesById.set(id, rule2);
     }
-    const tags = sarifTaxonomyTags(f);
+    const tags = f.rule_id === void 0 ? [] : sarifTaxonomyTags(f);
     const rule = rulesById.get(id);
     if (tags.length > 0 && rule !== void 0) {
       rule.properties = { tags: [.../* @__PURE__ */ new Set([...rule.properties?.tags ?? [], ...tags])].sort() };
@@ -58748,19 +58751,16 @@ var RISK_ASSESSMENT = { category: "ID.RA", subcategories: ["ID.RA-01"] };
 var OWASP_TO_CSF = {
   "A01:2025": [RISK_ASSESSMENT, { category: "PR.AA", subcategories: ["PR.AA-05"] }, { category: "PR.DS", subcategories: ["PR.DS-01"] }],
   "A02:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-01"] }],
-  "A03:2025": [
-    { category: "ID.RA", subcategories: ["ID.RA-01", "ID.RA-09"] },
-    { category: "GV.SC", subcategories: ["GV.SC-07"] },
-    { category: "PR.PS", subcategories: ["PR.PS-02"] }
-  ],
+  // ID.RA-09 ("the authenticity and integrity of hardware and software are
+  // assessed prior to acquisition and use") is not cited for A03 or A08:
+  // nothing here verifies a signature or a provenance attestation yet. Part
+  // E's `cosign verify` in scan_containers may evidence it once integrated.
+  "A03:2025": [RISK_ASSESSMENT, { category: "GV.SC", subcategories: ["GV.SC-07"] }, { category: "PR.PS", subcategories: ["PR.PS-02"] }],
   "A04:2025": [RISK_ASSESSMENT, { category: "PR.DS", subcategories: ["PR.DS-01", "PR.DS-02"] }],
   "A05:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-06"] }, { category: "PR.DS", subcategories: ["PR.DS-10"] }],
   "A06:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-06"] }],
   "A07:2025": [RISK_ASSESSMENT, { category: "PR.AA", subcategories: ["PR.AA-01", "PR.AA-03"] }],
-  "A08:2025": [
-    { category: "ID.RA", subcategories: ["ID.RA-01", "ID.RA-09"] },
-    { category: "PR.DS", subcategories: ["PR.DS-01"] }
-  ],
+  "A08:2025": [RISK_ASSESSMENT, { category: "PR.DS", subcategories: ["PR.DS-01"] }],
   "A09:2025": [RISK_ASSESSMENT, { category: "PR.PS", subcategories: ["PR.PS-04"] }, { category: "DE.CM", subcategories: ["DE.CM-09"] }],
   "A10:2025": [RISK_ASSESSMENT, { category: "PR.IR", subcategories: ["PR.IR-03"] }, { category: "PR.PS", subcategories: ["PR.PS-06"] }]
 };

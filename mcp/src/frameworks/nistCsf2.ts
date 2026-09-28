@@ -73,7 +73,6 @@ export const CSF_SUBCATEGORY_TEXT: Readonly<Record<string, string>> = {
     'The risks posed by a supplier, their products and services, and other third parties are understood, ' +
     'recorded, prioritized, assessed, responded to, and monitored over the course of the relationship',
   'ID.RA-01': 'Vulnerabilities in assets are identified, validated, and recorded',
-  'ID.RA-09': 'The authenticity and integrity of hardware and software are assessed prior to acquisition and use',
   'PR.AA-01': 'Identities and credentials for authorized users, services, and hardware are managed by the organization',
   'PR.AA-03': 'Users, services, and hardware are authenticated',
   'PR.AA-05':
@@ -106,19 +105,16 @@ const RISK_ASSESSMENT: CsfReference = { category: 'ID.RA', subcategories: ['ID.R
 export const OWASP_TO_CSF: Readonly<Record<Owasp2025Id, readonly CsfReference[]>> = {
   'A01:2025': [RISK_ASSESSMENT, { category: 'PR.AA', subcategories: ['PR.AA-05'] }, { category: 'PR.DS', subcategories: ['PR.DS-01'] }],
   'A02:2025': [RISK_ASSESSMENT, { category: 'PR.PS', subcategories: ['PR.PS-01'] }],
-  'A03:2025': [
-    { category: 'ID.RA', subcategories: ['ID.RA-01', 'ID.RA-09'] },
-    { category: 'GV.SC', subcategories: ['GV.SC-07'] },
-    { category: 'PR.PS', subcategories: ['PR.PS-02'] },
-  ],
+  // ID.RA-09 ("the authenticity and integrity of hardware and software are
+  // assessed prior to acquisition and use") is not cited for A03 or A08:
+  // nothing here verifies a signature or a provenance attestation yet. Part
+  // E's `cosign verify` in scan_containers may evidence it once integrated.
+  'A03:2025': [RISK_ASSESSMENT, { category: 'GV.SC', subcategories: ['GV.SC-07'] }, { category: 'PR.PS', subcategories: ['PR.PS-02'] }],
   'A04:2025': [RISK_ASSESSMENT, { category: 'PR.DS', subcategories: ['PR.DS-01', 'PR.DS-02'] }],
   'A05:2025': [RISK_ASSESSMENT, { category: 'PR.PS', subcategories: ['PR.PS-06'] }, { category: 'PR.DS', subcategories: ['PR.DS-10'] }],
   'A06:2025': [RISK_ASSESSMENT, { category: 'PR.PS', subcategories: ['PR.PS-06'] }],
   'A07:2025': [RISK_ASSESSMENT, { category: 'PR.AA', subcategories: ['PR.AA-01', 'PR.AA-03'] }],
-  'A08:2025': [
-    { category: 'ID.RA', subcategories: ['ID.RA-01', 'ID.RA-09'] },
-    { category: 'PR.DS', subcategories: ['PR.DS-01'] },
-  ],
+  'A08:2025': [RISK_ASSESSMENT, { category: 'PR.DS', subcategories: ['PR.DS-01'] }],
   'A09:2025': [RISK_ASSESSMENT, { category: 'PR.PS', subcategories: ['PR.PS-04'] }, { category: 'DE.CM', subcategories: ['DE.CM-09'] }],
   'A10:2025': [RISK_ASSESSMENT, { category: 'PR.IR', subcategories: ['PR.IR-03'] }, { category: 'PR.PS', subcategories: ['PR.PS-06'] }],
 };

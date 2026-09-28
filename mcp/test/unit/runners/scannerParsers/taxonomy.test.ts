@@ -111,10 +111,12 @@ describe('trivyParser', () => {
     });
   }
 
-  it('a vulnerable dependency is CWE-1395 (A03), plus the CweIDs of the advisory', () => {
+  // Ruling M2: a dependency CVE is A03 — the flaw inside the package is
+  // named in `cwe` but is not the project's own injection or crypto bug.
+  it("a vulnerable dependency is A03 only; the advisory's CweIDs stay in cwe beside CWE-1395", () => {
     const [f] = trivyParser.parse(vuln({ CweIDs: ['CWE-79'] })).findings;
     expect(f?.cwe).toEqual(['CWE-79', 'CWE-1395']);
-    expect(f?.owasp).toEqual(['A03:2025', 'A05:2025']);
+    expect(f?.owasp).toEqual(['A03:2025']);
   });
 
   it('without CweIDs it is still a vulnerable dependency', () => {
@@ -206,6 +208,18 @@ describe('dependency auditors', () => {
     // 2025 category, so they add a CWE and no category.
     expect(findings.some((f) => f.cwe?.includes('CWE-1321'))).toBe(true);
     for (const f of findings) expect(f.owasp).toEqual(['A03:2025']);
+  });
+
+  it('npm audit: an advisory naming an A05 CWE is still A03 only', () => {
+    const doc = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: {
+        marked: { name: 'marked', via: [{ source: 1, name: 'marked', title: 'XSS', severity: 'high', cwe: ['CWE-79'], range: '<4.0.10' }], fixAvailable: true },
+      },
+    });
+    const [f] = npmAuditParser.parse(doc).findings;
+    expect(f?.cwe).toEqual(['CWE-79', 'CWE-1395']);
+    expect(f?.owasp).toEqual(['A03:2025']);
   });
 
   it('pip-audit: CWE-1395', () => {

@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import type { Category, Finding, Severity } from '../../types.js';
 import {
   asArray,
-  DEPENDENCY_CWE,
+  dependencyTaxonomy,
   getNumber,
   getProp,
   getString,
@@ -90,9 +90,9 @@ function mapVulnerability(raw: unknown, target: string, ctx: ParserContext): Fin
     title,
     fix_available: fixed !== undefined && fixed.length > 0,
     file_path: toRelativeIfPossible(target, ctx.project_path),
-    // A vulnerable dependency is CWE-1395 whatever the flaw inside it; the
-    // advisory's own CweIDs name that flaw.
-    taxonomy: { cwe: [DEPENDENCY_CWE, ...asArray(getProp(raw, 'CweIDs'))] },
+    // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
+    // it; the advisory's own CweIDs name that flaw, in `cwe` only.
+    taxonomy: dependencyTaxonomy(asArray(getProp(raw, 'CweIDs'))),
   };
   if (description !== undefined) input.message = description;
   // Trivy "snippet" surrogate: enough package metadata to make the
