@@ -8,6 +8,12 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- `cosign` in the toolchain catalogue (`check_toolchain` probes `cosign version`; `install_toolchain`
+  installs v3.1.3 — winget and scoop pinned to it, Linux and macOS from the release binary checked
+  against its sha256, Homebrew on macOS).
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

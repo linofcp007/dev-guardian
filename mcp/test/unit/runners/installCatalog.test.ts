@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  COSIGN_RELEASE_SHA256,
+  COSIGN_VERSION,
   TOOL_CATALOG,
   knownCompromise,
   suggestedInstallCommandString,
@@ -130,6 +132,54 @@ describe('actionlint catalog entry', () => {
     expect(meta?.install.win32.choco?.args).toEqual(['install', '-y', 'actionlint']);
     expect(meta?.install.darwin.brew?.args).toEqual(['install', 'actionlint']);
     expect(meta?.install.linux.go?.args).toEqual(['install', 'github.com/rhysd/actionlint/cmd/actionlint@latest']);
+  });
+});
+
+describe('cosign catalog entry', () => {
+  // scan_containers checks an image's Sigstore signature and SLSA provenance
+  // with cosign; check_toolchain/install_toolchain need to know about it.
+  const meta = TOOL_CATALOG['cosign'];
+
+  it('is registered with a `cosign version` probe, required by scan_containers, not a default install', () => {
+    expect(meta).toBeDefined();
+    expect(meta?.probe).toEqual({ command: 'cosign', args: ['version'] });
+    expect(meta?.required_by).toEqual(['scan_containers']);
+    expect(meta?.default).toBe(false);
+    expect(COSIGN_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('pins the Windows installers to that version (winget and scoop both take an exact version)', () => {
+    expect(meta?.install.win32.winget?.args).toEqual([
+      'install', '--id', 'Sigstore.Cosign', '--exact', '--version', COSIGN_VERSION,
+      '--accept-source-agreements', '--accept-package-agreements',
+    ]);
+    expect(meta?.install.win32.scoop?.args).toEqual(['install', `cosign@${COSIGN_VERSION}`]);
+    expect(suggestedInstallCommandString('cosign', 'win32')).toContain(COSIGN_VERSION);
+  });
+
+  it.each([
+    ['linux', 'sha256sum -c -'],
+    ['darwin', 'shasum -a 256 -c -'],
+  ] as const)('%s: downloads the pinned release binary and checks its sha256 before installing it', (os, checker) => {
+    const script = meta?.install[os].curl?.args[1] ?? '';
+    expect(meta?.install[os].curl?.command).toBe('bash');
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const key = `${os}-${arch}` as const;
+      expect(script).toContain(`https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${os}-$arch`);
+      expect(script).toContain(COSIGN_RELEASE_SHA256[key]);
+      expect(COSIGN_RELEASE_SHA256[key]).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(script).toContain(checker);
+    // The check runs BEFORE the install, and a failed check stops it (set -e).
+    expect(script.indexOf(checker)).toBeLessThan(script.indexOf('install -m 0755'));
+    expect(script.startsWith('set -eu')).toBe(true);
+    expect(script).not.toMatch(/latest/);
+    // An architecture with no pinned checksum is refused, never guessed.
+    expect(script).toMatch(/\*\) echo "[^"]*" >&2; exit 1/);
+  });
+
+  it('macOS also offers Homebrew, the convention every other darwin entry follows', () => {
+    expect(meta?.install.darwin.brew?.args).toEqual(['install', 'cosign']);
   });
 });
 
