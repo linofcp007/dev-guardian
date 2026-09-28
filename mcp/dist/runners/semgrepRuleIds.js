@@ -223,36 +223,43 @@ export function ruleIdsInFile(file) {
         return typeof id === 'string' && id.length > 0 ? [id] : [];
     });
 }
-function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+/** A version directory as Claude Code's plugin cache names one: `2.0.1`, `3.0.0-rc.1`, or a commit. */
+const VERSION_DIR = /^(\d+(\.\d+)*(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?|[0-9a-f]{7,40})$/;
 /**
  * Recognises a stored rule id written before fix round 2 for one of the
  * plugin's own packs, installed at `packsDir` (`<root>/configs/semgrep`)
  * now: `<an install of this plugin>.configs.semgrep.<pack rule id>` →
- * `<pack rule id>`, else null. "An install of this plugin" is its root, or
- * a sibling of it (Claude Code keeps each version in `…/dev-guardian/<v>/`)
- * — identified from the plugin's root, never from a path segment named
- * `configs/semgrep` (a project's or a registered rule directory's of that
- * name keeps its id). The rule id must be one the packs declare. A project
- * rule or a registered rule outside the project is never re-keyed: its
- * stored id is what a scan stores today.
+ * `<pack rule id>`, else null. "An install of this plugin" is its root; and
+ * when the root is a version directory of Claude Code's cache
+ * (`…/<marketplace>/dev-guardian/<version>/`, {@link VERSION_DIR}), exactly
+ * one other version directory beside it — never a deeper path, never a
+ * sibling of a root that is not a version (`--plugin-dir C:\src\dev-guardian`,
+ * a fork's directory: those keep their old ids, by design; round 3's review,
+ * M-3/M-4). Identified from the plugin's root, never from a path segment
+ * named `configs/semgrep` (a project's or a registered rule directory's of
+ * that name keeps its id). The rule id must be one the packs declare. A
+ * project rule or a registered rule outside the project is never re-keyed:
+ * its stored id is what a scan stores today.
  */
 export function pluginPackIdMatcher(packsDir, packRuleIds) {
     const fp = flavourOf(packsDir);
     const root = fp.dirname(fp.dirname(fp.resolve(packsDir)));
     const own = semgrepConfigPrefix(fp.join(root, 'configs', 'semgrep', 'x.yml'));
     const parent = semgrepConfigPrefix(fp.join(fp.dirname(root), 'x.yml'));
-    const sibling = parent.length > 0 ? new RegExp(`^${escapeRegExp(parent)}\\.[A-Za-z0-9._-]+\\.configs\\.semgrep$`) : null;
+    const versioned = VERSION_DIR.test(fp.basename(root)) && parent.length > 0;
     return (ruleId) => {
         const m = /^(.+)\.configs\.semgrep\.([A-Za-z0-9_-]+)$/.exec(ruleId);
         if (m === null)
             return null;
-        const prefix = `${m[1] ?? ''}.configs.semgrep`;
+        const installed = m[1] ?? '';
         const id = m[2] ?? '';
         if (!packRuleIds.has(id))
             return null;
-        return prefix === own || (sibling?.test(prefix) ?? false) ? id : null;
+        if (`${installed}.configs.semgrep` === own)
+            return id;
+        if (!versioned || !installed.startsWith(`${parent}.`))
+            return null;
+        return VERSION_DIR.test(installed.slice(parent.length + 1)) ? id : null;
     };
 }
 //# sourceMappingURL=semgrepRuleIds.js.map

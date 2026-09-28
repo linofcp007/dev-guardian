@@ -139,6 +139,21 @@ describe('re-keying stored plugin-pack findings', () => {
     expect(match('configs.semgrep.bugfix-js-off-by-one')).toBeNull();
     expect(match(`${semgrepConfigPrefix(OLD_PACK)}.other-rule`)).toBeNull();
   });
+
+  it('only ONE version directory beside a versioned root — never deeper, never beside a root that is not a version (review M-3)', () => {
+    const match = pluginPackIdMatcher(PACKS, PACK_IDS);
+    const at = (...dirs: string[]): string => packId(join(CACHE, ...dirs, 'configs', 'semgrep', 'x.yml'));
+    expect(match(at('3.0.0-rc.1'))).toBe('bugfix-js-off-by-one');
+    expect(match(at('a1b2c3d4'))).toBe('bugfix-js-off-by-one');
+    expect(match(at('2.0.1', 'nested', 'x'))).toBeNull();
+    expect(match(at('my-fork'))).toBeNull();
+    // A shallow root that is not a version directory (--plugin-dir C:\dg): its own id only.
+    const shallow = join(BASE, 'dg', 'configs', 'semgrep');
+    const matchShallow = pluginPackIdMatcher(shallow, PACK_IDS);
+    expect(matchShallow(packId(join(shallow, 'x.yml')))).toBe('bugfix-js-off-by-one');
+    expect(matchShallow(packId(join(BASE, 'other', 'configs', 'semgrep', 'x.yml')))).toBeNull();
+    expect(matchShallow(packId(join(BASE, '2.0.0', 'configs', 'semgrep', 'x.yml')))).toBeNull();
+  });
 });
 
 describe('the re-key is resumable and incremental (M-2)', () => {
@@ -182,6 +197,15 @@ describe('the re-key is resumable and incremental (M-2)', () => {
     expect(rekeyStoredLocalRuleIds(db, { ...opts, afterBatch: (n) => (batches = n) })).toBe(2);
     expect(batches).toBe(1);
     expect(reKeyed(storage, 8)).toBe(8);
+  });
+
+  it("does not wait on a running scan whose owner is gone (the reaper's rule): one start re-keys it (review M-1)", () => {
+    const { db, storage } = fresh();
+    seedOld(storage, 1);
+    seedOld(storage, 1, 1, false); // running, its owner dead (below)
+    seedOld(storage, 1, 2);
+    expect(rekeyStoredLocalRuleIds(db, { ...opts, reap: { isAlive: () => false } })).toBe(3);
+    expect(reKeyed(storage, 3)).toBe(3);
   });
 
   it('stops before a scan still being written, and picks it up once it is done', () => {

@@ -37952,23 +37952,426 @@ function ruleIdsInFile(file) {
     return typeof id === "string" && id.length > 0 ? [id] : [];
   });
 }
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+var VERSION_DIR = /^(\d+(\.\d+)*(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?|[0-9a-f]{7,40})$/;
 function pluginPackIdMatcher(packsDir, packRuleIds) {
   const fp = flavourOf(packsDir);
   const root = fp.dirname(fp.dirname(fp.resolve(packsDir)));
   const own = semgrepConfigPrefix(fp.join(root, "configs", "semgrep", "x.yml"));
   const parent = semgrepConfigPrefix(fp.join(fp.dirname(root), "x.yml"));
-  const sibling = parent.length > 0 ? new RegExp(`^${escapeRegExp(parent)}\\.[A-Za-z0-9._-]+\\.configs\\.semgrep$`) : null;
+  const versioned = VERSION_DIR.test(fp.basename(root)) && parent.length > 0;
   return (ruleId) => {
     const m = /^(.+)\.configs\.semgrep\.([A-Za-z0-9_-]+)$/.exec(ruleId);
     if (m === null) return null;
-    const prefix = `${m[1] ?? ""}.configs.semgrep`;
+    const installed = m[1] ?? "";
     const id = m[2] ?? "";
     if (!packRuleIds.has(id)) return null;
-    return prefix === own || (sibling?.test(prefix) ?? false) ? id : null;
+    if (`${installed}.configs.semgrep` === own) return id;
+    if (!versioned || !installed.startsWith(`${parent}.`)) return null;
+    return VERSION_DIR.test(installed.slice(parent.length + 1)) ? id : null;
   };
+}
+
+// src/storage/scansRepo.ts
+import { hostname as hostname2 } from "node:os";
+
+// src/storage/repoUtil.ts
+function nowIso() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function boolToInt(value) {
+  return value ? 1 : 0;
+}
+function intToBool(value) {
+  return value === 1;
+}
+function parseJsonArray(raw, fallback = []) {
+  if (raw === null || raw === void 0 || raw === "") return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function parseJsonObject(raw, fallback) {
+  if (raw === null || raw === void 0 || raw === "") return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// src/storage/scansRepo.ts
+var WORKTREE_PATH_EXCLUSION = "%guardian-fixpr-wt-%";
+var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
+var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
+var ScansRepo = class {
+  constructor(db) {
+    this.db = db;
+    this.insertStmt = db.prepare(`
+      INSERT INTO scans (
+        id, scan_type, project_path, tree_hash,
+        started_at, status, tools_run, missing_tools, report_dir, meta,
+        owner_pid, owner_host, cache_key
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    this.finalizeStmt = db.prepare(`
+      UPDATE scans
+      SET status = ?, finished_at = ?, tools_run = ?, missing_tools = ?,
+          report_dir = COALESCE(?, report_dir), error = ?,
+          meta = COALESCE(?, meta)
+      WHERE id = ?
+    `);
+    this.markCancelledStmt = db.prepare(`
+      UPDATE scans
+      SET status = 'cancelled', finished_at = ?
+      WHERE id = ? AND status = 'running'
+    `);
+    this.listRunningStmt = db.prepare(`
+      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
+    `);
+    this.reapOneStmt = db.prepare(`
+      UPDATE scans
+      SET status = 'failed', finished_at = ?, error = ?
+      WHERE id = ? AND status = 'running'
+    `);
+    this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
+    this.getLatestStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `);
+    this.getLatestForProjectStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE status = 'completed' AND project_path = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `);
+    this.listHistoryStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+    this.listHistoryForProjectStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+    this.findCacheStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `);
+    this.attachCacheStmt = db.prepare(`
+      INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    this.countForProjectStmt = db.prepare(
+      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`
+    );
+  }
+  db;
+  insertStmt;
+  finalizeStmt;
+  markCancelledStmt;
+  listRunningStmt;
+  reapOneStmt;
+  getByIdStmt;
+  getLatestStmt;
+  getLatestForProjectStmt;
+  listHistoryStmt;
+  listHistoryForProjectStmt;
+  findCacheStmt;
+  attachCacheStmt;
+  countForProjectStmt;
+  completedOfTypesCache = /* @__PURE__ */ new Map();
+  insert(input) {
+    const started = nowIso();
+    this.insertStmt.run(
+      input.scan_id,
+      input.scan_type,
+      input.project_path,
+      input.tree_hash,
+      started,
+      "running",
+      "[]",
+      "[]",
+      input.report_dir ?? null,
+      JSON.stringify(input.meta ?? {}),
+      process.pid,
+      hostname2(),
+      input.cache_key ?? null
+    );
+    return {
+      scan_id: input.scan_id,
+      scan_type: input.scan_type,
+      project_path: input.project_path,
+      tree_hash: input.tree_hash,
+      started_at: started,
+      finished_at: null,
+      status: "running",
+      tools_run: [],
+      missing_tools: [],
+      report_paths: input.report_dir ? [input.report_dir] : []
+    };
+  }
+  /** Returns the `finished_at` it wrote, so a caller can report the row's real time. */
+  finalize(input) {
+    const finishedAt = nowIso();
+    this.finalizeStmt.run(
+      input.status,
+      finishedAt,
+      JSON.stringify(input.tools_run),
+      JSON.stringify(input.missing_tools),
+      input.report_dir ?? null,
+      input.error ?? null,
+      input.meta !== void 0 ? JSON.stringify(input.meta) : null,
+      input.scan_id
+    );
+    return finishedAt;
+  }
+  markCancelled(scanId) {
+    this.markCancelledStmt.run(nowIso(), scanId);
+  }
+  /**
+   * Fails scans left in `running` by a process that is gone (crash, kill -9).
+   *
+   * **Call it only at startup, before this process starts any scan** — the
+   * rule for this process's own pid below depends on that.
+   *
+   * Only DEAD owners' scans: several servers share one database, and the old
+   * sweep (`every running scan`) killed whatever another live server was
+   * scanning at the time. For a scan whose owner is on this host:
+   *   - the owner pid is THIS process's pid → reaped. This process has not
+   *     started a scan yet, so an earlier process with the same pid wrote the
+   *     row: a container restarted as pid 1 under the same hostname, or a pid
+   *     Windows handed out again;
+   *   - the pid no longer exists → reaped;
+   *   - the pid exists → left alone, until the scan is older than
+   *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
+   * A scan whose owner cannot be checked from here (none recorded, or another
+   * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
+   */
+  reapRunning(options = {}) {
+    const now = options.now ?? Date.now();
+    const host = options.host ?? hostname2();
+    const ownPid = options.ownPid ?? process.pid;
+    const isAlive = options.isAlive ?? pidIsAlive;
+    let reaped = 0;
+    for (const row of this.listRunningStmt.all()) {
+      const reason = reapReason(row, { host, ownPid, now, isAlive });
+      if (reason === null) continue;
+      reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
+    }
+    return reaped;
+  }
+  getById(scanId) {
+    const row = this.getByIdStmt.get(scanId);
+    return row ? rowToRecord(row) : null;
+  }
+  /**
+   * The latest completed scan in the WHOLE database, from ANY project and of
+   * ANY type — no `project_path` filter. Only for a caller with genuinely no
+   * project in scope; a reader answering for a project uses
+   * `history/openSet.ts` (the open set, or the latest usable scan of a type),
+   * and one that wants that project's history uses `getLatestForProject`.
+   */
+  getLatest() {
+    const row = this.getLatestStmt.get();
+    return row ? rowToRecord(row) : null;
+  }
+  /** The latest completed scan FOR ONE project. Mirrors `surfaceRepo.ts`'s
+   *  `getLatestForProject` and `findingsRepo.ts`'s `listOpenForProject`. */
+  getLatestForProject(projectPath) {
+    const row = this.getLatestForProjectStmt.get(projectPath);
+    return row ? rowToRecord(row) : null;
+  }
+  /**
+   * Scan history across the WHOLE database, from ANY project — no
+   * `project_path` filter and no `status` filter (unlike `getLatest`, every
+   * status is included; see `listHistoryStmt`'s own comment). Excludes
+   * `create_fix_pr`'s own verification re-scans, the same as `getLatest` —
+   * see this file's own module comment. A caller that DID resolve a
+   * `project_path` must use `listHistoryForProject` instead, for the same
+   * reason `getLatest`'s own doc comment gives.
+   */
+  listHistory(limit = 50) {
+    return this.listHistoryStmt.all(limit).map(rowToRecord);
+  }
+  /**
+   * `listHistory`, scoped to one project — never all scans filtered in JS,
+   * which would silently truncate at whatever `limit` the caller used before
+   * the JS-side filter even ran. Mirrors `getLatestForProject`'s relationship
+   * to `getLatest`: same "this project" vs. "any project" split, for a
+   * history list instead of a single latest row.
+   */
+  listHistoryForProject(projectPath, limit = 50) {
+    return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+  }
+  /**
+   * Every pass name the completed scans of `type` for `projectPath` ever
+   * recorded in `tools_run`, and whether one of them recorded no bookkeeping
+   * at all — the widest holder the open set's carry-forward walk has to
+   * allow for before it can stop (`runCompare.ts#StillCarry`).
+   */
+  runNamesOfType(projectPath, type) {
+    const names = this.db.prepare(
+      `SELECT DISTINCT json_extract(je.value, '$.name') AS name
+           FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`
+    ).all(projectPath, type).map((r) => r.name).filter((n2) => typeof n2 === "string");
+    const empty = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM scans
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+            AND (tools_run IS NULL OR tools_run IN ('', '[]'))
+            AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`
+    ).get(projectPath, type);
+    return { names, anyEmpty: (empty?.n ?? 0) > 0 };
+  }
+  /**
+   * Completed scans of `types` for ONE project, newest first, as one SQL
+   * query — the latest scan of a type is found however many other scans
+   * (of other types, or of other projects) were written after it. Every
+   * "find the latest scan of type X" used to search `listHistory(50)`, a
+   * window of the 50 newest rows in the whole database, and read "no such
+   * scan" once 50 others had run since.
+   *
+   * `beforeScanId` keeps only scans strictly older than that one, and
+   * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
+   * order — how "the previous scan" is found, and how a search that only
+   * matters above some scan stops there. `excludeWithChildScans` drops rows
+   * whose `meta.child_scans` is an array (an orchestrated
+   * `security_scan_full` parent) in SQL, so a search for script-era rows does
+   * not page through every orchestrated run to find none. Paged by `limit` /
+   * `offset` for callers that skip some rows (a scan with coverage none, a
+   * scoped run) and must keep looking.
+   */
+  listCompletedOfTypes(projectPath, types, opts) {
+    if (types.length === 0) return [];
+    const shape = {
+      before: opts.beforeScanId !== void 0,
+      after: opts.afterScanId !== void 0,
+      noParents: opts.excludeWithChildScans === true
+    };
+    const stmt = this.completedOfTypesStmt(types.length, shape);
+    const params = [projectPath, ...types];
+    if (opts.beforeScanId !== void 0) params.push(opts.beforeScanId);
+    if (opts.afterScanId !== void 0) params.push(opts.afterScanId);
+    params.push(opts.limit, opts.offset ?? 0);
+    return stmt.all(...params).map(rowToRecord);
+  }
+  /**
+   * `scanIds`, newest first in the one order every "latest" query here uses
+   * — `started_at DESC, rowid DESC` — so two scans started in the same
+   * millisecond still sort the way SQL picked them. Unknown ids are dropped.
+   */
+  sortNewestFirst(scanIds) {
+    if (scanIds.length === 0) return [];
+    const placeholders = scanIds.map(() => "?").join(", ");
+    return this.db.prepare(
+      `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`
+    ).all(...scanIds).map((r) => r.id);
+  }
+  /** How many scans (any status, any type) one project has recorded. */
+  countForProject(projectPath) {
+    return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+  }
+  completedOfTypesStmt(arity, shape) {
+    const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
+    const cached2 = this.completedOfTypesCache.get(key);
+    if (cached2 !== void 0) return cached2;
+    const placeholders = Array.from({ length: arity }, () => "?").join(", ");
+    const beforeClause = shape.before ? "AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const afterClause = shape.after ? "AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
+    const parentClause = shape.noParents ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'" : "";
+    const stmt = this.db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+        ${beforeClause} ${afterClause} ${parentClause}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ? OFFSET ?
+    `);
+    this.completedOfTypesCache.set(key, stmt);
+    return stmt;
+  }
+  /**
+   * Returns the most recent completed scan stored under exactly `cache_key`
+   * which started no earlier than `freshThreshold`. The factory uses this to
+   * honour US-8 AC-2 (5-minute cache window); the key is built by
+   * `treeHash/cacheKey.ts#scanCacheKey`.
+   */
+  findCacheHit(args) {
+    const row = this.findCacheStmt.get(args.cache_key, args.freshThreshold);
+    return row ? rowToRecord(row) : null;
+  }
+  attachTreeCache(args) {
+    this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
+  }
+};
+function runningScanIsOrphan(row, options = {}) {
+  const ctx = {
+    now: options.now ?? Date.now(),
+    host: options.host ?? hostname2(),
+    ownPid: options.ownPid ?? process.pid,
+    isAlive: options.isAlive ?? pidIsAlive
+  };
+  return reapReason({ id: "", ...row }, ctx) !== null;
+}
+function reapReason(row, ctx) {
+  const started = Date.parse(row.started_at);
+  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+  const pid = row.owner_pid;
+  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
+    if (pid === ctx.ownPid) {
+      return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
+    }
+    if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
+    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+      return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
+    }
+    return null;
+  }
+  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
+    return "owner unknown on this host and the scan started more than 6 h ago";
+  }
+  return null;
+}
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return !(error2 instanceof Error && "code" in error2 && error2.code === "ESRCH");
+  }
+}
+function rowToRecord(row) {
+  const record4 = {
+    scan_id: row.id,
+    scan_type: row.scan_type,
+    project_path: row.project_path,
+    tree_hash: row.tree_hash,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status,
+    tools_run: parseJsonArray(row.tools_run),
+    missing_tools: parseJsonArray(row.missing_tools),
+    report_paths: row.report_dir ? [row.report_dir] : []
+  };
+  if (row.cached_from) record4.cached_from = row.cached_from;
+  if (row.meta && row.meta !== "{}") {
+    try {
+      record4.meta = JSON.parse(row.meta);
+    } catch {
+    }
+  }
+  return record4;
 }
 
 // src/storage/localRuleIds.ts
@@ -37993,14 +38396,15 @@ function rekeyStoredLocalRuleIds(db, opts = {}) {
     return matcher;
   };
   const nextScans = db.prepare(
-    "SELECT rowid AS rid, id, project_path, status FROM scans WHERE rowid > ? ORDER BY rowid LIMIT ?"
+    "SELECT rowid AS rid, id, project_path, status, started_at, owner_pid, owner_host FROM scans WHERE rowid > ? ORDER BY rowid LIMIT ?"
   );
+  const reap = { ownPid: -1, ...opts.reap };
   let changed = 0;
   let batches = 0;
   let watermark = readWatermark(db);
   for (; ; ) {
     const page = nextScans.all(watermark, batchScans);
-    const running = page.findIndex((s) => s.status === "running");
+    const running = page.findIndex((s) => s.status === "running" && !runningScanIsOrphan(s, reap));
     const scans = running < 0 ? page : page.slice(0, running);
     const last = scans[scans.length - 1];
     if (last === void 0) break;
@@ -38423,35 +38827,6 @@ function shortHash(input) {
   return createHash3("sha1").update(input).digest("hex").slice(0, 16);
 }
 
-// src/storage/repoUtil.ts
-function nowIso() {
-  return (/* @__PURE__ */ new Date()).toISOString();
-}
-function boolToInt(value) {
-  return value ? 1 : 0;
-}
-function intToBool(value) {
-  return value === 1;
-}
-function parseJsonArray(raw, fallback = []) {
-  if (raw === null || raw === void 0 || raw === "") return fallback;
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
-}
-function parseJsonObject(raw, fallback) {
-  if (raw === null || raw === void 0 || raw === "") return fallback;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 // src/storage/agentAuditRepo.ts
 var AgentAuditRepo = class {
   constructor(db) {
@@ -38784,7 +39159,7 @@ var DOMAIN_ERROR_CODES = [
 ];
 
 // src/storage/findingsRepo.ts
-var WORKTREE_PATH_EXCLUSION = "%guardian-fixpr-wt-%";
+var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
 var SUPPRESSION_MATCHES_F = "(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) AND (s.project_path IS NULL OR s.project_path = l.project_path)";
 var FindingsRepo = class {
   constructor(db) {
@@ -38815,7 +39190,7 @@ var FindingsRepo = class {
     this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -38852,7 +39227,7 @@ var FindingsRepo = class {
     this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -39114,369 +39489,6 @@ var RuntimeMetaRepo = class {
     this.deleteStmt.run(key);
   }
 };
-
-// src/storage/scansRepo.ts
-import { hostname as hostname2 } from "node:os";
-var WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
-var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
-var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
-var ScansRepo = class {
-  constructor(db) {
-    this.db = db;
-    this.insertStmt = db.prepare(`
-      INSERT INTO scans (
-        id, scan_type, project_path, tree_hash,
-        started_at, status, tools_run, missing_tools, report_dir, meta,
-        owner_pid, owner_host, cache_key
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    this.finalizeStmt = db.prepare(`
-      UPDATE scans
-      SET status = ?, finished_at = ?, tools_run = ?, missing_tools = ?,
-          report_dir = COALESCE(?, report_dir), error = ?,
-          meta = COALESCE(?, meta)
-      WHERE id = ?
-    `);
-    this.markCancelledStmt = db.prepare(`
-      UPDATE scans
-      SET status = 'cancelled', finished_at = ?
-      WHERE id = ? AND status = 'running'
-    `);
-    this.listRunningStmt = db.prepare(`
-      SELECT id, started_at, owner_pid, owner_host FROM scans WHERE status = 'running'
-    `);
-    this.reapOneStmt = db.prepare(`
-      UPDATE scans
-      SET status = 'failed', finished_at = ?, error = ?
-      WHERE id = ? AND status = 'running'
-    `);
-    this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
-    this.getLatestStmt = db.prepare(`
-      SELECT * FROM scans
-      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT 1
-    `);
-    this.getLatestForProjectStmt = db.prepare(`
-      SELECT * FROM scans
-      WHERE status = 'completed' AND project_path = ?
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT 1
-    `);
-    this.listHistoryStmt = db.prepare(`
-      SELECT * FROM scans
-      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT ?
-    `);
-    this.listHistoryForProjectStmt = db.prepare(`
-      SELECT * FROM scans
-      WHERE project_path = ?
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT ?
-    `);
-    this.findCacheStmt = db.prepare(`
-      SELECT * FROM scans
-      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT 1
-    `);
-    this.attachCacheStmt = db.prepare(`
-      INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
-      VALUES (?, ?, ?, ?)
-    `);
-    this.countForProjectStmt = db.prepare(
-      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`
-    );
-  }
-  db;
-  insertStmt;
-  finalizeStmt;
-  markCancelledStmt;
-  listRunningStmt;
-  reapOneStmt;
-  getByIdStmt;
-  getLatestStmt;
-  getLatestForProjectStmt;
-  listHistoryStmt;
-  listHistoryForProjectStmt;
-  findCacheStmt;
-  attachCacheStmt;
-  countForProjectStmt;
-  completedOfTypesCache = /* @__PURE__ */ new Map();
-  insert(input) {
-    const started = nowIso();
-    this.insertStmt.run(
-      input.scan_id,
-      input.scan_type,
-      input.project_path,
-      input.tree_hash,
-      started,
-      "running",
-      "[]",
-      "[]",
-      input.report_dir ?? null,
-      JSON.stringify(input.meta ?? {}),
-      process.pid,
-      hostname2(),
-      input.cache_key ?? null
-    );
-    return {
-      scan_id: input.scan_id,
-      scan_type: input.scan_type,
-      project_path: input.project_path,
-      tree_hash: input.tree_hash,
-      started_at: started,
-      finished_at: null,
-      status: "running",
-      tools_run: [],
-      missing_tools: [],
-      report_paths: input.report_dir ? [input.report_dir] : []
-    };
-  }
-  /** Returns the `finished_at` it wrote, so a caller can report the row's real time. */
-  finalize(input) {
-    const finishedAt = nowIso();
-    this.finalizeStmt.run(
-      input.status,
-      finishedAt,
-      JSON.stringify(input.tools_run),
-      JSON.stringify(input.missing_tools),
-      input.report_dir ?? null,
-      input.error ?? null,
-      input.meta !== void 0 ? JSON.stringify(input.meta) : null,
-      input.scan_id
-    );
-    return finishedAt;
-  }
-  markCancelled(scanId) {
-    this.markCancelledStmt.run(nowIso(), scanId);
-  }
-  /**
-   * Fails scans left in `running` by a process that is gone (crash, kill -9).
-   *
-   * **Call it only at startup, before this process starts any scan** — the
-   * rule for this process's own pid below depends on that.
-   *
-   * Only DEAD owners' scans: several servers share one database, and the old
-   * sweep (`every running scan`) killed whatever another live server was
-   * scanning at the time. For a scan whose owner is on this host:
-   *   - the owner pid is THIS process's pid → reaped. This process has not
-   *     started a scan yet, so an earlier process with the same pid wrote the
-   *     row: a container restarted as pid 1 under the same hostname, or a pid
-   *     Windows handed out again;
-   *   - the pid no longer exists → reaped;
-   *   - the pid exists → left alone, until the scan is older than
-   *     {@link LIVE_OWNER_REAP_AFTER_MS} (the pid has been reused by then).
-   * A scan whose owner cannot be checked from here (none recorded, or another
-   * host) is reaped once older than {@link UNKNOWN_OWNER_REAP_AFTER_MS}.
-   */
-  reapRunning(options = {}) {
-    const now = options.now ?? Date.now();
-    const host = options.host ?? hostname2();
-    const ownPid = options.ownPid ?? process.pid;
-    const isAlive = options.isAlive ?? pidIsAlive;
-    let reaped = 0;
-    for (const row of this.listRunningStmt.all()) {
-      const reason = reapReason(row, { host, ownPid, now, isAlive });
-      if (reason === null) continue;
-      reaped += this.reapOneStmt.run(nowIso(), `reaped on startup: ${reason}`, row.id).changes;
-    }
-    return reaped;
-  }
-  getById(scanId) {
-    const row = this.getByIdStmt.get(scanId);
-    return row ? rowToRecord(row) : null;
-  }
-  /**
-   * The latest completed scan in the WHOLE database, from ANY project and of
-   * ANY type — no `project_path` filter. Only for a caller with genuinely no
-   * project in scope; a reader answering for a project uses
-   * `history/openSet.ts` (the open set, or the latest usable scan of a type),
-   * and one that wants that project's history uses `getLatestForProject`.
-   */
-  getLatest() {
-    const row = this.getLatestStmt.get();
-    return row ? rowToRecord(row) : null;
-  }
-  /** The latest completed scan FOR ONE project. Mirrors `surfaceRepo.ts`'s
-   *  `getLatestForProject` and `findingsRepo.ts`'s `listOpenForProject`. */
-  getLatestForProject(projectPath) {
-    const row = this.getLatestForProjectStmt.get(projectPath);
-    return row ? rowToRecord(row) : null;
-  }
-  /**
-   * Scan history across the WHOLE database, from ANY project — no
-   * `project_path` filter and no `status` filter (unlike `getLatest`, every
-   * status is included; see `listHistoryStmt`'s own comment). Excludes
-   * `create_fix_pr`'s own verification re-scans, the same as `getLatest` —
-   * see this file's own module comment. A caller that DID resolve a
-   * `project_path` must use `listHistoryForProject` instead, for the same
-   * reason `getLatest`'s own doc comment gives.
-   */
-  listHistory(limit = 50) {
-    return this.listHistoryStmt.all(limit).map(rowToRecord);
-  }
-  /**
-   * `listHistory`, scoped to one project — never all scans filtered in JS,
-   * which would silently truncate at whatever `limit` the caller used before
-   * the JS-side filter even ran. Mirrors `getLatestForProject`'s relationship
-   * to `getLatest`: same "this project" vs. "any project" split, for a
-   * history list instead of a single latest row.
-   */
-  listHistoryForProject(projectPath, limit = 50) {
-    return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
-  }
-  /**
-   * Every pass name the completed scans of `type` for `projectPath` ever
-   * recorded in `tools_run`, and whether one of them recorded no bookkeeping
-   * at all — the widest holder the open set's carry-forward walk has to
-   * allow for before it can stop (`runCompare.ts#StillCarry`).
-   */
-  runNamesOfType(projectPath, type) {
-    const names = this.db.prepare(
-      `SELECT DISTINCT json_extract(je.value, '$.name') AS name
-           FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
-          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`
-    ).all(projectPath, type).map((r) => r.name).filter((n2) => typeof n2 === "string");
-    const empty = this.db.prepare(
-      `SELECT COUNT(*) AS n FROM scans
-          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
-            AND (tools_run IS NULL OR tools_run IN ('', '[]'))
-            AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`
-    ).get(projectPath, type);
-    return { names, anyEmpty: (empty?.n ?? 0) > 0 };
-  }
-  /**
-   * Completed scans of `types` for ONE project, newest first, as one SQL
-   * query — the latest scan of a type is found however many other scans
-   * (of other types, or of other projects) were written after it. Every
-   * "find the latest scan of type X" used to search `listHistory(50)`, a
-   * window of the 50 newest rows in the whole database, and read "no such
-   * scan" once 50 others had run since.
-   *
-   * `beforeScanId` keeps only scans strictly older than that one, and
-   * `afterScanId` only scans strictly newer, in the same (started_at, rowid)
-   * order — how "the previous scan" is found, and how a search that only
-   * matters above some scan stops there. `excludeWithChildScans` drops rows
-   * whose `meta.child_scans` is an array (an orchestrated
-   * `security_scan_full` parent) in SQL, so a search for script-era rows does
-   * not page through every orchestrated run to find none. Paged by `limit` /
-   * `offset` for callers that skip some rows (a scan with coverage none, a
-   * scoped run) and must keep looking.
-   */
-  listCompletedOfTypes(projectPath, types, opts) {
-    if (types.length === 0) return [];
-    const shape = {
-      before: opts.beforeScanId !== void 0,
-      after: opts.afterScanId !== void 0,
-      noParents: opts.excludeWithChildScans === true
-    };
-    const stmt = this.completedOfTypesStmt(types.length, shape);
-    const params = [projectPath, ...types];
-    if (opts.beforeScanId !== void 0) params.push(opts.beforeScanId);
-    if (opts.afterScanId !== void 0) params.push(opts.afterScanId);
-    params.push(opts.limit, opts.offset ?? 0);
-    return stmt.all(...params).map(rowToRecord);
-  }
-  /**
-   * `scanIds`, newest first in the one order every "latest" query here uses
-   * — `started_at DESC, rowid DESC` — so two scans started in the same
-   * millisecond still sort the way SQL picked them. Unknown ids are dropped.
-   */
-  sortNewestFirst(scanIds) {
-    if (scanIds.length === 0) return [];
-    const placeholders = scanIds.map(() => "?").join(", ");
-    return this.db.prepare(
-      `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`
-    ).all(...scanIds).map((r) => r.id);
-  }
-  /** How many scans (any status, any type) one project has recorded. */
-  countForProject(projectPath) {
-    return this.countForProjectStmt.get(projectPath)?.n ?? 0;
-  }
-  completedOfTypesStmt(arity, shape) {
-    const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
-    const cached2 = this.completedOfTypesCache.get(key);
-    if (cached2 !== void 0) return cached2;
-    const placeholders = Array.from({ length: arity }, () => "?").join(", ");
-    const beforeClause = shape.before ? "AND (started_at, rowid) < (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
-    const afterClause = shape.after ? "AND (started_at, rowid) > (SELECT started_at, rowid FROM scans WHERE id = ?)" : "";
-    const parentClause = shape.noParents ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'" : "";
-    const stmt = this.db.prepare(`
-      SELECT * FROM scans
-      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
-        ${beforeClause} ${afterClause} ${parentClause}
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT ? OFFSET ?
-    `);
-    this.completedOfTypesCache.set(key, stmt);
-    return stmt;
-  }
-  /**
-   * Returns the most recent completed scan stored under exactly `cache_key`
-   * which started no earlier than `freshThreshold`. The factory uses this to
-   * honour US-8 AC-2 (5-minute cache window); the key is built by
-   * `treeHash/cacheKey.ts#scanCacheKey`.
-   */
-  findCacheHit(args) {
-    const row = this.findCacheStmt.get(args.cache_key, args.freshThreshold);
-    return row ? rowToRecord(row) : null;
-  }
-  attachTreeCache(args) {
-    this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
-  }
-};
-function reapReason(row, ctx) {
-  const started = Date.parse(row.started_at);
-  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
-  const pid = row.owner_pid;
-  if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
-    if (pid === ctx.ownPid) {
-      return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
-    }
-    if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
-    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
-      return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
-    }
-    return null;
-  }
-  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
-    return "owner unknown on this host and the scan started more than 6 h ago";
-  }
-  return null;
-}
-function pidIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error2) {
-    return !(error2 instanceof Error && "code" in error2 && error2.code === "ESRCH");
-  }
-}
-function rowToRecord(row) {
-  const record4 = {
-    scan_id: row.id,
-    scan_type: row.scan_type,
-    project_path: row.project_path,
-    tree_hash: row.tree_hash,
-    started_at: row.started_at,
-    finished_at: row.finished_at,
-    status: row.status,
-    tools_run: parseJsonArray(row.tools_run),
-    missing_tools: parseJsonArray(row.missing_tools),
-    report_paths: row.report_dir ? [row.report_dir] : []
-  };
-  if (row.cached_from) record4.cached_from = row.cached_from;
-  if (row.meta && row.meta !== "{}") {
-    try {
-      record4.meta = JSON.parse(row.meta);
-    } catch {
-    }
-  }
-  return record4;
-}
 
 // src/storage/stackRepo.ts
 var StackRepo = class {
@@ -41226,10 +41238,10 @@ function globBody(pattern) {
       re += `[${negate ? "^" : ""}${cls}]`;
       i2 = close + 1;
     } else if (c3 === "\\" && i2 + 1 < pattern.length) {
-      re += escapeRegExp2(pattern.charAt(i2 + 1));
+      re += escapeRegExp(pattern.charAt(i2 + 1));
       i2 += 2;
     } else {
-      re += escapeRegExp2(c3);
+      re += escapeRegExp(c3);
       i2 += 1;
     }
   }
@@ -41248,7 +41260,7 @@ function findClassEnd(pattern, start) {
   }
   return -1;
 }
-function escapeRegExp2(text) {
+function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 async function loadProjectExclusions(projectPath) {
@@ -41451,11 +41463,11 @@ function globToRegExp(pattern) {
         re += "\\{";
         continue;
       }
-      const alternatives = p.slice(i2 + 1, close).split(",").map(escapeRegExp3);
+      const alternatives = p.slice(i2 + 1, close).split(",").map(escapeRegExp2);
       re += `(?:${alternatives.join("|")})`;
       i2 = close;
     } else {
-      re += escapeRegExp3(c3);
+      re += escapeRegExp2(c3);
     }
   }
   return new RegExp(`^${re}$`);
@@ -41501,7 +41513,7 @@ function expandGlob(root, pattern) {
   walk4(root);
   return out.sort();
 }
-function escapeRegExp3(text) {
+function escapeRegExp2(text) {
   return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 
@@ -67482,9 +67494,9 @@ function editPipPin(worktreePath, step) {
   } catch {
     return { ok: false, label, reason: `'${file}' is not in the committed tree` };
   }
-  const name = step.package_name.split(/[-_.]+/).map(escapeRegExp4).join("[-_.]+");
+  const name = step.package_name.split(/[-_.]+/).map(escapeRegExp3).join("[-_.]+");
   const pin = new RegExp(
-    `(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp4(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`,
+    `(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp3(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`,
     "gim"
   );
   let count2 = 0;
@@ -67519,7 +67531,7 @@ function firstStderrLine(stderr) {
   }
   return "(no stderr output)";
 }
-function escapeRegExp4(text) {
+function escapeRegExp3(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 

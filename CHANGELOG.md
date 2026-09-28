@@ -1032,7 +1032,13 @@ keeps working (migrations 004–011 are additive).
   validations): in batches that commit as they go, so a start that is
   stopped keeps its progress, and on each later start for rows an older
   plugin process wrote since (200 000 rows: about 40 s once, on a loaded
-  machine; nothing new: 1 ms). A committed `.guardian/baseline.json` is
+  machine; nothing new: 1 ms); a scan left `running` by a process that is
+  gone does not hold it back. Only an install in Claude Code's plugin cache
+  layout (`…/<marketplace>/dev-guardian/<version>/`) is recognised across
+  versions — the running install and one version directory beside it.
+  Findings stored by an install anywhere else (`--plugin-dir`, another
+  marketplace name, a fork's directory) keep their old ids, by design, and
+  read as new once after the update. A committed `.guardian/baseline.json` is
   unaffected: `dev-guardian scan` runs no plugin pack, and a project rule's
   id did not change.
 - **`scan_dast` over a surface whose route recovery failed** read coverage

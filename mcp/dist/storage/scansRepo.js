@@ -393,6 +393,21 @@ export class ScansRepo {
         this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
     }
 }
+/**
+ * Whether a `running` scan's owner is gone, by the reaper's own rule
+ * ({@link ScansRepo.reapRunning}) — for a reader that must not wait on a scan
+ * nobody will finish (`storage/localRuleIds.ts`, which runs before the
+ * reaper does). A live owner, or one that cannot be judged yet, is not.
+ */
+export function runningScanIsOrphan(row, options = {}) {
+    const ctx = {
+        now: options.now ?? Date.now(),
+        host: options.host ?? hostname(),
+        ownPid: options.ownPid ?? process.pid,
+        isAlive: options.isAlive ?? pidIsAlive,
+    };
+    return reapReason({ id: '', ...row }, ctx) !== null;
+}
 /** Why `row` should be reaped, or null to leave it running. */
 function reapReason(row, ctx) {
     // A timestamp that does not parse was not written by a live scan of ours.

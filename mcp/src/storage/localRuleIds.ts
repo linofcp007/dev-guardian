@@ -40,7 +40,11 @@
  * scans written since — rows an older plugin process sharing the database
  * wrote with the old ids are re-keyed then — so a start with nothing new
  * costs one indexed query. The walk stops before a scan still `running`: its
- * findings may not all be in yet. Changes values, never the schema.
+ * findings may not all be in yet — unless its owner is gone, by the reaper's
+ * own rule (`scansRepo.ts#runningScanIsOrphan`): that scan will never be
+ * finished, and the reaper, which runs after the database is opened, has not
+ * failed it yet. Waiting on it held the re-key back a whole start (round 3's
+ * review, M-1). Changes values, never the schema.
  *
  * `.guardian/baseline.json` is not touched and needs nothing: it never holds
  * a plugin-pack finding (`dev-guardian scan` runs no plugin pack), and the
@@ -52,6 +56,7 @@ import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
 import { rekeyStoredIdentities } from '../fingerprint/findingIdentity.js';
 import { pluginPackIdMatcher, pluginPacksDir, ruleIdsInDir } from '../runners/semgrepRuleIds.js';
 import type { DB } from './db.js';
+import { runningScanIsOrphan, type ReapOptions } from './scansRepo.js';
 
 /** The last `scans.rowid` whose findings the re-key has looked at. */
 export const WATERMARK_KEY = 'local_rule_ids_rekey_rowid';
@@ -83,6 +88,8 @@ export interface RekeyOptions {
   batchScans?: number;
   /** Called after each committed batch, with how many have committed so far. */
   afterBatch?: (batches: number) => void;
+  /** How a `running` scan's owner is judged (`scansRepo.ts#runningScanIsOrphan`). */
+  reap?: ReapOptions;
 }
 
 function readWatermark(db: DB): number {
@@ -107,15 +114,21 @@ export function rekeyStoredLocalRuleIds(db: DB, opts: RekeyOptions = {}): number
     matcher ??= pluginPackIdMatcher(packsDir, opts.packRuleIds ?? ruleIdsInDir(packsDir));
     return matcher;
   };
-  const nextScans = db.prepare<[number, number], { rid: number; id: string; project_path: string; status: string }>(
-    'SELECT rowid AS rid, id, project_path, status FROM scans WHERE rowid > ? ORDER BY rowid LIMIT ?',
+  const nextScans = db.prepare<
+    [number, number],
+    { rid: number; id: string; project_path: string; status: string; started_at: string; owner_pid: number | null; owner_host: string | null }
+  >(
+    'SELECT rowid AS rid, id, project_path, status, started_at, owner_pid, owner_host FROM scans WHERE rowid > ? ORDER BY rowid LIMIT ?',
   );
+  // This process has started no scan yet, but it is alive: its own pid is
+  // judged like any other, never taken as a dead owner's.
+  const reap: ReapOptions = { ownPid: -1, ...opts.reap };
   let changed = 0;
   let batches = 0;
   let watermark = readWatermark(db);
   for (;;) {
     const page = nextScans.all(watermark, batchScans);
-    const running = page.findIndex((s) => s.status === 'running');
+    const running = page.findIndex((s) => s.status === 'running' && !runningScanIsOrphan(s, reap));
     const scans = running < 0 ? page : page.slice(0, running);
     const last = scans[scans.length - 1];
     if (last === undefined) break;
