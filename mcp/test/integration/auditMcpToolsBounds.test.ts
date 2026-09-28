@@ -54,7 +54,9 @@ interface ServerReport {
 
 interface AuditResult {
   ok: true;
+  scan_id: string;
   coverage: string;
+  findings: Array<{ rule_id?: string; severity: string; title: string; message?: string; snippet?: string }>;
   servers: ServerReport[];
   tools_run: Array<{ name: string; status: string; reason?: string }>;
   missing_tools: string[];
@@ -84,10 +86,11 @@ function project(servers: Record<string, unknown>): string {
 async function audit(
   input: Record<string, unknown>,
   meta?: { signal: AbortSignal },
+  plugin: PluginContext = makePlugin(),
 ): Promise<AuditResult> {
   const tool = TOOLS.find((t) => t.name === 'audit_mcp_tools');
   if (tool === undefined) throw new Error('audit_mcp_tools not registered');
-  const r = (await tool.handler(input, makePlugin(), meta)) as unknown as AuditResult | { ok: false; error: unknown };
+  const r = (await tool.handler(input, plugin, meta)) as unknown as AuditResult | { ok: false; error: unknown };
   if (!r.ok) throw new Error(`audit failed: ${JSON.stringify(r.error)}`);
   return r;
 }
@@ -193,6 +196,43 @@ describe('C1: the audit keeps its own time', () => {
  * 4000 enum strings, 27 s; three such servers, 44 s at 1.7 GB RSS, and a
  * heap abort under --max-old-space-size=600.
  */
+/**
+ * Fix round 5, I-1 (reproduced): one tool holding 6000 nested arrays
+ * (~12 KB) threw `RangeError: Maximum call stack size exceeded` in the pin
+ * hash, outside any per-server guard — another server's findings and pins
+ * were lost and the whole scan failed.
+ */
+describe('I-1: one server cannot cost another its results', () => {
+  it('audits a server with a value 6000 arrays deep beside a poisoned one: both reported, the deep one partial', async () => {
+    const plugin = makePlugin();
+    const dir = project({ deep: stdio('deep'), bad: stdio('poisoned', { env: { MARK: 'bad' } }) });
+    const r = await audit({ project_path: dir, servers: ['deep', 'bad'], timeout_ms: 60_000 }, undefined, plugin);
+    const deep = r.servers.find((s) => s.name === 'deep');
+    expect(deep?.status).toBe('partial');
+    expect(r.findings.some((f) => f.rule_id === 'mcp-tool-schema-too-deep')).toBe(true);
+    expect(r.servers.find((s) => s.name === 'bad')?.status).toBe('ok');
+    expect(r.findings.some((f) => f.rule_id === 'mcp-tool-poisoning' && f.title.includes("'bad'"))).toBe(true);
+    expect(plugin.storage.scans.getById(r.scan_id)?.status).toBe('completed');
+  });
+
+  it("keeps the other servers' results when processing one server throws", async () => {
+    const plugin = makePlugin();
+    const original = plugin.storage.mcpToolPins.getServerPins.bind(plugin.storage.mcpToolPins);
+    vi.spyOn(plugin.storage.mcpToolPins, 'getServerPins').mockImplementation((projectPath, serverKey) => {
+      if (serverKey.includes('"first"')) throw new Error('storage exploded');
+      return original(projectPath, serverKey);
+    });
+    const dir = project({ first: stdio('poisoned', { env: { MARK: 'first' } }), second: stdio('poisoned', { env: { MARK: 'second' } }) });
+    const r = await audit({ project_path: dir, servers: ['first', 'second'], timeout_ms: 60_000 }, undefined, plugin);
+    const first = r.servers.find((s) => s.name === 'first');
+    expect(first?.status).toBe('partial');
+    expect(first?.reason).toContain('storage exploded');
+    expect(r.servers.find((s) => s.name === 'second')?.status).toBe('ok');
+    expect(r.findings.some((f) => f.title.includes("'second'"))).toBe(true);
+    expect(r.coverage).toBe('partial');
+  });
+});
+
 describe('C1 residual: the analysis is bounded, yields, and is never a clean pass when cut', () => {
   const quick = (r: ChildAudit): void => {
     expect(r.killed, 'the audit never returned and was killed').toBe(false);

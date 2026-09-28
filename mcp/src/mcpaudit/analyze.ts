@@ -212,7 +212,10 @@ const YIELD_EVERY_STRINGS = 1000;
 const MAX_DEPTH = 128;
 
 /** Every string in `value` and every object key, iteratively; a bound reached is pushed to `cuts`. */
-function* walkStrings(value: unknown, root: string, item: string, cuts: string[]): Generator<TextField> {
+/** Called once per walk that met nesting past {@link MAX_DEPTH}. */
+type OnTooDeep = (item: string, root: string) => void;
+
+function* walkStrings(value: unknown, root: string, item: string, onTooDeep: OnTooDeep): Generator<TextField> {
   const stack: Array<{ v: unknown; path: string; depth: number }> = [{ v: value, path: root, depth: 0 }];
   let tooDeep = false;
   while (stack.length > 0) {
@@ -242,7 +245,7 @@ function* walkStrings(value: unknown, root: string, item: string, cuts: string[]
       stack.push({ v: child, path: childPath, depth: depth + 1 });
     }
   }
-  if (tooDeep) cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
+  if (tooDeep) onTooDeep(item, root);
 }
 
 /** A name as it may appear in a finding: visible, and short. */
@@ -256,7 +259,7 @@ interface ItemFields {
   fields: Iterable<TextField>;
 }
 
-function* itemsOf(listing: ServerListing, cuts: string[]): Generator<ItemFields> {
+function* itemsOf(listing: ServerListing, onTooDeep: OnTooDeep): Generator<ItemFields> {
   if (listing.instructions !== undefined) {
     yield { item: 'server instructions', fields: [{ item: 'server instructions', path: 'instructions', text: listing.instructions }] };
   }
@@ -268,9 +271,9 @@ function* itemsOf(listing: ServerListing, cuts: string[]): Generator<ItemFields>
         yield { item, path: 'name', text: t.name };
         if (t.title !== undefined) yield { item, path: 'title', text: t.title };
         if (t.description !== undefined) yield { item, path: 'description', text: t.description };
-        yield* walkStrings(t.inputSchema, 'inputSchema', item, cuts);
-        yield* walkStrings(t.outputSchema, 'outputSchema', item, cuts);
-        yield* walkStrings(t.annotations, 'annotations', item, cuts);
+        yield* walkStrings(t.inputSchema, 'inputSchema', item, onTooDeep);
+        yield* walkStrings(t.outputSchema, 'outputSchema', item, onTooDeep);
+        yield* walkStrings(t.annotations, 'annotations', item, onTooDeep);
       })(),
     };
   }
@@ -282,7 +285,7 @@ function* itemsOf(listing: ServerListing, cuts: string[]): Generator<ItemFields>
         yield { item, path: 'name', text: p.name };
         if (p.title !== undefined) yield { item, path: 'title', text: p.title };
         if (p.description !== undefined) yield { item, path: 'description', text: p.description };
-        yield* walkStrings(p.arguments, 'arguments', item, cuts);
+        yield* walkStrings(p.arguments, 'arguments', item, onTooDeep);
       })(),
     };
   }
@@ -447,6 +450,16 @@ function ruleMeta(id: McpRuleId): Omit<Hit, 'field' | 'index' | 'detail'> {
         explain:
           'The text carries a long base64 run. A description has no use for one; an instruction encoded this ' +
           'way passes every plain-text check, and the model can decode it.',
+      };
+    case 'mcp-tool-schema-too-deep':
+      return {
+        rule: id,
+        severity: 'medium',
+        subcategory: 'mcp_tool_poisoning',
+        label: 'a value nested too deep to analyse',
+        explain:
+          `A value is nested more than ${MAX_DEPTH} levels deep. No real schema needs that — a few levels is ` +
+          'normal — and what lies deeper was not analysed; it is still covered by the pin.',
       };
     case 'mcp-tool-string-over-bound':
       return {
@@ -706,7 +719,18 @@ function formatChars(n: number): string {
 function* analysisSteps(run: AnalysisRun): Generator<void> {
   const { listing, bounds } = run;
   let overlong = false;
-  for (const { fields } of itemsOf(listing, run.cuts)) {
+  // Nesting past the bound is a finding and a cut (fix round 5, I-1): a real
+  // schema is a few levels deep; thousands is a value built to break things.
+  const onTooDeep: OnTooDeep = (item, root) => {
+    run.cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
+    addHit(run, {
+      ...ruleMeta('mcp-tool-schema-too-deep'),
+      field: { item, path: root, text: '' },
+      index: 0,
+      detail: `more than ${MAX_DEPTH} levels`,
+    });
+  };
+  for (const { fields } of itemsOf(listing, onTooDeep)) {
     for (const field of fields) {
       if (run.strings >= bounds.maxStrings) {
         run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);

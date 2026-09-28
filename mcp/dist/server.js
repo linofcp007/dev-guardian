@@ -58838,7 +58838,7 @@ async function ensureLabels(cwd, labels) {
     }
   }
   const applied = [];
-  const omitted = [];
+  const omitted2 = [];
   for (const label of labels) {
     if (known.has(label.toLowerCase())) {
       applied.push(label);
@@ -58851,9 +58851,9 @@ async function ensureLabels(cwd, labels) {
       timeoutMs: 15e3
     });
     if (created.outcome === "completed" || /already exists/i.test(created.stderr)) applied.push(label);
-    else omitted.push(label);
+    else omitted2.push(label);
   }
-  return { applied, omitted };
+  return { applied, omitted: omitted2 };
 }
 function firstLine5(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
@@ -69638,19 +69638,50 @@ import { randomUUID as randomUUID18 } from "node:crypto";
 
 // src/agentaudit/hash.ts
 import { createHash as createHash13 } from "node:crypto";
-function stableStringify2(value) {
-  return JSON.stringify(sortKeys(value));
-}
-function sortKeys(value) {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value !== null && typeof value === "object") {
-    const out = {};
-    for (const key of Object.keys(value).sort()) {
-      out[key] = sortKeys(value[key]);
-    }
-    return out;
+var Literal = class {
+  constructor(text) {
+    this.text = text;
   }
-  return value;
+  text;
+};
+function omitted(v) {
+  return v === void 0 || typeof v === "function" || typeof v === "symbol";
+}
+function stableStringify2(value) {
+  const parts = [];
+  const stack = [value];
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (item instanceof Literal) {
+      parts.push(item.text);
+      continue;
+    }
+    if (Array.isArray(item)) {
+      parts.push("[");
+      stack.push(new Literal("]"));
+      for (let i2 = item.length - 1; i2 >= 0; i2 -= 1) {
+        const element = item[i2];
+        stack.push(omitted(element) ? new Literal("null") : element);
+        if (i2 > 0) stack.push(new Literal(","));
+      }
+      continue;
+    }
+    if (item !== null && typeof item === "object") {
+      const record4 = item;
+      const keys = Object.keys(record4).sort().filter((k) => !omitted(record4[k]));
+      parts.push("{");
+      stack.push(new Literal("}"));
+      for (let i2 = keys.length - 1; i2 >= 0; i2 -= 1) {
+        const key = keys[i2] ?? "";
+        stack.push(record4[key]);
+        stack.push(new Literal(`${JSON.stringify(key)}:`));
+        if (i2 > 0) stack.push(new Literal(","));
+      }
+      continue;
+    }
+    parts.push(omitted(item) ? "null" : JSON.stringify(item) ?? "null");
+  }
+  return parts.join("");
 }
 function hashConfigValue(value) {
   return createHash13("sha256").update(stableStringify2(value)).digest("hex");
@@ -71231,7 +71262,7 @@ var ANALYSIS_BOUNDS = {
 };
 var YIELD_EVERY_STRINGS = 1e3;
 var MAX_DEPTH = 128;
-function* walkStrings(value, root, item, cuts) {
+function* walkStrings(value, root, item, onTooDeep) {
   const stack = [{ v: value, path: root, depth: 0 }];
   let tooDeep = false;
   while (stack.length > 0) {
@@ -71261,13 +71292,13 @@ function* walkStrings(value, root, item, cuts) {
       stack.push({ v: child, path: childPath, depth: depth + 1 });
     }
   }
-  if (tooDeep) cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
+  if (tooDeep) onTooDeep(item, root);
 }
 function shortName(name) {
   const visible = escapeInvisible(name);
   return visible.length > 80 ? `${visible.slice(0, 80)}\u2026` : visible;
 }
-function* itemsOf(listing, cuts) {
+function* itemsOf(listing, onTooDeep) {
   if (listing.instructions !== void 0) {
     yield { item: "server instructions", fields: [{ item: "server instructions", path: "instructions", text: listing.instructions }] };
   }
@@ -71279,9 +71310,9 @@ function* itemsOf(listing, cuts) {
         yield { item, path: "name", text: t.name };
         if (t.title !== void 0) yield { item, path: "title", text: t.title };
         if (t.description !== void 0) yield { item, path: "description", text: t.description };
-        yield* walkStrings(t.inputSchema, "inputSchema", item, cuts);
-        yield* walkStrings(t.outputSchema, "outputSchema", item, cuts);
-        yield* walkStrings(t.annotations, "annotations", item, cuts);
+        yield* walkStrings(t.inputSchema, "inputSchema", item, onTooDeep);
+        yield* walkStrings(t.outputSchema, "outputSchema", item, onTooDeep);
+        yield* walkStrings(t.annotations, "annotations", item, onTooDeep);
       })()
     };
   }
@@ -71293,7 +71324,7 @@ function* itemsOf(listing, cuts) {
         yield { item, path: "name", text: p.name };
         if (p.title !== void 0) yield { item, path: "title", text: p.title };
         if (p.description !== void 0) yield { item, path: "description", text: p.description };
-        yield* walkStrings(p.arguments, "arguments", item, cuts);
+        yield* walkStrings(p.arguments, "arguments", item, onTooDeep);
       })()
     };
   }
@@ -71414,6 +71445,14 @@ function ruleMeta(id) {
         subcategory: "mcp_tool_poisoning",
         label: "a large encoded blob",
         explain: "The text carries a long base64 run. A description has no use for one; an instruction encoded this way passes every plain-text check, and the model can decode it."
+      };
+    case "mcp-tool-schema-too-deep":
+      return {
+        rule: id,
+        severity: "medium",
+        subcategory: "mcp_tool_poisoning",
+        label: "a value nested too deep to analyse",
+        explain: `A value is nested more than ${MAX_DEPTH} levels deep. No real schema needs that \u2014 a few levels is normal \u2014 and what lies deeper was not analysed; it is still covered by the pin.`
       };
     case "mcp-tool-string-over-bound":
       return {
@@ -71564,7 +71603,16 @@ function formatChars(n2) {
 function* analysisSteps(run) {
   const { listing, bounds } = run;
   let overlong = false;
-  for (const { fields } of itemsOf(listing, run.cuts)) {
+  const onTooDeep = (item, root) => {
+    run.cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
+    addHit(run, {
+      ...ruleMeta("mcp-tool-schema-too-deep"),
+      field: { item, path: root, text: "" },
+      index: 0,
+      detail: `more than ${MAX_DEPTH} levels`
+    });
+  };
+  for (const { fields } of itemsOf(listing, onTooDeep)) {
     for (const field2 of fields) {
       if (run.strings >= bounds.maxStrings) {
         run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);
@@ -75446,18 +75494,26 @@ async function runAudit(ctx, run, callMeta) {
     };
     const partialReasons = outcome.status === "partial" ? [outcome.reason ?? "the listing was cut short"] : [];
     const complete = partialReasons.length === 0;
-    const comparison = comparePins(
-      listing,
-      ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
-      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
-      { complete }
-    );
-    findings.push(...comparison.findings);
-    const analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
-    findings.push(...analysis.findings);
-    if (analysis.cuts.length > 0) partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join("; ")}`);
+    const serverFindings = [];
+    let comparison = null;
+    let analysis = null;
+    try {
+      comparison = comparePins(
+        listing,
+        ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
+        ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
+        { complete }
+      );
+      serverFindings.push(...comparison.findings);
+      analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
+      serverFindings.push(...analysis.findings);
+      if (analysis.cuts.length > 0) partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join("; ")}`);
+    } catch (e) {
+      const message3 = e instanceof Error ? e.message : String(e);
+      partialReasons.push(`this server's listing could not be fully processed (${message3.slice(0, 200)}); its pins were left as they were`);
+    }
     const reason = partialReasons.length === 0 ? void 0 : escapeInvisible(partialReasons.join("; "));
-    const warnings2 = [...withTransport.warnings ?? [], ...visibleList(comparison.warnings)];
+    const warnings2 = [...withTransport.warnings ?? [], ...visibleList(comparison?.warnings ?? [])];
     const report = {
       name: escapeInvisible(name),
       ...withTransport,
@@ -75475,11 +75531,13 @@ async function runAudit(ctx, run, callMeta) {
       resources_count: normalized.resources.length,
       resource_templates_count: normalized.resourceTemplates.length,
       ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {},
-      pins: {
-        first_audit: comparison.firstAudit,
-        changed: visibleList(comparison.changed),
-        added: visibleList(comparison.added),
-        removed: visibleList(comparison.removed)
+      ...comparison === null ? {} : {
+        pins: {
+          first_audit: comparison.firstAudit,
+          changed: visibleList(comparison.changed),
+          added: visibleList(comparison.added),
+          removed: visibleList(comparison.removed)
+        }
       }
     };
     const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;
@@ -75498,10 +75556,12 @@ async function runAudit(ctx, run, callMeta) {
         sourceLabel: listing.sourceLabel,
         ownToolNames: new Set(listing.tools.map((t) => t.name))
       },
-      mentions: analysis.mentions,
+      mentions: analysis?.mentions ?? { bare: /* @__PURE__ */ new Map(), quoted: /* @__PURE__ */ new Map(), full: false, reported: /* @__PURE__ */ new Set() },
       toolNames: listing.tools.map((t) => t.name),
-      pins: comparison.pins,
-      complete
+      // Pins are written only for a server fully compared AND analysed.
+      pins: comparison !== null && analysis !== null ? comparison.pins : null,
+      complete,
+      findings: serverFindings
     });
   }
   const others = audited.map((a2) => ({
@@ -75522,11 +75582,13 @@ async function runAudit(ctx, run, callMeta) {
   for (const [serverKey, toolNames] of pinned) {
     others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
   }
-  for (const a2 of audited) findings.push(...shadowingFromMentions(a2.target, a2.mentions, others));
+  for (const a2 of audited) a2.findings.push(...shadowingFromMentions(a2.target, a2.mentions, others));
+  for (const a2 of audited) findings.push(...a2.findings);
   if (findings.length > 0) {
     ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   }
   for (const a2 of audited) {
+    if (a2.pins === null) continue;
     if (a2.complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, a2.target.serverKey, a2.pins);
     else ctx.storage.mcpToolPins.upsertServerPins(projectPath, a2.target.serverKey, a2.pins);
   }

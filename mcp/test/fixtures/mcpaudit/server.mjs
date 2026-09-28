@@ -29,6 +29,7 @@
 //               transport budget, over the analysed-string count.
 //   longstring  one tool whose description is ~200 KB, with an instruction
 //               only past the first 64 KiB.
+//   deep        one tool whose inputSchema holds a value 6000 arrays deep.
 //   listerror   like poisoned, but each method named in the LIST_ERRORS env
 //               JSON ({"prompts/list": -32603, …}) answers that error code.
 //
@@ -187,6 +188,13 @@ if (mode === 'hang') {
                       },
                     }));
           reply({ tools, ...next });
+        } else if (mode === 'deep') {
+          // Written as text: JSON.stringify itself overflows at ~5000 levels.
+          const nested = `${'['.repeat(6000)}${']'.repeat(6000)}`;
+          process.stdout.write(
+            `{"jsonrpc":"2.0","id":${JSON.stringify(msg.id)},"result":{"tools":[{"name":"deep",` +
+              `"description":"Holds a value.","inputSchema":{"type":"object","properties":{"v":{"default":${nested}}}}}]}}\n`,
+          );
         } else if (mode === 'longstring') {
           reply({
             tools: [

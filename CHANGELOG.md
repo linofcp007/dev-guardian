@@ -57,6 +57,12 @@ version bump.
   read unchanged), and a duplicate tool name is a high `mcp-tool-duplicate-name`; pin lists and
   everything stored in the scan are escaped (a tool name carrying tag characters came back raw); a
   qualified and a bare name reaching the same launch start it once.
+- A value nested some thousands of levels deep (6000 arrays, ~12 KB) overflowed the stack in the
+  recursive hash and took the whole audit down, another server's results with it. The canonical
+  serialiser behind every pin (and `agent_config_hashes`) is iterative and byte-identical to the old
+  one; nesting past 128 levels is `mcp-tool-schema-too-deep` and makes the server partial; the pin
+  comparison and the analysis run under a per-server guard, so one server's failure is that server's
+  partial, never the audit's.
 - A list method answering an error other than MethodNotFound (-32601) makes the server partial, with
   the reason, for every list method (reproduced: -32603 on `resources/templates/list` read ok, coverage
   full); -32601 stays silent.

@@ -22,6 +22,7 @@ export type McpRuleId =
   | 'mcp-tool-hidden-unicode'
   | 'mcp-tool-homoglyph'
   | 'mcp-tool-string-over-bound'
+  | 'mcp-tool-schema-too-deep'
   | 'mcp-tool-sensitive-file-access'
   | 'mcp-tool-conceal-from-user'
   | 'mcp-tool-exfiltration'

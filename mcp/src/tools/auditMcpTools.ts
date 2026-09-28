@@ -48,12 +48,13 @@ import {
   MCP_AUDIT_TOOL_NAME,
   normalizeListing,
   shadowingFromMentions,
+  type ListingAnalysis,
   type MentionIndex,
   type OtherServer,
   type ServerListing,
   type ShadowTarget,
 } from '../mcpaudit/analyze.js';
-import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
+import { comparePins, parsePinKey, type PinComparison } from '../mcpaudit/pins.js';
 import { isListed, probeServer, type ProbeOutcome } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '../mcpaudit/select.js';
@@ -242,9 +243,12 @@ interface Audited {
   target: ShadowTarget;
   mentions: MentionIndex;
   toolNames: string[];
-  pins: McpPin[];
+  /** Null when the server could not be fully processed: its stored pins are left as they were. */
+  pins: McpPin[] | null;
   /** False when the listing was cut short: pins are then only added to, never replaced. */
   complete: boolean;
+  /** This server's findings, the cross-server ones added at the end. */
+  findings: Finding[];
 }
 
 /** Every string a report carries, made visible: server text never rides out raw (fix round 4). */
@@ -381,23 +385,34 @@ async function runAudit(
     const partialReasons: string[] = outcome.status === 'partial' ? [outcome.reason ?? 'the listing was cut short'] : [];
     const complete = partialReasons.length === 0;
 
-    // Pins hash the FULL content — linear and cheap — so a change past any
-    // analysis bound is still caught.
-    const comparison = comparePins(
-      listing,
-      ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
-      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
-      { complete },
-    );
-    findings.push(...comparison.findings);
-
-    const analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
-    findings.push(...analysis.findings);
-    // Listed in full, analysed in part: partial, with what was not read.
-    if (analysis.cuts.length > 0) partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`);
+    // One server's failure never costs another its results (fix round 5,
+    // I-1): whatever this server's listing makes the comparison or the
+    // analysis throw, the server is partial with the reason, its pins are
+    // left as they were, and the audit carries on.
+    const serverFindings: Finding[] = [];
+    let comparison: PinComparison | null = null;
+    let analysis: ListingAnalysis | null = null;
+    try {
+      // Pins hash the FULL content — linear, iterative and cheap — so a
+      // change past any analysis bound is still caught.
+      comparison = comparePins(
+        listing,
+        ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
+        ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
+        { complete },
+      );
+      serverFindings.push(...comparison.findings);
+      analysis = await analyzeServerListingAsync(listing, [], { shouldStop });
+      serverFindings.push(...analysis.findings);
+      // Listed in full, analysed in part: partial, with what was not read.
+      if (analysis.cuts.length > 0) partialReasons.push(`analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      partialReasons.push(`this server's listing could not be fully processed (${message.slice(0, 200)}); its pins were left as they were`);
+    }
 
     const reason = partialReasons.length === 0 ? undefined : escapeInvisible(partialReasons.join('; '));
-    const warnings = [...(withTransport.warnings ?? []), ...visibleList(comparison.warnings)];
+    const warnings = [...(withTransport.warnings ?? []), ...visibleList(comparison?.warnings ?? [])];
     const report: ServerReport = {
       name: escapeInvisible(name),
       ...withTransport,
@@ -417,12 +432,16 @@ async function runAudit(
       resources_count: normalized.resources.length,
       resource_templates_count: normalized.resourceTemplates.length,
       ...(normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}),
-      pins: {
-        first_audit: comparison.firstAudit,
-        changed: visibleList(comparison.changed),
-        added: visibleList(comparison.added),
-        removed: visibleList(comparison.removed),
-      },
+      ...(comparison === null
+        ? {}
+        : {
+            pins: {
+              first_audit: comparison.firstAudit,
+              changed: visibleList(comparison.changed),
+              added: visibleList(comparison.added),
+              removed: visibleList(comparison.removed),
+            },
+          }),
     };
     const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;
     if (reason === undefined) {
@@ -441,10 +460,12 @@ async function runAudit(
         sourceLabel: listing.sourceLabel,
         ownToolNames: new Set(listing.tools.map((t) => t.name)),
       },
-      mentions: analysis.mentions,
+      mentions: analysis?.mentions ?? { bare: new Map(), quoted: new Map(), full: false, reported: new Set() },
       toolNames: listing.tools.map((t) => t.name),
-      pins: comparison.pins,
+      // Pins are written only for a server fully compared AND analysed.
+      pins: comparison !== null && analysis !== null ? comparison.pins : null,
       complete,
+      findings: serverFindings,
     });
   }
 
@@ -469,12 +490,14 @@ async function runAudit(
   for (const [serverKey, toolNames] of pinned) {
     others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
   }
-  for (const a of audited) findings.push(...shadowingFromMentions(a.target, a.mentions, others));
+  for (const a of audited) a.findings.push(...shadowingFromMentions(a.target, a.mentions, others));
+  for (const a of audited) findings.push(...a.findings);
 
   if (findings.length > 0) {
     ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   }
   for (const a of audited) {
+    if (a.pins === null) continue;
     if (a.complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, a.target.serverKey, a.pins);
     else ctx.storage.mcpToolPins.upsertServerPins(projectPath, a.target.serverKey, a.pins);
   }
