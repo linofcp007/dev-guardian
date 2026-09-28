@@ -62639,6 +62639,7 @@ function isInvisible(code) {
   code === 65279 || // BOM / zero-width no-break space
   code >= 917504 && code <= 917631;
 }
+var MCP_DESCRIPTION_POISONING = /(ignore\s+(previous|all)|do\s+not\s+(tell|mention|inform)|system\s+prompt|<important>|<secret>|<system>)/i;
 function analyzeMcpManifest(file) {
   const name = file.relPath.split("/").pop()?.toLowerCase() ?? "";
   const looksMcp = /mcp.*\.json$/.test(name) || name === "plugin.json" || /"mcpservers"\s*:/i.test(file.content) || /"command"\s*:/.test(file.content) && /"args"\s*:/.test(file.content) && name.endsWith(".json");
@@ -62666,9 +62667,7 @@ function analyzeMcpManifest(file) {
   }
   const desc = collectDescriptions(json);
   for (const d of desc) {
-    if (/(ignore\s+(previous|all)|do\s+not\s+(tell|mention|inform)|system\s+prompt|<important>|<secret>|<system>)/i.test(
-      d
-    )) {
+    if (MCP_DESCRIPTION_POISONING.test(d)) {
       out.push(
         finding2(
           file,

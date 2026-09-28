@@ -276,6 +276,14 @@ function isInvisible(code: number): boolean {
 }
 
 /**
+ * Directives that manipulate the model when it reads a tool description.
+ * Shared with `audit_mcp_tools` (`mcpaudit/analyze.ts`), which runs it over
+ * the definitions a server actually serves rather than a manifest on disk.
+ */
+export const MCP_DESCRIPTION_POISONING =
+  /(ignore\s+(previous|all)|do\s+not\s+(tell|mention|inform)|system\s+prompt|<important>|<secret>|<system>)/i;
+
+/**
  * MCP-specific manifest checks: least-privilege (over-broad declared
  * capability) and tool poisoning (instructions hidden in tool descriptions).
  * Only runs on JSON manifests that actually look like MCP configs.
@@ -318,11 +326,7 @@ function analyzeMcpManifest(file: IngestedFile): Finding[] {
   // Tool poisoning: hidden directives inside tool descriptions.
   const desc = collectDescriptions(json);
   for (const d of desc) {
-    if (
-      /(ignore\s+(previous|all)|do\s+not\s+(tell|mention|inform)|system\s+prompt|<important>|<secret>|<system>)/i.test(
-        d,
-      )
-    ) {
+    if (MCP_DESCRIPTION_POISONING.test(d)) {
       out.push(
         finding(
           file,
