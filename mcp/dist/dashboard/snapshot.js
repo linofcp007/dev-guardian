@@ -41,7 +41,7 @@
  * identity after a line shift came back as "resolved".
  */
 import { coverageRunsOf, owaspCoverage } from '../frameworks/coverage.js';
-import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import { findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor } from '../history/runCompare.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
@@ -74,9 +74,11 @@ export function buildSnapshot(storage, projectPath, now) {
     const openFindings = open.findings;
     // OWASP 2025: which categories the scans behind these numbers could and
     // did test, over the same bookkeeping `buildCoverage` reads, for the
-    // project's source languages — the one read here that is not storage:
-    // with no detect_stack snapshot, the languages come from the files.
-    const owasp = owaspCoverage(coverageRunsOf(open.bookkeeping, open.scans), openFindings, resolveProjectLanguages(storage.stack, projectPath));
+    // project's source languages as the scans recorded them. The one read
+    // here that is not storage: a scan written before that record falls back
+    // to today's tree (the files and the detect_stack snapshot), saying so.
+    const owaspRuns = coverageRunsOf(open.bookkeeping, open.scans);
+    const owasp = owaspCoverage(owaspRuns, openFindings, languagesOfRuns(owaspRuns, () => resolveProjectLanguages(storage.stack, projectPath)));
     const coverage = buildCoverage(open, cveGap, owasp);
     const findings = buildFindingsSummary(openFindings, truncation, owasp);
     const cveItems = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
@@ -195,7 +197,11 @@ function buildCoverage(open, cveGap, owasp) {
             findings: c.findings,
             ...(c.reasons.length > 0 ? { reasons: c.reasons } : {}),
         })),
-        owasp_languages: { languages: owasp.languages, source: owasp.languages_source },
+        owasp_languages: {
+            languages: owasp.languages,
+            source: owasp.languages_source,
+            ...(owasp.languages_incomplete !== undefined ? { incomplete: owasp.languages_incomplete } : {}),
+        },
     };
 }
 /**

@@ -28,6 +28,11 @@
  * cached by, so a moved branch is a new review, not a stale hit.
  */
 
+import {
+  PROJECT_LANGUAGES_META_KEY,
+  resolveProjectLanguagesAsync,
+  type ProjectLanguages,
+} from '../frameworks/projectLanguages.js';
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
@@ -121,6 +126,7 @@ const reviewPr = makeScanTool<ReviewPrInput>({
     const headIsCheckedOut = (await resolveCommit(ctx.projectPath, 'HEAD')) === head;
     let tree: MaterialisedTree | null = null;
     let cleanupNote: string | null = null;
+    let projectLanguages: ProjectLanguages | null = null;
     try {
       let scanRoot = ctx.projectPath;
       let unavailable: string | null = null;
@@ -133,6 +139,12 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         }
       }
       const where = headIsCheckedOut ? 'the working tree' : `head ${head.slice(0, 12)}`;
+      // The languages of the tree this review reads — the head's own when it
+      // is not checked out — listed before that tree is removed below.
+      projectLanguages =
+        unavailable === null
+          ? await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot })
+          : { languages: null, source: `could not be determined (${unavailable})` };
 
       if (unavailable !== null) {
         // gitleaks reads commits, not files, and still runs below.
@@ -193,6 +205,7 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         // (`frameworks/coverage.ts`) claims registry categories only when
         // the row says `false`, as scan_sast's rows always have.
         local_only: input.local_only === true,
+        ...(projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {}),
         ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
       },
     };

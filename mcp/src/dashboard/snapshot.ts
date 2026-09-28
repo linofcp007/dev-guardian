@@ -42,7 +42,7 @@
  */
 
 import { coverageRunsOf, owaspCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
-import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import {
   findLatestUsable,
   latestStateScan,
@@ -113,12 +113,14 @@ export function buildSnapshot(
   const openFindings = open.findings;
   // OWASP 2025: which categories the scans behind these numbers could and
   // did test, over the same bookkeeping `buildCoverage` reads, for the
-  // project's source languages — the one read here that is not storage:
-  // with no detect_stack snapshot, the languages come from the files.
+  // project's source languages as the scans recorded them. The one read
+  // here that is not storage: a scan written before that record falls back
+  // to today's tree (the files and the detect_stack snapshot), saying so.
+  const owaspRuns = coverageRunsOf(open.bookkeeping, open.scans);
   const owasp = owaspCoverage(
-    coverageRunsOf(open.bookkeeping, open.scans),
+    owaspRuns,
     openFindings,
-    resolveProjectLanguages(storage.stack, projectPath),
+    languagesOfRuns(owaspRuns, () => resolveProjectLanguages(storage.stack, projectPath)),
   );
   const coverage = buildCoverage(open, cveGap, owasp);
 
@@ -247,7 +249,11 @@ function buildCoverage(open: OpenSet, cveGap: boolean, owasp: OwaspCoverage): Co
       findings: c.findings,
       ...(c.reasons.length > 0 ? { reasons: c.reasons } : {}),
     })),
-    owasp_languages: { languages: owasp.languages, source: owasp.languages_source },
+    owasp_languages: {
+      languages: owasp.languages,
+      source: owasp.languages_source,
+      ...(owasp.languages_incomplete !== undefined ? { incomplete: owasp.languages_incomplete } : {}),
+    },
   };
 }
 

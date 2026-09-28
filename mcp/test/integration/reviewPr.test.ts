@@ -529,6 +529,19 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(p.storage.scans.getById(res.scan_id)?.meta?.['local_only']).toBe(localOnly);
   });
 
+  // M-b: the languages of the tree the review scanned — the head's own tree
+  // when it is not checked out — recorded for OWASP coverage.
+  it('records the languages of the reviewed head, not of the working tree', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'lib.rs', 'fn f() {}\n');
+    await commitAll(dir);
+    await git(dir, 'checkout', '-q', 'main');
+    const { r, p } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const meta = p.storage.scans.getById((r as unknown as ReviewResult).scan_id)?.meta;
+    expect(meta?.['project_languages']).toMatchObject({ languages: ['python', 'rust'] });
+  });
+
   it('an empty pull request runs no scanner and says why', async () => {
     const dir = await repo('main', { 'a.py': 'a = 1\n' });
     const { r } = await review(dir, { base_ref: 'main' });

@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
-import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
 import { isOrchestratedFullScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -182,10 +182,13 @@ async function handler(
     ? ctx.storage.cves.listActive(scanId)
     : [];
 
+  // Judged against the languages the scans recorded when they ran; a row
+  // written before that record falls back to today's tree, and says so.
+  const runs = coverageRunsOfScan(ctx, scan);
   const owasp = owaspCoverage(
-    coverageRunsOfScan(ctx, scan),
+    runs,
     findings,
-    resolveProjectLanguages(ctx.storage.stack, scan.project_path),
+    languagesOfRuns(runs, () => resolveProjectLanguages(ctx.storage.stack, scan.project_path)),
   );
   const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);

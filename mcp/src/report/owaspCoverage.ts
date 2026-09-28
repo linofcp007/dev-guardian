@@ -27,7 +27,8 @@ export function taxonomyCell(f: Pick<Finding, 'cwe' | 'owasp'>): string {
 
 export const COVERAGE_RULE =
   'A category counts as tested only when, for every source language of the project, a scanner that ran ' +
-  'fully ok has at least three rules for it in that language. A scanner that sees only a slice of a ' +
+  'fully ok has at least three rules for it in that language, naming at least two distinct CWEs. A ' +
+  'scanner that sees only a slice of a ' +
   'category, whatever the language — gitleaks (hard-coded credentials) for A07, Trivy and the dependency ' +
   'auditors (known-vulnerable components, not build and distribution integrity) for A03 — makes it partial ' +
   'at most. "not tested" is not a clean result: nothing looked. A finding can map to more than one category; a ' +
@@ -56,18 +57,31 @@ export function testedByText(by: readonly OwaspTestedBy[]): string {
   return out.length > 0 ? out.join(', ') : '—';
 }
 
-/** `Project languages: go, javascript (detect_stack snapshot of …)`. */
-export function languagesLine(cov: Pick<OwaspCoverage, 'languages' | 'languages_source'>): string {
+/** `Project languages: go, javascript (detect_stack snapshot of …)`, and why it may be incomplete. */
+export function languagesLine(cov: Pick<OwaspCoverage, 'languages' | 'languages_source' | 'languages_incomplete'>): string {
   const list = cov.languages === null ? 'unknown' : cov.languages.length === 0 ? 'none detected' : cov.languages.join(', ');
-  return `Project languages: ${list} (${cov.languages_source})`;
+  const incomplete =
+    cov.languages_incomplete !== undefined
+      ? ` — may be incomplete (${cov.languages_incomplete}), so no category is claimed as tested`
+      : '';
+  return `Project languages: ${list} (${cov.languages_source})${incomplete}`;
 }
 
 /**
- * What would test a category that was not tested — or, when nothing
- * dev-guardian runs reaches it in the project's languages, that sentence.
+ * What would test a category that was not tested: the detectors that COULD
+ * make it tested, the languages nothing dev-guardian runs can test it in,
+ * and apart, the ones that would only partly cover it — or, when nothing
+ * reaches it at all in the project's languages, that sentence.
  */
 export function untestedHint(c: OwaspCategoryCoverage, cov: Pick<OwaspCoverage, 'languages'>): string {
-  if (c.could_be_tested_by.length > 0) return `would be tested by: ${c.could_be_tested_by.join('; ')}`;
+  const parts: string[] = [];
+  if (c.could_be_tested_by.length > 0) parts.push(`would be tested by: ${c.could_be_tested_by.join('; ')}`);
+  const anything = c.could_be_tested_by.length > 0 || c.could_partly_cover.length > 0;
+  if (anything && c.untestable_languages.length > 0) {
+    parts.push(`nothing dev-guardian runs can make it tested for ${c.untestable_languages.join(', ')}`);
+  }
+  if (c.could_partly_cover.length > 0) parts.push(`would partly cover: ${c.could_partly_cover.join('; ')}`);
+  if (parts.length > 0) return parts.join('; ');
   const langs = cov.languages === null || cov.languages.length === 0 ? 'these languages' : cov.languages.join(', ');
   return `no scanner dev-guardian runs has rules for ${langs}`;
 }
@@ -98,10 +112,7 @@ export function owaspCoverageMarkdown(cov: OwaspCoverage): string[] {
     if (c.status === 'partial') lines.push(`- ${c.id} partial: ${c.reasons.join('; ')}.`);
   }
   for (const c of cov.categories) {
-    if (c.status !== 'not_tested') continue;
-    lines.push(
-      c.could_be_tested_by.length > 0 ? `- ${c.id} ${untestedHint(c, cov)}.` : `- ${c.id}: ${untestedHint(c, cov)}.`,
-    );
+    if (c.status === 'not_tested') lines.push(`- ${c.id}: ${untestedHint(c, cov)}.`);
   }
   if (cov.findings_total > 0) lines.push(`- ${unmappedSentence(cov, 'findings')}`);
   return lines;

@@ -85,9 +85,9 @@ describe('findings packs carry cwe/owasp metadata', () => {
 describe("coverage claims for our own packs are the packs' metadata", () => {
   const reachOf = (id: string) => {
     const d = OWASP_DETECTORS.find((x) => x.id === id);
-    const out: Record<string, Record<string, number>> = {};
+    const out: Record<string, unknown> = {};
     for (const [cat, reach] of Object.entries(d?.reach ?? {})) {
-      if (reach?.kind === 'rules') out[cat] = { ...reach.perLanguage } as Record<string, number>;
+      if (reach?.kind === 'rules') out[cat] = { ...reach.perLanguage };
     }
     return out;
   };
@@ -100,10 +100,11 @@ describe("coverage claims for our own packs are the packs' metadata", () => {
     expect(reachOf('bugfix-packs')).toEqual(countRuleReach(rules));
   });
 
-  it('compliance_check: the recorded reach is a recount of rgpd.yml — A09 only, one rule per language', () => {
+  it('compliance_check: the recorded reach is a recount of rgpd.yml — A09 only, one CWE-532 rule per language', () => {
     const recount = countRuleReach(rulesOf('rgpd.yml'));
     expect(reachOf('rgpd-pack')).toEqual(recount);
-    expect(recount).toEqual({ 'A09:2025': { csharp: 1, javascript: 1, php: 1, python: 1, typescript: 1 } });
+    const one = { rules: 1, weaknesses: 1, sole: 'CWE-532' };
+    expect(recount).toEqual({ 'A09:2025': { csharp: one, javascript: one, php: one, python: one, typescript: one } });
   });
 
   // The four tracker/embed rules are CWE-359, which OWASP files under A01,

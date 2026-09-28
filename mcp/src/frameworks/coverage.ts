@@ -9,14 +9,17 @@
  * project scanned clean for injection was barely looked at. Coverage is
  * therefore judged per (category, source language of the project):
  *
- *   - `tested` — for EVERY source language of the project, a detector that
- *     ran fully ok reaches the category with at least {@link MIN_RULES}
- *     rules in that language (or is language-agnostic for it, or is a
- *     vulnerability database complete for that language's packages);
- *   - `partial` — some language has only 1–2 rules ("thin"), some language
- *     has none (the covered and uncovered languages are named), the only
- *     run that reached it was incomplete, or the only detector that reached
- *     it is NARROW;
+ *   - `tested` — for EVERY source language of the project, a rule-based
+ *     detector that ran fully ok reaches the category with at least
+ *     {@link MIN_RULES} rules in that language covering at least
+ *     {@link MIN_WEAKNESSES} distinct CWEs — three rules of one CWE are one
+ *     check repeated (the registry's three Rust A07 rules are all CWE-295);
+ *   - `partial` — some language has only 1–2 rules or one weakness
+ *     ("thin"), some language has none (the covered and uncovered languages
+ *     are named), the only run that reached it was incomplete, the only
+ *     detector that reached it is NARROW, or the project's language list
+ *     may be incomplete (a truncated or unreadable listing: a language it
+ *     missed could have no rules at all);
  *   - `not_tested` — no detector that ran reaches the category in any of
  *     the project's languages. Zero findings there are not a clean result.
  *
@@ -65,6 +68,8 @@ import { classifyTaxonomy } from './taxonomy.js';
 
 /** The fewest rules in a language for a detector to TEST a category there. Fewer is "thin". */
 export const MIN_RULES = 3;
+/** The fewest distinct CWEs those rules must cover. One is a single check, repeated. */
+export const MIN_WEAKNESSES = 2;
 
 /** One scan's bookkeeping, as far as coverage needs it. */
 export interface CoverageRun {
@@ -75,7 +80,23 @@ export interface CoverageRun {
   missing_tools: readonly string[];
 }
 
-type RuleCounts = Readonly<Partial<Record<SourceLanguage, number>>>;
+/**
+ * One (category, language) cell of a detector: how many rules, how many
+ * distinct CWEs those rules name (all of each rule's CWEs), and the CWE when
+ * there is exactly one.
+ */
+export interface RuleCell {
+  rules: number;
+  weaknesses: number;
+  sole?: string;
+}
+
+/** `cell(10, 7)`, or `cell(3, 'CWE-295')` for rules that all name one CWE. */
+function cell(rules: number, weaknesses: number | string): RuleCell {
+  return typeof weaknesses === 'string' ? { rules, weaknesses: 1, sole: weaknesses } : { rules, weaknesses };
+}
+
+type RuleCounts = Readonly<Partial<Record<SourceLanguage, RuleCell>>>;
 
 /** How far a detector reaches into one category. */
 export type Reach =
@@ -132,25 +153,46 @@ function registryRan(run: CoverageRun): boolean {
 const rules = (perLanguage: RuleCounts): Reach => ({ kind: 'rules', perLanguage });
 
 /**
- * Semgrep registry, p/default (1074 rules), fetched 2026-09-28: rules per
- * (category, language), each rule counted in every source language it
- * lists, under every category `classifyTaxonomy` gives its metadata — what
- * its findings would carry. `--config=auto` picks registry rulesets by
- * language; p/default is the measured stand-in.
+ * Semgrep registry, p/default (1074 rules), fetched 2026-09-28: per
+ * (category, language), the rules and the distinct CWEs they name — each
+ * rule counted in every source language it lists, under every category
+ * `classifyTaxonomy` gives its metadata (what its findings would carry).
+ * `--config=auto` picks registry rulesets by language; p/default is the
+ * measured stand-in.
  */
 const REGISTRY_RULES: Partial<Record<Owasp2025Id, Reach>> = {
-  'A01:2025': rules({ csharp: 7, go: 10, java: 10, javascript: 32, php: 8, python: 20, ruby: 14, scala: 5, typescript: 32 }),
-  'A02:2025': rules({ csharp: 3, go: 6, java: 11, javascript: 10, kotlin: 2, python: 12, scala: 3, typescript: 10 }),
-  'A03:2025': rules({ javascript: 1, typescript: 1 }),
-  'A04:2025': rules({ csharp: 2, go: 24, java: 43, javascript: 19, kotlin: 11, php: 6, python: 53, ruby: 11, scala: 3, typescript: 15 }),
-  'A05:2025': rules({
-    c: 1, csharp: 4, go: 28, java: 38, javascript: 60, kotlin: 2, lua: 1, php: 17, python: 92, ruby: 30, rust: 1, scala: 9, typescript: 61,
+  'A01:2025': rules({
+    csharp: cell(7, 4), go: cell(10, 8), java: cell(10, 7), javascript: cell(32, 8), php: cell(8, 6), python: cell(20, 8),
+    ruby: cell(14, 7), scala: cell(5, 2), typescript: cell(32, 8),
   }),
-  'A06:2025': rules({ c: 3, csharp: 2, go: 2, java: 4, javascript: 12, php: 1, python: 5, ruby: 5, scala: 2, swift: 1, typescript: 16 }),
-  'A07:2025': rules({ csharp: 2, go: 3, java: 5, javascript: 9, kotlin: 2, php: 3, python: 10, ruby: 3, rust: 3, typescript: 10 }),
-  'A08:2025': rules({ csharp: 11, go: 2, java: 7, javascript: 9, php: 2, python: 17, ruby: 9, typescript: 9 }),
-  'A09:2025': rules({ python: 1 }),
-  'A10:2025': rules({ csharp: 1, go: 1, php: 1, ruby: 1 }),
+  'A02:2025': rules({
+    csharp: cell(3, 'CWE-611'), go: cell(6, 4), java: cell(11, 3), javascript: cell(10, 5), kotlin: cell(2, 2), python: cell(12, 6),
+    scala: cell(3, 'CWE-611'), typescript: cell(10, 5),
+  }),
+  'A03:2025': rules({ javascript: cell(1, 'CWE-1104'), typescript: cell(1, 'CWE-1104') }),
+  'A04:2025': rules({
+    csharp: cell(2, 2), go: cell(24, 6), java: cell(43, 7), javascript: cell(19, 8), kotlin: cell(11, 5), php: cell(6, 5),
+    python: cell(53, 7), ruby: cell(11, 4), scala: cell(3, 3), typescript: cell(15, 8),
+  }),
+  'A05:2025': rules({
+    c: cell(1, 'CWE-94'), csharp: cell(4, 3), go: cell(28, 6), java: cell(38, 11), javascript: cell(60, 8), kotlin: cell(2, 2),
+    lua: cell(1, 'CWE-94'), php: cell(17, 6), python: cell(92, 12), ruby: cell(30, 4), rust: cell(1, 'CWE-94'), scala: cell(9, 4),
+    typescript: cell(61, 8),
+  }),
+  'A06:2025': rules({
+    c: cell(3, 'CWE-676'), csharp: cell(2, 2), go: cell(2, 'CWE-362'), java: cell(4, 4), javascript: cell(12, 3), php: cell(1, 'CWE-676'),
+    python: cell(5, 3), ruby: cell(5, 3), scala: cell(2, 'CWE-522'), swift: cell(1, 'CWE-311'), typescript: cell(16, 5),
+  }),
+  'A07:2025': rules({
+    csharp: cell(2, 2), go: cell(3, 2), java: cell(5, 4), javascript: cell(9, 5), kotlin: cell(2, 2), php: cell(3, 2), python: cell(10, 4),
+    ruby: cell(3, 2), rust: cell(3, 'CWE-295'), typescript: cell(10, 6),
+  }),
+  'A08:2025': rules({
+    csharp: cell(11, 2), go: cell(2, 2), java: cell(7, 2), javascript: cell(9, 5), php: cell(2, 'CWE-502'), python: cell(17, 2),
+    ruby: cell(9, 4), typescript: cell(9, 5),
+  }),
+  'A09:2025': rules({ python: cell(1, 'CWE-532') }),
+  'A10:2025': rules({ csharp: cell(1, 'CWE-209'), go: cell(1, 'CWE-476'), php: cell(1, 'CWE-252'), ruby: cell(1, 'CWE-369') }),
 };
 
 /**
@@ -158,18 +200,22 @@ const REGISTRY_RULES: Partial<Record<Owasp2025Id, Reach>> = {
  * plugins and blacklists — 85), measured 2026-09-28. Python only.
  */
 const BANDIT_RULES: Partial<Record<Owasp2025Id, Reach>> = {
-  'A01:2025': rules({ python: 8 }),
-  'A04:2025': rules({ python: 22 }),
-  'A05:2025': rules({ python: 38 }),
-  'A07:2025': rules({ python: 4 }),
-  'A08:2025': rules({ python: 5 }),
-  'A10:2025': rules({ python: 3 }),
+  'A01:2025': rules({ python: cell(8, 4) }),
+  'A04:2025': rules({ python: cell(22, 4) }),
+  'A05:2025': rules({ python: cell(38, 6) }),
+  'A07:2025': rules({ python: cell(4, 2) }),
+  'A08:2025': rules({ python: cell(5, 2) }),
+  // Three checks, all CWE-703 — a class MITRE discourages for mapping.
+  'A10:2025': rules({ python: cell(3, 'CWE-703') }),
 };
 
 /** configs/semgrep/bugfix-*.yml, recounted by packTaxonomy.test.ts. */
 const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
-  'A06:2025': rules({ javascript: 1, typescript: 1 }),
-  'A10:2025': rules({ csharp: 3, go: 5, java: 3, javascript: 6, php: 2, python: 5, typescript: 6 }),
+  'A06:2025': rules({ javascript: cell(1, 'CWE-362'), typescript: cell(1, 'CWE-362') }),
+  'A10:2025': rules({
+    csharp: cell(3, 3), go: cell(5, 4), java: cell(3, 2), javascript: cell(6, 3), php: cell(2, 2), python: cell(5, 4),
+    typescript: cell(6, 3),
+  }),
 };
 
 /**
@@ -179,7 +225,10 @@ const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
  * data written to logs.
  */
 const RGPD_RULES: Partial<Record<Owasp2025Id, Reach>> = {
-  'A09:2025': rules({ csharp: 1, javascript: 1, php: 1, python: 1, typescript: 1 }),
+  'A09:2025': rules({
+    csharp: cell(1, 'CWE-532'), javascript: cell(1, 'CWE-532'), php: cell(1, 'CWE-532'), python: cell(1, 'CWE-532'),
+    typescript: cell(1, 'CWE-532'),
+  }),
 };
 
 const DEPENDENCY_AUDITORS = ['npm', 'pip-audit', 'dotnet'] as const;
@@ -302,33 +351,46 @@ export const OWASP_DETECTORS: readonly OwaspDetector[] = [
   },
 ];
 
+/** Every scan type an OWASP detector reads — the rows that record their languages at scan time. */
+export const OWASP_SCAN_TYPES: ReadonlySet<string> = new Set(OWASP_DETECTORS.flatMap((d) => d.scanTypes));
+
 /**
- * Rules per (category, source language) of a rule list — how the pack
- * detectors above are counted, and how their test recounts them. A rule
- * counts in every source language it lists (`generic` counts in none),
- * under every category `classifyTaxonomy` gives its metadata.
+ * Rules and distinct CWEs per (category, source language) of a rule list —
+ * how the pack detectors above are counted, and how their test recounts
+ * them. A rule counts in every source language it lists (`generic` counts
+ * in none), under every category `classifyTaxonomy` gives its metadata; its
+ * CWEs all count toward the cell's distinct weaknesses.
  */
 export function countRuleReach(
   ruleList: ReadonlyArray<{ languages?: unknown; metadata?: Record<string, unknown> }>,
-): Record<string, Record<string, number>> {
-  const out: Record<string, Record<string, number>> = {};
+): Record<string, Record<string, RuleCell>> {
+  const acc: Record<string, Record<string, { rules: number; cwes: Set<string> }>> = {};
   for (const rule of ruleList) {
     const langs = new Set(
       (Array.isArray(rule.languages) ? rule.languages : [])
         .map((l) => (typeof l === 'string' ? canonicalLanguage(l) : null))
         .filter((l): l is SourceLanguage => l !== null),
     );
-    const cats = classifyTaxonomy({ cwe: rule.metadata?.['cwe'], owasp: rule.metadata?.['owasp'] }).owasp ?? [];
-    for (const cat of cats) {
+    const tax = classifyTaxonomy({ cwe: rule.metadata?.['cwe'], owasp: rule.metadata?.['owasp'] });
+    for (const cat of tax.owasp ?? []) {
       for (const lang of langs) {
-        const row = (out[cat] ??= {});
-        row[lang] = (row[lang] ?? 0) + 1;
+        const row = (acc[cat] ??= {});
+        const c = (row[lang] ??= { rules: 0, cwes: new Set<string>() });
+        c.rules += 1;
+        for (const cwe of tax.cwe ?? []) c.cwes.add(cwe);
       }
     }
   }
-  for (const cat of Object.keys(out)) {
-    const row = out[cat] ?? {};
-    out[cat] = Object.fromEntries(Object.entries(row).sort((a, b) => a[0].localeCompare(b[0])));
+  const out: Record<string, Record<string, RuleCell>> = {};
+  for (const [cat, row] of Object.entries(acc)) {
+    out[cat] = Object.fromEntries(
+      Object.entries(row)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([lang, c]) => {
+          const only = c.cwes.size === 1 ? [...c.cwes][0] : undefined;
+          return [lang, only !== undefined ? cell(c.rules, only) : cell(c.rules, c.cwes.size)];
+        }),
+    );
   }
   return out;
 }
@@ -347,9 +409,9 @@ export interface OwaspTestedBy {
 export interface OwaspLanguageCoverage {
   language: string;
   /**
-   * full: ≥ MIN_RULES from a complete, rule-based run; thin: 1–2; narrow:
-   * only a narrow detector (a slice of the category); incomplete: only
-   * incomplete runs; none.
+   * full: a complete rule-based run with ≥ MIN_RULES rules and ≥
+   * MIN_WEAKNESSES CWEs; thin: fewer; narrow: only a narrow detector (a
+   * slice of the category); incomplete: only incomplete runs; none.
    */
   coverage: 'full' | 'thin' | 'narrow' | 'incomplete' | 'none';
 }
@@ -367,11 +429,14 @@ export interface OwaspCategoryCoverage {
   /** Open findings of the covered scans that carry this category. */
   findings: number;
   /**
-   * The detectors that reach this category in the project's languages, with
-   * their counts — what to run when it was not tested. Empty when nothing
-   * dev-guardian runs has rules for those languages.
+   * Detectors that could make this category `tested` in (some of) the
+   * project's languages — what to run when it was not. Only those.
    */
   could_be_tested_by: string[];
+  /** Detectors that reach it only in part there: thin, one weakness, or narrow. */
+  could_partly_cover: string[];
+  /** Project languages NO detector dev-guardian runs could make it tested in. */
+  untestable_languages: string[];
 }
 
 export interface OwaspCoverage {
@@ -382,6 +447,8 @@ export interface OwaspCoverage {
   /** The languages coverage was judged against; null when unknown. */
   languages: string[] | null;
   languages_source: string;
+  /** Why that language list may be incomplete — every rule-based claim is then at most partial. */
+  languages_incomplete?: string;
 }
 
 /** What a run of a detector reached in one category, and whether the run was complete. */
@@ -391,16 +458,30 @@ interface Contribution {
   entry: OwaspTestedBy;
 }
 
-/** Rules `reach` has in `lang`: Infinity when it is complete there, 0 when it has none. */
-function rulesIn(reach: Reach, lang: string): number {
+const COMPLETE_CELL: RuleCell = { rules: Number.POSITIVE_INFINITY, weaknesses: Number.POSITIVE_INFINITY };
+
+/** What `reach` has in `lang`: a complete cell when it is complete there, null when it has nothing. */
+function cellIn(reach: Reach, lang: string): RuleCell | null {
   switch (reach.kind) {
     case 'any-language':
-      return Number.POSITIVE_INFINITY;
+      return COMPLETE_CELL;
     case 'languages':
-      return (reach.languages as readonly string[]).includes(lang) ? Number.POSITIVE_INFINITY : 0;
+      return (reach.languages as readonly string[]).includes(lang) ? COMPLETE_CELL : null;
     case 'rules':
-      return (reach.perLanguage as Readonly<Record<string, number | undefined>>)[lang] ?? 0;
+      return (reach.perLanguage as Readonly<Record<string, RuleCell | undefined>>)[lang] ?? null;
   }
+}
+
+/** A cell that could make a category tested — before the detector's narrowness and the run's completeness. */
+function meetsBar(c: RuleCell): boolean {
+  return c.rules >= MIN_RULES && c.weaknesses >= MIN_WEAKNESSES;
+}
+
+/** Why a reached cell falls short: `3 rule(s), one weakness (CWE-295)`, `1 rule(s)`. */
+function shortfall(c: RuleCell): string {
+  if (c.rules < MIN_RULES) return `${c.rules} rule(s)`;
+  if (c.weaknesses === 1) return `${c.rules} rule(s), one weakness (${c.sole ?? 'one CWE'})`;
+  return `${c.rules} rule(s), ${c.weaknesses === 0 ? 'no CWE named' : `${c.weaknesses} CWEs`}`;
 }
 
 function incompleteReason(run: CoverageRun, d: OwaspDetector): string | undefined {
@@ -438,29 +519,64 @@ function contributionsOf(runs: readonly CoverageRun[], id: Owasp2025Id): Contrib
   return out;
 }
 
-/** `Semgrep registry rules (…): go 10, java 10 (personal data …)` for the languages given; null when it reaches none. */
-function hint(d: OwaspDetector, reach: Reach, languages: readonly string[] | null): string | null {
-  let summary: string;
-  if (reach.kind === 'any-language') summary = 'any language';
-  else if (reach.kind === 'languages') {
-    const hit = languages === null ? [...reach.languages] : reach.languages.filter((l) => languages.includes(l));
-    if (hit.length === 0) return null;
-    summary = hit.join(', ');
-  } else {
-    const entries = Object.entries(reach.perLanguage as Readonly<Record<string, number | undefined>>)
-      .filter((e): e is [string, number] => e[1] !== undefined && e[1] > 0)
-      .filter(([l]) => languages === null || languages.includes(l));
-    if (entries.length === 0) return null;
-    summary = entries.map(([l, n]) => `${l} ${n}${n < MIN_RULES ? ' (thin)' : ''}`).join(', ');
+/** `javascript 60 rules, 8 CWEs` / `javascript 1 rule(s), one weakness (CWE-532)` / `javascript`. */
+function cellText(reach: Reach, lang: string, c: RuleCell): string {
+  if (reach.kind !== 'rules') return lang;
+  if (meetsBar(c)) return `${lang} ${c.rules} rules, ${c.weaknesses} CWEs`;
+  const cwes = c.weaknesses === 1 ? `one weakness (${c.sole ?? 'one CWE'})` : c.weaknesses === 0 ? 'no CWE named' : `${c.weaknesses} CWEs`;
+  return `${lang} ${c.rules} rule(s), ${cwes}`;
+}
+
+/**
+ * M-d: for the project's languages (all a detector reaches when they are
+ * unknown), the detectors that COULD make the category tested, the ones
+ * that could only partly cover it, and the languages nothing can test.
+ */
+function hints(
+  id: Owasp2025Id,
+  languages: readonly string[] | null,
+): Pick<OwaspCategoryCoverage, 'could_be_tested_by' | 'could_partly_cover' | 'untestable_languages'> {
+  const could: string[] = [];
+  const partly: string[] = [];
+  const testable = new Set<string>();
+  for (const d of OWASP_DETECTORS) {
+    const reach = d.reach[id];
+    if (reach === undefined) continue;
+    const scope = d.narrow ?? d.scope;
+    const tail = scope !== undefined ? ` — ${scope}` : '';
+    if (reach.kind === 'any-language') {
+      // Language-agnostic detectors are all narrow: never "would test".
+      partly.push(`${d.label}: any language${tail}`);
+      continue;
+    }
+    const langs =
+      languages ??
+      (reach.kind === 'languages' ? [...reach.languages] : Object.keys(reach.perLanguage as Record<string, unknown>));
+    const meets: string[] = [];
+    const short: string[] = [];
+    for (const lang of langs) {
+      const c = cellIn(reach, lang);
+      if (c === null) continue;
+      if (d.narrow === undefined && meetsBar(c)) {
+        meets.push(cellText(reach, lang, c));
+        testable.add(lang);
+      } else short.push(cellText(reach, lang, c));
+    }
+    if (meets.length > 0) could.push(`${d.label}: ${meets.join(', ')}${d.scope !== undefined ? ` — ${d.scope}` : ''}`);
+    if (short.length > 0) partly.push(`${d.label}: ${short.join(', ')}${tail}`);
   }
-  const scope = d.narrow ?? d.scope;
-  return `${d.label}: ${summary}${scope !== undefined ? ` — ${scope}` : ''}`;
+  return {
+    could_be_tested_by: could,
+    could_partly_cover: partly,
+    untestable_languages: languages === null ? [] : languages.filter((l) => !testable.has(l)),
+  };
 }
 
 function judge(
   contributions: readonly Contribution[],
-  languages: readonly string[] | null,
+  project: { languages: readonly string[] | null; incomplete?: string },
 ): { status: OwaspCoverageStatus; perLanguage: OwaspLanguageCoverage[]; reasons: string[]; used: Contribution[] } {
+  const { languages } = project;
   const agnostic = contributions.filter((c) => c.reach.kind === 'any-language');
   const complete = (c: Contribution): boolean => c.entry.partial === undefined;
   const narrow = (c: Contribution): boolean => c.detector.narrow !== undefined;
@@ -488,9 +604,10 @@ function judge(
   const reasons: string[] = [];
   const used = new Set<Contribution>();
   for (const lang of languages) {
-    const reaching = contributions.filter((c) => rulesIn(c.reach, lang) > 0);
+    const reaching = contributions.filter((c) => cellIn(c.reach, lang) !== null);
     for (const c of reaching) used.add(c);
-    const full = reaching.filter((c) => complete(c) && !narrow(c) && rulesIn(c.reach, lang) >= MIN_RULES);
+    const cellOf = (c: Contribution): RuleCell => cellIn(c.reach, lang) ?? { rules: 0, weaknesses: 0 };
+    const full = reaching.filter((c) => complete(c) && !narrow(c) && meetsBar(cellOf(c)));
     if (full.length > 0) {
       perLanguage.push({ language: lang, coverage: 'full' });
       continue;
@@ -499,7 +616,7 @@ function judge(
     const narrowOk = reaching.filter((c) => complete(c) && narrow(c));
     if (thin.length > 0 || narrowOk.length > 0) {
       perLanguage.push({ language: lang, coverage: thin.length > 0 ? 'thin' : 'narrow' });
-      for (const c of thin) reasons.push(`thin: ${rulesIn(c.reach, lang)} rule(s) for ${lang} (${c.detector.label})`);
+      for (const c of thin) reasons.push(`thin: ${shortfall(cellOf(c))} for ${lang} (${c.detector.label})`);
       reasons.push(...narrowLines(narrowOk));
       continue;
     }
@@ -514,7 +631,13 @@ function judge(
   const uncovered = perLanguage.filter((l) => l.coverage === 'none').map((l) => l.language);
   if (covered.length === 0) return { status: 'not_tested', perLanguage, reasons: [], used: [] };
   if (uncovered.length > 0) reasons.push(`covers ${covered.join(', ')}; nothing for ${uncovered.join(', ')}`);
-  const status: OwaspCoverageStatus = perLanguage.every((l) => l.coverage === 'full') ? 'tested' : 'partial';
+  let status: OwaspCoverageStatus = perLanguage.every((l) => l.coverage === 'full') ? 'tested' : 'partial';
+  // N2: a listing that may have missed a language cannot back "every
+  // language of the project" — the one it missed could have no rules.
+  if (status === 'tested' && project.incomplete !== undefined) {
+    status = 'partial';
+    reasons.push(`the language list may be incomplete (${project.incomplete}); a language it missed could have no rules`);
+  }
   return { status, perLanguage, reasons: [...new Set(reasons)], used: [...used] };
 }
 
@@ -538,10 +661,10 @@ export function owaspCoverage(
   }
 
   const languages = project.languages === null ? null : [...new Set(project.languages)].sort();
-  return {
+  const judged = { languages, ...(project.incomplete !== undefined ? { incomplete: project.incomplete } : {}) };
+  const out: OwaspCoverage = {
     categories: OWASP_TOP10_2025.map((c) => {
-      const verdict = judge(contributionsOf(runs, c.id), languages);
-      const hintLanguages = languages === null || languages.length === 0 ? null : languages;
+      const verdict = judge(contributionsOf(runs, c.id), judged);
       return {
         id: c.id,
         title: c.title,
@@ -551,11 +674,7 @@ export function owaspCoverage(
         languages: verdict.perLanguage,
         reasons: verdict.status === 'tested' ? [] : verdict.reasons,
         findings: counts.get(c.id) ?? 0,
-        could_be_tested_by: OWASP_DETECTORS.flatMap((d) => {
-          const reach = d.reach[c.id];
-          const text = reach === undefined ? null : hint(d, reach, hintLanguages);
-          return text === null ? [] : [text];
-        }),
+        ...hints(c.id, languages === null || languages.length === 0 ? null : languages),
       };
     }),
     findings_total: findings.length,
@@ -563,6 +682,8 @@ export function owaspCoverage(
     languages,
     languages_source: project.source,
   };
+  if (project.incomplete !== undefined) out.languages_incomplete = project.incomplete;
+  return out;
 }
 
 /**

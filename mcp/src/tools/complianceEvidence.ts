@@ -33,7 +33,7 @@ import type { PluginContext } from '../context.js';
 import { coverageRunsOf, owaspCoverage, type OwaspCategoryCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
 import { CSF_CATEGORIES, owaspForCsfCategory } from '../frameworks/nistCsf2.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { resolveProjectLanguages } from '../frameworks/projectLanguages.js';
+import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedHint } from '../report/owaspCoverage.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -106,11 +106,12 @@ async function handler(
   let owasp: OwaspEvidence | null = null;
   if (framework === 'owasp-top10-2025' || framework === 'nist-csf-2.0') {
     const open = openSetForProject(storage, projectPath);
+    const runs = coverageRunsOf(open.bookkeeping, open.scans);
     owasp = {
       coverage: owaspCoverage(
-        coverageRunsOf(open.bookkeeping, open.scans),
+        runs,
         open.findings,
-        resolveProjectLanguages(storage.stack, projectPath),
+        languagesOfRuns(runs, () => resolveProjectLanguages(storage.stack, projectPath)),
       ),
       findings: open.findings,
     };

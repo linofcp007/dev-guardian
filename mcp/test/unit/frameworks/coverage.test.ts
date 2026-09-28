@@ -43,13 +43,16 @@ describe('owaspCoverage — per (category, language)', () => {
   });
 
   // The review's reproduction: a Rust project, scan_sast ok, 0 findings,
-  // used to read A01/A02/A04–A08 "tested". p/default has 1 A05 rule and 3
-  // A07 rules for Rust, and none for the rest.
-  it('a Rust project: the registry tests A07 (3 rules), A05 is thin, the rest was never looked for', () => {
+  // used to read A01/A02/A04–A08 "tested". p/default has 1 A05 rule for
+  // Rust, and 3 A07 rules that are all CWE-295 — TLS certificate checks, one
+  // weakness. Nothing is tested.
+  it('a Rust project: A05 is thin, A07 is one weakness (CWE-295), the rest was never looked for', () => {
     const cov = owaspCoverage([SAST()], [], langs('rust'));
-    expect(tested(cov)).toEqual(['A07:2025']);
+    expect(tested(cov)).toEqual([]);
     expect(cat(cov, 'A05:2025').status).toBe('partial');
     expect(cat(cov, 'A05:2025').reasons.join(' ')).toMatch(/thin: 1 rule\(s\) for rust/);
+    expect(cat(cov, 'A07:2025').status).toBe('partial');
+    expect(cat(cov, 'A07:2025').reasons.join(' ')).toMatch(/thin: 3 rule\(s\), one weakness \(CWE-295\) for rust/);
     for (const id of ['A01:2025', 'A02:2025', 'A03:2025', 'A04:2025', 'A06:2025', 'A08:2025', 'A09:2025', 'A10:2025'] as const) {
       expect(cat(cov, id).status, id).toBe('not_tested');
     }
@@ -310,15 +313,57 @@ describe('owaspCoverage — findings and hints', () => {
     expect(statusOf(cov)['A05:2025']).toBe('not_tested');
   });
 
-  it('points only at detectors that reach the project languages, with their rule counts', () => {
+  // M-d: "would be tested by" lists only what could make the category
+  // tested; thin and narrow detectors are listed apart.
+  it('names only detectors that could make the category tested, and the partial ones apart', () => {
     const go = owaspCoverage([], [], langs('go'));
     // Nothing dev-guardian runs has an A09 rule for Go.
     expect(cat(go, 'A09:2025').could_be_tested_by).toEqual([]);
+    expect(cat(go, 'A09:2025').could_partly_cover).toEqual([]);
+    expect(cat(go, 'A09:2025').untestable_languages).toEqual(['go']);
+
     const js = owaspCoverage([], [], langs('javascript'));
-    const hints = cat(js, 'A09:2025').could_be_tested_by.join(' | ');
-    // The RGPD pack is named for what it is — personal data in logs, one rule.
-    expect(hints).toMatch(/RGPD pack[^|]*javascript 1 \(thin\)[^|]*personal data written to logs only/);
-    expect(cat(js, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/Semgrep registry[^|]*javascript 60/);
+    // The RGPD pack is named for what it is — one rule, one weakness, logs.
+    expect(cat(js, 'A09:2025').could_be_tested_by).toEqual([]);
+    expect(cat(js, 'A09:2025').could_partly_cover.join(' | ')).toMatch(
+      /RGPD pack[^|]*javascript 1 rule\(s\), one weakness \(CWE-532\)[^|]*personal data written to logs only/,
+    );
+    expect(cat(js, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/Semgrep registry[^|]*javascript 60 rules, 8 CWEs/);
+    expect(cat(js, 'A05:2025').untestable_languages).toEqual([]);
+    // A03: nothing dev-guardian runs can make it tested today.
+    const a03 = cat(js, 'A03:2025');
+    expect(a03.could_be_tested_by).toEqual([]);
+    expect(a03.untestable_languages).toEqual(['javascript']);
+    expect(a03.could_partly_cover.join(' | ')).toMatch(/Trivy vulnerability pass[^|]*known-vulnerable dependencies only/);
+  });
+
+  // M-c: three rules of one weakness is one check, repeated.
+  it.each([
+    ['csharp', 'A02:2025', /thin: 3 rule\(s\), one weakness \(CWE-611\) for csharp/],
+    ['scala', 'A02:2025', /one weakness \(CWE-611\)/],
+    ['c', 'A06:2025', /thin: 3 rule\(s\), one weakness \(CWE-676\) for c /],
+  ] as const)('%s %s: >= 3 rules but one weakness is thin', (lang, id, reason) => {
+    const cov = owaspCoverage([SAST()], [], langs(lang));
+    expect(cat(cov, id).status).toBe('partial');
+    expect(cat(cov, id).reasons.join(' ')).toMatch(reason);
+  });
+
+  it('Bandit on Python: A10 is three checks of one discouraged CWE (703), so thin', () => {
+    const cov = owaspCoverage([SAST([{ name: 'bandit', status: 'ok' }], { meta: { local_only: true } })], [], langs('python'));
+    expect(cat(cov, 'A10:2025').status).toBe('partial');
+    expect(cat(cov, 'A10:2025').reasons.join(' ')).toMatch(/one weakness \(CWE-703\)/);
+    expect(cat(cov, 'A05:2025').status).toBe('tested'); // 38 checks, 6 CWEs
+  });
+
+  // N2: a truncated or unreadable listing may have missed a language.
+  it('an incomplete language list caps every rule-based claim at partial, and says why', () => {
+    const cov = owaspCoverage([SAST()], [], { languages: ['javascript'], source: 's', incomplete: 'the file walk stopped after 20000 directories' });
+    expect(tested(cov)).toEqual([]);
+    expect(cat(cov, 'A05:2025').status).toBe('partial');
+    expect(cat(cov, 'A05:2025').reasons.join(' ')).toMatch(
+      /the language list may be incomplete \(the file walk stopped after 20000 directories\)/,
+    );
+    expect(cov.languages_incomplete).toBe('the file walk stopped after 20000 directories');
   });
 
   it('records the languages it judged against, and where they came from', () => {
@@ -340,7 +385,11 @@ describe('OWASP_DETECTORS', () => {
       expect(d.measured, d.id).toMatch(/2026-09-28/);
       for (const reach of Object.values(d.reach)) {
         if (reach?.kind !== 'rules') continue;
-        for (const n of Object.values(reach.perLanguage)) expect(Number.isInteger(n) && (n ?? 0) > 0).toBe(true);
+        for (const cell of Object.values(reach.perLanguage)) {
+          expect(Number.isInteger(cell?.rules) && (cell?.rules ?? 0) > 0).toBe(true);
+          expect(Number.isInteger(cell?.weaknesses) && (cell?.weaknesses ?? -1) >= 0).toBe(true);
+          if (cell?.weaknesses === 1) expect(cell.sole).toMatch(/^CWE-\d+$/);
+        }
       }
     }
   });
@@ -351,8 +400,9 @@ describe('OWASP_DETECTORS', () => {
       const r = registry?.reach[id];
       return r?.kind === 'rules' ? r.perLanguage : {};
     };
-    expect(rules('A05:2025').rust).toBe(1);
-    expect(rules('A07:2025').rust).toBe(3);
+    expect(rules('A05:2025').rust).toEqual({ rules: 1, weaknesses: 1, sole: 'CWE-94' });
+    expect(rules('A07:2025').rust).toEqual({ rules: 3, weaknesses: 1, sole: 'CWE-295' });
+    expect(rules('A02:2025').csharp).toEqual({ rules: 3, weaknesses: 1, sole: 'CWE-611' });
     expect(rules('A01:2025').rust).toBeUndefined();
     expect(rules('A02:2025').php).toBeUndefined();
     expect(rules('A02:2025').ruby).toBeUndefined();

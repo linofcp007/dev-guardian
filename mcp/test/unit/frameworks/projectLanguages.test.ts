@@ -1,13 +1,22 @@
 /**
  * A project's source languages, which OWASP coverage is judged against:
- * the detect_stack snapshot when there is one, else the files' extensions.
+ * the union of the detect_stack snapshot and the languages of the files the
+ * scanners would read — never the snapshot's silence alone, never a
+ * truncated listing passed off as complete.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { canonicalLanguage, languageOfFile } from '../../../src/frameworks/languages.js';
-import { languagesFromFiles, resolveProjectLanguages } from '../../../src/frameworks/projectLanguages.js';
+import {
+  languagesFromFiles,
+  languagesFromFilesAsync,
+  languagesOfRuns,
+  recordedLanguages,
+  resolveProjectLanguages,
+} from '../../../src/frameworks/projectLanguages.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -32,11 +41,11 @@ describe('languageOfFile / canonicalLanguage', () => {
     ['a.js', 'javascript'],
     ['a.MJS', 'javascript'],
     ['a.tsx', 'typescript'],
-    ['types.d.ts', 'typescript'],
     ['a.py', 'python'],
     ['main.go', 'go'],
     ['A.java', 'java'],
-    ['b.kts', 'kotlin'],
+    ['Main.kt', 'kotlin'],
+    ['tool.kts', 'kotlin'],
     ['P.cs', 'csharp'],
     ['i.php', 'php'],
     ['r.rb', 'ruby'],
@@ -49,12 +58,19 @@ describe('languageOfFile / canonicalLanguage', () => {
     expect(languageOfFile(name)).toBe(lang);
   });
 
-  it.each(['index.html', 'a.yml', 'main.tf', 'Dockerfile', 'run.sh', 'README.md', 'a.json'])(
-    '%s is not a source language',
-    (name) => {
-      expect(languageOfFile(name)).toBeNull();
-    },
-  );
+  it.each([
+    'index.html', 'a.yml', 'main.tf', 'Dockerfile', 'run.sh', 'README.md', 'a.json',
+    // A build script, not the product's code.
+    'build.gradle.kts', 'settings.gradle.kts',
+    // A header belongs to C, C++ or Objective-C alike: the .c/.cpp beside it decides.
+    'include/a.h',
+    // Declarations carry no code for a rule to match.
+    'types/index.d.ts',
+    // Minified or generated.
+    'app.min.js', 'api.pb.go', 'schema_pb2.py',
+  ])('%s is not counted as a source language', (name) => {
+    expect(languageOfFile(name)).toBeNull();
+  });
 
   it('reads the names Semgrep and detect_stack use', () => {
     expect(canonicalLanguage('js')).toBe('javascript');
@@ -62,20 +78,75 @@ describe('languageOfFile / canonicalLanguage', () => {
     expect(canonicalLanguage('kt')).toBe('kotlin');
     expect(canonicalLanguage('golang')).toBe('go');
     expect(canonicalLanguage('generic')).toBeNull();
-    expect(canonicalLanguage('hcl')).toBeNull();
   });
 });
 
-describe('languagesFromFiles', () => {
-  it('lists the source languages present, skipping dependency and hidden directories', () => {
+describe('languagesFromFiles — the files the scanners would read', () => {
+  it('skips dependency, hidden, test, example, docs and vendored trees (M-e)', () => {
     const dir = project({
       'src/main.rs': 'fn main() {}',
-      'web/index.html': '<p>x</p>',
+      'third_party/zlib/inflate.c': '',
+      'examples/demo.rb': '',
+      'test/fixtures/x.go': '',
+      'tests/t.py': '',
+      'docs/Sample.java': '',
+      'vendor/lib.php': '',
+      'Pods/Lib/a.swift': '',
       'node_modules/x/index.js': '',
       '.venv/lib/a.py': '',
-      'Cargo.toml': '',
+      'pkg/a_test.go': '',
+      'web/index.html': '<p>x</p>',
     });
-    expect(languagesFromFiles(dir)).toEqual({ languages: ['rust'], complete: true });
+    expect(languagesFromFiles(dir)).toEqual({ languages: ['rust'], listing: 'walk' });
+  });
+
+  it('honours .guardianignore and a project .semgrepignore', () => {
+    const dir = project({
+      'app/main.go': '',
+      'scripts/gen.py': '',
+      'legacy/old.php': '',
+      '.guardianignore': 'scripts/\n',
+      '.semgrepignore': 'legacy/\n',
+    });
+    expect(languagesFromFiles(dir).languages).toEqual(['go']);
+  });
+
+  it('reads the file list from git inside a work tree, so .gitignore applies', () => {
+    const dir = project({ 'src/app.ts': '', 'out-gen/client.java': '', '.gitignore': 'out-gen/\n' });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    const r = languagesFromFiles(dir);
+    expect(r).toEqual({ languages: ['typescript'], listing: 'git' });
+  });
+
+  it('the async listing agrees', async () => {
+    const dir = project({ 'src/app.ts': '', 'out-gen/client.java': '', '.gitignore': 'out-gen/\n' });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    expect(await languagesFromFilesAsync(dir)).toEqual({ languages: ['typescript'], listing: 'git' });
+  });
+
+  it('a .h beside .cpp files is C++, never C as well', () => {
+    expect(languagesFromFiles(project({ 'include/a.h': '', 'src/a.cpp': '' })).languages).toEqual(['cpp']);
+  });
+
+  // N2: 20 050 empty directories used to hide a Rust file and read complete.
+  it('a walk stopped at its directory limit is incomplete, and says so', () => {
+    const dir = project({ 'z/index.js': '', 'a/lib.rs': '', 'm/1/x': '', 'm/2/x': '', 'm/3/x': '' });
+    const r = languagesFromFiles(dir, { useGit: false, maxDirs: 3 });
+    expect(r.incomplete).toMatch(/the file walk stopped after 3 directories/);
+  });
+
+  // M-a: an unreadable directory used to be skipped silently.
+  it('an unreadable subdirectory makes the walk incomplete, and is named', () => {
+    const dir = project({ 'src/a.js': '', 'locked/b.rs': '' });
+    const r = languagesFromFiles(dir, {
+      useGit: false,
+      readDir: (abs) => {
+        if (abs.endsWith('locked')) throw new Error('EACCES: permission denied');
+        return readdirSync(abs, { withFileTypes: true });
+      },
+    });
+    expect(r.languages).toEqual(['javascript']);
+    expect(r.incomplete).toMatch(/could not read locked/);
   });
 
   it('answers null for a directory it cannot read', () => {
@@ -83,39 +154,91 @@ describe('languagesFromFiles', () => {
   });
 });
 
-describe('resolveProjectLanguages', () => {
-  it('prefers the detect_stack snapshot for the languages it detects', () => {
-    // A stray script is not a project language when detect_stack says so.
-    const dir = project({ 'main.go': '', 'tools/gen.py': '' });
-    const r = resolveProjectLanguages(stack(['go']), dir);
-    expect(r.languages).toEqual(['go']);
+describe('resolveProjectLanguages — the snapshot AND the files (N1)', () => {
+  it('Kotlin sources with a Groovy build.gradle: the snapshot says java, the files add kotlin', () => {
+    const dir = project({ 'build.gradle': '', 'app/src/Main.kt': 'fun main() {}' });
+    const r = resolveProjectLanguages(stack(['java']), dir);
+    expect(r.languages).toEqual(['java', 'kotlin']);
     expect(r.source).toMatch(/detect_stack snapshot of 2026-09-28T10:00:00\.000Z/);
+    expect(r.source).toMatch(/kotlin found in the files but not in the snapshot/);
+    expect(r.incomplete).toBeUndefined();
   });
 
-  // detect_stack knows nine languages; C#, Swift, C and the rest are
-  // invisible to it, so a snapshot's silence about them says nothing.
-  it('adds, from the files, the languages detect_stack cannot detect', () => {
-    const dir = project({ 'App.csproj': '', 'Program.cs': '', 'web/app.js': '' });
-    const r = resolveProjectLanguages(stack(['javascript']), dir);
-    expect(r.languages).toEqual(['csharp', 'javascript']);
-    expect(r.source).toMatch(/file extensions for csharp/);
+  it('a stale snapshot does not hide a language added since', () => {
+    const dir = project({ 'package.json': '{}', 'web/app.js': '', 'native/Cargo.toml': '', 'native/src/lib.rs': '' });
+    expect(resolveProjectLanguages(stack(['javascript']), dir).languages).toEqual(['javascript', 'rust']);
   });
 
-  it('falls back to the files when there is no snapshot', () => {
-    const dir = project({ 'src/main.rs': '', 'Cargo.toml': '' });
+  it('keeps a snapshot language the files do not show (union, never intersection)', () => {
+    const dir = project({ 'main.go': '' });
+    expect(resolveProjectLanguages(stack(['go', 'python']), dir).languages).toEqual(['go', 'python']);
+  });
+
+  it('falls back to the files when there is no snapshot, and to them alone when the snapshot is malformed', () => {
+    const dir = project({ 'src/main.rs': '' });
     const r = resolveProjectLanguages(NO_STACK, dir);
     expect(r.languages).toEqual(['rust']);
-    expect(r.source).toMatch(/file extensions \(no detect_stack snapshot\)/);
+    expect(r.source).toMatch(/no detect_stack snapshot/);
+    expect(resolveProjectLanguages(stack('python'), dir).languages).toEqual(['rust']);
   });
 
-  it('ignores a snapshot whose languages field is not a list of strings', () => {
-    const dir = project({ 'a.py': '' });
-    expect(resolveProjectLanguages(stack('python'), dir).languages).toEqual(['python']);
+  it('carries an incomplete listing through', () => {
+    const dir = project({ 'a/b/c/d.js': '' });
+    const r = resolveProjectLanguages(NO_STACK, dir, { walk: { useGit: false, maxDirs: 1 } });
+    expect(r.incomplete).toMatch(/stopped after 1 director/);
   });
 
   it('is unknown — never "no language" — when the project cannot be read', () => {
     const r = resolveProjectLanguages(NO_STACK, join(makeTempDir('proj-langs-'), 'gone'));
     expect(r.languages).toBeNull();
     expect(r.source).toMatch(/could not be determined/);
+  });
+});
+
+describe('languages recorded at scan time (M-b)', () => {
+  it('reads a recorded value back, and refuses a malformed one', () => {
+    expect(recordedLanguages({ project_languages: { languages: ['go'], source: 's' } })).toEqual({ languages: ['go'], source: 's' });
+    expect(recordedLanguages({ project_languages: { languages: ['go'], source: 's', incomplete: 'why' } })?.incomplete).toBe('why');
+    expect(recordedLanguages({ project_languages: { languages: 'go', source: 's' } })).toBeNull();
+    expect(recordedLanguages({})).toBeNull();
+    expect(recordedLanguages(undefined)).toBeNull();
+  });
+
+  const run = (scan_type: string, meta?: Record<string, unknown>) => ({
+    scan_id: `${scan_type}-1`,
+    scan_type,
+    tools_run: [],
+    missing_tools: [],
+    ...(meta !== undefined ? { meta } : {}),
+  });
+  const today = { languages: ['javascript'], source: 'file extensions (no detect_stack snapshot)' };
+
+  it('judges against what the scans recorded, not today\'s tree', () => {
+    const r = languagesOfRuns([run('sast', { project_languages: { languages: ['rust'], source: 'x' } })], () => today);
+    expect(r.languages).toEqual(['rust']);
+    expect(r.source).toMatch(/recorded when the scan ran/);
+  });
+
+  it('unions several scans, and falls back to today\'s tree for a scan that predates the record — saying so', () => {
+    const r = languagesOfRuns(
+      [run('sast', { project_languages: { languages: ['go'], source: 'x' } }), run('secrets', {})],
+      () => today,
+    );
+    expect(r.languages).toEqual(['go', 'javascript']);
+    expect(r.source).toMatch(/1 older scan predates that record and is judged against today's tree/);
+  });
+
+  it('ignores scans no OWASP detector reads (a quality run records nothing)', () => {
+    const r = languagesOfRuns([run('sast', { project_languages: { languages: ['go'], source: 'x' } }), run('quality', {})], () => today);
+    expect(r.languages).toEqual(['go']);
+  });
+
+  it('carries a recorded incomplete listing through', () => {
+    const r = languagesOfRuns([run('sast', { project_languages: { languages: ['go'], source: 'x', incomplete: 'walk stopped' } })], () => today);
+    expect(r.incomplete).toMatch(/walk stopped/);
+  });
+
+  it('uses today\'s tree when no scan is in play', () => {
+    expect(languagesOfRuns([], () => today)).toEqual(today);
   });
 });

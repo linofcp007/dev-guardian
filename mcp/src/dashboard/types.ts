@@ -187,7 +187,7 @@ export interface CoverageState {
    * from (`frameworks/projectLanguages.ts`) — "tested" is a claim about
    * them. Set whenever `owasp` is.
    */
-  owasp_languages?: { languages: string[] | null; source: string };
+  owasp_languages?: { languages: string[] | null; source: string; incomplete?: string };
 }
 
 export interface OwaspCoverageEntry {

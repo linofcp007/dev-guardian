@@ -146,7 +146,8 @@ describe('report_export', () => {
     expect(md).toMatch(/stored before schema 13 \| `src\/app\.js:9` \| — \|/);
 
     expect(md).toContain('## OWASP Top 10:2025 coverage');
-    expect(md).toMatch(/Project languages: javascript \(file extensions \(no detect_stack snapshot\)\)/);
+    // The seeded row predates recorded languages: today's tree, and it says so.
+    expect(md).toMatch(/Project languages: javascript \([^\n]*judged against today's tree/);
     expect(md).toMatch(/\| A05:2025 Injection \| tested \| semgrep \(sast\) \| 1 \|/);
     // p/default holds exactly one A03 rule for JavaScript: looked at, thinly.
     expect(md).toMatch(/\| A03:2025 Software Supply Chain Failures \| partial \| semgrep \(sast\) \| 0 \|/);
@@ -154,7 +155,7 @@ describe('report_export', () => {
     // The registry has no A09 or A10 rule for JavaScript.
     expect(md).toMatch(/\| A09:2025 Security Logging and Alerting Failures \| NOT TESTED \|/);
     expect(md).toMatch(/\| A10:2025 Mishandling of Exceptional Conditions \| NOT TESTED \|/);
-    expect(md).toMatch(/A10:2025 would be tested by: bug_hunt packs[^\n]*javascript 6/);
+    expect(md).toMatch(/A10:2025: would be tested by: bug_hunt packs[^\n]*javascript 6 rules, 3 CWEs/);
     expect(md).toMatch(/not tested.*is not a clean result/i);
     expect(md).toMatch(/vulnerable dependency counts under A03 only/);
     expect(md).toMatch(/1 of 2 findings carry no OWASP 2025 category/);
@@ -162,18 +163,36 @@ describe('report_export', () => {
 
   // The review's reproduction, end to end: a Rust project, scan_sast ok,
   // zero findings. It used to read A01/A02/A04–A08 "tested".
-  it('a Rust project with zero findings: only A07 is tested, A05 is thin, the rest NOT TESTED', async () => {
+  it('a Rust project with zero findings: nothing is tested — A05 thin, A07 one weakness, the rest NOT TESTED', async () => {
     const plugin = makePlugin();
     const project = tempProject({ 'Cargo.toml': '[package]\n', 'src/main.rs': 'fn main() { let p = format!("/data/{}", a); }\n' });
     seedScan(plugin, { id: 'RS', type: 'sast', project, tools_run: SEMGREP_OK });
     const md = await exportScan(plugin, project, 'RS', 'markdown');
     expect(md).toMatch(/Project languages: rust/);
-    expect(md).toMatch(/\| A07:2025 Authentication Failures \| tested \|/);
+    expect(md).not.toMatch(/\| tested \|/);
+    expect(md).toMatch(/A07:2025 partial: thin: 3 rule\(s\), one weakness \(CWE-295\) for rust/);
     expect(md).toMatch(/\| A05:2025 Injection \| partial \|/);
     expect(md).toMatch(/A05:2025 partial: thin: 1 rule\(s\) for rust/);
     for (const id of ['A01', 'A02', 'A04', 'A06', 'A08']) expect(md).toMatch(new RegExp(`\\| ${id}:2025 [^|]+\\| NOT TESTED \\|`));
     // Nothing dev-guardian runs has A09 rules for Rust — said, not implied.
     expect(md).toMatch(/A09:2025: no scanner dev-guardian runs has rules for rust/);
+  });
+
+  // M-b: a report judges a scan against the languages it RECORDED, not
+  // against whatever the working tree holds today.
+  it('judges a scan against the languages recorded when it ran', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({ 'src/app.js': '' }); // today: JavaScript only
+    seedScan(plugin, {
+      id: 'OLD',
+      type: 'sast',
+      project,
+      tools_run: SEMGREP_OK,
+      meta: { local_only: false, project_languages: { languages: ['rust'], source: 'file extensions (no detect_stack snapshot)' } },
+    });
+    const md = await exportScan(plugin, project, 'OLD', 'markdown');
+    expect(md).toMatch(/Project languages: rust \(recorded when the scan ran/);
+    expect(md).toMatch(/\| A05:2025 Injection \| partial \|/);
   });
 
   it('a Semgrep that failed tests nothing, and nothing reads clean', async () => {
@@ -412,10 +431,8 @@ describe('dashboard', () => {
     expect(status['A05:2025']).toBe('tested');
     expect(status['A03:2025']).toBe('partial');
     expect(status['A09:2025']).toBe('not_tested');
-    expect(snapshot.coverage.owasp_languages).toEqual({
-      languages: ['javascript'],
-      source: 'file extensions (no detect_stack snapshot)',
-    });
+    expect(snapshot.coverage.owasp_languages?.languages).toEqual(['javascript']);
+    expect(snapshot.coverage.owasp_languages?.source).toMatch(/judged against today's tree/);
 
     const text = renderStatus(snapshot, { color: false });
     expect(text).toMatch(/OWASP 2025 +A05 1 · 1 unmapped/);

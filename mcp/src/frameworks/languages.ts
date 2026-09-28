@@ -85,9 +85,13 @@ export function canonicalLanguage(raw: string): SourceLanguage | null {
   return ALIASES[raw.trim().toLowerCase()] ?? null;
 }
 
+/**
+ * `.h` is deliberately absent: a header belongs to C, C++ or Objective-C
+ * alike, so the `.c` / `.cpp` files beside it decide, and a C++ project's
+ * headers never add C. Objective-C (`.m`, `.mm`) is not in the list at all.
+ */
 const EXTENSIONS: Readonly<Record<string, SourceLanguage>> = {
   '.c': 'c',
-  '.h': 'c',
   '.cc': 'cpp',
   '.cpp': 'cpp',
   '.cxx': 'cpp',
@@ -121,9 +125,18 @@ const EXTENSIONS: Readonly<Record<string, SourceLanguage>> = {
   '.cts': 'typescript',
 };
 
+/**
+ * Files that are not the product's code even though their extension says a
+ * language: build scripts (`build.gradle.kts`), type declarations
+ * (`*.d.ts` — no code for a rule to match), minified bundles and generated
+ * protobuf / Dart / designer code.
+ */
+const NOT_PRODUCT_CODE = /(\.gradle\.kts|\.d\.ts|\.min\.js|\.pb\.go|_pb2\.py|_pb2_grpc\.py|\.g\.dart|\.designer\.cs)$/;
+
 /** The source language of a file, by its extension (case-insensitive), or null. */
 export function languageOfFile(name: string): SourceLanguage | null {
   const lower = name.toLowerCase();
+  if (NOT_PRODUCT_CODE.test(lower)) return null;
   const dot = lower.lastIndexOf('.');
   if (dot < 0) return null;
   return EXTENSIONS[lower.slice(dot)] ?? null;
