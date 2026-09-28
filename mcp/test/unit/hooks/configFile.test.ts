@@ -124,8 +124,11 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'hook-config-file-'));
 });
+// Retries ENOTEMPTY: a `ln -sfn` the swapper test had started can finish after
+// its shell was killed and put a link back while the directory is removed —
+// in a parallel POSIX run that failed the test in teardown, not in its reads.
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe('readSmallJsonFile', () => {
@@ -288,7 +291,12 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
         // swapper that never ran would pass every assertion above vacuously.
         expect(r.counts['refused:not-a-regular-file'] ?? 0).toBeGreaterThan(0);
       } finally {
+        const exited = new Promise<void>((settle) => {
+          if (swapper.exitCode !== null || swapper.signalCode !== null) settle();
+          else swapper.once('exit', () => settle());
+        });
         swapper.kill('SIGKILL');
+        await exited;
       }
     },
     60_000,
