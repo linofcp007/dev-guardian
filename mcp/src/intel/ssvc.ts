@@ -241,12 +241,14 @@ export function automatablePoint(
         '— no barrier dev-guardian can see',
     };
   }
+  // For `unknown`, the provider's own first gap says why — "no import
+  // found" and "the snapshot never recorded imports" are different facts.
   const why =
     dependency === null
       ? (whyNone ?? 'no reachability data')
       : dependency.verdict === 'imported'
         ? 'the package is imported, but no route was shown to reach an importing file — not evidence of a barrier'
-        : 'no import of the package was found — absence of evidence, not a barrier';
+        : (dependency.coverage_gaps[0] ?? 'no import of the package was found — absence of evidence, not a barrier');
   return { value: 'yes', assumed: true, basis: `${why}: assumed the most severe value` };
 }
 

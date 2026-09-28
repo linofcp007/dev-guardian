@@ -141,9 +141,9 @@ async function handler(
   if (inp.vex_status !== undefined && cveIds.length === 0) {
     return failDomain(
       'unsupported_target',
-      `vex_status needs a finding that names a CVE, and ${inp.finding_fingerprint} ` +
+      `vex_status needs a finding that names a CVE — export_vex states CVEs — and ${inp.finding_fingerprint} ` +
         `(${located.finding.tool}${located.finding.rule_id !== undefined ? ` ${located.finding.rule_id}` : ''}) ` +
-        'names none. Suppress it without vex_status, or suppress the dependency finding itself.',
+        'names none. Suppress it without vex_status.',
     );
   }
 

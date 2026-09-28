@@ -54358,7 +54358,7 @@ async function handler8(input, ctx) {
   if (inp.vex_status !== void 0 && cveIds.length === 0) {
     return failDomain9(
       "unsupported_target",
-      `vex_status needs a finding that names a CVE, and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) names none. Suppress it without vex_status, or suppress the dependency finding itself.`
+      `vex_status needs a finding that names a CVE \u2014 export_vex states CVEs \u2014 and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) names none. Suppress it without vex_status.`
     );
   }
   const identity3 = located.finding.identity;
@@ -61555,7 +61555,7 @@ function automatablePoint(dependency, whyNone) {
       basis: `exposed: ${dependency.evidence[0]?.detail ?? "a file an HTTP route reaches imports the package"} \u2014 no barrier dev-guardian can see`
     };
   }
-  const why = dependency === null ? whyNone ?? "no reachability data" : dependency.verdict === "imported" ? "the package is imported, but no route was shown to reach an importing file \u2014 not evidence of a barrier" : "no import of the package was found \u2014 absence of evidence, not a barrier";
+  const why = dependency === null ? whyNone ?? "no reachability data" : dependency.verdict === "imported" ? "the package is imported, but no route was shown to reach an importing file \u2014 not evidence of a barrier" : dependency.coverage_gaps[0] ?? "no import of the package was found \u2014 absence of evidence, not a barrier";
   return { value: "yes", assumed: true, basis: `${why}: assumed the most severe value` };
 }
 function technicalImpactPoint(severity) {

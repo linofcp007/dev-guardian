@@ -162,6 +162,14 @@ describe('automatablePoint', () => {
     expect(automatablePoint(dep('unknown'), null)).toMatchObject({ value: 'yes', assumed: true });
   });
 
+  it('says why the use is unknown in the provider’s own words', () => {
+    const p = automatablePoint(
+      { ...dep('unknown'), coverage_gaps: ['the surface snapshot was mapped before third-party imports were recorded'] },
+      null,
+    );
+    expect(p.basis).toMatch(/before third-party imports were recorded/);
+  });
+
   it('assumes yes, naming why, when there was nothing to assess against', () => {
     const p = automatablePoint(null, 'no attack-surface snapshot for this project');
     expect(p).toMatchObject({ value: 'yes', assumed: true });
