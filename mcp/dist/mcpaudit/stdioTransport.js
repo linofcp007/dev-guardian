@@ -27,6 +27,10 @@
  *     parent has already exited keeps a stale parent pid, is out of reach,
  *     and survives — the Windows counterpart of the POSIX `setsid()` limit
  *     (and one the MSYS token covers only for processes Git Bash started).
+ *   - Before any of this, on Windows: a `PATH` entry that looks local but
+ *     reaches the network (a mapped drive, a junction to a share) is still
+ *     `stat`ed while the command is resolved — off the event loop, bounded
+ *     by the deadline, but an SMB request all the same (`launch.ts`).
  *
  * `close()` ALWAYS kills the tree — after a successful listing too: a server
  * that answered is still running, and nothing here needs it afterwards.
