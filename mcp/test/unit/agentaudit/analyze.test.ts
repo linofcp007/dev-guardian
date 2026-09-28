@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeAgentConfig } from '../../../src/agentaudit/analyze.js';
+import { analyzeAgentConfig, collectMcpEntries } from '../../../src/agentaudit/analyze.js';
 import type { ConfigSource } from '../../../src/agentaudit/configSources.js';
 
 function mcpSource(overrides: Partial<ConfigSource>): ConfigSource {
@@ -133,5 +133,45 @@ describe('analyzeAgentConfig', () => {
     expect(keys).toContain('~/.claude.json::global1');
     expect(keys.some((k) => k.includes('proj1'))).toBe(true);
     expect(result.findings.some((f) => f.rule_id === 'agent-audit-unpinned-launcher')).toBe(true);
+  });
+
+  // A plugin's `mcpServers` may be a PATH to another JSON file rather than
+  // an inline object. Nothing here follows it, so that must be said: an
+  // audit that silently skipped it would read as "no servers" — clean.
+  it('warns when a source declares mcpServers as a path it does not follow', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({
+        label: '.claude-plugin/plugin.json',
+        absolutePath: '/proj/.claude-plugin/plugin.json',
+        json: { name: 'p', mcpServers: './servers.json' },
+      }),
+    ];
+    const result = analyzeAgentConfig(sources, new Map());
+    expect(result.mcpServersFound).toBe(0);
+    expect(result.warnings.some((w) => w.includes('.claude-plugin/plugin.json') && w.includes('./servers.json'))).toBe(
+      true,
+    );
+  });
+});
+
+describe('collectMcpEntries', () => {
+  it('returns every entry across sources, nested ~/.claude.json projects included', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({ json: { mcpServers: { a: { command: 'node' } } } }),
+      {
+        label: '~/.claude.json',
+        kind: 'user',
+        absolutePath: '/home/u/.claude.json',
+        mcpServersField: 'mcpServers',
+        exists: true,
+        json: { projects: { '/p': { mcpServers: { b: { command: 'node' } } } } },
+      },
+    ];
+    const collected = collectMcpEntries(sources);
+    expect(collected.entries.map((e) => `${e.sourceLabel}::${e.name}`)).toEqual([
+      '.mcp.json::a',
+      '~/.claude.json (project: /p)::b',
+    ]);
+    expect(collected.sourcesRead).toEqual(['.mcp.json', '~/.claude.json']);
   });
 });

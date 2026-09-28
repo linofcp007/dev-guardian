@@ -8,6 +8,13 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- `audit_agent_config` reads a plugin's `.claude-plugin/plugin.json` `mcpServers`, and with
+  `include_user_config` also Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`,
+  Windsurf's `~/.codeium/windsurf/mcp_config.json` and `~/.gemini/settings.json` (the paths
+  `mcp-config --write` uses). An `mcpServers` given as a path to another file is a warning.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

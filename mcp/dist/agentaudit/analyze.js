@@ -48,7 +48,15 @@ function expandNestedProjectSources(source) {
     }
     return out;
 }
-export function analyzeAgentConfig(sources, previousHashes) {
+/**
+ * Every MCP server entry the read sources declare — shared by
+ * `audit_agent_config` (static checks) and `audit_mcp_tools` (which starts
+ * only the entries the caller names). A source that could not be parsed is a
+ * warning, and so is an `mcpServers` given as a path to another file (a
+ * plugin's `plugin.json` may do that): nothing here follows it, and saying
+ * nothing would read as "no servers there".
+ */
+export function collectMcpEntries(sources) {
     const warnings = [];
     const sourcesRead = [];
     const sourcesMissing = [];
@@ -65,11 +73,32 @@ export function analyzeAgentConfig(sources, previousHashes) {
         sourcesRead.push(source.label);
         allSources.push(source);
         allSources.push(...expandNestedProjectSources(source));
+        const pathForm = mcpServersPath(source);
+        if (pathForm !== null) {
+            warnings.push(`${source.label}: ${source.mcpServersField ?? 'mcpServers'} is a path ("${pathForm}"), not an inline ` +
+                'object; the servers declared in that file were not read from here');
+        }
     }
-    const findings = [];
     const entries = [];
-    for (const source of allSources) {
+    for (const source of allSources)
         entries.push(...extractMcpServers(source));
+    return { sources: allSources, entries, warnings, sourcesRead, sourcesMissing };
+}
+/** The `mcpServers` value when it is a string (a path to another file), else null. */
+function mcpServersPath(source) {
+    if (source.mcpServersField === null)
+        return null;
+    const root = source.json;
+    if (root === null || typeof root !== 'object' || Array.isArray(root))
+        return null;
+    const value = root[source.mcpServersField];
+    return typeof value === 'string' ? value : null;
+}
+export function analyzeAgentConfig(sources, previousHashes) {
+    const collected = collectMcpEntries(sources);
+    const { warnings, sourcesRead, sourcesMissing, entries } = collected;
+    const findings = [];
+    for (const source of collected.sources) {
         findings.push(...checkWildcardPermissions(source));
         findings.push(...checkBypassPermissions(source));
         findings.push(...checkEnableAllProjectMcpServers(source));

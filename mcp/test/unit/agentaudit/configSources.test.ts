@@ -7,9 +7,11 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { MAX_CONFIG_BYTES, readConfigSources } from '../../../src/agentaudit/configSources.js';
+import { claudeDesktopConfigPath } from '../../../src/hostsetup/mcpConfig.js';
+import { detectOs } from '../../../src/platform/osDetect.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -98,5 +100,89 @@ describe('readConfigSources — real disk I/O', () => {
     const dir = makeTempDir('agentaudit-cfg-');
     const sources = readConfigSources(dir, false);
     expect(sources.some((s) => s.kind === 'user')).toBe(false);
+  });
+});
+
+/**
+ * Part A.1 (3.0 additions): the hosts dev-guardian itself writes configs for
+ * (`hostsetup/mcpConfig.ts`) are also where an MCP server can be declared.
+ * A plugin's own `.claude-plugin/plugin.json` is project-scoped; Claude
+ * Desktop, Cursor, Windsurf and Gemini's user-level files are read only with
+ * `include_user_config`, at the same OS paths `mcp-config --write` uses.
+ */
+describe('readConfigSources — the wider host set', () => {
+  const saved = {
+    HOME: process.env['HOME'],
+    USERPROFILE: process.env['USERPROFILE'],
+    APPDATA: process.env['APPDATA'],
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  function pointHomeAt(dir: string): void {
+    process.env['HOME'] = dir;
+    process.env['USERPROFILE'] = dir;
+    process.env['APPDATA'] = join(dir, 'AppData', 'Roaming');
+  }
+
+  function writeAt(path: string, content: unknown): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(content), 'utf8');
+  }
+
+  const USER_LABELS = [
+    'claude_desktop_config.json',
+    '~/.cursor/mcp.json',
+    '~/.codeium/windsurf/mcp_config.json',
+    '~/.gemini/settings.json',
+  ];
+
+  it("reads a plugin's .claude-plugin/plugin.json as a project source of mcpServers", () => {
+    const dir = makeTempDir('agentaudit-cfg-');
+    writeAt(join(dir, '.claude-plugin', 'plugin.json'), {
+      name: 'p',
+      mcpServers: { srv: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/server.js'] } },
+    });
+    const source = readConfigSources(dir, false).find((s) => s.label === '.claude-plugin/plugin.json');
+    expect(source?.kind).toBe('project');
+    expect(source?.exists).toBe(true);
+    expect(source?.mcpServersField).toBe('mcpServers');
+  });
+
+  it('reads Claude Desktop, ~/.cursor, Windsurf and ~/.gemini configs with include_user_config', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    const desktop = claudeDesktopConfigPath({ os: detectOs(), home, appData: process.env['APPDATA'] });
+    expect(desktop).not.toBeNull();
+    if (desktop === null) return;
+    writeAt(desktop, { mcpServers: { a: { command: 'node' } } });
+    writeAt(join(home, '.cursor', 'mcp.json'), { mcpServers: { b: { command: 'node' } } });
+    writeAt(join(home, '.codeium', 'windsurf', 'mcp_config.json'), { mcpServers: { c: { command: 'node' } } });
+    writeAt(join(home, '.gemini', 'settings.json'), { mcpServers: { d: { command: 'node' } } });
+
+    const dir = makeTempDir('agentaudit-cfg-');
+    const sources = readConfigSources(dir, true);
+    for (const label of USER_LABELS) {
+      const source = sources.find((s) => s.label === label);
+      expect(source, label).toBeDefined();
+      expect(source?.kind, label).toBe('user');
+      expect(source?.exists, label).toBe(true);
+      expect(source?.mcpServersField, label).toBe('mcpServers');
+    }
+    expect(sources.find((s) => s.label === 'claude_desktop_config.json')?.absolutePath).toBe(desktop);
+  });
+
+  it('never reads those user-level files without include_user_config', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    writeAt(join(home, '.cursor', 'mcp.json'), { mcpServers: { b: { command: 'node' } } });
+    const dir = makeTempDir('agentaudit-cfg-');
+    const labels = readConfigSources(dir, false).map((s) => s.label);
+    for (const label of USER_LABELS) expect(labels).not.toContain(label);
   });
 });

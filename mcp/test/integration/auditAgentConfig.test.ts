@@ -79,6 +79,19 @@ describe('audit_agent_config', () => {
   // Fixed): `.mcp.json` used `${CLAUDE_PROJECT_DIR}` in `args`, which Claude
   // Code does not expand for a project-scoped server entry, and the server
   // failed to start with a literal-placeholder MODULE_NOT_FOUND.
+  it("reads a plugin's .claude-plugin/plugin.json mcpServers", async () => {
+    const dir = makeTempDir('agent-audit-');
+    writeJson(dir, '.claude-plugin/plugin.json', {
+      name: 'p',
+      mcpServers: { risky: { command: 'npx', args: ['-y', 'some-random-package'] } },
+    });
+    const plugin = makePlugin();
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+    expect(r.sources_read).toContain('.claude-plugin/plugin.json');
+    expect(r.mcp_servers_found).toBe(1);
+    expect(r.findings.some((f) => f.rule_id === 'agent-audit-unpinned-launcher')).toBe(true);
+  });
+
   it('flags ${CLAUDE_PROJECT_DIR} in a project .mcp.json as the unexpanded-var defect', async () => {
     const dir = makeTempDir('agent-audit-');
     writeJson(dir, '.mcp.json', {

@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve22.call(this, root, ref);
+      let _sch = resolve23.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve22(root, ref) {
+    function resolve23(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve22(baseURI, relativeURI, options) {
+    function resolve23(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve22,
+      resolve: resolve23,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve22, reject) {
+        return new Promise(function(resolve23, reject) {
           isexe(path8, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve22(is);
+              resolve23(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve22, reject) => {
+      const step = (i2) => new Promise((resolve23, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve22(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve23(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path8.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve22(subStep(p, i2, 0));
+        resolve23(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve22, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve23, reject) => {
         if (ii === pathExt.length)
-          return resolve22(step(i2 + 1));
+          return resolve23(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve22(p + ext);
+              return resolve23(p + ext);
           }
-          return resolve22(subStep(p, i2, ii + 1));
+          return resolve23(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve22, reject) => {
-        Object.assign(methods, { resolve: resolve22, reject });
+      const promise = new Promise((resolve23, reject) => {
+        Object.assign(methods, { resolve: resolve23, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve22 = promise.resolve.bind(promise);
-      return { resolve: resolve22, promises };
+      const resolve23 = promise.resolve.bind(promise);
+      return { resolve: resolve23, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve22, promises }, subprocess) => {
-      resolve22();
+    waitForConcurrentStreams = async ({ resolve: resolve23, promises }, subprocess) => {
+      resolve23();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -34920,7 +34920,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve22) => setTimeout(resolve22, pollInterval));
+        await new Promise((resolve23) => setTimeout(resolve23, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -34937,7 +34937,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve23, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35015,7 +35015,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve22(parseResult.data);
+            resolve23(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35276,12 +35276,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve22, reject) => {
+    return new Promise((resolve23, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve22, interval);
+      const timeoutId = setTimeout(resolve23, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36594,7 +36594,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve22) => setTimeout(resolve22, pollInterval));
+      await new Promise((resolve23) => setTimeout(resolve23, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37282,19 +37282,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve22) => {
+    return new Promise((resolve23) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve22();
+        resolve23();
       } else {
-        this._stdout.once("drain", resolve22);
+        this._stdout.once("drain", resolve23);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve21 } from "node:path";
+import { resolve as resolve22 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -42019,7 +42019,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve22) => this.waiting.push(resolve22));
+    await new Promise((resolve23) => this.waiting.push(resolve23));
     this.active += 1;
   }
   release() {
@@ -51166,7 +51166,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve22 = (name, ecosystem, file, version2) => {
+  const resolve23 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -51233,7 +51233,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve22(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve23(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -51243,7 +51243,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve22(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve23(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -51251,10 +51251,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve22(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve23(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText3("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve22(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve23(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -51270,7 +51270,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve22(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve23(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -69881,7 +69881,7 @@ function expandNestedProjectSources(source) {
   }
   return out;
 }
-function analyzeAgentConfig(sources, previousHashes) {
+function collectMcpEntries(sources) {
   const warnings = [];
   const sourcesRead = [];
   const sourcesMissing = [];
@@ -69898,11 +69898,29 @@ function analyzeAgentConfig(sources, previousHashes) {
     sourcesRead.push(source.label);
     allSources.push(source);
     allSources.push(...expandNestedProjectSources(source));
+    const pathForm = mcpServersPath(source);
+    if (pathForm !== null) {
+      warnings.push(
+        `${source.label}: ${source.mcpServersField ?? "mcpServers"} is a path ("${pathForm}"), not an inline object; the servers declared in that file were not read from here`
+      );
+    }
   }
-  const findings = [];
   const entries2 = [];
-  for (const source of allSources) {
-    entries2.push(...extractMcpServers(source));
+  for (const source of allSources) entries2.push(...extractMcpServers(source));
+  return { sources: allSources, entries: entries2, warnings, sourcesRead, sourcesMissing };
+}
+function mcpServersPath(source) {
+  if (source.mcpServersField === null) return null;
+  const root = source.json;
+  if (root === null || typeof root !== "object" || Array.isArray(root)) return null;
+  const value = root[source.mcpServersField];
+  return typeof value === "string" ? value : null;
+}
+function analyzeAgentConfig(sources, previousHashes) {
+  const collected = collectMcpEntries(sources);
+  const { warnings, sourcesRead, sourcesMissing, entries: entries2 } = collected;
+  const findings = [];
+  for (const source of collected.sources) {
     findings.push(...checkWildcardPermissions(source));
     findings.push(...checkBypassPermissions(source));
     findings.push(...checkEnableAllProjectMcpServers(source));
@@ -69949,7 +69967,48 @@ function analyzeAgentConfig(sources, previousHashes) {
 // src/agentaudit/configSources.ts
 import { existsSync as existsSync53, readFileSync as readFileSync40, statSync as statSync20 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join73 } from "node:path";
+import { join as join74 } from "node:path";
+
+// src/hostsetup/mcpConfig.ts
+import { join as join73, resolve as resolve18 } from "node:path";
+var SERVER_ID = "dev-guardian";
+function claudeDesktopConfigPath(env) {
+  switch (env.os) {
+    case "win32": {
+      const appData = env.appData ?? join73(env.home, "AppData", "Roaming");
+      return join73(appData, "Claude", "claude_desktop_config.json");
+    }
+    case "darwin":
+      return join73(env.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    case "linux":
+      return join73(env.home, ".config", "Claude", "claude_desktop_config.json");
+    default:
+      return null;
+  }
+}
+function resolveMcpConfigPath(host, scope, env) {
+  const { projectPath, home } = env;
+  switch (host) {
+    case "cursor":
+      return scope === "global" ? join73(home, ".cursor", "mcp.json") : join73(projectPath, ".cursor", "mcp.json");
+    case "gemini":
+      return scope === "global" ? join73(home, ".gemini", "settings.json") : join73(projectPath, ".gemini", "settings.json");
+    case "codex":
+      return scope === "global" ? join73(home, ".codex", "config.toml") : join73(projectPath, ".codex", "config.toml");
+    case "copilot":
+      return join73(projectPath, ".vscode", "mcp.json");
+    case "windsurf":
+      return join73(home, ".codeium", "windsurf", "mcp_config.json");
+    case "claude-desktop":
+      return claudeDesktopConfigPath(env);
+    case "cline":
+      return null;
+    // manual
+    default:
+      return null;
+  }
+}
+var OUR_TABLE_PATH = `mcp_servers.${SERVER_ID}`;
 
 // src/agentaudit/jsonc.ts
 function stripComments(text) {
@@ -70039,46 +70098,74 @@ function parseJsonc(text) {
 
 // src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
-  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join73(p, ".mcp.json") },
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join74(p, ".mcp.json") },
   {
     label: ".claude/settings.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join73(p, ".claude", "settings.json")
+    resolve: (p) => join74(p, ".claude", "settings.json")
   },
   {
     label: ".claude/settings.local.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join73(p, ".claude", "settings.local.json")
+    resolve: (p) => join74(p, ".claude", "settings.local.json")
   },
   {
     label: ".cursor/mcp.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join73(p, ".cursor", "mcp.json")
+    resolve: (p) => join74(p, ".cursor", "mcp.json")
   },
   {
     label: ".vscode/mcp.json",
     kind: "project",
     mcpServersField: "servers",
-    resolve: (p) => join73(p, ".vscode", "mcp.json")
+    resolve: (p) => join74(p, ".vscode", "mcp.json")
   },
   {
     label: ".gemini/settings.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join73(p, ".gemini", "settings.json")
+    resolve: (p) => join74(p, ".gemini", "settings.json")
+  },
+  // A Claude Code plugin declares its own servers here, launched with
+  // `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's root (this directory).
+  {
+    label: ".claude-plugin/plugin.json",
+    kind: "project",
+    mcpServersField: "mcpServers",
+    resolve: (p) => join74(p, ".claude-plugin", "plugin.json")
   }
 ];
+function hostPathEnv() {
+  return { os: detectOs(), home: homedir3(), appData: process.env["APPDATA"], projectPath: "" };
+}
+function hostConfigPath(host) {
+  return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
+}
 var USER_DESCRIPTORS = [
-  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join73(homedir3(), ".claude.json") },
+  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join74(homedir3(), ".claude.json") },
   {
     label: "~/.claude/settings.json",
     kind: "user",
     mcpServersField: null,
-    resolve: () => join73(homedir3(), ".claude", "settings.json")
-  }
+    resolve: () => join74(homedir3(), ".claude", "settings.json")
+  },
+  {
+    label: "claude_desktop_config.json",
+    kind: "user",
+    mcpServersField: "mcpServers",
+    resolve: () => claudeDesktopConfigPath(hostPathEnv()) ?? ""
+  },
+  { label: "~/.cursor/mcp.json", kind: "user", mcpServersField: "mcpServers", resolve: () => hostConfigPath("cursor") },
+  {
+    label: "~/.codeium/windsurf/mcp_config.json",
+    kind: "user",
+    mcpServersField: "mcpServers",
+    resolve: () => hostConfigPath("windsurf")
+  },
+  { label: "~/.gemini/settings.json", kind: "user", mcpServersField: "mcpServers", resolve: () => hostConfigPath("gemini") }
 ];
 function configSourceDescriptors(includeUserConfig) {
   return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
@@ -70127,14 +70214,14 @@ function readOne2(descriptor, projectPath) {
 var inputSchema27 = {
   project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project to audit. Defaults to the current working directory."),
   include_user_config: external_exports.boolean().optional().default(false).describe(
-    "Also read ~/.claude.json and ~/.claude/settings.json \u2014 the USER-level config, shared across every project on this machine. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
+    "Also read the USER-level config, shared across every project on this machine: ~/.claude.json, ~/.claude/settings.json, Claude Desktop's claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
   ),
   severity_min: SeverityMin
 };
 var tool46 = {
   name: "audit_agent_config",
   title: "Audit the AI-agent workspace configuration (MCP servers, permissions, hooks)",
-  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, and with include_user_config also ~/.claude.json and ~/.claude/settings.json. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed.",
+  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, .claude-plugin/plugin.json, and with include_user_config also ~/.claude.json, ~/.claude/settings.json and the Claude Desktop, Cursor, Windsurf and Gemini user configs. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed.",
   inputSchema: inputSchema27,
   handler: (input, ctx) => handler43(input, ctx)
 };
@@ -70204,7 +70291,7 @@ function countBySeverity5(findings) {
 
 // src/tools/vetPackages.ts
 import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
-import { resolve as resolve20 } from "node:path";
+import { resolve as resolve21 } from "node:path";
 
 // src/hooks/bashGuard.ts
 var BASH_RULES = [
@@ -71096,7 +71183,7 @@ var ALLOW = {
 
 // src/pkgvet/popular.ts
 import { readFileSync as readFileSync41 } from "node:fs";
-import { join as join74 } from "node:path";
+import { join as join75 } from "node:path";
 
 // src/pkgvet/typosquat.ts
 function damerauLevenshtein(a2, b, max) {
@@ -71228,14 +71315,14 @@ function findTyposquatTarget(index, name, opts = {}) {
 
 // src/pkgvet/popular.ts
 function defaultPopularDir() {
-  return join74(resolveConfigsDir(), "popular-packages");
+  return join75(resolveConfigsDir(), "popular-packages");
 }
 function parsePopularList(text) {
   return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 var cache = /* @__PURE__ */ new Map();
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
-  const path8 = join74(dir, `${ecosystem}.txt`);
+  const path8 = join75(dir, `${ecosystem}.txt`);
   const hit = cache.get(path8);
   if (hit !== void 0) return hit;
   let index = null;
@@ -71252,11 +71339,11 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync8, readdirSync as readdirSync26 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname20, isAbsolute as isAbsolute14, join as join76, parse as parse6, relative as relative24, resolve as resolve19 } from "node:path";
+import { dirname as dirname20, isAbsolute as isAbsolute14, join as join77, parse as parse6, relative as relative24, resolve as resolve20 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync7, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join75, parse as parse5, relative as relative23, resolve as resolve18 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join76, parse as parse5, relative as relative23, resolve as resolve19 } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
 var MAX_LINK_HOPS = 32;
@@ -71264,18 +71351,18 @@ function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
 function walkLinksUnder(under, path8) {
-  const rel2 = relative23(resolve18(under), resolve18(path8));
+  const rel2 = relative23(resolve19(under), resolve19(path8));
   if (rel2 === "" || rel2.startsWith("..") || isAbsolute13(rel2)) return { ok: true };
-  let current = resolve18(under);
+  let current = resolve19(under);
   const queue = rel2.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
   for (let part = queue.shift(); part !== void 0; part = queue.shift()) {
     if (part === ".") continue;
     if (part === "..") {
-      current = resolve18(current, "..");
+      current = resolve19(current, "..");
       continue;
     }
-    const next = join75(current, part);
+    const next = join76(current, part);
     let isLink;
     try {
       isLink = lstatSync7(next).isSymbolicLink();
@@ -71295,7 +71382,7 @@ function walkLinksUnder(under, path8) {
       return { ok: false, reason: "unreadable", at: next };
     }
     if (isRemoteOrDeviceTarget(target)) return { ok: false, reason: "remote-link", at: next };
-    const resolved = resolve18(current, target);
+    const resolved = resolve19(current, target);
     const root = parse5(resolved).root;
     queue.unshift(...resolved.slice(root.length).split(/[\\/]+/).filter((p) => p.length > 0));
     current = root;
@@ -71363,12 +71450,12 @@ function isInside4(dir, path8) {
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
 }
 function walkRoot(path8, ctx, under) {
-  const abs = resolve19(path8);
+  const abs = resolve20(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
   const holds = (dir2, base) => samePath2(dir2, base) || isInside4(dir2, base);
-  const project = ctx.projectDir === void 0 ? void 0 : resolve19(ctx.projectDir);
-  const home = resolve19(homeOf(ctx));
+  const project = ctx.projectDir === void 0 ? void 0 : resolve20(ctx.projectDir);
+  const home = resolve20(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside4(project, abs)) return project;
   const dir = dirname20(abs);
@@ -71413,18 +71500,18 @@ function listDir(dir, ctx) {
   }
 }
 function samePath2(a2, b) {
-  const norm = (p) => resolve19(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve20(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
   const stops = [ctx.homeDir, homedir4()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve19(ctx.projectDir);
+  let dir = resolve20(ctx.projectDir);
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath2(s, dir))) break;
     out.push(dir);
-    if (present(join76(dir, ".git"))) break;
+    if (present(join77(dir, ".git"))) break;
     const parent = dirname20(dir);
     if (parent === dir) break;
     dir = parent;
@@ -71525,35 +71612,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors(ctx);
   for (const dir of near) {
     files.push(
-      { path: join76(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join76(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join76(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join76(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join77(dir, ".npmrc"), parse: fromNpmrc },
+      { path: join77(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
+      { path: join77(dir, ".yarnrc"), parse: fromYarnrc },
+      { path: join77(dir, "bunfig.toml"), parse: fromBunfig }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname20(top), i2 = 0; i2 < 64; dir = dirname20(dir), i2 += 1) {
-      files.push({ path: join76(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join77(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
       if (dirname20(dir) === dir) break;
     }
   }
-  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join76(home, ".config");
-  const localAppData = envValue(env, "LOCALAPPDATA") ?? join76(home, "AppData", "Local");
+  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
+  const localAppData = envValue(env, "LOCALAPPDATA") ?? join77(home, "AppData", "Local");
   files.push(
-    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join76(home, ".npmrc"), parse: fromNpmrc },
-    { path: join76(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join76(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join76(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join76(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join76(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join76(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join76(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join77(home, ".npmrc"), parse: fromNpmrc },
+    { path: join77(home, ".yarnrc.yml"), parse: fromYarnrcYml },
+    { path: join77(home, ".yarnrc"), parse: fromYarnrc },
+    { path: join77(home, ".bunfig.toml"), parse: fromBunfig },
+    { path: join77(xdg, ".bunfig.toml"), parse: fromBunfig },
+    { path: join77(xdg, "pnpm", "rc"), parse: fromNpmrc },
+    { path: join77(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
+    { path: join77(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
   const globalConfig2 = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join76(envValue(env, "APPDATA") ?? join76(home, "AppData", "Roaming"), "npm") : dirname20(dirname20(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join76(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "npm") : dirname20(dirname20(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join77(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
 var ENV_REGISTRY = {
@@ -71602,7 +71689,7 @@ function findManifest(root, file, match, ctx) {
     const next = queue.shift();
     if (next === void 0) break;
     visited += 1;
-    const manifest = join76(next.dir, file);
+    const manifest = join77(next.dir, file);
     const text = read(manifest, ctx, root, "workspace manifest");
     if (text !== void 0 && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
@@ -71612,7 +71699,7 @@ function findManifest(root, file, match, ctx) {
     } catch {
       continue;
     }
-    for (const e of entries2) queue.push({ dir: join76(next.dir, e), depth: next.depth + 1 });
+    for (const e of entries2) queue.push({ dir: join77(next.dir, e), depth: next.depth + 1 });
   }
   return void 0;
 }
@@ -71628,7 +71715,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join76(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join76(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join77(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join77(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -71645,7 +71732,7 @@ var pep503 = (n2) => n2.trim().toLowerCase().replace(/[-_.]+/g, "-");
 function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
-    const path8 = join76(dir, "pyproject.toml");
+    const path8 = join77(dir, "pyproject.toml");
     const text = read(path8, ctx);
     if (text === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
@@ -71696,22 +71783,22 @@ function pypiRegistry(name, ctx) {
   const confs = [];
   const explicit = envValue(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join76(home, ".config");
+  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
   confs.push(
-    join76(xdg, "pip", "pip.conf"),
-    join76(home, ".pip", "pip.conf"),
-    join76(home, "Library", "Application Support", "pip", "pip.conf")
+    join77(xdg, "pip", "pip.conf"),
+    join77(home, ".pip", "pip.conf"),
+    join77(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue(env, "APPDATA") ?? join76(home, "AppData", "Roaming");
-  confs.push(join76(appdata, "pip", "pip.ini"), join76(home, "pip", "pip.ini"));
+  const appdata = envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
+  confs.push(join77(appdata, "pip", "pip.ini"), join77(home, "pip", "pip.ini"));
   for (const prefix of [envValue(env, "VIRTUAL_ENV"), envValue(env, "CONDA_PREFIX")]) {
-    if (prefix !== void 0) confs.push(join76(prefix, "pip.conf"), join76(prefix, "pip.ini"));
+    if (prefix !== void 0) confs.push(join77(prefix, "pip.conf"), join77(prefix, "pip.ini"));
   }
-  confs.push(join76(etc, "pip.conf"), join76(etc, "xdg", "pip", "pip.conf"));
-  confs.push(join76(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join76(d, "pip", "pip.conf"));
+  confs.push(join77(etc, "pip.conf"), join77(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join77(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
+  for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join77(d, "pip", "pip.conf"));
   const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
-  if (programData !== void 0) confs.push(join76(programData, "pip", "pip.ini"));
+  if (programData !== void 0) confs.push(join77(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
     const text = read(path8, ctx);
     const url = text === void 0 ? void 0 : fromPipConf(text);
@@ -71720,18 +71807,18 @@ function pypiRegistry(name, ctx) {
   const uvConfs = [];
   const uvExplicit = envValue(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
-  uvConfs.push(join76(xdg, "uv", "uv.toml"), join76(appdata, "uv", "uv.toml"), join76(etc, "uv", "uv.toml"));
+  uvConfs.push(join77(xdg, "uv", "uv.toml"), join77(appdata, "uv", "uv.toml"), join77(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
     const text = read(path8, ctx);
     const url = text === void 0 ? void 0 : fromUvToml(text);
     if (url !== void 0) return { kind: "registry", source: path8, url };
   }
   for (const dir of ancestors(ctx)) {
-    const uvToml = join76(dir, "uv.toml");
+    const uvToml = join77(dir, "uv.toml");
     const uvText = read(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
-    const pyproject = join76(dir, "pyproject.toml");
+    const pyproject = join77(dir, "pyproject.toml");
     const text = read(pyproject, ctx);
     if (text === void 0) continue;
     const url = fromPyproject(text);
@@ -71754,7 +71841,7 @@ function hasRepositories(text) {
 }
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
-    const path8 = join76(dir, "composer.json");
+    const path8 = join77(dir, "composer.json");
     const text = read(path8, ctx);
     if (text === void 0) continue;
     if (hasRepositories(text)) return { kind: "registry", source: path8 };
@@ -71763,13 +71850,13 @@ function composerRegistry(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join76(composerHome, "config.json")] : [join76(home, ".composer", "config.json"), join76(home, ".config", "composer", "config.json"), join76(envValue(env, "APPDATA") ?? join76(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const globals = composerHome !== void 0 ? [join77(composerHome, "config.json")] : [join77(home, ".composer", "config.json"), join77(home, ".config", "composer", "config.json"), join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path8 of globals) if (hasRepositories(read(path8, ctx))) return { kind: "registry", source: path8 };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
   const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
-  return hit === void 0 ? void 0 : join76(dir, hit);
+  return hit === void 0 ? void 0 : join77(dir, hit);
 }
 function customNugetSources(text) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
@@ -71787,7 +71874,7 @@ function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
   const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve19(dirname20(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve20(dirname20(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -71810,7 +71897,7 @@ function nugetRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve19(ctx.projectDir);
+    let dir = resolve20(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
@@ -71821,23 +71908,23 @@ function nugetRegistry(name, ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue(env, "APPDATA") ?? join76(home, "AppData", "Roaming");
-  for (const dir of [join76(appdata, "NuGet"), join76(home, ".nuget", "NuGet"), join76(home, ".config", "NuGet")]) {
+  const appdata = envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
+  for (const dir of [join77(appdata, "NuGet"), join77(home, ".nuget", "NuGet"), join77(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
-  const userDirs = [join76(appdata, "NuGet", "config"), join76(home, ".nuget", "config"), join76(home, ".config", "NuGet", "config")];
+  const userDirs = [join77(appdata, "NuGet", "config"), join77(home, ".nuget", "config"), join77(home, ".config", "NuGet", "config")];
   const machineDirs = [
-    join76(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
-    join76(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+    join77(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join77(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
   const programFilesX86 = envValue(env, "ProgramFiles(x86)");
-  if (programFilesX86 !== void 0) machineDirs.push(join76(programFilesX86, "NuGet", "Config"));
+  if (programFilesX86 !== void 0) machineDirs.push(join77(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
     for (const f of listDir(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
-      files.push(join76(dir, f));
-      if (machineDirs.includes(dir)) machineWide.add(join76(dir, f));
+      files.push(join77(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join77(dir, f));
     }
   }
   for (const path8 of files) {
@@ -72683,7 +72770,7 @@ async function handler44(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve20(inp.project_path);
+    projectDir = resolve21(inp.project_path);
     if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
@@ -73152,7 +73239,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve21(process.cwd());
+  const projectPath = resolve22(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
