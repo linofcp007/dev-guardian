@@ -203,6 +203,61 @@
 # JS e 0.36 s para o prompt de sistema, cerca de 1 s por ficheiro com o parse
 # incluido. Os timeouts sao da carga da maquina, como no pack RGPD; o
 # `scan_sast` reporta-os como corrida parcial, com a razao, e nunca limpa.
+# Como o pack corre em TODOS os `scan_sast`, mediu-se tambem onde nao ha
+# modelo nenhum: o `mcp/src` deste repo (274 ficheiros) leva 6 s, com 0
+# resultados e 0 erros — a mesma ordem do `base.yml` (7 s) na mesma arvore;
+# o LibreChat inteiro (5 122 ficheiros) levou 39 s.
+#
+# ---------------------------------------------------------------------------
+# A ABLAÇAO (`npm run ablate -- llm`). Duas corridas e uma re-ablação:
+#
+#   1. So com as fixtures (eixo 3 N/A): 101 clauses ablados em 8 de 8
+#      regras, 75 resultados de base em hits/, 8/8 regras disparam, 99 vivos
+#      e 2 DEAD — os dois ramos do objeto de mensagem do prompt de sistema
+#      (`role` antes de `content`, e ao contrario). O par deu MOVES: o padrao
+#      de objeto do Semgrep ignora a ordem das chaves e cada ramo cobria os
+#      dois. O segundo saiu; a regra, re-ablada sozinha, deu 12/12 vivos.
+#   2. Completa, com o eixo 3 sobre a arvore do corpus (`GUARDIAN_LLM_SRC`,
+#      1 914 ficheiros — ver `mcp/test/ablate/packs.ts`), sha256 9c145c79 (o
+#      ficheiro difere desse so nos comentarios que registam esta ablação):
+#      99 de 103 clauses em 8 de 8 regras (2 colapsados por serem a mesma
+#      ablação, 2 estruturais), 75 resultados de base em hits/ e 234 no
+#      corpus, todos comparaveis, 2 ficheiros excluidos por tempo, piso de
+#      ruido 0. 8/8 regras disparam em hits/; 99/99 vivos, 0 DEAD,
+#      0 INCONCLUSIVE. O interpretador JS nao tem resultados reais: o eixo 3
+#      é vacuo nele, e o relatorio diz isso.
+#   3. A regra do interpretador Python re-ablada sozinha (`--filter`), mesmo
+#      sha e mesmo corpus: 36/36 vivos, 0 no eixo 2 (ver a nota do ruido).
+#
+# Os 6 SUPPRESSES-TP do eixo 2 sao todos o vizinho `excluded:` anotado em
+# hits/: as chamadas com limite de tokens que as regras de fluxo usam como
+# fonte (os limites das duas regras de limite de tokens) e a mensagem de
+# UTILIZADOR ao lado da de sistema (o regex `$ROLE`).
+#
+# Os 23 RAISING do eixo 3 da corrida 2, lidos linha a linha, sao de tres
+# tipos, e nenhum é um clause que acrescente ruido:
+#
+#   - 13 ramos POSITIVOS — fontes e sinks das regras de fluxo e os `create`
+#     sem limite — cuja remoção faz a regra casar menos: as linhas que
+#     listam sao exatamente os verdadeiros da triagem;
+#   - 4 restrições de uma exclusao ou de um sanitizador, cuja remoção alarga
+#     o que excluem: os dois `pattern-inside` dos guardas do despacho (sem
+#     eles, TODO o nome fica limpo e o exemplo do swarm some), o regex do
+#     `$FN` de recuperação (sem ele, qualquer chamada limpa o pedido) e o
+#     regex do sha em `revision` (sem ele, qualquer `revision=` exclui, e as
+#     21 chamadas do FastChat com `revision=revision`, verdadeiras, somem);
+#   - 6 que so listam UMA linha, `langchain_experimental/sql/base.py:178` — a
+#     segunda consulta SQL do `SQLDatabaseChain._call`, verdadeira. É RUIDO,
+#     e medido como tal: entre esses 6 estao clauses que nao a podem tocar (o
+#     sink `sqlalchemy.text` e o `pandas.read_sql_query`, que nao tem nenhum
+#     resultado real); a variante sem o `sqlalchemy.text`, varrida à mao no
+#     mesmo corpus, da os mesmos 11 resultados; e a re-ablação da corrida 3
+#     acusou a mesma linha em OUTROS 6 clauses (`invoke_model`,
+#     `content[i].text`, `exec`, `executemany`, e dois em comum). A linha
+#     cai de algumas varreduras e nao de outras, sem erro nenhum no
+#     relatorio do Semgrep; o piso de ruido, medido com duas varreduras, deu
+#     0 e nao a apanhou. A hipotese, nao provada: o ponto fixo do taint numa
+#     função longa corta-se em silencio sob carga.
 #
 # ---------------------------------------------------------------------------
 # PONTOS CEGOS CONHECIDOS, escritos para que ninguem os tome por cobertura:
