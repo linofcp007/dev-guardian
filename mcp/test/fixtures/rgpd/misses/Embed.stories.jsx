@@ -1,5 +1,5 @@
 // A Storybook story: demo content for the people building the UI, never
-// served to the app's visitors. `*.stories.*` is in the tracker rules'
+// served to the app's visitors. `*.stories.jsx` is in the tracker rules'
 // `paths.exclude`. Nothing in this file may fire.
 
 import { CartaoEmbed } from './CartaoEmbed';

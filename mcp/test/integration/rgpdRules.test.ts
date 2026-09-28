@@ -82,11 +82,14 @@ function ruleOf(row: SemgrepResult): string {
   return row.check_id.split('.').pop() ?? row.check_id;
 }
 
-/** `{ ruleId: count }` per basename, from RAW rows (no dedup). */
-function countsByFile(rows: readonly SemgrepResult[]): Record<string, Record<string, number>> {
+/**
+ * `{ ruleId: count }` per fixture path (relative to the scanned copy, `/`
+ * separators — `hits/` has one nested file), from RAW rows (no dedup).
+ */
+function countsByFile(result: SemgrepRun): Record<string, Record<string, number>> {
   const out: Record<string, Record<string, number>> = {};
-  for (const row of rows) {
-    const file = basename(row.path);
+  for (const row of result.rows) {
+    const file = fixturePath(result, row);
     const byRule = out[file] ?? {};
     byRule[ruleOf(row)] = (byRule[ruleOf(row)] ?? 0) + 1;
     out[file] = byRule;
@@ -101,8 +104,9 @@ function filesIn(dir: string): string[] {
 /**
  * Every FILE under `dir`, recursively, as `/`-separated relative paths.
  * `misses/` has subdirectories (`__tests__/`, `__mocks__/`, ...: the
- * test-code directories the tracker rules exclude), so a top-level listing
- * would count a directory as a file.
+ * test-code directories the tracker rules exclude) and `hits/` has one (a
+ * site folder named like a test domain), so a top-level listing would count
+ * a directory as a file.
  */
 function allFilesIn(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -221,9 +225,14 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'layout.ejs': { [META]: 1 },
   // Unconditional, and (fix round 2) in the `{{else}}` arm of a consent `{{#if}}`.
   'analytics.hbs': { [HOTJAR]: 2 },
-  // A page NAMED "stories" is served to visitors: the `*.stories.*` exclusion
-  // (Storybook) needs the dot on each side and must not swallow it.
+  // A page NAMED "stories" is served to visitors: the `*.stories.jsx`
+  // exclusion (Storybook) needs the dot on each side and must not swallow it.
   'stories.html': { [YOUTUBE]: 1 },
+  // A site kept in a DIRECTORY named like a test domain. Semgrep matches a
+  // slash-free exclude glob against every path segment, directories included:
+  // the first `*.test.*` skipped this whole folder (review of the
+  // application-code round). The anchored `*.test.js` does not.
+  'loja.test.pt/index.html': { [HOTJAR]: 1 },
 };
 
 /**
@@ -232,21 +241,35 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
  * a test, spec, story or test-support directory was markup that is input to a
  * test, never served to a visitor. Each has a fixture in `misses/` that fires
  * once the exclusion is removed — see the test that proves it.
+ *
+ * The file globs carry their EXTENSION (`*.test.js`, not `*.test.*`) because
+ * Semgrep has no file-only glob: measured, a slash-free glob matches any path
+ * segment, so `*.test.*` also skipped a directory `sites/loja.test.pt/`, and
+ * `{js,jsx}` brace sets are not expanded (such a glob excluded nothing). With
+ * the extension in the glob only a directory named like a test FILE
+ * (`x.test.js/`) is skipped. Only the JS family is listed: the other
+ * extensions the tracker rules read have no test-file convention of this
+ * shape.
  */
-const TRACKER_EXCLUDES = ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__'];
+const TRACKER_EXCLUDES = [
+  '*.test.js', '*.test.jsx', '*.test.tsx',
+  '*.spec.js', '*.spec.jsx', '*.spec.tsx',
+  '*.stories.js', '*.stories.jsx', '*.stories.tsx',
+  '__tests__', '__mocks__', '__fixtures__', '__factories__',
+];
 
 /**
  * Whether a `/`-separated fixture path is excluded by one `paths.exclude`
- * glob. Only the two shapes the pack uses are understood — `*.x.*` on the
- * file name, and a bare name matching a DIRECTORY segment — and anything else
- * throws, so a new glob cannot be silently mis-modelled here.
+ * glob, the way Semgrep matches a glob with no `/` in it (probed against
+ * Semgrep 1.176, see TRACKER_EXCLUDES): against EVERY path segment, file name
+ * and directory names alike, with `*` matching within one segment. A glob
+ * holding `/` or any glob syntax beyond `*` throws, so a new glob cannot be
+ * silently mis-modelled here.
  */
 function excludedBy(path: string, glob: string): boolean {
-  const segments = path.split('/');
-  const onName = /^\*\.([A-Za-z]+)\.\*$/.exec(glob)?.[1];
-  if (onName !== undefined) return (segments[segments.length - 1] ?? '').includes(`.${onName}.`);
-  if (/^[A-Za-z_]+$/.test(glob)) return segments.slice(0, -1).includes(glob);
-  throw new Error(`a paths.exclude glob this test does not model: ${glob}`);
+  if (!/^[\w.*-]+$/.test(glob)) throw new Error(`a paths.exclude glob this test does not model: ${glob}`);
+  const segment = new RegExp(`^${glob.replace(/\./g, '\\.').replace(/\*/g, '[^/]*')}$`);
+  return path.split('/').some((s) => segment.test(s));
 }
 
 /**
@@ -303,7 +326,7 @@ describe('rgpd rules', () => {
   });
 
   it('Step 0: every hits/ fixture on disk has a registered expectation, and vice versa', () => {
-    expect(filesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
+    expect(allFilesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
   });
 
   it('declares exactly the rules the fixtures are written for', () => {
@@ -312,10 +335,10 @@ describe('rgpd rules', () => {
 
   it.skipIf(!AVAILABLE)('fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
     const hitsDir = resolve(FIXTURES, 'hits');
-    const { rows, scanned, errors } = run(RULES, hitsDir);
-    expect(errors).toBe(0);
-    expect(scanned).toBe(filesIn(hitsDir).length);
-    expect(countsByFile(rows)).toEqual(EXPECTED_HITS);
+    const result = run(RULES, hitsDir);
+    expect(result.errors).toBe(0);
+    expect(result.scanned).toBe(allFilesIn(hitsDir).length);
+    expect(countsByFile(result)).toEqual(EXPECTED_HITS);
   });
 
   it.skipIf(!AVAILABLE)('fires on exactly the marked lines of the personal-data-in-log fixtures', () => {
@@ -340,7 +363,7 @@ describe('rgpd rules', () => {
 
   /**
    * `paths.exclude` is not a clause, so the ablation harness never removes it
-   * and could not say whether any of the seven globs is load-bearing. This
+   * and could not say whether any of the thirteen globs is load-bearing. This
    * does it by hand, for all of them at once: with the exclusions stripped
    * from the pack, a tracker fires in EXACTLY the misses/ files the globs
    * exclude, and every glob excludes at least one of them. A glob with no
@@ -741,7 +764,7 @@ describe('the tracker messages prescribe loading nothing before consent', () => 
 
 describe('the tracker rules are restricted to markup', () => {
   it('every generic-mode rule names the file types it reads, and has a hit fixture of each', () => {
-    const hitExts = new Set(filesIn(resolve(FIXTURES, 'hits')).map((f) => extname(f)));
+    const hitExts = new Set(allFilesIn(resolve(FIXTURES, 'hits')).map((f) => extname(f)));
     for (const rule of packRules()) {
       if (!(rule.languages ?? []).includes('generic')) continue;
       const include = rule.paths?.include ?? [];
@@ -759,7 +782,20 @@ describe('the tracker rules are restricted to markup', () => {
       if (!(rule.languages ?? []).includes('generic')) continue;
       expect([rule.id, rule.paths?.exclude]).toEqual([rule.id, TRACKER_EXCLUDES]);
     }
-    const swallowed = filesIn(resolve(FIXTURES, 'hits')).filter((f) => TRACKER_EXCLUDES.some((g) => excludedBy(f, g)));
+    // Recursive, and judged on every path segment: `loja.test.pt/index.html`
+    // is the fixture a directory-matching glob would swallow.
+    const swallowed = allFilesIn(resolve(FIXTURES, 'hits')).filter((f) => TRACKER_EXCLUDES.some((g) => excludedBy(f, g)));
     expect(swallowed).toEqual([]);
+  });
+
+  it('models Semgrep\'s glob the way Semgrep was measured to apply it: to every path segment', () => {
+    // Probed with Semgrep 1.176 on a tree built for it (see TRACKER_EXCLUDES).
+    expect(excludedBy('sites/loja.test.pt/index.html', '*.test.*')).toBe(true);
+    expect(excludedBy('sites/loja.test.pt/index.html', '*.test.js')).toBe(false);
+    expect(excludedBy('sites/foo.test.js/index.html', '*.test.js')).toBe(true);
+    expect(excludedBy('src/a.test.js', '*.test.js')).toBe(true);
+    expect(excludedBy('src/test.js', '*.test.js')).toBe(false);
+    expect(excludedBy('src/__tests__/h.js', '__tests__')).toBe(true);
+    expect(() => excludedBy('a.test.js', '*.test.{js,jsx}')).toThrow();
   });
 });

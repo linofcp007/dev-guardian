@@ -1,4 +1,4 @@
-// A component spec: `*.spec.*` is in the tracker rules' `paths.exclude`.
+// A component spec: `*.spec.tsx` is in the tracker rules' `paths.exclude`.
 // Nothing in this file may fire.
 
 import { render } from '@testing-library/react';

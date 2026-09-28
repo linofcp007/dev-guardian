@@ -1,5 +1,5 @@
 // A unit test: the tracker markup here is INPUT to the code under test and is
-// never served to a visitor. `*.test.*` is in the tracker rules'
+// never served to a visitor. `*.test.js` is in the tracker rules'
 // `paths.exclude` (measured on application code: Site Kit and Ghost carry
 // exactly this shape). Nothing in this file may fire.
 

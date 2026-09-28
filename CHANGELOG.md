@@ -684,11 +684,14 @@ keeps working (migrations 004–011 are additive).
   `lookup(email).id`, `user.email.length`, C# `email.Length`, but not LINQ's
   `ElementAt`) is not what is logged (3), unless that object holds a function
   body — a log call inside a callback whose result's `.length`/`.Count()`/`.id`
-  is read still counts; and the tracker rules skip test code — `*.test.*`,
-  `*.spec.*`, `*.stories.*`, `__tests__`, `__mocks__`, `__fixtures__`,
-  `__factories__` (8). The three that remain are a bot account's address and
-  synthetic addresses in a seed script, which a name cannot tell apart. The
-  corpus list, commits and per-rule counts are in the pack header.
+  is read still counts; and the tracker rules skip test code — `*.test.js`,
+  `*.spec.js`, `*.stories.js` (each also `.jsx`/`.tsx`), `__tests__`,
+  `__mocks__`, `__fixtures__`, `__factories__` (8). The file globs name their
+  extension because Semgrep matches a slash-free glob against directories too:
+  `*.test.*` would skip a site folder named `loja.test.pt/`. The three that
+  remain are a bot account's address and synthetic addresses in a seed script,
+  which a name cannot tell apart. The corpus list, commits and per-rule counts
+  are in the pack header.
 - **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy
   installed. A `package.json` that declares no dependency (and whose lock

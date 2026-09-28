@@ -788,18 +788,34 @@ rules:
   # (`app/layout.js`), e foi medido sobre misses/ e sobre codigo real antes
   # de entrar.
   #
-  # O `paths.exclude` tira o codigo de TESTE: `*.test.*`, `*.spec.*`, as
-  # stories do Storybook (`*.stories.*`) e as pastas `__tests__`,
-  # `__mocks__`, `__fixtures__`, `__factories__`. O markup ali é a ENTRADA de
-  # um teste ou uma demonstração para quem desenvolve, e nunca é servido a um
-  # visitante. Medido em codigo de aplicação: todos os 8 falsos positivos das
-  # regras de rastreadores eram isto (um plugin WordPress e o Ghost), e todos
-  # os verdadeiros ficaram. O `.semgrepignore` por omissao do Semgrep ja salta
-  # `test/` e `tests/`, mas nao os testes ao lado do codigo. O `*.x.*` exige
-  # o ponto dos dois lados: uma pagina `stories.html` é servida e esta em
-  # hits/. Nao é um clause, e a ablação nunca o retira: o `rgpdRules.test.ts`
-  # tira as sete exclusoes e exige que disparem exatamente as fixtures de
-  # misses/ que elas cobrem, pelo menos uma por exclusao.
+  # O `paths.exclude` tira o codigo de TESTE: `*.test.js`, `*.spec.js`, as
+  # stories do Storybook (`*.stories.js`), cada um com `.js`, `.jsx` e
+  # `.tsx`, e as pastas `__tests__`, `__mocks__`, `__fixtures__`,
+  # `__factories__`. O markup ali é a ENTRADA de um teste ou uma
+  # demonstração para quem desenvolve, e nunca é servido a um visitante.
+  # Medido em codigo de aplicação: todos os 8 falsos positivos das regras de
+  # rastreadores eram isto (um plugin WordPress e o Ghost), e todos os
+  # verdadeiros ficaram. O `.semgrepignore` por omissao do Semgrep ja salta
+  # `test/` e `tests/`, mas nao os testes ao lado do codigo. O `*.test.js`
+  # exige o ponto dos dois lados: uma pagina `stories.html` é servida e esta
+  # em hits/.
+  #
+  # POR QUE A EXTENSAO ESTA ESCRITA (revisao desta ronda). Medido no Semgrep
+  # 1.176: um glob sem `/` casa QUALQUER segmento do caminho, pastas
+  # incluidas, e nao ha sintaxe para "so ficheiros" (`**/x/**` casa so
+  # pastas, o contrario do que se quer); `{js,jsx}` nao é expandido — um
+  # glob assim nao excluiu nada. A primeira versao, `*.test.*`, saltava por
+  # isso uma pasta inteira `sites/loja.test.pt/`, e esse site esta em hits/.
+  # Com a extensao no glob so uma pasta chamada como um ficheiro de teste
+  # (`x.test.js/`) é saltada. So a familia JS esta na lista: as outras
+  # extensoes que estas regras leem nao tem convenção de teste desta forma,
+  # e um `x.test.html` volta a ser lido — o erro possivel é um falso
+  # positivo, nunca um rastreador escondido.
+  #
+  # Nao é um clause, e a ablação nunca o retira: o `rgpdRules.test.ts` tira
+  # as treze exclusoes e exige que disparem exatamente as fixtures de misses/
+  # que elas cobrem, pelo menos uma por exclusao, e modela o glob como o
+  # Semgrep o aplica — a todos os segmentos do caminho.
   #
   # OS GUARDAS SAO OS MESMOS NAS QUATRO REGRAS, e cada um casa o BLOCO
   # INTEIRO que protege, nunca o caminho ate ao alvo: o Semgrep so exclui um
@@ -874,7 +890,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
-      exclude: ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Google Analytics (gtag.js) carregado antes do consentimento: o script é
       pedido no carregamento da pagina e define os cookies `_ga`/`_ga_*`
@@ -914,7 +930,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
-      exclude: ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Meta Pixel iniciado antes do consentimento: `fbq('init', ...)` corre no
       carregamento da pagina, define o cookie `_fbp` e envia eventos para a
@@ -947,7 +963,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
-      exclude: ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Hotjar carregado antes do consentimento: o script grava a sessao do
       visitante (cliques, movimento, scroll) e define cookies `_hj*` no
@@ -982,7 +998,7 @@ rules:
     severity: WARNING
     paths:
       include: ['*.html', '*.htm', '*.php', '*.jsx', '*.tsx', '*.js', '*.vue', '*.twig', '*.cshtml', '*.razor', '*.ejs', '*.hbs']
-      exclude: ['*.test.*', '*.spec.*', '*.stories.*', '__tests__', '__mocks__', '__fixtures__', '__factories__']
+      exclude: ['*.test.js', '*.test.jsx', '*.test.tsx', '*.spec.js', '*.spec.jsx', '*.spec.tsx', '*.stories.js', '*.stories.jsx', '*.stories.tsx', '__tests__', '__mocks__', '__fixtures__', '__factories__']
     message: >-
       Video do YouTube incorporado a partir de youtube.com/embed: o iframe
       define cookies do YouTube (YSC, VISITOR_INFO1_LIVE) no carregamento da
