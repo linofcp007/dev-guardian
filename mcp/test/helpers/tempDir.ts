@@ -30,6 +30,7 @@
 import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Recursive delete that retries the Windows lock errors instead of throwing. */
 export function rmDir(path: string): void {
@@ -67,10 +68,20 @@ export function rmDirOrDefer(dir: string, list = LEFTOVERS_FILE): void {
   }
 }
 
+/** Whether `inner` is `outer` or lies below it. */
+function within(outer: string, inner: string): boolean {
+  const rel = relative(outer, inner);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 /**
- * Only what a test made: a directory inside the OS temp directory, or a
- * `dev-guardian-test-*` directly in the home directory. Anything else listed
- * is dropped unread — the list is a plain file anyone can write.
+ * Only what a test made: a directory directly inside the OS temp directory —
+ * the shape `mkdtempSync(join(tmpdir(), prefix))` gives every test directory —
+ * or a `dev-guardian-test-*` directly in the home directory; and never one that
+ * holds this checkout or the working directory. Anything else listed is dropped
+ * unread — the list is a plain file anyone can write. "Anywhere inside the
+ * temp directory" deleted this repository's own test/unit/testHelpers when the
+ * checkout itself sat in /tmp, as a CI runner's or a container's does.
  */
 export function isDisposable(dir: string): boolean {
   let real: string;
@@ -79,8 +90,9 @@ export function isDisposable(dir: string): boolean {
   } catch {
     return false; // gone already
   }
-  const inTmp = relative(realpathSync.native(tmpdir()), real);
-  if (inTmp !== '' && !inTmp.startsWith('..') && !isAbsolute(inTmp)) return true;
+  const here = realpathSync.native(dirname(fileURLToPath(import.meta.url)));
+  if (within(real, here) || within(real, realpathSync.native(process.cwd()))) return false;
+  if (dirname(real) === realpathSync.native(tmpdir())) return true;
   return dirname(real) === realpathSync.native(homedir()) && basename(real).startsWith('dev-guardian-test-');
 }
 

@@ -5,7 +5,7 @@
  * predicate, never by letting it loose on a real directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,8 +29,8 @@ describe('rmDirOrDefer / removeLeftovers', () => {
   it('removes a listed directory in the temp dir, and the list with it', () => {
     const base = makeTempDir('guardian-tempdir-');
     const list = join(base, 'list.txt');
-    const dir = join(base, 'left-behind');
-    mkdirSync(dir);
+    // A direct child of the temp dir: the shape every test directory has.
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-tempdir-left-'));
     writeFileSync(join(dir, 'f'), 'x');
     writeFileSync(list, `${dir}\n${dir}\n`);
     removeLeftovers(list);
@@ -50,17 +50,19 @@ describe('rmDirOrDefer / removeLeftovers', () => {
     expect(() => removeLeftovers(join(makeTempDir('guardian-tempdir-'), 'none.txt'))).not.toThrow();
   });
 
+  // Exercised on a directory this test made — never on anything real. The
+  // first version listed this repository's own test directory, and when the
+  // checkout sat in /tmp (a container, a CI runner) the removal took it.
   it('never touches a listed directory outside what a test makes — it is dropped, not removed', () => {
     const base = makeTempDir('guardian-tempdir-');
     const list = join(base, 'list.txt');
-    // The repo's own test directory: real, and nothing a test should ever delete.
-    const outside = dirname(fileURLToPath(import.meta.url));
-    expect(existsSync(outside)).toBe(true);
-    writeFileSync(list, `${outside}\n`);
+    const nested = join(base, 'nested', 'keep');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'f'), 'x');
+    writeFileSync(list, `${nested}\n`);
     removeLeftovers(list);
-    expect(existsSync(outside)).toBe(true);
+    expect(readFileSync(join(nested, 'f'), 'utf8')).toBe('x');
     expect(existsSync(list)).toBe(false);
-    expect(readFileSync(join(outside, 'tempDir.test.ts'), 'utf8')).toContain('removeLeftovers');
   });
 });
 
@@ -74,6 +76,17 @@ describe('isDisposable', () => {
     expect(isDisposable(dirname(tmpdir()))).toBe(false);
     expect(isDisposable(homedir())).toBe(false);
     expect(isDisposable(dirname(homedir()))).toBe(false);
+  });
+
+  it('is never a directory deeper in the temp dir, nor this checkout wherever it sits', () => {
+    const nested = join(makeTempDir('guardian-tempdir-'), 'nested');
+    mkdirSync(nested);
+    expect(isDisposable(nested)).toBe(false);
+    const here = dirname(fileURLToPath(import.meta.url));
+    const checkout = join(here, '..', '..', '..', '..');
+    for (const dir of [here, join(here, '..'), join(here, '..', '..'), checkout, process.cwd()]) {
+      expect(isDisposable(dir)).toBe(false);
+    }
   });
 
   it('is a dev-guardian-test-* directly in the home directory, and nothing else there', () => {

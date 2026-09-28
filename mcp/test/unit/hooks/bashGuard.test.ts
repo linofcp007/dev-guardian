@@ -768,11 +768,18 @@ describe('assessBashCommand — the pattern rules are linear (ReDoS, fix round 2
     ['wipefs shred …', 'wipefs shred '.repeat(S / 13)],
   ];
 
+  // The best of three: one sample read 135-158 ms on a loaded machine against
+  // a typical 11 ms; a quadratic shape is slow on every run, a busy scheduler
+  // on one.
   it.each(worst)('a 16 KB statement of %s takes well under 50 ms', (_label, statement) => {
     assessBashCommand(statement); // warm-up
-    const t0 = performance.now();
-    assessBashCommand(statement);
-    expect(performance.now() - t0).toBeLessThan(50);
+    let best = Number.POSITIVE_INFINITY;
+    for (let k = 0; k < 3; k += 1) {
+      const t0 = performance.now();
+      assessBashCommand(statement);
+      best = Math.min(best, performance.now() - t0);
+    }
+    expect(best).toBeLessThan(50);
   });
 
   it('127 of the worst statements with rm -rf / last finish in well under 5 s', () => {
