@@ -118,6 +118,26 @@ const SENSITIVE_PATH = [
   // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`.
   String.raw`(?:^|[\s\x60'"(\/\\])\.env(?:\.[\w-]+)?(?![\w-])`,
 ].join('|');
+/** A credential or agent-config path anywhere in a text. */
+export const SENSITIVE_PATH_ANYWHERE = new RegExp(`(?:${SENSITIVE_PATH})`, 'i');
+
+/**
+ * A directive to pass something ON — into a parameter, another tool, a URL,
+ * a request — rather than to use it (fix round 4, M7): `pass its content as
+ * 'sidenote'`, `include it as sidenote.`, `send it to https://…`, `put the
+ * contents in the notes parameter`. With a sensitive path in the same text
+ * this is the shape of tool-poisoning exfiltration, and the finding is high.
+ */
+export const PASS_ELSEWHERE: readonly RegExp[] = [
+  new RegExp(
+    String.raw`\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` +
+      String.raw`(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` +
+      String.raw`[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|this\s+)?` +
+      String.raw`(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?\b|arg(?:ument)?\b|https?:\/\/|[a-z_][\w-]*(?=\s*[.;,)]|\s*$))`,
+    'i',
+  ),
+];
+
 const OWNER = String.raw`(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
 const SECRET_NOUN = String.raw`(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 /** What an exfiltration instruction ships out. */
@@ -143,13 +163,16 @@ export const TEXT_RULES: readonly TextRule[] = [
   },
   {
     id: 'mcp-tool-sensitive-file-access',
-    severity: 'high',
+    // Medium: an SSH, cloud or registry helper legitimately tells the model
+    // to read such a file. `analyze.ts` raises it to high when the same text
+    // also directs passing it elsewhere or hiding it (fix round 4, M7).
+    severity: 'medium',
     subcategory: 'data_exfiltration',
     label: 'an instruction to read credential or agent-config files',
     explain:
-      'The text tells the model to read, include or send SSH keys, cloud or package-registry credentials, ' +
-      '.env files or an MCP host config — files a tool description has no reason to ask the model for. A ' +
-      'tool that only names the files it reads itself does not trip this.',
+      'The text tells the model to read an SSH key or config, cloud or package-registry credentials, a .env ' +
+      'file or an MCP host config. Confirm that is this tool\'s own purpose (an SSH or registry helper may ' +
+      'need it); a tool that only names the files it reads itself does not trip this.',
     patterns: [
       new RegExp(`${DIRECTIVE}${READ_VERB}${SAME_SENTENCE}(?:${SENSITIVE_PATH})`, 'i'),
       new RegExp(`${DIRECTIVE}${READ_VERB}${OWNER}${SECRET_NOUN}`, 'i'),
@@ -305,8 +328,34 @@ function readable(text: string): boolean {
   return printable / [...text].length >= 0.9;
 }
 
+/**
+ * The only tag sequences Unicode recommends for general interchange (RGI):
+ * the England, Scotland and Wales flags — 🏴 U+1F3F4, the tag letters of
+ * `gbeng`/`gbsct`/`gbwls`, and CANCEL TAG U+E007F (fix round 4). Any other
+ * use of tag characters, a flag or not, stays reported.
+ */
+const RGI_SUBDIVISION_FLAGS = new Set(['gbeng', 'gbsct', 'gbwls']);
+
+function subdivisionFlagTags(points: readonly number[]): Set<number> {
+  const exempt = new Set<number>();
+  for (let i = 0; i < points.length; i += 1) {
+    if (points[i] !== 0x1f3f4) continue;
+    let j = i + 1;
+    let tag = '';
+    for (let c = points[j]; c !== undefined && c >= 0xe0020 && c <= 0xe007e; c = points[j]) {
+      tag += String.fromCharCode(c - 0xe0000);
+      j += 1;
+    }
+    if (points[j] === 0xe007f && RGI_SUBDIVISION_FLAGS.has(tag)) {
+      for (let k = i + 1; k <= j; k += 1) exempt.add(k);
+    }
+  }
+  return exempt;
+}
+
 export function scanInvisible(text: string): InvisibleScan | null {
   const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
+  const flagTags = subdivisionFlagTags(points);
   const kinds = new Set<InvisibleKind>();
   let count = 0;
   let decodedTags = '';
@@ -316,7 +365,7 @@ export function scanInvisible(text: string): InvisibleScan | null {
   for (let i = 0; i < points.length; i += 1) {
     const code = points[i] ?? 0;
     const kind = invisibleKind(code);
-    if (kind !== null && !isLegitimate(code, points[i - 1], points[i + 1])) {
+    if (kind !== null && !flagTags.has(i) && !isLegitimate(code, points[i - 1], points[i + 1])) {
       kinds.add(kind);
       count += 1;
       if (index < 0) index = offset;

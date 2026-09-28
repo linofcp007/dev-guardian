@@ -70862,6 +70862,13 @@ var SENSITIVE_PATH = [
   // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`.
   String.raw`(?:^|[\s\x60'"(\/\\])\.env(?:\.[\w-]+)?(?![\w-])`
 ].join("|");
+var SENSITIVE_PATH_ANYWHERE = new RegExp(`(?:${SENSITIVE_PATH})`, "i");
+var PASS_ELSEWHERE = [
+  new RegExp(
+    String.raw`\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` + String.raw`(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` + String.raw`[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|this\s+)?` + String.raw`(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?\b|arg(?:ument)?\b|https?:\/\/|[a-z_][\w-]*(?=\s*[.;,)]|\s*$))`,
+    "i"
+  )
+];
 var OWNER = String.raw`(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
 var SECRET_NOUN = String.raw`(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 var DATA_NOUN = String.raw`\b(data|contents?|conversation|chat|history|messages?|files?|results?|outputs?|keys?|tokens?|secrets?|credentials?|env(ironment)?|variables|everything|context|prompts?)\b`;
@@ -70882,10 +70889,13 @@ var TEXT_RULES = [
   },
   {
     id: "mcp-tool-sensitive-file-access",
-    severity: "high",
+    // Medium: an SSH, cloud or registry helper legitimately tells the model
+    // to read such a file. `analyze.ts` raises it to high when the same text
+    // also directs passing it elsewhere or hiding it (fix round 4, M7).
+    severity: "medium",
     subcategory: "data_exfiltration",
     label: "an instruction to read credential or agent-config files",
-    explain: "The text tells the model to read, include or send SSH keys, cloud or package-registry credentials, .env files or an MCP host config \u2014 files a tool description has no reason to ask the model for. A tool that only names the files it reads itself does not trip this.",
+    explain: "The text tells the model to read an SSH key or config, cloud or package-registry credentials, a .env file or an MCP host config. Confirm that is this tool's own purpose (an SSH or registry helper may need it); a tool that only names the files it reads itself does not trip this.",
     patterns: [
       new RegExp(`${DIRECTIVE}${READ_VERB}${SAME_SENTENCE}(?:${SENSITIVE_PATH})`, "i"),
       new RegExp(`${DIRECTIVE}${READ_VERB}${OWNER}${SECRET_NOUN}`, "i")
@@ -70991,8 +71001,26 @@ function readable2(text) {
   }
   return printable / [...text].length >= 0.9;
 }
+var RGI_SUBDIVISION_FLAGS = /* @__PURE__ */ new Set(["gbeng", "gbsct", "gbwls"]);
+function subdivisionFlagTags(points) {
+  const exempt = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 < points.length; i2 += 1) {
+    if (points[i2] !== 127988) continue;
+    let j = i2 + 1;
+    let tag = "";
+    for (let c3 = points[j]; c3 !== void 0 && c3 >= 917536 && c3 <= 917630; c3 = points[j]) {
+      tag += String.fromCharCode(c3 - 917504);
+      j += 1;
+    }
+    if (points[j] === 917631 && RGI_SUBDIVISION_FLAGS.has(tag)) {
+      for (let k = i2 + 1; k <= j; k += 1) exempt.add(k);
+    }
+  }
+  return exempt;
+}
 function scanInvisible(text) {
   const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
+  const flagTags = subdivisionFlagTags(points);
   const kinds = /* @__PURE__ */ new Set();
   let count2 = 0;
   let decodedTags = "";
@@ -71002,7 +71030,7 @@ function scanInvisible(text) {
   for (let i2 = 0; i2 < points.length; i2 += 1) {
     const code = points[i2] ?? 0;
     const kind = invisibleKind(code);
-    if (kind !== null && !isLegitimate(code, points[i2 - 1], points[i2 + 1])) {
+    if (kind !== null && !flagTags.has(i2) && !isLegitimate(code, points[i2 - 1], points[i2 + 1])) {
       kinds.add(kind);
       count2 += 1;
       if (index < 0) index = offset;
@@ -71314,7 +71342,38 @@ function textRuleHits(field2) {
     }
     if (hit !== null) hits.push(hit);
   }
-  return hits;
+  return escalateSensitive(field2, texts, hits);
+}
+var RULE_PATTERNS = (id) => TEXT_RULES.find((r) => r.id === id)?.patterns ?? [];
+var PASS_ON_OR_HIDE = [
+  ...PASS_ELSEWHERE,
+  ...RULE_PATTERNS("mcp-tool-parameter-smuggling"),
+  ...RULE_PATTERNS("mcp-tool-conceal-from-user")
+];
+function escalateSensitive(field2, texts, hits) {
+  let at = -1;
+  for (const text of texts) {
+    const path8 = SENSITIVE_PATH_ANYWHERE.exec(text);
+    if (path8 === null) continue;
+    if (PASS_ON_OR_HIDE.some((p) => p.test(text))) {
+      at = Math.min(path8.index, field2.text.length);
+      break;
+    }
+  }
+  if (at < 0) return hits;
+  const high = {
+    severity: "high",
+    label: "an instruction to pass credential or agent-config files on",
+    explain: "The text points the model at an SSH key, cloud or package-registry credentials, a .env file or an MCP host config AND tells it to pass that on (a parameter, another tool, a URL) or to hide it from the user \u2014 the shape of tool-poisoning exfiltration. No tool needs that."
+  };
+  const existing = hits.findIndex((h2) => h2.rule === "mcp-tool-sensitive-file-access");
+  const detail = "directs passing the file on or hiding it";
+  if (existing >= 0) {
+    const h2 = hits[existing];
+    if (h2 !== void 0) hits[existing] = { ...h2, ...high, detail: h2.detail === void 0 ? detail : `${h2.detail}; ${detail}` };
+    return hits;
+  }
+  return [...hits, { ...ruleMeta("mcp-tool-sensitive-file-access"), ...high, field: field2, index: at, detail }];
 }
 function homoglyphHit(field2) {
   const mixed = mixedScriptWord(field2.text);

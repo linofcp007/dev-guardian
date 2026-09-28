@@ -289,7 +289,13 @@ Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
    diferente também conta. As `instructions` do servidor (que vão para o
    system prompt) contam como uma tool (`mcp-server-instructions-changed`,
    high). Prompts, resources e templates também ficam registados
-   (`mcp-prompt-definition-changed` e afins, medium).
+   (`mcp-prompt-definition-changed` e afins, medium). Duas tools com o
+   mesmo nome são `mcp-tool-duplicate-name` (high): o cliente escolhe uma
+   delas de forma ambígua. `mcp-tool-sensitive-file-access` em medium
+   significa que a tool manda o modelo ler um ficheiro de credenciais ou de
+   configuração: confirma com o utilizador se esse é o propósito da tool
+   (um cliente SSH ou de registry pode precisar disso); em high, manda
+   também passá-lo a outro sítio ou escondê-lo — isso nenhuma tool precisa.
 
 ## Quando não correr scans completos
 
