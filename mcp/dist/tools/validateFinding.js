@@ -3,8 +3,10 @@
  * finding lives in?
  *
  * This module is WIRING ONLY. Every rule that decides a verdict lives in
- * `../validate/staticProvider.ts` (the six gates on the negative verdict) and
- * `../validate/importGraph.ts` (hop counting). Nothing here inspects a
+ * `../validate/staticProvider.ts` (the six gates on the negative verdict),
+ * `../validate/dependencyProvider.ts` (is a dependency finding's package
+ * imported, and by a routed file) and `../validate/importGraph.ts` (hop
+ * counting). Nothing here inspects a
  * language, a hop count, a coverage status or a gate; if such a conditional
  * ever appears in this file, it is in the wrong file. What lives here is the
  * impure half the provider deliberately refuses to own: reading storage,
@@ -40,14 +42,20 @@
  * moment it was written.
  */
 import { z } from 'zod';
+import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
+import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
+import { validateDependencies } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
+import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary } from '../validate/summary.js';
+import { IMPLEMENTED_PROVIDERS } from '../validate/types.js';
 import { registerToolModule } from './index.js';
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
@@ -63,13 +71,12 @@ const Providers = z
     // `.min(1)`: an empty array would mean "run no providers", whose only
     // possible output is the empty batch every refusal here exists to avoid.
     // Omit the field to get every provider this version has.
-    .array(z.enum(['static']))
+    .array(z.enum(IMPLEMENTED_PROVIDERS))
     .min(1)
     .optional()
-    .describe("Evidence providers to run. This version implements only 'static' (import graph + surface " +
-    "snapshot); 'runtime' and 'dependency' are planned and will widen this enum. Omit the " +
-    'field to run every provider available in this version, so a caller written today keeps ' +
-    'working when the others land. Must be non-empty when supplied.');
+    .describe("Evidence providers to run: 'static' (the finding's own file, via the import graph) and " +
+    "'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is " +
+    'planned. Omit the field to run every provider this version has. Non-empty when supplied.');
 const tool = {
     name: 'validate_finding',
     title: 'Qualify findings by reachability',
@@ -82,22 +89,21 @@ const tool = {
     // by tightening wording only: every limit below survived, each one tested
     // in validateFinding.test.ts.
     description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding ' +
-        'lives in. Builds a file-level import graph from the latest map_attack_surface snapshot, ' +
-        'rooted at the route-declaring files, and returns reachable / unreachable / unknown per ' +
-        'finding with evidence (nearest route and hop count, how many routes reach the file, any ' +
-        'live-confirmed anonymous exposure) plus the coverage gaps behind it. REQUIRES a prior ' +
-        'map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by ' +
-        'default; a fingerprint validates one, and an unknown fingerprint is an error, not an empty ' +
-        'result. REPORT ONLY: it never suppresses a finding and never changes a severity — closing a ' +
-        'finding stays a human decision. Limits: granularity is the file, not the function ' +
-        '("reachable" means a route imports the file, NOT that the vulnerable line runs); ' +
-        '"unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime ' +
-        '(autoload, annotation injection, DI container); only HTTP routes are entry points, so a ' +
+        'lives in: a file-level import graph from the latest map_attack_surface snapshot, rooted at ' +
+        'the route files, gives reachable / unreachable / unknown with evidence (nearest route, hops, ' +
+        'live-confirmed anonymous exposure) and coverage gaps. The dependency provider adds, per ' +
+        'dependency CVE (npm, PyPI), reachable (a file a route reaches imports the package) / ' +
+        'imported / unknown — never unreachable. REQUIRES a prior map_attack_surface run (refuses ' +
+        'with no_surface_snapshot). Validates every open finding by default; an unknown fingerprint ' +
+        'is an error, not an empty result. REPORT ONLY: it never suppresses a finding and never ' +
+        'changes a severity. Limits: granularity is the file, not the function ("reachable" is NOT ' +
+        '"the vulnerable line runs"); "unreachable" is never emitted for Ruby, Java, C# or PHP, which ' +
+        'resolve code at runtime (autoload, DI container); only HTTP routes are entry points, so a ' +
         'file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and ' +
-        'NOTHING detects dynamic imports (import(expr), require(variable), reflection, plugin ' +
-        'registries) — where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU ' +
-        'WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree ' +
-        'moves. Read summary.coverage_gaps beside the counts.',
+        'NOTHING detects dynamic imports (import(expr), require(variable), reflection) — where they ' +
+        'are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts are stored ' +
+        'against the snapshot and tree hash and flagged stale once the tree moves. Read ' +
+        'summary.coverage_gaps beside the counts.',
     inputSchema: {
         project_path: ProjectPath,
         fingerprint: Fingerprint,
@@ -117,13 +123,11 @@ const NO_OPEN_FINDINGS_NOTE = 'No open findings to validate, so nothing was comp
     'finding-producing types left an unsuppressed finding open. Run security_scan_full (or ' +
     'scan_sast) first, then re-run validate_finding.';
 async function handler(input, ctx) {
-    // `providers` is validated by the schema and deliberately not read here.
-    // `z.enum(['static'])` makes `['static']` the only value that can arrive,
-    // so reading it could not change what runs; and `summary.providers_run`
-    // reports what actually ran rather than what was asked for, so echoing the
-    // argument would start lying the moment the enum widens and a caller asks
-    // for a provider this version cannot execute.
+    // `summary.providers_run` reports what actually ran, in the fixed order of
+    // IMPLEMENTED_PROVIDERS — never the argument echoed back.
     const inp = input;
+    const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
+    const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
     let projectPath;
     try {
         projectPath = resolveProjectPath(inp.project_path).path;
@@ -171,20 +175,39 @@ async function handler(input, ctx) {
     const workingTreeHash = await computeTreeHash(projectPath);
     const graph = buildImportGraph(persisted.snapshot.imports);
     const dast = collectAnonymousExposures(ctx, projectPath);
-    const validations = validateStatically({
-        snapshot: persisted.snapshot,
-        snapshotId: persisted.id,
-        // The snapshot's tree, not the working tree — see the module doc comment.
-        treeHash: persisted.tree_hash,
-        graph,
-        findings: selected,
-        anonymouslyExposedRouteFiles: dast.files,
-        // Injected so the provider stays pure, and minted once so a whole batch
-        // carries one timestamp rather than N that drift across a long run.
-        computedAt: new Date().toISOString(),
-        languageOf: languageOfPath,
-        projectPath,
-    });
+    // Injected so the providers stay pure, and minted once so a whole batch
+    // carries one timestamp rather than N that drift across a long run.
+    const computedAt = new Date().toISOString();
+    const validations = [];
+    if (providersRun.includes('static')) {
+        validations.push(...validateStatically({
+            snapshot: persisted.snapshot,
+            snapshotId: persisted.id,
+            // The snapshot's tree, not the working tree — see the module doc comment.
+            treeHash: persisted.tree_hash,
+            graph,
+            findings: selected,
+            anonymouslyExposedRouteFiles: dast.files,
+            computedAt,
+            languageOf: languageOfPath,
+            projectPath,
+        }));
+    }
+    if (providersRun.includes('dependency')) {
+        // Only the dependency findings get a verdict from it — see
+        // `validateDependencies`. Same snapshot, graph, tree and timestamp.
+        validations.push(...validateDependencies({
+            snapshot: persisted.snapshot,
+            snapshotId: persisted.id,
+            treeHash: persisted.tree_hash,
+            graph,
+            findings: selected,
+            computedAt,
+            projectPath,
+            npmResolver: makeNpmResolver(projectPath),
+            pypiPins: makePypiPinResolver(projectPath),
+        }));
+    }
     ctx.storage.validations.upsert(projectPath, validations);
     return {
         ok: true,
@@ -201,6 +224,12 @@ async function handler(input, ctx) {
             sourceScan: openSet.newestSource,
             workingTreeHash,
             now: Date.now(),
+            providersRun,
+            findingsSelected: selected.length,
+            withoutCoordinates: selected.flatMap((f) => {
+                const ids = findingVulnIds(f);
+                return ids.length > 0 && dependencyCoordinates(f) === null ? [{ fingerprint: f.fingerprint, ids }] : [];
+            }),
         }),
         ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
         // Newer scans the open set passed over because their scanners did not

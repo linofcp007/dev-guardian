@@ -17,6 +17,19 @@
  * reused only under that exact key, within a freshness window.
  */
 import { nowIso, parseJsonObject } from './repoUtil.js';
+/**
+ * Snapshots kept per project; each insert deletes that project's older ones.
+ * The table grew without bound — every forced or cache-missing
+ * `map_attack_surface` run added a row of routes, imports and third-party
+ * imports. What reads an older snapshot was checked first: `scan_dast`,
+ * `validate_finding`, `prioritize_findings`, `export_vex` and
+ * `guardian://surface/latest` read only the newest for their project, and the
+ * cache only reuses the newest under its key; the spec diff lives inside each
+ * snapshot. The one reader of an older row is `guardian://surface/{id}` —
+ * a verdict stores its `snapshot_id` as provenance — which answers
+ * `{ snapshot: null }` once that row is gone.
+ */
+export const SURFACE_SNAPSHOTS_KEPT = 10;
 const EMPTY_SNAPSHOT = {
     routes: [],
     env_vars: [],
@@ -36,6 +49,7 @@ export class SurfaceRepo {
     getByIdStmt;
     findCacheStmt;
     listRecentStmt;
+    pruneStmt;
     constructor(db) {
         this.insertStmt = db.prepare(`
       INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json, cache_key)
@@ -61,10 +75,20 @@ export class SurfaceRepo {
         this.listRecentStmt = db.prepare(`
       SELECT * FROM surface_snapshots ORDER BY id DESC LIMIT ?
     `);
+        this.pruneStmt = db.prepare(`
+      DELETE FROM surface_snapshots
+      WHERE project_path = ?
+        AND id NOT IN (
+          SELECT id FROM surface_snapshots WHERE project_path = ? ORDER BY id DESC LIMIT ?
+        )
+    `);
     }
     insert(input) {
         const capturedAt = nowIso();
         const info = this.insertStmt.run(input.project_path, capturedAt, input.tree_hash, JSON.stringify(input.snapshot), input.cache_key ?? null);
+        // Retention: see SURFACE_SNAPSHOTS_KEPT. After the insert, so the new
+        // row always survives its own prune.
+        this.pruneStmt.run(input.project_path, input.project_path, SURFACE_SNAPSHOTS_KEPT);
         return {
             id: Number(info.lastInsertRowid),
             project_path: input.project_path,
@@ -149,7 +173,46 @@ function rowToSnapshot(row) {
             // below as dead code (TS2783), when the whole point is that it is live
             // for exactly the legacy rows that lack the field.
             routes: storedRoutes.map((r) => ({ provenance: 'code', ...r })),
+            // Validated, never trusted: an earlier shape of this field (a flat
+            // list, written by a pre-release build) or a damaged one reads as
+            // absent — the snapshot is then recomputed rather than read as "no
+            // package is imported" — and an entry pointing at no file is dropped.
+            external_imports: readExternalImports(parsed['external_imports']),
         },
     };
+}
+function readExternalImports(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+    const record = value;
+    const rawFiles = record['files'];
+    const rawPackages = record['packages'];
+    if (!Array.isArray(rawFiles) || !Array.isArray(rawPackages))
+        return undefined;
+    const files = rawFiles.filter((f) => typeof f === 'string');
+    if (files.length !== rawFiles.length)
+        return undefined;
+    const packages = [];
+    for (const raw of rawPackages) {
+        if (raw === null || typeof raw !== 'object')
+            continue;
+        const p = raw;
+        const indices = p['files'];
+        const count = p['file_count'];
+        if (typeof p['specifier'] !== 'string' || typeof p['language'] !== 'string')
+            continue;
+        if (!Array.isArray(indices) || typeof count !== 'number')
+            continue;
+        const valid = indices.every((i) => Number.isInteger(i) && typeof i === 'number' && i >= 0 && i < files.length);
+        if (!valid)
+            continue;
+        packages.push({
+            specifier: p['specifier'],
+            language: p['language'],
+            files: indices,
+            file_count: Math.max(count, indices.length),
+        });
+    }
+    return { files, packages };
 }
 //# sourceMappingURL=surfaceRepo.js.map

@@ -31,7 +31,7 @@ describe('ValidationsRepo', () => {
     s.validations.upsert('/proj', [
       row({ evidence: [{ detail: 'a' }, { detail: 'b' }], coverage_gaps: ['go: no_rules'] }),
     ]);
-    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    const got = s.validations.getByFingerprint('/proj', 'fp1', 'static');
     expect(got?.evidence).toEqual([{ detail: 'a' }, { detail: 'b' }]);
     expect(got?.coverage_gaps).toEqual(['go: no_rules']);
     expect(got?.verdict).toBe('unknown');
@@ -44,7 +44,7 @@ describe('ValidationsRepo', () => {
     s.validations.upsert('/proj', [row({ verdict: 'unknown', tree_hash: 'tree-a' })]);
     s.validations.upsert('/proj', [row({ verdict: 'unreachable', tree_hash: 'tree-b' })]);
     expect(s.validations.listByProject('/proj')).toHaveLength(1);
-    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    const got = s.validations.getByFingerprint('/proj', 'fp1', 'static');
     expect(got?.verdict).toBe('unreachable');
     expect(got?.tree_hash).toBe('tree-b');
   });
@@ -56,15 +56,28 @@ describe('ValidationsRepo', () => {
     expect(s.validations.listByProject('/proj')).toHaveLength(2);
   });
 
+  it('answers for the provider asked, even when two share one computed_at (review M5)', () => {
+    // validate_finding mints one computed_at per batch, so a dependency CVE's
+    // static and dependency verdicts tie on it: "the newest" was arbitrary.
+    const s = makeStorage();
+    s.validations.upsert('/proj', [
+      row({ provider: 'static', verdict: 'unknown' }),
+      row({ provider: 'dependency', verdict: 'reachable' }),
+    ]);
+    expect(s.validations.getByFingerprint('/proj', 'fp1', 'static')?.verdict).toBe('unknown');
+    expect(s.validations.getByFingerprint('/proj', 'fp1', 'dependency')?.verdict).toBe('reachable');
+    expect(s.validations.getByFingerprint('/proj', 'fp1', 'runtime')).toBeNull();
+  });
+
   it('scopes rows by project_path', () => {
     const s = makeStorage();
     s.validations.upsert('/a', [row()]);
     expect(s.validations.listByProject('/b')).toEqual([]);
-    expect(s.validations.getByFingerprint('/b', 'fp1')).toBeNull();
+    expect(s.validations.getByFingerprint('/b', 'fp1', 'static')).toBeNull();
   });
 
   it('returns null for an unknown fingerprint rather than throwing', () => {
-    expect(makeStorage().validations.getByFingerprint('/proj', 'nope')).toBeNull();
+    expect(makeStorage().validations.getByFingerprint('/proj', 'nope', 'static')).toBeNull();
   });
 
   it('downgrades to unknown/low, naming the column, when evidence is not valid JSON', () => {
@@ -83,7 +96,7 @@ describe('ValidationsRepo', () => {
       )
       .run();
 
-    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    const got = s.validations.getByFingerprint('/proj', 'fp1', 'static');
     expect(got?.verdict).toBe('unknown');
     expect(got?.confidence).toBe('low');
     expect(got?.coverage_gaps).toEqual(['stored verdict could not be read: evidence was not valid JSON']);
@@ -101,7 +114,7 @@ describe('ValidationsRepo', () => {
       )
       .run();
 
-    const got = s.validations.getByFingerprint('/proj', 'fp1');
+    const got = s.validations.getByFingerprint('/proj', 'fp1', 'static');
     expect(got?.verdict).toBe('unknown');
     expect(got?.confidence).toBe('low');
     expect(got?.coverage_gaps).toEqual([

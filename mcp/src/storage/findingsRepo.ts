@@ -109,6 +109,8 @@ interface FindingRow {
   content_key: string | null;
   cwe: string | null;
   owasp: string | null;
+  /** Migration 014: a JSON array, NULL when the scanner gave none (and on older rows). */
+  vuln_aliases?: string | null;
 }
 
 export interface InsertFindingInput extends Finding {
@@ -121,7 +123,7 @@ export class FindingsRepo {
     string, string, string, string | null, string, string, string | null,
     string, string | null, string | null, number | null, number | null,
     string | null, 0 | 1, 0 | 1, string | null, string | null, string | null,
-    string | null, string | null,
+    string | null, string | null, string | null,
   ]>;
   private readonly identityForFingerprintStmt: Statement<[string], { identity: string }>;
   private readonly listByScanStmt: Statement<[string], FindingRow>;
@@ -137,9 +139,9 @@ export class FindingsRepo {
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
         snippet, fix_available, fix_applied, raw, identity, content_key,
-        cwe, owasp
+        cwe, owasp, vuln_aliases
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // The identity of the most recent scan's row for this fingerprint. Rows
@@ -270,6 +272,7 @@ export class FindingsRepo {
           f.content_key ?? null,
           taxonomyColumn(f.cwe),
           taxonomyColumn(f.owasp),
+          f.vuln_aliases === undefined || f.vuln_aliases.length === 0 ? null : JSON.stringify(f.vuln_aliases),
         );
         inserted += info.changes;
       }
@@ -454,6 +457,8 @@ function rowToFinding(row: FindingRow): Finding {
   if (cwe !== null) finding.cwe = cwe;
   const owasp = readTaxonomyColumn(row.owasp, STORED_OWASP);
   if (owasp !== null) finding.owasp = owasp;
+  const aliases = parseAliases(row.vuln_aliases);
+  if (aliases.length > 0) finding.vuln_aliases = aliases;
   return finding;
 }
 
@@ -486,4 +491,19 @@ function readTaxonomyColumn(stored: string | null, shape: RegExp): string[] | nu
   if (!Array.isArray(parsed)) return null;
   const kept = parsed.filter((v): v is string => typeof v === 'string' && shape.test(v));
   return kept.length > 0 ? kept : null;
+}
+
+/**
+ * A damaged column reads as no aliases — the finding is then tied by its
+ * rule id alone, which only ever narrows what it is tied to, never widens it.
+ * `?? null` covers a row read before migration 014 ran on this handle.
+ */
+function parseAliases(raw: string | null | undefined): string[] {
+  if (raw === null || raw === undefined) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
 }

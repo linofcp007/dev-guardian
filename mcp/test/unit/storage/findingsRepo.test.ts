@@ -43,6 +43,18 @@ describe('FindingsRepo', () => {
     expect(findings.listByScan('s1')).toHaveLength(2);
   });
 
+  it('round-trips a finding’s vulnerability aliases (migration 014); none reads back as absent', () => {
+    const { scans, findings } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'deps', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'a', rule_id: 'PYSEC-2021-142', vuln_aliases: ['CVE-2020-14343', 'GHSA-8q59-q68h-6hv4'] }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'b' }), scan_id: 's1' },
+    ]);
+    const byFp = new Map(findings.listByScan('s1').map((f) => [f.fingerprint, f]));
+    expect(byFp.get('a')?.vuln_aliases).toEqual(['CVE-2020-14343', 'GHSA-8q59-q68h-6hv4']);
+    expect(byFp.get('b')?.vuln_aliases).toBeUndefined();
+  });
+
   it('counts by severity returns a record with every severity slot', () => {
     const { scans, findings } = setup();
     scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });

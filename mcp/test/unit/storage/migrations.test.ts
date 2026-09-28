@@ -455,4 +455,52 @@ describe('migrations runner', () => {
     expect(old).not.toHaveProperty('cwe');
     expect(old).not.toHaveProperty('owasp');
   });
+
+  it('upgrades a pre-014 database: suppressions gain VEX columns, and an existing one claims no VEX status', () => {
+    // An existing suppression was a plain "false positive" — it must not
+    // start reading as a VEX `not_affected` statement after the upgrade.
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    // Whatever the newest pre-014 migration is once parallel branches merge.
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path)
+       VALUES ('fp-old', 'reviewed', '2026-01-01T00:00:00.000Z', '/p')`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const row = db
+      .prepare(`SELECT vex_status, vex_justification, vex_impact_statement FROM suppressions`)
+      .get();
+    expect(row).toEqual({ vex_status: null, vex_justification: null, vex_impact_statement: null });
+    expect(new Storage(db).suppressions.listAll()[0]?.vex_status).toBeUndefined();
+  });
+
+  it('upgrades a pre-014 database: an existing finding reads no vulnerability aliases', () => {
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('d1', 'deps', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, rule_id, severity, category, title, message)
+       VALUES ('fp-old', 'd1', 'pip-audit', 'PYSEC-2021-142', 'medium', 'security', 't',
+               'an incomplete fix for CVE-2020-1747')`,
+    );
+
+    runMigrations(db);
+
+    const [finding] = new Storage(db).findings.listByScan('d1');
+    expect(finding?.rule_id).toBe('PYSEC-2021-142');
+    expect(finding?.vuln_aliases).toBeUndefined();
+  });
 });

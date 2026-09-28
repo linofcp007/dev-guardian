@@ -33,6 +33,12 @@ describe('npmAuditParser (npm 7+ audit report v2)', () => {
     expect(minimist?.fix_available).toBe(true); // fixAvailable: { ... }
   });
 
+  it('records the GHSA id of the advisory URL as the finding’s alias', () => {
+    const { findings } = npmAuditParser.parse(readFileSync(FIXTURE, 'utf8'));
+    const lodash = findings.find((f) => f.title.includes('lodash'));
+    expect(lodash?.vuln_aliases).toEqual(['GHSA-jf85-cpcp-j695']);
+  });
+
   it('maps "moderate" to medium', () => {
     const json = JSON.stringify({
       vulnerabilities: {
@@ -75,6 +81,12 @@ describe('npmAuditParser (npm 6 advisories map)', () => {
     expect(cves).toHaveLength(1);
     expect(cves[0]?.cve_id).toBe('CVE-2019-10744');
     expect(cves[0]?.package_name).toBe('lodash');
+  });
+
+  it('records the advisory’s CVEs and GHSA id as the finding’s aliases', () => {
+    const withGhsa = v1.replace('"cves":', '"github_advisory_id":"GHSA-jf85-cpcp-j695","cves":');
+    const { findings } = npmAuditParser.parse(withGhsa);
+    expect(findings[0]?.vuln_aliases).toEqual(['CVE-2019-10744', 'GHSA-jf85-cpcp-j695']);
   });
 });
 

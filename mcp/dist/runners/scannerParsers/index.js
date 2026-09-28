@@ -114,7 +114,24 @@ export function makeFinding(input) {
         if (owasp !== undefined)
             finding.owasp = owasp;
     }
+    const aliases = cleanAliases(input.vuln_aliases, input.rule_id);
+    if (aliases.length > 0)
+        finding.vuln_aliases = aliases;
     return finding;
+}
+function cleanAliases(raw, ruleId) {
+    const seen = new Set(ruleId === undefined ? [] : [ruleId.trim().toUpperCase()]);
+    const out = [];
+    for (const value of raw ?? []) {
+        if (typeof value !== 'string')
+            continue;
+        const id = value.trim();
+        if (id === '' || seen.has(id.toUpperCase()))
+            continue;
+        seen.add(id.toUpperCase());
+        out.push(id);
+    }
+    return out;
 }
 /**
  * The weakness every finding of a class is by definition, whatever its

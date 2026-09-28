@@ -36,6 +36,7 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { externalImports } from '../../src/surface/moduleEdges.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { computeTreeHash } from '../../src/treeHash/computeTreeHash.js';
 import type {
@@ -175,7 +176,7 @@ function seedScan(findings: Finding[], scanType: ScanType = 'sast'): string {
 
 interface Summary {
   findings_selected: number;
-  counts_by_verdict: Record<string, number>;
+  counts_by_verdict: Record<string, Record<string, number>>;
   coverage_gaps: string[];
   snapshot: {
     id: number;
@@ -513,7 +514,7 @@ describe('validate_finding persistence', () => {
     const r = expectOk(await run());
 
     expect(rawRows('finding_validations')).toHaveLength(r.validations.length);
-    const stored = ctx.storage.validations.getByFingerprint(projectPath, 'fp2');
+    const stored = ctx.storage.validations.getByFingerprint(projectPath, 'fp2', 'static');
     expect(stored?.verdict).toBe('unreachable');
     expect(stored?.provider).toBe('static');
   });
@@ -566,7 +567,7 @@ describe('validate_finding staleness', () => {
     expect(second.summary.working_tree_hash).not.toBe(treeHash);
     // The stored row keeps the tree it was computed against — the staleness
     // flag is derived at read time, never frozen into the row.
-    expect(ctx.storage.validations.getByFingerprint(projectPath, 'fp1')?.tree_hash).toBe(treeHash);
+    expect(ctx.storage.validations.getByFingerprint(projectPath, 'fp1', 'static')?.tree_hash).toBe(treeHash);
   });
 });
 
@@ -692,12 +693,18 @@ describe('validate_finding summary', () => {
     const r = expectOk(await run());
 
     expect(r.summary.counts_by_verdict).toEqual({
-      reachable: 1,
-      unreachable: 1,
-      unknown: 1,
-      // Present and zero, not absent: `confirmed` is not producible by
-      // `static`, and a reader must see that rather than infer it.
-      confirmed: 0,
+      static: {
+        reachable: 1,
+        unreachable: 1,
+        unknown: 1,
+        // Present and zero, not absent: `confirmed` is not producible by
+        // `static`, and a reader must see that rather than infer it. Nor is
+        // `imported`, which only the dependency provider answers.
+        confirmed: 0,
+        imported: 0,
+      },
+      // These three semgrep findings are not dependencies: nothing to count.
+      dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
     });
   });
 
@@ -791,6 +798,139 @@ describe('validate_finding summary', () => {
     expect(r.summary.providers_run).toEqual(['static']);
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/runtime/);
     expect(r.summary.coverage_gaps.join(' | ')).toMatch(/dependency/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The dependency provider                                             */
+/* ------------------------------------------------------------------ */
+
+describe('validate_finding — the dependency provider', () => {
+  /** A Trivy CVE on lodash, read from the npm lockfile. */
+  function lodashCve(over: Partial<Finding> = {}): Finding {
+    return finding({
+      fingerprint: 'cve-lodash',
+      tool: 'trivy',
+      rule_id: 'CVE-2021-23337',
+      subcategory: 'cve',
+      title: 'lodash: command injection',
+      file_path: 'package-lock.json',
+      line_start: undefined,
+      snippet: 'lodash@4.17.20->4.17.21',
+      ...over,
+    });
+  }
+
+  it('runs by default beside static, and answers reachable for a package a routed file imports', async () => {
+    // The lockfile says the code loads exactly the vulnerable lodash 4.17.20.
+    writeFileSync(join(projectPath, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3, packages: { 'node_modules/lodash': { version: '4.17.20' } },
+    }));
+    seedSnapshot({
+      external_imports: externalImports([{ file: 'src/db.ts', specifier: 'lodash', language: 'typescript' }]),
+    });
+    seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
+
+    const r = expectOk(await run());
+
+    expect(r.summary.providers_run).toEqual(['static', 'dependency']);
+    const dependency = r.validations.filter((v) => v.provider === 'dependency');
+    // Only the dependency finding gets a dependency verdict.
+    expect(dependency.map((v) => [v.fingerprint, v.verdict])).toEqual([['cve-lodash', 'reachable']]);
+    expect(dependency[0]?.evidence.map((e) => e.detail).join(' | ')).toMatch(/src\/db\.ts/);
+    // Both findings still get their static verdict, and the batch counts
+    // findings, not verdicts.
+    expect(r.validations.filter((v) => v.provider === 'static')).toHaveLength(2);
+    expect(r.summary.findings_selected).toBe(2);
+    // Both verdicts for the CVE are stored, one row per provider.
+    const stored = rawRows('finding_validations').filter((row) => row['fingerprint'] === 'cve-lodash');
+    expect(stored.map((row) => row['provider']).sort()).toEqual(['dependency', 'static']);
+  });
+
+  it('says each kind of gap once for a batch of 30 packages (review M4: it was 34 entries, 10 KB)', async () => {
+    seedSnapshot({ external_imports: externalImports([]) });
+    seedScan(Array.from({ length: 30 }, (_, i) => lodashCve({
+      fingerprint: `cve-${i}`, rule_id: `CVE-2024-${1000 + i}`, snippet: `pkg-${i}@1.0.${i}->1.1.0`,
+    })));
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.validations).toHaveLength(30);
+    expect(r.summary.coverage_gaps.filter((g) => /no project file imports the package/.test(g))).toHaveLength(1);
+    expect(r.summary.coverage_gaps.length).toBeLessThan(8);
+    expect(JSON.stringify(r.summary.coverage_gaps).length).toBeLessThan(3000);
+  });
+
+  it('reads a route-reached PyPI import reachable wherever the requirements file sits (review N1)', async () => {
+    // deploy/requirements.txt pins pyyaml==5.3; app/web.py declares a route
+    // and imports yaml. It read "imported only by files outside 'deploy' …
+    // another install's copy".
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(projectPath, 'deploy'), { recursive: true });
+    writeFileSync(join(projectPath, 'deploy', 'requirements.txt'), 'pyyaml==5.3\nflask==3.0.0\n');
+    const yamlCve = lodashCve({
+      fingerprint: 'cve-yaml', rule_id: 'CVE-2020-14343', title: 'PyYAML: incomplete fix',
+      file_path: 'deploy/requirements.txt', snippet: 'PyYAML@5.3->5.4',
+    });
+    seedSnapshot({
+      routes: [route({ file: join(projectPath, 'app', 'web.py'), framework: 'flask', language: 'python' })],
+      external_imports: externalImports([{ file: 'app/web.py', specifier: 'yaml', language: 'python' }]),
+    });
+    seedScan([yamlCve]);
+
+    const reachable = expectOk(await run({ providers: ['dependency'] }));
+    expect(only(reachable).verdict).toBe('reachable');
+    expect(JSON.stringify(only(reachable))).not.toMatch(/another install/);
+
+    // A second manifest pinning another version: the import may load either.
+    mkdirSync(join(projectPath, 'services', 'b'), { recursive: true });
+    writeFileSync(join(projectPath, 'services', 'b', 'requirements.txt'), 'PyYAML==6.0.1\n');
+    const ambiguous = expectOk(await run({ providers: ['dependency'] }));
+    expect(only(ambiguous).verdict).toBe('unknown');
+    expect(only(ambiguous).coverage_gaps.join(' | ')).toContain(
+      'may load a different pin (services/b/requirements.txt: 6.0.1)',
+    );
+  });
+
+  it('says a vulnerability finding without package coordinates is not exportable to VEX (final review, M-b)', async () => {
+    seedSnapshot({ external_imports: externalImports([]) });
+    seedScan([finding({
+      fingerprint: 'nuclei-log4shell', tool: 'nuclei', rule_id: 'CVE-2021-44228', subcategory: 'dast',
+      title: 'Apache Log4j RCE', file_path: 'https://app.test/login', line_start: undefined,
+    })]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.validations).toEqual([]);
+    const gap = r.summary.coverage_gaps.find((g) => g.includes('not exportable to VEX (no package coordinates)'));
+    expect(gap).toMatch(/CVE-2021-44228/);
+    expect(gap).toMatch(/^1 finding/);
+  });
+
+  it('runs alone when asked for alone', async () => {
+    seedSnapshot({
+      external_imports: externalImports([{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }]),
+    });
+    seedScan([lodashCve(), finding({ fingerprint: 'sast-1' })]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.summary.providers_run).toEqual(['dependency']);
+    expect(r.validations.map((v) => [v.provider, v.verdict])).toEqual([['dependency', 'imported']]);
+    expect(r.summary.coverage_gaps.join(' | ')).toMatch(/'static' was not requested/);
+  });
+
+  it('answers unknown on a snapshot mapped before third-party imports were recorded', async () => {
+    seedSnapshot({ external_imports: undefined });
+    seedScan([lodashCve()]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(only(r).provider).toBe('dependency');
+    expect(only(r).verdict).toBe('unknown');
+    // Not the staleness gap (the snapshot's tree is not the working tree
+    // here either): the one that names the missing field.
+    expect(r.summary.coverage_gaps.join(' | ')).toMatch(/before third-party imports were recorded/);
   });
 });
 

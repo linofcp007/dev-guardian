@@ -8,6 +8,10 @@ version bump.
 
 ## [Unreleased]
 
+**BREAKING**, in short (detailed below): `validate_finding`'s
+`summary.counts_by_verdict`, a 2.0.0 field, is keyed by provider —
+`counts_by_verdict.reachable` is now `counts_by_verdict.static.reachable`.
+
 ### Added
 
 - Findings carry `cwe` and `owasp` (OWASP Top 10:2025), migration 013; annotations, not part of the fingerprint or identity. Stored findings without them read as unknown, never as a category.
@@ -23,6 +27,78 @@ version bump.
 - "Would be tested by" lists only what could make a category tested; thin and narrow scanners are listed apart as "would partly cover".
 - A scanner that sees one slice of a category whatever the language never makes it tested on its own: gitleaks is partial for A07 ("hard-coded credentials only"), Trivy and the npm/pip-audit/dotnet auditors are partial for A03 ("known-vulnerable dependencies only; build and distribution integrity not assessed").
 - A multi-pass scanner is incomplete when any of its passes failed or is listed missing (`gitleaks` beside `gitleaks-working-tree`, the npm/pip-audit/dotnet auditors). `review_pr` records `local_only` on its scan row. `report_export` on an `audit_executive` row reads its sub-scans. `compliance_evidence` lists partial categories apart from the evidenced ones.
+- `map_attack_surface` persists the import specifiers it cannot resolve to a project file — the
+  third-party packages — as `external_imports` on the snapshot; they were only counted. Stored
+  compactly (each path once, per package the indices of its files, capped at 1000 with the true
+  count), a cached snapshot without the field is recomputed rather than served, and
+  `guardian://surface/latest` counts them in `totals` rather than inlining them.
+- Surface snapshots are kept to the newest 10 per project; the table grew with every run.
+  `guardian://surface/{id}` of a pruned snapshot answers `{ snapshot: null }`.
+- `validate_finding` implements its `dependency` provider: a dependency CVE (npm; PyPI through a
+  table of distributions whose module name is known and unique) reads `reachable` when a file a route
+  reaches imports the package, `imported` when only other files do, and `unknown` otherwise — never
+  `unreachable`. For npm, only files under the finding's manifest directory count, and only one that
+  loads exactly the vulnerable version (Node's lookup, read from `package-lock.json` or the installed
+  `node_modules`; an unreadable lockfile is never passed over); when that cannot be read, the answer
+  is at most `imported`, with the reason. A Python environment is not scoped to a directory: any
+  importer counts, and a route-reached one reads `reachable` only when the project's manifests
+  (requirement files at any depth, `requirements/*.txt`, `*-requirements.txt`, `Pipfile.lock`,
+  `poetry.lock`, `uv.lock`) pin the package at that one version — another pin is `unknown`, named.
+  It runs by default beside `static`. The verdict set gains `imported`. `summary.coverage_gaps` says
+  each kind of gap once, with how many findings it concerns, and names the vulnerability findings
+  that carry no package version — "not exportable to VEX (no package coordinates)".
+  `ValidationsRepo.getByFingerprint` takes the provider explicitly.
+- `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /
+  Track, the CISA SSVC Guide's Table 9): Exploitation from KEV (EPSS ≥ 0.1 approximates a public
+  PoC; below it `poc` is assumed, since nothing dev-guardian has shows that no PoC exists),
+  Automatable from the dependency provider's exposure (assumed when the surface snapshot maps another
+  tree than the finding's scan), Technical Impact from severity, and the new `mission_wellbeing`
+  parameter (default `medium`). A point with no data takes the more severe value and is listed in
+  `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
+- `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
+  optional `impact_statement`, for a finding with a vulnerability id of its own — CVE, GHSA, PYSEC, …
+  (migration 014; existing suppressions state nothing in VEX terms). The reply names those ids
+  (`vex.vulnerability_ids`), says whether `export_vex` can publish it (`vex.exportable`: not for a
+  finding with no package version), and names the other open copies in the same VEX statements, by
+  `export_vex`'s own rule (`vex.other_open_findings`, with a `warning`): `not_affected` needs a
+  justification on every copy.
+- Dependency findings record the other ids their scanner gives for the same vulnerability
+  (`vuln_aliases`: Trivy `VendorIDs`, pip-audit's OSV aliases, npm audit's GHSA and CVE ids, WPScan's
+  further CVEs; migration 014). Not part of the fingerprint.
+- **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
+  statement per vulnerability and package version of the latest usable dependency scan — named by
+  its CVE or its own GHSA/PYSEC id, with its aliases (OpenVEX `aliases`, CycloneDX `references`).
+  Each CVE row names a statement (a finding no row covers names its own); a finding is a copy in
+  every statement one of its own ids names — pip-audit's PYSEC-2026-1794 is both of pillow's
+  CVE-2023-4863 and CVE-2023-5129. Two rows are never one statement, and no statement lists as an
+  alias an id that names another one.
+  `not_affected` only from a VEX suppression on every copy (the notes name a copy without one; the
+  copies' impact statements are joined), `affected` when the dependency provider finds that version
+  reachable on a snapshot of the scanned tree, otherwise `under_investigation`; `fixed` is never
+  guessed. Packages are named by purl (the SBOM's, else built from ecosystem, name and version — a
+  `.jar` target's `group:artifact` as a Maven purl), never two statuses for one package; the product
+  by the SBOM's purl only when that SBOM describes the same tree (`generate_sbom` now records its
+  tree). Written under `.guardian/reports/vex-*`; `unknowns` names what was missing, and nothing is
+  written when no vulnerability was measured.
+
+### Changed
+
+- **BREAKING:** `validate_finding`'s `summary.counts_by_verdict` is keyed by provider
+  (`{ static: {…}, dependency: {…} }`). One flat count counted a dependency finding twice, once per
+  provider, and mixed two questions.
+- A finding is tied to a vulnerability only by its own ids — its rule id and the aliases its scanner
+  recorded — never by an id its title or description mentions (CVE-2026-4800's lodash advisory
+  mentions CVE-2021-23337). The KEV/EPSS weighting of `prioritize_findings` moves both ways.
+  Measured per finding on an npm + Gradle + PyPI project (227 findings, 3.0.0 against this change,
+  one database, 2026-09-28 — EPSS moves, so the scores are that day's):
+  - 61 findings changed their own CVE ids: 11 (all Trivy) lost a CVE their text only mentioned,
+    48 (all pip-audit) gained their aliases' CVEs where they had none, and 2 (pip-audit) both;
+  - 41 scores changed, 35 up and 6 down;
+  - `uncorrelated` went from 50 to 3.
+
+  `create_fix_pr` breaks its severity ties by KEV/EPSS the same way, so its order shifts with them.
+  A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding
+  counts as `uncorrelated` until the next scan.
 
 ## [3.0.0] - 2026-09-28
 

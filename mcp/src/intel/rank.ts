@@ -20,39 +20,38 @@
  */
 
 import type { CveIntelResult } from './types.js';
+import { findingVulnIds, isCveId } from './vulnIds.js';
 import type { Finding } from '../types.js';
 
-const CVE_ID_RE = /CVE-\d{4}-\d+/gi;
-const CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
+type CveSubject = Pick<Finding, 'tool' | 'rule_id' | 'subcategory' | 'snippet' | 'line_start' | 'vuln_aliases'>;
 
 /**
- * The CVE id(s) a `Finding` is about, best-effort given the existing data
- * model — there is no stored `finding -> cve_id` foreign key (a `Finding`
- * and its `scan_cves` rows are correlated only by scan + package, not by
- * fingerprint; see `runners/scannerParsers/*.ts`'s own comments). Reliable
- * for `tool: 'trivy'` (`rule_id` IS the CVE id, always) and for `wpscan`
- * when the vulnerability has one (`rule_id` is the first CVE, else the
- * title). Falls back to scanning `title`/`message` for an embedded
- * `CVE-YYYY-NNNN`, which additionally covers npm-audit v1 and pip-audit
- * advisories that mention one in prose.
+ * The CVE id(s) a `Finding` is about: the CVEs among its OWN vulnerability
+ * ids — its rule id and the aliases its scanner recorded
+ * (`intel/vulnIds.ts#findingVulnIds`). Trivy: the rule id (a CVE whenever
+ * one is assigned); pip-audit: the CVE among its OSV aliases; npm audit v1:
+ * the advisory's `cves`; WPScan: every CVE of the vulnerability.
  *
- * KNOWN GAP: npm-audit's v2 parser (`mapV2Advisory`) records no CVE at all
- * for a finding, even when the underlying advisory has one — its `cves[]`
- * output is only ever populated on the v1 path
- * (`runners/scannerParsers/npmAudit.ts`). Those findings are simply never
- * correlated here and never gain an exploitability boost; fixing that needs
- * a stored finding-CVE link, out of this task's scope.
+ * It used to scan the title and message for any `CVE-YYYY-NNNN` as well,
+ * which tied a finding to every CVE its description MENTIONS — and gave it
+ * that CVE's KEV/EPSS boost, SSVC exploitation and VEX statements (review of
+ * the 3.0 additions, C1). Only own ids now.
+ *
+ * A CVE id with no package behind it — a nuclei template or a DAST check
+ * named by its CVE, which `dependencyCoordinates` cannot place — still gets
+ * its KEV/EPSS boost here. That is pre-existing and kept on purpose (final
+ * review, M-b): KEV weighs the vulnerability, which such a finding is about.
+ * Only VEX needs a package version, so `suppress_finding` and
+ * `validate_finding` say such a finding is "not exportable to VEX (no
+ * package coordinates)" rather than this module ignoring it.
+ *
+ * KNOWN GAP: a row stored before migration 014 carries no aliases, so a
+ * pip-audit PYSEC finding or an npm-audit advisory from an older scan has no
+ * CVE here until the next scan records them — counted by
+ * `isUncorrelatedFinding`, never guessed from its text.
  */
-export function findingCveIds(finding: Pick<Finding, 'rule_id' | 'title' | 'message'>): string[] {
-  const ids = new Set<string>();
-  if (finding.rule_id !== undefined && CVE_ID_ONLY_RE.test(finding.rule_id)) {
-    ids.add(finding.rule_id.toUpperCase());
-  }
-  for (const text of [finding.title, finding.message]) {
-    if (text === undefined) continue;
-    for (const match of text.matchAll(CVE_ID_RE)) ids.add(match[0].toUpperCase());
-  }
-  return [...ids];
+export function findingCveIds(finding: CveSubject): string[] {
+  return findingVulnIds(finding).filter(isCveId).map((id) => id.toUpperCase());
 }
 
 /**
@@ -72,14 +71,14 @@ export const CVE_CAPABLE_TOOLS: readonly string[] = ['trivy', 'npm-audit', 'wpsc
  * advisory dev-guardian cannot yet weigh by KEV/EPSS (review round 1,
  * Important #2), not an ordinary finding that was never expected to have
  * one. The main source today: npm-audit's v2 parser (`mapV2Advisory`,
- * `runners/scannerParsers/npmAudit.ts`) records no CVE at all for a
- * finding even when the underlying advisory has one — `rule_id` is a
- * GHSA id or advisory URL instead. `prioritize_findings` and `risk_score`
+ * `runners/scannerParsers/npmAudit.ts`) — npm's report gives the advisory's
+ * GHSA id and never its CVE — and every dependency finding stored before
+ * migration 014 recorded aliases. `prioritize_findings` and `risk_score`
  * both surface a COUNT of these (never silently drop them from the
  * boost — a finding that cannot be weighted is reported as such, not
  * left unexplained).
  */
-export function isUncorrelatedFinding(finding: Pick<Finding, 'tool' | 'rule_id' | 'title' | 'message'>): boolean {
+export function isUncorrelatedFinding(finding: CveSubject): boolean {
   return CVE_CAPABLE_TOOLS.includes(finding.tool) && findingCveIds(finding).length === 0;
 }
 

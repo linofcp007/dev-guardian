@@ -198,6 +198,15 @@ export interface Finding {
    * never filed under a category.
    */
   owasp?: string[];
+  /**
+   * Other ids of the SAME vulnerability, as its scanner records them
+   * (Trivy `VendorIDs`, pip-audit's OSV `aliases`, npm audit's GHSA and
+   * CVE ids, WPScan's further CVEs) — never an id the text mentions. With
+   * the rule id, these are the finding's own vulnerability ids
+   * (`intel/vulnIds.ts`). Not part of the fingerprint or identity. Absent
+   * when the scanner gave none, and on every row stored before migration 014.
+   */
+  vuln_aliases?: string[];
 }
 
 export interface ScanRecord {
@@ -299,7 +308,33 @@ export interface Suppression {
    * had. Present on every suppression `suppress_finding` writes from now on.
    */
   project_path?: string;
+  /**
+   * Migration 014: the suppression is also a VEX statement that the product
+   * is `not_affected` by the CVE the finding names, for `vex_justification`'s
+   * reason. Absent on an ordinary suppression — which states nothing in VEX
+   * terms and is never exported as `not_affected`.
+   */
+  vex_status?: VexSuppressionStatus;
+  /** Present exactly when `vex_status` is (suppress_finding requires it). */
+  vex_justification?: OpenVexJustification;
+  vex_impact_statement?: string;
 }
+
+/** The only VEX status a suppression can carry: the others are not reasons to hide a finding. */
+export type VexSuppressionStatus = 'not_affected';
+
+/**
+ * OpenVEX's `not_affected` justification labels (OpenVEX spec v0.2.0, "Status
+ * Justifications" — the labels of CISA's VEX Status Justifications, June 2022).
+ */
+export const OPENVEX_JUSTIFICATIONS = [
+  'component_not_present',
+  'vulnerable_code_not_present',
+  'vulnerable_code_not_in_execute_path',
+  'vulnerable_code_cannot_be_controlled_by_adversary',
+  'inline_mitigations_already_exist',
+] as const;
+export type OpenVexJustification = (typeof OPENVEX_JUSTIFICATIONS)[number];
 
 export interface Baseline {
   id: number;
@@ -575,6 +610,21 @@ export interface AttackSurfaceSnapshot {
    */
   imports: { file: string; module_file: string }[];
   /**
+   * The imports that name a package rather than a project file — `express`,
+   * `lodash/merge`, `yaml`, `github.com/gin-gonic/gin` — and which files
+   * import each, project-relative POSIX like `imports`. Stdlib modules are
+   * here too; nothing tells them apart from a package by the text alone.
+   * Read by `validate_finding`'s dependency provider to decide whether a
+   * vulnerable package is imported, and whether by a file a route reaches
+   * (`surface/moduleEdges.ts#externalImports` says what is left out).
+   *
+   * ABSENT on every snapshot persisted before it was recorded — "this
+   * snapshot never looked" must not read as "nothing imports any package",
+   * so a reader checks `=== undefined` first — and on one stored in an
+   * earlier shape of this field (`surfaceRepo.ts` drops it on read).
+   */
+  external_imports?: ExternalImports;
+  /**
    * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
    * syntax error confined to one file): the routes outside the unparsed span
    * are in `routes`, the ones inside it may be missing. Present only when
@@ -583,6 +633,27 @@ export interface AttackSurfaceSnapshot {
    * snapshot persisted before this field existed.
    */
   partially_parsed?: PartialParse[];
+}
+
+/**
+ * `AttackSurfaceSnapshot.external_imports`, stored compactly: each importing
+ * path once in `files`, and per (specifier, language) the indices of the
+ * files that import it. The flat `{file, specifier, language}` list it
+ * replaced measured 783 KB of a 933 KB snapshot at 10.5k imports.
+ */
+export interface ExternalImports {
+  /** Project-relative POSIX files, each once, sorted — the index space of `packages[].files`. */
+  files: string[];
+  packages: ExternalImportEntry[];
+}
+
+export interface ExternalImportEntry {
+  specifier: string;
+  language: string;
+  /** Indices into `ExternalImports.files`, at most `MAX_FILES_PER_PACKAGE` (`surface/moduleEdges.ts`). */
+  files: number[];
+  /** How many files import it in all — more than `files.length` when the list was capped. */
+  file_count: number;
 }
 
 /** One file a Semgrep run could not fully parse, as `map_attack_surface` reports it. */

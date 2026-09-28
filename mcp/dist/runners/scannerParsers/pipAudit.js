@@ -78,6 +78,8 @@ export const pipAuditParser = {
                     file_path: filePath,
                     snippet: `${name}@${version ?? ''}`,
                     taxonomy: dependencyTaxonomy(),
+                    // OSV's own aliases — what ties PYSEC-… to its CVE and GHSA.
+                    vuln_aliases: aliases,
                 };
                 if (description !== undefined)
                     findingInput.message = description;

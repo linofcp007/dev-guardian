@@ -77,6 +77,8 @@ import './tools/createFixPr.js';
 import './tools/auditAgentConfig.js';
 // Install-time package vetting (Task 16):
 import './tools/vetPackages.js';
+// VEX export (3.0 additions, part C):
+import './tools/exportVex.js';
 
 // Resources:
 import './resources/scans.js';

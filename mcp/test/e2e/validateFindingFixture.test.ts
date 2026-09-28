@@ -44,8 +44,8 @@
  * because Semgrep's default ignore list skips those.
  */
 
-import { cpSync, existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { cpSync, existsSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -53,6 +53,7 @@ import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
+import { expandExternalImports } from '../../src/surface/moduleEdges.js';
 import { TOOLS } from '../../src/tools/index.js';
 import '../../src/tools/mapAttackSurface.js';
 import '../../src/tools/validateFinding.js';
@@ -161,7 +162,7 @@ type ValidationWithStale = FindingValidation & { stale: boolean };
 interface ValidateOk {
   ok: true;
   validations: ValidationWithStale[];
-  summary: { counts_by_verdict: Record<string, number> };
+  summary: { counts_by_verdict: Record<string, Record<string, number>> };
 }
 
 interface ValidateErr {
@@ -304,10 +305,8 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       // these two findings and these two verdicts, catching a stray third
       // verdict (e.g. `unknown`) that per-finding assertions alone would miss.
       expect(result.summary.counts_by_verdict).toEqual({
-        reachable: 1,
-        unreachable: 1,
-        unknown: 0,
-        confirmed: 0,
+        static: { reachable: 1, unreachable: 1, unknown: 0, confirmed: 0, imported: 0 },
+        dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
       });
     },
     6 * 60_000,
@@ -378,11 +377,66 @@ describe('E2E — the real chain: map_attack_surface then validate_finding', () 
       ]);
 
       expect(result.summary.counts_by_verdict).toEqual({
-        reachable: 3,
-        unreachable: 1,
-        unknown: 0,
-        confirmed: 0,
+        static: { reachable: 3, unreachable: 1, unknown: 0, confirmed: 0, imported: 0 },
+        dependency: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 },
       });
+    },
+    6 * 60_000,
+  );
+
+  it.skipIf(!SEMGREP_AVAILABLE)(
+    'answers reachable for a dependency CVE whose package a route file imports, from real Semgrep imports',
+    async () => {
+      const work = makeTempDir('guardian-validate-dep-');
+      cpSync(FIXTURE, work, { recursive: true });
+      // The lockfile the CVE comes from: node-express's code loads express 4.18.2.
+      writeFileSync(join(work, 'node-express', 'package-lock.json'), JSON.stringify({
+        lockfileVersion: 3, packages: { 'node_modules/express': { version: '4.18.2' } },
+      }));
+      const ctx = makeContext();
+
+      const surface = okResult<SurfaceResult>(
+        await tool('map_attack_surface').handler({ project_path: work, force: true }, ctx),
+      );
+      expect(surface.tools_run.map((t) => `${t.name}:${t.status}`)).toContain('semgrep:ok');
+      if (surface.snapshot_id === null) throw new Error('no snapshot persisted');
+
+      // The real snapshot records the package imports, project-relative.
+      const external = expandExternalImports(ctx.storage.surface.getById(surface.snapshot_id)?.snapshot.external_imports).entries;
+      expect(external).toContainEqual({ file: 'node-express/server.js', specifier: 'express', language: 'javascript' });
+      expect(external).toContainEqual({ file: 'py-flask/app.py', specifier: 'flask', language: 'python' });
+
+      // A Trivy CVE on express, read from the npm lockfile. server.js both
+      // declares routes and imports express, so the package is reached at 0 hops.
+      const scanId = 'e2e-deps-scan';
+      ctx.storage.scans.insert({ scan_id: scanId, scan_type: 'deps', project_path: work, tree_hash: 'e2e' });
+      ctx.storage.findings.bulkInsert([
+        {
+          scan_id: scanId,
+          fingerprint: 'e2e-express-cve',
+          tool: 'trivy',
+          rule_id: 'CVE-2024-43796',
+          severity: 'medium',
+          category: 'security',
+          subcategory: 'cve',
+          title: 'express: XSS in response.redirect()',
+          file_path: 'node-express/package-lock.json',
+          snippet: 'express@4.18.2->4.20.0',
+          fix_available: true,
+        },
+      ]);
+      ctx.storage.scans.finalize({ scan_id: scanId, status: 'completed', tools_run: [], missing_tools: [] });
+
+      const raw = await tool('validate_finding').handler(
+        { project_path: work, providers: ['dependency'] },
+        ctx,
+      );
+      const result = expectOk(raw as unknown as ValidateOk | ValidateErr);
+
+      expect(result.validations.map((v) => [v.provider, v.verdict])).toEqual([['dependency', 'reachable']]);
+      expect(result.validations[0]?.evidence[0]?.detail).toMatch(
+        /imports 'express' 4\.18\.2, per node-express\/package-lock\.json and is reachable in 0 hops/,
+      );
     },
     6 * 60_000,
   );

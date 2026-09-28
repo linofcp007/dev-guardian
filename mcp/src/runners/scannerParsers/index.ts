@@ -126,6 +126,12 @@ export function makeFinding(input: {
   snippet?: string;
   fix_available?: boolean;
   taxonomy?: { cwe?: unknown; owasp?: unknown; deriveOwasp?: boolean };
+  /**
+   * Other ids the SCANNER gives for this same vulnerability. Kept out of the
+   * fingerprint; the rule id and anything that is not a string are dropped,
+   * duplicates collapse (case-insensitively), and an empty list is absent.
+   */
+  vuln_aliases?: readonly unknown[];
 }): Finding {
   const snippet = clampSnippet(input.snippet);
   const fingerprintInput: Parameters<typeof computeFingerprint>[0] = {
@@ -159,7 +165,22 @@ export function makeFinding(input: {
     if (cwe !== undefined) finding.cwe = cwe;
     if (owasp !== undefined) finding.owasp = owasp;
   }
+  const aliases = cleanAliases(input.vuln_aliases, input.rule_id);
+  if (aliases.length > 0) finding.vuln_aliases = aliases;
   return finding;
+}
+
+function cleanAliases(raw: readonly unknown[] | undefined, ruleId: string | undefined): string[] {
+  const seen = new Set<string>(ruleId === undefined ? [] : [ruleId.trim().toUpperCase()]);
+  const out: string[] = [];
+  for (const value of raw ?? []) {
+    if (typeof value !== 'string') continue;
+    const id = value.trim();
+    if (id === '' || seen.has(id.toUpperCase())) continue;
+    seen.add(id.toUpperCase());
+    out.push(id);
+  }
+  return out;
 }
 
 /**

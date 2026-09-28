@@ -227,7 +227,10 @@ raiz nas rotas que `map_attack_surface` já mapeou.
    findings abertos — é o comportamento por omissão).
 3. Lê o veredito por finding — `reachable` / `unreachable` / `unknown` — **ao
    lado** de `coverage_gaps`, nunca sozinho: uma contagem de vereditos sem os
-   gaps ao lado não é uma resposta.
+   gaps ao lado não é uma resposta. Um CVE de dependência (npm, PyPI) tem
+   também o veredito do provider `dependency`: `reachable` (um ficheiro que
+   uma rota alcança importa o package), `imported` ou `unknown` — nunca
+   `unreachable`.
 4. Usa isto como CONTEXTO na conversa com o utilizador ("este finding não
    parece alcançável por nenhuma rota, mas é uma leitura estática — quer
    mesmo assim mantê-lo como prioridade?"), nunca como justificação
