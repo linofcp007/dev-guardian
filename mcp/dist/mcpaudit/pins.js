@@ -164,19 +164,14 @@ const CHANGED_SEVERITY = {
     resource: 'medium',
     'resource-template': 'medium',
 };
-/**
- * Compare what `listing` serves with `previous` (pin key → stored hash).
- * `auditedBefore` says whether the server was audited at all before — with
- * an empty `previous` it separates "had nothing" (everything is new) from
- * "never audited" (nothing to compare).
- */
-export function comparePins(listing, previous, auditedBefore) {
+export function comparePins(listing, previous, auditedBefore, options = {}) {
+    const complete = options.complete !== false;
     const items = new Map();
     for (const item of pinnedItems(listing))
         items.set(item.key, item);
     const pins = [...items.values()].map((i) => ({ key: i.key, hash: i.hash }));
     const firstAudit = !auditedBefore && previous.size === 0;
-    const none = { changed: [], added: [], removed: [], rehashed: [], warnings: [] };
+    const none = { changed: [], added: [], removed: [], rehashed: [], firstPinned: [], warnings: [] };
     if (firstAudit)
         return { findings: [], firstAudit, ...none, pins };
     const changed = [];
@@ -207,7 +202,7 @@ export function comparePins(listing, previous, auditedBefore) {
                 'scheme this build does not know, so it could not be compared; re-pinned');
         }
     }
-    const removed = [...previous.keys()].filter((key) => !items.has(key)).sort();
+    const removed = complete ? [...previous.keys()].filter((key) => !items.has(key)).sort() : [];
     const server = escapeInvisible(listing.serverName);
     const finding = (ruleId, severity, what, title, message) => makeFinding({
         tool: MCP_AUDIT_TOOL_NAME,
@@ -254,6 +249,7 @@ export function comparePins(listing, previous, auditedBefore) {
         added: added.map((i) => i.key),
         removed,
         rehashed,
+        firstPinned: [],
         warnings,
         pins,
     };

@@ -17,6 +17,7 @@ import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/std
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { hashConfigValue } from '../../src/agentaudit/hash.js';
+import { serverPinKey } from '../../src/mcpaudit/select.js';
 
 import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -89,8 +90,15 @@ function writeMcpJson(dir: string, servers: Record<string, unknown>): void {
   writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: servers }, null, 2), 'utf8');
 }
 
+/**
+ * Every probe spawns node, which a loaded machine (an antivirus scanning each
+ * spawn, parallel suites) can slow past the 20 s default: servers expected to
+ * answer get 60 s unless a test sets its own budget.
+ */
 async function audit(plugin: PluginContext, input: Record<string, unknown>): Promise<AuditResult> {
-  const r = (await getTool('audit_mcp_tools').handler(input, plugin)) as unknown as AuditResult | AuditError;
+  const r = (await getTool('audit_mcp_tools').handler({ timeout_ms: 60_000, ...input }, plugin)) as unknown as
+    | AuditResult
+    | AuditError;
   if (!r.ok) throw new Error(`audit failed: ${r.error.code}: ${r.error.message}`);
   return r;
 }
@@ -263,13 +271,13 @@ describe('audit_mcp_tools: rug pull between two audits', () => {
     const plugin = makePlugin();
     const projectPath = realpathSync(dir);
     const v1 = hashConfigValue({ name: 'lookup', description, inputSchema: { type: 'object' }, annotations: null });
-    plugin.storage.mcpToolPins.replaceServerPins(projectPath, '.mcp.json::mutable', [{ key: 'lookup', hash: v1 }]);
+    plugin.storage.mcpToolPins.replaceServerPins(projectPath, serverPinKey({ sourceLabel: '.mcp.json', name: 'mutable' }), [{ key: 'lookup', hash: v1 }]);
 
     const r = await audit(plugin, { project_path: dir, servers: ['mutable'] });
     expect(r.project_path).toBe(projectPath);
     expect(r.findings).toEqual([]);
     expect(r.servers[0]?.pins?.rehashed).toEqual(['lookup']);
-    expect(plugin.storage.mcpToolPins.getServerPins(projectPath, '.mcp.json::mutable').get('lookup')).toMatch(/^v2:/);
+    expect(plugin.storage.mcpToolPins.getServerPins(projectPath, serverPinKey({ sourceLabel: '.mcp.json', name: 'mutable' })).get('lookup')).toMatch(/^v2:/);
   });
 });
 
@@ -360,6 +368,77 @@ describe('audit_mcp_tools: servers that do not answer', () => {
     ]);
     expect(r.missing_tools).toContain('mcp-tool-audit:absent');
     expect(r.coverage).toBe('none');
+  });
+});
+
+/**
+ * Fix round 3, I1: `servers: ["github"]` with include_user_config started
+ * every entry named github — another project's from ~/.claude.json
+ * included, with THIS project as its cwd.
+ */
+describe('audit_mcp_tools: which entries a name starts', () => {
+  const saved = {
+    HOME: process.env['HOME'],
+    USERPROFILE: process.env['USERPROFILE'],
+    CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
+  };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  function setup(): { dir: string } {
+    const home = makeTempDir('mcp-audit-home-');
+    process.env['HOME'] = home;
+    process.env['USERPROFILE'] = home;
+    delete process.env['CLAUDE_CONFIG_DIR'];
+    const dir = makeTempDir('mcp-audit-');
+    const here = realpathSync(dir).replace(/\\/g, '/');
+    writeFileSync(
+      join(home, '.claude.json'),
+      JSON.stringify({
+        projects: {
+          [here]: { mcpServers: { github: stdio('poisoned', { env: { MARK: 'mine' } }) } },
+          '/some/other/project': { mcpServers: { github: stdio('poisoned', { env: { MARK: 'theirs' } }) } },
+        },
+      }),
+      'utf8',
+    );
+    writeMcpJson(dir, { github: stdio('poisoned', { env: { MARK: 'mcp' } }) });
+    return { dir };
+  }
+
+  it('refuses a bare name whose entries launch differently, lists this project\'s qualified names, starts nothing', async () => {
+    const { dir } = setup();
+    const r = await audit(makePlugin(), { project_path: dir, servers: ['github'], include_user_config: true });
+    expect(r.servers).toHaveLength(1);
+    expect(r.servers[0]?.status).toBe('skipped');
+    expect(r.servers[0]?.reason).toContain('.mcp.json::github');
+    expect(r.servers[0]?.reason).toContain('(project: ');
+    expect(r.servers[0]?.reason).not.toContain('/some/other/project');
+    for (const mark of ['mine', 'theirs', 'mcp']) expect(existsSync(join(dir, `probe-poisoned-${mark}.json`))).toBe(false);
+  });
+
+  it('starts exactly the entry a qualified name picks', async () => {
+    const { dir } = setup();
+    const r = await audit(makePlugin(), { project_path: dir, servers: ['.mcp.json::github'], include_user_config: true });
+    expect(r.servers.map((s) => [s.server_key, s.status])).toEqual([['.mcp.json::github', 'ok']]);
+    expect(existsSync(join(dir, 'probe-poisoned-mcp.json'))).toBe(true);
+    expect(existsSync(join(dir, 'probe-poisoned-mine.json'))).toBe(false);
+    expect(existsSync(join(dir, 'probe-poisoned-theirs.json'))).toBe(false);
+  });
+
+  it("never offers another project's entry, even by its qualified name", async () => {
+    const { dir } = setup();
+    const r = await audit(makePlugin(), {
+      project_path: dir,
+      servers: ['~/.claude.json (project: /some/other/project)::github'],
+      include_user_config: true,
+    });
+    expect(r.servers[0]?.status).toBe('skipped');
+    expect(existsSync(join(dir, 'probe-poisoned-theirs.json'))).toBe(false);
   });
 });
 

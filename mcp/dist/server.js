@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve23.call(this, root, ref);
+      let _sch = resolve24.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve23(root, ref) {
+    function resolve24(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve23(baseURI, relativeURI, options) {
+    function resolve24(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve23,
+      resolve: resolve24,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8214,15 +8214,15 @@ var require_windows = __commonJS({
       }
       return false;
     }
-    function checkStat(stat2, path8, options) {
-      if (!stat2.isSymbolicLink() && !stat2.isFile()) {
+    function checkStat(stat3, path8, options) {
+      if (!stat3.isSymbolicLink() && !stat3.isFile()) {
         return false;
       }
       return checkPathExt(path8, options);
     }
     function isexe(path8, options, cb) {
-      fs.stat(path8, function(er, stat2) {
-        cb(er, er ? false : checkStat(stat2, path8, options));
+      fs.stat(path8, function(er, stat3) {
+        cb(er, er ? false : checkStat(stat3, path8, options));
       });
     }
     function sync(path8, options) {
@@ -8238,20 +8238,20 @@ var require_mode = __commonJS({
     isexe.sync = sync;
     var fs = __require("fs");
     function isexe(path8, options, cb) {
-      fs.stat(path8, function(er, stat2) {
-        cb(er, er ? false : checkStat(stat2, options));
+      fs.stat(path8, function(er, stat3) {
+        cb(er, er ? false : checkStat(stat3, options));
       });
     }
     function sync(path8, options) {
       return checkStat(fs.statSync(path8), options);
     }
-    function checkStat(stat2, options) {
-      return stat2.isFile() && checkMode(stat2, options);
+    function checkStat(stat3, options) {
+      return stat3.isFile() && checkMode(stat3, options);
     }
-    function checkMode(stat2, options) {
-      var mod = stat2.mode;
-      var uid = stat2.uid;
-      var gid = stat2.gid;
+    function checkMode(stat3, options) {
+      var mod = stat3.mode;
+      var uid = stat3.uid;
+      var gid = stat3.gid;
       var myUid = options.uid !== void 0 ? options.uid : process.getuid && process.getuid();
       var myGid = options.gid !== void 0 ? options.gid : process.getgid && process.getgid();
       var u2 = parseInt("100", 8);
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve23, reject) {
+        return new Promise(function(resolve24, reject) {
           isexe(path8, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve23(is);
+              resolve24(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve23, reject) => {
+      const step = (i2) => new Promise((resolve24, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve23(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve24(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path8.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve23(subStep(p, i2, 0));
+        resolve24(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve23, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve24, reject) => {
         if (ii === pathExt.length)
-          return resolve23(step(i2 + 1));
+          return resolve24(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve23(p + ext);
+              return resolve24(p + ext);
           }
-          return resolve23(subStep(p, i2, ii + 1));
+          return resolve24(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -8467,10 +8467,10 @@ var require_resolveCommand = __commonJS({
       }
       return resolved;
     }
-    function resolveCommand(parsed) {
+    function resolveCommand2(parsed) {
       return resolveCommandAttempt(parsed) || resolveCommandAttempt(parsed, true);
     }
-    module.exports = resolveCommand;
+    module.exports = resolveCommand2;
   }
 });
 
@@ -8554,19 +8554,19 @@ var require_parse = __commonJS({
   "node_modules/cross-spawn/lib/parse.js"(exports, module) {
     "use strict";
     var path8 = __require("path");
-    var resolveCommand = require_resolveCommand();
+    var resolveCommand2 = require_resolveCommand();
     var escape2 = require_escape();
     var readShebang = require_readShebang();
     var isWin = process.platform === "win32";
     var isExecutableRegExp = /\.(?:com|exe)$/i;
     var isCmdShimRegExp = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/i;
     function detectShebang(parsed) {
-      parsed.file = resolveCommand(parsed);
+      parsed.file = resolveCommand2(parsed);
       const shebang = parsed.file && readShebang(parsed.file);
       if (shebang) {
         parsed.args.unshift(parsed.file);
         parsed.command = shebang;
-        return resolveCommand(parsed);
+        return resolveCommand2(parsed);
       }
       return parsed.file;
     }
@@ -8668,7 +8668,7 @@ var require_cross_spawn = __commonJS({
     var cp = __require("child_process");
     var parse8 = require_parse();
     var enoent = require_enoent();
-    function spawn3(command, args, options) {
+    function spawn4(command, args, options) {
       const parsed = parse8(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
@@ -8680,8 +8680,8 @@ var require_cross_spawn = __commonJS({
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
     }
-    module.exports = spawn3;
-    module.exports.spawn = spawn3;
+    module.exports = spawn4;
+    module.exports.spawn = spawn4;
     module.exports.sync = spawnSync2;
     module.exports._parse = parse8;
     module.exports._enoent = enoent;
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve23, reject) => {
-        Object.assign(methods, { resolve: resolve23, reject });
+      const promise = new Promise((resolve24, reject) => {
+        Object.assign(methods, { resolve: resolve24, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14293,7 +14293,7 @@ var init_iterate = __esm({
 });
 
 // node_modules/execa/lib/io/contents.js
-import { setImmediate } from "node:timers/promises";
+import { setImmediate as setImmediate2 } from "node:timers/promises";
 var getStreamOutput, logOutputAsync, resumeStream, getStreamContents2, getBufferedData, handleBufferedData;
 var init_contents2 = __esm({
   "node_modules/execa/lib/io/contents.js"() {
@@ -14359,7 +14359,7 @@ var init_contents2 = __esm({
       await logLines(linesIterable, stream, fdNumber, verboseInfo);
     };
     resumeStream = async (stream) => {
-      await setImmediate();
+      await setImmediate2();
       if (stream.readableFlowing === null) {
         stream.resume();
       }
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve23 = promise.resolve.bind(promise);
-      return { resolve: resolve23, promises };
+      const resolve24 = promise.resolve.bind(promise);
+      return { resolve: resolve24, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve23, promises }, subprocess) => {
-      resolve23();
+    waitForConcurrentStreams = async ({ resolve: resolve24, promises }, subprocess) => {
+      resolve24();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -28175,14 +28175,14 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
     });
   } else {
     const runChecks = (payload, checks2, ctx) => {
-      let isAborted2 = aborted(payload);
+      let isAborted3 = aborted(payload);
       let asyncResult;
       for (const ch of checks2) {
         if (ch._zod.def.when) {
           const shouldRun = ch._zod.def.when(payload);
           if (!shouldRun)
             continue;
-        } else if (isAborted2) {
+        } else if (isAborted3) {
           continue;
         }
         const currLen = payload.issues.length;
@@ -28196,15 +28196,15 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
             const nextLen = payload.issues.length;
             if (nextLen === currLen)
               return;
-            if (!isAborted2)
-              isAborted2 = aborted(payload, currLen);
+            if (!isAborted3)
+              isAborted3 = aborted(payload, currLen);
           });
         } else {
           const nextLen = payload.issues.length;
           if (nextLen === currLen)
             continue;
-          if (!isAborted2)
-            isAborted2 = aborted(payload, currLen);
+          if (!isAborted3)
+            isAborted3 = aborted(payload, currLen);
         }
       }
       if (asyncResult) {
@@ -35195,7 +35195,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve23) => setTimeout(resolve23, pollInterval));
+        await new Promise((resolve24) => setTimeout(resolve24, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -35212,7 +35212,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve23, reject) => {
+    return new Promise((resolve24, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35290,7 +35290,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve23(parseResult.data);
+            resolve24(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35551,12 +35551,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve23, reject) => {
+    return new Promise((resolve24, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve23, interval);
+      const timeoutId = setTimeout(resolve24, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36869,7 +36869,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve23) => setTimeout(resolve23, pollInterval));
+      await new Promise((resolve24) => setTimeout(resolve24, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37557,19 +37557,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve23) => {
+    return new Promise((resolve24) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve23();
+        resolve24();
       } else {
-        this._stdout.once("drain", resolve23);
+        this._stdout.once("drain", resolve24);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve22 } from "node:path";
+import { resolve as resolve23 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -37955,8 +37955,8 @@ function makeSourceReader(projectPath) {
     if (!isInside(root, lexical)) return null;
     try {
       const real = realpathSync.native(lexical);
-      const stat2 = statSync2(real);
-      if (!isInside(root, real) || !stat2.isFile() || stat2.size > MAX_SOURCE_BYTES) return null;
+      const stat3 = statSync2(real);
+      if (!isInside(root, real) || !stat3.isFile() || stat3.size > MAX_SOURCE_BYTES) return null;
       return readFileSync5(real, "utf8");
     } catch {
       return null;
@@ -39771,6 +39771,10 @@ var McpToolPinsRepo = class {
     this.insertPinStmt = db.prepare(`
       INSERT INTO mcp_tool_pins (project_path, server_key, tool_name, hash, updated_at) VALUES (?, ?, ?, ?, ?)
     `);
+    this.upsertPinStmt = db.prepare(`
+      INSERT INTO mcp_tool_pins (project_path, server_key, tool_name, hash, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_path, server_key, tool_name) DO UPDATE SET hash = excluded.hash, updated_at = excluded.updated_at
+    `);
     this.upsertServerStmt = db.prepare(`
       INSERT INTO mcp_server_pins (project_path, server_key, tool_count, audited_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(project_path, server_key) DO UPDATE SET
@@ -39784,6 +39788,7 @@ var McpToolPinsRepo = class {
   deletePinsStmt;
   insertPinStmt;
   upsertServerStmt;
+  upsertPinStmt;
   /** The hashes recorded for one server, keyed by item key. Empty when none. */
   getServerPins(projectPath, serverKey) {
     const out = /* @__PURE__ */ new Map();
@@ -39797,6 +39802,18 @@ var McpToolPinsRepo = class {
   /** Every pinned item key of a project, with the server that serves it. */
   listPinKeys(projectPath) {
     return this.listKeysStmt.all(projectPath);
+  }
+  /**
+   * Add or update `pins` for one server without removing any other: for a
+   * listing a budget cut short, where an item not seen may still be served.
+   */
+  upsertServerPins(projectPath, serverKey, pins) {
+    const at = nowIso();
+    const tx = this.db.transaction(() => {
+      for (const pin of pins) this.upsertPinStmt.run(projectPath, serverKey, pin.key, pin.hash, at);
+      this.upsertServerStmt.run(projectPath, serverKey, this.getServerPins(projectPath, serverKey).size, at);
+    });
+    tx();
   }
   /**
    * Replace one server's pins with `pins`, in one transaction: an item not in
@@ -42135,12 +42152,12 @@ function onDisk(projectPath, rels, fromUntracked = false) {
   const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : "");
   const out = /* @__PURE__ */ new Set();
   for (const rel2 of rels) {
-    let isFile = false;
+    let isFile2 = false;
     try {
-      isFile = lstatSync(join15(projectPath, ...rel2.split("/"))).isFile();
+      isFile2 = lstatSync(join15(projectPath, ...rel2.split("/"))).isFile();
     } catch {
     }
-    if (!isFile) continue;
+    if (!isFile2) continue;
     assertInside(rel2);
     out.add(rel2);
   }
@@ -42363,7 +42380,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve23) => this.waiting.push(resolve23));
+    await new Promise((resolve24) => this.waiting.push(resolve24));
     this.active += 1;
   }
   release() {
@@ -42477,14 +42494,14 @@ function listFilesRecursive(dir) {
 }
 function describePack(entry) {
   let isDir = false;
-  let isFile = false;
+  let isFile2 = false;
   try {
     const s = statSync7(entry);
     isDir = s.isDirectory();
-    isFile = s.isFile();
+    isFile2 = s.isFile();
   } catch {
   }
-  if (isFile) {
+  if (isFile2) {
     try {
       return `file:${entry}:${sha2563(readFileSync13(entry))}`;
     } catch {
@@ -51515,7 +51532,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve23 = (name, ecosystem, file, version2) => {
+  const resolve24 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -51582,7 +51599,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve23(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve24(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -51592,7 +51609,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve23(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve24(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -51600,10 +51617,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve23(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve24(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText3("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve23(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve24(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -51619,7 +51636,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve23(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve24(name, "dotnet", relative14(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -53003,7 +53020,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat2 = statSync11(outFile);
+  const stat3 = statSync11(outFile);
   const raw = readFileSync22(outFile, "utf8");
   const summary = summarize3(raw);
   ctx.storage.scans.insert({
@@ -53023,7 +53040,7 @@ async function handler2(input, ctx) {
       format: format2,
       produced_by: producedBy,
       file_path: outFile,
-      size_bytes: stat2.size,
+      size_bytes: stat3.size,
       components_count: summary.components_count,
       top_packages: summary.top_packages
     }
@@ -53034,12 +53051,12 @@ async function handler2(input, ctx) {
     format: format2,
     produced_by: producedBy,
     file_path: outFile,
-    size_bytes: stat2.size,
+    size_bytes: stat3.size,
     components_count: summary.components_count,
     top_packages: summary.top_packages
   };
   let inlined = false;
-  if (stat2.size <= inlineMaxBytes) {
+  if (stat3.size <= inlineMaxBytes) {
     try {
       payload["inline"] = JSON.parse(raw);
       inlined = true;
@@ -61364,13 +61381,13 @@ function collectConfigFiles(root, maxDepth) {
     for (const name of entries2) {
       if (SKIP_DIRS3.has(name)) continue;
       const abs = join56(dir, name);
-      let stat2;
+      let stat3;
       try {
-        stat2 = statSync14(abs);
+        stat3 = statSync14(abs);
       } catch {
         continue;
       }
-      if (stat2.isDirectory()) {
+      if (stat3.isDirectory()) {
         walk4(abs, depth + 1);
       } else if (TARGET_FILES.some((re) => re.test(name)) && existsSync44(abs)) {
         out.push(abs);
@@ -64393,9 +64410,9 @@ function synthesizeJavaImport(span) {
   const match = /^import\s+(static\s+)?(.+)$/.exec(trimmed);
   const path8 = match?.[2];
   if (path8 === void 0) return void 0;
-  const qualifiedName = path8.trim().replace(/\.\*$/, "");
-  if (qualifiedName.length === 0) return void 0;
-  return { $MODULE: { abstract_content: qualifiedName.replace(/\./g, " ") } };
+  const qualifiedName2 = path8.trim().replace(/\.\*$/, "");
+  if (qualifiedName2.length === 0) return void 0;
+  return { $MODULE: { abstract_content: qualifiedName2.replace(/\./g, " ") } };
 }
 function synthesizeCsharpImport(span) {
   const trimmed = span.replace(/;\s*$/, "").trim();
@@ -71355,12 +71372,13 @@ var CHANGED_SEVERITY = {
   resource: "medium",
   "resource-template": "medium"
 };
-function comparePins(listing, previous, auditedBefore) {
+function comparePins(listing, previous, auditedBefore, options = {}) {
+  const complete = options.complete !== false;
   const items = /* @__PURE__ */ new Map();
   for (const item of pinnedItems(listing)) items.set(item.key, item);
   const pins = [...items.values()].map((i2) => ({ key: i2.key, hash: i2.hash }));
   const firstAudit = !auditedBefore && previous.size === 0;
-  const none = { changed: [], added: [], removed: [], rehashed: [], warnings: [] };
+  const none = { changed: [], added: [], removed: [], rehashed: [], firstPinned: [], warnings: [] };
   if (firstAudit) return { findings: [], firstAudit, ...none, pins };
   const changed = [];
   const added = [];
@@ -71386,7 +71404,7 @@ function comparePins(listing, previous, auditedBefore) {
       );
     }
   }
-  const removed = [...previous.keys()].filter((key) => !items.has(key)).sort();
+  const removed = complete ? [...previous.keys()].filter((key) => !items.has(key)).sort() : [];
   const server = escapeInvisible(listing.serverName);
   const finding4 = (ruleId, severity, what, title, message3) => makeFinding({
     tool: MCP_AUDIT_TOOL_NAME,
@@ -71453,6 +71471,7 @@ function comparePins(listing, previous, auditedBefore) {
     added: added.map((i2) => i2.key),
     removed,
     rehashed,
+    firstPinned: [],
     warnings,
     pins
   };
@@ -73529,7 +73548,7 @@ var SSEClientTransport = class {
   }
   _startOrAuth() {
     const fetchImpl = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
-    return new Promise((resolve23, reject) => {
+    return new Promise((resolve24, reject) => {
       this._eventSource = new EventSource(this._url.href, {
         ...this._eventSourceInit,
         fetch: async (url2, init) => {
@@ -73550,7 +73569,7 @@ var SSEClientTransport = class {
       this._abortController = new AbortController();
       this._eventSource.onerror = (event) => {
         if (event.code === 401 && this._authProvider) {
-          this._authThenStart().then(resolve23, reject);
+          this._authThenStart().then(resolve24, reject);
           return;
         }
         const error2 = new SseError(event.code, event.message, event);
@@ -73572,7 +73591,7 @@ var SSEClientTransport = class {
           void this.close();
           return;
         }
-        resolve23();
+        resolve24();
       });
       this._eventSource.onmessage = (event) => {
         const messageEvent = event;
@@ -74100,6 +74119,114 @@ var StreamableHTTPClientTransport = class {
   }
 };
 
+// src/mcpaudit/launch.ts
+import { spawn as spawn2 } from "node:child_process";
+import { stat as stat2 } from "node:fs/promises";
+import { delimiter, extname as extname2, isAbsolute as isAbsolute15, resolve as resolve20 } from "node:path";
+var URL_IN_TEXT = /\b(?:https?|wss?):\/\/[^\s"'<>]+/i;
+var UNC_IN_ARG = /(?:^|=)(?:\\\\|\/\/)[^\\/\s]+[\\/]/;
+function remoteReasonOf(entry) {
+  if (entry.command === void 0) {
+    if (entry.url !== void 0) return `remote server at ${originOf(entry.url)}`;
+    return null;
+  }
+  if (isRemoteOrDeviceTarget(entry.command)) {
+    return "its command is on a network or device path (starting it contacts that host)";
+  }
+  for (const part of [entry.command, ...entry.args ?? []]) {
+    const url2 = URL_IN_TEXT.exec(part);
+    if (url2 !== null) return `its command line names ${originOf(url2[0])} (a proxy or client of a remote server)`;
+    if (UNC_IN_ARG.test(part)) return "its command line names a network path";
+  }
+  return null;
+}
+function originOf(url2) {
+  try {
+    return new URL(url2).origin;
+  } catch {
+    return "a URL";
+  }
+}
+function envValue(env, name) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+  return key === void 0 ? void 0 : env[key];
+}
+async function isFile(path8) {
+  try {
+    return (await stat2(path8)).isFile();
+  } catch {
+    return false;
+  }
+}
+function raceDeadline(p, deadline, onTimeout) {
+  let timer;
+  const timeout = new Promise((done) => {
+    timer = setTimeout(() => done(onTimeout), Math.max(0, deadline - Date.now()));
+    timer.unref();
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer !== void 0) clearTimeout(timer);
+  });
+}
+function reachableFromChild(path8, deadline) {
+  return new Promise((done) => {
+    const child = spawn2(process.execPath, ["-e", 'process.exit(require("fs").statSync(process.argv[1]).isFile() ? 0 : 1)', path8], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(false);
+    }, Math.max(0, deadline - Date.now()));
+    timer.unref();
+    child.on("error", () => {
+      clearTimeout(timer);
+      done(false);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      done(code === 0);
+    });
+  });
+}
+async function resolveCommand(command, env, cwd, deadline) {
+  if (isRemoteOrDeviceTarget(command)) {
+    const reachable = await reachableFromChild(command, deadline);
+    return reachable ? { ok: true, command } : { ok: false, reason: "its command is on a network path that could not be reached within its time budget" };
+  }
+  if (process.platform !== "win32") return { ok: true, command };
+  const exts = (envValue(env, "PATHEXT") ?? process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e !== "");
+  const withExts = (base) => extname2(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
+  let candidates2;
+  const skipped2 = [];
+  if (/[\\/]/.test(command) || isAbsolute15(command)) {
+    candidates2 = withExts(resolve20(cwd, command));
+  } else {
+    const dirs = (envValue(env, "PATH") ?? "").split(delimiter).filter((d) => d !== "");
+    candidates2 = [];
+    for (const dir of dirs) {
+      if (isRemoteOrDeviceTarget(dir)) {
+        skipped2.push(dir);
+        continue;
+      }
+      candidates2.push(...withExts(resolve20(dir, command)));
+    }
+  }
+  const search2 = (async () => {
+    for (const c3 of candidates2) if (await isFile(c3)) return c3;
+    return null;
+  })();
+  const found = await raceDeadline(search2, deadline, "timeout");
+  if (found === "timeout") return { ok: false, reason: `resolving '${command}' did not finish within its time budget` };
+  if (found === null) {
+    return {
+      ok: false,
+      reason: `could not start the server: '${command}' was not found on PATH` + (skipped2.length > 0 ? ` (network PATH entries were not searched: ${skipped2.join(", ")})` : "")
+    };
+  }
+  return { ok: true, command: found };
+}
+
 // src/mcpaudit/stdioTransport.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
 
@@ -74141,26 +74268,37 @@ function getDefaultEnvironment() {
 // src/mcpaudit/stdioTransport.ts
 init_execa();
 init_mjs();
-var MAX_READ_BUFFER_BYTES = 8 * 1024 * 1024;
+var MiB = 1024 * 1024;
+var DEFAULT_INBOUND_LIMITS = {
+  maxBytes: 32 * MiB,
+  maxMessages: 1e4,
+  maxMessageBytes: 8 * MiB
+};
 var STDERR_TAIL_CHARS = 2048;
 var TERM_GRACE_MS = 2e3;
 var KILL_GRACE_MS2 = 2e3;
+function formatBytes(n2) {
+  return n2 % MiB === 0 ? `${n2 / MiB} MiB` : `${n2} bytes`;
+}
 function probeEnvironment(entryEnv, treeToken) {
   const base = {};
   for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base[k] = v;
   return { ...base, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
 }
 var ProbeStdioTransport = class {
-  constructor(launch) {
+  constructor(launch, limits) {
     this.launch = launch;
+    this.limits = limits;
+    this.readBuffer = new ReadBuffer({ maxBufferSize: limits.maxMessageBytes });
   }
   launch;
+  limits;
   onclose;
   onerror;
   onmessage;
   child;
   done;
-  readBuffer = new ReadBuffer({ maxBufferSize: MAX_READ_BUFFER_BYTES });
+  readBuffer;
   posixGroup = process.platform !== "win32";
   treeToken = process.platform === "win32" ? randomUUID19() : null;
   removeExitHook = null;
@@ -74168,6 +74306,9 @@ var ProbeStdioTransport = class {
   exited = null;
   closing = null;
   closeNotified = false;
+  bytesIn = 0;
+  messagesIn = 0;
+  selfClosed = null;
   /** Last {@link STDERR_TAIL_CHARS} characters the server wrote to stderr. */
   get stderrTail() {
     return this.stderr;
@@ -74175,6 +74316,10 @@ var ProbeStdioTransport = class {
   /** How the process ended, once it has; null while it runs. */
   get exit() {
     return this.exited;
+  }
+  /** Why the transport closed itself (a budget, the deadline); null when it did not. */
+  get closeReason() {
+    return this.selfClosed;
   }
   async start() {
     if (this.child !== void 0) throw new Error("ProbeStdioTransport already started");
@@ -74194,11 +74339,13 @@ var ProbeStdioTransport = class {
     this.child = child;
     if (this.posixGroup) this.removeExitHook = onExit(() => signalGroup2(child.pid, "SIGKILL"));
     child.stdout?.on("data", (chunk) => {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      if (!this.admit(buf.length)) return;
+      child.stdout?.pause();
       try {
-        this.readBuffer.append(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      } catch (e) {
-        this.onerror?.(e);
-        void this.close();
+        this.readBuffer.append(buf);
+      } catch {
+        this.fail(`sent a single message larger than ${formatBytes(this.limits.maxMessageBytes)}`);
         return;
       }
       for (; ; ) {
@@ -74210,14 +74357,25 @@ var ProbeStdioTransport = class {
           continue;
         }
         if (message3 === null) break;
+        this.messagesIn += 1;
+        if (this.messagesIn > this.limits.maxMessages) {
+          this.fail(`sent more than ${this.limits.maxMessages} messages (the per-server budget)`);
+          return;
+        }
         this.onmessage?.(message3);
+        if (this.closing !== null) return;
       }
+      this.resumeLater(child.stdout);
     });
     child.stderr?.on("data", (chunk) => {
-      this.stderr = (this.stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS);
+      const text = chunk.toString();
+      if (!this.admit(Buffer.byteLength(text))) return;
+      child.stderr?.pause();
+      this.stderr = (this.stderr + text).slice(-STDERR_TAIL_CHARS);
+      this.resumeLater(child.stderr);
     });
     child.stdin?.on("error", (e) => this.onerror?.(e));
-    const spawned = new Promise((resolve23) => child.once("spawn", () => resolve23("spawned")));
+    const spawned = new Promise((resolve24) => child.once("spawn", () => resolve24("spawned")));
     this.done = child.then((result) => {
       this.exited = {
         exitCode: result.exitCode ?? null,
@@ -74232,15 +74390,40 @@ var ProbeStdioTransport = class {
       throw new Error(`could not start '${this.launch.command}': ${this.exited.spawnError}`);
     }
   }
+  /** Counts `bytes` against the budget and checks the deadline; false (and closing) when either is spent. */
+  admit(bytes) {
+    if (this.closing !== null) return false;
+    this.bytesIn += bytes;
+    if (this.bytesIn > this.limits.maxBytes) {
+      this.fail(`sent more than ${formatBytes(this.limits.maxBytes)} (the per-server budget)`);
+      return false;
+    }
+    if (Date.now() > this.limits.deadline) {
+      this.fail("was still sending when its time budget ran out");
+      return false;
+    }
+    return true;
+  }
+  /** One chunk per turn of the event loop: timers run before the next one is read. */
+  resumeLater(stream) {
+    setImmediate(() => {
+      if (this.closing === null) stream?.resume();
+    });
+  }
+  fail(reason) {
+    this.selfClosed ??= reason;
+    this.onerror?.(new Error(reason));
+    void this.close();
+  }
   send(message3) {
-    return new Promise((resolve23, reject) => {
+    return new Promise((resolve24, reject) => {
       const stdin = this.child?.stdin;
-      if (stdin === void 0 || stdin === null || this.exited !== null) {
+      if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
         reject(new Error("Not connected"));
         return;
       }
-      if (stdin.write(serializeMessage(message3))) resolve23();
-      else stdin.once("drain", () => resolve23());
+      if (stdin.write(serializeMessage(message3))) resolve24();
+      else stdin.once("drain", () => resolve24());
     });
   }
   /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
@@ -74273,6 +74456,8 @@ var ProbeStdioTransport = class {
         signalGroup2(pid, "SIGTERM");
       }
     }
+    child.stdout?.resume();
+    child.stderr?.resume();
     if (!await settlesWithin(done, TERM_GRACE_MS)) {
       if (this.treeToken === null) signalGroup2(pid, "SIGKILL");
       else child.kill("SIGKILL");
@@ -74302,8 +74487,8 @@ function signalGroup2(pid, signal) {
 }
 async function settlesWithin(p, ms) {
   let timer;
-  const timeout = new Promise((resolve23) => {
-    timer = setTimeout(() => resolve23(false), ms);
+  const timeout = new Promise((resolve24) => {
+    timer = setTimeout(() => resolve24(false), ms);
     timer.unref();
   });
   const settled = await Promise.race([p.then(() => true, () => true), timeout]);
@@ -74312,114 +74497,119 @@ async function settlesWithin(p, ms) {
 }
 
 // src/mcpaudit/probe.ts
+function isListed(o2) {
+  return o2.status === "ok" || o2.status === "partial";
+}
+function isAborted2(signal) {
+  return signal?.aborted === true;
+}
 var PLUGIN_JSON_LABEL = ".claude-plugin/plugin.json";
 var PLACEHOLDER = /\$\{[^}]*\}/g;
 var MAX_PAGES = 100;
-var MAX_ITEMS = 1e4;
-var HTTP_TYPES = /* @__PURE__ */ new Set(["http", "streamable-http", "streamablehttp", "streamable_http"]);
+var MAX_ITEMS = 1e3;
+var LIST_METHOD = {
+  tools: "tools/list",
+  prompts: "prompts/list",
+  resources: "resources/list",
+  resourceTemplates: "resources/templates/list"
+};
 async function probeServer(entry, opts) {
   const warnings = [];
+  const deadlineAt = Date.now() + opts.timeoutMs;
+  const deadline = AbortSignal.timeout(opts.timeoutMs);
+  const signal = opts.signal === void 0 ? deadline : AbortSignal.any([deadline, opts.signal]);
+  if (isAborted2(opts.signal)) return { status: "skipped", reason: "cancelled before it was started", warnings };
+  const remote = remoteReasonOf(entry);
+  if (remote !== null && !opts.allowRemote) {
+    return {
+      status: "skipped",
+      reason: `${remote}: audit_mcp_tools contacts a remote MCP server only with allow_remote: true`,
+      warnings
+    };
+  }
   const expand = placeholderExpander(entry, opts.projectPath, warnings);
-  const type = entry.type?.toLowerCase();
   let transport;
   let kind;
   let stdio = null;
-  if (entry.command !== void 0 && type !== "sse" && (type === void 0 || !HTTP_TYPES.has(type))) {
+  if (entry.command !== void 0) {
     kind = "stdio";
+    const env = stringEnv(entry.env, expand, warnings);
+    const resolved = await resolveCommand(expand(entry.command), probeEnvironment(env, null), opts.projectPath, deadlineAt);
+    if (!resolved.ok) return { status: "failed", transport: kind, reason: resolved.reason, warnings };
+    if (isAborted2(opts.signal)) return { status: "skipped", reason: "cancelled before it was started", warnings };
     const launch = {
-      command: expand(entry.command),
+      command: resolved.command,
       args: (entry.args ?? []).map(expand),
-      env: stringEnv(entry.env, expand, warnings),
+      env,
       cwd: opts.projectPath
     };
-    stdio = new ProbeStdioTransport(launch);
+    stdio = new ProbeStdioTransport(launch, { ...DEFAULT_INBOUND_LIMITS, deadline: deadlineAt });
     transport = stdio;
   } else if (entry.url !== void 0) {
-    kind = type === "sse" ? "sse" : "http";
+    kind = entry.remoteTransport ?? "http";
     let url2;
     try {
       url2 = new URL(expand(entry.url));
     } catch {
       return { status: "failed", transport: kind, reason: "the entry's url is not a valid URL", warnings };
     }
-    if (!opts.allowRemote) {
-      return {
-        status: "skipped",
-        transport: kind,
-        reason: `remote server at ${url2.origin}: audit_mcp_tools contacts a remote MCP server only with allow_remote: true`,
-        warnings
-      };
-    }
     const requestInit = { headers: stringHeaders(entry.raw["headers"], expand) };
     transport = kind === "sse" ? new SSEClientTransport(url2, { requestInit }) : new StreamableHTTPClientTransport(url2, { requestInit });
   } else {
     return { status: "failed", reason: "the entry has neither a command nor a url", warnings };
   }
-  const deadline = AbortSignal.timeout(opts.timeoutMs);
-  const signal = opts.signal === void 0 ? deadline : AbortSignal.any([deadline, opts.signal]);
   const requestOptions = () => {
-    return { signal, timeout: opts.timeoutMs, maxTotalTimeout: opts.timeoutMs };
+    const left = Math.max(1, deadlineAt - Date.now());
+    return { signal, timeout: left, maxTotalTimeout: left };
   };
   const client = new Client({ name: "dev-guardian-audit", version: opts.clientVersion }, { capabilities: {} });
   client.onerror = () => {
   };
+  const listing = { tools: [], prompts: [], resources: [], resourceTemplates: [] };
+  const stops = [];
+  let received = false;
+  let advertised = { tools: false, prompts: false, resources: false };
   let phase = "start";
+  const list2 = async (key) => {
+    phase = LIST_METHOD[key];
+    const method = LIST_METHOD[key];
+    const result = await listAll(key, (cursor) => {
+      const params = cursor === void 0 ? {} : { cursor };
+      return client.request({ method, params }, PAGE2, requestOptions()).then((page) => {
+        received = true;
+        return page;
+      });
+    }, listing[key]);
+    if (result !== null) stops.push(result);
+  };
   try {
     phase = "initialize";
     await client.connect(transport, requestOptions());
     const caps = client.getServerCapabilities() ?? {};
-    const advertised = {
+    advertised = {
       tools: caps.tools !== void 0,
       prompts: caps.prompts !== void 0,
       resources: caps.resources !== void 0
     };
-    const listing = { tools: [], prompts: [], resources: [], resourceTemplates: [] };
-    if (advertised.tools) {
-      phase = "tools/list";
-      listing.tools = await listAll(
-        "tools",
-        (cursor) => client.request({ method: "tools/list", params: cursor === void 0 ? {} : { cursor } }, PAGE2, requestOptions())
-      );
-    }
-    if (advertised.prompts) {
-      phase = "prompts/list";
-      listing.prompts = await listAll(
-        "prompts",
-        (cursor) => client.request({ method: "prompts/list", params: cursor === void 0 ? {} : { cursor } }, PAGE2, requestOptions())
-      );
-    }
+    if (advertised.tools) await list2("tools");
+    else warnings.push("the server does not advertise tools; tools/list was not called");
+    if (advertised.prompts) await list2("prompts");
     if (advertised.resources) {
-      phase = "resources/list";
-      listing.resources = await listAll(
-        "resources",
-        (cursor) => client.request(
-          { method: "resources/list", params: cursor === void 0 ? {} : { cursor } },
-          PAGE2,
-          requestOptions()
-        )
-      );
-      phase = "resources/templates/list";
+      await list2("resources");
       try {
-        listing.resourceTemplates = await listAll(
-          "resourceTemplates",
-          (cursor) => client.request(
-            { method: "resources/templates/list", params: cursor === void 0 ? {} : { cursor } },
-            PAGE2,
-            requestOptions()
-          )
-        );
+        await list2("resourceTemplates");
       } catch (e) {
-        if (signal.aborted || (stdio?.exit ?? null) !== null) throw e;
+        if (signal.aborted || (stdio?.closeReason ?? null) !== null || (stdio?.exit ?? null) !== null) throw e;
         if (!(e instanceof McpError && e.code === ErrorCode.MethodNotFound)) {
-          warnings.push(`resources/templates/list failed, templates were not read: ${String(e.message).slice(0, 200)}`);
+          warnings.push(`resources/templates/list failed, templates were not read: ${messageOf(e).slice(0, 200)}`);
         }
       }
     }
-    if (!advertised.tools) warnings.push("the server does not advertise tools; tools/list was not called");
     const info = client.getServerVersion();
     const instructions = client.getInstructions();
     return {
-      status: "ok",
+      status: stops.length === 0 ? "ok" : "partial",
+      ...stops.length === 0 ? {} : { reason: stops.join("; ") },
       transport: kind,
       ...info === void 0 ? {} : { serverInfo: { name: info.name, version: info.version } },
       ...instructions === void 0 ? {} : { instructions },
@@ -74428,8 +74618,21 @@ async function probeServer(entry, opts) {
       warnings
     };
   } catch (e) {
+    const reason = failureReason(e, phase, opts, stdio, deadline);
     await stdio?.close();
-    return { status: "failed", transport: kind, reason: failureReason(e, phase, opts, stdio, deadline), warnings };
+    if (!received) return { status: "failed", transport: kind, reason, warnings };
+    const info = client.getServerVersion();
+    const instructions = client.getInstructions();
+    return {
+      status: "partial",
+      reason: [...stops, `the listing stopped: ${reason}`].join("; "),
+      transport: kind,
+      ...info === void 0 ? {} : { serverInfo: { name: info.name, version: info.version } },
+      ...instructions === void 0 ? {} : { instructions },
+      advertised,
+      listing,
+      warnings
+    };
   } finally {
     await client.close().catch(() => {
     });
@@ -74437,38 +74640,53 @@ async function probeServer(entry, opts) {
     });
   }
 }
-async function listAll(key, page) {
-  const out = [];
+async function listAll(key, page, into) {
   const seen = /* @__PURE__ */ new Set();
   let cursor;
+  const what = LIST_METHOD[key];
   for (let i2 = 0; i2 < MAX_PAGES; i2 += 1) {
     const result = await page(cursor);
     const items = result[key];
-    if (!Array.isArray(items)) throw new Error(`${key}/list answered without a '${key}' array`);
-    out.push(...items);
-    if (out.length > MAX_ITEMS) throw new Error(`${key}/list returned more than ${MAX_ITEMS} items`);
-    const next = result.nextCursor;
-    if (typeof next !== "string" || next === "") return out;
-    if (seen.has(next)) throw new Error(`${key}/list repeated cursor ${JSON.stringify(next.slice(0, 40))}`);
+    if (!Array.isArray(items)) throw new Error(`${what} answered without a '${key}' array`);
+    for (const item of items) {
+      if (into.length >= MAX_ITEMS) {
+        return `${what} returned more than ${MAX_ITEMS} items; only the first ${MAX_ITEMS} were read`;
+      }
+      into.push(item);
+    }
+    const next = result["nextCursor"];
+    if (typeof next !== "string" || next === "") return null;
+    if (into.length >= MAX_ITEMS) {
+      return `${what} has more than ${MAX_ITEMS} items; only the first ${MAX_ITEMS} were read`;
+    }
+    if (seen.has(next)) {
+      return `${what} repeated cursor ${JSON.stringify(next.slice(0, 40))}; the listing stopped there`;
+    }
     seen.add(next);
     cursor = next;
   }
-  throw new Error(`${key}/list did not finish within ${MAX_PAGES} pages`);
+  return `${what} did not end within ${MAX_PAGES} pages; the rest was not read`;
 }
 var PAGE2 = external_exports.object({}).passthrough();
+function messageOf(e) {
+  return e instanceof Error ? e.message : String(e);
+}
 function failureReason(e, phase, opts, stdio, deadline) {
   const exit = stdio?.exit ?? null;
   const stderr = stdio?.stderrTail.trim() ?? "";
   const withStderr = (s) => stderr === "" ? s : `${s}; stderr: ${stderr.slice(-600)}`;
   if (exit?.spawnError !== void 0) return withStderr(`could not start the server: ${exit.spawnError}`);
-  if (deadline.aborted) return withStderr(`did not answer within ${opts.timeoutMs} ms (during ${phase})`);
+  const closed = stdio?.closeReason ?? null;
+  if (closed !== null) return `the server ${closed} (during ${phase})`;
   if (opts.signal?.aborted === true) return `cancelled during ${phase}`;
+  if (deadline.aborted || e instanceof McpError && e.code === ErrorCode.RequestTimeout) {
+    return withStderr(`did not answer within ${opts.timeoutMs} ms (during ${phase})`);
+  }
   if (exit !== null) {
     const how = exit.signal !== null ? `was killed by ${exit.signal}` : `exited with code ${exit.exitCode ?? "?"}`;
     return withStderr(`the server ${how} during ${phase}`);
   }
-  const message3 = e instanceof Error ? e.message : String(e);
-  return withStderr(`${phase} failed: ${message3.slice(0, 400)}`);
+  return withStderr(`${phase} failed: ${messageOf(e).slice(0, 400)}`);
 }
 function placeholderExpander(entry, projectPath, warnings) {
   const seen = /* @__PURE__ */ new Set();
@@ -74499,17 +74717,83 @@ function stringHeaders(headers, expand) {
   return out;
 }
 
+// src/mcpaudit/select.ts
+function qualifiedName(e) {
+  return `${e.sourceLabel}::${e.name}`;
+}
+function serverPinKey(e) {
+  return JSON.stringify([e.sourceLabel, e.name]);
+}
+function serverNameOfPinKey(key) {
+  try {
+    const parsed = JSON.parse(key);
+    if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[1] === "string") return parsed[1];
+  } catch {
+  }
+  return key;
+}
+function launchIdentity(e) {
+  return hashConfigValue({
+    command: e.command ?? null,
+    args: e.args ?? null,
+    env: e.env ?? null,
+    cwd: e.cwd ?? null,
+    url: e.url ?? null,
+    transport: e.remoteTransport ?? null,
+    headers: e.raw["headers"] ?? null
+  });
+}
+function planTargets(requested, entries2) {
+  const plan = [];
+  const started = /* @__PURE__ */ new Map();
+  for (const name of requested) {
+    const qualified = entries2.filter((e) => qualifiedName(e) === name);
+    let candidates2 = qualified.length > 0 ? qualified : entries2.filter((e) => e.name === name);
+    if (candidates2.length === 0) {
+      plan.push({ requested: name, kind: "missing" });
+      continue;
+    }
+    const launches = new Set(candidates2.map(launchIdentity));
+    if (launches.size > 1) {
+      plan.push({
+        requested: name,
+        kind: "refuse",
+        reason: `${candidates2.length} entries named '${name}' launch different servers: ${candidates2.map(qualifiedName).join(", ")}. Name one of them as <source>::<name>.`
+      });
+      continue;
+    }
+    candidates2 = [...candidates2];
+    const [first, ...rest] = candidates2;
+    if (first === void 0) continue;
+    const already = started.get(first);
+    if (already !== void 0) {
+      plan.push({ requested: name, kind: "duplicate", of: already });
+      continue;
+    }
+    started.set(first, name);
+    plan.push({ requested: name, kind: "start", entry: first, alsoDeclaredIn: rest.map(qualifiedName) });
+  }
+  return plan;
+}
+
 // src/tools/auditMcpTools.ts
 var DEFAULT_TIMEOUT_MS7 = 2e4;
+var DEFAULT_AUDIT_BUDGET_MS = 10 * 60 * 1e3;
+function auditBudgetMs() {
+  const raw = Number(process.env["GUARDIAN_MCP_AUDIT_BUDGET_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIT_BUDGET_MS;
+}
 var inputSchema28 = {
   project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project whose MCP configs declare the servers. Defaults to the current working directory."),
   servers: external_exports.array(external_exports.string().min(1).regex(/^[^*?]+$/, "exact server names only: no wildcards")).min(1).max(50).describe(
-    'REQUIRED. The exact MCP server entry names to start and audit, as they appear in the config (e.g. ["github", "filesystem"]). No wildcard and no default: only these are executed.'
+    'REQUIRED. The MCP servers to start and audit: an entry name as it appears in the config (e.g. ["github"]), or `<source>::<name>` (e.g. ".mcp.json::github") to pick one entry when several share a name. No wildcard and no default: only these are executed.'
   ),
   include_user_config: external_exports.boolean().optional().default(false).describe(
     "Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini). Off by default."
   ),
-  allow_remote: external_exports.boolean().optional().default(false).describe("Contact remote (http/sse) servers among the named ones. Off by default: they are skipped."),
+  allow_remote: external_exports.boolean().optional().default(false).describe(
+    "Contact servers that reach another machine: a url entry, a command on a network path, or a URL on the command line (mcp-remote and other proxies). Off by default: they are skipped."
+  ),
   timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS7).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
 };
 var tool47 = {
@@ -74517,7 +74801,7 @@ var tool47 = {
   title: "Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)",
   // Worded so this description does not trip the checks it lists: measured,
   // a literal tag block or file name here was a finding on dev-guardian itself.
-  description: "Start the MCP servers named in `servers`, list the tools, prompts and resources each one serves, and check those definitions: tool poisoning (instructions aimed at the model, IMPORTANT-tag blocks), hidden Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of name, title, description, input/output schema, annotations), prompt and resource template: a tool changed since the previous audit is a high \"rug pull\" finding (reported once, then re-pinned), a prompt or resource changed is medium; a new or removed tool or prompt is low/info. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus the entry's own env), cwd = the project; it never calls tools/call; it contacts remote servers only with allow_remote; and it kills the process tree after. Run it only for servers the user asked to audit. Names are looked up in the configs audit_agent_config reads. A name not declared, a remote server without allow_remote, or a server that fails or does not answer within timeout_ms is skipped/failed with a reason and lowers coverage \u2014 never a clean pass.",
+  description: "Start the MCP servers named in `servers` (a name, or `<source>::<name>` when several entries share it), list the tools, prompts, resources and templates each serves, and check them: instructions aimed at the model, hidden Unicode and look-alike letters, instructions to read secrets or agent config, to hide actions from the user, to send data out (a URL, an address, an image, a parameter), cross-server shadowing, base64 blobs, oversized descriptions. Pins every definition and the server instructions: a tool or the instructions changed since the previous audit is a high \"rug pull\", reported once. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the names the caller lists (no wildcard, no default), with a minimal environment plus the entry's own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url, a network-path command, a URL on the command line) only with allow_remote; it kills the process tree after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean result covers only what it chose to show this client. A name not declared or ambiguous, a remote server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing a budget cut short is skipped/failed/partial with a reason and lowers coverage, never a clean pass.",
   inputSchema: inputSchema28,
   handler: (input, ctx, callMeta) => handler44(input, ctx, callMeta)
 };
@@ -74546,7 +74830,7 @@ async function handler44(input, ctx, callMeta) {
   const includeUserConfig = inp.include_user_config === true;
   const allowRemote = inp.allow_remote === true;
   const timeoutMs = typeof inp.timeout_ms === "number" ? inp.timeout_ms : DEFAULT_TIMEOUT_MS7;
-  const collected = collectMcpEntries(readConfigSources(projectPath, includeUserConfig));
+  const collected = collectMcpEntries(readConfigSources(projectPath, includeUserConfig), { onlyProject: projectPath });
   const scanId = randomUUID20();
   ctx.storage.scans.insert({ scan_id: scanId, scan_type: "mcp_tool_audit", project_path: projectPath, tree_hash: "" });
   const run = { scanId, projectPath, names, includeUserConfig, allowRemote, timeoutMs, collected };
@@ -74570,76 +74854,117 @@ async function runAudit(ctx, run, callMeta) {
   const reports = [];
   const probed = [];
   const clientVersion = resolveVersion();
+  const budgetMs = auditBudgetMs();
+  const auditDeadline = Date.now() + budgetMs;
+  const signal = callMeta?.signal;
   for (const u2 of collected.sourcesUnreadable) {
     const runName = `${MCP_AUDIT_TOOL_NAME}:${u2.source}`;
     toolsRun.push({ name: runName, status: "failed", reason: `config not read: ${u2.reason}` });
     missingTools.push(runName);
   }
   const unreadableNote = collected.sourcesUnreadable.length === 0 ? "" : `; these config sources exist and could not be read: ${collected.sourcesUnreadable.map((u2) => `${u2.source} (${u2.reason})`).join(", ")}`;
-  for (const name of names) {
-    const entries2 = collected.entries.filter((e) => e.name === name);
-    if (entries2.length === 0) {
-      const runName = `${MCP_AUDIT_TOOL_NAME}:${name}`;
-      const reason = `not declared in any config source read (${collected.sourcesRead.join(", ") || "none found"})` + unreadableNote + (includeUserConfig ? "" : "; user-level configs were not read (include_user_config)");
-      toolsRun.push({ name: runName, status: "skipped", reason });
-      missingTools.push(runName);
-      reports.push({ name, status: "skipped", reason, tools_count: 0, prompts_count: 0, resources_count: 0 });
+  const notRun = (name, status, reason, extra = {}) => {
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${extra.server_key ?? name}`;
+    const shown = escapeInvisible(reason);
+    toolsRun.push({ name: runName, status, reason: shown });
+    missingTools.push(runName);
+    reports.push({ name, ...extra, status, reason: shown, tools_count: 0, prompts_count: 0, resources_count: 0 });
+  };
+  for (const target of planTargets(names, collected.entries)) {
+    const name = target.requested;
+    if (target.kind === "missing") {
+      notRun(
+        name,
+        "skipped",
+        `not declared in any config source read (${collected.sourcesRead.join(", ") || "none found"})` + unreadableNote + (includeUserConfig ? "" : "; user-level configs were not read (include_user_config)")
+      );
       continue;
     }
-    for (const entry of entries2) {
-      const serverKey = `${entry.sourceLabel}::${entry.name}`;
-      const runName = `${MCP_AUDIT_TOOL_NAME}:${serverKey}`;
-      const outcome = await probeServer(entry, {
-        projectPath,
-        timeoutMs,
-        allowRemote,
-        clientVersion,
-        ...callMeta?.signal === void 0 ? {} : { signal: callMeta.signal }
-      });
-      const base = {
-        name,
-        server_key: serverKey,
-        source: entry.sourceLabel,
-        ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
-        ...outcome.warnings.length > 0 ? { warnings: outcome.warnings.map(escapeInvisible) } : {}
-      };
-      if (outcome.status !== "ok") {
-        const reason = escapeInvisible(outcome.reason);
-        toolsRun.push({ name: runName, status: outcome.status, reason });
-        missingTools.push(runName);
-        reports.push({ ...base, status: outcome.status, reason, tools_count: 0, prompts_count: 0, resources_count: 0 });
-        continue;
-      }
-      const normalized = normalizeListing(outcome.listing);
-      const listing = {
-        serverKey,
-        serverName: entry.name,
-        sourceLabel: entry.sourceLabel,
-        ...outcome.instructions === void 0 ? {} : { instructions: outcome.instructions },
-        tools: normalized.tools,
-        prompts: normalized.prompts,
-        resources: normalized.resources,
-        resourceTemplates: normalized.resourceTemplates
-      };
-      const report = {
-        ...base,
-        status: "ok",
-        ...outcome.serverInfo === void 0 ? {} : {
-          server_info: {
-            name: escapeInvisible(outcome.serverInfo.name),
-            version: escapeInvisible(outcome.serverInfo.version)
-          }
-        },
-        tools_count: normalized.tools.length,
-        prompts_count: normalized.prompts.length,
-        resources_count: normalized.resources.length,
-        resource_templates_count: normalized.resourceTemplates.length,
-        ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}
-      };
-      toolsRun.push({ name: runName, status: "ok" });
-      reports.push(report);
-      probed.push({ entry, report, listing });
+    if (target.kind === "refuse") {
+      notRun(name, "skipped", target.reason);
+      continue;
     }
+    if (target.kind === "duplicate") {
+      reports.push({
+        name,
+        status: "skipped",
+        reason: `the same entry as '${escapeInvisible(target.of)}', audited once`,
+        tools_count: 0,
+        prompts_count: 0,
+        resources_count: 0
+      });
+      continue;
+    }
+    const entry = target.entry;
+    const qualified = qualifiedName(entry);
+    const base = {
+      server_key: qualified,
+      source: entry.sourceLabel,
+      ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: target.alsoDeclaredIn } : {}
+    };
+    if (signal?.aborted === true) {
+      notRun(name, "skipped", "cancelled before it was started", base);
+      continue;
+    }
+    const left = auditDeadline - Date.now();
+    if (left <= 0) {
+      notRun(name, "skipped", `the audit's overall budget of ${budgetMs} ms was used up before this server`, base);
+      continue;
+    }
+    const outcome = await probeServer(entry, {
+      projectPath,
+      timeoutMs: Math.min(timeoutMs, left),
+      allowRemote,
+      clientVersion,
+      ...signal === void 0 ? {} : { signal }
+    });
+    const withTransport = {
+      ...base,
+      ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
+      ...outcome.warnings.length > 0 ? { warnings: outcome.warnings.map(escapeInvisible) } : {}
+    };
+    if (!isListed(outcome)) {
+      notRun(name, outcome.status, outcome.reason, withTransport);
+      continue;
+    }
+    const normalized = normalizeListing(outcome.listing);
+    const listing = {
+      serverKey: serverPinKey(entry),
+      serverName: entry.name,
+      sourceLabel: entry.sourceLabel,
+      ...outcome.instructions === void 0 ? {} : { instructions: outcome.instructions },
+      tools: normalized.tools,
+      prompts: normalized.prompts,
+      resources: normalized.resources,
+      resourceTemplates: normalized.resourceTemplates
+    };
+    const partialReason = outcome.status === "partial" ? escapeInvisible(outcome.reason ?? "the listing was cut short") : void 0;
+    const report = {
+      name,
+      ...withTransport,
+      status: outcome.status,
+      ...partialReason === void 0 ? {} : { reason: partialReason },
+      ...outcome.serverInfo === void 0 ? {} : {
+        server_info: {
+          name: escapeInvisible(outcome.serverInfo.name),
+          version: escapeInvisible(outcome.serverInfo.version)
+        }
+      },
+      tools_count: normalized.tools.length,
+      prompts_count: normalized.prompts.length,
+      resources_count: normalized.resources.length,
+      resource_templates_count: normalized.resourceTemplates.length,
+      ...normalized.malformed > 0 ? { malformed_definitions: normalized.malformed } : {}
+    };
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified}`;
+    if (partialReason === void 0) {
+      toolsRun.push({ name: runName, status: "ok" });
+    } else {
+      toolsRun.push({ name: runName, status: "ok", reason: `partial: ${partialReason}` });
+      missingTools.push(runName);
+    }
+    reports.push(report);
+    probed.push({ report, listing, complete: partialReason === void 0 });
   }
   const others = probed.map((p) => ({
     serverKey: p.listing.serverKey,
@@ -74657,16 +74982,17 @@ async function runAudit(ctx, run, callMeta) {
     pinned.set(row.server_key, list2);
   }
   for (const [serverKey, toolNames] of pinned) {
-    others.push({ serverKey, serverName: serverKey.slice(serverKey.lastIndexOf("::") + 2), toolNames });
+    others.push({ serverKey, serverName: serverNameOfPinKey(serverKey), toolNames });
   }
   const findings = [];
   const newPins = [];
-  for (const { report, listing } of probed) {
+  for (const { report, listing, complete } of probed) {
     findings.push(...analyzeServerListing(listing, others));
     const comparison = comparePins(
       listing,
       ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
-      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey)
+      ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey),
+      { complete }
     );
     findings.push(...comparison.findings);
     report.pins = {
@@ -74674,15 +75000,19 @@ async function runAudit(ctx, run, callMeta) {
       changed: comparison.changed,
       added: comparison.added,
       removed: comparison.removed,
-      ...comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {}
+      ...comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {},
+      ...comparison.firstPinned.length > 0 ? { first_pinned: comparison.firstPinned } : {}
     };
     if (comparison.warnings.length > 0) report.warnings = [...report.warnings ?? [], ...comparison.warnings];
-    newPins.push({ serverKey: listing.serverKey, pins: comparison.pins });
+    newPins.push({ serverKey: listing.serverKey, pins: comparison.pins, complete });
   }
   if (findings.length > 0) {
     ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: scanId })));
   }
-  for (const { serverKey, pins } of newPins) ctx.storage.mcpToolPins.replaceServerPins(projectPath, serverKey, pins);
+  for (const { serverKey, pins, complete } of newPins) {
+    if (complete) ctx.storage.mcpToolPins.replaceServerPins(projectPath, serverKey, pins);
+    else ctx.storage.mcpToolPins.upsertServerPins(projectPath, serverKey, pins);
+  }
   const warnings = [...collected.warnings];
   const coverage = computeCoverage(toolsRun, missingTools);
   ctx.storage.scans.finalize({
@@ -74724,7 +75054,7 @@ function countBySeverity6(findings) {
 
 // src/tools/vetPackages.ts
 import { existsSync as existsSync53, statSync as statSync20 } from "node:fs";
-import { resolve as resolve21 } from "node:path";
+import { resolve as resolve22 } from "node:path";
 
 // src/hooks/bashGuard.ts
 var BASH_RULES = [
@@ -75772,7 +76102,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync8, readdirSync as readdirSync26 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname21, isAbsolute as isAbsolute15, join as join77, parse as parse6, relative as relative25, resolve as resolve20 } from "node:path";
+import { dirname as dirname21, isAbsolute as isAbsolute16, join as join77, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -75788,15 +76118,15 @@ function isPublicRegistryUrl(ecosystem, url2) {
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside4(dir, path8) {
   const rel2 = relative25(dir, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute15(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute16(rel2);
 }
 function walkRoot2(path8, ctx, under) {
-  const abs = resolve20(path8);
+  const abs = resolve21(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
   const holds = (dir2, base) => samePath2(dir2, base) || isInside4(dir2, base);
-  const project = ctx.projectDir === void 0 ? void 0 : resolve20(ctx.projectDir);
-  const home = resolve20(homeOf(ctx));
+  const project = ctx.projectDir === void 0 ? void 0 : resolve21(ctx.projectDir);
+  const home = resolve21(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside4(project, abs)) return project;
   const dir = dirname21(abs);
@@ -75841,14 +76171,14 @@ function listDir(dir, ctx) {
   }
 }
 function samePath2(a2, b) {
-  const norm = (p) => resolve20(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve21(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
   const stops = [ctx.homeDir, homedir4()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve20(ctx.projectDir);
+  let dir = resolve21(ctx.projectDir);
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath2(s, dir))) break;
     out.push(dir);
@@ -75865,7 +76195,7 @@ function envOf(ctx) {
 function homeOf(ctx) {
   return ctx.homeDir ?? homedir4();
 }
-function envValue(env, name) {
+function envValue2(env, name) {
   const v = env[name] ?? env[name.toLowerCase()];
   return v !== void 0 && v.trim() !== "" ? v.trim() : void 0;
 }
@@ -75966,10 +76296,10 @@ function npmConfigFiles(ctx) {
       if (dirname21(dir) === dir) break;
     }
   }
-  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
-  const localAppData = envValue(env, "LOCALAPPDATA") ?? join77(home, "AppData", "Local");
+  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
+  const localAppData = envValue2(env, "LOCALAPPDATA") ?? join77(home, "AppData", "Local");
   files.push(
-    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join77(home, ".npmrc"), parse: fromNpmrc },
+    { path: envValue2(env, "NPM_CONFIG_USERCONFIG") ?? join77(home, ".npmrc"), parse: fromNpmrc },
     { path: join77(home, ".yarnrc.yml"), parse: fromYarnrcYml },
     { path: join77(home, ".yarnrc"), parse: fromYarnrc },
     { path: join77(home, ".bunfig.toml"), parse: fromBunfig },
@@ -75978,9 +76308,9 @@ function npmConfigFiles(ctx) {
     { path: join77(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
     { path: join77(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
-  const globalConfig2 = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
+  const globalConfig2 = envValue2(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "npm") : dirname21(dirname21(ctx.nodeExecPath ?? process.execPath)));
+  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join77(envValue2(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "npm") : dirname21(dirname21(ctx.nodeExecPath ?? process.execPath)));
   files.push({ path: join77(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
@@ -76122,23 +76452,23 @@ function pypiRegistry(name, ctx) {
   const home = homeOf(ctx);
   const etc = ctx.etcDir ?? "/etc";
   const confs = [];
-  const explicit = envValue(env, "PIP_CONFIG_FILE");
+  const explicit = envValue2(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
+  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join77(home, ".config");
   confs.push(
     join77(xdg, "pip", "pip.conf"),
     join77(home, ".pip", "pip.conf"),
     join77(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
+  const appdata = envValue2(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
   confs.push(join77(appdata, "pip", "pip.ini"), join77(home, "pip", "pip.ini"));
-  for (const prefix of [envValue(env, "VIRTUAL_ENV"), envValue(env, "CONDA_PREFIX")]) {
+  for (const prefix of [envValue2(env, "VIRTUAL_ENV"), envValue2(env, "CONDA_PREFIX")]) {
     if (prefix !== void 0) confs.push(join77(prefix, "pip.conf"), join77(prefix, "pip.ini"));
   }
   confs.push(join77(etc, "pip.conf"), join77(etc, "xdg", "pip", "pip.conf"));
   confs.push(join77(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join77(d, "pip", "pip.conf"));
-  const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
+  for (const d of (envValue2(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join77(d, "pip", "pip.conf"));
+  const programData = envValue2(env, "ProgramData") ?? envValue2(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join77(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
     const text = read(path8, ctx);
@@ -76146,7 +76476,7 @@ function pypiRegistry(name, ctx) {
     if (url2 !== void 0) return { kind: "registry", source: path8, url: url2 };
   }
   const uvConfs = [];
-  const uvExplicit = envValue(env, "UV_CONFIG_FILE");
+  const uvExplicit = envValue2(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
   uvConfs.push(join77(xdg, "uv", "uv.toml"), join77(appdata, "uv", "uv.toml"), join77(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
@@ -76190,8 +76520,8 @@ function composerRegistry(ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const composerHome = envValue(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join77(composerHome, "config.json")] : [join77(home, ".composer", "config.json"), join77(home, ".config", "composer", "config.json"), join77(envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const composerHome = envValue2(env, "COMPOSER_HOME");
+  const globals = composerHome !== void 0 ? [join77(composerHome, "config.json")] : [join77(home, ".composer", "config.json"), join77(home, ".config", "composer", "config.json"), join77(envValue2(env, "APPDATA") ?? join77(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path8 of globals) if (hasRepositories(read(path8, ctx))) return { kind: "registry", source: path8 };
   return null;
 }
@@ -76213,9 +76543,9 @@ function isLocalFolderSource(source) {
 }
 function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
-  const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
+  const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue2(env, name) ?? whole);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve20(dirname21(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve21(dirname21(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -76238,7 +76568,7 @@ function nugetRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve20(ctx.projectDir);
+    let dir = resolve21(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
@@ -76249,7 +76579,7 @@ function nugetRegistry(name, ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
+  const appdata = envValue2(env, "APPDATA") ?? join77(home, "AppData", "Roaming");
   for (const dir of [join77(appdata, "NuGet"), join77(home, ".nuget", "NuGet"), join77(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
@@ -76259,7 +76589,7 @@ function nugetRegistry(name, ctx) {
     join77(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
     join77(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
-  const programFilesX86 = envValue(env, "ProgramFiles(x86)");
+  const programFilesX86 = envValue2(env, "ProgramFiles(x86)");
   if (programFilesX86 !== void 0) machineDirs.push(join77(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
@@ -77111,7 +77441,7 @@ async function handler45(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve21(inp.project_path);
+    projectDir = resolve22(inp.project_path);
     if (!existsSync53(projectDir) || !statSync20(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
@@ -77580,7 +77910,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve22(process.cwd());
+  const projectPath = resolve23(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

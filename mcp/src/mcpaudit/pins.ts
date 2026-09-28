@@ -189,6 +189,8 @@ export interface PinComparison {
   removed: string[];
   /** Stored under an older scheme, unchanged by that scheme's recipe, re-pinned without a finding. */
   rehashed: string[];
+  /** Items of a kind the previous audit did not pin yet: recorded, not reported as added. */
+  firstPinned: string[];
   warnings: string[];
   /** What to store for this server now. */
   pins: McpPin[];
@@ -215,17 +217,28 @@ const CHANGED_SEVERITY: Record<PinItemKind, Severity> = {
  * an empty `previous` it separates "had nothing" (everything is new) from
  * "never audited" (nothing to compare).
  */
+export interface CompareOptions {
+  /**
+   * False when the listing was cut short (a budget): nothing is reported
+   * removed, and the pins returned are only what was seen, to be ADDED to
+   * the stored ones.
+   */
+  complete?: boolean;
+}
+
 export function comparePins(
   listing: ServerListing,
   previous: ReadonlyMap<string, string>,
   auditedBefore: boolean,
+  options: CompareOptions = {},
 ): PinComparison {
+  const complete = options.complete !== false;
   const items = new Map<string, PinnedItem>();
   for (const item of pinnedItems(listing)) items.set(item.key, item);
   const pins = [...items.values()].map((i) => ({ key: i.key, hash: i.hash }));
 
   const firstAudit = !auditedBefore && previous.size === 0;
-  const none = { changed: [], added: [], removed: [], rehashed: [], warnings: [] };
+  const none = { changed: [], added: [], removed: [], rehashed: [], firstPinned: [], warnings: [] };
   if (firstAudit) return { findings: [], firstAudit, ...none, pins };
 
   const changed: PinnedItem[] = [];
@@ -253,7 +266,7 @@ export function comparePins(
       );
     }
   }
-  const removed = [...previous.keys()].filter((key) => !items.has(key)).sort();
+  const removed = complete ? [...previous.keys()].filter((key) => !items.has(key)).sort() : [];
 
   const server = escapeInvisible(listing.serverName);
   const finding = (ruleId: string, severity: Severity, what: string, title: string, message: string): Finding =>
@@ -332,6 +345,7 @@ export function comparePins(
     added: added.map((i) => i.key),
     removed,
     rehashed,
+    firstPinned: [],
     warnings,
     pins,
   };

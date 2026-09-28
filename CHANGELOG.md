@@ -36,6 +36,19 @@ version bump.
   (`hooks/configFile.ts`). A config that exists and was not read — refused, too large, or not valid
   JSON — is listed in `sources_unreadable`, is a failed `tools_run` pass, and lowers `coverage`
   (new in `audit_agent_config`'s response); a directory at a config path used to read as missing.
+- `audit_mcp_tools` kept no time on Windows against a server flooding stdout (the event loop starved;
+  `timeout_ms` never fired) or with a command on a UNC path (the process blocked synchronously, and
+  contacted SMB without `allow_remote`). The transport now reads one chunk per event-loop turn,
+  checks the deadline on every chunk and closes itself past a 32 MiB / 10 000-message / 8 MiB-line
+  budget; Windows commands are resolved with async `stat` over local `PATH` entries only, and a UNC
+  command is remote.
+- `allow_remote` now also gates `mcp-remote`-style proxies (an `http(s)`/`ws(s)` URL on the command
+  line), UNC commands and UNC arguments. A name selects entries exactly: `<source>::<name>` picks one;
+  a bare name whose entries launch different servers is refused with the qualified names; another
+  project's entries in `.claude.json` are never started. Lists stop at 1000 items or 100 pages, or at
+  a repeated cursor, as a named `partial`; every failure says what stopped it; cancelling stops
+  launching; the whole audit has a budget (`GUARDIAN_MCP_AUDIT_BUDGET_MS`, 10 min). Pins are keyed
+  by `[source, name]`, which no two entries share.
 
 ## [3.0.0] - 2026-09-28
 

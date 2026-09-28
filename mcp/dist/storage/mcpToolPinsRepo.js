@@ -19,6 +19,7 @@ export class McpToolPinsRepo {
     deletePinsStmt;
     insertPinStmt;
     upsertServerStmt;
+    upsertPinStmt;
     constructor(db) {
         this.db = db;
         this.getPinsStmt = db.prepare(`
@@ -35,6 +36,10 @@ export class McpToolPinsRepo {
     `);
         this.insertPinStmt = db.prepare(`
       INSERT INTO mcp_tool_pins (project_path, server_key, tool_name, hash, updated_at) VALUES (?, ?, ?, ?, ?)
+    `);
+        this.upsertPinStmt = db.prepare(`
+      INSERT INTO mcp_tool_pins (project_path, server_key, tool_name, hash, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_path, server_key, tool_name) DO UPDATE SET hash = excluded.hash, updated_at = excluded.updated_at
     `);
         this.upsertServerStmt = db.prepare(`
       INSERT INTO mcp_server_pins (project_path, server_key, tool_count, audited_at) VALUES (?, ?, ?, ?)
@@ -56,6 +61,19 @@ export class McpToolPinsRepo {
     /** Every pinned item key of a project, with the server that serves it. */
     listPinKeys(projectPath) {
         return this.listKeysStmt.all(projectPath);
+    }
+    /**
+     * Add or update `pins` for one server without removing any other: for a
+     * listing a budget cut short, where an item not seen may still be served.
+     */
+    upsertServerPins(projectPath, serverKey, pins) {
+        const at = nowIso();
+        const tx = this.db.transaction(() => {
+            for (const pin of pins)
+                this.upsertPinStmt.run(projectPath, serverKey, pin.key, pin.hash, at);
+            this.upsertServerStmt.run(projectPath, serverKey, this.getServerPins(projectPath, serverKey).size, at);
+        });
+        tx();
     }
     /**
      * Replace one server's pins with `pins`, in one transaction: an item not in
