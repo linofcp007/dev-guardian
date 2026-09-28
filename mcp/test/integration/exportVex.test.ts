@@ -211,6 +211,37 @@ describe('export_vex', () => {
     expect(r.note).toMatch(/0 CVE/);
   });
 
+  it('never writes the absolute project path into the document, even when the SBOM names the product by it', async () => {
+    // Syft (and Trivy fs) name a directory source's product by the path they
+    // were given — absolute here, as generate_sbom passes it. A VEX document
+    // is made to be shared; the local directory layout is not the product.
+    seedDepsScan();
+    const file = join(projectPath, 'sbom.cdx.json');
+    writeFileSync(file, JSON.stringify({
+      bomFormat: 'CycloneDX',
+      specVersion: '1.6',
+      metadata: { component: { type: 'file', name: projectPath } },
+      components: [{ type: 'library', name: 'lodash', version: '4.17.20', purl: 'pkg:npm/lodash@4.17.20' }],
+    }));
+    ctx.storage.scans.insert({ scan_id: 'sbom-abs', scan_type: 'sbom', project_path: projectPath, tree_hash: '' });
+    ctx.storage.scans.finalize({
+      scan_id: 'sbom-abs', status: 'completed', tools_run: [{ name: 'syft', status: 'ok' }], missing_tools: [],
+      meta: { format: 'cyclonedx-json', file_path: file },
+    });
+
+    for (const format of ['openvex', 'cyclonedx']) {
+      const r = await exportVex({ format });
+      if (r.file_path === null) throw new Error('no document written');
+      const text = readFileSync(r.file_path, 'utf8');
+      expect(text).not.toContain(JSON.stringify(projectPath).slice(1, -1));
+      expect(text).not.toContain(projectPath);
+    }
+    const cdx = await exportVex({ format: 'cyclonedx' });
+    if (cdx.file_path === null) throw new Error('no document written');
+    const doc = JSON.parse(readFileSync(cdx.file_path, 'utf8')) as { metadata: { component: { name: string } } };
+    expect(doc.metadata.component.name).toBe(basename(projectPath));
+  });
+
   it('names a surface snapshot of a different tree than the dependency scan', async () => {
     seedDepsScan('tree-deps');
     seedSurface('tree-surface');

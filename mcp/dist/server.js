@@ -64457,10 +64457,10 @@ function buildResolutionIndex(projectFiles) {
   const byPosixPath = /* @__PURE__ */ new Map();
   const goPackages = /* @__PURE__ */ new Map();
   for (const file of projectFiles) {
-    const posix = toPosix2(file);
-    byPosixPath.set(posix, file);
-    if (!posix.endsWith(".go")) continue;
-    const dir = dirOf(posix);
+    const posix2 = toPosix2(file);
+    byPosixPath.set(posix2, file);
+    if (!posix2.endsWith(".go")) continue;
+    const dir = dirOf(posix2);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file]);
@@ -64479,11 +64479,11 @@ function toPosix2(path8) {
   return path8.replace(/\\/g, "/");
 }
 function dirOf(file) {
-  const posix = toPosix2(file);
-  const parts = posix.split("/");
+  const posix2 = toPosix2(file);
+  const parts = posix2.split("/");
   parts.pop();
   const dir = parts.join("/");
-  return dir === "" && posix.startsWith("/") ? "/" : dir;
+  return dir === "" && posix2.startsWith("/") ? "/" : dir;
 }
 function joinAndNormalize(dir, tail) {
   const absolute = dir.startsWith("/");
@@ -69236,8 +69236,8 @@ function samePathKey(path8) {
   } catch {
     real = resolve17(path8);
   }
-  const posix = real.replace(/\\/g, "/");
-  return process.platform === "win32" ? posix.toLowerCase() : posix;
+  const posix2 = real.replace(/\\/g, "/");
+  return process.platform === "win32" ? posix2.toLowerCase() : posix2;
 }
 function parseWorktreeList(porcelain) {
   const entries2 = [];
@@ -73298,7 +73298,7 @@ async function handler44(input, _ctx, callMeta) {
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
 import { existsSync as existsSync55, readFileSync as readFileSync42, writeFileSync as writeFileSync20 } from "node:fs";
-import { basename as basename9, join as join77 } from "node:path";
+import { basename as basename9, join as join77, posix, win32 } from "node:path";
 
 // src/vex/render.ts
 var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
@@ -73771,11 +73771,14 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
 }
 function productOf(projectPath, sbom) {
   const directory = basename9(projectPath);
+  const sbomName = sbom?.product_name ?? null;
+  const name = sbomName === null ? directory : isAbsolutePath(sbomName) ? win32.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;
-  if (productPurl !== null) {
-    return { id: productPurl, name: sbom?.product_name ?? directory, source: "sbom" };
-  }
-  return { id: `pkg:generic/${encodeURIComponent(directory)}`, name: sbom?.product_name ?? directory, source: "directory" };
+  if (productPurl !== null) return { id: productPurl, name, source: "sbom" };
+  return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: "directory" };
+}
+function isAbsolutePath(name) {
+  return posix.isAbsolute(name) || win32.isAbsolute(name);
 }
 
 // src/resources/scans.ts

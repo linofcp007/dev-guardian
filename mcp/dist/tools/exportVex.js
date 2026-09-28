@@ -30,7 +30,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, posix, win32 } from 'node:path';
 import { z } from 'zod';
 import { findLatestUsable } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -263,13 +263,23 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
  * The product the statements are about: the SBOM's own product purl, else a
  * generic purl built from the project directory's name — an IRI OpenVEX
  * accepts, and one that says no more than is known.
+ *
+ * The name is never a path. Syft and Trivy name a directory source's product
+ * by the path they were given, which `generate_sbom` passes absolute: copied
+ * into a document made to be shared, it published the local directory
+ * layout (`C:\Users\<name>\…`). An absolute name is cut to its last segment.
  */
 function productOf(projectPath, sbom) {
     const directory = basename(projectPath);
+    const sbomName = sbom?.product_name ?? null;
+    const name = sbomName === null ? directory : isAbsolutePath(sbomName) ? win32.basename(sbomName) || directory : sbomName;
     const productPurl = sbom?.product_purl ?? null;
-    if (productPurl !== null) {
-        return { id: productPurl, name: sbom?.product_name ?? directory, source: 'sbom' };
-    }
-    return { id: `pkg:generic/${encodeURIComponent(directory)}`, name: sbom?.product_name ?? directory, source: 'directory' };
+    if (productPurl !== null)
+        return { id: productPurl, name, source: 'sbom' };
+    return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: 'directory' };
+}
+/** Absolute on either platform — the SBOM may have been written on the other one. */
+function isAbsolutePath(name) {
+    return posix.isAbsolute(name) || win32.isAbsolute(name);
 }
 //# sourceMappingURL=exportVex.js.map
