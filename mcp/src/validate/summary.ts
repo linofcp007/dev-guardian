@@ -66,6 +66,13 @@ export interface SummaryInput {
    * Default: the number of distinct fingerprints among `validations`.
    */
   findingsSelected?: number;
+  /**
+   * Selected findings with a vulnerability id of their own (CVE, GHSA, …)
+   * but no package coordinates — a nuclei template named by its CVE, say:
+   * no dependency verdict, and nothing `export_vex` can state (final review,
+   * M-b). Each with its own ids, rule id first.
+   */
+  withoutCoordinates?: ReadonlyArray<{ fingerprint: string; ids: readonly string[] }>;
 }
 
 export function buildSummary(input: SummaryInput): Record<string, unknown> {
@@ -270,6 +277,17 @@ function collectGaps(
       `no completed scan_dast run was found for this project among the ${input.dast.scansSearched} ` +
         'most recent scans, so no reaching route could be cross-referenced as confirmed ' +
         'anonymously exposed — that is a missing input, not evidence that nothing is exposed',
+    );
+  }
+  const uncoordinated = input.withoutCoordinates ?? [];
+  if (uncoordinated.length > 0) {
+    const ids = [...new Set(uncoordinated.flatMap((f) => f.ids.slice(0, 1)))];
+    const shown = `${ids.slice(0, 3).join(', ')}${ids.length > 3 ? `, … ${ids.length - 3} more` : ''}`;
+    gaps.add(
+      `${uncoordinated.length} finding${uncoordinated.length === 1 ? '' : 's'} with a vulnerability id of ` +
+        `${uncoordinated.length === 1 ? 'its' : 'their'} own (${shown}) name${uncoordinated.length === 1 ? 's' : ''} ` +
+        "no package version: the 'dependency' provider does not apply, and " +
+        `${uncoordinated.length === 1 ? 'it is' : 'they are'} not exportable to VEX (no package coordinates)`,
     );
   }
   if (providersRun.includes('dependency') && input.persisted.snapshot.external_imports === undefined) {

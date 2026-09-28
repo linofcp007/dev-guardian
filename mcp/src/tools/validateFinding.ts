@@ -44,7 +44,9 @@
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
+import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
@@ -273,6 +275,10 @@ async function handler(
       now: Date.now(),
       providersRun,
       findingsSelected: selected.length,
+      withoutCoordinates: selected.flatMap((f) => {
+        const ids = findingVulnIds(f);
+        return ids.length > 0 && dependencyCoordinates(f) === null ? [{ fingerprint: f.fingerprint, ids }] : [];
+      }),
     }),
     ...(selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {}),
     // Newer scans the open set passed over because their scanners did not

@@ -31,6 +31,14 @@ import { findingVulnIds, isCveId } from './vulnIds.js';
  * that CVE's KEV/EPSS boost, SSVC exploitation and VEX statements (review of
  * the 3.0 additions, C1). Only own ids now.
  *
+ * A CVE id with no package behind it — a nuclei template or a DAST check
+ * named by its CVE, which `dependencyCoordinates` cannot place — still gets
+ * its KEV/EPSS boost here. That is pre-existing and kept on purpose (final
+ * review, M-b): KEV weighs the vulnerability, which such a finding is about.
+ * Only VEX needs a package version, so `suppress_finding` and
+ * `validate_finding` say such a finding is "not exportable to VEX (no
+ * package coordinates)" rather than this module ignoring it.
+ *
  * KNOWN GAP: a row stored before migration 014 carries no aliases, so a
  * pip-audit PYSEC finding or an npm-audit advisory from an older scan has no
  * CVE here until the next scan records them — counted by

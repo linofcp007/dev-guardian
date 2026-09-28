@@ -54391,7 +54391,7 @@ var inputSchema5 = {
 var tool11 = {
   name: "suppress_finding",
   title: "Suppress finding",
-  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id \u2014 never one its text mentions), vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes.",
+  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id \u2014 never one its text mentions), vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes \u2014 only for a finding that names a package version (`vex.exportable`), and as not_affected only once every copy of the vulnerability has one: the reply names the other open copies (`vex.other_open_findings`, `warning`).",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
@@ -54447,18 +54447,55 @@ async function handler8(input, ctx) {
       ...vex.impact_statement !== void 0 ? { vex_impact_statement: vex.impact_statement } : {}
     } : {}
   });
+  if (vex === null) {
+    return {
+      ok: true,
+      suppression_id: id,
+      finding_fingerprint: inp.finding_fingerprint,
+      // Null: this project's stored row for this fingerprint has no identity
+      // (written before schema 7, or by a tool that computes none), so the
+      // suppression matches it by fingerprint only and lapses if lines shift.
+      finding_identity: identity3 ?? null,
+      expires_at: inp.expires_at ?? null,
+      // Null for an ordinary suppression: it states nothing in VEX terms.
+      vex: null
+    };
+  }
+  const exportable = dependencyCoordinates(located.finding) !== null;
+  const others = otherOpenCopies(ctx, projectPath, inp.finding_fingerprint, vulnIds);
+  const warning = others.length === 0 ? null : `${others.length} other open finding(s) share ${others.length === 1 ? "this vulnerability id" : "these vulnerability ids"}: ${others.slice(0, MAX_NAMED_COPIES).map((o2) => `${o2.file_path ?? "(no file)"} [${o2.fingerprint.slice(0, 12)}]`).join(", ")}${others.length > MAX_NAMED_COPIES ? ` and ${others.length - MAX_NAMED_COPIES} more` : ""}. export_vex states not_affected only when every copy of the vulnerability in that package version carries a VEX justification \u2014 suppress those with vex_status too, or it stays under_investigation.`;
   return {
     ok: true,
     suppression_id: id,
     finding_fingerprint: inp.finding_fingerprint,
-    // Null: this project's stored row for this fingerprint has no identity
-    // (written before schema 7, or by a tool that computes none), so the
-    // suppression matches it by fingerprint only and lapses if lines shift.
     finding_identity: identity3 ?? null,
     expires_at: inp.expires_at ?? null,
-    // Null for an ordinary suppression: it states nothing in VEX terms.
-    vex: vex === null ? null : { ...vex, vulnerability_ids: vulnIds }
+    vex: {
+      ...vex,
+      vulnerability_ids: vulnIds,
+      exportable,
+      ...exportable ? {} : {
+        note: "not exportable to VEX (no package coordinates): export_vex states a vulnerability per package version, and this finding names none. The suppression is recorded and hides it."
+      },
+      other_open_findings: others.slice(0, MAX_LISTED_COPIES)
+    },
+    ...warning !== null ? { warning } : {}
   };
+}
+var MAX_NAMED_COPIES = 5;
+var MAX_LISTED_COPIES = 50;
+function otherOpenCopies(ctx, projectPath, fingerprint, vulnIds) {
+  const keys = new Set(vulnIds.map(vulnIdKey));
+  return openSetForProject(ctx.storage, projectPath).findings.filter((f) => f.fingerprint !== fingerprint && findingVulnIds(f).some((id) => keys.has(vulnIdKey(id)))).map((f) => {
+    const coordinates = dependencyCoordinates(f);
+    return {
+      fingerprint: f.fingerprint,
+      tool: f.tool,
+      rule_id: f.rule_id ?? null,
+      file_path: f.file_path ?? null,
+      package: coordinates === null ? null : `${coordinates.name}@${coordinates.version}`
+    };
+  });
 }
 function vexArgumentProblem(inp) {
   if (inp.vex_status !== void 0 && inp.justification === void 0) {
@@ -68556,6 +68593,14 @@ function collectGaps(input, stale, providersRun) {
       `no completed scan_dast run was found for this project among the ${input.dast.scansSearched} most recent scans, so no reaching route could be cross-referenced as confirmed anonymously exposed \u2014 that is a missing input, not evidence that nothing is exposed`
     );
   }
+  const uncoordinated = input.withoutCoordinates ?? [];
+  if (uncoordinated.length > 0) {
+    const ids2 = [...new Set(uncoordinated.flatMap((f) => f.ids.slice(0, 1)))];
+    const shown = `${ids2.slice(0, 3).join(", ")}${ids2.length > 3 ? `, \u2026 ${ids2.length - 3} more` : ""}`;
+    gaps.add(
+      `${uncoordinated.length} finding${uncoordinated.length === 1 ? "" : "s"} with a vulnerability id of ${uncoordinated.length === 1 ? "its" : "their"} own (${shown}) name${uncoordinated.length === 1 ? "s" : ""} no package version: the 'dependency' provider does not apply, and ${uncoordinated.length === 1 ? "it is" : "they are"} not exportable to VEX (no package coordinates)`
+    );
+  }
   if (providersRun.includes("dependency") && input.persisted.snapshot.external_imports === void 0) {
     gaps.add(
       "the surface snapshot was mapped before third-party imports were recorded, so the 'dependency' provider could match no package \u2014 re-run map_attack_surface with force: true"
@@ -68688,7 +68733,11 @@ async function handler41(input, ctx) {
       workingTreeHash,
       now: Date.now(),
       providersRun,
-      findingsSelected: selected.length
+      findingsSelected: selected.length,
+      withoutCoordinates: selected.flatMap((f) => {
+        const ids2 = findingVulnIds(f);
+        return ids2.length > 0 && dependencyCoordinates(f) === null ? [{ fingerprint: f.fingerprint, ids: ids2 }] : [];
+      })
     }),
     ...selected.length === 0 ? { note: NO_OPEN_FINDINGS_NOTE } : {},
     // Newer scans the open set passed over because their scanners did not
@@ -74190,10 +74239,10 @@ function joinImpacts(values) {
   const more = distinct.length - MAX_IMPACTS;
   return more > 0 ? `${shown}; and ${more} more on other copies of the finding` : shown;
 }
-var MAX_NAMED_COPIES = 5;
+var MAX_NAMED_COPIES2 = 5;
 function nameCopies(findings) {
-  const named = findings.slice(0, MAX_NAMED_COPIES).map((f) => `${f.file_path ?? "(no file)"} [${f.fingerprint.slice(0, 12)}]`).join(", ");
-  const more = findings.length - MAX_NAMED_COPIES;
+  const named = findings.slice(0, MAX_NAMED_COPIES2).map((f) => `${f.file_path ?? "(no file)"} [${f.fingerprint.slice(0, 12)}]`).join(", ");
+  const more = findings.length - MAX_NAMED_COPIES2;
   return more > 0 ? `${named} and ${more} more` : named;
 }
 function assess(subjects, fallback, index) {

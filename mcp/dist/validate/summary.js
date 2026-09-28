@@ -205,6 +205,15 @@ function collectGaps(input, stale, providersRun) {
             'most recent scans, so no reaching route could be cross-referenced as confirmed ' +
             'anonymously exposed — that is a missing input, not evidence that nothing is exposed');
     }
+    const uncoordinated = input.withoutCoordinates ?? [];
+    if (uncoordinated.length > 0) {
+        const ids = [...new Set(uncoordinated.flatMap((f) => f.ids.slice(0, 1)))];
+        const shown = `${ids.slice(0, 3).join(', ')}${ids.length > 3 ? `, … ${ids.length - 3} more` : ''}`;
+        gaps.add(`${uncoordinated.length} finding${uncoordinated.length === 1 ? '' : 's'} with a vulnerability id of ` +
+            `${uncoordinated.length === 1 ? 'its' : 'their'} own (${shown}) name${uncoordinated.length === 1 ? 's' : ''} ` +
+            "no package version: the 'dependency' provider does not apply, and " +
+            `${uncoordinated.length === 1 ? 'it is' : 'they are'} not exportable to VEX (no package coordinates)`);
+    }
     if (providersRun.includes('dependency') && input.persisted.snapshot.external_imports === undefined) {
         gaps.add('the surface snapshot was mapped before third-party imports were recorded, so the ' +
             "'dependency' provider could match no package — re-run map_attack_surface with force: true");

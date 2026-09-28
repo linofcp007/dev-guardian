@@ -32,6 +32,10 @@ const SAST_FP = 'b'.repeat(64);
 const PYSEC_FP = 'c'.repeat(64);
 /** A GHSA-only Trivy finding (no CVE assigned) whose description mentions a CVE. */
 const GHSA_FP = 'd'.repeat(64);
+/** A nuclei template named by its CVE: a vulnerability id, but no package coordinates. */
+const NUCLEI_FP = 'e'.repeat(64);
+/** A second copy of the lodash CVE, in another lockfile. */
+const COPY_FP = 'f'.repeat(64);
 
 beforeEach(() => {
   const db = new Database(':memory:');
@@ -64,6 +68,10 @@ beforeEach(() => {
       subcategory: 'cve', title: 'handlebars: prototype pollution', file_path: 'package-lock.json',
       message: 'Related to CVE-2021-23383.', snippet: 'handlebars@4.7.6->4.7.7', fix_available: true,
     },
+    {
+      fingerprint: NUCLEI_FP, tool: 'nuclei', rule_id: 'CVE-2021-44228', severity: 'critical', category: 'security',
+      subcategory: 'dast', title: 'Apache Log4j RCE', file_path: 'https://app.test/login', fix_available: false,
+    },
   ];
   ctx.storage.scans.insert({ scan_id: 's1', scan_type: 'deps', project_path: projectPath, tree_hash: 'h' });
   ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: 's1' })));
@@ -94,6 +102,8 @@ describe('suppress_finding — VEX not_affected', () => {
       justification: 'vulnerable_code_not_in_execute_path',
       impact_statement: 'only lodash.get is used; the template function is never called',
       vulnerability_ids: ['CVE-2021-23337'],
+      exportable: true,
+      other_open_findings: [],
     });
     expect(ctx.storage.suppressions.listAll()[0]).toMatchObject({
       finding_fingerprint: CVE_FP,
@@ -163,5 +173,44 @@ describe('suppress_finding — VEX not_affected', () => {
       }),
     );
     expect(r.vex.vulnerability_ids).toEqual(['GHSA-xvch-5gv4-984h']);
+  });
+
+  it('says a vulnerability finding without package coordinates is not exportable to VEX (final review, M-b)', async () => {
+    const r = okResult<{ vex: { exportable: boolean; note?: string } }>(
+      await suppress({
+        finding_fingerprint: NUCLEI_FP,
+        vex_status: 'not_affected',
+        justification: 'inline_mitigations_already_exist',
+      }),
+    );
+    expect(r.vex.exportable).toBe(false);
+    expect(r.vex.note).toContain('not exportable to VEX (no package coordinates)');
+    // The suppression itself is recorded: it still hides the finding.
+    expect(ctx.storage.suppressions.listAll()[0]?.finding_fingerprint).toBe(NUCLEI_FP);
+  });
+
+  it('warns about, and names, the other open findings of the same vulnerability (final review, M-d)', async () => {
+    ctx.storage.findings.bulkInsert([{
+      scan_id: 's1', fingerprint: COPY_FP, tool: 'trivy', rule_id: 'CVE-2021-23337', severity: 'high',
+      category: 'security', subcategory: 'cve', title: 'lodash: command injection',
+      file_path: 'nested/package-lock.json', snippet: 'lodash@4.17.20->4.17.21', fix_available: true,
+    }]);
+
+    const r = okResult<{
+      vex: { other_open_findings: Array<{ fingerprint: string; file_path: string | null }> };
+      warning?: string;
+    }>(
+      await suppress({
+        finding_fingerprint: CVE_FP,
+        vex_status: 'not_affected',
+        justification: 'vulnerable_code_not_in_execute_path',
+      }),
+    );
+
+    expect(r.vex.other_open_findings.map((f) => [f.fingerprint, f.file_path])).toEqual([
+      [COPY_FP, 'nested/package-lock.json'],
+    ]);
+    expect(r.warning).toMatch(/nested\/package-lock\.json/);
+    expect(r.warning).toMatch(/export_vex/);
   });
 });

@@ -892,6 +892,21 @@ describe('validate_finding — the dependency provider', () => {
     );
   });
 
+  it('says a vulnerability finding without package coordinates is not exportable to VEX (final review, M-b)', async () => {
+    seedSnapshot({ external_imports: externalImports([]) });
+    seedScan([finding({
+      fingerprint: 'nuclei-log4shell', tool: 'nuclei', rule_id: 'CVE-2021-44228', subcategory: 'dast',
+      title: 'Apache Log4j RCE', file_path: 'https://app.test/login', line_start: undefined,
+    })]);
+
+    const r = expectOk(await run({ providers: ['dependency'] }));
+
+    expect(r.validations).toEqual([]);
+    const gap = r.summary.coverage_gaps.find((g) => g.includes('not exportable to VEX (no package coordinates)'));
+    expect(gap).toMatch(/CVE-2021-44228/);
+    expect(gap).toMatch(/^1 finding/);
+  });
+
   it('runs alone when asked for alone', async () => {
     seedSnapshot({
       external_imports: externalImports([{ file: 'tools/cli.ts', specifier: 'lodash', language: 'typescript' }]),
