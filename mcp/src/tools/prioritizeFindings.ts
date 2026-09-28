@@ -39,7 +39,7 @@
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { describeOpenSet, openSetForProject } from '../history/openSet.js';
+import { describeOpenSet, openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { exploitabilitySignal, findingCveIds, isUncorrelatedFinding } from '../intel/rank.js';
 import {
@@ -164,7 +164,9 @@ async function handler(
   const cveIdsByFinding = new Map<string, string[]>(open.map((f) => [f.fingerprint, findingCveIds(f)]));
   const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
   const intel: ReadonlyMap<string, CveIntelResult> = await enrichCveIntel(ctx.storage, allCveIds);
-  const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing);
+  // Which tree each finding was measured on, to tell a stale surface snapshot.
+  const scanTrees = new Map(set.scans.map((scan) => [scan.scan_id, scan.tree_hash]));
+  const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing, scanTrees);
 
   const ranked: RankedFinding[] = open.map((f) => {
     const factors: string[] = [];
@@ -257,10 +259,12 @@ function uncorrelatedCoverage(open: readonly Finding[]): { uncorrelated: number;
 }
 
 interface SsvcAssessor {
-  assess(finding: Finding, cveIds: readonly string[]): RankedFinding['ssvc'];
+  assess(finding: OpenFinding, cveIds: readonly string[]): RankedFinding['ssvc'];
   mission: SsvcPoint<MissionWellbeing>;
   missionGiven: boolean;
   surfaceSnapshotId: number | null;
+  /** Set once any finding's scan is of another tree than the snapshot. */
+  surfaceStale: boolean;
 }
 
 /**
@@ -273,6 +277,7 @@ function ssvcAssessor(
   projectPath: string,
   intel: ReadonlyMap<string, CveIntelResult>,
   missionWellbeing: MissionWellbeing | undefined,
+  scanTrees: ReadonlyMap<string, string>,
 ): SsvcAssessor {
   const mission = missionWellbeingPoint(missionWellbeing);
   // THIS project's snapshot — another project's would relativize into a
@@ -287,12 +292,21 @@ function ssvcAssessor(
           projectPath,
           npmResolver: makeNpmResolver(projectPath),
         });
-  return {
+  const assessor: SsvcAssessor = {
     mission,
     missionGiven: missionWellbeing !== undefined,
     surfaceSnapshotId: surface?.id ?? null,
+    surfaceStale: false,
     assess(finding, cveIds) {
       if (cveIds.length === 0) return null;
+      // Exposure read off a map of another tree is not data about this one
+      // (review of part C, M8) — export_vex says the same in `unknowns`.
+      const findingTree = scanTrees.get(finding.scan_id);
+      const stale =
+        surface !== null && findingTree !== undefined && findingTree !== '' && findingTree !== surface.tree_hash
+          ? `the attack-surface snapshot maps another tree (${surface.tree_hash}) than this finding's scan (${findingTree})`
+          : null;
+      if (stale !== null) assessor.surfaceStale = true;
       const subject = dependencySubjectOf(finding);
       const dependency = subject !== null && index !== null ? assessDependency(subject, index) : null;
       const whyNone =
@@ -304,7 +318,7 @@ function ssvcAssessor(
       return {
         ...assessSsvc({
           exploitation: exploitationPoint(cveIds, intel),
-          automatable: automatablePoint(dependency, whyNone),
+          automatable: automatablePoint(dependency, whyNone, stale),
           technical_impact: technicalImpactPoint(finding.severity),
           mission_wellbeing: mission,
         }),
@@ -312,6 +326,7 @@ function ssvcAssessor(
       };
     },
   };
+  return assessor;
 }
 
 /** Decision counts over every open finding, and how many rest on assumptions. */
@@ -333,6 +348,7 @@ function ssvcSummary(ranked: readonly RankedFinding[], assessor: SsvcAssessor): 
     assumed_inputs: assumedInputs,
     mission_wellbeing: { value: assessor.mission.value, source: assessor.missionGiven ? 'parameter' : 'default' },
     surface_snapshot_id: assessor.surfaceSnapshotId,
+    surface_snapshot_stale: assessor.surfaceStale,
     source:
       'CISA SSVC Guide (Nov 2022), Table 9 — the deployer decision tree; see intel/ssvc.ts for ' +
       'which decision points dev-guardian approximates',

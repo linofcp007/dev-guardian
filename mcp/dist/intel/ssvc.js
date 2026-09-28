@@ -38,12 +38,12 @@
  *     feed, and EPSS models exploitation activity with published exploit
  *     code (Exploit-DB, Metasploit, GitHub) among its inputs, so a score of at least
  *     {@link EPSS_POC_THRESHOLD} stands in for "a public PoC exists". Below
- *     it, with no KEV listing, `none` — also an approximation: absence from
- *     KEV is not proof nobody exploits it, and a low EPSS is not proof no
- *     PoC exists. A CVE with no intel at all (offline, a failed fetch) is
- *     assumed `active`; one KEV does not list and FIRST has not scored is
- *     assumed `poc`, the worse of what is left. The threshold is
- *     dev-guardian's choice, not CISA's or FIRST's.
+ *     it — or with no EPSS score — it is `poc` too, but ASSUMED: a low EPSS
+ *     is not proof that no PoC exists, and dev-guardian has no exploit feed
+ *     that could show it (review of the 3.0 additions, M1), so `none` is
+ *     never produced. A CVE with no intel at all (offline, a failed fetch)
+ *     is assumed `active`. The threshold is dev-guardian's choice, not
+ *     CISA's or FIRST's.
  *   - Automatable. From exposure, the one barrier the attack surface can
  *     show: `yes` when validate_finding's dependency provider finds the
  *     package imported by a file an HTTP route reaches. Nothing dev-guardian
@@ -165,26 +165,34 @@ export function exploitationPoint(cveIds, intel) {
                 'concept cannot be ruled out, so assumed poc',
         };
     }
+    // Never `none` (review of the 3.0 additions, M1): a low EPSS score is not
+    // evidence that no public proof of concept exists, and dev-guardian has
+    // nothing else to tell — so the more severe of what KEV leaves open.
     return {
-        value: 'none',
-        assumed: false,
-        basis: `approximated: not KEV-listed, and FIRST EPSS is below ${EPSS_POC_THRESHOLD}` +
+        value: 'poc',
+        assumed: true,
+        basis: `not KEV-listed, and FIRST EPSS is below ${EPSS_POC_THRESHOLD}` +
             (maxEpss === null ? '' : ` (highest ${maxEpss.score.toFixed(3)})`) +
-            ' — neither proves no exploit exists',
+            ', but dev-guardian has no exploit or proof-of-concept feed to show that none exists: assumed poc',
     };
 }
 /**
  * Automatable from exposure. `dependency` is null when there was nothing to
  * assess against; `whyNone` then says why (no snapshot, not a package).
  */
-export function automatablePoint(dependency, whyNone) {
+export function automatablePoint(dependency, whyNone, 
+/** Set when the surface snapshot maps another tree than the finding's scan (review M8). */
+staleSnapshot = null) {
     if (dependency?.verdict === 'reachable') {
-        return {
-            value: 'yes',
-            assumed: false,
-            basis: `exposed: ${dependency.evidence[0]?.detail ?? 'a file an HTTP route reaches imports the package'} ` +
-                '— no barrier dev-guardian can see',
-        };
+        const exposure = dependency.evidence[0]?.detail ?? 'a file an HTTP route reaches imports the package';
+        if (staleSnapshot !== null) {
+            return {
+                value: 'yes',
+                assumed: true,
+                basis: `${exposure} — but ${staleSnapshot}, so it is not data about this tree: assumed the most severe value`,
+            };
+        }
+        return { value: 'yes', assumed: false, basis: `exposed: ${exposure} — no barrier dev-guardian can see` };
     }
     // For `unknown`, the provider's own first gap says why — "no import
     // found" and "the snapshot never recorded imports" are different facts.

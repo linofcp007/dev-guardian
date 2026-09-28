@@ -27,9 +27,11 @@ version bump.
   the new `imported` verdict.
 - `prioritize_findings` gives every CVE finding a CISA SSVC deployer decision (Act / Attend / Track* /
   Track, the CISA SSVC Guide's Table 9): Exploitation from KEV (EPSS ≥ 0.1 approximates a public
-  PoC), Automatable from the dependency provider's exposure, Technical Impact from severity, and the
-  new `mission_wellbeing` parameter (default `medium`). A point with no data takes the more severe
-  value and is listed in `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
+  PoC; below it `poc` is assumed, since nothing dev-guardian has shows that no PoC exists),
+  Automatable from the dependency provider's exposure (assumed when the surface snapshot maps another
+  tree than the finding's scan), Technical Impact from severity, and the new `mission_wellbeing`
+  parameter (default `medium`). A point with no data takes the more severe value and is listed in
+  `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
 - `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
   optional `impact_statement`, for a finding with a vulnerability id of its own — CVE, GHSA, PYSEC, …
   (migration 014; existing suppressions state nothing in VEX terms). The reply names those ids

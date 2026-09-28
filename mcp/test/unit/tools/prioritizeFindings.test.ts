@@ -219,6 +219,7 @@ interface SsvcSummary {
   assumed_inputs: Record<string, number>;
   mission_wellbeing: { value: string; source: string };
   surface_snapshot_id: number | null;
+  surface_snapshot_stale?: boolean;
 }
 
 /** A Trivy CVE on an npm package, the shape its parser stores. */
@@ -231,7 +232,7 @@ function npmCve(fingerprint: string, cve: string, pkg: string, severity: 'critic
 }
 
 /** A snapshot whose one route file imports `pkg`. */
-function seedSurface(storage: Storage, pkg: string): number {
+function seedSurface(storage: Storage, pkg: string, treeHash = 'h'): number {
   // The lockfile says the project's code loads exactly the vulnerable
   // version (npmCve's 1.0.0) — what lets the dependency provider say reachable.
   writeFileSync(join(P, 'package-lock.json'), JSON.stringify({
@@ -239,7 +240,7 @@ function seedSurface(storage: Storage, pkg: string): number {
   }));
   return storage.surface.insert({
     project_path: P,
-    tree_hash: 't',
+    tree_hash: treeHash,
     snapshot: {
       routes: [{
         method: 'GET', provenance: 'code', path_raw: '/', path_resolved: '/', path_partial: false,
@@ -281,6 +282,22 @@ describe('prioritize_findings — CISA SSVC decision per CVE finding', () => {
     expect(ssvc?.cve_ids).toEqual(['CVE-2024-2222']);
     expect(res.summary.ssvc.decisions).toEqual({ Act: 1, Attend: 0, 'Track*': 0, Track: 0 });
     expect(res.summary.ssvc.surface_snapshot_id).toBe(snapshotId);
+    db.close();
+  });
+
+  it('does not take exposure from a surface snapshot of another tree as data (review M8)', async () => {
+    const { storage, scanId, db } = seed();
+    storage.findings.bulkInsert([{ scan_id: scanId, ...npmCve('kev-lodash', 'CVE-2024-2222', 'lodash') }]);
+    storage.cveIntel.upsertMany([{ cve_id: 'CVE-2024-2222', kev: true, fetched_at: NOW_ISO }]);
+    // The finding's scan is of tree 'h'; the snapshot maps tree 'other'.
+    seedSurface(storage, 'lodash', 'other');
+
+    const res = await runSsvc(storage);
+    const automatable = res.ranked[0]?.ssvc?.automatable;
+
+    expect(automatable).toMatchObject({ value: 'yes', assumed: true });
+    expect(automatable?.basis).toMatch(/another tree/);
+    expect(res.summary.ssvc.surface_snapshot_stale).toBe(true);
     db.close();
   });
 

@@ -115,9 +115,14 @@ describe('exploitationPoint', () => {
     expect(p.basis).toMatch(/EPSS/);
   });
 
-  it('approximates none from a measured, non-KEV CVE with a low EPSS score', () => {
+  it('never reads none out of a low EPSS score: with no PoC feed, poc is assumed (review M1)', () => {
+    // dev-guardian stores no exploit-reference feed, so nothing it has is
+    // evidence that no public proof of concept exists. CISA: a decision
+    // point with no data takes the more severe value.
     const p = exploitationPoint(['CVE-1'], intel([measured('CVE-1', { epss_score: 0.02 })]));
-    expect(p).toMatchObject({ value: 'none', assumed: false });
+    expect(p).toMatchObject({ value: 'poc', assumed: true });
+    expect(p.basis).toMatch(/0.020/);
+    expect(p.basis).toMatch(/no .*proof-of-concept feed/);
   });
 
   it('assumes poc — the worse of the two KEV leaves open — when FIRST has not scored the CVE', () => {

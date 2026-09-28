@@ -61658,18 +61658,22 @@ function exploitationPoint(cveIds, intel) {
     };
   }
   return {
-    value: "none",
-    assumed: false,
-    basis: `approximated: not KEV-listed, and FIRST EPSS is below ${EPSS_POC_THRESHOLD}` + (maxEpss === null ? "" : ` (highest ${maxEpss.score.toFixed(3)})`) + " \u2014 neither proves no exploit exists"
+    value: "poc",
+    assumed: true,
+    basis: `not KEV-listed, and FIRST EPSS is below ${EPSS_POC_THRESHOLD}` + (maxEpss === null ? "" : ` (highest ${maxEpss.score.toFixed(3)})`) + ", but dev-guardian has no exploit or proof-of-concept feed to show that none exists: assumed poc"
   };
 }
-function automatablePoint(dependency, whyNone) {
+function automatablePoint(dependency, whyNone, staleSnapshot = null) {
   if (dependency?.verdict === "reachable") {
-    return {
-      value: "yes",
-      assumed: false,
-      basis: `exposed: ${dependency.evidence[0]?.detail ?? "a file an HTTP route reaches imports the package"} \u2014 no barrier dev-guardian can see`
-    };
+    const exposure = dependency.evidence[0]?.detail ?? "a file an HTTP route reaches imports the package";
+    if (staleSnapshot !== null) {
+      return {
+        value: "yes",
+        assumed: true,
+        basis: `${exposure} \u2014 but ${staleSnapshot}, so it is not data about this tree: assumed the most severe value`
+      };
+    }
+    return { value: "yes", assumed: false, basis: `exposed: ${exposure} \u2014 no barrier dev-guardian can see` };
   }
   const why = dependency === null ? whyNone ?? "no reachability data" : dependency.verdict === "imported" ? "the package is imported, but no route was shown to reach an importing file \u2014 not evidence of a barrier" : dependency.coverage_gaps[0] ?? "no import of the package was found \u2014 absence of evidence, not a barrier";
   return { value: "yes", assumed: true, basis: `${why}: assumed the most severe value` };
@@ -62843,7 +62847,8 @@ async function handler37(input, ctx) {
   const cveIdsByFinding = new Map(open.map((f) => [f.fingerprint, findingCveIds(f)]));
   const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
   const intel = await enrichCveIntel(ctx.storage, allCveIds);
-  const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing);
+  const scanTrees = new Map(set2.scans.map((scan2) => [scan2.scan_id, scan2.tree_hash]));
+  const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing, scanTrees);
   const ranked = open.map((f) => {
     const factors = [];
     let score = 0;
@@ -62902,7 +62907,7 @@ function uncorrelatedCoverage(open) {
     note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, so they cannot be weighted by KEV/EPSS yet.`
   };
 }
-function ssvcAssessor(ctx, projectPath, intel, missionWellbeing) {
+function ssvcAssessor(ctx, projectPath, intel, missionWellbeing, scanTrees) {
   const mission = missionWellbeingPoint(missionWellbeing);
   const surface = ctx.storage.surface.getLatestForProject(projectPath);
   const index = surface === null ? null : prepareDependencyIndex({
@@ -62911,19 +62916,23 @@ function ssvcAssessor(ctx, projectPath, intel, missionWellbeing) {
     projectPath,
     npmResolver: makeNpmResolver(projectPath)
   });
-  return {
+  const assessor = {
     mission,
     missionGiven: missionWellbeing !== void 0,
     surfaceSnapshotId: surface?.id ?? null,
+    surfaceStale: false,
     assess(finding4, cveIds) {
       if (cveIds.length === 0) return null;
+      const findingTree = scanTrees.get(finding4.scan_id);
+      const stale = surface !== null && findingTree !== void 0 && findingTree !== "" && findingTree !== surface.tree_hash ? `the attack-surface snapshot maps another tree (${surface.tree_hash}) than this finding's scan (${findingTree})` : null;
+      if (stale !== null) assessor.surfaceStale = true;
       const subject = dependencySubjectOf(finding4);
       const dependency = subject !== null && index !== null ? assessDependency(subject, index) : null;
       const whyNone = index === null ? "no attack-surface snapshot for this project (run map_attack_surface)" : subject === null ? "the finding names no package to look for in the imports" : null;
       return {
         ...assessSsvc({
           exploitation: exploitationPoint(cveIds, intel),
-          automatable: automatablePoint(dependency, whyNone),
+          automatable: automatablePoint(dependency, whyNone, stale),
           technical_impact: technicalImpactPoint(finding4.severity),
           mission_wellbeing: mission
         }),
@@ -62931,6 +62940,7 @@ function ssvcAssessor(ctx, projectPath, intel, missionWellbeing) {
       };
     }
   };
+  return assessor;
 }
 function ssvcSummary(ranked, assessor) {
   const decisions = Object.fromEntries(SSVC_DECISIONS.map((d) => [d, 0]));
@@ -62950,6 +62960,7 @@ function ssvcSummary(ranked, assessor) {
     assumed_inputs: assumedInputs,
     mission_wellbeing: { value: assessor.mission.value, source: assessor.missionGiven ? "parameter" : "default" },
     surface_snapshot_id: assessor.surfaceSnapshotId,
+    surface_snapshot_stale: assessor.surfaceStale,
     source: "CISA SSVC Guide (Nov 2022), Table 9 \u2014 the deployer decision tree; see intel/ssvc.ts for which decision points dev-guardian approximates"
   };
 }
