@@ -243,6 +243,16 @@ describe('report_export', () => {
     expect(md).not.toMatch(/\| tested \|/);
   });
 
+  // I-1: a note, not a status change — the scanners never read the Rust.
+  it('names a language only in skipped paths on the languages line, and still tests what was read', async () => {
+    const plugin = makePlugin();
+    const project = tempProject({ 'src/app.js': '', 'pkg/build/lib.rs': 'pub fn f() {}\n' });
+    seedScan(plugin, { id: 'SKIP', type: 'sast', project, tools_run: SEMGREP_OK });
+    const md = await exportScan(plugin, project, 'SKIP', 'markdown');
+    expect(md).toMatch(/Project languages: javascript \([^\n]*rust only under pkg\/build\/ \(skipped by Semgrep\) — not counted/);
+    expect(md).toMatch(/\| A05:2025 Injection \| tested \|/);
+  });
+
   it('judges a scan against the languages recorded when it ran', async () => {
     const plugin = makePlugin();
     const project = tempProject({ 'src/app.js': '' }); // today: JavaScript only

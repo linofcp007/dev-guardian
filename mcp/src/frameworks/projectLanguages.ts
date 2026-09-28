@@ -47,6 +47,19 @@
  * TOP-level directory is compared: `src/main/java/com/example/…` or
  * `…/repository/spec/…` is the product's code.
  *
+ * ---- Languages only in skipped paths ----------------------------------
+ *
+ * A language whose files ALL sit where the scanners do not look
+ * (`pkg/build/`, `dist/`, `test/`, a `.guardianignore` entry) is not a
+ * language of the project — nothing read it — but it is never silently
+ * gone: a Go `build` package or a `dist/` crate can be product code no
+ * scanner saw. It is named in `source` ("rust only under pkg/build/
+ * (skipped by Semgrep) — not counted"), at most {@link MAX_NAMED_PATHS}
+ * paths and then "+N more", and changes no status. A walk looks into
+ * skipped directories for this within its own budget
+ * ({@link MAX_PEEK_DIRS}); dependency and tool caches (`node_modules/`,
+ * `.venv/`, …) are never looked into.
+ *
  * ---- Incomplete and unknown -------------------------------------------
  *
  * `incomplete` is set, with the reason, when the listing may have missed a
@@ -67,7 +80,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { git, splitNul } from '../runners/git.js';
@@ -87,6 +100,12 @@ export interface ProjectLanguages {
    * rule-based claim for them is at most partial. Absent: none.
    */
   peripheral?: Record<string, string[]>;
+  /**
+   * Languages found ONLY in paths the scanners skip, with those paths
+   * (bounded, then "+N more"). Not project languages: a note in `source`,
+   * never a status. Absent: none.
+   */
+  skipped?: Record<string, string[]>;
 }
 
 /** What `storage.stack` offers, and all this needs of it. */
@@ -100,6 +119,7 @@ export interface FileLanguages {
   listing: 'git' | 'walk';
   incomplete?: string;
   peripheral?: Record<string, string[]>;
+  skipped?: Record<string, string[]>;
 }
 
 export interface WalkOptions {
@@ -115,6 +135,15 @@ export interface WalkOptions {
 
 /** Directories the walk visits at most — the ceiling detect_stack's manifest walk uses. */
 const MAX_DIRS = 20_000;
+/** Skipped directories the walk looks into, at most, to name the languages only they hold. */
+const MAX_PEEK_DIRS = 2_000;
+/** Paths named per skipped-only language before "+N more". */
+const MAX_NAMED_PATHS = 3;
+
+/** Dependency and tool caches: skipped, and never looked into for a note. */
+const CACHE_DIRS: ReadonlySet<string> = new Set([
+  '.git', '.svn', '.hg', '_darcs', 'CVS', 'node_modules', '.venv', '.env', '.tox', '.npm', '.yarn', '_opam', '_build', '_cargo',
+]);
 
 /** Semgrep 1.176.1's built-in `.semgrepignore`, used when the project has none (measured — see the module comment). */
 const SEMGREP_DEFAULT_IGNORE = [
@@ -172,7 +201,13 @@ export const PERIPHERAL_TOP_DIRS: ReadonlySet<string> = new Set([
 /** C++ sources and headers: with any of these, a `.h` is C++'s, not C's. */
 const CPP_EXTENSIONS = /\.(cc|cpp|cxx|hpp|hh|hxx)$/i;
 
-function readText(path: string): string | null {
+/** The project's own ignore files, as text (null: absent or unreadable). */
+interface IgnoreTexts {
+  semgrep: string | null;
+  guardian: string | null;
+}
+
+function readTextSync(path: string): string | null {
   try {
     return readFileSync(path, 'utf8');
   } catch {
@@ -180,22 +215,94 @@ function readText(path: string): string | null {
   }
 }
 
-/** What the scanners leave out, as one test on a project-relative POSIX path. */
-function scannerExclusions(root: string): (rel: string, isDir?: boolean) => boolean {
-  const semgrep: IgnoreMatcher = compileIgnore(readText(join(root, '.semgrepignore')) ?? SEMGREP_DEFAULT_IGNORE);
-  const guardianText = readText(join(root, GUARDIAN_IGNORE_FILE));
-  const guardian = guardianText === null ? null : compileIgnore(guardianText);
-  return (rel, isDir = false) => {
-    if (rel.split('/').includes('.git')) return true;
-    if (semgrep.ignores(rel, isDir)) return true;
-    return guardian !== null && guardian.ignores(rel, isDir);
+async function readTextAsync(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function ignoreTextsSync(root: string): IgnoreTexts {
+  return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(root, GUARDIAN_IGNORE_FILE)) };
+}
+
+async function ignoreTextsAsync(root: string): Promise<IgnoreTexts> {
+  const [semgrep, guardian] = await Promise.all([
+    readTextAsync(join(root, '.semgrepignore')),
+    readTextAsync(join(root, GUARDIAN_IGNORE_FILE)),
+  ]);
+  return { semgrep, guardian };
+}
+
+/** Which layer leaves a path out: Semgrep's ignores, `.guardianignore`, or VCS internals. */
+type ExclusionLayer = 'semgrep' | 'guardian' | 'vcs';
+
+interface Exclusions {
+  /** The layer that leaves out this exact path (not its parents), or null. */
+  layer(rel: string, isDir?: boolean): ExclusionLayer | null;
+  /** Whether the path is left out, by itself or by a directory above it. */
+  excluded(rel: string, isDir?: boolean): boolean;
+}
+
+/** What the scanners leave out (see the module comment). */
+function scannerExclusions(texts: IgnoreTexts): Exclusions {
+  const semgrep: IgnoreMatcher = compileIgnore(texts.semgrep ?? SEMGREP_DEFAULT_IGNORE);
+  const guardian = texts.guardian === null ? null : compileIgnore(texts.guardian);
+  const layer = (rel: string, isDir = false): ExclusionLayer | null => {
+    if (rel.split('/').includes('.git')) return 'vcs';
+    if (semgrep.ignores(rel, isDir)) return 'semgrep';
+    return guardian !== null && guardian.ignores(rel, isDir) ? 'guardian' : null;
   };
+  return { layer, excluded: (rel, isDir = false) => layer(rel, isDir) !== null };
+}
+
+const LAYER_TEXT: Record<Exclude<ExclusionLayer, 'vcs'>, string> = {
+  semgrep: 'skipped by Semgrep',
+  guardian: 'excluded by .guardianignore',
+};
+
+/** Bound a list of named paths: the first {@link MAX_NAMED_PATHS}, then "+N more" (counting any earlier "+N more"). */
+function boundPaths(entries: Iterable<string>): string[] {
+  let extra = 0;
+  const named = new Set<string>();
+  for (const e of entries) {
+    const more = /^\+(\d+) more$/.exec(e);
+    if (more !== null && more[1] !== undefined) extra += Number.parseInt(more[1], 10);
+    else named.add(e);
+  }
+  const sorted = [...named].sort();
+  const shown = sorted.slice(0, MAX_NAMED_PATHS);
+  const hidden = sorted.length - shown.length + extra;
+  return hidden > 0 ? [...shown, `+${hidden} more`] : shown;
 }
 
 function languagesOfList(
   files: readonly string[],
-  excluded: (rel: string) => boolean,
-): Pick<FileLanguages, 'languages' | 'peripheral'> & { languages: SourceLanguage[] } {
+  exclusions: Exclusions,
+): Pick<FileLanguages, 'languages' | 'peripheral' | 'skipped'> & { languages: SourceLanguage[] } {
+  // The top-most left-out directory of a path, memoised per directory.
+  const dirMemo = new Map<string, { at: string; layer: ExclusionLayer } | null>();
+  const leftOutDir = (segments: readonly string[]): { at: string; layer: ExclusionLayer } | null => {
+    for (let i = 1; i < segments.length; i++) {
+      const prefix = segments.slice(0, i).join('/');
+      let hit = dirMemo.get(prefix);
+      if (hit === undefined) {
+        const layer = exclusions.layer(prefix, true);
+        hit = layer === null ? null : { at: `${prefix}/`, layer };
+        dirMemo.set(prefix, hit);
+      }
+      if (hit !== null) return hit;
+    }
+    return null;
+  };
+  const skippedAt = new Map<string, Set<string>>();
+  const noteSkipped = (lang: string, where: { at: string; layer: ExclusionLayer }): void => {
+    if (where.layer === 'vcs') return;
+    const set = skippedAt.get(lang) ?? new Set<string>();
+    set.add(`${where.at} (${LAYER_TEXT[where.layer]})`);
+    skippedAt.set(lang, set);
+  };
   const product = new Set<string>();
   const peripheralDirs = new Map<string, Set<string>>();
   let hasCpp = false;
@@ -211,7 +318,15 @@ function languagesOfList(
   };
   const headers: string[] = [];
   for (const rel of files) {
-    if (excluded(rel)) continue;
+    const segments = rel.split('/');
+    const byDir = leftOutDir(segments);
+    const fileLayer = byDir === null ? exclusions.layer(rel) : null;
+    const where = byDir ?? (fileLayer === null ? null : { at: rel, layer: fileLayer });
+    if (where !== null) {
+      const lang = languageOfFile(rel);
+      if (lang !== null) noteSkipped(lang, where);
+      continue;
+    }
     if (/\.h$/i.test(rel)) {
       headers.push(rel);
       continue;
@@ -229,7 +344,16 @@ function languagesOfList(
     const dirs = peripheralDirs.get(lang);
     if (!product.has(lang) && dirs !== undefined) peripheral[lang] = [...dirs].sort();
   }
-  return Object.keys(peripheral).length > 0 ? { languages, peripheral } : { languages };
+  const skipped: Record<string, string[]> = {};
+  for (const lang of SOURCE_LANGUAGES) {
+    const at = skippedAt.get(lang);
+    if (at !== undefined && !all.has(lang)) skipped[lang] = boundPaths(at);
+  }
+  return {
+    languages,
+    ...(Object.keys(peripheral).length > 0 ? { peripheral } : {}),
+    ...(Object.keys(skipped).length > 0 ? { skipped } : {}),
+  };
 }
 
 /** `git ls-files -t`: every listed path, minus the skip-worktree ('S') entries of a sparse checkout. */
@@ -266,6 +390,7 @@ async function gitListAsync(root: string): Promise<string[] | null> {
 }
 
 interface Walked {
+  /** Every file seen: the ones the scanners read, and the ones found in skipped directories. */
   files: string[];
   incomplete?: string;
 }
@@ -281,138 +406,125 @@ function walkReasons(stopped: boolean, maxDirs: number, unreadable: readonly str
 }
 
 /**
- * The walk both variants share, over a directory reader: every file path
- * (POSIX, relative), pruning only what the scanners exclude. Null when
- * `root` itself cannot be read.
+ * The walk, as a plan: it yields each directory to read (relative, `''` for
+ * the root) and is handed back its entries, or null when it could not be
+ * read. A synchronous and an asynchronous driver run the same plan, so the
+ * CLI dashboard (synchronous) and the MCP readers (which must not block)
+ * walk identically.
+ *
+ * Directories the scanners read count toward `maxDirs`; reaching it makes
+ * the walk incomplete. Directories they skip are looked into only to name
+ * the languages found there, within their own `maxPeek` budget — never a
+ * cache (`CACHE_DIRS`), never a reason for incompleteness.
  */
-async function walkWith(
-  root: string,
-  excluded: (rel: string, isDir?: boolean) => boolean,
+function* walkPlan(
+  exclusions: Exclusions,
   maxDirs: number,
-  read: (abs: string) => Dirent[] | Promise<Dirent[]>,
-): Promise<Walked | null> {
-  let top: Dirent[];
-  try {
-    top = await read(root);
-  } catch {
-    return null;
-  }
+  maxPeek: number,
+): Generator<string, Walked | null, Dirent[] | null> {
+  const rootEntries = yield '';
+  if (rootEntries === null) return null;
   const files: string[] = [];
   const unreadable: string[] = [];
-  const stack: Array<{ rel: string; entries: Dirent[] | null }> = [{ rel: '', entries: top }];
+  const read: Array<{ rel: string; entries: Dirent[] | null }> = [{ rel: '', entries: rootEntries }];
+  const peek: string[] = [];
   let visited = 0;
   let stopped = false;
-  while (stack.length > 0) {
-    const next = stack.pop();
+  const take = (rel: string, entries: readonly Dirent[], skipped: boolean): void => {
+    for (const entry of entries) {
+      const child = rel === '' ? entry.name : `${rel}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (CACHE_DIRS.has(entry.name)) continue;
+        if (skipped || exclusions.excluded(child, true)) peek.push(child);
+        else read.push({ rel: child, entries: null });
+      } else if (entry.isFile()) {
+        files.push(child);
+      }
+    }
+  };
+  while (read.length > 0) {
+    const next = read.pop();
     if (next === undefined) break;
     if (visited >= maxDirs) {
       stopped = true;
       break;
     }
     visited += 1;
-    let entries = next.entries;
+    const entries = next.entries ?? (yield next.rel);
     if (entries === null) {
-      try {
-        entries = await read(join(root, next.rel));
-      } catch {
-        unreadable.push(next.rel);
-        continue;
-      }
+      unreadable.push(next.rel);
+      continue;
     }
-    for (const entry of entries) {
-      const rel = next.rel === '' ? entry.name : `${next.rel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (!excluded(rel, true)) stack.push({ rel, entries: null });
-      } else if (entry.isFile()) {
-        files.push(rel);
-      }
-    }
+    take(next.rel, entries, false);
+  }
+  // Looked into only for the note: its own budget, and no verdict on the walk.
+  let peeked = 0;
+  while (peek.length > 0 && peeked < maxPeek && !stopped) {
+    const rel = peek.pop();
+    if (rel === undefined) break;
+    peeked += 1;
+    const entries = yield rel;
+    if (entries !== null) take(rel, entries, true);
   }
   const incomplete = walkReasons(stopped, maxDirs, unreadable);
   return incomplete !== undefined ? { files, incomplete } : { files };
 }
 
-/** The synchronous twin of {@link walkWith} — for the CLI dashboard, which is synchronous. */
-function walkSync(
-  root: string,
-  excluded: (rel: string, isDir?: boolean) => boolean,
-  maxDirs: number,
-  read: (abs: string) => Dirent[],
-): Walked | null {
-  let top: Dirent[];
-  try {
-    top = read(root);
-  } catch {
-    return null;
+function walkSync(root: string, exclusions: Exclusions, opts: WalkOptions): Walked | null {
+  const read = opts.readDir ?? ((abs: string) => readdirSync(abs, { withFileTypes: true }));
+  const plan = walkPlan(exclusions, opts.maxDirs ?? MAX_DIRS, MAX_PEEK_DIRS);
+  let step = plan.next(null);
+  while (step.done !== true) {
+    let entries: Dirent[] | null;
+    try {
+      entries = read(join(root, step.value));
+    } catch {
+      entries = null;
+    }
+    step = plan.next(entries);
   }
-  const files: string[] = [];
-  const unreadable: string[] = [];
-  const stack: Array<{ rel: string; entries: Dirent[] | null }> = [{ rel: '', entries: top }];
-  let visited = 0;
-  let stopped = false;
-  while (stack.length > 0) {
-    const next = stack.pop();
-    if (next === undefined) break;
-    if (visited >= maxDirs) {
-      stopped = true;
-      break;
-    }
-    visited += 1;
-    let entries = next.entries;
-    if (entries === null) {
-      try {
-        entries = read(join(root, next.rel));
-      } catch {
-        unreadable.push(next.rel);
-        continue;
-      }
-    }
-    for (const entry of entries) {
-      const rel = next.rel === '' ? entry.name : `${next.rel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (!excluded(rel, true)) stack.push({ rel, entries: null });
-      } else if (entry.isFile()) {
-        files.push(rel);
-      }
-    }
-  }
-  const incomplete = walkReasons(stopped, maxDirs, unreadable);
-  return incomplete !== undefined ? { files, incomplete } : { files };
+  return step.value;
 }
 
-function fromFiles(
-  listing: 'git' | 'walk',
-  files: string[] | null,
-  excluded: (rel: string) => boolean,
-  incomplete?: string,
-): FileLanguages {
+async function walkAsync(root: string, exclusions: Exclusions, opts: WalkOptions): Promise<Walked | null> {
+  const read = opts.readDirAsync ?? ((abs: string) => readdir(abs, { withFileTypes: true }));
+  const plan = walkPlan(exclusions, opts.maxDirs ?? MAX_DIRS, MAX_PEEK_DIRS);
+  let step = plan.next(null);
+  while (step.done !== true) {
+    let entries: Dirent[] | null;
+    try {
+      entries = await read(join(root, step.value));
+    } catch {
+      entries = null;
+    }
+    step = plan.next(entries);
+  }
+  return step.value;
+}
+
+function fromFiles(listing: 'git' | 'walk', files: string[] | null, exclusions: Exclusions, incomplete?: string): FileLanguages {
   if (files === null) return { languages: null, listing };
-  const out: FileLanguages = { ...languagesOfList(files, excluded), listing };
+  const out: FileLanguages = { ...languagesOfList(files, exclusions), listing };
   if (incomplete !== undefined) out.incomplete = incomplete;
   return out;
 }
 
 /** The source languages among the files the scanners would read — synchronous (the CLI dashboard). */
 export function languagesFromFiles(root: string, opts: WalkOptions = {}): FileLanguages {
-  const excluded = scannerExclusions(root);
+  const exclusions = scannerExclusions(ignoreTextsSync(root));
   const listed = opts.useGit === false ? null : gitListSync(root);
-  if (listed !== null) return fromFiles('git', listed, excluded);
-  const walked = walkSync(root, excluded, opts.maxDirs ?? MAX_DIRS, opts.readDir ?? ((abs) => readdirSync(abs, { withFileTypes: true })));
-  return fromFiles('walk', walked?.files ?? null, excluded, walked?.incomplete);
+  if (listed !== null) return fromFiles('git', listed, exclusions);
+  const walked = walkSync(root, exclusions, opts);
+  return fromFiles('walk', walked?.files ?? null, exclusions, walked?.incomplete);
 }
 
 /** {@link languagesFromFiles} without blocking the event loop — scan time and the MCP readers. */
 export async function languagesFromFilesAsync(root: string, opts: WalkOptions = {}): Promise<FileLanguages> {
-  const excluded = scannerExclusions(root);
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
   const listed = opts.useGit === false ? null : await gitListAsync(root);
-  if (listed !== null) return fromFiles('git', listed, excluded);
-  const walked = await walkWith(
-    root,
-    excluded,
-    opts.maxDirs ?? MAX_DIRS,
-    opts.readDirAsync ?? ((abs) => readdir(abs, { withFileTypes: true })),
-  );
-  return fromFiles('walk', walked?.files ?? null, excluded, walked?.incomplete);
+  if (listed !== null) return fromFiles('git', listed, exclusions);
+  const walked = await walkAsync(root, exclusions, opts);
+  return fromFiles('walk', walked?.files ?? null, exclusions, walked?.incomplete);
 }
 
 function snapshotLanguages(snapshot: unknown): SourceLanguage[] | null {
@@ -438,6 +550,23 @@ function peripheralText(peripheral: Record<string, string[]> | undefined): strin
   return Object.entries(peripheral)
     .map(([lang, dirs]) => `; ${lang} only under ${dirs.join(', ')}`)
     .join('');
+}
+
+function skippedText(skipped: Record<string, string[]> | undefined): string {
+  if (skipped === undefined) return '';
+  return Object.entries(skipped)
+    .map(([lang, paths]) => `; ${lang} only under ${paths.join(', ')} — not counted`)
+    .join('');
+}
+
+/** The skipped-only notes for languages NOT among `languages` (a counted language needs none). */
+function skippedFor(
+  skipped: Record<string, string[]> | undefined,
+  languages: readonly string[],
+): Record<string, string[]> | undefined {
+  if (skipped === undefined) return undefined;
+  const kept = Object.entries(skipped).filter(([lang]) => !languages.includes(lang));
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
 }
 
 /** The union of the snapshot and the files, described. */
@@ -467,6 +596,12 @@ function combine(snapshot: { at: string; languages: SourceLanguage[] } | null, f
   if (files.peripheral !== undefined) {
     out.peripheral = files.peripheral;
     out.source += peripheralText(files.peripheral);
+  }
+  // A snapshot language is counted, so a skipped-only note for it would be noise.
+  const skipped = skippedFor(files.skipped, out.languages ?? []);
+  if (skipped !== undefined) {
+    out.skipped = skipped;
+    out.source += skippedText(skipped);
   }
   if (files.incomplete !== undefined) out.incomplete = files.incomplete;
   return out;
@@ -512,13 +647,15 @@ function readPeripheral(raw: unknown): Record<string, string[]> | undefined {
 export function recordedLanguages(meta: Record<string, unknown> | undefined): ProjectLanguages | null {
   const raw = meta?.[PROJECT_LANGUAGES_META_KEY];
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const { languages, source, incomplete, peripheral } = raw as Record<string, unknown>;
+  const { languages, source, incomplete, peripheral, skipped } = raw as Record<string, unknown>;
   if (typeof source !== 'string') return null;
   if (languages !== null && !(Array.isArray(languages) && languages.every((l) => typeof l === 'string'))) return null;
   const out: ProjectLanguages = { languages: languages === null ? null : [...(languages as string[])].sort(), source };
   if (typeof incomplete === 'string') out.incomplete = incomplete;
   const p = readPeripheral(peripheral);
   if (p !== undefined) out.peripheral = p;
+  const s = readPeripheral(skipped);
+  if (s !== undefined) out.skipped = s;
   return out;
 }
 
@@ -575,6 +712,16 @@ function unionOfRuns(runs: readonly Run[], fallback: ProjectLanguages | null): P
   const onlyPeripheral: Record<string, string[]> = {};
   for (const [l, dirs] of peripheral) if (!product.has(l)) onlyPeripheral[l] = [...dirs].sort();
   if (Object.keys(onlyPeripheral).length > 0) out.peripheral = onlyPeripheral;
+  // Skipped-only notes: every scan's, for languages no scan counted, re-bounded.
+  const skippedPaths = new Map<string, string[]>();
+  for (const p of parts) {
+    for (const [l, paths] of Object.entries(p.skipped ?? {})) skippedPaths.set(l, [...(skippedPaths.get(l) ?? []), ...paths]);
+  }
+  const notes: Record<string, string[]> = {};
+  for (const [l, paths] of [...skippedPaths].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (!languages.has(l)) notes[l] = boundPaths(paths);
+  }
+  if (Object.keys(notes).length > 0) out.skipped = notes;
   return out;
 }
 

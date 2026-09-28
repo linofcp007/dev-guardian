@@ -108,6 +108,12 @@ describe('languagesFromFiles — the files the scanners would read', () => {
       languages: ['c', 'java', 'ruby', 'rust', 'swift', 'typescript'],
       listing: 'walk',
       peripheral: { c: ['third_party/'], java: ['docs/'], ruby: ['examples/'], swift: ['Pods/'] },
+      // Nothing read these (I-1): named, not counted. Caches are never looked into.
+      skipped: {
+        go: ['pkg/a_test.go (skipped by Semgrep)', 'test/ (skipped by Semgrep)'],
+        php: ['vendor/ (skipped by Semgrep)'],
+        python: ['tests/ (skipped by Semgrep)'],
+      },
     });
   });
 
@@ -176,6 +182,45 @@ describe('languagesFromFiles — the files the scanners would read', () => {
   });
 
   // M-a: an unreadable directory used to be skipped silently.
+  // I-1: a language that lives only where the scanners do not look is not a
+  // project language (nothing read it), but it is never silently gone: a
+  // Go `build` package or a `dist/` crate can be product code.
+  it('names a language found only in paths the scanners skip, bounded, without counting it', async () => {
+    const dir = project({
+      'src/app.js': '',
+      'test/lib.rs': '',
+      'a/tests/lib.rs': '',
+      'pkg/build/lib.rs': '',
+      'dist/lib.rs': '',
+      'gen/api.go': '',
+      'node_modules/dep/lib.rs': '',
+      '.guardianignore': 'gen/\n',
+    });
+    const expected = {
+      languages: ['javascript'],
+      listing: 'walk',
+      skipped: {
+        go: ['gen/ (excluded by .guardianignore)'],
+        rust: ['a/tests/ (skipped by Semgrep)', 'dist/ (skipped by Semgrep)', 'pkg/build/ (skipped by Semgrep)', '+1 more'],
+      },
+    };
+    expect(languagesFromFiles(dir)).toEqual(expected);
+    expect(await languagesFromFilesAsync(dir)).toEqual(expected);
+    const r = resolveProjectLanguages(NO_STACK, dir);
+    expect(r.languages).toEqual(['javascript']);
+    expect(r.source).toMatch(/rust only under a\/tests\/ \(skipped by Semgrep\), dist\/ \(skipped by Semgrep\), pkg\/build\/ \(skipped by Semgrep\), \+1 more — not counted/);
+  });
+
+  it('the git listing names skipped languages too', () => {
+    const dir = project({ 'src/app.js': '', 'pkg/build/lib.rs': '' });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    expect(languagesFromFiles(dir)).toEqual({
+      languages: ['javascript'],
+      listing: 'git',
+      skipped: { rust: ['pkg/build/ (skipped by Semgrep)'] },
+    });
+  });
+
   it('the async walk honours the same limit', async () => {
     const dir = project({ 'z/index.js': '', 'a/lib.rs': '', 'm/1/x': '', 'm/2/x': '', 'm/3/x': '' });
     const r = await languagesFromFilesAsync(dir, { useGit: false, maxDirs: 3 });
@@ -301,6 +346,17 @@ describe('languages recorded at scan time (M-b)', () => {
       () => today,
     );
     expect(one.peripheral).toEqual({ rust: ['examples/'] });
+  });
+
+  it('merges skipped notes across scans, and drops one for a language another scan counted', () => {
+    const merged = languagesOfRuns(
+      [
+        run('sast', { project_languages: { languages: ['javascript'], source: 'x', skipped: { rust: ['dist/ (skipped by Semgrep)'], go: ['build/ (skipped by Semgrep)'] } } }),
+        run('bugs', { project_languages: { languages: ['javascript', 'go'], source: 'y' } }),
+      ],
+      () => today,
+    );
+    expect(merged.skipped).toEqual({ rust: ['dist/ (skipped by Semgrep)'] });
   });
 
   it('carries a recorded incomplete listing through', () => {
