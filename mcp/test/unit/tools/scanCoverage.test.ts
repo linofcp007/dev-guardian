@@ -145,3 +145,40 @@ describe('assessCoverage', () => {
     expect(warning).toMatch(/semgrep ran with reduced coverage/);
   });
 });
+
+/**
+ * Fix round 3: a scanner that ran but whose rules did not load
+ * (`ToolRun.rule_config_error`) is not a missing scanner — the warning names
+ * the rule error and never says "install it".
+ */
+describe('assessCoverage: rules that did not load are not "install"', () => {
+  const ruleError: ToolRun = { name: 'semgrep', status: 'failed', reason: 'no rule loaded', rule_config_error: true };
+
+  it('coverage none: says Semgrep ran and its rules did not load — never "NO scanner ran" or "Install semgrep"', () => {
+    const { coverage, warning } = assessCoverage('sast', [ruleError], []);
+    expect(coverage).toBe('none');
+    expect(warning).toMatch(/semgrep ran, but its rules did not load/);
+    expect(warning).toMatch(/NOT a clean bill of health/);
+    expect(warning).not.toMatch(/install semgrep/i);
+    expect(warning).not.toMatch(/NO scanner ran/);
+  });
+
+  it('beside a scanner that is not installed: install advice for that one only', () => {
+    const { warning } = assessCoverage('sast', [ruleError, skipped('bandit')], ['bandit']);
+    expect(warning).toMatch(/semgrep ran, but its rules did not load/);
+    expect(warning).toMatch(/install or fix it/);
+    expect(warning).toMatch(/bandit/);
+    expect(warning).not.toMatch(/install semgrep/i);
+  });
+
+  it('partial coverage: the same clause, never "semgrep did not run"', () => {
+    const { coverage, warning } = assessCoverage('sast', [ruleError, ok('bandit')], []);
+    expect(coverage).toBe('partial');
+    expect(warning).toMatch(/semgrep ran, but its rules did not load/);
+    expect(warning).not.toMatch(/semgrep did not run/);
+  });
+
+  it('control: a crashed scanner (no rule error) keeps the install advice', () => {
+    expect(assessCoverage('sast', [failed('semgrep')], []).warning).toMatch(/Install semgrep/);
+  });
+});

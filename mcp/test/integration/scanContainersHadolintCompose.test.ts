@@ -77,6 +77,29 @@ describe('scan_containers: trivy image scanners', () => {
     expect(scannersIdx).toBeGreaterThanOrEqual(0);
     expect(call?.[0].args?.[scannersIdx + 1]).toBe('vuln,secret,misconfig');
   });
+
+  // Follow-up X5: the image reference is recorded on the run, so a later
+  // comparison can tell image A's findings from image B's (runCompare.ts).
+  it('records which image it scanned on the trivy-image run, ok or failed, and stores it', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    for (const [result, status] of [
+      [ok, 'ok'],
+      [{ ...ok, outcome: 'failed' as const, exitCode: 1 }, 'failed'],
+    ] as const) {
+      vi.mocked(runProcess).mockResolvedValue(result);
+      const project = makeTempDir('containers-');
+      const ctx = plugin(project);
+      const r = (await tool().handler({ project_path: project, image: 'ghcr.io/org/app:1.2.3' }, ctx)) as Result & {
+        scan_id: string;
+        tools_run: { name: string; status: string; target?: string; reason?: string }[];
+      };
+      const run = r.tools_run.find((t) => t.name === 'trivy-image');
+      expect(run).toMatchObject({ status, target: 'ghcr.io/org/app:1.2.3' });
+      expect(run?.reason).toMatch(/ghcr\.io\/org\/app:1\.2\.3/);
+      const stored = ctx.storage.scans.getById(r.scan_id)?.tools_run.find((t) => t.name === 'trivy-image');
+      expect(stored?.target).toBe('ghcr.io/org/app:1.2.3');
+    }
+  });
 });
 
 describe('scan_containers: hadolint', () => {

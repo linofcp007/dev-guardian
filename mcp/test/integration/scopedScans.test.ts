@@ -413,6 +413,35 @@ describe('bug_hunt — scope', () => {
     expect(r.top_findings.every((f) => f.category === 'bug')).toBe(true);
   });
 
+  // Follow-up X1: a batch Semgrep only partly parsed is partial coverage —
+  // the shared judge's verdict — not a failed bug hunt.
+  it('a file Semgrep only partly parsed: ok, listed missing, the file named', async () => {
+    const dir = project();
+    write(dir, 'src/a.php');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command !== 'semgrep') return done(0);
+      writeFileSync(
+        after(call.args, '--output'),
+        JSON.stringify({
+          results: [],
+          errors: [{ level: 'warn', type: ['PartialParsing', []], message: 'Syntax error at line src/a.php:2', path: 'src/a.php' }],
+          paths: { scanned: ['src/a.php'] },
+        }),
+      );
+      return done(0);
+    });
+    const r = await ok('bug_hunt', dir, { scope: { paths: ['src/a.php'] } });
+    const entry = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
+      | undefined;
+    expect(entry?.status).toBe('ok');
+    expect(entry?.reason).toMatch(/only partly parsed/);
+    expect(entry?.partially_parsed?.map((p) => p.file)).toEqual(['src/a.php']);
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
   it('re-runs the surviving packs over the scoped files when a registry pack is gone, and names the gap', async () => {
     const dir = project();
     write(dir, 'a.py');

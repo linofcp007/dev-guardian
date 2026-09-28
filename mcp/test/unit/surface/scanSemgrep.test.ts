@@ -16,6 +16,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, copyFileSync: vi.fn() };
 });
 
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -148,20 +149,109 @@ describe('countRouteTargets — the files Semgrep would scan, per its default ig
     return root;
   }
 
-  it('with no .semgrepignore: exactly the five files Semgrep scanned', () => {
+  it('with no .semgrepignore: exactly the five files Semgrep scanned', async () => {
     const root = tree(false);
     try {
-      expect(countRouteTargets(root)).toBe(5);
+      expect(await countRouteTargets(root)).toBe(5);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('with a .semgrepignore of its own: test/, tests/ and *_test.go count again (the build-output walk excludes stay)', () => {
+  it('with a .semgrepignore of its own: test/, tests/ and *_test.go count again (the build-output walk excludes stay)', async () => {
     const root = tree(true);
     try {
       // 15 route-language files, minus build/, dist/, vendor/ (always excluded from the walk).
-      expect(countRouteTargets(root)).toBe(12);
+      expect(await countRouteTargets(root)).toBe(12);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('countRouteTargets inside a git work tree — .gitignore honoured, as Semgrep does (follow-up X3)', () => {
+  // Measured on Semgrep 1.176.1 with the routes pack over exactly this repo:
+  // WITHOUT a .semgrepignore it scanned ignored-but-tracked.js, src/app.js
+  // and untracked.js — never gen/ or deep/gen/ (.gitignore) nor test/ (its
+  // default ignore); with an empty .semgrepignore it added test/t.js and
+  // still skipped both gitignored trees. Outside git (the same files, no
+  // .git) it scanned gen/ and deep/gen/: there .gitignore is not honoured,
+  // and the walk above stays.
+  const gitOf = (cwd: string, ...args: string[]): void => {
+    execFileSync('git', args, { cwd, stdio: 'ignore' });
+  };
+
+  function repo(files: Record<string, string>, gitignore: string, tracked: readonly string[], forced: readonly string[] = []): string {
+    const root = mkdtempSync(join(tmpdir(), 'route-targets-git-'));
+    for (const [file, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), text);
+    }
+    writeFileSync(join(root, '.gitignore'), gitignore);
+    gitOf(root, 'init', '-q', '.');
+    gitOf(root, 'add', '--', '.gitignore', ...tracked);
+    if (forced.length > 0) gitOf(root, 'add', '-f', '--', ...forced);
+    return root;
+  }
+
+  const ROUTE = "app.get('/x', h);\n";
+  const FILES = {
+    'src/app.js': ROUTE,
+    'gen/gen.js': ROUTE,
+    'deep/gen/d.js': ROUTE,
+    'test/t.js': ROUTE,
+    'untracked.js': ROUTE,
+    'ignored-but-tracked.js': ROUTE,
+    'main.tf': 'x\n',
+  };
+
+  it('with no .semgrepignore: tracked and untracked-not-ignored files, minus the default ignore — exactly what Semgrep scanned', async () => {
+    const root = repo(FILES, 'gen/\nignored-but-tracked.js\n', ['src/app.js', 'test/t.js'], ['ignored-but-tracked.js']);
+    try {
+      expect(await countRouteTargets(root)).toBe(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('with a .semgrepignore of its own: the default ignore goes, .gitignore stays', async () => {
+    const root = repo(FILES, 'gen/\nignored-but-tracked.js\n', ['src/app.js', 'test/t.js'], ['ignored-but-tracked.js']);
+    try {
+      writeFileSync(join(root, '.semgrepignore'), '# own\n');
+      expect(await countRouteTargets(root)).toBe(4);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('route files excluded only by .gitignore are no targets at all — 0, not applicable', async () => {
+    const root = repo({ 'main.tf': 'x\n', 'gen/app.js': ROUTE, 'out/server.py': 'x\n' }, 'gen/\nout/\n', ['main.tf']);
+    try {
+      expect(await countRouteTargets(root)).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a tracked file deleted from the work tree is not a target', async () => {
+    const root = repo({ 'src/app.js': ROUTE, 'src/gone.js': ROUTE }, '', ['src/app.js', 'src/gone.js']);
+    try {
+      rmSync(join(root, 'src', 'gone.js'));
+      expect(await countRouteTargets(root)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the walk\'s own excludes: vendor/ and hidden directories, even when tracked', async () => {
+    const root = repo(
+      { 'src/app.php': '<?php\n', 'vendor/lib/x.php': '<?php\n', '.hidden/y.js': ROUTE },
+      '',
+      ['src/app.php', 'vendor/lib/x.php', '.hidden/y.js'],
+    );
+    try {
+      writeFileSync(join(root, '.semgrepignore'), '# own\n');
+      expect(await countRouteTargets(root)).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

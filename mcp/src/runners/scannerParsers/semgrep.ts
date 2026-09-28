@@ -17,6 +17,7 @@
 import type { Category, Finding, Severity } from '../../types.js';
 import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
 import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
+import { localRuleIdNormalizer, type RuleIdContext } from '../semgrepRuleIds.js';
 import {
   asArray,
   getNumber,
@@ -49,13 +50,38 @@ export const semgrepParser: ScannerParser = {
   },
 };
 
+/**
+ * {@link semgrepParser} for a run that passed these `--config` values: a
+ * rule from one of their local files is stored under the id
+ * `runners/semgrepRuleIds.ts` gives it — a project rule's id from the
+ * project root, a plugin pack's rule's own id, any other file's as Semgrep
+ * spells it — never under the path of the machine it ran on (`rule_id` is
+ * part of a finding's identity). `rules.projectPath` defaults to the parse
+ * context's project, `rules.cwd` (Semgrep's working directory) to the
+ * project. Registry ids are passed through unchanged.
+ */
+export function semgrepParserFor(configs: readonly string[], rules: RuleIdContext = {}): ScannerParser {
+  return {
+    name: SEMGREP_TOOL_NAME,
+    parse: (input, ctx = {}) => {
+      const projectPath = rules.projectPath ?? ctx.project_path;
+      const normalize = localRuleIdNormalizer(configs, {
+        ...rules,
+        ...(projectPath !== undefined ? { projectPath } : {}),
+      });
+      return semgrepParser.parse(input, { ...ctx, semgrep_rule_id: normalize });
+    },
+  };
+}
+
 function mapResult(raw: unknown, ctx: ParserContext): Finding | null {
   const extra = getProp(raw, 'extra');
   const start = getProp(raw, 'start');
   const end = getProp(raw, 'end');
   const metadata = getProp(extra, 'metadata');
 
-  const checkId = getString(raw, 'check_id');
+  const reportedId = getString(raw, 'check_id');
+  const checkId = reportedId === undefined ? undefined : (ctx.semgrep_rule_id?.(reportedId) ?? reportedId);
   const message = getString(extra, 'message');
   const filePath = getString(raw, 'path');
   if (!checkId || !filePath) return null;

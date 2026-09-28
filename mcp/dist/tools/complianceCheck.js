@@ -48,7 +48,7 @@ import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { Force, ProjectPath } from '../schemas.js';
@@ -79,7 +79,8 @@ export function rgpdSubcategory(ruleId) {
 const rgpdParser = {
     name: semgrepParser.name,
     parse(input, ctx) {
-        const out = semgrepParser.parse(input, ctx);
+        // The pack's rules under their own ids, not the install path (runners/semgrepRuleIds.ts).
+        const out = semgrepParserFor([rgpdRulesPath()]).parse(input, ctx);
         return {
             findings: out.findings.map((f) => {
                 const subcategory = rgpdSubcategory(f.rule_id ?? '');

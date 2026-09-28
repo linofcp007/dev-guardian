@@ -218,7 +218,7 @@ async function handler(input, ctx) {
     // not run (nor needed), and the snapshot (ports, specs) is persisted with
     // Semgrep `skipped`. A Terraform-only project must not read as an
     // incomplete scan because of the surface.
-    const targets = countRouteTargets(projectPath);
+    const targets = await countRouteTargets(projectPath);
     if (targets === 0) {
         const toolsRun = [{ name: 'semgrep', status: 'skipped', reason: NOT_APPLICABLE_REASON }];
         const snapshot = buildSnapshot(EMPTY_SEMGREP_REPORT, projectPath, ctx, toolsRun, includeEnvVars, [], inp.spec_paths);
@@ -280,7 +280,7 @@ async function handler(input, ctx) {
     if (judged.verdict === 'scanned_nothing') {
         return degradedResult([judged.toolRun], ['semgrep'], `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
             'surface was mapped and nothing was persisted — an empty result here is a gap, not an ' +
-            'application that exposes nothing. Check .semgrepignore / .gitignore.', ctx, projectPath);
+            'application that exposes nothing. Check .semgrepignore.', ctx, projectPath);
     }
     // Rebuild the captures modern Semgrep redacts, before anything downstream
     // looks for them. Reading the files is the impure half and belongs here;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { evaluateGate, exitCodeForCoverage } from '../../../src/ci/gate.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
 import { CI_EXIT } from '../../../src/ci/types.js';
-import type { Finding, Severity } from '../../../src/types.js';
+import type { Finding, Severity, ToolRun } from '../../../src/types.js';
 import type { ScanStepResult } from '../../../src/ci/types.js';
 
 function finding(over: Partial<Finding> = {}): Finding {
@@ -398,5 +398,158 @@ describe('exitCodeForCoverage (carried forward from Task 5 coordinator review)',
     );
     expect(none.coverage).toBe('none');
     expect(none.exitCode).toBe(exitCodeForCoverage('none'));
+  });
+});
+
+/**
+ * Follow-up X1 — `--accept-partial-parse <path>`. A Semgrep step the shared
+ * judge found `partial` (some files only partly parsed: `ok` AND missing)
+ * carries those files in `partial_parses` (runScans.ts). When EVERY one is
+ * accepted, the gap prints as accepted and does not force exit 2; coverage
+ * itself stays `partial` — in the verdict, and so in JSON and SARIF. Skipped,
+ * failed, scanned-nothing and unlisted files still exit 2. Paths are
+ * project-relative and matched exactly: no globs.
+ */
+describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
+  const WP = 'wp/rest-controller.php';
+  const partialRun = (files: readonly string[]): ToolRun => ({
+    name: 'semgrep',
+    status: 'ok',
+    reason: `partial: ${files.length} file(s) only partly parsed — findings in the unparsed spans may be missing`,
+    partially_parsed: files.map((file) => ({ file, type: 'PartialParsing', message: 'Syntax error' })),
+  });
+  const partialStep = (files: readonly string[] = [WP], over: Partial<ScanStepResult> = {}): ScanStepResult =>
+    step({
+      tool: 'security_scan_full',
+      tools_run: [partialRun(files)],
+      missing_tools: ['semgrep'],
+      partial_parses: { semgrep: files.map((file) => ({ file, type: 'PartialParsing' })) },
+      ...over,
+    });
+
+  it('not accepted: exit 2, coverage partial, the gap names the file and the flag', () => {
+    const v = evaluateGate(input({ steps: [partialStep()] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverage).toBe('partial');
+    expect(v.acceptedGaps).toEqual([]);
+    expect(v.coverageGaps).toHaveLength(1);
+    expect(v.coverageGaps[0]).toMatch(/^security_scan_full: semgrep ran with reduced coverage/);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: wp\/rest-controller\.php .*--accept-partial-parse/);
+  });
+
+  it('every file accepted: exit 0, printed as accepted, coverage stays partial', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverage).toBe('partial');
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.acceptedGaps).toEqual([
+      'security_scan_full: semgrep only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
+    expect(v.unusedPartialParseAcceptances).toEqual([]);
+  });
+
+  it('an accepted path that is not the one partially parsed: exit 2, and the acceptance is reported unused', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: ['wp/other.php'] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: wp\/rest-controller\.php/);
+    expect(v.unusedPartialParseAcceptances).toEqual(['wp/other.php']);
+  });
+
+  it('one of two files accepted: exit 2, naming only the unaccepted one', () => {
+    const v = evaluateGate(input({ steps: [partialStep([WP, 'b.js'])], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: b\.js /);
+    expect(v.coverageGaps[0]).not.toMatch(/not accepted: .*rest-controller/);
+  });
+
+  it('matched exactly: backslashes and a leading ./ normalise; case, globs, directories and prefixes do not', () => {
+    for (const spelling of ['wp\\rest-controller.php', './wp/rest-controller.php']) {
+      expect(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [spelling] })).exitCode).toBe(CI_EXIT.PASS);
+    }
+    for (const spelling of ['WP/rest-controller.php', 'wp/*.php', 'wp/**', 'wp', 'wp/', 'rest-controller.php', '/wp/rest-controller.php']) {
+      expect(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [spelling] })).exitCode).toBe(
+        CI_EXIT.INCOMPLETE_SCAN,
+      );
+    }
+  });
+
+  it('accepts per step: the SAST and the surface step each need their files accepted', () => {
+    const steps = [partialStep(), partialStep(['app/routes.php'], { tool: 'map_attack_surface' })];
+    expect(evaluateGate(input({ steps, acceptedPartialParses: [WP] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const both = evaluateGate(input({ steps, acceptedPartialParses: [WP, 'app/routes.php'] }));
+    expect(both.exitCode).toBe(CI_EXIT.PASS);
+    expect(both.acceptedGaps).toHaveLength(2);
+  });
+
+  it('never accepts a skipped, failed or scanned-nothing Semgrep, even with a file of the step accepted', () => {
+    const skipped: ToolRun = { name: 'semgrep', status: 'skipped', reason: 'semgrep scanned 0 files' };
+    const failed: ToolRun = { name: 'semgrep', status: 'failed', reason: 'exit 7' };
+    for (const other of [skipped, failed]) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { tools_run: [partialRun([WP]), other] })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(v.acceptedGaps).toEqual([]);
+    }
+    // A step with no partial_parses at all (scanned nothing, not installed).
+    const nothing = evaluateGate(input({
+      steps: [step({ tools_run: [skipped], missing_tools: ['semgrep'] })],
+      acceptedPartialParses: [WP],
+    }));
+    expect(nothing.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(nothing.unusedPartialParseAcceptances).toEqual([WP]);
+  });
+
+  it('another gap beside an accepted one still exits 2; a blocking finding still exits 1', () => {
+    const gap = evaluateGate(input({
+      steps: [partialStep(), step({ tool: 'scan_deps', tools_run: [], missing_tools: ['trivy'] })],
+      acceptedPartialParses: [WP],
+    }));
+    expect(gap.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(gap.acceptedGaps).toHaveLength(1);
+    const blocking = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP], findings: [finding()] }));
+    expect(blocking.exitCode).toBe(CI_EXIT.GATE_FAILED);
+  });
+
+  // Fix round 1: only a PARSE problem can be accepted. A per-file Timeout
+  // (Semgrep gave up on the file) is per-file too, and the shared judge
+  // calls it partial — but accepting a file's parse gap never means
+  // accepting that it was not analysed at all.
+  it('a per-file Timeout on an accepted file still exits 2, naming the type', () => {
+    for (const types of [['Timeout'], ['PartialParsing', 'Timeout']]) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: types.map((type) => ({ file: WP, type })) } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(v.acceptedGaps).toEqual([]);
+      expect(v.coverageGaps[0]).toMatch(/not accepted: Timeout on wp\/rest-controller\.php/);
+      expect(v.coverageGaps[0]).toMatch(/PartialParsing, Syntax error, Lexical error/);
+      expect(v.unusedPartialParseAcceptances).toEqual([]);
+    }
+    for (const type of ['Syntax error', 'Lexical error']) {
+      const v = evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type }] } })],
+        acceptedPartialParses: [WP],
+      }));
+      expect(v.exitCode).toBe(CI_EXIT.PASS);
+    }
+  });
+
+  it("the DAST step's partial-surface gap is accepted with the surface's files", () => {
+    const dast = step({
+      tool: 'scan_dast',
+      tools_run: [{ name: 'guardian-dast', status: 'ok' }],
+      missing_tools: ['guardian-dast:partial-surface'],
+      partial_parses: { 'guardian-dast:partial-surface': [{ file: WP, type: 'PartialParsing' }] },
+    });
+    expect(evaluateGate(input({ steps: [dast] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const v = evaluateGate(input({ steps: [dast], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.acceptedGaps).toEqual([
+      'scan_dast: guardian-dast:partial-surface only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
   });
 });

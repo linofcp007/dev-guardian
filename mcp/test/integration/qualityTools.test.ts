@@ -47,6 +47,9 @@ import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 
 import type { PluginContext } from '../../src/context.js';
 import { resolveBugfixRules } from '../../src/platform/configsDir.js';
+import { semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
+import { openSetForProject } from '../../src/history/openSet.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { customRulesMetaKey } from '../../src/platform/customRules.js';
 
 /** A rules file `register_custom_rules` and its reader accept. */
@@ -239,6 +242,44 @@ describe('bug_hunt', () => {
     // The pack-level detail (which pack, and why) lives on tools_run's
     // reason instead — the field actually meant for free-text diagnostics.
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toContain(PRIMARY_PACK);
+  });
+
+  // Fix round 2: the retry is judged by the shared Semgrep judge too — it
+  // read the exit code alone, so a file the retry only partly parsed was
+  // reported as a plain "ran with the survivors".
+  it('the retry names a file it only partly parsed', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    let calls = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        writeOutput(opts, configFailureJson(PRIMARY_PACK));
+        return { outcome: 'failed' as const, exitCode: 7, stdout: '', stderr: '', truncated: false };
+      }
+      writeOutput(
+        opts,
+        JSON.stringify({
+          results: [],
+          errors: [{ level: 'warn', type: ['PartialParsing', []], message: 'Syntax error at line wp/a.php:3', path: join(project, 'wp', 'a.php') }],
+          paths: { scanned: [join(project, 'wp', 'a.php')] },
+        }),
+      );
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('bug_hunt').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string; partially_parsed?: Array<{ file: string }> }[];
+    };
+    expect(calls).toBe(2);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toContain(PRIMARY_PACK);
+    expect(run?.reason).toMatch(/only partly parsed/);
+    expect(run?.partially_parsed?.map((p) => p.file)).toEqual(['wp/a.php']);
+    expect(r.missing_tools).toEqual(['semgrep']);
   });
 
   it('the local bugfix-*.yml rules survive and still report findings when BOTH base registry packs fail to download', async () => {
@@ -437,8 +478,8 @@ describe('bug_hunt', () => {
   });
 
   it(
-    'a single broken RULE inside the local file does not fail the whole scan — real findings still ' +
-      'come back, with an accurate reason instead of the misleading "install semgrep" warning',
+    'a single broken RULE inside the local file: its real findings still come back, the run is partial ' +
+      '(never ok/full, never failed/none), and the reason names the rule — never "install semgrep"',
     async () => {
       // This is the case the coordinator's own reproduction and the two
       // suggested routes did not cover, found while reproducing the
@@ -452,16 +493,21 @@ describe('bug_hunt', () => {
       const plugin = makePlugin(project);
       vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
 
+      // Semgrep names both rules by the pack's directory, dotted — the
+      // plugin's install path (measured on 1.176.1, runners/semgrepRuleIds.ts).
+      const jsPack = resolveBugfixRules().find((f) => f.endsWith('bugfix-js.yml'));
+      if (jsPack === undefined) throw new Error('bugfix-js.yml not found');
+      const installed = (id: string): string => `${semgrepConfigPrefix(jsPack)}.${id}`;
       vi.mocked(runProcess).mockImplementation(async (opts) => {
-        // Real Semgrep 1.164.0 shape, live-captured with the exact
-        // three-config invocation bug_hunt actually runs.
+        // Semgrep's shape, live-captured with the exact three-config
+        // invocation bug_hunt actually runs (1.164.0; ids as 1.176.1 spells them).
         writeOutput(
           opts,
           JSON.stringify({
             version: '1.164.0',
             results: [
               {
-                check_id: 'bugfix-js-off-by-one-loop-lte-length',
+                check_id: installed('bugfix-js-off-by-one-loop-lte-length'),
                 path: 'app.ts',
                 start: { line: 2 },
                 end: { line: 2 },
@@ -473,9 +519,9 @@ describe('bug_hunt', () => {
                 code: 2,
                 level: 'error',
                 type: 'Rule parse error',
-                rule_id: 'bugfix-js-error-handling-empty-catch',
+                rule_id: installed('bugfix-js-error-handling-empty-catch'),
                 message:
-                  'Rule parse error in rule bugfix-js-error-handling-empty-catch:\n ' +
+                  `Rule parse error in rule ${installed('bugfix-js-error-handling-empty-catch')}:\n ` +
                   'Invalid pattern for JavaScript: Failure: no pattern found',
               },
             ],
@@ -493,25 +539,192 @@ describe('bug_hunt', () => {
         warnings: string[];
         coverage?: string;
         top_findings: { rule_id?: string }[];
+        missing_tools: string[];
       };
       expect(r.ok).toBe(true);
-      // Before this fix: status:'failed', no reason, coverage:'none' --
-      // even though a real scan happened. Must now read as 'ok'.
-      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
-      const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
-      expect(reason).toContain('bugfix-js-error-handling-empty-catch');
-      expect(reason).toContain('Invalid pattern for JavaScript');
+      // Bugfix-rules-jsts task 3 made this 'ok' at coverage 'full' ("one bad
+      // rule costs that rule"), judged by the exit code; fix round 1 made it
+      // 'failed' — coverage 'none', "NO scanner ran … Install semgrep", and
+      // the open set skipping the row. Fix round 2: the rules that loaded
+      // ran — partial coverage, Semgrep ok AND missing, the broken rule
+      // named in failed_rules so its old findings are not re-measured.
+      const run = r.tools_run.find((t) => t.name === 'semgrep') as
+        | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string; message: string }> }
+        | undefined;
+      expect(run?.status).toBe('ok');
+      const reason = run?.reason ?? '';
+      expect(reason).toMatch(/^Semgrep ran, but 1 rule\(s\) did not load: bugfix-js-error-handling-empty-catch — Invalid pattern for JavaScript/);
+      expect(reason).toContain('Findings of the other rules over 1 file(s) are kept');
+      // Named as its findings are: the rule's own id, not the install path.
+      expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['bugfix-js-error-handling-empty-catch']);
+      expect(r.missing_tools).toContain('semgrep');
       // The real finding from the OTHER, still-valid rule must still reach
       // the caller — not be silently dropped just because a sibling rule
       // in the same file failed to parse.
       const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
       expect(total).toBeGreaterThan(0);
-      expect(r.top_findings.some((f) => (f.rule_id ?? '').includes('off-by-one'))).toBe(true);
-      expect(r.coverage).toBe('full');
+      expect(r.top_findings.map((f) => f.rule_id)).toContain('bugfix-js-off-by-one-loop-lte-length');
+      expect(r.coverage).toBe('partial');
       // The misleading warning has to be gone for this case specifically.
       expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
     },
   );
+
+  // Fix round 2, the guard fix round 1 deleted: a broken rule is not a
+  // clean re-measure. The run is the bugs slot's newest source (never
+  // skipped as coverage none), what the loaded rules re-measured resolves,
+  // and what the broken rule found last time stays open, not re-measured.
+  it('a broken rule on the next run: the open set keeps its old finding open and resolves what the other rules re-measured', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const hit = (check_id: string, path: string) => ({
+      check_id,
+      path,
+      start: { line: 2 },
+      end: { line: 2 },
+      extra: { severity: 'ERROR', message: 'bug', metadata: {} },
+    });
+    const reports = [
+      // First run: every rule loaded.
+      {
+        exit: 1,
+        body: {
+          results: [
+            hit('bugfix-js-error-handling-empty-catch', 'a.ts'),
+            hit('bugfix-js-off-by-one-loop-lte-length', 'b.ts'),
+            hit('bugfix-js-off-by-one-loop-lte-length', 'c.ts'),
+          ],
+          errors: [],
+          paths: { scanned: ['a.ts', 'b.ts', 'c.ts'] },
+        },
+      },
+      // Second run: empty-catch did not load; c.ts was fixed.
+      {
+        exit: 2,
+        body: {
+          results: [hit('bugfix-js-off-by-one-loop-lte-length', 'b.ts')],
+          errors: [
+            {
+              code: 2,
+              level: 'error',
+              type: 'Rule parse error',
+              rule_id: 'bugfix-js-error-handling-empty-catch',
+              message: 'Rule parse error in rule bugfix-js-error-handling-empty-catch:\n Invalid pattern for JavaScript',
+            },
+          ],
+          paths: { scanned: ['a.ts', 'b.ts', 'c.ts'] },
+        },
+      },
+    ];
+    let call = 0;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const report = reports[Math.min(call, reports.length - 1)];
+      call += 1;
+      if (report === undefined) throw new Error('no report');
+      writeOutput(opts, JSON.stringify(report.body));
+      return { outcome: report.exit === 1 ? ('completed' as const) : ('failed' as const), exitCode: report.exit, stdout: '', stderr: '', truncated: false };
+    });
+    await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin);
+    await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin);
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    const byFile = Object.fromEntries(set.findings.map((f) => [f.file_path, f.not_remeasured ?? false]));
+    expect(byFile).toEqual({ 'a.ts': true, 'b.ts': false });
+    expect(set.coverage).toBe('partial');
+    expect(set.skipped.count).toBe(0);
+    expect(set.sources.map((x) => x.carried_for ?? null)).toEqual([
+      null,
+      ['semgrep (rule not loaded: bugfix-js-error-handling-empty-catch)'],
+    ]);
+  });
+
+  // Fix round 1: the whole-project run is judged by the shared Semgrep judge
+  // (runners/semgrepReport.ts), like its scoped run and scan_sast — not by
+  // the exit code alone, which read both shapes below as ok, coverage full.
+  it('a file Semgrep only partly parsed: ok, listed missing, the file named — partial coverage', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(
+        opts,
+        JSON.stringify({
+          results: [],
+          errors: [
+            {
+              code: 3,
+              level: 'warn',
+              type: ['PartialParsing', [{ path: join(project, 'wp', 'a.php') }]],
+              message: 'Syntax error at line wp/a.php:3',
+              path: join(project, 'wp', 'a.php'),
+            },
+          ],
+          paths: { scanned: [join(project, 'wp', 'a.php'), join(project, 'app.ts')] },
+        }),
+      );
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; partially_parsed?: Array<{ file: string }> }[];
+      missing_tools: string[];
+      coverage?: string;
+    };
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/only partly parsed/);
+    expect(run?.partially_parsed?.map((p) => p.file)).toEqual(['wp/a.php']);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(r.coverage).toBe('partial');
+  });
+
+  it('a clean exit that scanned nothing is a skipped gap, never ok', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(opts, JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string }[];
+      missing_tools: string[];
+      coverage?: string;
+    };
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('skipped');
+    expect(run?.reason).toMatch(/scanned 0 files/);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(r.coverage).not.toBe('full');
+  });
+
+  it('a bugfix rule with an unknown language (Semgrep exit 8): failed, the rule error named, never "install semgrep"', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      writeOutput(
+        opts,
+        JSON.stringify({
+          results: [],
+          errors: [{ code: 8, level: 'error', type: 'UnknownLanguageError', short_msg: 'invalid language: klingon', long_msg: 'unsupported language: klingon.', spans: [] }],
+          paths: { scanned: [] },
+        }),
+      );
+      return { outcome: 'failed' as const, exitCode: 8, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('bug_hunt').handler({ project_path: project, force: true }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; rule_config_error?: boolean }[];
+      warnings: string[];
+    };
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toBe('the rule configuration did not load — UnknownLanguageError: invalid language: klingon (semgrep exit 8)');
+    expect(run?.rule_config_error).toBe(true);
+    expect(r.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
 
   it(
     'a genuine failure with no recognisable errors[] shape still reports failed — the broadening ' +
@@ -1006,6 +1219,9 @@ describe('bug_hunt', () => {
         },
       ],
       errors: [],
+      // Every real Semgrep report says what it scanned; without it the run
+      // reads "scanned nothing" (the shared judge), never a clean result.
+      paths: { scanned: ['a.ts', 'b.ts', 'c.ts'] },
     });
   }
 
@@ -1158,6 +1374,7 @@ describe('bug_hunt', () => {
             },
           ],
           errors: [],
+          paths: { scanned: ['a.py', 'b.py', 'c.py', 'd.py', 'e.py'] },
         }),
       );
       return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };

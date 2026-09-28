@@ -295,6 +295,19 @@ keeps working (migrations 004–011 are additive).
   are written by hand. `mcp/test/docs/docs.test.ts` holds every tool,
   resource, skill and command count the READMEs, CLAUDE.md and
   `mcp/README.md` state to the code.
+- **`dev-guardian scan --accept-partial-parse <path>`** (repeatable, command
+  line only — a `.guardian/ci.json` declaring `accept_partial_parse` is
+  refused, like `start_command`). When every file a Semgrep step could only
+  partly parse is named, that gap prints as "accepted" (JSON `accepted_gaps`)
+  and no longer forces exit 2; coverage still reads `partial` in the report,
+  the JSON and the SARIF. Paths are project-relative and matched exactly. A
+  skipped, failed or scanned-nothing Semgrep, or any file not named, still
+  exits 2; with `--base-url` the DAST step's `partial-surface` gap is accepted
+  with the same files. A WordPress plugin with PHP's legal `const NAMESPACE`
+  (a Semgrep 1.176.1 `PartialParsing` warning) can now pass the gate once the
+  gap has been looked at. Only parse types are acceptable (`PartialParsing`,
+  `Syntax error`, `Lexical error`): a per-file `Timeout` still exits 2. See
+  `docs/ci.md`.
 
 ### Changed
 
@@ -699,6 +712,14 @@ keeps working (migrations 004–011 are additive).
   remain are a bot account's address and synthetic addresses in a seed script,
   which a name cannot tell apart. The corpus list, commits and per-rule counts
   are in the pack header.
+- **`register_custom_rules` registered rules Semgrep cannot compile.** Its
+  shape check passed `languages: [klingon]`, and one such file makes Semgrep
+  refuse the whole configuration on every later scan (exit 8, nothing
+  scanned). When Semgrep is installed, every file is now compiled with
+  `semgrep --validate` (metrics off, 60 s bound) and one it refuses is
+  `rejected` with Semgrep's own message; a directory holding one is
+  registered as its accepted files. Without Semgrep, or when it cannot
+  answer, the shape check stands and `semgrep_validated: false` says so.
 - **`dev-guardian scan` / `baseline update` exited 2** ("INCOMPLETE SCAN —
   security_scan_full: trivy not installed") on a clean project with Trivy
   installed. A `package.json` that declares no dependency (and whose lock
@@ -1020,6 +1041,126 @@ keeps working (migrations 004–011 are additive).
   temp file over the pipeline file, so it never writes through a symlink or a
   hard link and never leaves the file half-written; `--help` says what it
   still refuses.
+- **Scan retention** also keeps the sub-scans a baselined `audit_executive`
+  row links in `meta.sub_scan_ids`: pruning them made the audit's
+  per-scanner comparison fall back to its one-line-per-tool entries.
+- **Two images, one target**: `scan_containers` of image B "re-measured"
+  image A's findings, so `diff_scans` and `regression_alert` read them as
+  resolved. The `trivy-image` run now records its image (`tools_run[].target`),
+  and an image's findings are re-measured only by a scan of the same image —
+  otherwise not re-measured, named `trivy-image (<image>)`. References are
+  compared as Docker resolves them (`nginx`, `nginx:latest` and
+  `docker.io/library/nginx:latest` are one image). Rows written before keep
+  today's reading. A misconfiguration does not record whether the Dockerfile
+  pass or the image pass found it, so one from a scan that also scanned an
+  image stays not re-measured (and open, carried) until that image is
+  scanned again — even when a later Dockerfile pass no longer reports it:
+  the conservative reading.
+- **The open set dropped findings a newer scan did not look at again.** A
+  slot's newest scan was its whole answer, so a partly parsed file, a Semgrep
+  that failed beside an ok Bandit, or a scan of image B made every older
+  finding it did not re-measure vanish from `findings/open`, `risk_score`,
+  the dashboard, triage, prioritize, `create_fix_pr`, `validate_finding` and
+  `create_github_issues`, with only `coverage: partial` left to say so. Each
+  slot now carries forward the findings of its older scans that every newer
+  one left open — `runCompare`'s own "not re-measured" predicate, shared —
+  marked `not_remeasured: true`, the older scan listed in `sources` with
+  `carried_for`. A finding a newer scan measured and did not find stays
+  resolved; a scanner the newer scan did not run at all is not a gap —
+  except a pass that runs only when asked (`trivy-image`, nuclei): a scan
+  that did not ask did not look, so image A's CVEs stay open under a
+  Dockerfile-only scan. A carry makes the set's coverage `partial`; the
+  dashboard names only what a carried scan was carried for (never its own
+  stale gaps), as reduced coverage when the scanner ran on another target;
+  `sources` stay newest first. The walk is linear in the history it covers:
+  250 scans x 1000 findings with a gap in every scan took 10-15.5 s, now
+  under 0.3 s (200 x 300: 4.2 s, now 0.06 s); 2000 scans each over its own
+  image took 19 s, now 0.33 s (5000, half of them Dockerfile-only: 63 s, now
+  0.44 s); a partly parsed file and a different rule not loaded in every scan
+  no longer grow the carry's conditions (5000 scans: 1.3 s, now 0.02 s), and
+  large sets of them stay cheap: a set already met is skipped, and past 10 000
+  (file, rule) pairs the carry keeps the newest set alone — it can only carry
+  more, never drop a finding (2000 scans alternating two sets of 200 files
+  and 200 rules: 11.8 s, now 0.1 s).
+- **A bug_hunt or RGPD finding changed identity with every plugin update.**
+  Semgrep names a rule from a local file by that file's directory, dotted —
+  the whole absolute path when it does not run from under it
+  (`C.Users.….plugins.cache.<version>.configs.semgrep.<rule>`) — and both
+  the fingerprint and the identity hash `rule_id`. So a new install path
+  (every version) made every finding of the plugin's own packs new:
+  suppressions stopped applying, the open set held both copies. A project's
+  own rule did the same whenever Semgrep ran from elsewhere (`review_pr` on
+  a ref, `create_fix_pr`'s worktree). The parser now stores a rule of the
+  plugin's own packs — found from the plugin's root, not from any directory
+  named `configs/semgrep` — under its own id, and a project rule under the
+  id Semgrep gives it from the project root (what every scan run from the
+  project always stored); a rule file anywhere else keeps Semgrep's own id,
+  so two files that define the same rule id stay two rules. Stored
+  plugin-pack findings are re-keyed at startup (the own id, the fingerprint
+  and identity a fresh scan computes, their suppressions and cached
+  validations): in batches that commit as they go, so a start that is
+  stopped keeps its progress, and on each later start for rows an older
+  plugin process wrote since (200 000 rows: about 40 s once, on a loaded
+  machine; nothing new: 1 ms); a scan left `running` by a process that is
+  gone does not hold it back. Only an install in Claude Code's plugin cache
+  layout (`…/<marketplace>/dev-guardian/<version>/`) is recognised across
+  versions — the running install and one version directory beside it.
+  Findings stored by an install anywhere else (`--plugin-dir`, another
+  marketplace name, a fork's directory) keep their old ids, by design, and
+  read as new once after the update. A committed `.guardian/baseline.json` is
+  unaffected: `dev-guardian scan` runs no plugin pack, and a project rule's
+  id did not change.
+- **`scan_dast` over a surface whose route recovery failed** read coverage
+  `full`: `map_attack_surface` persists a snapshot whose
+  `semgrep-metavar-recovery` step lost some matches, with nothing in
+  `missing_tools`. Any failed step of the surface's run now makes the DAST run
+  partial (`guardian-dast:partial-surface`), names the step in the warning and
+  lists it under `summary.surface_gaps.failed_steps`.
+- **`map_attack_surface` counted gitignored route files** as Semgrep targets.
+  Inside a git work tree Semgrep lists its targets through git (measured on
+  1.176.1), so a project whose only route files are gitignored read "scanned 0
+  of N" — a gap, and exit 2 in CI. The count now reads `git ls-files --cached
+  --others --exclude-standard` there (Semgrep's default ignore still applied
+  when there is no `.semgrepignore`): such a project is not applicable, never a
+  gap. Outside git the walk is unchanged.
+- **`scan_sast` read a file Semgrep only partly parsed as a failed scanner**
+  (a warn-level `PartialParsing`, e.g. PHP's `const NAMESPACE`), while
+  `map_attack_surface` read the same warning as partial coverage. The per-file
+  classification now lives in the shared Semgrep judge
+  (`runners/semgrepReport.ts`, a `partial` verdict), used by `scan_sast`,
+  `map_attack_surface` and the batched scoped runs (`scan_sast`/`bug_hunt`
+  with `scope`, `review_pr`): `paths.scanned > 0` with only per-file errors is
+  partial coverage — Semgrep `ok` and listed missing, the files named in
+  `tools_run[].partially_parsed` (one entry per file and error type); fatal
+  errors stay `failed`. Whole-project `bug_hunt` and `scan_wordpress`
+  (`semgrep-wp`), which judged Semgrep by its exit code alone, use it too: a
+  partly parsed file or a run that scanned nothing no longer reads `ok` at
+  coverage full (`scan_wordpress` with no `.php` file is not applicable).
+  A rule that did not load while the other rules ran (a typo'd pattern in
+  `.semgrep.yml`, a registered rule or a bugfix pack) is a narrower gap, not
+  a failed Semgrep: the judge names such rules (`rules_not_loaded`: a rule
+  error with its `rule_id`), and `scan_sast` (whole-project, the Docker
+  fallback and scoped runs), `bug_hunt` and `review_pr` record Semgrep `ok`
+  and missing with them in `tools_run[].failed_rules` and a reason naming
+  each ("Semgrep ran, but 1 rule(s) did not load: …") — never coverage none
+  and "NO scanner ran … Install semgrep" for a Semgrep that ran, and never a
+  row the open set skips; the other rules' findings resolve as usual, and an
+  earlier finding of the broken rule stays open as not re-measured.
+  `bug_hunt`'s retry after a dead registry pack is judged the same way. A
+  rule error that names no rule stays `failed`. A run in which NO rule
+  loaded — every rule of the local rule files failed and no registry pack
+  ran — is `failed` (nothing was scanned for), the rules named; a rule
+  configuration Semgrep refuses outright (a rule with an unknown language:
+  exit 8, `UnknownLanguageError`) names that error, once, instead of `(no
+  message)`. The Docker fallback reads the project's rule file on the host to
+  tell (it passes the container's `/src/…` name). Both are marked `tools_run[].rule_config_error`, and the
+  coverage warning then says Semgrep ran and its rules did not load, never
+  "Install semgrep". A comparison
+  (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
+  Semgrep finding in a partly parsed file as not measured by that run —
+  never resolved, never new — and names it `semgrep (partly parsed: …)`;
+  its note (and `regression_alert`'s hint) says Semgrep "only partly
+  measured" it, never that it "failed, or is not installed".
 
 ### Security
 

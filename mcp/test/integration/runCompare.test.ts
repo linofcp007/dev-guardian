@@ -804,6 +804,105 @@ describe("Task 15's scanners in the comparison", () => {
     });
   });
 
+  /**
+   * Follow-up X5 — two images, one target. `trivy-image` was one target
+   * whatever image it scanned, so scanning image B "re-measured" image A's
+   * findings and resolved them. The run now records the image reference
+   * (`ToolRun.target`), and a finding of an image pass is re-measured only
+   * by a pass over the SAME image. A row written before the reference was
+   * recorded (no `target`) keeps today's reading: any image pass.
+   */
+  describe('X5: an image pass re-measures only its own image', () => {
+    const I = 'i'.repeat(64);
+    const J = 'j'.repeat(64);
+    const imageMisconfig: SeedFinding = {
+      fp: I, tool: 'trivy', rule_id: 'DS-0026', subcategory: 'dockerfile', file: 'app/Dockerfile', severity: 'high',
+    };
+    const imageCve: SeedFinding = {
+      fp: J, tool: 'trivy', rule_id: 'CVE-2099-0001', subcategory: 'cve', file: 'app:1 (alpine 3.10.9)', severity: 'high',
+    };
+    const image = (target: string | undefined): ToolRun =>
+      target === undefined ? { name: 'trivy-image', status: 'ok' } : { name: 'trivy-image', status: 'ok', target };
+
+    function pair(first: ToolRun[], second: ToolRun[], finding: SeedFinding): { s: Seeded; p: string } {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-x5-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: first, findings: [finding] });
+      seedScan(s, { id: 'b', type: 'containers', project: p, tools_run: second });
+      return { s, p };
+    }
+
+    it("scanning image B never resolves image A's misconfiguration, nor its CVE", async () => {
+      for (const finding of [imageMisconfig, imageCve]) {
+        const { s, p } = pair([image('registry/app:1')], [image('registry/other:2')], finding);
+        const d = await diff(s, p, 'containers');
+        expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+        expect(d.not_measured).toEqual(['trivy-image (registry/app:1)']);
+        expect(d.note).toMatch(/registry\/app:1/);
+      }
+    });
+
+    it('control: the same image scanned again resolves it', async () => {
+      const { s, p } = pair([image('registry/app:1')], [image('registry/app:1')], imageMisconfig);
+      expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    });
+
+    it("regression_alert: image B's scan does not cancel a real new high with image A's resolution", async () => {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-x5-alert-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: [image('registry/app:1')], findings: [imageMisconfig] });
+      seedScan(s, {
+        id: 'b', type: 'containers', project: p, tools_run: [image('registry/other:2')],
+        findings: [{ ...imageCve, file: 'registry/other:2 (alpine 3.10.9)' }],
+      });
+      const r = okResult<AlertOut>(await tool('regression_alert').handler({ project_path: p, threshold: 0 }, s.plugin));
+      expect(r.resolved_findings_by_severity['high']).toBe(0);
+      expect(r.not_remeasured_by_severity['high']).toBe(1);
+      expect(r.score_delta).toBe(5);
+      expect(r.regressed).toBe(true);
+    });
+
+    it('a legacy row with no image reference, on either side, keeps reading any image pass as the same target', async () => {
+      for (const [first, second] of [
+        [image(undefined), image('registry/other:2')],
+        [image('registry/app:1'), image(undefined)],
+        [image(undefined), image(undefined)],
+      ] satisfies [ToolRun, ToolRun][]) {
+        const { s, p } = pair([first], [second], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+      }
+    });
+
+    // Fix round 1: one image, several spellings — Docker's defaults applied.
+    it('one image under several spellings is one target: nginx, nginx:latest, docker.io/library/nginx:latest', async () => {
+      for (const [first, second] of [
+        ['nginx', 'docker.io/library/nginx:latest'],
+        ['nginx:latest', 'index.docker.io/library/nginx'],
+        ['library/nginx:1.25', 'nginx:1.25'],
+        ['ghcr.io/org/app', 'ghcr.io/org/app:latest'],
+      ] as const) {
+        const { s, p } = pair([image(first)], [image(second)], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary, `${first} vs ${second}`).toMatchObject({ resolved: 1, not_remeasured: 0 });
+      }
+      for (const [first, second] of [
+        ['nginx', 'nginx:1.25'],
+        ['nginx:1.25', 'nginx@sha256:' + 'a'.repeat(64)],
+        ['org/app', 'ghcr.io/org/app'],
+        ['localhost:5000/app', 'app'],
+      ] as const) {
+        const { s, p } = pair([image(first)], [image(second)], imageMisconfig);
+        expect((await diff(s, p, 'containers')).summary, `${first} vs ${second}`).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      }
+    });
+
+    it('a Dockerfile pass still never re-measures an image, whatever image it names', async () => {
+      const { s, p } = pair([image('registry/app:1')], [{ name: 'trivy-dockerfile', status: 'ok' }], imageMisconfig);
+      const d = await diff(s, p, 'containers');
+      expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      expect(d.not_measured).toEqual(['trivy-image (registry/app:1)']);
+    });
+  });
+
   it("hadolint's finding: resolved when hadolint ran, whatever else failed; not re-measured when it failed", async () => {
     const lint = [{ fp: H, tool: 'hadolint', category: 'quality' as const, severity: 'medium' as const }];
     const first: ToolRun[] = [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'ok' }];
@@ -1083,5 +1182,75 @@ describe('a scanner the reference did not run at all: what it finds now is new',
       expect(diff.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
       expect(diff.reference_not_measured).toEqual(['scan_sast']);
     });
+  });
+});
+
+/**
+ * Follow-up X1: a Semgrep run the shared judge found `partial` is `ok` AND
+ * missing, the files named in `partially_parsed`. That shape reads as the
+ * retry shape ("ran, with a narrower gap"), so without more it would have
+ * MEASURED every Semgrep finding — including one inside the unparsed span of
+ * a named file, which would then read resolved (or new). Before, the run was
+ * `failed` and nothing of Semgrep's was measured. A finding in a file the run
+ * only partly parsed is unmeasured; every other Semgrep finding is measured.
+ */
+describe('a Semgrep run that only partly parsed some files', () => {
+  const partialRun = (...files: string[]): ToolRun => ({
+    name: 'semgrep',
+    status: 'ok',
+    reason: 'partial',
+    partially_parsed: files.map((file) => ({ file, type: 'PartialParsing', message: 'Syntax error' })),
+  });
+
+  function pair(findingFile: string, newer: ToolRun): { s: Seeded; p: string } {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-partial-parse-');
+    seedScan(s, { id: 'a', type: 'sast', project: p, findings: [{ fp: S, tool: 'semgrep', file: findingFile }] });
+    seedScan(s, { id: 'b', type: 'sast', project: p, tools_run: [newer], missing_tools: ['semgrep'] });
+    return { s, p };
+  }
+  const diff = async (s: Seeded, p: string): Promise<DiffOut> =>
+    okResult<DiffOut>(await tool('diff_scans').handler({ project_path: p, scan_type: 'sast' }, s.plugin));
+
+  it('does not resolve a finding in a file it only partly parsed, and names the file', async () => {
+    const { s, p } = pair('wp/rest-controller.php', partialRun('wp/rest-controller.php'));
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(d.not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    // Fix round 2: worded per verdict — Semgrep ran; it neither failed nor is missing.
+    expect(d.note).toMatch(/only partly measured semgrep \(partly parsed: wp\/rest-controller\.php\)/);
+    expect(d.note).not.toMatch(/failed, or is not installed/);
+  });
+
+  it('control: resolves a finding in any other file — the rest of the run measured', async () => {
+    const { s, p } = pair('src/app.js', partialRun('wp/rest-controller.php'));
+    expect((await diff(s, p)).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it("regression_alert's hint says Semgrep only partly measured the file — never that it failed or is not installed", async () => {
+    const { s, p } = pair('wp/rest-controller.php', partialRun('wp/rest-controller.php'));
+    const r = okResult<{ regressed: boolean; hint: string; not_measured?: string[] }>(
+      await tool('regression_alert').handler({ project_path: p, scan_type: 'sast', threshold: 0 }, s.plugin),
+    );
+    expect(r.regressed).toBe(false);
+    expect(r.not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    // A scan type is compared with itself: what was measured is findings, not types.
+    expect(r.hint).toMatch(/^No significant regression among the findings that were measured\. /);
+    expect(r.hint).toMatch(/only partly measured semgrep \(partly parsed: wp\/rest-controller\.php\)/);
+    expect(r.hint).not.toMatch(/failed, or is not installed/);
+    // A file Semgrep's parser cannot read is not the user's to "fix".
+    expect(r.hint).not.toMatch(/fix the file/);
+  });
+
+  it('a reference that only partly parsed a file holds a finding there now "not previously measured", never new', async () => {
+    const s = freshPlugin();
+    const p = projectDir('runcmp-partial-parse-ref-');
+    seedScan(s, { id: 'a', type: 'sast', project: p, tools_run: [partialRun('wp/rest-controller.php')], missing_tools: ['semgrep'] });
+    seedScan(s, { id: 'b', type: 'sast', project: p, findings: [{ fp: D, tool: 'semgrep', file: 'wp/rest-controller.php' }] });
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
+    expect(d.reference_not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    expect(d.note).toMatch(/reference scan \S+ only partly measured semgrep \(partly parsed/);
+    expect(d.note).not.toMatch(/failed, or was not installed/);
   });
 });

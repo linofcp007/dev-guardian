@@ -97,6 +97,24 @@ function input(over: Partial<Parameters<typeof evaluateGate>[0]> = {}) {
 
 const PROJECT = '/proj';
 
+/** A security_scan_full step whose Semgrep only partly parsed one file (follow-up X1). */
+const WP = 'wp/rest-controller.php';
+function partialStep(): ScanStepResult {
+  return step({
+    tool: 'security_scan_full',
+    tools_run: [
+      {
+        name: 'semgrep',
+        status: 'ok',
+        reason: 'partial: 1 file(s) only partly parsed',
+        partially_parsed: [{ file: WP, type: 'PartialParsing', message: 'Syntax error' }],
+      },
+    ],
+    missing_tools: ['semgrep'],
+    partial_parses: { semgrep: [{ file: WP, type: 'PartialParsing' }] },
+  });
+}
+
 // See the module doc comment above for why this is `require`d rather than
 // imported.
 const addFormats = createRequire(import.meta.url)('ajv-formats') as FormatsPlugin;
@@ -299,6 +317,14 @@ describe('renderSarif', () => {
     expectValidSarif(doc);
   });
 
+  it('keeps executionSuccessful: false for an accepted partial parse — coverage stays partial (follow-up X1)', () => {
+    const v = evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS); // sanity: accepted
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    expect(doc.runs[0].invocations[0].executionSuccessful).toBe(false);
+    expectValidSarif(doc);
+  });
+
   it('keeps executionSuccessful: true on a GATE_FAILED verdict when coverage is still full', () => {
     // Mutation-proven gap (task report): rewiring the implementation to
     // `v.exitCode === 0` instead of `v.coverage === 'full'` left every other
@@ -464,6 +490,16 @@ describe('renderHuman', () => {
     expect(text).not.toMatch(/undefined/);
   });
 
+  it('prints an accepted partial parse as accepted — never as a gap — with coverage partial (follow-up X1)', () => {
+    const text = renderHuman(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP, 'x.php'] })));
+    expect(text).toMatch(/^dev-guardian CI: PASS \(exit code 0\)$/m);
+    expect(text).toMatch(/^coverage: partial$/m);
+    expect(text).not.toMatch(/coverage gaps/i);
+    expect(text).toMatch(/^accepted \(--accept-partial-parse\):$/m);
+    expect(text).toMatch(/^ {2}- security_scan_full: semgrep only partly parsed wp\/rest-controller\.php — accepted/m);
+    expect(text).toMatch(/--accept-partial-parse x\.php: no step reported it partly parsed/);
+  });
+
   it('reads as a clean pass when there are no findings and coverage is full', () => {
     const v = evaluateGate(input());
     const text = renderHuman(v);
@@ -496,6 +532,17 @@ describe('renderJson', () => {
     expect(o.coverage).toBe('full');
     expect(o.exit_code).toBe(CI_EXIT.PASS);
     expect(o.coverage_gaps).toEqual([]);
+  });
+
+  it('carries accepted partial parses apart from the gaps, and coverage stays partial (follow-up X1)', () => {
+    const o = JSON.parse(renderJson(evaluateGate(input({ steps: [partialStep()], acceptedPartialParses: [WP, 'x.php'] }))));
+    expect(o.exit_code).toBe(CI_EXIT.PASS);
+    expect(o.coverage).toBe('partial');
+    expect(o.coverage_gaps).toEqual([]);
+    expect(o.accepted_gaps).toEqual([
+      'security_scan_full: semgrep only partly parsed wp/rest-controller.php — accepted (--accept-partial-parse)',
+    ]);
+    expect(o.unused_partial_parse_acceptances).toEqual(['x.php']);
   });
 
   it('carries baseline_absent, distinctly from an empty baseline', () => {

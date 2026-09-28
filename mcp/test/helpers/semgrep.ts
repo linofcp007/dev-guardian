@@ -65,6 +65,8 @@ export interface SemgrepOptions {
   readonly timeoutMs?: number;
   /** Variables set over the inherited environment for this call. */
   readonly env?: Readonly<Record<string, string>>;
+  /** The working directory (Semgrep names a local rule relative to it when it can). */
+  readonly cwd?: string;
 }
 
 function semgrepCommand(): { file: string; prefix: string[] } {
@@ -107,6 +109,7 @@ export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}
       timeout: timeoutMs,
       killSignal: 'SIGKILL',
       windowsHide: true,
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     });
   } finally {
     closeSync(out);

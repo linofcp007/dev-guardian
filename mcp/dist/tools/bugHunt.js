@@ -114,7 +114,9 @@ import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSem
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
+import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
+import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
@@ -310,13 +312,18 @@ export const BUG_SUBCATEGORIES = new Set([
  * `severity_min` had already been fixed for (see `scanToolFactory.ts`).
  * `categories` is now a response-only view, {@link categoriesView}.
  */
-const bugCategoryParser = {
-    name: semgrepParser.name,
-    parse(input, ctx) {
-        const out = semgrepParser.parse(input, ctx);
-        return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
-    },
-};
+function bugCategoryParserFor(packs, ctx) {
+    // A plugin pack's rule is stored under its own id, never under the path of
+    // the plugin's install (runners/semgrepRuleIds.ts).
+    const base = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
+    return {
+        name: semgrepParser.name,
+        parse(input, ctx) {
+            const out = base.parse(input, ctx);
+            return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
+        },
+    };
+}
 /**
  * `categories` as a view over the stored findings: the ones whose
  * subcategory is not listed are withheld from THIS response, counted by
@@ -525,7 +532,7 @@ async function invokeBugHunt(input, ctx) {
     // all of them by default (omitting them only if resolveBugfixRules()
     // finds none); see this file's header comment.
     const configuredPacks = configuredPacksFor(input, ctx.plugin, ctx.rulesProjectPath);
-    const categoryParser = bugCategoryParser;
+    const categoryParser = bugCategoryParserFor(configuredPacks, ctx);
     if (ctx.scope !== null) {
         return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
     }
@@ -554,11 +561,12 @@ async function invokeBugHunt(input, ctx) {
     // `missing_tools` gets the bare tool name only (never
     // `semgrep:<pack>`) — see the header comment for why; the pack-level
     // detail lives in the `reason` string below instead.
-    const reportGap = (failures) => {
+    const reportGap = (failures, retryReason) => {
         tools_run.push({
             name: 'semgrep',
             status: 'failed',
-            reason: `no configured pack could be scanned (${describeConfigFailures(failures)})`,
+            reason: `no configured pack could be scanned (${describeConfigFailures(failures)})` +
+                (retryReason !== undefined ? `; the retry: ${retryReason}` : ''),
         });
         missing_tools.push('semgrep');
         return {
@@ -574,34 +582,17 @@ async function invokeBugHunt(input, ctx) {
     const failures = findConfigDownloadFailures(raw);
     if (failures.length === 0) {
         // The ordinary case: no WHOLE `--config=` failed to load —
-        // findConfigDownloadFailures found nothing whole-config-fatal. That
-        // does NOT mean the exit code is clean: a single bad RULE inside an
-        // otherwise-valid local file (e.g. a typo'd bugfix-js.yml pattern)
-        // also exits non-zero/non-one, but Semgrep still scans with
-        // everything else that loaded — verified live, not assumed (see
-        // semgrepConfigFailure.ts's header comment). wasAnythingScanned is
-        // what tells the two apart; exit code/outcome alone cannot (same
-        // file, same comment).
+        // findConfigDownloadFailures found nothing whole-config-fatal. Judged by
+        // the shared Semgrep judge ({@link judgeBugHuntRun}), never by the exit
+        // code alone.
         if (raw)
             parser_inputs.push({ parser: categoryParser, input: raw });
-        const okByExit = result.outcome === 'completed' || result.exitCode === 1;
-        const ok = okByExit || wasAnythingScanned(raw);
-        const toolRun = { name: 'semgrep', status: ok ? 'ok' : 'failed' };
-        if (!okByExit) {
-            // Either genuinely failed, or "ok" only because something was
-            // scanned anyway despite a non-clean exit — both need the
-            // human-readable reason attached. Before this, a malformed local
-            // rule file reported status:'failed' with NO reason at all,
-            // alongside assessCoverage's "install semgrep" warning — which
-            // sends a user chasing their toolchain instead of their own rule
-            // file (bugfix-rules-jsts task-3 fix round).
-            const reason = describeRawErrors(raw);
-            if (reason !== null)
-                toolRun.reason = reason;
-        }
-        tools_run.push(toolRun);
+        const judged = judgeBugHuntRun(raw, result, ctx, configuredPacks);
+        tools_run.push(judged.toolRun);
+        if (judged.missing)
+            missing_tools.push('semgrep');
         return {
-            outcome: ok ? 'completed' : result.outcome,
+            outcome: judged.toolRun.status === 'failed' && !wasAnythingScanned(raw) ? result.outcome : 'completed',
             tools_run,
             missing_tools,
             parser_inputs,
@@ -650,19 +641,24 @@ async function invokeBugHunt(input, ctx) {
     }
     const retryRaw = readJsonSafe(outFile);
     const retryFailures = findConfigDownloadFailures(retryRaw);
-    const retryOk = retryFailures.length === 0 && (retry.outcome === 'completed' || retry.exitCode === 1);
-    if (!retryOk) {
+    if (retryFailures.length > 0) {
         // The retry ran to a real exit but didn't help either (network
         // flake, or the "survivor" just got retired too) — combine every
         // failure we saw and refuse to trust either attempt's output.
         return reportGap([...failures, ...retryFailures]);
     }
+    // Judged like the first run (fix round 2: it read the exit code alone) —
+    // and a gap whatever the verdict, since the dead packs did not run.
+    const judged = judgeBugHuntRun(retryRaw, retry, ctx, survivors);
+    if (judged.toolRun.status !== 'ok')
+        return reportGap(failures, judged.toolRun.reason);
     if (retryRaw)
         parser_inputs.push({ parser: categoryParser, input: retryRaw });
     tools_run.push({
-        name: 'semgrep',
-        status: 'ok',
-        reason: `ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`,
+        ...judged.toolRun,
+        reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, judged.toolRun.reason]
+            .filter((x) => x !== undefined)
+            .join('; '),
     });
     missing_tools.push('semgrep');
     return {
@@ -672,6 +668,97 @@ async function invokeBugHunt(input, ctx) {
         parser_inputs,
         report_paths: [reportDir],
     };
+}
+/**
+ * One whole-project bug_hunt run's `semgrep` entry, judged by the shared
+ * Semgrep judge (`runners/semgrepReport.ts`), as scan_sast and this tool's
+ * own scoped run are — never by the exit code alone, which read a partly
+ * parsed file and a run that scanned nothing as ok, coverage full (fix
+ * round 1). `missing`: list `semgrep` in `missing_tools` too.
+ *
+ *   - partial (files only partly parsed) → ok + missing, `partially_parsed`;
+ *   - rules that did not load while the others ran (a typo'd pattern in
+ *     bugfix-js.yml or a registered rule: exit 2, `paths.scanned` filled —
+ *     the judge's `rules_not_loaded`, semgrepConfigFailure.ts) → ok +
+ *     missing, the rules in `failed_rules` under their stored ids, and a
+ *     reason naming each one. Fix round 1 made this `failed`: coverage
+ *     `none`, "NO scanner ran … Install semgrep" for a Semgrep that was
+ *     installed and scanned, and the open set skipping the row — so one
+ *     persistent broken custom rule froze the bugs slot at the last good
+ *     scan. That undid bugfix-rules-jsts task 3 ("one bad rule costs that
+ *     rule"). The broken rule's earlier findings stay open as not
+ *     re-measured (`history/runCompare.ts`, `failed_rules`);
+ *   - scanned nothing → skipped + missing;
+ *   - anything else → failed, the errors as its reason.
+ */
+function judgeBugHuntRun(raw, run, ctx, packs) {
+    const check = checkSemgrepReport({
+        raw,
+        exitCode: run.exitCode,
+        outcome: run.outcome,
+        targets: 1,
+        projectPath: ctx.projectPath,
+        ruleIdOf: localRuleIdNormalizer(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
+    });
+    if (check.verdict === 'ok')
+        return { toolRun: { name: 'semgrep', status: 'ok' }, missing: false };
+    if (check.verdict === 'partial' && check.partial !== undefined) {
+        return {
+            toolRun: {
+                name: 'semgrep',
+                status: 'ok',
+                reason: describePartialParse(check.partial, 'bugs in the unparsed spans may be missing'),
+                partially_parsed: check.partial,
+            },
+            missing: true,
+        };
+    }
+    if (check.verdict === 'scanned_nothing') {
+        return {
+            toolRun: {
+                name: 'semgrep',
+                status: 'skipped',
+                reason: 'semgrep scanned 0 files — nothing here is a language its packs cover, or the packs loaded nothing',
+            },
+            missing: true,
+        };
+    }
+    const notLoaded = check.rules_not_loaded;
+    const rules = { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
+    if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(packs, notLoaded, rules)) {
+        // Every local rule failed and no registry pack ran (M-1): nothing was scanned for.
+        return {
+            toolRun: { name: 'semgrep', status: 'failed', reason: describeNoRuleLoaded(notLoaded), failed_rules: notLoaded, rule_config_error: true },
+            missing: false,
+        };
+    }
+    if (notLoaded !== undefined && notLoaded.length > 0) {
+        const toolRun = {
+            name: 'semgrep',
+            status: 'ok',
+            reason: [
+                describeRulesNotLoaded(notLoaded, check.scanned),
+                ...(check.partial !== undefined ? [describePartialParse(check.partial, 'bugs in the unparsed spans may be missing')] : []),
+            ].join('; '),
+            failed_rules: notLoaded,
+        };
+        if (check.partial !== undefined)
+            toolRun.partially_parsed = check.partial;
+        return { toolRun, missing: true };
+    }
+    const reason = describeRawErrors(raw) ?? check.reason ?? 'semgrep failed';
+    if (check.rule_config_error !== undefined) {
+        return {
+            toolRun: {
+                name: 'semgrep',
+                status: 'failed',
+                reason: `the rule configuration did not load — ${check.rule_config_error} (semgrep exit ${String(run.exitCode)})`,
+                rule_config_error: true,
+            },
+            missing: false,
+        };
+    }
+    return { toolRun: { name: 'semgrep', status: 'failed', reason }, missing: false };
 }
 /**
  * `bug_hunt` over a scope's files: the same packs, as explicit targets
@@ -697,6 +784,7 @@ async function invokeBugHuntOnScope(args) {
         return finish('completed');
     }
     const runOn = (use) => semgrepOnFiles({
+        rules: { configs: use, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
         configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
         files,
         cwd: ctx.projectPath,
@@ -725,9 +813,11 @@ async function invokeBugHuntOnScope(args) {
     const failures = failuresOf(first.reports);
     if (failures.length === 0) {
         for (const raw of first.reports)
-            parser_inputs.push({ parser: bugCategoryParser, input: raw });
+            parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
         tools_run.push(first.toolRun);
-        if (first.nothingScanned)
+        // Scanned nothing, or some files only partly parsed or rules not loaded (`ok` + missing).
+        const narrower = first.partial.length > 0 || first.failedRules.length > 0;
+        if (first.nothingScanned || (first.toolRun.status === 'ok' && narrower))
             missing_tools.push('semgrep');
         return finish(first.cancelled ? 'cancelled' : 'completed');
     }
@@ -748,7 +838,7 @@ async function invokeBugHuntOnScope(args) {
     if (retryFailures.length > 0)
         return reportGap([...failures, ...retryFailures]);
     for (const raw of retry.reports)
-        parser_inputs.push({ parser: bugCategoryParser, input: raw });
+        parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
     tools_run.push({
         ...retry.toolRun,
         reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]

@@ -1,10 +1,10 @@
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
+import { git, splitNul } from '../runners/git.js';
 import { runProcess } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
-import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 /**
@@ -96,9 +96,10 @@ export function buildToolRun(run, via) {
  * .semgrepignore" (https://semgrep.dev/docs/ignoring-files-folders-code): the
  * default file lists `node_modules/`, `build/`, `dist/`, `vendor/`, `.env/`,
  * `.venv/`, `.tox/`, `*.min.js`, `.npm/`, `.yarn/`, `test/`, `tests/`,
- * `*_test.go`, `.semgrep` and `.semgrep_logs/` (plus `:include .gitignore`,
- * not mirrored here — a file ignored only by `.gitignore` still counts, the
- * conservative direction). Measured on 1.176.1 with the routes pack: without
+ * `*_test.go`, `.semgrep` and `.semgrep_logs/` (plus `:include .gitignore` —
+ * inside a git work tree `.gitignore` applies either way, and
+ * {@link countRouteTargets} reads it through git; outside one Semgrep did not
+ * honour it, measured). Measured on 1.176.1 with the routes pack: without
  * a `.semgrepignore` it skipped test/, tests/ and deep/test/ at any depth,
  * foo_test.go, build/, dist/, vendor/ and *.min.js, and scanned testdata/,
  * spec/ and __tests__/; with an empty `.semgrepignore` it skipped none of
@@ -120,19 +121,71 @@ const SEMGREP_DEFAULT_IGNORED_SUFFIXES = ['.min.js', '_test.go'];
  * it read as "scanned 0 of 1" — a gap and an exit 2 on every CI run. With a
  * `.semgrepignore`, Semgrep ignores nothing by default, and the user's own
  * ignore excluding every route file IS a real gap, so those files count.
- * Both walks keep {@link PROJECT_WALK_EXCLUDE} (dependencies, build output).
+ *
+ * Inside a git work tree Semgrep lists its targets through git — tracked
+ * files plus untracked ones `.gitignore` does not exclude — whether or not
+ * there is a `.semgrepignore` (measured on 1.176.1: gitignored `gen/` and
+ * `deep/gen/` were never scanned, a force-added tracked file was; a
+ * gitignored directory given as the target itself scanned nothing). So there
+ * the count is `git ls-files --cached --others --exclude-standard`: a route
+ * file excluded only by `.gitignore` is not applicable, never a gap. Outside
+ * git — or when git cannot answer — Semgrep did not honour `.gitignore`
+ * (measured: `gen/` was scanned), and the walk stays. Both keep
+ * {@link PROJECT_WALK_EXCLUDE} (dependencies, build output) and skip hidden
+ * directories, as the walk always has.
  */
-export function countRouteTargets(projectPath) {
-    if (existsSync(join(projectPath, '.semgrepignore'))) {
+export async function countRouteTargets(projectPath) {
+    const ownIgnore = existsSync(join(projectPath, '.semgrepignore'));
+    const listed = await gitListedFiles(projectPath);
+    if (listed !== null)
+        return countListedRouteTargets(projectPath, listed, ownIgnore);
+    if (ownIgnore) {
         return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
     }
     return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS, new Set([...PROJECT_WALK_EXCLUDE, ...SEMGREP_DEFAULT_IGNORED_DIRS]), (name) => SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix)));
 }
 /**
- * Error types that describe the rules or the configuration, never one target
- * file — fatal wherever they appear, even when the entry carries a path.
+ * The files git lists under `projectPath` (relative to it, `/`-separated):
+ * tracked, plus untracked ones no `.gitignore` excludes — or null outside a
+ * git work tree, or when git cannot answer (not installed, an unsafe
+ * repository), which falls back to the walk.
  */
-const CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
+async function gitListedFiles(projectPath) {
+    const r = await git(projectPath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+    return r.exitCode === 0 ? splitNul(r.stdout) : null;
+}
+/**
+ * The route targets among git's listing: a routes-pack extension, no
+ * directory the walk skips ({@link PROJECT_WALK_EXCLUDE}, hidden ones), and —
+ * with no `.semgrepignore` — none of Semgrep's default-ignored directories or
+ * suffixes. A tracked file deleted from the work tree is listed by
+ * `--cached` and scanned by nobody: only regular files on disk count.
+ */
+function countListedRouteTargets(projectPath, files, ownIgnore) {
+    const skipDirs = ownIgnore
+        ? PROJECT_WALK_EXCLUDE
+        : new Set([...PROJECT_WALK_EXCLUDE, ...SEMGREP_DEFAULT_IGNORED_DIRS]);
+    let count = 0;
+    for (const file of new Set(files)) {
+        const segments = file.split('/');
+        const name = (segments.pop() ?? '').toLowerCase();
+        if (!ROUTE_PACK_EXTENSIONS.some((ext) => name.endsWith(ext)))
+            continue;
+        if (segments.some((dir) => skipDirs.has(dir) || dir.startsWith('.')))
+            continue;
+        if (!ownIgnore && SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix)))
+            continue;
+        try {
+            if (!lstatSync(join(projectPath, file)).isFile())
+                continue;
+        }
+        catch {
+            continue;
+        }
+        count += 1;
+    }
+    return count;
+}
 /**
  * Global Constraint 3 for the surface scan, as the controller ruled it for
  * I3: the report is judged by the one Semgrep judge every other call site
@@ -146,79 +199,43 @@ const CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
  */
 export function judgeSurfaceReport(args) {
     const { run, raw, via, targets, projectPath } = args;
-    const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets });
-    if (check.ok)
+    const check = checkSemgrepReport({
+        raw,
+        exitCode: run.exitCode,
+        outcome: run.outcome,
+        targets,
+        ...(projectPath !== undefined ? { projectPath } : {}),
+    });
+    if (check.verdict === 'ok')
         return { verdict: 'ok', toolRun: buildToolRun(run, via ?? undefined) };
     const prefix = via !== null ? `${via}: ` : '';
-    const exitClean = run.outcome === 'completed' || run.exitCode === 1;
-    if (exitClean && check.scanned === 0 && check.errors === 0) {
+    if (check.verdict === 'scanned_nothing') {
         return {
             verdict: 'scanned_nothing',
             toolRun: {
                 name: 'semgrep',
                 status: 'skipped',
                 reason: `${prefix}semgrep scanned 0 of ${targets} file(s) in a routes-pack language — every one is ` +
-                    'excluded (.semgrepignore, .gitignore) or the rule file loaded nothing',
+                    'excluded (.semgrepignore) or the rule file loaded nothing',
             },
         };
     }
-    if (exitClean && check.scanned > 0 && check.errors > 0) {
-        const partial = perFileErrors(raw)?.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) })) ?? null;
-        if (partial !== null) {
-            const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
-            return {
-                verdict: 'partial',
-                partial,
-                toolRun: {
-                    name: 'semgrep',
-                    status: 'ok',
-                    reason: `${via !== null ? `ran via ${via}; ` : ''}partial: ${partial.length} file(s) only partly parsed — ` +
-                        `routes in the unparsed spans may be missing (${listed})`,
-                },
-            };
-        }
+    if (check.verdict === 'partial' && check.partial !== undefined) {
+        const partial = check.partial;
+        return {
+            verdict: 'partial',
+            partial,
+            toolRun: {
+                name: 'semgrep',
+                status: 'ok',
+                reason: `${via !== null ? `ran via ${via}; ` : ''}` +
+                    describePartialParse(partial, 'routes in the unparsed spans may be missing'),
+                partially_parsed: partial,
+            },
+        };
     }
     const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
     const detail = [check.reason ?? 'semgrep failed', ...(stderr !== undefined ? [stderr] : [])].join('; ');
     return { verdict: 'failed', toolRun: { name: 'semgrep', status: 'failed', reason: `${prefix}${detail}` } };
-}
-/**
- * Every `errors[]` entry as a per-file problem, or null when any one of them
- * is not: a config/rule error type, no target file named, or the file named
- * is a YAML file (the routes pack itself — the pack reads no YAML target).
- * The file comes from the entry's `path`, else its first span, else the
- * location list inside a `["PartialParsing", [...]]` type.
- */
-function perFileErrors(raw) {
-    const errors = asArray(getProp(parseInputAsJson(raw), 'errors'));
-    const out = [];
-    for (const entry of errors) {
-        const rawType = getProp(entry, 'type');
-        const type = typeof rawType === 'string' ? rawType : Array.isArray(rawType) && typeof rawType[0] === 'string' ? rawType[0] : null;
-        if (type === null || CONFIG_ERROR_TYPE.test(type))
-            return null;
-        const file = targetFileOf(entry, rawType);
-        if (file === null || /\.ya?ml$/i.test(file))
-            return null;
-        const message = getString(entry, 'message') ?? type;
-        out.push({ file, type, message: message.split(/\r?\n/)[0] ?? message });
-    }
-    return out.length > 0 ? out : null;
-}
-function targetFileOf(entry, rawType) {
-    const path = getString(entry, 'path');
-    if (path !== undefined && path.length > 0)
-        return path;
-    const span = asArray(getProp(entry, 'spans'))[0];
-    const spanFile = span === undefined ? undefined : getString(span, 'file');
-    if (spanFile !== undefined && spanFile.length > 0)
-        return spanFile;
-    if (Array.isArray(rawType)) {
-        const location = asArray(rawType[1])[0];
-        const locationPath = location === undefined ? undefined : getString(location, 'path');
-        if (locationPath !== undefined && locationPath.length > 0)
-            return locationPath;
-    }
-    return null;
 }
 //# sourceMappingURL=scanSemgrep.js.map

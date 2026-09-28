@@ -74,6 +74,19 @@ export function findingKey(f) {
         return SKILL_OSV;
     return f.tool;
 }
+/**
+ * The `tool` of every finding {@link findingKey} can put under `key` — its
+ * inverse, for a query that reads only one key's findings
+ * (`history/openSet.ts`'s carry-forward): a Trivy key is `trivy`'s, the OSV
+ * key scan_skill's, any other key its own tool.
+ */
+export function toolsOfKey(key) {
+    if (key.startsWith('trivy:'))
+        return ['trivy'];
+    if (key === SKILL_OSV)
+        return [SKILL_TOOL];
+    return [key];
+}
 const scanner = (...measures) => ({ measures });
 /** Every name a scan in this codebase writes to `tools_run` or `missing_tools`. */
 export const RUN_NAMES = {
@@ -93,7 +106,7 @@ export const RUN_NAMES = {
     trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
     // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
     // the image's own misconfigurations.
-    'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
+    'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
     'trivy-config': scanner(TRIVY_CONFIG),
     'trivy-dockerfile': scanner(TRIVY_CONFIG),
     // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
@@ -145,7 +158,7 @@ export const RUN_NAMES = {
     // The surface it probed was partial (a file Semgrep only partly parsed):
     // routes the map could not read were never probed.
     'guardian-dast:partial-surface': scanner('dast'),
-    nuclei: scanner('nuclei'),
+    nuclei: { measures: ['nuclei'], onRequest: true }, // only with use_nuclei
     // WordPress.
     wpscan: scanner('wpscan'),
     wp_plugin_check: scanner(), // a findings-less lookup

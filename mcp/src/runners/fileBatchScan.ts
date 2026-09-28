@@ -10,23 +10,47 @@
  *
  * A batch whose check fails makes the whole tool `failed` with the batch's
  * reason; the results it did write are still kept, because they are real.
- * Nothing about one batch is ever inferred from another.
+ * Nothing about one batch is ever inferred from another. A batch the check
+ * calls partial (Semgrep: some files only partly parsed —
+ * `semgrepReport.ts`) is not a failure: the run is `ok`, its reason and
+ * `partially_parsed` name those files, and the result carries them in
+ * `partial` for the caller to list the scanner missing as well. So is a
+ * Semgrep batch whose only errors are rules that did not load (the judge's
+ * `rules_not_loaded`): the rules go to `failed_rules` and `failedRules`,
+ * once each however many batches reported them.
  */
 
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ToolRun } from '../types.js';
+import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess, type ProcessOutcome } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { checkSemgrepReport, pythonUtf8Env } from './semgrepReport.js';
+import {
+  checkSemgrepReport,
+  describeNoRuleLoaded,
+  describePartialParse,
+  describeRulesNotLoaded,
+  pythonUtf8Env,
+} from './semgrepReport.js';
+import { localRuleIdNormalizer, noRuleLoaded, type RuleIdContext } from './semgrepRuleIds.js';
+import { toRelativeIfPossible } from './scannerParsers/index.js';
 
 export interface BatchCheck {
   ok: boolean;
   reason?: string;
   /** Files the batch's report says were analysed, when the scanner reports it. */
   scanned?: number;
+  /**
+   * Files this batch could only partly analyse, as the report names them —
+   * the batch is then partial, not failed (`ok` is false only for a failure).
+   */
+  partial?: PartialParse[];
+  /** Rules this batch did not load while its others ran — partial, not failed. */
+  failedRules?: FailedRule[];
+  /** A failure because the rule configuration was refused (`ToolRun.rule_config_error`). */
+  ruleConfigError?: boolean;
 }
 
 export interface FileBatchScanOptions {
@@ -54,6 +78,12 @@ export interface FileBatchScanOptions {
    * scanned nothing at all is `skipped`, with `nothingScanned` set.
    */
   requireScanned?: boolean;
+  /**
+   * Whether the rules the batches did not load are ALL the run had (no
+   * registry pack, every local rule): the run is then `failed` — nothing was
+   * scanned for — never `ok` with a gap (fix round 3, M-1).
+   */
+  noRuleLoaded?: (failedRules: readonly FailedRule[]) => boolean;
 }
 
 export interface FileBatchScanResult {
@@ -64,6 +94,14 @@ export interface FileBatchScanResult {
   cancelled: boolean;
   /** `requireScanned`, and no batch scanned a single file (`toolRun` is `skipped`). */
   nothingScanned: boolean;
+  /**
+   * Files some batch could only partly analyse (relative to `cwd`). Non-empty
+   * on an `ok` run means partial coverage: the caller lists the scanner in
+   * `missing_tools` too.
+   */
+  partial: PartialParse[];
+  /** Rules some batch did not load, once each. Non-empty on an `ok` run: partial coverage, as `partial`. */
+  failedRules: FailedRule[];
 }
 
 export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileBatchScanResult> {
@@ -75,6 +113,9 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
   const reports: string[] = [];
   const reportFiles: string[] = [];
   const failures: string[] = [];
+  let configFailures = 0;
+  const partial: PartialParse[] = [];
+  const failedRules: FailedRule[] = [];
   let cancelled = false;
   let scanned = 0;
 
@@ -107,14 +148,37 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       targets: opts.requireScanned === true ? 0 : batch.length,
     });
     scanned += verdict.scanned ?? 0;
+    for (const p of verdict.partial ?? []) {
+      const file = toRelativeIfPossible(p.file, opts.cwd);
+      if (!partial.some((q) => q.file === file && q.type === p.type)) partial.push({ ...p, file });
+    }
+    for (const r of verdict.failedRules ?? []) if (!failedRules.some((q) => q.rule_id === r.rule_id)) failedRules.push(r);
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
       failures.push(`${label}${verdict.reason ?? 'failed'}`);
+      if (verdict.ruleConfigError === true) configFailures += 1;
     }
     if (cancelled) break;
   }
 
   const described = `${opts.files.length} file(s)${batches.length > 1 ? ` in ${batches.length} batches` : ''}`;
+  if (failures.length === 0 && !cancelled && failedRules.length > 0 && opts.noRuleLoaded?.(failedRules) === true) {
+    return {
+      toolRun: {
+        name: opts.name,
+        status: 'failed',
+        reason: `${described}: ${describeNoRuleLoaded(failedRules)}`,
+        failed_rules: failedRules,
+        rule_config_error: true,
+      },
+      reports,
+      reportFiles,
+      cancelled,
+      nothingScanned: false,
+      partial,
+      failedRules,
+    };
+  }
   if (opts.requireScanned === true && !cancelled && failures.length === 0 && batches.length > 0 && scanned === 0) {
     return {
       toolRun: {
@@ -128,17 +192,33 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       reportFiles,
       cancelled,
       nothingScanned: true,
+      partial,
+      failedRules,
     };
   }
-  const toolRun: ToolRun =
-    failures.length === 0 && !cancelled
-      ? { name: opts.name, status: 'ok', reason: `${described} scanned` }
-      : {
-          name: opts.name,
-          status: 'failed',
-          reason: cancelled && failures.length === 0 ? 'cancelled' : `${described}: ${failures.join('; ')}`,
-        };
-  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false };
+  let toolRun: ToolRun;
+  if (failures.length === 0 && !cancelled) {
+    toolRun = {
+      name: opts.name,
+      status: 'ok',
+      reason: [
+        `${described} scanned`,
+        ...(failedRules.length > 0 ? [describeRulesNotLoaded(failedRules, scanned)] : []),
+        ...(partial.length > 0 ? [describePartialParse(partial, 'findings in the unparsed spans may be missing')] : []),
+      ].join('; '),
+    };
+    if (partial.length > 0) toolRun.partially_parsed = partial;
+    if (failedRules.length > 0) toolRun.failed_rules = failedRules;
+  } else {
+    toolRun = {
+      name: opts.name,
+      status: 'failed',
+      reason: cancelled && failures.length === 0 ? 'cancelled' : `${described}: ${failures.join('; ')}`,
+    };
+    // Every batch failed on its rule configuration: installed, the rules are the problem.
+    if (!cancelled && failures.length > 0 && configFailures === failures.length) toolRun.rule_config_error = true;
+  }
+  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial, failedRules };
 }
 
 /** `scanFileBatches` for Semgrep: `--json --quiet --output <f> -- files`, UTF-8 mode, GC3 check. */
@@ -150,7 +230,15 @@ export function semgrepOnFiles(args: {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   onLog?: (line: string) => void;
+  /**
+   * The configs the run passed, and how its rule ids are stored
+   * (`runners/semgrepRuleIds.ts`): a rule that did not load is named as its
+   * findings are, and a run in which none loaded is failed.
+   */
+  rules?: { configs: readonly string[]; ctx: RuleIdContext };
 }): Promise<FileBatchScanResult> {
+  const rules = args.rules;
+  const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
   return scanFileBatches({
     name: 'semgrep',
     command: 'semgrep',
@@ -163,8 +251,29 @@ export function semgrepOnFiles(args: {
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
-    check: checkSemgrepReport,
+    // The shared judge's `partial` verdict is no failure of the batch, and
+    // neither are rules that did not load while the others ran.
+    check: (args) => {
+      const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}) });
+      if (c.verdict === 'partial' && c.partial !== undefined) {
+        return { ok: true, scanned: c.scanned, partial: c.partial };
+      }
+      if (c.rules_not_loaded !== undefined && c.rules_not_loaded.length > 0) {
+        return { ok: true, scanned: c.scanned, partial: c.partial ?? [], failedRules: c.rules_not_loaded };
+      }
+      return {
+        ok: c.ok,
+        scanned: c.scanned,
+        ...(c.rule_config_error !== undefined
+          ? { reason: `the rule configuration did not load — ${c.rule_config_error} (semgrep exit ${String(args.exitCode)})` }
+          : c.reason !== undefined
+            ? { reason: c.reason }
+            : {}),
+        ...(c.rule_config_error !== undefined ? { ruleConfigError: true } : {}),
+      };
+    },
     requireScanned: true,
+    ...(rules !== undefined ? { noRuleLoaded: (failed: readonly FailedRule[]) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}),
   });
 }
 

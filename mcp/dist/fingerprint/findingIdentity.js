@@ -118,6 +118,19 @@ export function assignIdentities(findings, opts = {}) {
         path: location.key,
         contentKey: contentKeys.get(index) ?? sha256('none'),
     }));
+    const identities = identitiesOf(keyed);
+    return keyed.map((k) => ({
+        ...k.finding,
+        identity: identities.get(k.index) ?? '',
+        content_key: k.contentKey,
+    }));
+}
+/**
+ * The identity recipe for findings whose content key is already known —
+ * {@link assignIdentities}' second half, shared with {@link rekeyStoredIdentities}
+ * so a re-keyed stored row gets exactly the identity a fresh scan would.
+ */
+function identitiesOf(keyed) {
     const groups = new Map();
     for (const k of keyed) {
         const group = JSON.stringify([k.tool, k.rule, k.path, k.contentKey]);
@@ -152,10 +165,38 @@ export function assignIdentities(findings, opts = {}) {
             identities.set(m.index, identity);
         }
     }
-    return keyed.map((k) => ({
-        ...k.finding,
-        identity: identities.get(k.index) ?? '',
-        content_key: k.contentKey,
+    return identities;
+}
+/**
+ * Identities for the stored findings of ONE scan, after their `rule_id`
+ * changed (`storage/localRuleIds.ts`: a local rule's path prefix removed):
+ * the same recipe as {@link assignIdentities}, with each row's stored content
+ * key — except a credential finding's, which IS its rule id
+ * (`secret\n<rule id>`, see `contentSource`) and is recomputed. A row with
+ * no content key (stored before identities existed) gets none. Returns the
+ * new identity and content key per row, in input order.
+ */
+export function rekeyStoredIdentities(rows, projectPath) {
+    const keyed = rows.flatMap((finding, index) => {
+        if (finding.content_key === undefined)
+            return [];
+        const contentKey = isCredentialFinding(finding) && finding.tool.toLowerCase() !== 'gitleaks'
+            ? sha256(`secret\n${finding.rule_id ?? ''}`)
+            : finding.content_key;
+        return [{
+                finding,
+                index,
+                tool: finding.tool.toLowerCase(),
+                rule: finding.rule_id ?? '',
+                path: locate(finding.file_path, projectPath).key,
+                contentKey,
+            }];
+    });
+    const identities = identitiesOf(keyed);
+    const contentKeys = new Map(keyed.map((k) => [k.index, k.contentKey]));
+    return rows.map((_, index) => ({
+        identity: identities.get(index) ?? null,
+        content_key: contentKeys.get(index) ?? null,
     }));
 }
 /**
@@ -250,7 +291,7 @@ export function resolutionKey(f) {
 export function indexFindings(items) {
     const byIdentity = new Map();
     const byFingerprint = new Map();
-    for (const item of items) {
+    const add = (item) => {
         if (item.identity !== undefined && !byIdentity.has(item.identity)) {
             byIdentity.set(item.identity, item);
         }
@@ -259,7 +300,9 @@ export function indexFindings(items) {
             byFingerprint.set(item.fingerprint, [item]);
         else
             same.push(item);
-    }
+    };
+    for (const item of items)
+        add(item);
     const find = (f) => {
         if (f.identity !== undefined) {
             const hit = byIdentity.get(f.identity);
@@ -272,7 +315,7 @@ export function indexFindings(items) {
         }
         return undefined;
     };
-    return { find, has: (f) => find(f) !== undefined };
+    return { find, has: (f) => find(f) !== undefined, add };
 }
 // ------------------------------------------------------------------ internal
 /**

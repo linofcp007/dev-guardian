@@ -46,11 +46,14 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
+import { openSetForProject } from '../../src/history/openSet.js';
+import { resolveProjectPath } from '../../src/platform/projectPath.js';
 
 afterAll(cleanupTempDirs);
 
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
+  await import('../../src/tools/riskScore.js');
 });
 
 const RULES =
@@ -271,23 +274,193 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     extra: { severity: 'WARNING', message: 'm', lines: 'foo()' },
   };
 
-  it('a rule that did not compile (exit 2, errors[]) is a failed run — its findings are still recorded', async () => {
-    // This used to be `ok` ("one bad rule costs that rule"). A non-empty
-    // `errors[]` means the run did not cover what it was given.
+  // A project rule that did not compile, as Semgrep 1.176.1 reports it
+  // (measured: exit 2, the rule named in `rule_id`, the other rules still
+  // run and `paths.scanned` is filled). This test used to pin `failed`:
+  // right that the run is not complete, wrong in what it said — coverage
+  // none on a Semgrep-only project, "NO scanner ran ... Install semgrep" for
+  // a Semgrep that ran, and a row the open set skipped, so one typo in
+  // .semgrep.yml froze the sast slot at the last good scan. Fix round 2:
+  // the narrower gap bug_hunt already records.
+  const RULE_ERROR = {
+    code: 2,
+    level: 'error',
+    type: 'Rule parse error',
+    rule_id: 'y',
+    message: 'Rule parse error in rule y:\n Invalid pattern for Python: Stdlib.Parsing.Parse_error\n----- pattern -----\nfoo((((\n',
+  };
+
+  it('a project rule that did not compile: Semgrep ran — ok and missing, the rule named, its findings kept, never "install semgrep"', async () => {
     const project = makeTempDir('sast-rules-');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, { results: [FINDING], errors: [RULE_ERROR], paths: { scanned: ['a.py'] } });
+
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string; message: string }> }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.failed_rules).toEqual([{ rule_id: 'y', message: 'Invalid pattern for Python: Stdlib.Parsing.Parse_error' }]);
+    expect(run?.reason).toMatch(/^Semgrep ran, but 1 rule\(s\) did not load: y — Invalid pattern for Python/);
+    expect(r.missing_tools).toContain('semgrep');
+    const out = r as unknown as { coverage: string; warnings: string[]; findings_count_by_severity: Record<string, number> };
+    expect(out.coverage).toBe('partial');
+    expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+    expect(out.findings_count_by_severity['medium']).toBe(1);
+  });
+
+  // Fix round 3, M-1: when EVERY local rule failed and no registry pack ran,
+  // nothing was scanned for — failed (Global Constraint 3), never ok with a
+  // gap; and never "install semgrep", for a Semgrep that ran.
+  const ALL_FAILED = {
+    results: [],
+    errors: [{ code: 2, level: 'error', type: 'Rule parse error', rule_id: 'x', message: 'Rule parse error in rule x:\n Invalid pattern' }],
+    paths: { scanned: ['a.py'] },
+  };
+
+  it('local_only, and every rule of .semgrep.yml failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
+    const project = makeTempDir('sast-rules-none-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
+      | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 1 rule\(s\) failed to load \(x — Invalid pattern\)/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
+    expect(run?.rule_config_error).toBe(true);
+    const out = r as unknown as { coverage: string; warnings: string[] };
+    expect(out.coverage).toBe('none');
+    expect(out.warnings.join(' ')).toMatch(/semgrep ran, but its rules did not load/);
+    expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('the same failure with the registry ruleset in the run: the registry rules ran — partial stays', async () => {
+    const project = makeTempDir('sast-rules-none-auto-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
+  });
+
+  it('the Docker fallback, local_only, every rule failed: failed too — its /src config read on the host (round 3 review, I-1)', async () => {
+    // Two broken patterns in the project's only rule file, Semgrep not on
+    // PATH: the container reports both rules not loaded. Read as
+    // /src/.semgrep.yml on the host, the file was never found and the run
+    // stayed ok + partial.
+    const project = makeTempDir('sast-rules-none-docker-');
+    const two = 'rules:\n  - id: x\n    pattern: eval( (\n    message: m\n    languages: [python]\n    severity: WARNING\n' +
+      '  - id: y\n    pattern: foo(]\n    message: m\n    languages: [python]\n    severity: WARNING\n';
+    writeFileSync(join(project, '.semgrep.yml'), two, 'utf8');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    const configs: string[] = [];
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      configs.push(...(opts.args ?? []).filter((a) => a.startsWith('--config=')));
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        const err = (id: string) => ({ code: 2, level: 'error', type: 'Rule parse error', rule_id: id, message: `Rule parse error in rule ${id}:\n Invalid pattern for Python` });
+        writeFileSync(host, JSON.stringify({ results: [], errors: [err('x'), err('y')], paths: { scanned: ['/src/a.py'] } }), 'utf8');
+      }
+      return { outcome: 'failed' as const, exitCode: 2, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(configs).toEqual(['--config=/src/.semgrep.yml']);
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
+      | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/ran via docker/);
+    expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 2 rule\(s\) failed to load/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', 'y']);
+    expect(run?.rule_config_error).toBe(true);
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('a scoped (batched) local_only run in which no rule loaded is failed too', async () => {
+    const project = makeTempDir('sast-rules-none-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, ALL_FAILED);
+    const r = await runSast(project, makePlugin(project), { local_only: true, scope: { paths: ['a.py'] } });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/no rule loaded/);
+    expect(run?.rule_config_error).toBe(true);
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  it('a rule with an unknown language (Semgrep exit 8): the reason names the rule error, never "install semgrep"', async () => {
+    const project = makeTempDir('sast-rules-lang-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(8, {
+      results: [],
+      errors: [{ code: 8, level: 'error', type: 'UnknownLanguageError', short_msg: 'invalid language: klingon', long_msg: 'unsupported language: klingon.', spans: [] }],
+      paths: { scanned: [] },
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; rule_config_error?: boolean } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(/the rule configuration did not load — UnknownLanguageError: invalid language: klingon \(semgrep exit 8\)/);
+    // Said once (round 3 review: the error text was repeated).
+    expect(run?.reason?.split('invalid language: klingon')).toHaveLength(2);
+    expect(run?.rule_config_error).toBe(true);
+    const warnings = (r as unknown as { warnings: string[] }).warnings.join(' ');
+    expect(warnings).toMatch(/semgrep ran, but its rules did not load/);
+    expect(warnings).not.toMatch(/install semgrep/i);
+  });
+
+  it('a rule error that names no rule stays failed — it cannot be told from a broken config', async () => {
+    const project = makeTempDir('sast-rules-');
     mockSemgrepOnPath(2, {
       results: [FINDING],
       errors: [{ type: 'Rule parse error', message: 'Invalid pattern in rule x' }],
       paths: { scanned: ['a.py'] },
     });
-
     const r = await runSast(project, makePlugin(project));
     const run = r.tools_run.find((t) => t.name === 'semgrep');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toContain('Invalid pattern in rule x');
-    expect((r as unknown as { coverage: string }).coverage).not.toBe('full');
+    // Its findings are real all the same.
     expect((r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity['medium']).toBe(1);
+  });
+
+  it('a rule that did not compile in the Docker fallback reads the same way', async () => {
+    const project = makeTempDir('sast-rules-docker-rule-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        writeFileSync(host, JSON.stringify({ results: [FINDING], errors: [RULE_ERROR], paths: { scanned: ['/src/a.py'] } }), 'utf8');
+      }
+      return { outcome: 'failed' as const, exitCode: 2, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }> } | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/ran via docker/);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['y']);
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  it('a scoped (batched) run reads a rule that did not compile the same way, once however many batches report it', async () => {
+    const project = makeTempDir('sast-rules-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, { results: [FINDING], errors: [RULE_ERROR, RULE_ERROR], paths: { scanned: ['a.py'] } });
+    const r = await runSast(project, makePlugin(project), { scope: { paths: ['a.py'] } });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }> } | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/1 file\(s\) scanned; Semgrep ran, but 1 rule\(s\) did not load: y — /);
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['y']);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });
 
   it('exit 0 with a non-empty errors[] (a file that did not parse) is not ok', async () => {
@@ -299,6 +472,64 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     });
     const r = await runSast(project, makePlugin(project));
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('failed');
+  });
+
+  // Follow-up X1: the shared judge's `partial` verdict. A warn-level
+  // PartialParsing tied to one scanned file is partial coverage — Semgrep
+  // ran (`ok`) AND is missing, the file named on the run — never `failed`,
+  // which made every WordPress project's SAST a failed scanner.
+  const WARNING = {
+    code: 3,
+    level: 'warn',
+    type: ['PartialParsing', [{ path: 'wp/rest-controller.php', start: { line: 20 }, end: { line: 20 } }]],
+    message: "Syntax error at line wp/rest-controller.php:20:\n `const NAMESPACE = 'guardian/v2';` was unexpected",
+    path: 'wp/rest-controller.php',
+  };
+
+  it('a warn-level PartialParsing on one scanned file is partial: ok, listed missing, the file named', async () => {
+    const project = makeTempDir('sast-partial-');
+    mockSemgrepOnPath(1, { results: [FINDING], errors: [WARNING], paths: { scanned: ['a.py', 'wp/rest-controller.php'] } });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: unknown }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/partial: 1 file\(s\) only partly parsed .*PartialParsing: wp\/rest-controller\.php/);
+    expect(run?.partially_parsed).toEqual([
+      { file: 'wp/rest-controller.php', type: 'PartialParsing', message: 'Syntax error at line wp/rest-controller.php:20:' },
+    ]);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
+    // The findings the run did report are real.
+    expect((r as unknown as { findings_count_by_severity: Record<string, number> }).findings_count_by_severity['medium']).toBe(1);
+  });
+
+  it('a partial parse beside a rule error that names no rule is still failed — fatal wins', async () => {
+    const project = makeTempDir('sast-partial-');
+    mockSemgrepOnPath(0, {
+      results: [],
+      errors: [WARNING, { type: 'Rule parse error', level: 'error', message: 'Invalid pattern in rule x' }],
+      paths: { scanned: ['a.py'] },
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { status: string; partially_parsed?: unknown } | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.partially_parsed).toBeUndefined();
+  });
+
+  it('a scoped run (explicit targets, batched) reads a partial parse the same way', async () => {
+    const project = makeTempDir('sast-partial-scope-');
+    mkdirSync(join(project, 'wp'));
+    writeFileSync(join(project, 'wp', 'rest-controller.php'), '<?php\n', 'utf8');
+    mockSemgrepOnPath(0, { results: [], errors: [WARNING], paths: { scanned: ['wp/rest-controller.php'] } });
+    const r = await runSast(project, makePlugin(project), { scope: { paths: ['wp/rest-controller.php'] } });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
+      | undefined;
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/partial: 1 file\(s\) only partly parsed/);
+    expect(run?.partially_parsed?.map((p) => p.file)).toEqual(['wp/rest-controller.php']);
+    expect(r.missing_tools).toContain('semgrep');
   });
 
   it('exit 0 that scanned nothing is never a clean result — skipped, listed missing, coverage not full', async () => {
@@ -672,5 +903,94 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     const r = await runSast(project, makePlugin(project));
     expect(r.tools_run.find((t) => t.name === 'dotnet-analyzers')?.status).toBe('skipped');
     expect(r.missing_tools).toContain('dotnet-sdk');
+  });
+});
+
+/**
+ * Follow-up X, fix round 1 (Critical), with real scan_sast rows: a
+ * work-in-progress edit makes one file PartialParsing, the partial scan
+ * becomes the sast slot's source — and the older finding on that file must
+ * not vanish from the open set, or from risk_score. The reviewer's shape.
+ */
+/**
+ * Fix round 2: a project rule that did not compile is a row the open set
+ * reads, not one it skips — the rules that loaded re-measured their
+ * findings, the broken rule's earlier findings stay open, not re-measured.
+ */
+describe('scan_sast: a rule that did not load keeps its older findings in the open set', () => {
+  const hit = (path: string, rule: string) => ({
+    check_id: rule,
+    path,
+    start: { line: 1 },
+    end: { line: 1 },
+    extra: { severity: 'ERROR', message: `${rule} here`, lines: 'foo()' },
+  });
+
+  it('x re-measured (b.py fixed, resolved); y did not load (its c.py finding carried, flagged); the row is not skipped', async () => {
+    const project = makeTempDir('sast-rule-carry-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath(1, { results: [hit('a.py', 'x'), hit('b.py', 'x'), hit('c.py', 'y')], errors: [], paths: { scanned: ['a.py', 'b.py', 'c.py'] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(2, {
+      results: [hit('a.py', 'x')],
+      errors: [{ code: 2, level: 'error', type: 'Rule parse error', rule_id: 'y', message: 'Rule parse error in rule y:\n Invalid pattern' }],
+      paths: { scanned: ['a.py', 'b.py', 'c.py'] },
+    });
+    await runSast(project, plugin);
+
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    expect(Object.fromEntries(set.findings.map((f) => [f.file_path, f.not_remeasured ?? false]))).toEqual({
+      'a.py': false,
+      'c.py': true,
+    });
+    expect(set.skipped.count).toBe(0);
+    expect(set.coverage).toBe('partial');
+    expect(set.sources.find((s) => s.carried_for !== undefined)?.carried_for).toEqual(['semgrep (rule not loaded: y)']);
+  });
+});
+
+describe('scan_sast: a partly parsed file keeps its older finding in the open set', () => {
+  const hit = (path: string, rule: string, line: string) => ({
+    check_id: rule,
+    path,
+    start: { line: 3 },
+    end: { line: 3 },
+    extra: { severity: 'ERROR', message: `${rule} here`, lines: line },
+  });
+  const A = hit('wp/a.php', 'php-echo-get', 'echo $_GET["x"];');
+  const B = hit('src/b.js', 'js-eval', 'eval(b)');
+  const C = hit('src/c.js', 'js-eval', 'eval(c)');
+  const WARNING = {
+    code: 3,
+    level: 'warn',
+    type: ['PartialParsing', [{ path: 'wp/a.php' }]],
+    message: 'Syntax error at line wp/a.php:9:\n `const NAMESPACE` was unexpected',
+    path: 'wp/a.php',
+  };
+
+  it('keeps a.php from the full scan, flagged; b.js from the partial one; c.js resolved; risk_score counts 2', async () => {
+    const project = makeTempDir('sast-carry-');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath(1, { results: [A, B, C], errors: [], paths: { scanned: ['wp/a.php', 'src/b.js', 'src/c.js'] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(1, { results: [B], errors: [WARNING], paths: { scanned: ['wp/a.php', 'src/b.js', 'src/c.js'] } });
+    const second = await runSast(project, plugin);
+    expect((second as unknown as { coverage: string }).coverage).toBe('partial');
+
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    const files = set.findings.map((f) => `${f.file_path}${f.not_remeasured === true ? ' (not re-measured)' : ''}`).sort();
+    expect(files).toEqual(['src/b.js', 'wp/a.php (not re-measured)']);
+    expect(set.coverage).toBe('partial');
+    expect(set.sources.find((s) => s.carried_for !== undefined)?.carried_for).toEqual([
+      'semgrep (partly parsed: wp/a.php)',
+    ]);
+
+    const risk = TOOLS.find((t) => t.name === 'risk_score');
+    if (risk === undefined) throw new Error('risk_score not registered');
+    const r = (await risk.handler({ project_path: project }, plugin)) as unknown as {
+      components: { findings: { open_findings: number } };
+    };
+    expect(r.components.findings.open_findings).toBe(2);
   });
 });

@@ -23,7 +23,8 @@
  *     `.guardian/reports/containers-<scan>/`.
  *
  * Returns `tools_run` with one entry per pass (trivy-dockerfile / trivy-image
- * / hadolint / docker-compose). Trivy's own gap is only counted (added to
+ * / hadolint / docker-compose; the trivy-image entry names its image in
+ * `target`). Trivy's own gap is only counted (added to
  * `missing_tools`) when there was something for it to scan — a project with
  * no Dockerfile, no `image`, and no compose file is "nothing to scan"
  * (coverage `full`), not "trivy is missing" (coverage `none`), the same
@@ -159,9 +160,15 @@ const scanContainers = makeScanTool({
                     const raw = readJsonSafe(outFile);
                     if (raw)
                         parser_inputs.push({ parser: trivyParser, input: raw });
+                    // `target`: which image this pass looked at. A comparison
+                    // re-measures an image's findings only by a scan of the SAME
+                    // image (history/runCompare.ts) — image B's scan never resolves
+                    // image A's.
                     tools_run.push({
                         name: 'trivy-image',
                         status: result.outcome === 'completed' ? 'ok' : 'failed',
+                        reason: `image ${inp.image}`,
+                        target: inp.image,
                     });
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;

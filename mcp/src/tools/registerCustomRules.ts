@@ -25,6 +25,18 @@
  *   - **Nothing valid means nothing written.** A call that registers nothing
  *     leaves the previous registration exactly as it was, and says so.
  *
+ * ---- Semgrep compiles them too (follow-up X, fix round 4) --------------
+ *
+ * The shape check passed `languages: [klingon]`, and one such file makes
+ * Semgrep refuse the whole configuration (exit 8, nothing scanned) on every
+ * later scan. When Semgrep is installed, every file that passed the shape
+ * check is compiled with `semgrep --validate` (`runners/semgrepValidate.ts`,
+ * bounded, metrics off) and one it refuses is `rejected` with Semgrep's own
+ * message. A directory holding a refused file is registered as its accepted
+ * files, one by one, so the refused one never reaches a scan. When Semgrep is
+ * not installed, or could not answer, the shape check stands and the result
+ * says the files were not validated by Semgrep (`semgrep_validated: false`).
+ *
  * The reading side (`resolveCustomSemgrepConfigs`) did not exist at all
  * until 2026-08-18 — see its module comment.
  */
@@ -41,9 +53,11 @@ import {
 } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { scannerAvailable } from './scanHelpers.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -67,8 +81,10 @@ const tool: ToolModule = {
     'Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project ' +
     '(registrations are per project). scan_sast and bug_hunt then run them as extra --config packs. ' +
     'Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, ' +
-    'languages, severity and a pattern) — anything else is returned in `rejected` with a reason and never ' +
-    'registered, so a stray YAML (e.g. Prometheus alerts in rules/) cannot break later scans. A ' +
+    'languages, severity and a pattern) and, when Semgrep is installed, compiled with semgrep --validate ' +
+    '(an unknown language or a broken pattern is refused with Semgrep\'s message) — anything else is ' +
+    'returned in `rejected` with a reason and never registered, so a stray YAML (e.g. Prometheus alerts in ' +
+    'rules/) cannot break later scans; semgrep_validated says whether Semgrep looked. A ' +
     'registered path that later disappears or stops validating is skipped rather than failing the ' +
     'scan. Pass clear=true to remove the registration.',
   inputSchema,
@@ -103,19 +119,22 @@ async function handler(
   }
 
   const explicit = inp.paths !== undefined && inp.paths.length > 0;
-  const { registered, rejected } = explicit
-    ? collectExplicit(projectPath, inp.paths ?? [])
-    : collectDiscovered(projectPath);
+  const collected = explicit ? collectExplicit(projectPath, inp.paths ?? []) : collectDiscovered(projectPath);
+  const rejected = collected.rejected;
+  const semgrep = await compileWithSemgrep(projectPath, collected.registered, rejected);
+  const registered = semgrep.registered;
+  const semgrepNote = semgrep.note === null ? '' : ` ${semgrep.note}`;
 
   if (registered.length === 0) {
     return {
       ok: true,
       registered: [],
       rejected,
-      note: explicit
+      semgrep_validated: semgrep.validated,
+      note: (explicit
         ? 'Nothing registered: no path named a valid Semgrep rules file. The previous registration is unchanged.'
         : 'No .semgrep/, semgrep/ or rules/ directory with a valid Semgrep rules file found. ' +
-          'The previous registration is unchanged.',
+          'The previous registration is unchanged.') + semgrepNote,
     };
   }
 
@@ -124,11 +143,78 @@ async function handler(
     ok: true,
     registered,
     rejected,
+    semgrep_validated: semgrep.validated,
     note:
-      rejected.length > 0
+      (rejected.length > 0
         ? `Registered ${registered.length} path(s); ${rejected.length} rejected (see \`rejected\`). ` +
           'Re-run scan_sast / bug_hunt to apply the new rule set.'
-        : 'Re-run scan_sast / bug_hunt to apply the new rule set.',
+        : 'Re-run scan_sast / bug_hunt to apply the new rule set.') + semgrepNote,
+  };
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The shape-checked `registered` paths, compiled by Semgrep when it is
+ * installed (see the module comment): a file it refuses moves to
+ * `rejected` with its message; a directory holding one is registered as its
+ * accepted files.
+ */
+async function compileWithSemgrep(
+  projectPath: string,
+  registered: readonly string[],
+  rejected: Rejected[],
+): Promise<{ registered: string[]; validated: boolean; note: string | null }> {
+  if (registered.length === 0) return { registered: [], validated: false, note: null };
+  if (!(await scannerAvailable('semgrep'))) {
+    return {
+      registered: [...registered],
+      validated: false,
+      note:
+        'Not validated by Semgrep (it is not installed): only the rule-file shape was checked, so a rule ' +
+        'Semgrep cannot compile (an unknown language, a broken pattern) would still fail later scans.',
+    };
+  }
+  // The files each entry stands for, as the reader passes them to Semgrep.
+  const filesOf = (entry: string): string[] =>
+    isDirectory(entry) ? yamlFilesUnder(entry).filter((f) => validateSemgrepRulesFile(f).ok) : [entry];
+  const verdict = await validateRuleFiles([...new Set(registered.flatMap(filesOf))], projectPath);
+  if (!verdict.validated) {
+    return {
+      registered: [...registered],
+      validated: false,
+      note: `Not validated by Semgrep (${verdict.reason}): only the rule-file shape was checked.`,
+    };
+  }
+  const kept: string[] = [];
+  let split = false;
+  for (const entry of registered) {
+    const files = filesOf(entry);
+    const refused = files.filter((f) => verdict.invalid.has(f));
+    for (const f of refused) rejected.push({ path: f, reason: `Semgrep refused it: ${verdict.invalid.get(f) ?? ''}` });
+    if (refused.length === 0) {
+      kept.push(entry);
+      continue;
+    }
+    if (isDirectory(entry)) {
+      const accepted = files.filter((f) => !verdict.invalid.has(f));
+      kept.push(...accepted);
+      if (accepted.length > 0) split = true;
+    }
+  }
+  return {
+    registered: [...new Set(kept)],
+    validated: true,
+    note: split
+      ? 'A directory holding a file Semgrep refused is registered as its accepted files, one by one: a file ' +
+        'added to it later is not picked up — register the directory again once the refused file is fixed.'
+      : null,
   };
 }
 

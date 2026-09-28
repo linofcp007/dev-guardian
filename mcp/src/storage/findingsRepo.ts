@@ -277,6 +277,62 @@ export class FindingsRepo {
   }
 
   /**
+   * The findings of `scanId` of one of `tools`, in one of `files` (matched as
+   * stored, and with `\` for `/`), or of one of `rules` — what the open
+   * set's carry-forward reads when an older scan could only be carried for
+   * those (`history/openSet.ts`), instead of every row of every older scan.
+   * Chunked below SQLite's parameter limit; each row once (the table's key
+   * is `(fingerprint, scan_id)`).
+   *
+   * `skip`, when given, is asked first with each matching row's two keys
+   * alone, and a row it skips is never read in full — the carry-forward
+   * passes the identities it already holds, so a scanner that fails in every
+   * scan while keeping its findings costs a key read per older row, not a
+   * full one.
+   */
+  listByScanMatching(
+    scanId: string,
+    match: { tools: readonly string[]; files: readonly string[]; rules: readonly string[] },
+    skip?: (keys: { fingerprint: string; identity: string | null }) => boolean,
+  ): Finding[] {
+    const fileKeys = [...new Set(match.files.flatMap((f) => [f, f.replace(/\//g, '\\')]))];
+    const chunks = (values: readonly string[]): string[][] => {
+      const out: string[][] = [];
+      for (let i = 0; i < values.length; i += 400) out.push(values.slice(i, i + 400));
+      return out;
+    };
+    const inList = (chunk: readonly string[]): string => chunk.map(() => '?').join(', ');
+    const byFingerprint = new Map<string, Finding>();
+    const wanted = new Set<string>();
+    const run = (column: 'tool' | 'file_path' | 'rule_id', values: readonly string[]): void => {
+      for (const chunk of chunks(values)) {
+        if (skip === undefined) {
+          const sql = `SELECT * FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+          for (const row of this.db.prepare<string[], FindingRow>(sql).all(scanId, ...chunk)) {
+            const finding = rowToFinding(row);
+            byFingerprint.set(finding.fingerprint, finding);
+          }
+          continue;
+        }
+        const sql = `SELECT fingerprint, identity FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+        for (const keys of this.db.prepare<string[], { fingerprint: string; identity: string | null }>(sql).all(scanId, ...chunk)) {
+          if (!skip(keys)) wanted.add(keys.fingerprint);
+        }
+      }
+    };
+    run('tool', [...new Set(match.tools)]);
+    run('file_path', fileKeys);
+    run('rule_id', [...new Set(match.rules)]);
+    for (const chunk of chunks([...wanted])) {
+      const sql = `SELECT * FROM findings WHERE scan_id = ? AND fingerprint IN (${inList(chunk)})`;
+      for (const row of this.db.prepare<string[], FindingRow>(sql).all(scanId, ...chunk)) {
+        byFingerprint.set(row.fingerprint, rowToFinding(row));
+      }
+    }
+    return [...byFingerprint.values()];
+  }
+
+  /**
    * Open findings from the latest completed scan IN THE WHOLE DATABASE, from
    * ANY project — no `project_path` filter.
    *

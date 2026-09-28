@@ -10,6 +10,7 @@ vi.mock('../../src/tools/scanHelpers.js', async (importOriginal) => {
 });
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -833,6 +834,28 @@ describe('map_attack_surface', () => {
     mkdirSync(join(projectPath, 'test'));
     writeFileSync(join(projectPath, 'test', 'x_test.go'), 'package test\n', 'utf8');
     writeFileSync(join(projectPath, 'lib.min.js'), 'var a=1\n', 'utf8');
+
+    const ctx = makeCtx();
+    const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));
+
+    expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+    expect(result.tools_run[0]).toMatchObject({ name: 'semgrep', status: 'skipped' });
+    expect(result.tools_run[0]?.reason).toMatch(/^not applicable/);
+    expect(result.missing_tools).toEqual([]);
+    expect(result.snapshot_id).not.toBeNull();
+  });
+
+  // Follow-up X3: inside a git work tree Semgrep lists its targets through
+  // git, so a route file excluded only by .gitignore is never scanned —
+  // measured on 1.176.1. Counting it read "scanned 0 of 1": a gap, exit 2.
+  it('a route file excluded only by .gitignore is not a target — not applicable, no gap', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const projectPath = makeTempDir('guardian-surface-gitignored-');
+    writeFileSync(join(projectPath, 'main.tf'), 'resource "null_resource" "x" {}\n', 'utf8');
+    mkdirSync(join(projectPath, 'generated'));
+    writeFileSync(join(projectPath, 'generated', 'client.js'), "app.get('/x', h);\n", 'utf8');
+    writeFileSync(join(projectPath, '.gitignore'), 'generated/\n', 'utf8');
+    execFileSync('git', ['init', '-q', '.'], { cwd: projectPath, stdio: 'ignore' });
 
     const ctx = makeCtx();
     const result = okResult<PartialOut>(await tool().handler({ project_path: projectPath }, ctx));

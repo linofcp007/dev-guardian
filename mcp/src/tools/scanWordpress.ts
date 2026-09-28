@@ -19,7 +19,9 @@ import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { hasFileWithExtension } from '../runners/projectFiles.js';
+import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import {
   AllowDirty,
   AutoFix,
@@ -119,8 +121,7 @@ registerToolModule(
             });
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
-            const ok = r.outcome === 'completed' || r.exitCode === 1;
-            tools_run.push({ name: 'semgrep-wp', status: ok ? 'ok' : 'failed' });
+            recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
           })(),
         );
       } else {
@@ -241,3 +242,63 @@ registerToolModule(
     },
   }),
 );
+
+/**
+ * The `semgrep-wp` entry, judged by the shared Semgrep judge
+ * (`runners/semgrepReport.ts`) — never by the exit code alone, which read a
+ * partly parsed file and a run that scanned no file as `ok`, coverage full
+ * (follow-up X, fix round 1). The gap is named `semgrep-wp`, the same name as
+ * the run, so a partial run reads "ran, with a narrower gap"
+ * (`history/runNames.ts` maps it to Semgrep's findings); only a Semgrep that
+ * is not installed is listed as `semgrep`.
+ *
+ *   - partial → `ok`, the files named in `partially_parsed`, and missing;
+ *   - scanned nothing → `skipped`: not applicable when the project holds no
+ *     `.php` file (nothing for p/php or p/wordpress to read), a gap when it
+ *     does;
+ *   - anything fatal → `failed`, the errors as its reason (the findings the
+ *     report holds were already kept).
+ */
+function recordSemgrepWp(args: {
+  raw: string | null;
+  run: ProcessRunResult;
+  projectPath: string;
+  tools_run: ToolRun[];
+  missing_tools: string[];
+}): void {
+  const { raw, run, projectPath, tools_run, missing_tools } = args;
+  const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1, projectPath });
+  if (check.verdict === 'ok') {
+    tools_run.push({ name: 'semgrep-wp', status: 'ok' });
+    return;
+  }
+  if (check.verdict === 'partial' && check.partial !== undefined) {
+    tools_run.push({
+      name: 'semgrep-wp',
+      status: 'ok',
+      reason: describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
+      partially_parsed: check.partial,
+    });
+    missing_tools.push('semgrep-wp');
+    return;
+  }
+  if (check.verdict === 'scanned_nothing') {
+    if (!hasFileWithExtension(projectPath, ['.php'])) {
+      tools_run.push({
+        name: 'semgrep-wp',
+        status: 'skipped',
+        reason: 'not applicable: no .php file here for p/php or p/wordpress to read',
+      });
+      return;
+    }
+    tools_run.push({
+      name: 'semgrep-wp',
+      status: 'skipped',
+      reason: 'semgrep scanned 0 files although .php files exist — excluded (.semgrepignore) or the rules loaded nothing',
+    });
+    missing_tools.push('semgrep-wp');
+    return;
+  }
+  const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  tools_run.push({ name: 'semgrep-wp', status: 'failed', reason: check.reason ?? stderr ?? 'semgrep failed' });
+}

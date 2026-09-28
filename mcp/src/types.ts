@@ -109,6 +109,45 @@ export interface ToolRun {
   version?: string;
   status: ToolRunStatus;
   reason?: string;
+  /**
+   * What a pass with a target of its own looked at — `trivy-image`: the
+   * image reference it scanned. `history/runCompare.ts` re-measures such a
+   * pass's findings only by a pass over the same target, so scanning image B
+   * never resolves image A's findings. Absent on every other pass, and on
+   * rows written before it was recorded (read as "any image", as before).
+   */
+  target?: string;
+  /**
+   * A Semgrep run the shared judge (`runners/semgrepReport.ts`) found
+   * `partial`: `ok`, and also listed in `missing_tools`, because these files
+   * were only partly parsed (project-relative). What the CI gate's
+   * `--accept-partial-parse` matches. Absent on every complete run.
+   */
+  partially_parsed?: PartialParse[];
+  /**
+   * Rules a Semgrep run did not load (a rule parse error) while the rest of
+   * its rules ran — scan_sast's and bug_hunt's broken-rule shape, `ok` AND
+   * missing. Their
+   * findings were not looked for: `history/runCompare.ts` reads a finding of
+   * one of these rules as not re-measured. `rule_id` is the id the rule's
+   * findings are stored under. Absent on every other run.
+   */
+  failed_rules?: FailedRule[];
+  /**
+   * The scanner is installed and ran, but its RULES did not load — none of
+   * them (a Semgrep run in which every local rule failed to compile and no
+   * registry pack ran), or its configuration was refused outright (an
+   * unknown language, a rule missing a required key). Set on a `failed` run
+   * only. A coverage warning then names the rule error, never "install the
+   * scanner" (`tools/scanCoverage.ts`).
+   */
+  rule_config_error?: true;
+}
+
+/** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */
+export interface FailedRule {
+  rule_id: string;
+  message: string;
 }
 
 export interface Finding {

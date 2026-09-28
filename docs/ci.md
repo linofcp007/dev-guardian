@@ -33,6 +33,7 @@ node dev-guardian.mjs baseline update --project .
 | `--local-only` | Semgrep runs only the rules on disk, with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. Semgrep's own version check still runs (`SEMGREP_ENABLE_VERSION_CHECK=0` turns it off), and a .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress) |
 | `--base-url <url>` + `--authorized-target` | include `scan_dast` against a running app you are authorized to test |
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
+| `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. |
 
 | Exit code | `scan` | `baseline update` |
 | ---: | --- | --- |
@@ -42,6 +43,29 @@ node dev-guardian.mjs baseline update --project .
 | 3 | usage or configuration error | usage or configuration error |
 
 `baseline update` is the only command that writes `.guardian/baseline.json`; `scan` never does. The file keeps `version: 1`; entries carry a line-independent `identity` next to the fingerprint, so a finding that merely moved down a line is not "new". A 2.0.x build still reads a file written by this one, and this one reads a 2.0.x file.
+
+### Files Semgrep can only partly parse
+
+Semgrep sometimes reads a file only in part and says so with a warning — PHP's legal `const NAMESPACE`, common in WordPress plugins, is one on Semgrep 1.176.1. The file's other code is still analysed, but findings (or routes) in the unreadable span are missing. `scan_sast`, `map_attack_surface` and the batched scoped runs report that as **partial** coverage: Semgrep ran, is also listed missing, and the file is named. The gate exits 2 for it, and the gap line names the file:
+
+```text
+coverage gaps:
+  - security_scan_full: semgrep ran with reduced coverage (partial: 1 file(s) only partly parsed — … (PartialParsing: wp/rest-controller.php)) — not accepted: wp/rest-controller.php (--accept-partial-parse <path> accepts one file, matched exactly)
+```
+
+Once you have looked at the file and decided the gap is acceptable, name it:
+
+```text
+node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller.php
+```
+
+- When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (--accept-partial-parse):` and no longer forces exit 2 (JSON: `accepted_gaps`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
+- Coverage still reads `partial` — in the human report, the JSON and the SARIF (`executionSuccessful: false`). Accepting a gap is not measuring it.
+- Paths are relative to `--project` and matched exactly: `/` or `\` separators and a leading `./` are fine; no globs, no directories, no case folding. An absolute path or one with `..` is a usage error (exit 3).
+- Only a **parse** problem can be accepted: Semgrep's `PartialParsing`, `Syntax error` or `Lexical error` on a file you named. Semgrep reports other per-file problems the same way — a per-file `Timeout` means it gave up on the file, so nothing in it was analysed — and those still exit 2 whatever you accept; the gap line names the type (`not accepted: Timeout on wp/rest-controller.php`).
+- A Semgrep that was skipped, failed (a rule or config error, an unclean exit), or scanned nothing, and any partly parsed file you did not name, still exits 2.
+- With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
+- The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
 
 ### Things a green pipeline does not tell you
 

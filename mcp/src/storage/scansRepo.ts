@@ -391,6 +391,33 @@ export class ScansRepo {
   }
 
   /**
+   * Every pass name the completed scans of `type` for `projectPath` ever
+   * recorded in `tools_run`, and whether one of them recorded no bookkeeping
+   * at all — the widest holder the open set's carry-forward walk has to
+   * allow for before it can stop (`runCompare.ts#StillCarry`).
+   */
+  runNamesOfType(projectPath: string, type: string): { names: string[]; anyEmpty: boolean } {
+    const names = this.db
+      .prepare<[string, string], { name: string | null }>(
+        `SELECT DISTINCT json_extract(je.value, '$.name') AS name
+           FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`,
+      )
+      .all(projectPath, type)
+      .map((r) => r.name)
+      .filter((n): n is string => typeof n === 'string');
+    const empty = this.db
+      .prepare<[string, string], { n: number }>(
+        `SELECT COUNT(*) AS n FROM scans
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+            AND (tools_run IS NULL OR tools_run IN ('', '[]'))
+            AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`,
+      )
+      .get(projectPath, type);
+    return { names, anyEmpty: (empty?.n ?? 0) > 0 };
+  }
+
+  /**
    * Completed scans of `types` for ONE project, newest first, as one SQL
    * query — the latest scan of a type is found however many other scans
    * (of other types, or of other projects) were written after it. Every
@@ -500,6 +527,25 @@ export class ScansRepo {
   attachTreeCache(args: { tree_hash: string; scan_id: string; scan_type: ScanType }): void {
     this.attachCacheStmt.run(args.tree_hash, args.scan_id, args.scan_type, nowIso());
   }
+}
+
+/**
+ * Whether a `running` scan's owner is gone, by the reaper's own rule
+ * ({@link ScansRepo.reapRunning}) — for a reader that must not wait on a scan
+ * nobody will finish (`storage/localRuleIds.ts`, which runs before the
+ * reaper does). A live owner, or one that cannot be judged yet, is not.
+ */
+export function runningScanIsOrphan(
+  row: { started_at: string; owner_pid: number | null; owner_host: string | null },
+  options: ReapOptions = {},
+): boolean {
+  const ctx: Required<ReapOptions> = {
+    now: options.now ?? Date.now(),
+    host: options.host ?? hostname(),
+    ownPid: options.ownPid ?? process.pid,
+    isAlive: options.isAlive ?? pidIsAlive,
+  };
+  return reapReason({ id: '', ...row }, ctx) !== null;
 }
 
 /** Why `row` should be reaped, or null to leave it running. */

@@ -331,6 +331,46 @@ describe('an orchestrated run is kept whole around a baseline (I2)', () => {
     expect(scanIds(db)).toEqual(['run1', 'run0', 's3']);
   });
 
+  // Follow-up X2: an audit_executive row links its sub-scans by
+  // `meta.sub_scan_ids` ({ tool: scan_id | null }), and `runCompare.ts`
+  // reads each sub-scan's bookkeeping through it. A baselined audit keeps
+  // them the way a baselined security_full parent keeps its children.
+  it("never prunes a baselined audit's sub_scan_ids, however far beyond the newest N they are", () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'sub-full', '/p1', 'security_full');
+    seedScan(storage, 'sub-quality', '/p1', 'quality');
+    seedScan(storage, 'audit1', '/p1', 'audit', {
+      sub_scan_ids: { security_scan_full: 'sub-full', quality_check: 'sub-quality', deps_audit: null },
+    });
+    storage.baselines.set({ scan_id: 'audit1' });
+    for (const id of ['f1', 'f2']) seedScan(storage, id, '/p1', 'security_full');
+    for (const id of ['q1', 'q2']) seedScan(storage, id, '/p1', 'quality');
+
+    expect(listPrunableScans(db, 1)).not.toContain('sub-full');
+    pruneScans(db, 1);
+
+    expect(scanIds(db)).toEqual(['sub-full', 'sub-quality', 'audit1', 'f2', 'q2']);
+    expect(storage.findings.listByScan('sub-full')).toHaveLength(1);
+  });
+
+  it("an audit that is not the baseline protects nothing, and malformed sub_scan_ids are tolerated", () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'sub-old', '/p1', 'quality');
+    seedScan(storage, 'audit0', '/p1', 'audit', { sub_scan_ids: { quality_check: 'sub-old' } });
+    seedScan(storage, 'audit1', '/p1', 'audit', { sub_scan_ids: ['sub-old', 7, null] });
+    storage.baselines.set({ scan_id: 'audit1' });
+    seedScan(storage, 'audit2', '/p1', 'audit', { sub_scan_ids: 'sub-old' });
+    storage.baselines.set({ scan_id: 'audit2' });
+    for (const id of ['q1', 'q2']) seedScan(storage, id, '/p1', 'quality');
+
+    pruneScans(db, 1);
+
+    // audit0 is beyond the newest audit and not a baseline; its sub-scan is
+    // an ordinary quality row, and the two baselined audits' malformed lists
+    // name nothing that could keep it.
+    expect(scanIds(db)).toEqual(['audit1', 'audit2', 'q2']);
+  });
+
   it('deletePrunableScans honours a baseline set on the parent after its children were listed', () => {
     const { db, storage } = fresh();
     seedRun(storage, 'run1');
