@@ -39199,9 +39199,9 @@ var FindingsRepo = class {
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw, identity, content_key
+        snippet, fix_available, fix_applied, raw, identity, content_key, vuln_aliases
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.identityForFingerprintStmt = db.prepare(`
       SELECT f.identity AS identity FROM findings f
@@ -39316,7 +39316,8 @@ var FindingsRepo = class {
           boolToInt(f.fix_applied),
           f.raw === void 0 ? null : JSON.stringify(f.raw),
           f.identity ?? null,
-          f.content_key ?? null
+          f.content_key ?? null,
+          f.vuln_aliases === void 0 || f.vuln_aliases.length === 0 ? null : JSON.stringify(f.vuln_aliases)
         );
         inserted += info.changes;
       }
@@ -39479,7 +39480,18 @@ function rowToFinding(row) {
   if (row.snippet !== null) finding4.snippet = row.snippet;
   if (row.identity !== null) finding4.identity = row.identity;
   if (row.content_key !== null) finding4.content_key = row.content_key;
+  const aliases = parseAliases(row.vuln_aliases);
+  if (aliases.length > 0) finding4.vuln_aliases = aliases;
   return finding4;
+}
+function parseAliases(raw) {
+  if (raw === null || raw === void 0) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 // src/storage/runtimeMetaRepo.ts
@@ -40205,24 +40217,24 @@ function resolveProjectPath(input) {
   if (!statSync4(candidate).isDirectory()) {
     throw new InvalidProjectPathError("not_a_directory", candidate);
   }
-  const canonical = canonicalPath(candidate);
-  if (isRootOrHome(canonical)) {
-    throw new InvalidProjectPathError("root_or_home", canonical);
+  const canonical2 = canonicalPath(candidate);
+  if (isRootOrHome(canonical2)) {
+    throw new InvalidProjectPathError("root_or_home", canonical2);
   }
-  return { path: canonical };
+  return { path: canonical2 };
 }
 function canonicalPath(p) {
   const resolved = resolve4(p);
-  let canonical = resolved;
+  let canonical2 = resolved;
   try {
-    canonical = realpathSync2.native(resolved);
+    canonical2 = realpathSync2.native(resolved);
   } catch {
   }
   if (process.platform === "win32") {
-    if (canonical.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical = resolved;
-    canonical = canonical.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
+    if (canonical2.startsWith("\\\\") && !resolved.startsWith("\\\\")) canonical2 = resolved;
+    canonical2 = canonical2.replace(/\//g, "\\").replace(/^([a-z]):/, (_m, drive) => `${drive.toUpperCase()}:`);
   }
-  return canonical;
+  return canonical2;
 }
 function isRootOrHome(p) {
   if (parse3(p).root === p) return true;
@@ -42296,7 +42308,21 @@ function makeFinding(input) {
   if (input.line_start !== void 0) finding4.line_start = input.line_start;
   if (input.line_end !== void 0) finding4.line_end = input.line_end;
   if (snippet !== void 0) finding4.snippet = snippet;
+  const aliases = cleanAliases(input.vuln_aliases, input.rule_id);
+  if (aliases.length > 0) finding4.vuln_aliases = aliases;
   return finding4;
+}
+function cleanAliases(raw, ruleId) {
+  const seen = new Set(ruleId === void 0 ? [] : [ruleId.trim().toUpperCase()]);
+  const out = [];
+  for (const value of raw ?? []) {
+    if (typeof value !== "string") continue;
+    const id = value.trim();
+    if (id === "" || seen.has(id.toUpperCase())) continue;
+    seen.add(id.toUpperCase());
+    out.push(id);
+  }
+  return out;
 }
 function normalizeSeverity(raw) {
   if (!raw) return "medium";
@@ -42405,6 +42431,7 @@ function mapVulnerability(raw, target, ctx) {
     file_path: toRelativeIfPossible(target, ctx.project_path)
   };
   if (description !== void 0) input.message = description;
+  input.vuln_aliases = asArray(getProp(raw, "VendorIDs"));
   input.snippet = `${pkg}@${installed ?? ""}->${fixed ?? ""}`;
   return makeFinding(input);
 }
@@ -49185,6 +49212,47 @@ function advisoryIdFromUrl(url) {
   return m?.[1] ?? url;
 }
 
+// src/intel/vulnIds.ts
+var KNOWN_SCHEME = /^(CVE-\d{4}-\d+|GHSA(-[0-9a-z]{4}){3}|PYSEC-\d{4}-\d+|GO-\d{4}-\d+|RUSTSEC-\d{4}-\d+|OSV-\d{4}-\d+|GSD-\d{4}-\d+|MAL-\d{4}-\d+|DSA-\d+(-\d+)?|DLA-\d+(-\d+)?|RHSA-\d{4}:\d+|USN-\d+(-\d+)?|ALAS2?-\d{4}-\d+)$/i;
+var ADVISORY_SHAPED = /^[A-Z][A-Z0-9]*-[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+var GITHUB_ADVISORY_URL = /^https?:\/\/github\.com\/advisories\/(GHSA(-[0-9a-z]{4}){3})\/?$/i;
+function advisoryIdFromUrl2(url) {
+  const match = GITHUB_ADVISORY_URL.exec(url.trim());
+  return match?.[1] === void 0 ? null : canonical(match[1]);
+}
+function vulnIdKey(id) {
+  return id.trim().toUpperCase();
+}
+function isCveId(id) {
+  return /^CVE-\d{4}-\d+$/i.test(id.trim());
+}
+function findingVulnIds(finding4) {
+  const ids2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (id) => {
+    if (id === null || seen.has(vulnIdKey(id))) return;
+    seen.add(vulnIdKey(id));
+    ids2.push(id);
+  };
+  if (finding4.rule_id !== void 0) {
+    add(ownIdOf(finding4.rule_id, dependencyCoordinates(finding4) !== null));
+  }
+  for (const alias of finding4.vuln_aliases ?? []) add(ownIdOf(alias, true));
+  return ids2;
+}
+function ownIdOf(raw, advisoryContext) {
+  const text2 = raw.trim();
+  const fromUrl = advisoryIdFromUrl2(text2);
+  if (fromUrl !== null) return fromUrl;
+  if (KNOWN_SCHEME.test(text2)) return canonical(text2);
+  if (advisoryContext && ADVISORY_SHAPED.test(text2)) return text2;
+  return null;
+}
+function canonical(id) {
+  if (/^GHSA-/i.test(id)) return `GHSA-${id.slice(5).toLowerCase()}`;
+  return id.toUpperCase();
+}
+
 // src/runners/scannerParsers/npmAudit.ts
 var NPM_AUDIT_TOOL_NAME = "npm-audit";
 var npmAuditParser = {
@@ -49239,7 +49307,9 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
     title: title ?? `Vulnerability in ${pkg ?? "a dependency"}`,
     file_path: "package.json",
     fix_available: fixAvailable,
-    snippet: `${pkg ?? ""}@${range ?? ""}`
+    snippet: `${pkg ?? ""}@${range ?? ""}`,
+    // The advisory's GHSA id, from its own URL; npm's v2 report gives no CVE.
+    vuln_aliases: ghsaOf(url)
   };
   const message3 = composeMessage(pkg, range, url);
   if (message3) input.message = message3;
@@ -49266,7 +49336,12 @@ function mapV1Advisory(adv, seen) {
     title: title ?? `Vulnerability in ${pkg}`,
     file_path: "package.json",
     fix_available: recommendation2 ? /upgrad|updat/i.test(recommendation2) : false,
-    snippet: `${pkg ?? ""}@${range ?? ""}`
+    snippet: `${pkg ?? ""}@${range ?? ""}`,
+    vuln_aliases: [
+      ...asArray(getProp(adv, "cves")),
+      getString(adv, "github_advisory_id"),
+      ...ghsaOf(url)
+    ]
   };
   const message3 = composeMessage(pkg, range, url ?? recommendation2);
   if (message3) input.message = message3;
@@ -49282,6 +49357,10 @@ function mapV1Advisory(adv, seen) {
     }
   }
   return { finding: makeFinding(input), cves };
+}
+function ghsaOf(url) {
+  const id = url === void 0 ? null : advisoryIdFromUrl2(url);
+  return id === null ? [] : [id];
 }
 function composeMessage(pkg, range, tail) {
   const parts = [];
@@ -49394,7 +49473,9 @@ var pipAuditParser = {
           title: `${id} in ${name}${version2 ? ` ${version2}` : ""}`,
           fix_available: fixVersions.length > 0,
           file_path: filePath,
-          snippet: `${name}@${version2 ?? ""}`
+          snippet: `${name}@${version2 ?? ""}`,
+          // OSV's own aliases — what ties PYSEC-… to its CVE and GHSA.
+          vuln_aliases: aliases
         };
         if (description !== void 0) findingInput.message = description;
         findings.push(makeFinding(findingInput));
@@ -54259,58 +54340,6 @@ function failDomain8(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
-// src/intel/rank.ts
-var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
-var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
-function findingCveIds(finding4) {
-  const ids2 = /* @__PURE__ */ new Set();
-  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
-    ids2.add(finding4.rule_id.toUpperCase());
-  }
-  for (const text2 of [finding4.title, finding4.message]) {
-    if (text2 === void 0) continue;
-    for (const match of text2.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
-  }
-  return [...ids2];
-}
-var CVE_CAPABLE_TOOLS = ["trivy", "npm-audit", "wpscan", "pip-audit"];
-function isUncorrelatedFinding(finding4) {
-  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
-}
-function exploitabilitySignal(cveIds, intel) {
-  let kev = false;
-  let maxEpss = null;
-  const contributed = [];
-  for (const id of cveIds) {
-    const entry = intel.get(id);
-    if (entry === void 0 || entry.status !== "ok") continue;
-    let matters = false;
-    if (entry.kev) {
-      kev = true;
-      matters = true;
-    }
-    if (entry.epss_score !== void 0) {
-      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
-      matters = true;
-    }
-    if (matters) contributed.push(id);
-  }
-  return { kev, max_epss: maxEpss, cve_ids: contributed };
-}
-function rankByExploitability(items, cveIdsOf, intel) {
-  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
-  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
-    const sa = signals2[a2.index];
-    const sb = signals2[b.index];
-    if (sa === void 0 || sb === void 0) return 0;
-    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
-    const ea = sa.max_epss ?? -1;
-    const eb = sb.max_epss ?? -1;
-    if (ea !== eb) return eb - ea;
-    return a2.index - b.index;
-  }).map((x) => x.item);
-}
-
 // src/tools/suppressFinding.ts
 var inputSchema5 = {
   project_path: ProjectPath,
@@ -54318,7 +54347,7 @@ var inputSchema5 = {
   reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
   expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires."),
   vex_status: external_exports.enum(["not_affected"]).optional().describe(
-    "Also record a VEX statement: the product is not_affected by the finding's CVE. Requires justification; only for a finding that names a CVE. export_vex publishes it."
+    "Also record a VEX statement: the product is not_affected by the finding's vulnerability. Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, \u2026). export_vex publishes it."
   ),
   justification: external_exports.enum(OPENVEX_JUSTIFICATIONS).optional().describe("OpenVEX justification for vex_status not_affected. Required with it."),
   impact_statement: external_exports.string().min(1).max(1e3).optional().describe("Optional free-text VEX impact statement, with vex_status.")
@@ -54326,7 +54355,7 @@ var inputSchema5 = {
 var tool11 = {
   name: "suppress_finding",
   title: "Suppress finding",
-  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a CVE finding, vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes.",
+  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id \u2014 never one its text mentions), vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes.",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
@@ -54354,11 +54383,11 @@ async function handler8(input, ctx) {
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
   }
-  const cveIds = findingCveIds(located.finding);
-  if (inp.vex_status !== void 0 && cveIds.length === 0) {
+  const vulnIds = findingVulnIds(located.finding);
+  if (inp.vex_status !== void 0 && vulnIds.length === 0) {
     return failDomain9(
       "unsupported_target",
-      `vex_status needs a finding that names a CVE \u2014 export_vex states CVEs \u2014 and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) names none. Suppress it without vex_status.`
+      `vex_status needs a finding with a vulnerability id of its own (CVE, GHSA, PYSEC, \u2026), and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) has none. Suppress it without vex_status.`
     );
   }
   const identity3 = located.finding.identity;
@@ -54392,7 +54421,7 @@ async function handler8(input, ctx) {
     finding_identity: identity3 ?? null,
     expires_at: inp.expires_at ?? null,
     // Null for an ordinary suppression: it states nothing in VEX terms.
-    vex: vex === null ? null : { ...vex, cve_ids: cveIds }
+    vex: vex === null ? null : { ...vex, vulnerability_ids: vulnIds }
   };
 }
 function vexArgumentProblem(inp) {
@@ -56515,6 +56544,48 @@ function fallbackResult(id, row, reason) {
   if (row.epss_score !== null) entry.epss_score = row.epss_score;
   if (row.epss_percentile !== null) entry.epss_percentile = row.epss_percentile;
   return entry;
+}
+
+// src/intel/rank.ts
+function findingCveIds(finding4) {
+  return findingVulnIds(finding4).filter(isCveId).map((id) => id.toUpperCase());
+}
+var CVE_CAPABLE_TOOLS = ["trivy", "npm-audit", "wpscan", "pip-audit"];
+function isUncorrelatedFinding(finding4) {
+  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
+}
+function exploitabilitySignal(cveIds, intel) {
+  let kev = false;
+  let maxEpss = null;
+  const contributed = [];
+  for (const id of cveIds) {
+    const entry = intel.get(id);
+    if (entry === void 0 || entry.status !== "ok") continue;
+    let matters = false;
+    if (entry.kev) {
+      kev = true;
+      matters = true;
+    }
+    if (entry.epss_score !== void 0) {
+      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
+      matters = true;
+    }
+    if (matters) contributed.push(id);
+  }
+  return { kev, max_epss: maxEpss, cve_ids: contributed };
+}
+function rankByExploitability(items, cveIdsOf, intel) {
+  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
+  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
+    const sa = signals2[a2.index];
+    const sb = signals2[b.index];
+    if (sa === void 0 || sb === void 0) return 0;
+    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
+    const ea = sa.max_epss ?? -1;
+    const eb = sb.max_epss ?? -1;
+    if (ea !== eb) return eb - ea;
+    return a2.index - b.index;
+  }).map((x) => x.item);
 }
 
 // src/tools/riskScore.ts
@@ -59160,7 +59231,9 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
     title,
     fix_available: fixedIn !== void 0 && fixedIn.length > 0,
     file_path: componentLabel,
-    snippet: `component:${componentLabel}`
+    snippet: `component:${componentLabel}`,
+    // Every CVE of the vulnerability is its own id; the first is the rule id.
+    vuln_aliases: cveList
   });
   findings.push(finding4);
   for (const cveId of cveList) {
@@ -59203,8 +59276,8 @@ function wpInstallPathProblem(raw) {
   if (namesOneInstall(raw)) return null;
   return `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no single install (resolved against the server's working directory, every remote install passed the same way would share one record). Pass the absolute path of the install, or target_url for a remote site.`;
 }
-function wpInstallKeys(canonical, raw) {
-  const keys = [canonical];
+function wpInstallKeys(canonical2, raw) {
+  const keys = [canonical2];
   if (raw !== void 0 && raw.length > 0 && namesOneInstall(raw)) keys.push(raw, resolve13(raw));
   return unique2(keys);
 }
@@ -64069,12 +64142,12 @@ function collectPorts(projectPath) {
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
     const path8 = join61(projectPath, name);
-    const canonical = canonicalPath2(path8);
-    if (canonical === void 0) continue;
-    if (seenDockerfiles.has(canonical)) continue;
-    seenDockerfiles.add(canonical);
-    const source = basename7(canonical);
-    for (const line of readLines(canonical)) {
+    const canonical2 = canonicalPath2(path8);
+    if (canonical2 === void 0) continue;
+    if (seenDockerfiles.has(canonical2)) continue;
+    seenDockerfiles.add(canonical2);
+    const source = basename7(canonical2);
+    for (const line of readLines(canonical2)) {
       const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
       if (match?.[1] === void 0) continue;
       for (const token of match[1].split(/\s+/)) {
@@ -73016,9 +73089,9 @@ function osvIds(osv, w) {
   );
   return hit?.vuln_ids ?? [];
 }
-function osvNameFor(w, canonical) {
+function osvNameFor(w, canonical2) {
   if (w.spec.ecosystem === "packagist") return w.spec.name.toLowerCase();
-  if (w.spec.ecosystem === "nuget") return canonical ?? w.spec.name;
+  if (w.spec.ecosystem === "nuget") return canonical2 ?? w.spec.name;
   return w.spec.name;
 }
 function buildResult(w, osv, osvError, now, offlineReason) {
@@ -73175,10 +73248,10 @@ async function networkRounds(work, http, signal, deadline, now) {
     }
     return p;
   });
-  const canonical = /* @__PURE__ */ new Map();
+  const canonical2 = /* @__PURE__ */ new Map();
   for (const w of work) {
     const key = w.spec.name.toLowerCase();
-    if (w.spec.ecosystem === "nuget" && !canonical.has(key)) canonical.set(key, nugetCanonicalId(w.spec.name, http));
+    if (w.spec.ecosystem === "nuget" && !canonical2.has(key)) canonical2.set(key, nugetCanonicalId(w.spec.name, http));
   }
   const answers = await Promise.all(pending);
   work.forEach((w, i2) => {
@@ -73194,7 +73267,7 @@ async function networkRounds(work, http, signal, deadline, now) {
   const osvPromise = (async () => {
     const queries = [];
     for (const w of work) {
-      const canonicalId = await (canonical.get(w.spec.name.toLowerCase()) ?? Promise.resolve(void 0));
+      const canonicalId = await (canonical2.get(w.spec.name.toLowerCase()) ?? Promise.resolve(void 0));
       w.osvName = osvNameFor(w, canonicalId);
       const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
       if (w.version !== void 0) q.version = w.version;

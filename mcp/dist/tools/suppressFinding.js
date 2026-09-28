@@ -27,7 +27,7 @@
  * completely different failure.
  */
 import { z } from 'zod';
-import { findingCveIds } from '../intel/rank.js';
+import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { OPENVEX_JUSTIFICATIONS, } from '../types.js';
@@ -51,8 +51,9 @@ const inputSchema = {
     vex_status: z
         .enum(['not_affected'])
         .optional()
-        .describe("Also record a VEX statement: the product is not_affected by the finding's CVE. Requires " +
-        'justification; only for a finding that names a CVE. export_vex publishes it.'),
+        .describe("Also record a VEX statement: the product is not_affected by the finding's vulnerability. " +
+        'Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, …). ' +
+        'export_vex publishes it.'),
     justification: z
         .enum(OPENVEX_JUSTIFICATIONS)
         .optional()
@@ -72,7 +73,8 @@ const tool = {
         'exclude it while the suppression is active — including after the code around it moves: the ' +
         "finding's line-independent identity is recorded alongside the fingerprint and either one " +
         'matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. ' +
-        'Pass expires_at for a temporary snooze. For a CVE finding, vex_status: not_affected with an ' +
+        'Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id — ' +
+        'never one its text mentions), vex_status: not_affected with an ' +
         'OpenVEX justification (and optional impact_statement) also makes it a VEX statement that ' +
         'export_vex publishes.',
     inputSchema,
@@ -100,13 +102,16 @@ async function handler(input, ctx) {
     if (!located) {
         return failDomain('unknown_finding', `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`);
     }
-    // A VEX statement is about a vulnerability: a finding that names no CVE
-    // gives a VEX consumer nothing to match it against.
-    const cveIds = findingCveIds(located.finding);
-    if (inp.vex_status !== undefined && cveIds.length === 0) {
-        return failDomain('unsupported_target', `vex_status needs a finding that names a CVE — export_vex states CVEs — and ${inp.finding_fingerprint} ` +
-            `(${located.finding.tool}${located.finding.rule_id !== undefined ? ` ${located.finding.rule_id}` : ''}) ` +
-            'names none. Suppress it without vex_status.');
+    // A VEX statement is about a vulnerability, named by the finding's OWN
+    // ids — its rule id and the aliases its scanner recorded, never an id its
+    // text mentions (intel/vulnIds.ts). A finding with none gives a VEX
+    // consumer nothing to match the statement against.
+    const vulnIds = findingVulnIds(located.finding);
+    if (inp.vex_status !== undefined && vulnIds.length === 0) {
+        return failDomain('unsupported_target', `vex_status needs a finding with a vulnerability id of its own (CVE, GHSA, PYSEC, …), and ` +
+            `${inp.finding_fingerprint} (${located.finding.tool}` +
+            `${located.finding.rule_id !== undefined ? ` ${located.finding.rule_id}` : ''}) has none. ` +
+            'Suppress it without vex_status.');
     }
     const identity = located.finding.identity;
     const vex = inp.vex_status !== undefined && inp.justification !== undefined
@@ -143,7 +148,7 @@ async function handler(input, ctx) {
         finding_identity: identity ?? null,
         expires_at: inp.expires_at ?? null,
         // Null for an ordinary suppression: it states nothing in VEX terms.
-        vex: vex === null ? null : { ...vex, cve_ids: cveIds },
+        vex: vex === null ? null : { ...vex, vulnerability_ids: vulnIds },
     };
 }
 /**

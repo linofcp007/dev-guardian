@@ -28,6 +28,10 @@ let projectPath = '';
 
 const CVE_FP = 'a'.repeat(64);
 const SAST_FP = 'b'.repeat(64);
+/** pip-audit PYSEC advisory = CVE-2020-14343; its text MENTIONS CVE-2020-1747. */
+const PYSEC_FP = 'c'.repeat(64);
+/** A GHSA-only Trivy finding (no CVE assigned) whose description mentions a CVE. */
+const GHSA_FP = 'd'.repeat(64);
 
 beforeEach(() => {
   const db = new Database(':memory:');
@@ -48,6 +52,17 @@ beforeEach(() => {
     {
       fingerprint: SAST_FP, tool: 'semgrep', rule_id: 'no-eval', severity: 'high', category: 'security',
       title: 'eval', file_path: 'src/a.ts', line_start: 3, fix_available: false,
+    },
+    {
+      fingerprint: PYSEC_FP, tool: 'pip-audit', rule_id: 'PYSEC-2021-142', severity: 'medium', category: 'security',
+      subcategory: 'dependency', title: 'PYSEC-2021-142 in pyyaml 5.3', file_path: 'requirements.txt',
+      message: 'This flaw is due to an incomplete fix for CVE-2020-1747.', snippet: 'pyyaml@5.3',
+      vuln_aliases: ['CVE-2020-14343', 'GHSA-8q59-q68h-6hv4'], fix_available: true,
+    },
+    {
+      fingerprint: GHSA_FP, tool: 'trivy', rule_id: 'GHSA-xvch-5gv4-984h', severity: 'high', category: 'security',
+      subcategory: 'cve', title: 'handlebars: prototype pollution', file_path: 'package-lock.json',
+      message: 'Related to CVE-2021-23383.', snippet: 'handlebars@4.7.6->4.7.7', fix_available: true,
     },
   ];
   ctx.storage.scans.insert({ scan_id: 's1', scan_type: 'deps', project_path: projectPath, tree_hash: 'h' });
@@ -78,7 +93,7 @@ describe('suppress_finding — VEX not_affected', () => {
       status: 'not_affected',
       justification: 'vulnerable_code_not_in_execute_path',
       impact_statement: 'only lodash.get is used; the template function is never called',
-      cve_ids: ['CVE-2021-23337'],
+      vulnerability_ids: ['CVE-2021-23337'],
     });
     expect(ctx.storage.suppressions.listAll()[0]).toMatchObject({
       finding_fingerprint: CVE_FP,
@@ -115,7 +130,7 @@ describe('suppress_finding — VEX not_affected', () => {
     expect(ctx.storage.suppressions.listAll()).toEqual([]);
   });
 
-  it('refuses a VEX status on a finding that names no CVE', async () => {
+  it('refuses a VEX status on a finding that is not about a vulnerability', async () => {
     const r = await suppress({
       finding_fingerprint: SAST_FP,
       vex_status: 'not_affected',
@@ -123,7 +138,30 @@ describe('suppress_finding — VEX not_affected', () => {
     });
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error('expected a refusal');
-    expect(r.error.message).toMatch(/CVE/);
+    expect(r.error.message).toMatch(/vulnerability id/);
     expect(ctx.storage.suppressions.listAll()).toEqual([]);
+  });
+
+  it('accepts a PYSEC advisory, naming its own ids — never the CVE its text mentions', async () => {
+    const r = okResult<{ vex: { vulnerability_ids: string[] } }>(
+      await suppress({
+        finding_fingerprint: PYSEC_FP,
+        vex_status: 'not_affected',
+        justification: 'vulnerable_code_not_in_execute_path',
+      }),
+    );
+    expect(r.vex.vulnerability_ids).toEqual(['PYSEC-2021-142', 'CVE-2020-14343', 'GHSA-8q59-q68h-6hv4']);
+    expect(r.vex.vulnerability_ids).not.toContain('CVE-2020-1747');
+  });
+
+  it('accepts a GHSA-only finding under its own id, not the CVE its description mentions', async () => {
+    const r = okResult<{ vex: { vulnerability_ids: string[] } }>(
+      await suppress({
+        finding_fingerprint: GHSA_FP,
+        vex_status: 'not_affected',
+        justification: 'component_not_present',
+      }),
+    );
+    expect(r.vex.vulnerability_ids).toEqual(['GHSA-xvch-5gv4-984h']);
   });
 });

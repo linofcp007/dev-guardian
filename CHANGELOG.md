@@ -25,8 +25,22 @@ version bump.
   new `mission_wellbeing` parameter (default `medium`). A point with no data takes the more severe
   value and is listed in `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
 - `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
-  optional `impact_statement`, for a finding that names a CVE (migration 014; existing suppressions
-  state nothing in VEX terms).
+  optional `impact_statement`, for a finding with a vulnerability id of its own — CVE, GHSA, PYSEC, …
+  (migration 014; existing suppressions state nothing in VEX terms). The reply names those ids
+  (`vex.vulnerability_ids`).
+- Dependency findings record the other ids their scanner gives for the same vulnerability
+  (`vuln_aliases`: Trivy `VendorIDs`, pip-audit's OSV aliases, npm audit's GHSA and CVE ids, WPScan's
+  further CVEs; migration 014). Not part of the fingerprint.
+
+### Changed
+
+- A finding is tied to a vulnerability only by its own ids — its rule id and the aliases its scanner
+  recorded — never by an id its title or description mentions. This changes the KEV/EPSS weighting
+  of `prioritize_findings` and `create_fix_pr`: a finding whose text mentions a KEV-listed or
+  high-EPSS CVE no longer inherits that CVE's boost (measured on real Trivy output: CVE-2026-4800's
+  lodash advisory mentions CVE-2021-23337). Scores change only where a boost was inherited that way.
+  A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding
+  counts as `uncorrelated` until the next scan.
 - **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
   statement per CVE of the latest usable dependency scan — `not_affected` only from a VEX
   suppression, `affected` when the dependency provider finds the package reachable, otherwise

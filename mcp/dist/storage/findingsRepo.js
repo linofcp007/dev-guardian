@@ -92,9 +92,9 @@ export class FindingsRepo {
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw, identity, content_key
+        snippet, fix_available, fix_applied, raw, identity, content_key, vuln_aliases
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         // The identity of the most recent scan's row for this fingerprint. Rows
         // of older scans can share a fingerprint with a DIFFERENT identity (same
@@ -197,7 +197,7 @@ export class FindingsRepo {
         const tx = this.db.transaction((rows) => {
             let inserted = 0;
             for (const f of rows) {
-                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw), f.identity ?? null, f.content_key ?? null);
+                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw), f.identity ?? null, f.content_key ?? null, f.vuln_aliases === undefined || f.vuln_aliases.length === 0 ? null : JSON.stringify(f.vuln_aliases));
                 inserted += info.changes;
             }
             return inserted;
@@ -371,6 +371,25 @@ function rowToFinding(row) {
         finding.identity = row.identity;
     if (row.content_key !== null)
         finding.content_key = row.content_key;
+    const aliases = parseAliases(row.vuln_aliases);
+    if (aliases.length > 0)
+        finding.vuln_aliases = aliases;
     return finding;
+}
+/**
+ * A damaged column reads as no aliases — the finding is then tied by its
+ * rule id alone, which only ever narrows what it is tied to, never widens it.
+ * `?? null` covers a row read before migration 014 ran on this handle.
+ */
+function parseAliases(raw) {
+    if (raw === null || raw === undefined)
+        return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : [];
+    }
+    catch {
+        return [];
+    }
 }
 //# sourceMappingURL=findingsRepo.js.map

@@ -181,6 +181,15 @@ export interface Finding {
    * text. Present exactly when `identity` is.
    */
   content_key?: string;
+  /**
+   * Other ids of the SAME vulnerability, as its scanner records them
+   * (Trivy `VendorIDs`, pip-audit's OSV `aliases`, npm audit's GHSA and
+   * CVE ids, WPScan's further CVEs) — never an id the text mentions. With
+   * the rule id, these are the finding's own vulnerability ids
+   * (`intel/vulnIds.ts`). Not part of the fingerprint or identity. Absent
+   * when the scanner gave none, and on every row stored before migration 014.
+   */
+  vuln_aliases?: string[];
 }
 
 export interface ScanRecord {

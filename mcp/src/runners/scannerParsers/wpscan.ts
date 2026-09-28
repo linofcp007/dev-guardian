@@ -108,6 +108,8 @@ function pushVuln(
     fix_available: fixedIn !== undefined && fixedIn.length > 0,
     file_path: componentLabel,
     snippet: `component:${componentLabel}`,
+    // Every CVE of the vulnerability is its own id; the first is the rule id.
+    vuln_aliases: cveList,
   });
   findings.push(finding);
 

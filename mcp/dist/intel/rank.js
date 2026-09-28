@@ -18,38 +18,26 @@
  * KEV/EPSS a tie-break within each severity band, it runs FIRST and the
  * stable severity sort after it (`candidates.ts#bySeverityThenExploitability`).
  */
-const CVE_ID_RE = /CVE-\d{4}-\d+/gi;
-const CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
+import { findingVulnIds, isCveId } from './vulnIds.js';
 /**
- * The CVE id(s) a `Finding` is about, best-effort given the existing data
- * model — there is no stored `finding -> cve_id` foreign key (a `Finding`
- * and its `scan_cves` rows are correlated only by scan + package, not by
- * fingerprint; see `runners/scannerParsers/*.ts`'s own comments). Reliable
- * for `tool: 'trivy'` (`rule_id` IS the CVE id, always) and for `wpscan`
- * when the vulnerability has one (`rule_id` is the first CVE, else the
- * title). Falls back to scanning `title`/`message` for an embedded
- * `CVE-YYYY-NNNN`, which additionally covers npm-audit v1 and pip-audit
- * advisories that mention one in prose.
+ * The CVE id(s) a `Finding` is about: the CVEs among its OWN vulnerability
+ * ids — its rule id and the aliases its scanner recorded
+ * (`intel/vulnIds.ts#findingVulnIds`). Trivy: the rule id (a CVE whenever
+ * one is assigned); pip-audit: the CVE among its OSV aliases; npm audit v1:
+ * the advisory's `cves`; WPScan: every CVE of the vulnerability.
  *
- * KNOWN GAP: npm-audit's v2 parser (`mapV2Advisory`) records no CVE at all
- * for a finding, even when the underlying advisory has one — its `cves[]`
- * output is only ever populated on the v1 path
- * (`runners/scannerParsers/npmAudit.ts`). Those findings are simply never
- * correlated here and never gain an exploitability boost; fixing that needs
- * a stored finding-CVE link, out of this task's scope.
+ * It used to scan the title and message for any `CVE-YYYY-NNNN` as well,
+ * which tied a finding to every CVE its description MENTIONS — and gave it
+ * that CVE's KEV/EPSS boost, SSVC exploitation and VEX statements (review of
+ * the 3.0 additions, C1). Only own ids now.
+ *
+ * KNOWN GAP: a row stored before migration 014 carries no aliases, so a
+ * pip-audit PYSEC finding or an npm-audit advisory from an older scan has no
+ * CVE here until the next scan records them — counted by
+ * `isUncorrelatedFinding`, never guessed from its text.
  */
 export function findingCveIds(finding) {
-    const ids = new Set();
-    if (finding.rule_id !== undefined && CVE_ID_ONLY_RE.test(finding.rule_id)) {
-        ids.add(finding.rule_id.toUpperCase());
-    }
-    for (const text of [finding.title, finding.message]) {
-        if (text === undefined)
-            continue;
-        for (const match of text.matchAll(CVE_ID_RE))
-            ids.add(match[0].toUpperCase());
-    }
-    return [...ids];
+    return findingVulnIds(finding).filter(isCveId).map((id) => id.toUpperCase());
 }
 /**
  * Tools whose findings are vulnerability-shaped and may legitimately carry a
@@ -67,9 +55,9 @@ export const CVE_CAPABLE_TOOLS = ['trivy', 'npm-audit', 'wpscan', 'pip-audit'];
  * advisory dev-guardian cannot yet weigh by KEV/EPSS (review round 1,
  * Important #2), not an ordinary finding that was never expected to have
  * one. The main source today: npm-audit's v2 parser (`mapV2Advisory`,
- * `runners/scannerParsers/npmAudit.ts`) records no CVE at all for a
- * finding even when the underlying advisory has one — `rule_id` is a
- * GHSA id or advisory URL instead. `prioritize_findings` and `risk_score`
+ * `runners/scannerParsers/npmAudit.ts`) — npm's report gives the advisory's
+ * GHSA id and never its CVE — and every dependency finding stored before
+ * migration 014 recorded aliases. `prioritize_findings` and `risk_score`
  * both surface a COUNT of these (never silently drop them from the
  * boost — a finding that cannot be weighted is reported as such, not
  * left unexplained).

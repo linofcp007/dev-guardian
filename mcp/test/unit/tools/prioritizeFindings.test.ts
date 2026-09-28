@@ -111,6 +111,31 @@ describe('prioritize_findings — KEV/EPSS weighting', () => {
     db.close();
   });
 
+  it('a CVE the description merely mentions boosts nothing and feeds no SSVC point (review C1)', async () => {
+    // Reproduced on real Trivy output: CVE-2026-4800's lodash description
+    // mentions CVE-2021-23337, and the finding used to inherit that CVE's
+    // KEV/EPSS signal. Deliberate change: the boost below was 0 → +220.
+    const { storage, scanId, db } = seed();
+    storage.findings.bulkInsert([
+      { scan_id: scanId, fingerprint: 'mentions', ...trivyFinding({ rule_id: 'CVE-2026-4800' }),
+        message: 'This is due to an incomplete fix for CVE-2021-23337.' },
+    ]);
+    storage.cveIntel.upsertMany([
+      { cve_id: 'CVE-2026-4800', kev: false, fetched_at: NOW_ISO },
+      { cve_id: 'CVE-2021-23337', kev: true, kev_date_added: '2026-01-01', epss_score: 0.213, fetched_at: NOW_ISO },
+    ]);
+    const res = await okResult<{ ranked: Array<RankedRow & { ssvc: { exploitation: { value: string; assumed: boolean; basis: string } } | null }> }>(
+      await runToolRaw('prioritize_findings', storage),
+    );
+    const row = res.ranked[0];
+    // high 250 + security 200 + observed 30, and nothing from CVE-2021-23337.
+    expect(row?.priority_score).toBe(480);
+    expect(row?.factors.some((f) => /kev|epss/i.test(f))).toBe(false);
+    expect(row?.ssvc?.exploitation.basis).not.toMatch(/CVE-2021-23337/);
+    expect(row?.ssvc?.exploitation).toMatchObject({ value: 'poc', assumed: true });
+    db.close();
+  });
+
   it('a plain Semgrep finding with no CVE association is entirely unaffected', async () => {
     const { storage, scanId, db } = seed();
     storage.findings.bulkInsert([

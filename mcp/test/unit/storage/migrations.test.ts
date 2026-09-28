@@ -446,4 +446,27 @@ describe('migrations runner', () => {
     expect(row).toEqual({ vex_status: null, vex_justification: null, vex_impact_statement: null });
     expect(new Storage(db).suppressions.listAll()[0]?.vex_status).toBeUndefined();
   });
+
+  it('upgrades a pre-014 database: an existing finding reads no vulnerability aliases', () => {
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('d1', 'deps', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, rule_id, severity, category, title, message)
+       VALUES ('fp-old', 'd1', 'pip-audit', 'PYSEC-2021-142', 'medium', 'security', 't',
+               'an incomplete fix for CVE-2020-1747')`,
+    );
+
+    runMigrations(db);
+
+    const [finding] = new Storage(db).findings.listByScan('d1');
+    expect(finding?.rule_id).toBe('PYSEC-2021-142');
+    expect(finding?.vuln_aliases).toBeUndefined();
+  });
 });

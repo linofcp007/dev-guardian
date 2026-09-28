@@ -28,19 +28,29 @@ describe('findingCveIds', () => {
     expect(findingCveIds(finding({ rule_id: 'cve-2021-44228' }))).toEqual(['CVE-2021-44228']);
   });
 
-  it('finds CVE ids mentioned in the title or message when rule_id is not one (npm-audit, wpscan)', () => {
+  // Deliberately reversed (3.0 additions, review of part C, C1): this used
+  // to read CVE ids out of the title and message, which tied a finding to
+  // every CVE its description MENTIONS — CVE-2026-4800's lodash advisory
+  // mentions CVE-2021-23337, and inherited its EPSS boost. A finding is tied
+  // to a CVE only by its own ids now: the rule id, and the aliases its
+  // scanner recorded (`intel/vulnIds.ts`).
+  it('never reads a CVE id the title or message merely mentions', () => {
     expect(
-      findingCveIds(finding({ rule_id: 'GHSA-xxxx', title: 'lodash prototype pollution (CVE-2020-8203)' })),
-    ).toEqual(['CVE-2020-8203']);
+      findingCveIds(finding({ rule_id: 'GHSA-35jh-r3h4-6jhm', title: 'lodash prototype pollution (CVE-2020-8203)' })),
+    ).toEqual([]);
     expect(
-      findingCveIds(finding({ rule_id: 'advisory-1', message: 'See CVE-2019-10744 for details.' })),
-    ).toEqual(['CVE-2019-10744']);
+      findingCveIds(finding({ rule_id: 'CVE-2026-4800', message: 'an incomplete fix for CVE-2021-23337' })),
+    ).toEqual(['CVE-2026-4800']);
   });
 
-  it('dedupes when the same CVE appears in both rule_id and message', () => {
+  it('reads the CVE ids among the aliases the scanner recorded', () => {
     expect(
-      findingCveIds(finding({ rule_id: 'CVE-2021-1', message: 'related to CVE-2021-1' })),
-    ).toEqual(['CVE-2021-1']);
+      findingCveIds(finding({ tool: 'pip-audit', rule_id: 'PYSEC-2021-142', vuln_aliases: ['CVE-2020-14343', 'GHSA-8q59-q68h-6hv4'] })),
+    ).toEqual(['CVE-2020-14343']);
+  });
+
+  it('dedupes when the same CVE is both the rule id and an alias', () => {
+    expect(findingCveIds(finding({ rule_id: 'CVE-2021-1', vuln_aliases: ['cve-2021-1'] }))).toEqual(['CVE-2021-1']);
   });
 
   it('returns nothing for a finding with no CVE association at all (a plain Semgrep finding)', () => {

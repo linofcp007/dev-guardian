@@ -17,6 +17,13 @@ describe('pipAuditParser', () => {
     expect(findings).toHaveLength(2);
   });
 
+  it('records the OSV aliases on the finding — the ids that tie PYSEC-… to its CVE', () => {
+    const { findings } = pipAuditParser.parse(read());
+    expect(findings[0]?.rule_id).toBe('PYSEC-2019-1234');
+    expect(findings[0]?.vuln_aliases).toEqual(['CVE-2019-19844', 'GHSA-8x94-hmjh-97hq']);
+    expect(findings[1]?.vuln_aliases).toBeUndefined();
+  });
+
   it('extracts the CVE alias into a scan_cves row, with the minimum SAFE fix version — never a downgrade', () => {
     // Fix round 1, CRITICAL item 1: installed 2.0.1, fix_versions is
     // ["1.11.27", "2.2.9", "3.0.1"] — 1.11.27 is an OLDER release branch's

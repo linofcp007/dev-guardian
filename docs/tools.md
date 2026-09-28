@@ -582,7 +582,7 @@ Assemble structured context about a finding (source snippet, surrounding lines, 
 
 ### `suppress_finding`
 
-Mark a finding of project\_path (default: the server's working directory) — named by the fingerprint a scan response shows — as a false positive. Resources that surface open findings exclude it while the suppression is active — including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires\_at for a temporary snooze. For a CVE finding, vex\_status: not\_affected with an OpenVEX justification (and optional impact\_statement) also makes it a VEX statement that export\_vex publishes.
+Mark a finding of project\_path (default: the server's working directory) — named by the fingerprint a scan response shows — as a false positive. Resources that surface open findings exclude it while the suppression is active — including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires\_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id — never one its text mentions), vex\_status: not\_affected with an OpenVEX justification (and optional impact\_statement) also makes it a VEX statement that export\_vex publishes.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -590,7 +590,7 @@ Mark a finding of project\_path (default: the server's working directory) — na
 | `finding_fingerprint` | string | yes | — | SHA-256 fingerprint of the finding to suppress (from a previous scan response). |
 | `reason` | string | yes | — | Why this finding is being suppressed. Required. |
 | `expires_at` | string | no | — | ISO-8601 expiry. When omitted, the suppression never expires. |
-| `vex_status` | one of "not\_affected" | no | — | Also record a VEX statement: the product is not\_affected by the finding's CVE. Requires justification; only for a finding that names a CVE. export\_vex publishes it. |
+| `vex_status` | one of "not\_affected" | no | — | Also record a VEX statement: the product is not\_affected by the finding's vulnerability. Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, …). export\_vex publishes it. |
 | `justification` | one of "component\_not\_present", "vulnerable\_code\_not\_present", "vulnerable\_code\_not\_in\_execute\_path", "vulnerable\_code\_cannot\_be\_controlled\_by\_adversary", "inline\_mitigations\_already\_exist" | no | — | OpenVEX justification for vex\_status not\_affected. Required with it. |
 | `impact_statement` | string | no | — | Optional free-text VEX impact statement, with vex\_status. |
 

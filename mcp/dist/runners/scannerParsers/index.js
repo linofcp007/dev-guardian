@@ -99,7 +99,24 @@ export function makeFinding(input) {
         finding.line_end = input.line_end;
     if (snippet !== undefined)
         finding.snippet = snippet;
+    const aliases = cleanAliases(input.vuln_aliases, input.rule_id);
+    if (aliases.length > 0)
+        finding.vuln_aliases = aliases;
     return finding;
+}
+function cleanAliases(raw, ruleId) {
+    const seen = new Set(ruleId === undefined ? [] : [ruleId.trim().toUpperCase()]);
+    const out = [];
+    for (const value of raw ?? []) {
+        if (typeof value !== 'string')
+            continue;
+        const id = value.trim();
+        if (id === '' || seen.has(id.toUpperCase()))
+            continue;
+        seen.add(id.toUpperCase());
+        out.push(id);
+    }
+    return out;
 }
 /**
  * Standard scanner severity strings → canonical `Severity`. Scanners differ

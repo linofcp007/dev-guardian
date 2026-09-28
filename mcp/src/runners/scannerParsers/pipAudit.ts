@@ -93,6 +93,8 @@ export const pipAuditParser: ScannerParser = {
           fix_available: fixVersions.length > 0,
           file_path: filePath,
           snippet: `${name}@${version ?? ''}`,
+          // OSV's own aliases — what ties PYSEC-… to its CVE and GHSA.
+          vuln_aliases: aliases,
         };
         if (description !== undefined) findingInput.message = description;
         findings.push(makeFinding(findingInput));

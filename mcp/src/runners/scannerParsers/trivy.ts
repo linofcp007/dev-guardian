@@ -90,6 +90,9 @@ function mapVulnerability(raw: unknown, target: string, ctx: ParserContext): Fin
     file_path: toRelativeIfPossible(target, ctx.project_path),
   };
   if (description !== undefined) input.message = description;
+  // The advisory's other ids as Trivy's database gives them (the GHSA id of
+  // a CVE, for a language package) — never the CVEs its description names.
+  input.vuln_aliases = asArray(getProp(raw, 'VendorIDs'));
   // Trivy "snippet" surrogate: enough package metadata to make the
   // fingerprint unique per (cve, package, installed_version) tuple.
   //

@@ -15,6 +15,30 @@ function read(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+describe('trivyParser — the vulnerability’s own aliases', () => {
+  const json = JSON.stringify({
+    Results: [{
+      Target: 'package-lock.json',
+      Vulnerabilities: [
+        {
+          VulnerabilityID: 'CVE-2026-4800', VendorIDs: ['GHSA-r5fr-rjxr-66jc'], PkgName: 'lodash',
+          InstalledVersion: '4.17.20', FixedVersion: '4.18.0', Severity: 'HIGH',
+          Description: 'This is due to an incomplete fix for CVE-2021-23337.',
+        },
+        { VulnerabilityID: 'GHSA-xxxx-yyyy-zzzz', PkgName: 'minimist', InstalledVersion: '1.2.5', Severity: 'LOW' },
+      ],
+    }],
+  });
+
+  it('records VendorIDs as aliases — never the CVE a description mentions — outside the fingerprint', () => {
+    const { findings } = trivyParser.parse(json);
+    expect(findings[0]?.vuln_aliases).toEqual(['GHSA-r5fr-rjxr-66jc']);
+    expect(findings[1]?.vuln_aliases).toBeUndefined();
+    const withoutAliases = trivyParser.parse(json.replace(',"VendorIDs":["GHSA-r5fr-rjxr-66jc"]', ''));
+    expect(withoutAliases.findings[0]?.fingerprint).toBe(findings[0]?.fingerprint);
+  });
+});
+
 describe('trivyParser (fs scan)', () => {
   it('emits one Finding per Vulnerability and one Finding per License', () => {
     const { findings, cves } = trivyParser.parse(read(FS_FIXTURE));
