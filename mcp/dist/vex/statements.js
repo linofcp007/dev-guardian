@@ -9,24 +9,34 @@
  * id and the aliases its scanner recorded (`intel/vulnIds.ts`), never an id
  * its description mentions.
  *
- * Rows are the anchors, and two rows of different ids are never one
- * statement (final review, M-a: OSV's alias set for GHSA-35jh-r3h4-6jhm holds
- * CVE-2026-4800 as well as CVE-2021-23337, so tying by "any shared id" made
- * two lodash vulnerabilities one statement; pip-audit's PYSEC-2020-96 carries
- * CVE-2025-50460, the ms-swift RCE). A finding joins the row, of its package
- * and version, that its rule id names; failing that, the first of its
- * aliases, in the scanner's order, that a row names; failing that, it is a
- * statement of its own — a PYSEC- or GHSA-only advisory — named by its first
- * CVE alias, else its own rule id, beside every other finding named the same.
- * A finding with no exact version (npm audit's vulnerable range) joins every
- * version of its package under the same name. After that, a statement never
- * lists as an alias an id that names another statement of the document.
+ * Statements are named, then filled — MEMBERSHIP, NOT MERGING:
+ *
+ *   - Each CVE row names one: its id, package and version. Two rows of
+ *     different ids are never one statement (final review, M-a: OSV's alias
+ *     set for GHSA-35jh-r3h4-6jhm holds CVE-2026-4800 as well as
+ *     CVE-2021-23337, and "any shared id" made two lodash vulnerabilities
+ *     one statement; pip-audit's PYSEC-2020-96 carries CVE-2025-50460, the
+ *     ms-swift RCE).
+ *   - A finding that is a copy in none of those — a PYSEC- or GHSA-only
+ *     advisory — names one of its own: its first CVE alias, else its own id.
+ *   - Then a row or finding is a COPY in every statement one of its own ids
+ *     names, in its package, at its version (a range — npm audit's — at any
+ *     version). One finding may be a copy in several: pip-audit's
+ *     PYSEC-2026-1794 is both CVE-2023-4863 and CVE-2023-5129 of pillow,
+ *     which Trivy reports apart, and an npm audit v1 advisory is every CVE
+ *     it lists. It used to join only the first, so suppressing Trivy's
+ *     CVE-2023-5129 alone published it `not_affected` while pip-audit's copy
+ *     of it stayed open (final review, membership ruling). `suppress_finding`
+ *     names the other copies with the same rule (`isVexCopyIn`).
+ *
+ * A statement never lists as an alias an id that names another statement of
+ * the document.
  *
  * The status rules, and the only ones:
  *
  *   - `not_affected` ONLY from a VEX suppression — `suppress_finding` with
  *     `vex_status: not_affected` and its justification — active, of this
- *     project, on EVERY finding of the group, all with one justification. It
+ *     project, on EVERY copy in the statement, all with one justification. It
  *     is the author's own statement, so it wins over reachability. The
  *     copies' distinct impact statements are all said, joined and bounded
  *     (final review, M-c). A copy with none is named in the notes (M-d). A
@@ -64,24 +74,21 @@ import { buildPurl, purlType, purlsFor } from './sbom.js';
 export function buildVexStatements(inputs) {
     const active = inputs.suppressions.filter((s) => (s.expires_at === undefined || Date.parse(s.expires_at) > inputs.now) &&
         (s.project_path === undefined || s.project_path === inputs.projectPath));
-    const members = [
-        ...inputs.cves.map(memberOfRow),
-        ...inputs.findings.flatMap((f) => {
-            const member = memberOfFinding(f);
-            return member === null ? [] : [member];
-        }),
-    ];
-    const drafts = groupMembers(members).map((group) => statementFor(group, inputs, active));
+    const members = membersOf(inputs.cves, inputs.findings);
+    const groups = groupMembers(members);
+    const names = new Set(groups.map((g) => vulnIdKey(g.name)));
+    const drafts = groups.map((group) => statementFor(group, names, inputs, active));
     const statements = mergeSameSubcomponent(drafts);
     // An id that names a statement of this document is that statement, never
     // an alias of another one (final review, M-a).
-    const names = new Set(statements.map((s) => vulnIdKey(s.vulnerability)));
-    return statements.map((s) => ({ ...s, aliases: s.aliases.filter((a) => !names.has(vulnIdKey(a))) }));
+    const stated = new Set(statements.map((s) => vulnIdKey(s.vulnerability)));
+    return statements.map((s) => ({ ...s, aliases: s.aliases.filter((a) => !stated.has(vulnIdKey(a))) }));
 }
 function memberOfRow(row) {
     return {
         ids: [row.cve_id],
         keys: new Set([vulnIdKey(row.cve_id)]),
+        ruleId: row.cve_id,
         pkg: row.package_name.toLowerCase(),
         name: row.package_name,
         version: row.installed_version ?? null,
@@ -97,54 +104,78 @@ function memberOfFinding(finding) {
     return {
         ids,
         keys: new Set(ids.map(vulnIdKey)),
+        ruleId: findingVulnIds({ ...finding, vuln_aliases: [] })[0] ?? null,
         pkg: coordinates.name.toLowerCase(),
         name: coordinates.name,
         version: subject.version,
         finding,
     };
 }
-function groupMembers(members) {
-    const rows = members.filter((m) => m.row !== undefined);
-    /** The id a member is stated under: see the header. */
-    const nameOf = (m) => {
-        if (m.row !== undefined)
-            return m.row.cve_id;
-        const rowKeys = new Set(rows.filter((r) => r.pkg === m.pkg && (m.version === null || r.version === m.version)).flatMap((r) => [...r.keys]));
-        return m.ids.find((id) => rowKeys.has(vulnIdKey(id))) ?? m.ids.find(isCveId) ?? m.ids[0] ?? '';
+/**
+ * THE membership rule, shared with `suppress_finding` (`isVexCopyIn`): a row
+ * or finding is a copy in a statement when one of its own ids names it, in
+ * the same package, at the same version — or either has none (a range).
+ */
+function isMemberOf(member, key) {
+    return (member.pkg === key.pkg &&
+        (member.version === null || key.version === null || member.version === key.version) &&
+        member.keys.has(vulnIdKey(key.name)));
+}
+/** Whether `finding` is a copy in the statement `key` — the rule `buildVexStatements` applies. */
+export function isVexCopyIn(finding, key) {
+    const member = memberOfFinding(finding);
+    return member !== null && isMemberOf(member, key);
+}
+/** The statements a dependency scan's rows and findings make, in document order (before any merge). */
+export function vexStatementKeys(scan) {
+    return statementKeysOf(membersOf(scan.cves, scan.findings));
+}
+function membersOf(cves, findings) {
+    return [
+        ...cves.map(memberOfRow),
+        ...findings.flatMap((f) => {
+            const member = memberOfFinding(f);
+            return member === null ? [] : [member];
+        }),
+    ];
+}
+/**
+ * Which statements there are — see the header. Rows name them first; then
+ * each finding a copy in none so far, fewest own ids first (so a GHSA-only
+ * advisory names the statement the finding that also lists its CVE joins,
+ * rather than each naming one of its own), exact versions before ranges.
+ */
+function statementKeysOf(members) {
+    const keys = [];
+    const add = (member, index) => {
+        if (keys.some((k) => isMemberOf(member, k)))
+            return;
+        const name = member.row?.cve_id ?? member.ids.find(isCveId) ?? member.ids[0] ?? '';
+        keys.push({ name, pkg: member.pkg, version: member.version, first: index });
     };
-    // Same package, same exact version (or both none), same name.
-    const byKey = new Map();
-    members.forEach((member, index) => {
-        const name = nameOf(member);
-        const key = `${member.pkg}\u0000${member.version ?? '\u0000'}\u0000${vulnIdKey(name)}`;
-        const group = byKey.get(key) ?? { name, members: [], first: index };
-        group.members.push(member);
-        byKey.set(key, group);
-    });
-    // A group with no version (a range) joins every version group of its
-    // package under the same name, rather than standing apart from them.
-    const groups = [...byKey.values()];
-    const exact = groups.filter((g) => g.members[0]?.version !== null);
-    const out = [...exact];
-    for (const loose of groups.filter((g) => g.members[0]?.version === null)) {
-        const pkg = loose.members[0]?.pkg;
-        const targets = exact.filter((g) => g.members[0]?.pkg === pkg && vulnIdKey(g.name) === vulnIdKey(loose.name));
-        if (targets.length === 0)
-            out.push(loose);
-        for (const target of targets)
-            target.members.push(...loose.members);
+    const indexed = members.map((member, index) => ({ member, index }));
+    const inOrder = (rows, exact) => indexed
+        .filter(({ member }) => (member.row !== undefined) === rows && (member.version !== null) === exact)
+        .sort((a, b) => a.member.ids.length - b.member.ids.length || a.index - b.index);
+    for (const [rows, exact] of [[true, true], [false, true], [true, false], [false, false]]) {
+        for (const { member, index } of inOrder(rows, exact))
+            add(member, index);
     }
-    return out.sort((a, b) => a.first - b.first);
+    return keys.sort((a, b) => a.first - b.first).map(({ name, pkg, version }) => ({ name, pkg, version }));
+}
+/** Each statement with every row and finding that is a copy in it — one finding may be a copy in several. */
+function groupMembers(members) {
+    return statementKeysOf(members).map((key) => ({ ...key, members: members.filter((m) => isMemberOf(m, key)) }));
 }
 /* ---------------------------------------------------------------------- *
  * One group → one statement
  * ---------------------------------------------------------------------- */
-function statementFor(group, inputs, active) {
+function statementFor(group, names, inputs, active) {
     const rows = group.members.flatMap((m) => (m.row === undefined ? [] : [m.row]));
     const findings = uniqueFindings(group.members.flatMap((m) => (m.finding === undefined ? [] : [m.finding])));
-    const version = group.members.find((m) => m.version !== null)?.version ?? null;
+    const version = group.version;
     const name = rows[0]?.package_name ?? group.members[0]?.name ?? '';
-    const { vulnerability, aliases } = namesOf(group);
+    const { vulnerability, aliases } = namesOf(group, names);
     const subjects = findings.flatMap((f) => {
         const subject = dependencySubjectOf(f);
         return subject === null ? [] : [{ ...subject, version: subject.version ?? version }];
@@ -212,11 +243,23 @@ function statementFor(group, inputs, active) {
         status_notes: `${label}: not known to affect the product — ${whyNot(assessment)}.${suppressedNote}`,
     };
 }
-/** The group's name, and every other own id of its members once. */
-function namesOf(group) {
+/**
+ * The group's name, and every other own id of its members once — except
+ * the ids of a copy whose rule id names ANOTHER statement: that finding is
+ * about that one first, and its aliases are said there. Trivy's
+ * CVE-2021-23337 carries GHSA-35jh-r3h4-6jhm and, from OSV's alias set,
+ * CVE-2026-4800: it is a copy in CVE-2026-4800 (its suppression counts
+ * there), but GHSA-35jh is CVE-2021-23337's alias, not CVE-2026-4800's. A
+ * copy whose rule id names no statement (pip-audit's PYSEC id, npm audit
+ * v1's number) gives its ids to every statement it is a copy in.
+ */
+function namesOf(group, names) {
     const aliases = [];
     const seen = new Set([vulnIdKey(group.name)]);
     for (const member of group.members) {
+        const rule = member.ruleId;
+        if (rule !== null && names.has(vulnIdKey(rule)) && vulnIdKey(rule) !== vulnIdKey(group.name))
+            continue;
         for (const id of member.ids) {
             if (seen.has(vulnIdKey(id)))
                 continue;

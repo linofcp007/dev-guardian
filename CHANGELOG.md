@@ -46,16 +46,19 @@ version bump.
   optional `impact_statement`, for a finding with a vulnerability id of its own — CVE, GHSA, PYSEC, …
   (migration 014; existing suppressions state nothing in VEX terms). The reply names those ids
   (`vex.vulnerability_ids`), says whether `export_vex` can publish it (`vex.exportable`: not for a
-  finding with no package version), and names the other open findings of the same vulnerability
-  (`vex.other_open_findings`, with a `warning`): `not_affected` needs a justification on every copy.
+  finding with no package version), and names the other open copies in the same VEX statements, by
+  `export_vex`'s own rule (`vex.other_open_findings`, with a `warning`): `not_affected` needs a
+  justification on every copy.
 - Dependency findings record the other ids their scanner gives for the same vulnerability
   (`vuln_aliases`: Trivy `VendorIDs`, pip-audit's OSV aliases, npm audit's GHSA and CVE ids, WPScan's
   further CVEs; migration 014). Not part of the fingerprint.
 - **`export_vex`** (tool 58): an OpenVEX 0.2.0 document, or a CycloneDX 1.6 VEX BOM, with one
   statement per vulnerability and package version of the latest usable dependency scan — named by
   its CVE or its own GHSA/PYSEC id, with its aliases (OpenVEX `aliases`, CycloneDX `references`).
-  A finding joins the CVE row its rule id names, else the first of its aliases a row names; two rows
-  are never one statement, and no statement lists as an alias an id that names another one.
+  Each CVE row names a statement (a finding no row covers names its own); a finding is a copy in
+  every statement one of its own ids names — pip-audit's PYSEC-2026-1794 is both of pillow's
+  CVE-2023-4863 and CVE-2023-5129. Two rows are never one statement, and no statement lists as an
+  alias an id that names another one.
   `not_affected` only from a VEX suppression on every copy (the notes name a copy without one; the
   copies' impact statements are joined), `affected` when the dependency provider finds that version
   reachable on a snapshot of the scanned tree, otherwise `under_investigation`; `fixed` is never
@@ -73,10 +76,12 @@ version bump.
 - A finding is tied to a vulnerability only by its own ids — its rule id and the aliases its scanner
   recorded — never by an id its title or description mentions (CVE-2026-4800's lodash advisory
   mentions CVE-2021-23337). The KEV/EPSS weighting of `prioritize_findings` moves both ways.
-  Measured on an npm + Gradle + PyPI project, 43 of its 227 scores change:
-  - 13 findings lose a boost inherited from a CVE their text mentions (CVE-2019-16335: 701 → 695);
-  - pip-audit findings gain one from their own aliases: 48 of them are now tied to a CVE, and
-    `uncorrelated` goes from 50 to 3 (PYSEC-2026-628: 410 → 497).
+  Measured per finding on an npm + Gradle + PyPI project (227 findings, 3.0.0 against this change,
+  one database, 2026-09-28 — EPSS moves, so the scores are that day's):
+  - 61 findings changed their own CVE ids: 11 (all Trivy) lost a CVE their text only mentioned,
+    48 (all pip-audit) gained their aliases' CVEs where they had none, and 2 (pip-audit) both;
+  - 41 scores changed, 35 up and 6 down;
+  - `uncorrelated` went from 50 to 3.
 
   `create_fix_pr` breaks its severity ties by KEV/EPSS the same way, so its order shifts with them.
   A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding

@@ -214,3 +214,52 @@ describe('suppress_finding — VEX not_affected', () => {
     expect(r.warning).toMatch(/export_vex/);
   });
 });
+
+describe('suppress_finding — the copies it names are export_vex’s copies', () => {
+  const TRIVY_A = '1'.repeat(64);
+  const TRIVY_B = '2'.repeat(64);
+  const PIP_AUDIT = '3'.repeat(64);
+  /** The same CVE in another pillow version: another statement, not a copy. */
+  const OTHER_VERSION = '4'.repeat(64);
+
+  /** Real OSV data: PYSEC-2026-1794 names CVE-2023-4863 and CVE-2023-5129 (pillow). */
+  beforeEach(() => {
+    const trivy = (fingerprint: string, id: string, version: string): Finding => ({
+      fingerprint, tool: 'trivy', rule_id: id, severity: 'high', category: 'security', subcategory: 'cve',
+      title: `${id} in pillow`, file_path: 'requirements.txt', snippet: `pillow@${version}->10.0.1`, fix_available: true,
+    });
+    ctx.storage.scans.insert({ scan_id: 's2', scan_type: 'deps', project_path: projectPath, tree_hash: 'h2' });
+    const findings: Finding[] = [
+      trivy(TRIVY_A, 'CVE-2023-4863', '10.0.0'),
+      trivy(TRIVY_B, 'CVE-2023-5129', '10.0.0'),
+      trivy(OTHER_VERSION, 'CVE-2023-5129', '9.5.0'),
+      {
+        fingerprint: PIP_AUDIT, tool: 'pip-audit', rule_id: 'PYSEC-2026-1794', severity: 'high', category: 'security',
+        subcategory: 'dependency', title: 'PYSEC-2026-1794 in pillow 10.0.0', file_path: 'requirements.txt',
+        snippet: 'pillow@10.0.0', vuln_aliases: ['CVE-2023-4863', 'CVE-2023-5129'], fix_available: true,
+      },
+    ];
+    ctx.storage.findings.bulkInsert(findings.map((f) => ({ ...f, scan_id: 's2' })));
+    ctx.storage.cves.bulkUpsert([
+      { scan_id: 's2', cve_id: 'CVE-2023-4863', package_name: 'pillow', installed_version: '10.0.0', fixed_version: '10.0.1', severity: 'high' },
+      { scan_id: 's2', cve_id: 'CVE-2023-5129', package_name: 'pillow', installed_version: '10.0.0', fixed_version: '10.0.1', severity: 'high' },
+      { scan_id: 's2', cve_id: 'CVE-2023-5129', package_name: 'pillow', installed_version: '9.5.0', fixed_version: '10.0.1', severity: 'high' },
+    ]);
+    ctx.storage.scans.finalize({ scan_id: 's2', status: 'completed', tools_run: [], missing_tools: [] });
+  });
+
+  async function copiesNamedFor(fingerprint: string): Promise<string[]> {
+    const r = okResult<{ vex: { other_open_findings: Array<{ fingerprint: string }> } }>(
+      await suppress({ finding_fingerprint: fingerprint, vex_status: 'not_affected', justification: 'component_not_present' }),
+    );
+    return r.vex.other_open_findings.map((f) => f.fingerprint).sort();
+  }
+
+  it('names pip-audit’s advisory for Trivy’s CVE-2023-5129 — and not the same CVE in another version', async () => {
+    expect(await copiesNamedFor(TRIVY_B)).toEqual([PIP_AUDIT]);
+  });
+
+  it('names both Trivy findings for the pip-audit advisory that is both CVEs', async () => {
+    expect(await copiesNamedFor(PIP_AUDIT)).toEqual([TRIVY_A, TRIVY_B].sort());
+  });
+});

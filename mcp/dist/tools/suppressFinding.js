@@ -29,10 +29,11 @@
 import { z } from 'zod';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
-import { findingVulnIds, vulnIdKey } from '../intel/vulnIds.js';
+import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { OPENVEX_JUSTIFICATIONS, } from '../types.js';
+import { isVexCopyIn, vexStatementKeys } from '../vex/statements.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
@@ -163,14 +164,15 @@ async function handler(input, ctx) {
     // carries a VEX justification, so the copies still open are named here,
     // where the caller can act on them, rather than only in the document.
     const exportable = dependencyCoordinates(located.finding) !== null;
-    const others = otherOpenCopies(ctx, projectPath, inp.finding_fingerprint, vulnIds);
+    const { statements, others } = otherOpenCopies(ctx, projectPath, located);
     const warning = others.length === 0
         ? null
-        : `${others.length} other open finding(s) share ${others.length === 1 ? 'this vulnerability id' : 'these vulnerability ids'}: ` +
+        : `${others.length} other open finding(s) are copies of the same VEX statement ` +
+            `(${statements.join(', ')}): ` +
             `${others.slice(0, MAX_NAMED_COPIES).map((o) => `${o.file_path ?? '(no file)'} [${o.fingerprint.slice(0, 12)}]`).join(', ')}` +
             `${others.length > MAX_NAMED_COPIES ? ` and ${others.length - MAX_NAMED_COPIES} more` : ''}. ` +
-            'export_vex states not_affected only when every copy of the vulnerability in that package version ' +
-            'carries a VEX justification — suppress those with vex_status too, or it stays under_investigation.';
+            'export_vex states not_affected only when every copy in a statement carries a VEX justification ' +
+            '— suppress those with vex_status too, or it stays under_investigation.';
     return {
         ok: true,
         suppression_id: id,
@@ -196,14 +198,22 @@ async function handler(input, ctx) {
 const MAX_NAMED_COPIES = 5;
 const MAX_LISTED_COPIES = 50;
 /**
- * The project's OTHER open findings with an own vulnerability id in common
- * with `vulnIds` — read after the suppression is inserted, so the one just
- * suppressed is not among them.
+ * The project's OTHER open findings that are copies in a VEX statement the
+ * suppressed finding is a copy in — `export_vex`'s own membership rule
+ * (`vex/statements.ts#isVexCopyIn`), over the statements the finding's scan
+ * makes (`vexStatementKeys`), so the two can never disagree about which
+ * findings one statement needs. Read after the suppression is inserted, so
+ * the one just suppressed is not among them.
  */
-function otherOpenCopies(ctx, projectPath, fingerprint, vulnIds) {
-    const keys = new Set(vulnIds.map(vulnIdKey));
-    return openSetForProject(ctx.storage, projectPath)
-        .findings.filter((f) => f.fingerprint !== fingerprint && findingVulnIds(f).some((id) => keys.has(vulnIdKey(id))))
+function otherOpenCopies(ctx, projectPath, located) {
+    const keys = vexStatementKeys({
+        cves: ctx.storage.cves.listActive(located.scan_id),
+        findings: ctx.storage.findings.listByScan(located.scan_id),
+    }).filter((key) => isVexCopyIn(located.finding, key));
+    if (keys.length === 0)
+        return { statements: [], others: [] };
+    const others = openSetForProject(ctx.storage, projectPath)
+        .findings.filter((f) => f.fingerprint !== located.finding.fingerprint && keys.some((key) => isVexCopyIn(f, key)))
         .map((f) => {
         const coordinates = dependencyCoordinates(f);
         return {
@@ -214,6 +224,7 @@ function otherOpenCopies(ctx, projectPath, fingerprint, vulnIds) {
             package: coordinates === null ? null : `${coordinates.name}@${coordinates.version}`,
         };
     });
+    return { statements: [...new Set(keys.map((k) => k.name))], others };
 }
 /**
  * The VEX arguments go together or not at all: `not_affected` without a

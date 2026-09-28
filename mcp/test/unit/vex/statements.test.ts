@@ -525,3 +525,101 @@ describe('buildVexStatements — affected only from a snapshot of this tree (M-h
     expect(s?.status).toBe('affected');
   });
 });
+
+/**
+ * Real OSV data: pip-audit's PYSEC-2026-1794 (pillow) names CVE-2023-4863
+ * AND CVE-2023-5129, which Trivy reports as two findings.
+ */
+function pillowScan(): Pick<VexInputs, 'cves' | 'findings'> {
+  const trivy = (fingerprint: string, id: string): Finding => finding({
+    fingerprint, identity: `id-${fingerprint}`, rule_id: id, title: `${id} in pillow`,
+    file_path: 'requirements.txt', snippet: 'pillow@10.0.0->10.0.1',
+  });
+  return {
+    cves: [
+      cve({ cve_id: 'CVE-2023-4863', package_name: 'pillow', installed_version: '10.0.0', fixed_version: '10.0.1' }),
+      cve({ cve_id: 'CVE-2023-5129', package_name: 'pillow', installed_version: '10.0.0', fixed_version: '10.0.1' }),
+    ],
+    findings: [
+      trivy('trivy-a', 'CVE-2023-4863'),
+      trivy('trivy-b', 'CVE-2023-5129'),
+      finding({
+        fingerprint: 'p1794', identity: 'id-p1794', tool: 'pip-audit', subcategory: 'dependency',
+        rule_id: 'PYSEC-2026-1794', file_path: 'requirements.txt', snippet: 'pillow@10.0.0',
+        vuln_aliases: ['CVE-2023-4863', 'CVE-2023-5129'],
+      }),
+    ],
+  };
+}
+
+/** A VEX suppression of the finding `fingerprint` (identity `id-<fingerprint>`). */
+function vexOn(fingerprint: string, id: number): Suppression {
+  return vexSuppression({ id, finding_fingerprint: fingerprint, finding_identity: `id-${fingerprint}` });
+}
+
+describe('buildVexStatements — a finding is a copy in every statement its own ids name', () => {
+  it('keeps CVE-2023-5129 under_investigation when only Trivy’s copy is suppressed, naming pip-audit’s', () => {
+    const byId = new Map(buildVexStatements(inputs({ ...pillowScan(), suppressions: [vexOn('trivy-b', 1)] }))
+      .map((s) => [s.vulnerability, s]));
+    expect(byId.get('CVE-2023-5129')?.status).toBe('under_investigation');
+    expect(byId.get('CVE-2023-5129')?.status_notes).toMatch(/p1794/);
+    expect(byId.get('CVE-2023-4863')?.status).toBe('under_investigation');
+  });
+
+  it('keeps both under_investigation when only the pip-audit advisory is suppressed, naming each Trivy copy', () => {
+    const byId = new Map(buildVexStatements(inputs({ ...pillowScan(), suppressions: [vexOn('p1794', 1)] }))
+      .map((s) => [s.vulnerability, s]));
+    expect(byId.get('CVE-2023-4863')?.status).toBe('under_investigation');
+    expect(byId.get('CVE-2023-4863')?.status_notes).toMatch(/trivy-a/);
+    expect(byId.get('CVE-2023-5129')?.status).toBe('under_investigation');
+    expect(byId.get('CVE-2023-5129')?.status_notes).toMatch(/trivy-b/);
+  });
+
+  it('states both not_affected once every copy of each is suppressed — and still never merges them', () => {
+    const statements = buildVexStatements(inputs({
+      ...pillowScan(),
+      suppressions: [vexOn('trivy-a', 1), vexOn('trivy-b', 2), vexOn('p1794', 3)],
+    }));
+    expect(statements.map((s) => [s.vulnerability, s.status, s.aliases])).toEqual([
+      ['CVE-2023-4863', 'not_affected', ['PYSEC-2026-1794']],
+      ['CVE-2023-5129', 'not_affected', ['PYSEC-2026-1794']],
+    ]);
+  });
+
+  it('states every CVE of an npm audit v1 advisory not_affected when its one finding is suppressed', () => {
+    // npm audit v1: one finding per advisory, its numeric id no vulnerability
+    // id, its CVEs as aliases — and one version-less scan_cves row per CVE.
+    const statements = buildVexStatements(inputs({
+      cves: [
+        cve({ installed_version: undefined, fixed_version: undefined }),
+        cve({ cve_id: 'CVE-2026-4800', installed_version: undefined, fixed_version: undefined }),
+      ],
+      findings: [finding({
+        fingerprint: 'npm-1673', identity: 'id-npm-1673', tool: 'npm-audit', subcategory: 'dependency',
+        rule_id: '1673', file_path: 'package.json', snippet: 'lodash@<4.17.21',
+        vuln_aliases: ['CVE-2021-23337', 'CVE-2026-4800', 'GHSA-35jh-r3h4-6jhm'],
+      })],
+      suppressions: [vexOn('npm-1673', 1)],
+    }));
+    expect(statements.map((s) => [s.vulnerability, s.status])).toEqual([
+      ['CVE-2021-23337', 'not_affected'],
+      ['CVE-2026-4800', 'not_affected'],
+    ]);
+    // Its rule id names no statement, so its GHSA is said on each; each CVE
+    // is a statement, so never an alias of the other.
+    expect(statements.map((s) => s.aliases)).toEqual([['GHSA-35jh-r3h4-6jhm'], ['GHSA-35jh-r3h4-6jhm']]);
+  });
+
+  it('says a copy’s aliases only where its rule id names the statement', () => {
+    // Trivy's CVE-2021-23337 carries CVE-2026-4800 from OSV's alias set: a
+    // copy in both, but GHSA-35jh is said only for CVE-2021-23337.
+    const byId = new Map(buildVexStatements(inputs({
+      cves: [cve(), cve({ cve_id: 'CVE-2026-4800', fixed_version: '4.18.0' })],
+      findings: [finding({ vuln_aliases: ['GHSA-35jh-r3h4-6jhm', 'CVE-2026-4800'] })],
+      suppressions: [vexSuppression()],
+    })).map((s) => [s.vulnerability, s]));
+    expect(byId.get('CVE-2021-23337')).toMatchObject({ status: 'not_affected', aliases: ['GHSA-35jh-r3h4-6jhm'] });
+    // It is that CVE by its own ids, so its suppression counts there too.
+    expect(byId.get('CVE-2026-4800')).toMatchObject({ status: 'not_affected', aliases: [] });
+  });
+});
