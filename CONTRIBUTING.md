@@ -63,8 +63,7 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
    version at runtime.
 2. Turn `Unreleased` in [CHANGELOG.md](CHANGELOG.md) into the release section, and
    point the clone instructions in the three READMEs and `docs/hosts.md` at the new
-   tag (`git clone … --branch vX.Y.Z`; they clone the default branch until the first
-   release after 2.0.0).
+   tag (`git clone … --branch vX.Y.Z`).
 3. Tag `vX.Y.Z` and create a GitHub release. `dev-guardian ci-init` pins that tag
    by commit SHA, so do not move a tag once published.
 

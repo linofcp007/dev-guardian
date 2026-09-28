@@ -129,12 +129,12 @@ Detalhes, configuração e formas de desligar: [docs/hooks.md](docs/hooks.md). O
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline e Claude Desktop recebem o servidor MCP e um ficheiro de regras (sem skills, comandos nem hooks). Clona uma vez e depois corre a CLI **pelo caminho absoluto** a partir do teu projeto:
 
 ```text
-git clone --depth 1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-Fixa uma versão com `--branch vX.Y.Z`: a última tag depois da 2.0.0, ou o branch por omissão, como acima, até haver uma. `--update-mcp`, `--global` e `ci-init` precisam de uma versão posterior à 2.0.0 — a 2.0.0 também escreve as configurações globais do Windsurf e do Claude Desktop com `mcp-config all --write`. A CLI preenche os caminhos absolutos, junta em vez de substituir e só gere um bloco delimitado dentro de ficheiros como o `AGENTS.md`; `--update-mcp` atualiza uma entrada desatualizada. Caminhos por host e snippets manuais: [docs/hosts.md](docs/hosts.md).
+O clone acima fixa a 3.0.0; para seguir uma versão posterior, clona antes a tag `vX.Y.Z` dela. `--update-mcp`, `--global` e `ci-init` precisam da 3.0.0 ou posterior — a 2.0.0 também escreve as configurações globais do Windsurf e do Claude Desktop com `mcp-config all --write`. A CLI preenche os caminhos absolutos, junta em vez de substituir e só gere um bloco delimitado dentro de ficheiros como o `AGENTS.md`; `--update-mcp` atualiza uma entrada desatualizada. Caminhos por host e snippets manuais: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 

@@ -4,7 +4,7 @@ The CLI runs the same tool handlers an MCP session does — no Claude Code, no M
 
 ## The short version
 
-Run the CLI from the project you want to scan, by the absolute path of a dev-guardian clone (see [hosts.md](hosts.md#1-clone-once) — `ci-init` needs a release after 2.0.0) or of the installed plugin:
+Run the CLI from the project you want to scan, by the absolute path of a dev-guardian clone (see [hosts.md](hosts.md#1-clone-once) — `ci-init` needs 3.0.0 or later) or of the installed plugin:
 
 ```text
 npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                  # once: the runtime packages scan needs

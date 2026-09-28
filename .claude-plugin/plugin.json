@@ -1,6 +1,6 @@
 {
   "name": "dev-guardian",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Open-source security, bug-hunting, code-quality, dependency, compliance, observability and performance toolkit for Claude Code: skills, slash commands, guardrail hooks and an MCP server that drives open-source scanners (Semgrep, Trivy, gitleaks, Syft and more), keeps baselines and history in a local SQLite database, and reports a scanner that did not run as a gap, never as a clean result. Stack-aware (Node/TypeScript, Python, PHP/WordPress, Go, Rust, Ruby, Java, C#/.NET); vets packages before they are installed and third-party skills or MCP servers before they are used. Trilingual EN/PT/ES — responds in the user's language. // Conjunto open-source de segurança, deteção de bugs, qualidade, dependências, compliance, observabilidade e performance: skills, comandos, hooks de proteção e um servidor MCP que corre scanners open-source, guarda baselines e histórico em SQLite local e nunca reporta como limpo um scanner que não correu. // Conjunto open-source de seguridad, detección de bugs, calidad, dependencias, cumplimiento, observabilidad y rendimiento: skills, comandos, hooks de protección y un servidor MCP que ejecuta escáneres open-source, guarda baselines e historial en SQLite local y nunca informa como limpio un escáner que no se ejecutó.",
   "author": {
     "name": "Carlos Pereira",

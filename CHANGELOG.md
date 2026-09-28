@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-28
+
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or
 scanned nothing is never reported as clean** — it is `skipped` or `failed` with
 a reason, it lands in `missing_tools`, and coverage says `partial` or `none`.
