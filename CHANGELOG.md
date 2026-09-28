@@ -18,8 +18,12 @@ version bump.
   tool, prompt, resource and template definitions they actually serve — tool poisoning, hidden
   Unicode, instructions to read secrets or agent config, to hide actions from the user, to send
   data to a URL or smuggle it in a parameter, cross-server shadowing, base64 blobs, oversized
-  descriptions. Each tool is pinned; a definition changed since the previous audit is a high
-  `mcp-tool-definition-changed` ("rug pull"). It executes the named servers only, with a minimal
+  descriptions. Each tool is pinned over everything the model sees (name, title, description,
+  input and output schema, annotations); a definition changed since the previous audit is a high
+  `mcp-tool-definition-changed` ("rug pull"). Prompts, resources and resource templates are pinned
+  too (`mcp-<kind>-definition-changed`, medium; resources appearing or going are not reported).
+  Pins carry their hash scheme: one from an older scheme is re-pinned silently when that scheme's
+  recipe still matches, and reported when it does not. It executes the named servers only, with a minimal
   environment plus the entry's own `env`, never calls `tools/call`, contacts remote servers only
   with `allow_remote`, and kills the process tree after. Scan type `mcp_tool_audit`.
 - Migration `012`: `mcp_tool_pins` and `mcp_server_pins`.

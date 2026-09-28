@@ -38257,7 +38257,7 @@ function pluginPackIdMatcher(packsDir, packRuleIds) {
   const root = fp.dirname(fp.dirname(fp.resolve(packsDir)));
   const own = semgrepConfigPrefix(fp.join(root, "configs", "semgrep", "x.yml"));
   const parent = semgrepConfigPrefix(fp.join(fp.dirname(root), "x.yml"));
-  const versioned = VERSION_DIR.test(fp.basename(root)) && parent.length > 0;
+  const versioned2 = VERSION_DIR.test(fp.basename(root)) && parent.length > 0;
   return (ruleId) => {
     const m = /^(.+)\.configs\.semgrep\.([A-Za-z0-9_-]+)$/.exec(ruleId);
     if (m === null) return null;
@@ -38265,7 +38265,7 @@ function pluginPackIdMatcher(packsDir, packRuleIds) {
     const id = m[2] ?? "";
     if (!packRuleIds.has(id)) return null;
     if (`${installed}.configs.semgrep` === own) return id;
-    if (!versioned || !installed.startsWith(`${parent}.`)) return null;
+    if (!versioned2 || !installed.startsWith(`${parent}.`)) return null;
     return VERSION_DIR.test(installed.slice(parent.length + 1)) ? id : null;
   };
 }
@@ -39757,13 +39757,13 @@ var McpToolPinsRepo = class {
   constructor(db) {
     this.db = db;
     this.getPinsStmt = db.prepare(`
-      SELECT tool_name, hash FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
+      SELECT tool_name AS key, hash FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
     `);
     this.hasServerStmt = db.prepare(`
       SELECT COUNT(*) AS n FROM mcp_server_pins WHERE project_path = ? AND server_key = ?
     `);
-    this.listNamesStmt = db.prepare(`
-      SELECT server_key, tool_name FROM mcp_tool_pins WHERE project_path = ? ORDER BY server_key, tool_name
+    this.listKeysStmt = db.prepare(`
+      SELECT server_key, tool_name AS key FROM mcp_tool_pins WHERE project_path = ? ORDER BY server_key, tool_name
     `);
     this.deletePinsStmt = db.prepare(`
       DELETE FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
@@ -39780,36 +39780,37 @@ var McpToolPinsRepo = class {
   db;
   getPinsStmt;
   hasServerStmt;
-  listNamesStmt;
+  listKeysStmt;
   deletePinsStmt;
   insertPinStmt;
   upsertServerStmt;
-  /** The tool hashes recorded for one server, keyed by tool name. Empty when none. */
+  /** The hashes recorded for one server, keyed by item key. Empty when none. */
   getServerPins(projectPath, serverKey) {
     const out = /* @__PURE__ */ new Map();
-    for (const row of this.getPinsStmt.all(projectPath, serverKey)) out.set(row.tool_name, row.hash);
+    for (const row of this.getPinsStmt.all(projectPath, serverKey)) out.set(row.key, row.hash);
     return out;
   }
-  /** Whether this server has been audited before — with or without tools. */
+  /** Whether this server has been audited before — with or without items. */
   hasServer(projectPath, serverKey) {
     return (this.hasServerStmt.get(projectPath, serverKey)?.n ?? 0) > 0;
   }
-  /** Every pinned tool of a project, with the server that serves it. */
-  listToolNames(projectPath) {
-    return this.listNamesStmt.all(projectPath);
+  /** Every pinned item key of a project, with the server that serves it. */
+  listPinKeys(projectPath) {
+    return this.listKeysStmt.all(projectPath);
   }
   /**
-   * Replace one server's pins with `pins`, in one transaction: a tool not in
+   * Replace one server's pins with `pins`, in one transaction: an item not in
    * `pins` is dropped, and the server is recorded as audited even when
-   * `pins` is empty. Duplicate tool names keep the last one.
+   * `pins` is empty. Duplicate keys keep the last one. `mcp_server_pins.
+   * tool_count` counts every pinned item.
    */
   replaceServerPins(projectPath, serverKey, pins) {
     const unique3 = /* @__PURE__ */ new Map();
-    for (const pin of pins) unique3.set(pin.tool_name, pin.hash);
+    for (const pin of pins) unique3.set(pin.key, pin.hash);
     const at = nowIso();
     const tx = this.db.transaction(() => {
       this.deletePinsStmt.run(projectPath, serverKey);
-      for (const [toolName, hash] of unique3) this.insertPinStmt.run(projectPath, serverKey, toolName, hash, at);
+      for (const [key, hash] of unique3) this.insertPinStmt.run(projectPath, serverKey, key, hash, at);
       this.upsertServerStmt.run(projectPath, serverKey, unique3.size, at);
     });
     tx();
@@ -71090,7 +71091,35 @@ function rank(s) {
 }
 
 // src/mcpaudit/pins.ts
+var PIN_SCHEME = 2;
+var NON_TOOL_KINDS = ["prompt", "resource", "resource-template"];
+var RESERVED_PREFIX = /^(tool|prompt|resource|resource-template):/;
+function pinKey(kind, id) {
+  if (kind !== "tool") return `${kind}:${id}`;
+  return RESERVED_PREFIX.test(id) ? `tool:${id}` : id;
+}
+var TOOL_KEY_PREFIX = `${"tool"}:`;
+function parsePinKey(key) {
+  if (key.startsWith(TOOL_KEY_PREFIX)) return { kind: "tool", id: key.slice(TOOL_KEY_PREFIX.length) };
+  for (const kind of NON_TOOL_KINDS) {
+    if (key.startsWith(`${kind}:`)) return { kind, id: key.slice(kind.length + 1) };
+  }
+  return { kind: "tool", id: key };
+}
+function versioned(value) {
+  return `v${PIN_SCHEME}:${hashConfigValue(value)}`;
+}
 function toolDefinitionHash(tool49) {
+  return versioned({
+    name: tool49.name,
+    title: tool49.title ?? null,
+    description: tool49.description ?? null,
+    inputSchema: tool49.inputSchema ?? null,
+    outputSchema: tool49.outputSchema ?? null,
+    annotations: tool49.annotations ?? null
+  });
+}
+function toolDefinitionHashV1(tool49) {
   return hashConfigValue({
     name: tool49.name,
     description: tool49.description ?? null,
@@ -71098,22 +71127,103 @@ function toolDefinitionHash(tool49) {
     annotations: tool49.annotations ?? null
   });
 }
+function promptHash(p) {
+  return versioned({
+    name: p.name,
+    title: p.title ?? null,
+    description: p.description ?? null,
+    arguments: p.arguments ?? null
+  });
+}
+function resourceHash(r, uriKey) {
+  return versioned({
+    [uriKey]: r.uri ?? null,
+    name: r.name,
+    title: r.title ?? null,
+    description: r.description ?? null
+  });
+}
+function pinScheme(stored) {
+  const m = /^v(\d+):[0-9a-f]{64}$/.exec(stored);
+  if (m?.[1] !== void 0) return Number(m[1]);
+  return /^[0-9a-f]{64}$/.test(stored) ? 1 : null;
+}
+function pinnedItems(listing) {
+  const items = [];
+  for (const t of listing.tools) {
+    items.push({
+      key: pinKey("tool", t.name),
+      kind: "tool",
+      label: t.name,
+      hash: toolDefinitionHash(t),
+      legacyHash: (scheme) => scheme === 1 ? toolDefinitionHashV1(t) : null
+    });
+  }
+  for (const p of listing.prompts) {
+    items.push({ key: pinKey("prompt", p.name), kind: "prompt", label: p.name, hash: promptHash(p), legacyHash: () => null });
+  }
+  for (const r of listing.resources) {
+    if (r.uri === void 0) continue;
+    items.push({ key: pinKey("resource", r.uri), kind: "resource", label: r.uri, hash: resourceHash(r, "uri"), legacyHash: () => null });
+  }
+  for (const r of listing.resourceTemplates ?? []) {
+    if (r.uri === void 0) continue;
+    items.push({
+      key: pinKey("resource-template", r.uri),
+      kind: "resource-template",
+      label: r.uri,
+      hash: resourceHash(r, "uriTemplate"),
+      legacyHash: () => null
+    });
+  }
+  return items;
+}
+var KIND_WORD = {
+  tool: "tool",
+  prompt: "prompt",
+  resource: "resource",
+  "resource-template": "resource template"
+};
+var CHANGED_SEVERITY = {
+  tool: "high",
+  prompt: "medium",
+  resource: "medium",
+  "resource-template": "medium"
+};
 function comparePins(listing, previous, auditedBefore) {
-  const current = /* @__PURE__ */ new Map();
-  for (const tool49 of listing.tools) current.set(tool49.name, toolDefinitionHash(tool49));
-  const pins = [...current].map(([tool_name, hash]) => ({ tool_name, hash }));
+  const items = /* @__PURE__ */ new Map();
+  for (const item of pinnedItems(listing)) items.set(item.key, item);
+  const pins = [...items.values()].map((i2) => ({ key: i2.key, hash: i2.hash }));
   const firstAudit = !auditedBefore && previous.size === 0;
-  if (firstAudit) return { findings: [], firstAudit, changed: [], added: [], removed: [], pins };
+  const none = { changed: [], added: [], removed: [], rehashed: [], warnings: [] };
+  if (firstAudit) return { findings: [], firstAudit, ...none, pins };
   const changed = [];
   const added = [];
-  for (const [name, hash] of current) {
-    const before = previous.get(name);
-    if (before === void 0) added.push(name);
-    else if (before !== hash) changed.push(name);
+  const rehashed = [];
+  const warnings = [];
+  for (const item of items.values()) {
+    const before = previous.get(item.key);
+    if (before === void 0) {
+      added.push(item);
+      continue;
+    }
+    if (before === item.hash) continue;
+    const scheme = pinScheme(before);
+    if (scheme === PIN_SCHEME) {
+      changed.push(item);
+    } else if (scheme !== null && scheme < PIN_SCHEME) {
+      const old = item.legacyHash(scheme);
+      if (old === before) rehashed.push(item.key);
+      else changed.push(item);
+    } else {
+      warnings.push(
+        `${KIND_WORD[item.kind]} '${escapeInvisible(item.label)}': its stored pin (${before.slice(0, 4)}\u2026) is of a scheme this build does not know, so it could not be compared; re-pinned`
+      );
+    }
   }
-  const removed = [...previous.keys()].filter((name) => !current.has(name)).sort();
+  const removed = [...previous.keys()].filter((key) => !items.has(key)).sort();
   const server = escapeInvisible(listing.serverName);
-  const finding4 = (ruleId, severity, name, title, message3) => makeFinding({
+  const finding4 = (ruleId, severity, what, title, message3) => makeFinding({
     tool: MCP_AUDIT_TOOL_NAME,
     rule_id: ruleId,
     severity,
@@ -71122,39 +71232,65 @@ function comparePins(listing, previous, auditedBefore) {
     title: escapeInvisible(title),
     message: escapeInvisible(message3),
     file_path: listing.sourceLabel,
-    snippet: escapeInvisible(`${server} > tool '${name}'`),
+    snippet: escapeInvisible(`${server} > ${what}`),
     fix_available: false
   });
-  const findings = [
-    ...changed.map(
-      (name) => finding4(
+  const findings = [];
+  for (const item of changed) {
+    const what = `${KIND_WORD[item.kind]} '${item.label}'`;
+    findings.push(
+      item.kind === "tool" ? finding4(
         "mcp-tool-definition-changed",
         "high",
-        name,
-        `Rug pull: MCP server '${server}' changed tool '${name}' since the previous audit`,
-        `Tool '${name}' of server '${server}' (${listing.sourceLabel}) is served with a different definition (description, input schema or annotations) than the previous audit_mcp_tools run recorded, under the same name. A tool approved once and rewritten later is how a server turns malicious after review. Read the new definition before using the server again; this audit now pins it.`
+        what,
+        `Rug pull: MCP server '${server}' changed tool '${item.label}' since the previous audit`,
+        `Tool '${item.label}' of server '${server}' (${listing.sourceLabel}) is served with a different definition (title, description, input or output schema, or annotations) than the previous audit_mcp_tools run recorded, under the same name. A tool approved once and rewritten later is how a server turns malicious after review. Read the new definition before using the server again; this audit now pins it.`
+      ) : finding4(
+        `mcp-${item.kind}-definition-changed`,
+        CHANGED_SEVERITY[item.kind],
+        what,
+        `MCP server '${server}' changed ${what} since the previous audit`,
+        `The ${what} of server '${server}' (${listing.sourceLabel}) is served with a different name, title or description than the previous audit recorded. That text reaches the model; read the new version. This audit now pins it.`
       )
-    ),
-    ...added.map(
-      (name) => finding4(
-        "mcp-tool-added",
+    );
+  }
+  for (const item of added) {
+    if (item.kind === "resource") continue;
+    const what = `${KIND_WORD[item.kind]} '${item.label}'`;
+    findings.push(
+      finding4(
+        `mcp-${item.kind}-added`,
         "low",
-        name,
-        `MCP server '${server}' added tool '${name}' since the previous audit`,
-        `Server '${server}' (${listing.sourceLabel}) now serves a tool '${name}' the previous audit did not see.`
+        what,
+        `MCP server '${server}' added ${what} since the previous audit`,
+        `Server '${server}' (${listing.sourceLabel}) now serves a ${what} the previous audit did not see.`
       )
-    ),
-    ...removed.map(
-      (name) => finding4(
-        "mcp-tool-removed",
+    );
+  }
+  for (const key of removed) {
+    const { kind, id } = parsePinKey(key);
+    if (kind === "resource") continue;
+    const what = `${KIND_WORD[kind]} '${id}'`;
+    findings.push(
+      finding4(
+        `mcp-${kind}-removed`,
         "info",
-        name,
-        `MCP server '${server}' no longer serves tool '${name}'`,
-        `Server '${server}' (${listing.sourceLabel}) served a tool '${name}' at the previous audit and does not now.`
+        what,
+        `MCP server '${server}' no longer serves ${what}`,
+        `Server '${server}' (${listing.sourceLabel}) served a ${what} at the previous audit and does not now.`
       )
-    )
-  ];
-  return { findings, firstAudit, changed, added, removed, pins };
+    );
+  }
+  return {
+    findings,
+    firstAudit,
+    changed: changed.map((i2) => i2.key),
+    added: added.map((i2) => i2.key),
+    removed,
+    rehashed,
+    warnings,
+    pins
+  };
 }
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
@@ -74216,7 +74352,7 @@ var tool47 = {
   title: "Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)",
   // Worded so this description does not trip the checks it lists: measured,
   // a literal tag block or file name here was a finding on dev-guardian itself.
-  description: "Start the MCP servers named in `servers`, list the tools, prompts and resources each one serves, and check those definitions: tool poisoning (instructions aimed at the model, IMPORTANT-tag blocks), hidden Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of name, description, inputSchema, annotations): a definition changed since the previous audit is a high \"rug pull\" finding (reported once, then re-pinned); a new or removed tool is low/info. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus the entry's own env), cwd = the project; it never calls tools/call; it contacts remote servers only with allow_remote; and it kills the process tree after. Run it only for servers the user asked to audit. Names are looked up in the configs audit_agent_config reads. A name not declared, a remote server without allow_remote, or a server that fails or does not answer within timeout_ms is skipped/failed with a reason and lowers coverage \u2014 never a clean pass.",
+  description: "Start the MCP servers named in `servers`, list the tools, prompts and resources each one serves, and check those definitions: tool poisoning (instructions aimed at the model, IMPORTANT-tag blocks), hidden Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of name, title, description, input/output schema, annotations), prompt and resource template: a tool changed since the previous audit is a high \"rug pull\" finding (reported once, then re-pinned), a prompt or resource changed is medium; a new or removed tool or prompt is low/info. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus the entry's own env), cwd = the project; it never calls tools/call; it contacts remote servers only with allow_remote; and it kills the process tree after. Run it only for servers the user asked to audit. Names are looked up in the configs audit_agent_config reads. A name not declared, a remote server without allow_remote, or a server that fails or does not answer within timeout_ms is skipped/failed with a reason and lowers coverage \u2014 never a clean pass.",
   inputSchema: inputSchema28,
   handler: (input, ctx, callMeta) => handler44(input, ctx, callMeta)
 };
@@ -74341,10 +74477,12 @@ async function runAudit(ctx, run, callMeta) {
   }));
   const probedKeys = new Set(others.map((o2) => o2.serverKey));
   const pinned = /* @__PURE__ */ new Map();
-  for (const row of ctx.storage.mcpToolPins.listToolNames(projectPath)) {
+  for (const row of ctx.storage.mcpToolPins.listPinKeys(projectPath)) {
     if (probedKeys.has(row.server_key)) continue;
+    const item = parsePinKey(row.key);
+    if (item.kind !== "tool") continue;
     const list2 = pinned.get(row.server_key) ?? [];
-    list2.push(row.tool_name);
+    list2.push(item.id);
     pinned.set(row.server_key, list2);
   }
   for (const [serverKey, toolNames] of pinned) {
@@ -74364,8 +74502,10 @@ async function runAudit(ctx, run, callMeta) {
       first_audit: comparison.firstAudit,
       changed: comparison.changed,
       added: comparison.added,
-      removed: comparison.removed
+      removed: comparison.removed,
+      ...comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {}
     };
+    if (comparison.warnings.length > 0) report.warnings = [...report.warnings ?? [], ...comparison.warnings];
     newPins.push({ serverKey: listing.serverKey, pins: comparison.pins });
   }
   if (findings.length > 0) {

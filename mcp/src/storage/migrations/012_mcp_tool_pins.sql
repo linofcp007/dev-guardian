@@ -5,10 +5,14 @@
 -- `server_key` is "<config source label>::<server name>" (e.g.
 -- ".mcp.json::github") — the same addressing `agent_config_hashes.entry_key`
 -- uses, so one server declared in two files is two servers here: they can
--- launch different commands. `hash` is sha256 of the canonical JSON
--- (keys sorted) of `{name, description, inputSchema, annotations}` — a
--- changed hash is a definition that changed under the same name, the "rug
--- pull" that `mcp-tool-definition-changed` reports.
+-- launch different commands. `tool_name` holds the ITEM key
+-- (`mcpaudit/pins.ts#pinKey`): a tool's bare name, or `<kind>:<id>` for a
+-- prompt, resource or resource template. `hash` is `v<scheme>:<sha256>` of
+-- the item's canonical JSON (keys sorted) — for a tool `{name, title,
+-- description, inputSchema, outputSchema, annotations}`; bare hex is scheme
+-- 1, over four of those fields, and is re-pinned on the next audit (see
+-- pins.ts). A changed hash is a definition that changed under the same name,
+-- the "rug pull" that `mcp-tool-definition-changed` reports.
 --
 -- `mcp_server_pins` records that a server WAS audited, with its tool count:
 -- a server that answered with no tools at all has no row in

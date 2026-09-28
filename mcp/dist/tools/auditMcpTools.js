@@ -33,7 +33,7 @@ import { z } from 'zod';
 import { collectMcpEntries } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
 import { analyzeServerListing, MCP_AUDIT_TOOL_NAME, normalizeListing, } from '../mcpaudit/analyze.js';
-import { comparePins } from '../mcpaudit/pins.js';
+import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { probeServer } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
@@ -83,8 +83,9 @@ const tool = {
         'Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, ' +
         'dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, ' +
         'cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of ' +
-        'name, description, inputSchema, annotations): a definition changed since the previous audit is a high ' +
-        '"rug pull" finding (reported once, then re-pinned); a new or removed tool is low/info. ' +
+        'name, title, description, input/output schema, annotations), prompt and resource template: a tool ' +
+        'changed since the previous audit is a high "rug pull" finding (reported once, then re-pinned), a ' +
+        'prompt or resource changed is medium; a new or removed tool or prompt is low/info. ' +
         'THIS EXECUTES THIRD-PARTY CODE: it runs the named servers\' commands as the host would, ONLY for the ' +
         'server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus ' +
         'the entry\'s own env), cwd = the project; it never calls tools/call; it contacts remote servers only ' +
@@ -228,11 +229,14 @@ async function runAudit(ctx, run, callMeta) {
     }));
     const probedKeys = new Set(others.map((o) => o.serverKey));
     const pinned = new Map();
-    for (const row of ctx.storage.mcpToolPins.listToolNames(projectPath)) {
+    for (const row of ctx.storage.mcpToolPins.listPinKeys(projectPath)) {
         if (probedKeys.has(row.server_key))
             continue;
+        const item = parsePinKey(row.key);
+        if (item.kind !== 'tool')
+            continue;
         const list = pinned.get(row.server_key) ?? [];
-        list.push(row.tool_name);
+        list.push(item.id);
         pinned.set(row.server_key, list);
     }
     for (const [serverKey, toolNames] of pinned) {
@@ -249,7 +253,10 @@ async function runAudit(ctx, run, callMeta) {
             changed: comparison.changed,
             added: comparison.added,
             removed: comparison.removed,
+            ...(comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {}),
         };
+        if (comparison.warnings.length > 0)
+            report.warnings = [...(report.warnings ?? []), ...comparison.warnings];
         newPins.push({ serverKey: listing.serverKey, pins: comparison.pins });
     }
     if (findings.length > 0) {

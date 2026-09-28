@@ -42,12 +42,12 @@ import {
   type OtherServer,
   type ServerListing,
 } from '../mcpaudit/analyze.js';
-import { comparePins } from '../mcpaudit/pins.js';
+import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { probeServer, type ProbeOutcome } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
-import type { McpToolPin } from '../storage/mcpToolPinsRepo.js';
+import type { McpPin } from '../storage/mcpToolPinsRepo.js';
 import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
@@ -102,8 +102,9 @@ const tool: ToolModule = {
     'Unicode (tag characters, zero-width, bidi), instructions to read secrets or agent config (SSH keys, ' +
     'dotenv files, MCP host configs), to hide actions from the user, to send data to a URL or smuggle it in a parameter, ' +
     'cross-server shadowing, large base64 blobs, abnormally long descriptions. Pins each tool (sha256 of ' +
-    'name, description, inputSchema, annotations): a definition changed since the previous audit is a high ' +
-    '"rug pull" finding (reported once, then re-pinned); a new or removed tool is low/info. ' +
+    'name, title, description, input/output schema, annotations), prompt and resource template: a tool ' +
+    'changed since the previous audit is a high "rug pull" finding (reported once, then re-pinned), a ' +
+    'prompt or resource changed is medium; a new or removed tool or prompt is low/info. ' +
     'THIS EXECUTES THIRD-PARTY CODE: it runs the named servers\' commands as the host would, ONLY for the ' +
     'server names the caller lists explicitly (no wildcard, no default), with a minimal environment (plus ' +
     'the entry\'s own env), cwd = the project; it never calls tools/call; it contacts remote servers only ' +
@@ -130,7 +131,8 @@ interface ServerReport {
   resources_count: number;
   resource_templates_count?: number;
   malformed_definitions?: number;
-  pins?: { first_audit: boolean; changed: string[]; added: string[]; removed: string[] };
+  /** Pin keys (`mcpaudit/pins.ts#pinKey`): a tool's name, or `<kind>:<id>`. */
+  pins?: { first_audit: boolean; changed: string[]; added: string[]; removed: string[]; rehashed?: string[] };
   warnings?: string[];
 }
 
@@ -296,10 +298,12 @@ async function runAudit(
   }));
   const probedKeys = new Set(others.map((o) => o.serverKey));
   const pinned = new Map<string, string[]>();
-  for (const row of ctx.storage.mcpToolPins.listToolNames(projectPath)) {
+  for (const row of ctx.storage.mcpToolPins.listPinKeys(projectPath)) {
     if (probedKeys.has(row.server_key)) continue;
+    const item = parsePinKey(row.key);
+    if (item.kind !== 'tool') continue;
     const list = pinned.get(row.server_key) ?? [];
-    list.push(row.tool_name);
+    list.push(item.id);
     pinned.set(row.server_key, list);
   }
   for (const [serverKey, toolNames] of pinned) {
@@ -307,7 +311,7 @@ async function runAudit(
   }
 
   const findings: Finding[] = [];
-  const newPins: Array<{ serverKey: string; pins: McpToolPin[] }> = [];
+  const newPins: Array<{ serverKey: string; pins: McpPin[] }> = [];
   for (const { report, listing } of probed) {
     findings.push(...analyzeServerListing(listing, others));
     const comparison = comparePins(
@@ -321,7 +325,9 @@ async function runAudit(
       changed: comparison.changed,
       added: comparison.added,
       removed: comparison.removed,
+      ...(comparison.rehashed.length > 0 ? { rehashed: comparison.rehashed } : {}),
     };
+    if (comparison.warnings.length > 0) report.warnings = [...(report.warnings ?? []), ...comparison.warnings];
     newPins.push({ serverKey: listing.serverKey, pins: comparison.pins });
   }
 

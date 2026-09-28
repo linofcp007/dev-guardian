@@ -66,7 +66,14 @@ function collect(
  * install records. A new one fails the test below until it is either mapped
  * (it is a finding tool) or listed here (it is not).
  */
-const NOT_FINDING_TOOLS = new Set(['tools/perfCheck.ts:lighthouse', 'tools/perfCheck.ts:k6', 'tools/installToolchain.ts:all-default']);
+const NOT_FINDING_TOOLS = new Set([
+  'tools/perfCheck.ts:lighthouse',
+  'tools/perfCheck.ts:k6',
+  'tools/installToolchain.ts:all-default',
+  // audit_mcp_tools' per-kind wording and severity tables, keyed by item kind.
+  'mcpaudit/pins.ts:tool',
+  'mcpaudit/pins.ts:high',
+]);
 
 /** Every finding `tool` value the source can produce. */
 function findingTools(): string[] {

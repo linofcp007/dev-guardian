@@ -19,8 +19,8 @@ describe('McpToolPinsRepo', () => {
   it('round-trips the pins of one server', () => {
     const storage = fresh();
     storage.mcpToolPins.replaceServerPins('/proj', '.mcp.json::srv', [
-      { tool_name: 'read', hash: 'a' },
-      { tool_name: 'write', hash: 'b' },
+      { key: 'read', hash: 'a' },
+      { key: 'write', hash: 'b' },
     ]);
     const pins = storage.mcpToolPins.getServerPins('/proj', '.mcp.json::srv');
     expect(pins).toEqual(
@@ -35,12 +35,12 @@ describe('McpToolPinsRepo', () => {
   it('replaces the set: a changed hash is updated and a tool no longer listed is dropped', () => {
     const storage = fresh();
     storage.mcpToolPins.replaceServerPins('/proj', 's', [
-      { tool_name: 'read', hash: 'a' },
-      { tool_name: 'gone', hash: 'g' },
+      { key: 'read', hash: 'a' },
+      { key: 'gone', hash: 'g' },
     ]);
     storage.mcpToolPins.replaceServerPins('/proj', 's', [
-      { tool_name: 'read', hash: 'a2' },
-      { tool_name: 'new', hash: 'n' },
+      { key: 'read', hash: 'a2' },
+      { key: 'new', hash: 'n' },
     ]);
     expect(storage.mcpToolPins.getServerPins('/proj', 's')).toEqual(
       new Map([
@@ -61,23 +61,23 @@ describe('McpToolPinsRepo', () => {
 
   it('keeps servers and projects apart', () => {
     const storage = fresh();
-    storage.mcpToolPins.replaceServerPins('/a', 's1', [{ tool_name: 't', hash: '1' }]);
-    storage.mcpToolPins.replaceServerPins('/a', 's2', [{ tool_name: 't', hash: '2' }]);
-    storage.mcpToolPins.replaceServerPins('/b', 's1', [{ tool_name: 't', hash: '3' }]);
+    storage.mcpToolPins.replaceServerPins('/a', 's1', [{ key: 't', hash: '1' }]);
+    storage.mcpToolPins.replaceServerPins('/a', 's2', [{ key: 't', hash: '2' }]);
+    storage.mcpToolPins.replaceServerPins('/b', 's1', [{ key: 't', hash: '3' }]);
     storage.mcpToolPins.replaceServerPins('/a', 's1', []);
     expect(storage.mcpToolPins.getServerPins('/a', 's2').get('t')).toBe('2');
     expect(storage.mcpToolPins.getServerPins('/b', 's1').get('t')).toBe('3');
     expect(storage.mcpToolPins.getServerPins('/a', 's1').size).toBe(0);
   });
 
-  it('lists every pinned tool name of a project with its server', () => {
+  it('lists every pinned key of a project with its server', () => {
     const storage = fresh();
-    storage.mcpToolPins.replaceServerPins('/a', 's1', [{ tool_name: 'send_email', hash: '1' }]);
-    storage.mcpToolPins.replaceServerPins('/a', 's2', [{ tool_name: 'read_file', hash: '2' }]);
-    storage.mcpToolPins.replaceServerPins('/b', 's3', [{ tool_name: 'other', hash: '3' }]);
-    expect(storage.mcpToolPins.listToolNames('/a')).toEqual([
-      { server_key: 's1', tool_name: 'send_email' },
-      { server_key: 's2', tool_name: 'read_file' },
+    storage.mcpToolPins.replaceServerPins('/a', 's1', [{ key: 'send_email', hash: '1' }]);
+    storage.mcpToolPins.replaceServerPins('/a', 's2', [{ key: 'read_file', hash: '2' }]);
+    storage.mcpToolPins.replaceServerPins('/b', 's3', [{ key: 'other', hash: '3' }]);
+    expect(storage.mcpToolPins.listPinKeys('/a')).toEqual([
+      { server_key: 's1', key: 'send_email' },
+      { server_key: 's2', key: 'read_file' },
     ]);
   });
 });

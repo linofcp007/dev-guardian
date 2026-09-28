@@ -1,48 +1,53 @@
 /**
- * Tool-definition pins for `audit_mcp_tools`.
+ * Definition pins for `audit_mcp_tools`.
  *
- * Keyed by (project_path, server_key, tool_name) — see
+ * Keyed by (project_path, server_key, key) — see
  * `migrations/012_mcp_tool_pins.sql` for why this carries no `scan_id`, and
- * why a server-level row exists beside the per-tool ones. Each audit reads a
- * server's previous pins to decide what changed, then replaces them with
- * what the server served this time.
+ * why a server-level row exists beside the per-item ones. The item key is
+ * `mcpaudit/pins.ts`'s `pinKey`: a tool's bare name, or `<kind>:<id>` for a
+ * prompt, resource or resource template. It is stored in the column named
+ * `tool_name`, which is what it held when only tools were pinned. Each audit
+ * reads a server's previous pins to decide what changed, then replaces them
+ * with what the server served this time.
  */
 
 import type { DB, Statement } from './db.js';
 import { nowIso } from './repoUtil.js';
 
-export interface McpToolPin {
-  tool_name: string;
+export interface McpPin {
+  /** `pinKey(kind, id)`: a tool's name, or `<kind>:<id>`. */
+  key: string;
+  /** `v<scheme>:<sha256 hex>`, or bare hex for scheme 1. */
   hash: string;
 }
 
-export interface PinnedToolName {
+export interface PinnedKey {
   server_key: string;
-  tool_name: string;
+  key: string;
 }
 
 interface PinRow {
-  tool_name: string;
+  key: string;
   hash: string;
 }
 
 export class McpToolPinsRepo {
   private readonly getPinsStmt: Statement<[string, string], PinRow>;
   private readonly hasServerStmt: Statement<[string, string], { n: number }>;
-  private readonly listNamesStmt: Statement<[string], PinnedToolName>;
+  private readonly listKeysStmt: Statement<[string], PinnedKey>;
   private readonly deletePinsStmt: Statement<[string, string]>;
   private readonly insertPinStmt: Statement<[string, string, string, string, string]>;
   private readonly upsertServerStmt: Statement<[string, string, number, string]>;
 
   constructor(private readonly db: DB) {
     this.getPinsStmt = db.prepare<[string, string], PinRow>(`
-      SELECT tool_name, hash FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
+      SELECT tool_name AS key, hash FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
     `);
     this.hasServerStmt = db.prepare<[string, string], { n: number }>(`
       SELECT COUNT(*) AS n FROM mcp_server_pins WHERE project_path = ? AND server_key = ?
     `);
-    this.listNamesStmt = db.prepare<[string], PinnedToolName>(`
-      SELECT server_key, tool_name FROM mcp_tool_pins WHERE project_path = ? ORDER BY server_key, tool_name
+    this.listKeysStmt = db.prepare<[string], PinnedKey>(`
+      SELECT server_key, tool_name AS key FROM mcp_tool_pins WHERE project_path = ? ORDER BY server_key, tool_name
     `);
     this.deletePinsStmt = db.prepare<[string, string]>(`
       DELETE FROM mcp_tool_pins WHERE project_path = ? AND server_key = ?
@@ -57,35 +62,36 @@ export class McpToolPinsRepo {
     `);
   }
 
-  /** The tool hashes recorded for one server, keyed by tool name. Empty when none. */
+  /** The hashes recorded for one server, keyed by item key. Empty when none. */
   getServerPins(projectPath: string, serverKey: string): Map<string, string> {
     const out = new Map<string, string>();
-    for (const row of this.getPinsStmt.all(projectPath, serverKey)) out.set(row.tool_name, row.hash);
+    for (const row of this.getPinsStmt.all(projectPath, serverKey)) out.set(row.key, row.hash);
     return out;
   }
 
-  /** Whether this server has been audited before — with or without tools. */
+  /** Whether this server has been audited before — with or without items. */
   hasServer(projectPath: string, serverKey: string): boolean {
     return (this.hasServerStmt.get(projectPath, serverKey)?.n ?? 0) > 0;
   }
 
-  /** Every pinned tool of a project, with the server that serves it. */
-  listToolNames(projectPath: string): PinnedToolName[] {
-    return this.listNamesStmt.all(projectPath);
+  /** Every pinned item key of a project, with the server that serves it. */
+  listPinKeys(projectPath: string): PinnedKey[] {
+    return this.listKeysStmt.all(projectPath);
   }
 
   /**
-   * Replace one server's pins with `pins`, in one transaction: a tool not in
+   * Replace one server's pins with `pins`, in one transaction: an item not in
    * `pins` is dropped, and the server is recorded as audited even when
-   * `pins` is empty. Duplicate tool names keep the last one.
+   * `pins` is empty. Duplicate keys keep the last one. `mcp_server_pins.
+   * tool_count` counts every pinned item.
    */
-  replaceServerPins(projectPath: string, serverKey: string, pins: readonly McpToolPin[]): void {
+  replaceServerPins(projectPath: string, serverKey: string, pins: readonly McpPin[]): void {
     const unique = new Map<string, string>();
-    for (const pin of pins) unique.set(pin.tool_name, pin.hash);
+    for (const pin of pins) unique.set(pin.key, pin.hash);
     const at = nowIso();
     const tx = this.db.transaction(() => {
       this.deletePinsStmt.run(projectPath, serverKey);
-      for (const [toolName, hash] of unique) this.insertPinStmt.run(projectPath, serverKey, toolName, hash, at);
+      for (const [key, hash] of unique) this.insertPinStmt.run(projectPath, serverKey, key, hash, at);
       this.upsertServerStmt.run(projectPath, serverKey, unique.size, at);
     });
     tx();
