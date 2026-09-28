@@ -262,6 +262,20 @@ describe('I2: remote shapes behind a stdio command', () => {
     expect(r.coverage).toBe('none');
   });
 
+  // Fix round 4, I2 residual (reproduced): this started, wrote the marker and
+  // tried SMB, and came back failed rather than skipped.
+  it('never starts a shell whose command string reaches a network path', async () => {
+    const shell =
+      process.platform === 'win32'
+        ? { command: 'cmd', args: ['/c', 'echo started> marker.txt & type \\\\192.0.2.1\\share\\x.txt'] }
+        : { command: 'sh', args: ['-c', 'echo started > marker.txt; cat //192.0.2.1/share/x.txt'] };
+    const dir = project({ sh: shell });
+    const r = await audit({ project_path: dir, servers: ['sh'] });
+    expect(r.servers[0]?.status).toBe('skipped');
+    expect(r.servers[0]?.reason).toContain('allow_remote');
+    expect(existsSync(join(dir, 'marker.txt'))).toBe(false);
+  });
+
   it('starts that same command line when allow_remote is given', async () => {
     const dir = project({
       proxy: stdio('poisoned', { args: [FIXTURE, 'poisoned', 'https://192.0.2.1/mcp'], env: { MARK: 'proxy' } }),

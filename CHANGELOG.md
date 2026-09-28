@@ -49,6 +49,11 @@ version bump.
   between items, and stops on cancel or the audit budget. A bound reached makes the server partial;
   a string over 64 KiB is itself a finding (`mcp-tool-string-over-bound`). Pins still hash the full
   content.
+- `allow_remote` gate, widened (reproduced: `cmd /c "… type \\host\share\x"` started, wrote a
+  marker and tried SMB): a UNC or device path anywhere in the command, an argument or an `env` value;
+  any `scheme://host` with a host there (`file://host/…`, `NODE_OPTIONS`, `DOCKER_HOST`, a database
+  URL); `ssh`; `docker`/`podman` against another engine. It is a textual gate on configuration
+  shapes, not a sandbox — SECURITY.md says so.
 - `allow_remote` now also gates `mcp-remote`-style proxies (an `http(s)`/`ws(s)` URL on the command
   line), UNC commands and UNC arguments. A name selects entries exactly: `<source>::<name>` picks one;
   a bare name whose entries launch different servers is refused with the qualified names; another

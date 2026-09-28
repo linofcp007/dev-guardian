@@ -2,24 +2,37 @@
  * Deciding how — and whether — a declared server may be started, before
  * anything is spawned.
  *
- * ## Remote entries (fix round 3, I2)
+ * ## Remote entries (fix rounds 3 and 4, I2)
  *
- * `allow_remote` gates every way an entry reaches another machine, not only
- * the `url` shape. An entry is remote when:
+ * `allow_remote` gates every way an entry's CONFIGURATION says it reaches
+ * another machine, not only the `url` shape. An entry is remote when:
  *
  *   - it has a URL (`url`, `serverUrl`, `httpUrl`) and no command;
- *   - its command is on a UNC or device-namespace path (`\\host\share\x.exe`,
- *     `\\?\…`, `\\.\…`): starting it contacts that host over SMB, which sends
- *     the user's NTLM credentials to it;
- *   - its command or any argument names an `http(s)://` or `ws(s)://` URL —
- *     `npx mcp-remote https://…`, `supergateway`, `mcp-proxy`, and any server
- *     told to talk to a URL (`mcp-remote` may also open a browser for OAuth);
- *   - any argument is, or ends in, a UNC path (`\\host\share\s.js`,
- *     `--config=\\host\share\c.json`).
+ *   - a UNC or device-namespace path appears ANYWHERE in its command, an
+ *     argument or an `env` value, as a substring (`\\host\share\x.exe`,
+ *     `cmd /c "… type \\host\share\x"`, `-r\\host\…`, `/config:\\host\…`,
+ *     `@\\host\…`, `\\?\…`, `\\.\…`, `//host/share/…`): touching it contacts
+ *     that host over SMB, which sends the user's NTLM credentials to it;
+ *   - any `scheme://host` with a non-empty host appears anywhere in the
+ *     command, an argument or an `env` value — `npx mcp-remote https://…`,
+ *     `supergateway`, `mcp-proxy`, `--import=file://host/x.mjs`,
+ *     `NODE_OPTIONS`, `DOCKER_HOST=tcp://…`, a database URL; `file:///x`
+ *     (no host) is local;
+ *   - its command is `ssh`;
+ *   - its command is `docker` or `podman` and it names another engine:
+ *     `-H`/`--host`, `--context`/`-c` (anything but `default`), podman's
+ *     `--remote`/`--connection`/`--url`, or `DOCKER_CONTEXT` in its `env`.
  *
- * The check is textual and applies on every platform. What a local server
- * does on its own once started (a URL in its code, or in an `env` value) is
- * not visible here; SECURITY.md says so.
+ * The first cut matched a UNC path only at the start of an argument or after
+ * `=`, and URLs only for http(s)/ws(s): the review started `cmd /c "echo
+ * started> marker & type \\host\share\x"`, which wrote the marker and tried
+ * SMB (fix round 4).
+ *
+ * This is a TEXTUAL gate on the shapes a configuration can take, not a
+ * sandbox. A program that looks local still reaches the network by itself
+ * once started — `npx` downloads the package, a server calls its own API, a
+ * script builds a URL at run time — and nothing here sees that; SECURITY.md
+ * says so. It applies on every platform.
  *
  * ## Resolving a command without touching the network (C1)
  *
@@ -35,15 +48,57 @@
  * process's event loop nor its thread pool waits on SMB; only a reachable one
  * is spawned. On POSIX the child's own `execvp` searches `PATH`, after the
  * fork, so there is nothing to resolve here.
+ *
+ * The limit, documented beside the process-tree ones in
+ * `stdioTransport.ts`: a `PATH` entry that LOOKS local but reaches the
+ * network — a mapped drive letter (`Z:\tools`), a junction or symlink to a
+ * UNC share — is still `stat`ed. The stat runs in the thread pool, bounded by
+ * the deadline, so it cannot block the event loop; it can still send an SMB
+ * request, and while a share does not answer, a thread-pool thread waits.
  */
 import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, resolve } from 'node:path';
 import { isRemoteOrDeviceTarget } from '../hooks/configFile.js';
-const URL_IN_TEXT = /\b(?:https?|wss?):\/\/[^\s"'<>]+/i;
-/** A UNC path at the start of an argument or after `=` (`--config=\\host\…`); never a URL's `//`. */
-const UNC_IN_ARG = /(?:^|=)(?:\\\\|\/\/)[^\\/\s]+[\\/]/;
-/** Why an entry reaches another machine, or null when it is local. */
+/** `scheme://host…` with a non-empty host; `file:///x` has none. */
+const URL_WITH_HOST = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/\\"'<>|]+/i;
+/**
+ * A UNC or device path anywhere: `\\host\…`, `\\?\…`, `\\.\…`, or
+ * `//host/…` not preceded by `:` or `/` (a URL's `://`, `file:///`).
+ */
+const UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+/** A command's own name: `C:\…\ssh.exe` → `ssh`. */
+function commandName(command) {
+    const base = command.replace(/\\/g, '/').split('/').pop() ?? command;
+    return base.replace(/\.(exe|cmd|bat|com)$/i, '').toLowerCase();
+}
+/** `docker`/`podman` told to use another engine (see the module doc), or null. */
+function remoteEngine(entry, name) {
+    if (name !== 'docker' && name !== 'podman')
+        return null;
+    const args = entry.args ?? [];
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (/^(-H|--host)(=|$)/.test(a) || /^-H\S/.test(a))
+            return `${name} is told to use another engine (${a.split('=')[0] ?? a})`;
+        if (/^(--context|-c)(=|$)/.test(a)) {
+            const value = a.includes('=') ? a.slice(a.indexOf('=') + 1) : (args[i + 1] ?? '');
+            if (value !== 'default')
+                return `${name} is told to use the context '${value}'`;
+        }
+        if (name === 'podman' && /^(--remote|--connection|--url)(=|$)/.test(a))
+            return `podman is told to use a remote engine (${a})`;
+    }
+    const context = entry.env?.['DOCKER_CONTEXT'];
+    if (typeof context === 'string' && context !== '' && context !== 'default') {
+        return `${name} is told to use the context '${context}' (DOCKER_CONTEXT)`;
+    }
+    return null;
+}
+/**
+ * Why an entry's configuration reaches another machine, or null when it
+ * looks local — a textual gate, not a sandbox (see the module doc).
+ */
 export function remoteReasonOf(entry) {
     if (entry.command === undefined) {
         if (entry.url !== undefined)
@@ -53,12 +108,24 @@ export function remoteReasonOf(entry) {
     if (isRemoteOrDeviceTarget(entry.command)) {
         return 'its command is on a network or device path (starting it contacts that host)';
     }
-    for (const part of [entry.command, ...(entry.args ?? [])]) {
-        const url = URL_IN_TEXT.exec(part);
+    const name = commandName(entry.command);
+    if (name === 'ssh')
+        return 'its command is ssh (the server runs on another machine)';
+    const engine = remoteEngine(entry, name);
+    if (engine !== null)
+        return engine;
+    const envValues = Object.entries(entry.env ?? {}).flatMap(([k, v]) => (typeof v === 'string' ? [[k, v]] : []));
+    const parts = [
+        { where: 'its command line', text: entry.command },
+        ...(entry.args ?? []).map((text) => ({ where: 'its command line', text })),
+        ...envValues.map(([k, text]) => ({ where: `its env ${k}`, text })),
+    ];
+    for (const { where, text } of parts) {
+        const url = URL_WITH_HOST.exec(text);
         if (url !== null)
-            return `its command line names ${originOf(url[0])} (a proxy or client of a remote server)`;
-        if (UNC_IN_ARG.test(part))
-            return 'its command line names a network path';
+            return `${where} names ${originOf(url[0])} (a proxy, a client or a source on another machine)`;
+        if (UNC_ANYWHERE.test(text))
+            return `${where} names a network or device path`;
     }
     return null;
 }

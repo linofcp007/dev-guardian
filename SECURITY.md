@@ -101,14 +101,22 @@ their respective projects.
   filled from it; its working directory is the project. The audit sends
   `initialize` and the list methods only and **never calls `tools/call`**;
   it **contacts a remote server only with `allow_remote: true`** — an entry
-  is remote when it has a URL, when its command is on a UNC or device path
-  (starting it would send the user's credentials to that host over SMB), or
-  when its command line names an `http(s)`/`ws(s)` URL or a UNC path
-  (`mcp-remote` and other proxies); and it **kills the server's process tree
-  afterwards** (the process group on POSIX, `taskkill /T` on Windows),
-  whether the server answered or not. On Windows the command is resolved
-  with asynchronous look-ups over the local `PATH` entries only, so a
-  network path never blocks the server. Each server has a time budget, an
+  is remote when it has a URL; when a UNC or device path appears anywhere in
+  its command, an argument or an `env` value (touching it would send the
+  user's credentials to that host over SMB); when any `scheme://host` with
+  a host appears there (`mcp-remote` and other proxies, `file://host/…`,
+  `NODE_OPTIONS`, `DOCKER_HOST`); when its command is `ssh`; or when it runs
+  `docker`/`podman` against another engine (`-H`, `--host`, a context,
+  `--remote`). **This is a textual gate on the shapes a configuration can
+  take, not a sandbox**: a program that looks local still reaches the
+  network by itself once started (`npx` downloads the package; a server
+  calls its own API), and nothing here sees that. It **kills the server's
+  process tree afterwards** (the process group on POSIX, `taskkill /T` on
+  Windows), whether the server answered or not. On Windows the command is
+  resolved with asynchronous look-ups over the local `PATH` entries only, so
+  a network path never blocks the server — though a `PATH` entry that looks
+  local but is not (a mapped drive, a junction to a share) is still looked
+  up, off the event loop. Each server has a time budget, an
   inbound budget (4 MiB, 10 000 messages, 2 MiB per message — 40 times the
   largest real listing measured) and a 1000-item cap per list; its listing
   is analysed right after it answers, up to 2 MiB of text, 64 KiB per

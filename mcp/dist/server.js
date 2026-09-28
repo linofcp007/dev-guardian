@@ -74564,8 +74564,30 @@ var StreamableHTTPClientTransport = class {
 import { spawn as spawn2 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
 import { delimiter, extname as extname2, isAbsolute as isAbsolute15, resolve as resolve20 } from "node:path";
-var URL_IN_TEXT = /\b(?:https?|wss?):\/\/[^\s"'<>]+/i;
-var UNC_IN_ARG = /(?:^|=)(?:\\\\|\/\/)[^\\/\s]+[\\/]/;
+var URL_WITH_HOST = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/\\"'<>|]+/i;
+var UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+function commandName(command) {
+  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
+}
+function remoteEngine(entry, name) {
+  if (name !== "docker" && name !== "podman") return null;
+  const args = entry.args ?? [];
+  for (let i2 = 0; i2 < args.length; i2 += 1) {
+    const a2 = args[i2] ?? "";
+    if (/^(-H|--host)(=|$)/.test(a2) || /^-H\S/.test(a2)) return `${name} is told to use another engine (${a2.split("=")[0] ?? a2})`;
+    if (/^(--context|-c)(=|$)/.test(a2)) {
+      const value = a2.includes("=") ? a2.slice(a2.indexOf("=") + 1) : args[i2 + 1] ?? "";
+      if (value !== "default") return `${name} is told to use the context '${value}'`;
+    }
+    if (name === "podman" && /^(--remote|--connection|--url)(=|$)/.test(a2)) return `podman is told to use a remote engine (${a2})`;
+  }
+  const context = entry.env?.["DOCKER_CONTEXT"];
+  if (typeof context === "string" && context !== "" && context !== "default") {
+    return `${name} is told to use the context '${context}' (DOCKER_CONTEXT)`;
+  }
+  return null;
+}
 function remoteReasonOf(entry) {
   if (entry.command === void 0) {
     if (entry.url !== void 0) return `remote server at ${originOf(entry.url)}`;
@@ -74574,10 +74596,20 @@ function remoteReasonOf(entry) {
   if (isRemoteOrDeviceTarget(entry.command)) {
     return "its command is on a network or device path (starting it contacts that host)";
   }
-  for (const part of [entry.command, ...entry.args ?? []]) {
-    const url2 = URL_IN_TEXT.exec(part);
-    if (url2 !== null) return `its command line names ${originOf(url2[0])} (a proxy or client of a remote server)`;
-    if (UNC_IN_ARG.test(part)) return "its command line names a network path";
+  const name = commandName(entry.command);
+  if (name === "ssh") return "its command is ssh (the server runs on another machine)";
+  const engine = remoteEngine(entry, name);
+  if (engine !== null) return engine;
+  const envValues = Object.entries(entry.env ?? {}).flatMap(([k, v]) => typeof v === "string" ? [[k, v]] : []);
+  const parts = [
+    { where: "its command line", text: entry.command },
+    ...(entry.args ?? []).map((text) => ({ where: "its command line", text })),
+    ...envValues.map(([k, text]) => ({ where: `its env ${k}`, text }))
+  ];
+  for (const { where, text } of parts) {
+    const url2 = URL_WITH_HOST.exec(text);
+    if (url2 !== null) return `${where} names ${originOf(url2[0])} (a proxy, a client or a source on another machine)`;
+    if (UNC_ANYWHERE.test(text)) return `${where} names a network or device path`;
   }
   return null;
 }
