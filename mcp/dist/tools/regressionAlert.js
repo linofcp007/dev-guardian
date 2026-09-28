@@ -167,7 +167,7 @@ async function handler(input, ctx) {
         hint: regressed
             ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
             : measuredNote !== null
-                ? `No significant regression among the types that were measured. ${measuredNote}`
+                ? `No significant regression among the findings that were measured. ${measuredNote}`
                 : 'No significant regression.',
         ...(skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {}),
         ...note,

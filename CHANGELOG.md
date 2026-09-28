@@ -993,7 +993,15 @@ keeps working (migrations 004–011 are additive).
   one left open — `runCompare`'s own "not re-measured" predicate, shared —
   marked `not_remeasured: true`, the older scan listed in `sources` with
   `carried_for`. A finding a newer scan measured and did not find stays
-  resolved; a scanner the newer scan did not run at all is not a gap.
+  resolved; a scanner the newer scan did not run at all is not a gap —
+  except a pass that runs only when asked (`trivy-image`, nuclei): a scan
+  that did not ask did not look, so image A's CVEs stay open under a
+  Dockerfile-only scan. A carry makes the set's coverage `partial`; the
+  dashboard names only what a carried scan was carried for (never its own
+  stale gaps), as reduced coverage when the scanner ran on another target;
+  `sources` stay newest first. The walk is linear in the history it covers:
+  250 scans x 1000 findings with a gap in every scan took 10-15.5 s, now
+  under 0.3 s (200 x 300: 4.2 s, now 0.06 s).
 - **`scan_dast` over a surface whose route recovery failed** read coverage
   `full`: `map_attack_surface` persists a snapshot whose
   `semgrep-metavar-recovery` step lost some matches, with nothing in
@@ -1024,7 +1032,9 @@ keeps working (migrations 004–011 are additive).
   applicable). A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
   Semgrep finding in a partly parsed file as not measured by that run —
-  never resolved, never new — and names it `semgrep (partly parsed: …)`.
+  never resolved, never new — and names it `semgrep (partly parsed: …)`;
+  its note (and `regression_alert`'s hint) says Semgrep "only partly
+  measured" it, never that it "failed, or is not installed".
 
 ### Security
 

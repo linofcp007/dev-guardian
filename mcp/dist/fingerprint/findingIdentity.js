@@ -250,7 +250,7 @@ export function resolutionKey(f) {
 export function indexFindings(items) {
     const byIdentity = new Map();
     const byFingerprint = new Map();
-    for (const item of items) {
+    const add = (item) => {
         if (item.identity !== undefined && !byIdentity.has(item.identity)) {
             byIdentity.set(item.identity, item);
         }
@@ -259,7 +259,9 @@ export function indexFindings(items) {
             byFingerprint.set(item.fingerprint, [item]);
         else
             same.push(item);
-    }
+    };
+    for (const item of items)
+        add(item);
     const find = (f) => {
         if (f.identity !== undefined) {
             const hit = byIdentity.get(f.identity);
@@ -272,7 +274,7 @@ export function indexFindings(items) {
         }
         return undefined;
     };
-    return { find, has: (f) => find(f) !== undefined };
+    return { find, has: (f) => find(f) !== undefined, add };
 }
 // ------------------------------------------------------------------ internal
 /**

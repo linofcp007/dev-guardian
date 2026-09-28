@@ -285,6 +285,11 @@ export interface FindingIndex<T> {
   /** The indexed item that `f` is — see {@link indexFindings}. */
   find(f: MatchableFinding): T | undefined;
   has(f: MatchableFinding): boolean;
+  /**
+   * Index `item` too, exactly as if it had been in the list: an index that
+   * grows with the list it answers for, instead of one rebuilt per batch.
+   */
+  add(item: T): void;
 }
 
 /**
@@ -300,14 +305,15 @@ export interface FindingIndex<T> {
 export function indexFindings<T extends MatchableFinding>(items: readonly T[]): FindingIndex<T> {
   const byIdentity = new Map<string, T>();
   const byFingerprint = new Map<string, T[]>();
-  for (const item of items) {
+  const add = (item: T): void => {
     if (item.identity !== undefined && !byIdentity.has(item.identity)) {
       byIdentity.set(item.identity, item);
     }
     const same = byFingerprint.get(item.fingerprint);
     if (same === undefined) byFingerprint.set(item.fingerprint, [item]);
     else same.push(item);
-  }
+  };
+  for (const item of items) add(item);
   const find = (f: MatchableFinding): T | undefined => {
     if (f.identity !== undefined) {
       const hit = byIdentity.get(f.identity);
@@ -318,7 +324,7 @@ export function indexFindings<T extends MatchableFinding>(items: readonly T[]): 
     }
     return undefined;
   };
-  return { find, has: (f) => find(f) !== undefined };
+  return { find, has: (f) => find(f) !== undefined, add };
 }
 
 // ------------------------------------------------------------------ internal

@@ -81,6 +81,18 @@ export function findingKey(
   return f.tool;
 }
 
+/**
+ * The `tool` of every finding {@link findingKey} can put under `key` — its
+ * inverse, for a query that reads only one key's findings
+ * (`history/openSet.ts`'s carry-forward): a Trivy key is `trivy`'s, the OSV
+ * key scan_skill's, any other key its own tool.
+ */
+export function toolsOfKey(key: string): string[] {
+  if (key.startsWith('trivy:')) return ['trivy'];
+  if (key === SKILL_OSV) return [SKILL_TOOL];
+  return [key];
+}
+
 export interface RunName {
   /**
    * The finding keys ({@link findingKey}) this entry speaks for. Empty: it
@@ -107,6 +119,15 @@ export interface RunName {
    * are two targets, and a row that did not record one reads as any image.
    */
   ownTarget?: true;
+  /**
+   * It runs only when a caller asks for it — `trivy-image` needs an image,
+   * nuclei must be requested — never merely because there is something for
+   * it to scan. A newer scan that did not run it at all therefore did not
+   * look (the target did not go away), and the open set keeps its older
+   * findings (`runCompare.ts#openGapFor`). A pass without the flag that is
+   * absent says its target is gone: Bandit once the Python is.
+   */
+  onRequest?: true;
 }
 
 const scanner = (...measures: string[]): RunName => ({ measures });
@@ -131,7 +152,7 @@ export const RUN_NAMES = {
   trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
   // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
   // the image's own misconfigurations.
-  'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
+  'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
   'trivy-config': scanner(TRIVY_CONFIG),
   'trivy-dockerfile': scanner(TRIVY_CONFIG),
 
@@ -190,7 +211,7 @@ export const RUN_NAMES = {
   // The surface it probed was partial (a file Semgrep only partly parsed):
   // routes the map could not read were never probed.
   'guardian-dast:partial-surface': scanner('dast'),
-  nuclei: scanner('nuclei'),
+  nuclei: { measures: ['nuclei'], onRequest: true }, // only with use_nuclei
 
   // WordPress.
   wpscan: scanner('wpscan'),

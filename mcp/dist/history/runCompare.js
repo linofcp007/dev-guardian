@@ -180,30 +180,65 @@ function keyVerdict(book, key) {
 function isEmptyBook(book) {
     return book.tools_run.length === 0 && book.missing_tools.length === 0;
 }
+/** A finding's file as the partial-parse lists name it: `/`-separated. */
+function fileOf(f) {
+    return f.file_path === undefined ? undefined : f.file_path.replace(/\\/g, '/');
+}
+/** Whether `run` ran ok and speaks for `key` — the one test every target and gap check below uses. */
+function measuresKeyOk(run, key) {
+    return run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
+}
+/**
+ * The narrower gaps INSIDE an ok run that measures `key`: files it could
+ * only partly parse (`ToolRun.partially_parsed`, the shared Semgrep judge's
+ * `partial` verdict) and rules that did not load (`ToolRun.failed_rules`,
+ * bug_hunt's broken-rule shape). The rest of that run measured — `ok` AND
+ * missing, the retry shape `keyVerdict` reads as measured — but a finding in
+ * one of those files, or of one of those rules, was not looked for.
+ */
+function narrowGapsOf(book, key) {
+    const files = new Set();
+    const rules = new Set();
+    for (const run of book.tools_run) {
+        if (!measuresKeyOk(run, key))
+            continue;
+        for (const pp of run.partially_parsed ?? [])
+            files.add(pp.file);
+        for (const fr of run.failed_rules ?? [])
+            rules.add(fr.rule_id);
+    }
+    return { files, rules };
+}
+/**
+ * The run measuring `f`'s key that left `f` out — its file only partly
+ * parsed, or its rule not loaded — with the label a reader is given, or
+ * null.
+ */
+function narrowGapOf(book, f) {
+    const key = findingKey(f);
+    const file = fileOf(f);
+    for (const run of book.tools_run) {
+        if (!measuresKeyOk(run, key))
+            continue;
+        if (file !== undefined && (run.partially_parsed ?? []).some((pp) => pp.file === file)) {
+            return { run, label: `${run.name} (partly parsed: ${file})` };
+        }
+        if (f.rule_id !== undefined && (run.failed_rules ?? []).some((fr) => fr.rule_id === f.rule_id)) {
+            return { run, label: `${run.name} (rule not loaded: ${f.rule_id})` };
+        }
+    }
+    return null;
+}
+/**
+ * How `book` answers for `f`, its scanner's verdict narrowed to the finding:
+ * `unmeasured` also when the run that measured the key could only partly
+ * parse `f`'s file, or did not load `f`'s rule.
+ */
 function bookkeepingVerdict(book, f) {
     if (isEmptyBook(book))
         return 'measured';
     const verdict = keyVerdict(book, findingKey(f));
-    return verdict === 'measured' && partlyParsedRunOf(book, f) !== null ? 'unmeasured' : verdict;
-}
-/**
- * The run measuring `f`'s key that could only partly parse `f`'s file
- * (`ToolRun.partially_parsed`: the shared Semgrep judge's `partial` verdict,
- * `ok` AND missing), or null. The rest of that run measured — the retry
- * shape above — but a finding inside the unparsed span of a named file was
- * not looked for: it is unmeasured, never resolved and never new. (Before
- * that verdict the whole run was `failed`, and none of its findings
- * measured.)
- */
-function partlyParsedRunOf(book, f) {
-    if (f.file_path === undefined)
-        return null;
-    const file = f.file_path.replace(/\\/g, '/');
-    const key = findingKey(f);
-    const run = book.tools_run.find((r) => r.status === 'ok' &&
-        (r.partially_parsed ?? []).some((p) => p.file === file) &&
-        (keysOfRun(r.name, true)?.includes(key) ?? false));
-    return run === undefined ? null : { run, file };
+    return verdict === 'measured' && narrowGapOf(book, f) !== null ? 'unmeasured' : verdict;
 }
 /** The runs and missing names of `book` that record a gap in `key`: failed, or missing without an ok run. */
 function gapNamesFor(book, key) {
@@ -224,91 +259,260 @@ function gapNamesFor(book, key) {
     return names;
 }
 /**
+ * An ok pass of `holder` that runs only when it is asked for
+ * (`runNames.ts` `onRequest`: `trivy-image` needs an image, nuclei must be
+ * requested) and speaks for `key`, as its label — or null. A newer scan
+ * that did not run such a pass at all did not look: the finding stays open.
+ * A pass that runs whenever there is something for it (Bandit, when there
+ * is Python) is not one: its absence says the target went away.
+ */
+function onRequestPassOf(holder, key) {
+    const run = holder.tools_run.find((r) => measuresKeyOk(r, key) && runNameEntry(r.name)?.onRequest === true);
+    return run === undefined ? null : passLabel(run, targetOf(run));
+}
+/**
  * The open set's question (`openSet.ts`): does `asked`, a NEWER scan of the
  * same slot, leave `f` — a finding of the older scan `holder` describes —
- * still open, because it did not re-measure it for a reason it RECORDED?
- * Returns that gap's name, or null when `asked` re-measured `f` (and did not
- * find it: resolved) or did not run `f`'s scanner at all (no gap recorded —
- * not applicable, not requested: a Python-free project's Bandit).
+ * still open? Returns the name of the gap, or null when `asked` re-measured
+ * `f` (and did not find it: resolved) or did not run `f`'s scanner at all
+ * with no gap recorded (not applicable: a Python-free project's Bandit).
  *
- * The same reading as {@link compareScansFor}'s "not re-measured", from the
- * same helpers — `keyVerdict`, `partlyParsedRunOf`, `targetNotRun` — minus
- * its did-not-run-at-all case:
+ * It CALLS the verdict every comparison uses — {@link answerFor}, through
+ * `bookkeepingVerdict` and `targetNotRun` — so the open set and
+ * `compareScansFor`'s "not re-measured" cannot drift apart. The one reading
+ * it adds: a `not_run` of a pass that runs only on request (an image, nuclei)
+ * is still a gap — the newer scan did not ask, so it did not look.
  *
  *   - a gap in `f`'s key (`semgrep` failed, or listed missing) → those names;
  *   - `f`'s file only partly parsed → `semgrep (partly parsed: wp/a.php)`;
- *   - a pass over another target → `trivy-image (registry/app:1)`.
+ *   - `f`'s rule not loaded → `semgrep (rule not loaded: <rule id>)`;
+ *   - a pass over another target, or one not requested this time →
+ *     `trivy-image (registry/app:1)`, `nuclei`.
  */
 export function openGapFor(holder, asked, f) {
-    if (isEmptyBook(asked))
+    const answer = answerFor(holder, asked, f);
+    if (answer.verdict === 'measured')
         return null;
-    const key = findingKey(f);
-    const verdict = keyVerdict(asked, key);
-    if (verdict === 'not_run')
-        return null;
-    if (verdict === 'unmeasured') {
+    if (answer.verdict === 'unmeasured') {
+        const narrow = narrowGapOf(asked, f);
+        if (narrow !== null)
+            return narrow.label;
+        const key = findingKey(f);
         const names = gapNamesFor(asked, key);
         return names.length > 0 ? names.join(', ') : key;
     }
-    const partly = partlyParsedRunOf(asked, f);
-    if (partly !== null)
-        return `${partly.run.name} (partly parsed: ${partly.file})`;
-    return targetNotRun(holder, asked, f);
+    if (answer.byTarget)
+        return answer.notRun;
+    return onRequestPassOf(holder, findingKey(f));
+}
+const NEVER = { kind: 'never' };
+const ALWAYS = { kind: 'always' };
+export function keyScope(holder, asked, key) {
+    if (isEmptyBook(asked))
+        return NEVER;
+    const verdict = keyVerdict(asked, key);
+    if (verdict === 'unmeasured')
+        return ALWAYS;
+    if (verdict === 'not_run')
+        return onRequestPassOf(holder, key) !== null ? ALWAYS : NEVER;
+    if (targetNotRunForKey(holder, asked, key) !== null)
+        return ALWAYS;
+    const narrow = narrowGapsOf(asked, key);
+    return narrow.files.size === 0 && narrow.rules.size === 0
+        ? NEVER
+        : { kind: 'some', files: narrow.files, rules: narrow.rules };
+}
+export function chainScope(holder, chain, key) {
+    return new ChainScopeFold(holder).scope(chain, key);
+}
+function meet(into, next) {
+    if (into === undefined)
+        return new Set(next);
+    for (const x of into)
+        if (!next.has(x))
+            into.delete(x);
+    return into;
 }
 /**
- * Whether ANY finding of the scan `holder` describes could be left open by
- * every scan of `chain` (newer ones) — {@link openGapFor} non-null against
- * each — judged per key from the bookkeeping alone, so the open set reads an
- * older scan's findings only when one of them could be carried. Necessary,
- * not sufficient: the per-finding test still decides (a partly parsed FILE,
- * for one). A key `holder` could have produced is one of a run that did not
- * skip (a skipped run produced nothing); a scan with no bookkeeping could
- * have produced anything, and a chain scan with none measured everything.
+ * {@link chainScope} folded incrementally, for a chain that only ever grows
+ * at its end (the open set's walk back through history): each key folds each
+ * newer scan once, and stays `never` once one closed it. One fold serves
+ * every holder with the same {@link holderSignature} — the only part of a
+ * holder `keyScope` reads — so a walk over N scans costs N folds per key,
+ * never N².
+ *
+ * The conjunction is kept small: files-only constraints (partly parsed
+ * files) fold into their intersection, rules-only ones (rules that did not
+ * load) into theirs, so "a.php partly parsed in every scan" stays one
+ * constraint however long the chain; and an empty intersection is `never` —
+ * no finding is in a file each of two scans only partly parsed when they
+ * name different files — which stops the walk there instead of carrying an
+ * ever-longer list nothing satisfies. `scopeAdmits` gives the same answer
+ * for the folded form as for the list it replaces (the carry-predicate
+ * property test holds both against `openGapFor`).
  */
-export function mayCarryPast(holder, chain) {
-    if (chain.length === 0 || chain.some(isEmptyBook))
+export class ChainScopeFold {
+    holder;
+    perKey = new Map();
+    constructor(holder) {
+        this.holder = holder;
+    }
+    scope(chain, key) {
+        let state = this.perKey.get(key);
+        if (state === undefined) {
+            state = { len: 0, never: false, mixed: [], mixedSigs: new Set(), fileMeet: undefined, ruleMeet: undefined, snapshot: null };
+            this.perKey.set(key, state);
+        }
+        for (; state.len < chain.length && !state.never; state.len += 1) {
+            const asked = chain[state.len];
+            if (asked === undefined)
+                break;
+            const scope = keyScope(this.holder, asked, key);
+            if (scope.kind === 'always')
+                continue;
+            state.snapshot = null;
+            if (scope.kind === 'never') {
+                state.never = true;
+                break;
+            }
+            if (scope.rules.size === 0) {
+                state.fileMeet = meet(state.fileMeet, scope.files);
+            }
+            else if (scope.files.size === 0) {
+                state.ruleMeet = meet(state.ruleMeet, scope.rules);
+            }
+            else {
+                const sig = JSON.stringify([[...scope.files].sort(), [...scope.rules].sort()]);
+                if (!state.mixedSigs.has(sig)) {
+                    state.mixedSigs.add(sig);
+                    state.mixed.push({ files: scope.files, rules: scope.rules });
+                }
+            }
+            // A finding has one file and one rule: an empty meet admits none.
+            if (state.fileMeet?.size === 0 || state.ruleMeet?.size === 0)
+                state.never = true;
+        }
+        if (state.snapshot === null) {
+            const none = new Set();
+            state.snapshot = state.never
+                ? { kind: 'never' }
+                : {
+                    kind: 'open',
+                    constraints: [
+                        ...(state.fileMeet !== undefined ? [{ files: new Set(state.fileMeet), rules: none }] : []),
+                        ...(state.ruleMeet !== undefined ? [{ files: none, rules: new Set(state.ruleMeet) }] : []),
+                        ...state.mixed,
+                    ],
+                };
+        }
+        return state.snapshot;
+    }
+}
+/**
+ * What `keyScope` reads of a holder: its ok runs, by name and target. Two
+ * holders with the same signature get the same scope from any chain.
+ */
+export function holderSignature(holder) {
+    return JSON.stringify(holder.tools_run
+        .filter((r) => r.status === 'ok')
+        .map((r) => [r.name, targetOf(r).ref ?? ''])
+        .sort((a, b) => (a.join('\0') < b.join('\0') ? -1 : 1)));
+}
+/** Whether a finding in `file` of `rule` is inside `scope`. */
+export function scopeAdmits(scope, file, rule) {
+    if (scope.kind === 'never')
         return false;
-    const measuresKeyOk = (run, key) => run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
-    const stillOpen = (asked, key) => {
-        const verdict = keyVerdict(asked, key);
-        if (verdict === 'unmeasured')
-            return true;
-        if (verdict === 'not_run')
-            return false;
-        if (asked.tools_run.some((r) => measuresKeyOk(r, key) && (r.partially_parsed ?? []).length > 0))
-            return true;
-        return holder.tools_run.some((h) => measuresKeyOk(h, key) &&
-            !asked.tools_run.some((a) => measuresKeyOk(a, key) && sameTarget(targetOf(a), targetOf(h))));
-    };
-    const produced = new Set();
-    let unknownProducer = isEmptyBook(holder);
-    if (unknownProducer)
+    return scope.constraints.every((c) => (file !== undefined && c.files.has(file)) || (rule !== undefined && c.rules.has(rule)));
+}
+/** A key no bookkeeping name measures — a finding tool the table does not know. */
+export const UNKNOWN_FINDING_KEY = '\0unknown';
+/**
+ * Every key a finding of the scan `holder` describes could have: one of a
+ * run that did not skip (a skipped run produced nothing), and
+ * {@link UNKNOWN_FINDING_KEY} when a run's name is not in the table. A scan
+ * with no bookkeeping at all could have produced anything.
+ */
+export function producedKeys(holder) {
+    const keys = new Set();
+    if (isEmptyBook(holder)) {
         for (const key of KNOWN_FINDING_KEYS)
-            produced.add(key);
+            keys.add(key);
+        keys.add(UNKNOWN_FINDING_KEY);
+    }
     for (const run of holder.tools_run) {
         if (run.status === 'skipped')
             continue;
-        const keys = keysOfRun(run.name, run.status === 'ok');
-        if (keys === null)
-            unknownProducer = true;
+        const k = keysOfRun(run.name, run.status === 'ok');
+        if (k === null)
+            keys.add(UNKNOWN_FINDING_KEY);
         else
-            for (const key of keys)
-                produced.add(key);
+            for (const key of k)
+                keys.add(key);
     }
-    // A finding tool no name is known to measure is open wherever coverage is not full (keyVerdict).
-    if (unknownProducer && chain.every((a) => computeCoverage(a.tools_run, a.missing_tools) !== 'full'))
-        return true;
-    for (const key of produced) {
-        if (chain.every((asked) => stillOpen(asked, key)))
-            return true;
-    }
-    return false;
+    return [...keys];
 }
-/** `semgrep (partly parsed: a.php, b.js)` for each run that only partly parsed some files. */
-function partlyParsedNames(book) {
-    return book.tools_run
-        .filter((run) => run.status === 'ok' && (run.partially_parsed ?? []).length > 0)
-        .map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(', ')})`);
+/**
+ * Whether any scan OLDER than a growing `chain` could still have a finding
+ * every scan of it leaves open, whatever that scan ran: {@link chainScope}
+ * for the widest holder the slot's history allows — every pass name the
+ * slot's scans ever recorded (`names`), each ok, each over a target no scan
+ * recorded — over every key it could produce, folded incrementally. When
+ * even that holder has nothing left open the carry-forward walk stops.
+ * `anyEmpty`: some scan of the slot has no bookkeeping, and could have
+ * produced anything.
+ */
+export class StillCarry {
+    fold;
+    keys;
+    constructor(names, anyEmpty) {
+        const widest = {
+            tools_run: names.map((name) => ({ name, status: 'ok', target: '\0any image no scan recorded' })),
+            missing_tools: [],
+        };
+        const keys = new Set(producedKeys(widest));
+        if (anyEmpty) {
+            for (const key of KNOWN_FINDING_KEYS)
+                keys.add(key);
+            keys.add(UNKNOWN_FINDING_KEY);
+        }
+        this.fold = new ChainScopeFold(widest);
+        this.keys = [...keys];
+    }
+    /** How much of the growing chain `check` has looked at for an empty book. */
+    seen = 0;
+    sawEmpty = false;
+    check(chain) {
+        if (chain.length === 0)
+            return true;
+        // A scan with no bookkeeping measured everything: nothing older is carried past it.
+        for (; this.seen < chain.length && !this.sawEmpty; this.seen += 1) {
+            const book = chain[this.seen];
+            if (book !== undefined && isEmptyBook(book))
+                this.sawEmpty = true;
+        }
+        if (this.sawEmpty)
+            return false;
+        return this.keys.some((key) => this.fold.scope(chain, key).kind !== 'never');
+    }
+}
+/** Whether a gap name is a narrower gap inside a run that measured ({@link narrowGapNames}). */
+function isNarrowGapName(name) {
+    return / \((partly parsed|rules not loaded): /.test(name);
+}
+/** `semgrep (partly parsed: a.php, b.js)` / `(rules not loaded: …)` for each run with a narrower gap. */
+function narrowGapNames(book) {
+    const names = [];
+    for (const run of book.tools_run) {
+        if (run.status !== 'ok')
+            continue;
+        const parsed = run.partially_parsed ?? [];
+        const failed = run.failed_rules ?? [];
+        if (parsed.length > 0)
+            names.push(`${run.name} (partly parsed: ${parsed.map((pp) => pp.file).join(', ')})`);
+        if (failed.length > 0)
+            names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(', ')})`);
+    }
+    return names;
 }
 // ---------------------------------------------------------------------------
 // Scans
@@ -429,15 +633,17 @@ function passLabel(run, target) {
  * everything, as everywhere else here.
  */
 function targetNotRun(holder, asked, f) {
-    if (holder === null || (asked.tools_run.length === 0 && asked.missing_tools.length === 0))
+    return holder === null ? null : targetNotRunForKey(holder, asked, findingKey(f));
+}
+/** {@link targetNotRun} for every finding under `key` — it depends on nothing else. */
+function targetNotRunForKey(holder, asked, key) {
+    if (isEmptyBook(asked))
         return null;
-    const key = findingKey(f);
-    const measuresKeyOk = (run) => run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
     for (const run of holder.tools_run) {
-        if (!measuresKeyOk(run))
+        if (!measuresKeyOk(run, key))
             continue;
         const target = targetOf(run);
-        if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target)))
+        if (!asked.tools_run.some((r) => measuresKeyOk(r, key) && sameTarget(targetOf(r), target)))
             return passLabel(run, target);
     }
     return null;
@@ -448,12 +654,12 @@ function targetNotRun(holder, asked, f) {
  */
 function answerFor(holder, asked, f) {
     if (asked === null)
-        return { verdict: 'unmeasured', notRun: null };
+        return { verdict: 'unmeasured', notRun: null, byTarget: false };
     const verdict = bookkeepingVerdict(asked, f);
     if (verdict !== 'measured')
-        return { verdict, notRun: verdict === 'not_run' ? f.tool : null };
+        return { verdict, notRun: verdict === 'not_run' ? f.tool : null, byTarget: false };
     const pass = targetNotRun(holder, asked, f);
-    return pass === null ? { verdict, notRun: null } : { verdict: 'not_run', notRun: pass };
+    return pass === null ? { verdict, notRun: null, byTarget: false } : { verdict: 'not_run', notRun: pass, byTarget: true };
 }
 /**
  * What `scan` did not measure, for a caller to name — exactly the names
@@ -490,8 +696,8 @@ export function notMeasured(storage, scan, scope = 'any') {
             if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== 'measured'))
                 add(name);
         }
-        // Files a run only partly parsed are a gap on both sides (partlyParsedRunOf).
-        for (const name of partlyParsedNames(book))
+        // Files a run only partly parsed, rules it did not load: a gap on both sides (narrowGapOf).
+        for (const name of narrowGapNames(book))
             add(name);
     };
     if (!isOrchestratedFullScan(scan)) {
@@ -605,17 +811,32 @@ export function measurementGaps(check, d) {
 export function describeMeasurementGaps(from, to, gaps) {
     const parts = [];
     const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
-    if (failedByTo.length > 0) {
-        parts.push(`Scan ${to.scan_id} did not measure ${failedByTo.join(', ')} (it failed, or is not installed): ` +
+    // A run that measured, with files it only partly parsed or rules that did
+    // not load (`narrowGapNames`), neither failed nor is missing: said so.
+    const narrowByTo = failedByTo.filter(isNarrowGapName);
+    const brokenByTo = failedByTo.filter((x) => !isNarrowGapName(x));
+    if (brokenByTo.length > 0) {
+        parts.push(`Scan ${to.scan_id} did not measure ${brokenByTo.join(', ')} (it failed, or is not installed): ` +
             'earlier findings from it are reported as not re-measured, never as resolved — re-run once the scanner works.');
+    }
+    if (narrowByTo.length > 0) {
+        parts.push(`Scan ${to.scan_id} only partly measured ${narrowByTo.join(', ')}: earlier findings in those files, or of those ` +
+            'rules, are reported as not re-measured, never as resolved — they are measured again once a run reads the ' +
+            "whole file (Semgrep's parser cannot always, even on valid code) and loads the rule.");
     }
     if (gaps.notRunByTo.length > 0) {
         parts.push(`Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(', ')} (not requested, or nothing for it to scan): ` +
             'earlier findings from it are reported as not re-measured, never as resolved — run it again to re-measure them.');
     }
-    if (gaps.byFrom.length > 0) {
-        parts.push(`The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(', ')} (it failed, or was not ` +
+    const narrowByFrom = gaps.byFrom.filter(isNarrowGapName);
+    const brokenByFrom = gaps.byFrom.filter((x) => !isNarrowGapName(x));
+    if (brokenByFrom.length > 0) {
+        parts.push(`The reference scan ${from.scan_id} did not measure ${brokenByFrom.join(', ')} (it failed, or was not ` +
             'installed): findings from it are reported as not previously measured, never as new.');
+    }
+    if (narrowByFrom.length > 0) {
+        parts.push(`The reference scan ${from.scan_id} only partly measured ${narrowByFrom.join(', ')}: findings in those files, ` +
+            'or of those rules, are reported as not previously measured, never as new.');
     }
     if (gaps.notRunByFrom.length > 0) {
         parts.push(`The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(', ')} (not applicable, or not ` +

@@ -59,9 +59,14 @@
  *     came from is listed in `sources` with `carried_for` (the gaps);
  *   - suppressions still apply;
  *   - a scanner the newer scan did not run AT ALL (no gap recorded: a
- *     Python-free project's Bandit) is not a gap, and carries nothing.
- * `runCompare.ts#mayCarryPast` decides from bookkeeping alone whether an
- * older scan could hold such a finding, so its findings are read only then.
+ *     Python-free project's Bandit) is not a gap, and carries nothing —
+ *     except a pass that runs only when asked (`trivy-image`, nuclei:
+ *     `runNames.ts` `onRequest`): a scan that did not ask did not look;
+ *   - a carry makes the set's coverage `partial`, and the carried scan's
+ *     bookkeeping speaks only for the gaps it was carried for.
+ * Which findings can be carried is decided per key from bookkeeping alone
+ * (`runCompare.ts#ChainScopeFold`), so an older scan's rows are read only
+ * for a key still open, and the walk is linear in the history it covers.
  *
  * Every lookup is a project- and type-scoped SQL query, paged only past the
  * rows it skips; nothing here searches a fixed window of recent scans.
@@ -69,7 +74,8 @@
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
-import { mayCarryPast, openGapFor } from './runCompare.js';
+import { ChainScopeFold, holderSignature, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
+import { findingKey, toolsOfKey } from './runNames.js';
 import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, slotView, sourceTypesOf, } from './scanRoles.js';
 /** Rows fetched per query while looking past skipped scans. */
 const PAGE = 25;
@@ -285,15 +291,55 @@ function slotSources(storage, projectPath, slot) {
     }
     return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
-/** Older scans of a slot the carry-forward walk examines at most (bookkeeping only unless one may carry). */
-const CARRY_WALK_LIMIT = 200;
+/**
+ * Older scans of a slot the carry-forward walk examines at most. The walk
+ * stops by itself at the first scan that measured what the newer ones did
+ * not (`StillCarry`); this bounds a history kept without retention.
+ */
+const CARRY_WALK_LIMIT = 5000;
 /**
  * The findings of `source`'s older usable scans (same slot, same type) that
  * every newer scan left open — see the module comment. Newest first.
+ *
+ * Linear in the history it walks, never history x findings x chain (fix
+ * round 2: the first version checked every finding against the whole chain
+ * of newer scans — 4.2 s for 200 scans x 300 findings with one file partly
+ * parsed in every scan, 14 s for 250 x 1000):
+ *   - per key, the chain's scope is folded once per scan (`ChainScopeFold`),
+ *     stops at the first newer scan that measured the key, and a finding's
+ *     fate is read off it (`scopeAdmits`); the per-finding verdict
+ *     (`openGapFor`) is asked once per (key, file, rule), for the label;
+ *   - an older scan's findings are read only for a key that could still be
+ *     open, and then only that key's tools, or the files and rules its
+ *     scope names — never every row;
+ *   - a finding whose identity the walk already holds (the source's own, or
+ *     carried from a newer scan) is dropped on its keys alone, before its row
+ *     is read: it could only lose to the newer copy;
+ *   - the walk stops once no older scan, whatever it ran, could have a
+ *     finding every newer one left open (`StillCarry`).
  */
-function carryForward(storage, projectPath, slot, source, isSuppressed) {
+function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
     const chain = [slotView(source, slot)];
+    const history = storage.scans.runNamesOfType(projectPath, slot);
+    const stillCarry = new StillCarry(history.names, history.anyEmpty);
+    // One incremental fold per kind of holder (`holderSignature`).
+    const folds = new Map();
+    const foldFor = (holder) => {
+        const sig = holderSignature(holder);
+        let fold = folds.get(sig);
+        if (fold === undefined) {
+            fold = new ChainScopeFold(holder);
+            folds.set(sig, fold);
+        }
+        return fold;
+    };
+    const known = new KnownFindings();
+    for (const f of sourceRows)
+        if (findingInSlot(source, f, slot) && !isSuppressed(f))
+            known.add(f);
     const out = [];
+    if (!stillCarry.check(chain))
+        return out;
     let walked = 0;
     for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
         const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
@@ -313,26 +359,120 @@ function carryForward(storage, projectPath, slot, source, isSuppressed) {
                 continue;
             walked += 1;
             const holder = slotView(scan, slot);
-            if (mayCarryPast(holder, chain)) {
-                const carried = [];
-                for (const finding of storage.findings.listByScan(scan.scan_id)) {
-                    if (!findingInSlot(scan, finding, slot) || isSuppressed(finding))
-                        continue;
-                    const gaps = chain.map((asked) => openGapFor(holder, asked, finding));
-                    const gap = gaps[0];
-                    if (gap === undefined || gap === null || gaps.some((g) => g === null))
-                        continue;
-                    carried.push({ finding, gap });
-                }
-                if (carried.length > 0)
-                    out.push({ slot, scan, coverage, findings: carried });
+            const carried = carriedFrom({ storage, scan, slot, holder, chain, fold: foldFor(holder), isSuppressed, known });
+            if (carried.length > 0) {
+                out.push({ slot, scan, coverage, findings: carried });
+                for (const { finding } of carried)
+                    known.add(finding);
             }
             chain.push(holder);
+            if (!stillCarry.check(chain))
+                return out;
         }
         if (page.length < PAGE)
             break;
     }
     return out;
+}
+/**
+ * The identities (and, for a row without one, fingerprints) of the findings
+ * a slot's open set already holds — each certain to end up in it, itself or
+ * as a newer copy — so an older copy is dropped on its keys alone, exactly
+ * as `indexFindings` would drop it later.
+ */
+class KnownFindings {
+    identities = new Set();
+    bare = new Set();
+    add(f) {
+        if (f.identity !== undefined)
+            this.identities.add(f.identity);
+        else
+            this.bare.add(f.fingerprint);
+    }
+    /** A row with these keys would lose to a finding already held. */
+    holds(keys) {
+        return keys.identity !== null && keys.identity !== undefined
+            ? this.identities.has(keys.identity)
+            : this.bare.has(keys.fingerprint);
+    }
+}
+/** The findings of `scan` (bookkeeping `holder`) that every scan of `chain` left open. */
+function carriedFrom(args) {
+    const { storage, scan, slot, holder, chain, fold, isSuppressed, known } = args;
+    const scopes = new Map();
+    const scopeOf = (key) => {
+        let scope = scopes.get(key);
+        if (scope === undefined) {
+            scope = fold.scope(chain, key);
+            scopes.set(key, scope);
+        }
+        return scope;
+    };
+    // What to read: nothing, when no key could stay open; a key open key-wide,
+    // by the tools whose findings carry it (`toolsOfKey`) — every row only for
+    // a key no tool name stands for; else only the files and rules the first
+    // constraint of each open key names (every admitted finding is inside it).
+    // Reading every row of every older scan whenever one key stayed open took
+    // 2.4 s for 250 scans x 1000 findings under a Semgrep that kept failing
+    // beside an ok Bandit (fix round 2).
+    let everything = false;
+    const tools = new Set();
+    const files = new Set();
+    const rules = new Set();
+    let anyOpen = false;
+    for (const key of producedKeys(holder)) {
+        const scope = scopeOf(key);
+        if (scope.kind === 'never')
+            continue;
+        anyOpen = true;
+        const first = scope.constraints[0];
+        if (first === undefined) {
+            if (key === UNKNOWN_FINDING_KEY) {
+                everything = true;
+                break;
+            }
+            for (const tool of toolsOfKey(key))
+                tools.add(tool);
+            continue;
+        }
+        for (const f of first.files)
+            files.add(f);
+        for (const r of first.rules)
+            rules.add(r);
+    }
+    if (!anyOpen)
+        return [];
+    const rows = everything
+        ? storage.findings.listByScan(scan.scan_id).filter((f) => !known.holds(f))
+        : storage.findings.listByScanMatching(scan.scan_id, { tools: [...tools], files: [...files], rules: [...rules] }, (keys) => known.holds(keys));
+    const newest = chain[0];
+    const labels = new Map();
+    const carried = [];
+    for (const finding of rows) {
+        if (!findingInSlot(scan, finding, slot) || isSuppressed(finding))
+            continue;
+        const key = findingKey(finding);
+        const file = finding.file_path === undefined ? undefined : finding.file_path.replace(/\\/g, '/');
+        if (!scopeAdmits(scopeOf(key), file, finding.rule_id))
+            continue;
+        // The label is the newest scan's own verdict on this finding — the same
+        // `openGapFor` every comparison's "not re-measured" reads.
+        const memo = JSON.stringify([key, file ?? null, finding.rule_id ?? null]);
+        let gap = labels.get(memo);
+        if (gap === undefined) {
+            gap = newest === undefined ? null : openGapFor(holder, newest, finding);
+            labels.set(memo, gap);
+        }
+        if (gap === null)
+            continue;
+        carried.push({ finding, gap });
+    }
+    return carried;
+}
+/** `semgrep (partly parsed: wp/a.php)` → `semgrep`; `semgrep, bandit` → both: the scanners a gap names. */
+function scannersOfGap(gap) {
+    const head = gap.split(' (')[0] ?? gap;
+    return head.split(', ').filter((name) => name.length > 0);
 }
 export function openSetForProject(storage, projectPath, opts = {}) {
     const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
@@ -350,13 +490,23 @@ export function openSetForProject(storage, projectPath, opts = {}) {
             considered.set(p.scan.scan_id, p.scan);
         }
     }
+    // Each source's rows, read once (a script-era row can source two slots).
+    const byScan = new Map();
+    const rowsOf = (scan) => {
+        let rows = byScan.get(scan.scan_id);
+        if (rows === undefined) {
+            rows = storage.findings.listByScan(scan.scan_id);
+            byScan.set(scan.scan_id, rows);
+        }
+        return rows;
+    };
     // What each slot's dedicated source did not look at again (the module
     // comment). The residual `security_full` slot has no dedicated source.
     const carried = [];
     for (const p of picked) {
         if (p.slot === 'security_full' || p.scan.scan_type !== p.slot)
             continue;
-        for (const c of carryForward(storage, projectPath, p.slot, p.scan, isSuppressed)) {
+        for (const c of carryForward(storage, projectPath, p.slot, p.scan, rowsOf(p.scan), isSuppressed)) {
             carried.push(c);
             considered.set(c.scan.scan_id, c.scan);
         }
@@ -364,28 +514,34 @@ export function openSetForProject(storage, projectPath, opts = {}) {
     // Newest first, in SQL's own order (started_at, then rowid — two scans can
     // start in the same millisecond), so where two sources hold the same
     // finding the newer copy — its line numbers, its scan id — is kept.
+    // (Carried scans are in `considered` too: `sources` is sorted by this.)
     const order = storage.scans.sortNewestFirst([...considered.keys()]);
     const rank = new Map(order.map((id, i) => [id, i]));
     const rankOf = (scanId) => rank.get(scanId) ?? order.length;
     picked.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
     carried.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
-    const byScan = new Map();
     const findings = [];
     const sources = [];
-    for (const { slot, scan, coverage } of picked) {
-        let rows = byScan.get(scan.scan_id);
-        if (rows === undefined) {
-            rows = storage.findings.listByScan(scan.scan_id);
-            byScan.set(scan.scan_id, rows);
+    // Grows with `findings`, one source at a time: a source's rows are matched
+    // against every earlier source's, never against each other — and never by
+    // rebuilding the index per source, which made the carried scans below
+    // quadratic (fix round 2).
+    const seen = indexFindings([]);
+    const admit = (batch) => {
+        for (const f of batch) {
+            findings.push(f);
+            seen.add(f);
         }
-        const seen = indexFindings(findings);
-        let contributed = 0;
-        for (const f of rows) {
+    };
+    for (const { slot, scan, coverage } of picked) {
+        const batch = [];
+        for (const f of rowsOf(scan)) {
             if (!findingInSlot(scan, f, slot) || isSuppressed(f) || seen.has(f))
                 continue;
-            findings.push({ ...f, scan_id: scan.scan_id });
-            contributed += 1;
+            batch.push({ ...f, scan_id: scan.scan_id });
         }
+        admit(batch);
+        const contributed = batch.length;
         sources.push({
             slot,
             scan_id: scan.scan_id,
@@ -398,17 +554,16 @@ export function openSetForProject(storage, projectPath, opts = {}) {
     }
     // After every source: a newer copy of the same identity always wins.
     for (const { slot, scan, coverage, findings: rows } of carried) {
-        const seen = indexFindings(findings);
-        const gaps = [];
-        let contributed = 0;
+        const gaps = new Set();
+        const batch = [];
         for (const { finding, gap } of rows) {
             if (seen.has(finding))
                 continue;
-            findings.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true });
-            contributed += 1;
-            if (!gaps.includes(gap))
-                gaps.push(gap);
+            batch.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true });
+            gaps.add(gap);
         }
+        admit(batch);
+        const contributed = batch.length;
         if (contributed === 0)
             continue;
         sources.push({
@@ -419,24 +574,49 @@ export function openSetForProject(storage, projectPath, opts = {}) {
             finished_at: scan.finished_at,
             coverage,
             findings: contributed,
-            carried_for: gaps,
+            carried_for: [...gaps],
         });
     }
     findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint));
+    // Newest first, carried sources included (`resources/findings.ts` names
+    // `sources[0]` as the scan the set was read from).
+    sources.sort((a, b) => rankOf(a.scan_id) - rankOf(b.scan_id));
     const skipped = summarizeSkipped(hits);
     const scans = [...considered.values()].sort((a, b) => rankOf(a.scan_id) - rankOf(b.scan_id));
+    // A carried finding is one no newer scan looked at again: partial, even
+    // when every source's own coverage is full (image B's scan over image A).
     const coverage = sources.length === 0
         ? 'none'
-        : sources.some((s) => s.coverage !== 'full') || skipped.count > 0
+        : sources.some((s) => s.coverage !== 'full' || s.carried_for !== undefined) || skipped.count > 0
             ? 'partial'
             : 'full';
+    // A carried scan speaks only for what it was carried FOR — the gaps of the
+    // newer scans — never for its own stale bookkeeping (a hadolint missing
+    // then, installed since). A scanner the slot's source ran ok is listed as
+    // run too, so a reader says "ran with reduced coverage" (image B, not
+    // image A) rather than "did not run"; one it did not run (nuclei, not
+    // requested this time) stays missing only.
+    const okInSlot = new Map();
+    for (const p of picked) {
+        const names = okInSlot.get(p.slot) ?? new Set();
+        for (const t of slotView(p.scan, p.slot).tools_run)
+            if (t.status === 'ok')
+                names.add(t.name);
+        okInSlot.set(p.slot, names);
+    }
     const bookkeeping = [
         ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
         ...sources
             .filter((src) => src.carried_for !== undefined)
-            .flatMap((src) => {
-            const scan = considered.get(src.scan_id);
-            return scan === undefined ? [] : [{ scan_id: src.scan_id, slot: src.slot, ...slotView(scan, src.slot) }];
+            .map((src) => {
+            const scanners = [...new Set((src.carried_for ?? []).flatMap(scannersOfGap))];
+            const ran = okInSlot.get(src.slot) ?? new Set();
+            return {
+                scan_id: src.scan_id,
+                slot: src.slot,
+                tools_run: scanners.filter((name) => ran.has(name)).map((name) => ({ name, status: 'ok' })),
+                missing_tools: scanners,
+            };
         }),
         ...hits.map((h) => ({ scan_id: h.scan.scan_id, slot: h.slot, ...slotView(h.scan, h.slot) })),
     ];

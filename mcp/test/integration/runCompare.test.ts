@@ -1217,11 +1217,29 @@ describe('a Semgrep run that only partly parsed some files', () => {
     const d = await diff(s, p);
     expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
     expect(d.not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    // Fix round 2: worded per verdict — Semgrep ran; it neither failed nor is missing.
+    expect(d.note).toMatch(/only partly measured semgrep \(partly parsed: wp\/rest-controller\.php\)/);
+    expect(d.note).not.toMatch(/failed, or is not installed/);
   });
 
   it('control: resolves a finding in any other file — the rest of the run measured', async () => {
     const { s, p } = pair('src/app.js', partialRun('wp/rest-controller.php'));
     expect((await diff(s, p)).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it("regression_alert's hint says Semgrep only partly measured the file — never that it failed or is not installed", async () => {
+    const { s, p } = pair('wp/rest-controller.php', partialRun('wp/rest-controller.php'));
+    const r = okResult<{ regressed: boolean; hint: string; not_measured?: string[] }>(
+      await tool('regression_alert').handler({ project_path: p, scan_type: 'sast', threshold: 0 }, s.plugin),
+    );
+    expect(r.regressed).toBe(false);
+    expect(r.not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    // A scan type is compared with itself: what was measured is findings, not types.
+    expect(r.hint).toMatch(/^No significant regression among the findings that were measured\. /);
+    expect(r.hint).toMatch(/only partly measured semgrep \(partly parsed: wp\/rest-controller\.php\)/);
+    expect(r.hint).not.toMatch(/failed, or is not installed/);
+    // A file Semgrep's parser cannot read is not the user's to "fix".
+    expect(r.hint).not.toMatch(/fix the file/);
   });
 
   it('a reference that only partly parsed a file holds a finding there now "not previously measured", never new', async () => {
@@ -1232,5 +1250,7 @@ describe('a Semgrep run that only partly parsed some files', () => {
     const d = await diff(s, p);
     expect(d.summary).toMatchObject({ new: 0, not_previously_measured: 1 });
     expect(d.reference_not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
+    expect(d.note).toMatch(/reference scan \S+ only partly measured semgrep \(partly parsed/);
+    expect(d.note).not.toMatch(/failed, or was not installed/);
   });
 });

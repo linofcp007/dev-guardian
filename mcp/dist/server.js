@@ -38350,6 +38350,57 @@ var FindingsRepo = class {
     return this.listByScanStmt.all(scanId).map(rowToFinding);
   }
   /**
+   * The findings of `scanId` of one of `tools`, in one of `files` (matched as
+   * stored, and with `\` for `/`), or of one of `rules` — what the open
+   * set's carry-forward reads when an older scan could only be carried for
+   * those (`history/openSet.ts`), instead of every row of every older scan.
+   * Chunked below SQLite's parameter limit; each row once (the table's key
+   * is `(fingerprint, scan_id)`).
+   *
+   * `skip`, when given, is asked first with each matching row's two keys
+   * alone, and a row it skips is never read in full — the carry-forward
+   * passes the identities it already holds, so a scanner that fails in every
+   * scan while keeping its findings costs a key read per older row, not a
+   * full one.
+   */
+  listByScanMatching(scanId, match, skip2) {
+    const fileKeys = [...new Set(match.files.flatMap((f) => [f, f.replace(/\//g, "\\")]))];
+    const chunks = (values) => {
+      const out = [];
+      for (let i2 = 0; i2 < values.length; i2 += 400) out.push(values.slice(i2, i2 + 400));
+      return out;
+    };
+    const inList = (chunk) => chunk.map(() => "?").join(", ");
+    const byFingerprint = /* @__PURE__ */ new Map();
+    const wanted = /* @__PURE__ */ new Set();
+    const run = (column, values) => {
+      for (const chunk of chunks(values)) {
+        if (skip2 === void 0) {
+          const sql2 = `SELECT * FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+          for (const row of this.db.prepare(sql2).all(scanId, ...chunk)) {
+            const finding4 = rowToFinding(row);
+            byFingerprint.set(finding4.fingerprint, finding4);
+          }
+          continue;
+        }
+        const sql = `SELECT fingerprint, identity FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
+        for (const keys of this.db.prepare(sql).all(scanId, ...chunk)) {
+          if (!skip2(keys)) wanted.add(keys.fingerprint);
+        }
+      }
+    };
+    run("tool", [...new Set(match.tools)]);
+    run("file_path", fileKeys);
+    run("rule_id", [...new Set(match.rules)]);
+    for (const chunk of chunks([...wanted])) {
+      const sql = `SELECT * FROM findings WHERE scan_id = ? AND fingerprint IN (${inList(chunk)})`;
+      for (const row of this.db.prepare(sql).all(scanId, ...chunk)) {
+        byFingerprint.set(row.fingerprint, rowToFinding(row));
+      }
+    }
+    return [...byFingerprint.values()];
+  }
+  /**
    * Open findings from the latest completed scan IN THE WHOLE DATABASE, from
    * ANY project — no `project_path` filter.
    *
@@ -38700,6 +38751,26 @@ var ScansRepo = class {
    */
   listHistoryForProject(projectPath, limit = 50) {
     return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+  }
+  /**
+   * Every pass name the completed scans of `type` for `projectPath` ever
+   * recorded in `tools_run`, and whether one of them recorded no bookkeeping
+   * at all — the widest holder the open set's carry-forward walk has to
+   * allow for before it can stop (`runCompare.ts#StillCarry`).
+   */
+  runNamesOfType(projectPath, type) {
+    const names = this.db.prepare(
+      `SELECT DISTINCT json_extract(je.value, '$.name') AS name
+           FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`
+    ).all(projectPath, type).map((r) => r.name).filter((n2) => typeof n2 === "string");
+    const empty = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM scans
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+            AND (tools_run IS NULL OR tools_run IN ('', '[]'))
+            AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`
+    ).get(projectPath, type);
+    return { names, anyEmpty: (empty?.n ?? 0) > 0 };
   }
   /**
    * Completed scans of `types` for ONE project, newest first, as one SQL
@@ -40440,14 +40511,15 @@ function resolutionKey(f) {
 function indexFindings(items) {
   const byIdentity = /* @__PURE__ */ new Map();
   const byFingerprint = /* @__PURE__ */ new Map();
-  for (const item of items) {
+  const add = (item) => {
     if (item.identity !== void 0 && !byIdentity.has(item.identity)) {
       byIdentity.set(item.identity, item);
     }
     const same = byFingerprint.get(item.fingerprint);
     if (same === void 0) byFingerprint.set(item.fingerprint, [item]);
     else same.push(item);
-  }
+  };
+  for (const item of items) add(item);
   const find = (f) => {
     if (f.identity !== void 0) {
       const hit = byIdentity.get(f.identity);
@@ -40458,7 +40530,7 @@ function indexFindings(items) {
     }
     return void 0;
   };
-  return { find, has: (f) => find(f) !== void 0 };
+  return { find, has: (f) => find(f) !== void 0, add };
 }
 function locate(filePath, projectPath) {
   let path6 = filePath ?? "";
@@ -48978,6 +49050,11 @@ function findingKey(f) {
   if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
   return f.tool;
 }
+function toolsOfKey(key) {
+  if (key.startsWith("trivy:")) return ["trivy"];
+  if (key === SKILL_OSV) return [SKILL_TOOL];
+  return [key];
+}
 var scanner = (...measures) => ({ measures });
 var RUN_NAMES = {
   // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
@@ -48996,7 +49073,7 @@ var RUN_NAMES = {
   trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
   // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
   // the image's own misconfigurations.
-  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true },
+  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
   "trivy-config": scanner(TRIVY_CONFIG),
   "trivy-dockerfile": scanner(TRIVY_CONFIG),
   // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
@@ -49048,7 +49125,8 @@ var RUN_NAMES = {
   // The surface it probed was partial (a file Semgrep only partly parsed):
   // routes the map could not read were never probed.
   "guardian-dast:partial-surface": scanner("dast"),
-  nuclei: scanner("nuclei"),
+  nuclei: { measures: ["nuclei"], onRequest: true },
+  // only with use_nuclei
   // WordPress.
   wpscan: scanner("wpscan"),
   wp_plugin_check: scanner(),
@@ -49290,19 +49368,40 @@ function keyVerdict(book, key) {
 function isEmptyBook(book) {
   return book.tools_run.length === 0 && book.missing_tools.length === 0;
 }
+function fileOf(f) {
+  return f.file_path === void 0 ? void 0 : f.file_path.replace(/\\/g, "/");
+}
+function measuresKeyOk(run, key) {
+  return run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
+}
+function narrowGapsOf(book, key) {
+  const files = /* @__PURE__ */ new Set();
+  const rules = /* @__PURE__ */ new Set();
+  for (const run of book.tools_run) {
+    if (!measuresKeyOk(run, key)) continue;
+    for (const pp of run.partially_parsed ?? []) files.add(pp.file);
+    for (const fr of run.failed_rules ?? []) rules.add(fr.rule_id);
+  }
+  return { files, rules };
+}
+function narrowGapOf(book, f) {
+  const key = findingKey(f);
+  const file = fileOf(f);
+  for (const run of book.tools_run) {
+    if (!measuresKeyOk(run, key)) continue;
+    if (file !== void 0 && (run.partially_parsed ?? []).some((pp) => pp.file === file)) {
+      return { run, label: `${run.name} (partly parsed: ${file})` };
+    }
+    if (f.rule_id !== void 0 && (run.failed_rules ?? []).some((fr) => fr.rule_id === f.rule_id)) {
+      return { run, label: `${run.name} (rule not loaded: ${f.rule_id})` };
+    }
+  }
+  return null;
+}
 function bookkeepingVerdict(book, f) {
   if (isEmptyBook(book)) return "measured";
   const verdict = keyVerdict(book, findingKey(f));
-  return verdict === "measured" && partlyParsedRunOf(book, f) !== null ? "unmeasured" : verdict;
-}
-function partlyParsedRunOf(book, f) {
-  if (f.file_path === void 0) return null;
-  const file = f.file_path.replace(/\\/g, "/");
-  const key = findingKey(f);
-  const run = book.tools_run.find(
-    (r) => r.status === "ok" && (r.partially_parsed ?? []).some((p) => p.file === file) && (keysOfRun(r.name, true)?.includes(key) ?? false)
-  );
-  return run === void 0 ? null : { run, file };
+  return verdict === "measured" && narrowGapOf(book, f) !== null ? "unmeasured" : verdict;
 }
 function gapNamesFor(book, key) {
   const okNames = new Set(book.tools_run.filter((r) => r.status === "ok").map((r) => r.name));
@@ -49318,48 +49417,156 @@ function gapNamesFor(book, key) {
   }
   return names;
 }
+function onRequestPassOf(holder, key) {
+  const run = holder.tools_run.find((r) => measuresKeyOk(r, key) && runNameEntry(r.name)?.onRequest === true);
+  return run === void 0 ? null : passLabel(run, targetOf(run));
+}
 function openGapFor(holder, asked, f) {
-  if (isEmptyBook(asked)) return null;
-  const key = findingKey(f);
-  const verdict = keyVerdict(asked, key);
-  if (verdict === "not_run") return null;
-  if (verdict === "unmeasured") {
+  const answer = answerFor(holder, asked, f);
+  if (answer.verdict === "measured") return null;
+  if (answer.verdict === "unmeasured") {
+    const narrow = narrowGapOf(asked, f);
+    if (narrow !== null) return narrow.label;
+    const key = findingKey(f);
     const names = gapNamesFor(asked, key);
     return names.length > 0 ? names.join(", ") : key;
   }
-  const partly = partlyParsedRunOf(asked, f);
-  if (partly !== null) return `${partly.run.name} (partly parsed: ${partly.file})`;
-  return targetNotRun(holder, asked, f);
+  if (answer.byTarget) return answer.notRun;
+  return onRequestPassOf(holder, findingKey(f));
 }
-function mayCarryPast(holder, chain) {
-  if (chain.length === 0 || chain.some(isEmptyBook)) return false;
-  const measuresKeyOk = (run, key) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
-  const stillOpen = (asked, key) => {
-    const verdict = keyVerdict(asked, key);
-    if (verdict === "unmeasured") return true;
-    if (verdict === "not_run") return false;
-    if (asked.tools_run.some((r) => measuresKeyOk(r, key) && (r.partially_parsed ?? []).length > 0)) return true;
-    return holder.tools_run.some(
-      (h2) => measuresKeyOk(h2, key) && !asked.tools_run.some((a2) => measuresKeyOk(a2, key) && sameTarget(targetOf(a2), targetOf(h2)))
-    );
-  };
-  const produced = /* @__PURE__ */ new Set();
-  let unknownProducer = isEmptyBook(holder);
-  if (unknownProducer) for (const key of KNOWN_FINDING_KEYS) produced.add(key);
+var NEVER3 = { kind: "never" };
+var ALWAYS = { kind: "always" };
+function keyScope(holder, asked, key) {
+  if (isEmptyBook(asked)) return NEVER3;
+  const verdict = keyVerdict(asked, key);
+  if (verdict === "unmeasured") return ALWAYS;
+  if (verdict === "not_run") return onRequestPassOf(holder, key) !== null ? ALWAYS : NEVER3;
+  if (targetNotRunForKey(holder, asked, key) !== null) return ALWAYS;
+  const narrow = narrowGapsOf(asked, key);
+  return narrow.files.size === 0 && narrow.rules.size === 0 ? NEVER3 : { kind: "some", files: narrow.files, rules: narrow.rules };
+}
+function meet(into, next) {
+  if (into === void 0) return new Set(next);
+  for (const x of into) if (!next.has(x)) into.delete(x);
+  return into;
+}
+var ChainScopeFold = class {
+  constructor(holder) {
+    this.holder = holder;
+  }
+  holder;
+  perKey = /* @__PURE__ */ new Map();
+  scope(chain, key) {
+    let state = this.perKey.get(key);
+    if (state === void 0) {
+      state = { len: 0, never: false, mixed: [], mixedSigs: /* @__PURE__ */ new Set(), fileMeet: void 0, ruleMeet: void 0, snapshot: null };
+      this.perKey.set(key, state);
+    }
+    for (; state.len < chain.length && !state.never; state.len += 1) {
+      const asked = chain[state.len];
+      if (asked === void 0) break;
+      const scope = keyScope(this.holder, asked, key);
+      if (scope.kind === "always") continue;
+      state.snapshot = null;
+      if (scope.kind === "never") {
+        state.never = true;
+        break;
+      }
+      if (scope.rules.size === 0) {
+        state.fileMeet = meet(state.fileMeet, scope.files);
+      } else if (scope.files.size === 0) {
+        state.ruleMeet = meet(state.ruleMeet, scope.rules);
+      } else {
+        const sig = JSON.stringify([[...scope.files].sort(), [...scope.rules].sort()]);
+        if (!state.mixedSigs.has(sig)) {
+          state.mixedSigs.add(sig);
+          state.mixed.push({ files: scope.files, rules: scope.rules });
+        }
+      }
+      if (state.fileMeet?.size === 0 || state.ruleMeet?.size === 0) state.never = true;
+    }
+    if (state.snapshot === null) {
+      const none = /* @__PURE__ */ new Set();
+      state.snapshot = state.never ? { kind: "never" } : {
+        kind: "open",
+        constraints: [
+          ...state.fileMeet !== void 0 ? [{ files: new Set(state.fileMeet), rules: none }] : [],
+          ...state.ruleMeet !== void 0 ? [{ files: none, rules: new Set(state.ruleMeet) }] : [],
+          ...state.mixed
+        ]
+      };
+    }
+    return state.snapshot;
+  }
+};
+function holderSignature(holder) {
+  return JSON.stringify(
+    holder.tools_run.filter((r) => r.status === "ok").map((r) => [r.name, targetOf(r).ref ?? ""]).sort((a2, b) => a2.join("\0") < b.join("\0") ? -1 : 1)
+  );
+}
+function scopeAdmits(scope, file, rule) {
+  if (scope.kind === "never") return false;
+  return scope.constraints.every(
+    (c3) => file !== void 0 && c3.files.has(file) || rule !== void 0 && c3.rules.has(rule)
+  );
+}
+var UNKNOWN_FINDING_KEY = "\0unknown";
+function producedKeys(holder) {
+  const keys = /* @__PURE__ */ new Set();
+  if (isEmptyBook(holder)) {
+    for (const key of KNOWN_FINDING_KEYS) keys.add(key);
+    keys.add(UNKNOWN_FINDING_KEY);
+  }
   for (const run of holder.tools_run) {
     if (run.status === "skipped") continue;
-    const keys = keysOfRun(run.name, run.status === "ok");
-    if (keys === null) unknownProducer = true;
-    else for (const key of keys) produced.add(key);
+    const k = keysOfRun(run.name, run.status === "ok");
+    if (k === null) keys.add(UNKNOWN_FINDING_KEY);
+    else for (const key of k) keys.add(key);
   }
-  if (unknownProducer && chain.every((a2) => computeCoverage(a2.tools_run, a2.missing_tools) !== "full")) return true;
-  for (const key of produced) {
-    if (chain.every((asked) => stillOpen(asked, key))) return true;
-  }
-  return false;
+  return [...keys];
 }
-function partlyParsedNames(book) {
-  return book.tools_run.filter((run) => run.status === "ok" && (run.partially_parsed ?? []).length > 0).map((run) => `${run.name} (partly parsed: ${(run.partially_parsed ?? []).map((p) => p.file).join(", ")})`);
+var StillCarry = class {
+  fold;
+  keys;
+  constructor(names, anyEmpty) {
+    const widest = {
+      tools_run: names.map((name) => ({ name, status: "ok", target: "\0any image no scan recorded" })),
+      missing_tools: []
+    };
+    const keys = new Set(producedKeys(widest));
+    if (anyEmpty) {
+      for (const key of KNOWN_FINDING_KEYS) keys.add(key);
+      keys.add(UNKNOWN_FINDING_KEY);
+    }
+    this.fold = new ChainScopeFold(widest);
+    this.keys = [...keys];
+  }
+  /** How much of the growing chain `check` has looked at for an empty book. */
+  seen = 0;
+  sawEmpty = false;
+  check(chain) {
+    if (chain.length === 0) return true;
+    for (; this.seen < chain.length && !this.sawEmpty; this.seen += 1) {
+      const book = chain[this.seen];
+      if (book !== void 0 && isEmptyBook(book)) this.sawEmpty = true;
+    }
+    if (this.sawEmpty) return false;
+    return this.keys.some((key) => this.fold.scope(chain, key).kind !== "never");
+  }
+};
+function isNarrowGapName(name) {
+  return / \((partly parsed|rules not loaded): /.test(name);
+}
+function narrowGapNames(book) {
+  const names = [];
+  for (const run of book.tools_run) {
+    if (run.status !== "ok") continue;
+    const parsed = run.partially_parsed ?? [];
+    const failed = run.failed_rules ?? [];
+    if (parsed.length > 0) names.push(`${run.name} (partly parsed: ${parsed.map((pp) => pp.file).join(", ")})`);
+    if (failed.length > 0) names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(", ")})`);
+  }
+  return names;
 }
 function typeResolver(storage, scan2) {
   if (isOrchestratedFullScan(scan2)) {
@@ -49424,22 +49631,23 @@ function passLabel(run, target) {
   return target.ref === void 0 ? run.name : `${run.name} (${run.target ?? target.ref})`;
 }
 function targetNotRun(holder, asked, f) {
-  if (holder === null || asked.tools_run.length === 0 && asked.missing_tools.length === 0) return null;
-  const key = findingKey(f);
-  const measuresKeyOk = (run) => run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
+  return holder === null ? null : targetNotRunForKey(holder, asked, findingKey(f));
+}
+function targetNotRunForKey(holder, asked, key) {
+  if (isEmptyBook(asked)) return null;
   for (const run of holder.tools_run) {
-    if (!measuresKeyOk(run)) continue;
+    if (!measuresKeyOk(run, key)) continue;
     const target = targetOf(run);
-    if (!asked.tools_run.some((r) => measuresKeyOk(r) && sameTarget(targetOf(r), target))) return passLabel(run, target);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r, key) && sameTarget(targetOf(r), target))) return passLabel(run, target);
   }
   return null;
 }
 function answerFor(holder, asked, f) {
-  if (asked === null) return { verdict: "unmeasured", notRun: null };
+  if (asked === null) return { verdict: "unmeasured", notRun: null, byTarget: false };
   const verdict = bookkeepingVerdict(asked, f);
-  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null };
+  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null, byTarget: false };
   const pass2 = targetNotRun(holder, asked, f);
-  return pass2 === null ? { verdict, notRun: null } : { verdict: "not_run", notRun: pass2 };
+  return pass2 === null ? { verdict, notRun: null, byTarget: false } : { verdict: "not_run", notRun: pass2, byTarget: true };
 }
 function notMeasured(storage, scan2, scope = "any") {
   const out = [];
@@ -49460,7 +49668,7 @@ function notMeasured(storage, scan2, scope = "any") {
       const keys = keysOfRun(name, false);
       if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
     }
-    for (const name of partlyParsedNames(book)) add(name);
+    for (const name of narrowGapNames(book)) add(name);
   };
   if (!isOrchestratedFullScan(scan2)) {
     gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
@@ -49547,9 +49755,16 @@ function measurementGaps(check2, d) {
 function describeMeasurementGaps(from, to, gaps) {
   const parts = [];
   const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
-  if (failedByTo.length > 0) {
+  const narrowByTo = failedByTo.filter(isNarrowGapName);
+  const brokenByTo = failedByTo.filter((x) => !isNarrowGapName(x));
+  if (brokenByTo.length > 0) {
     parts.push(
-      `Scan ${to.scan_id} did not measure ${failedByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+      `Scan ${to.scan_id} did not measure ${brokenByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+    );
+  }
+  if (narrowByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} only partly measured ${narrowByTo.join(", ")}: earlier findings in those files, or of those rules, are reported as not re-measured, never as resolved \u2014 they are measured again once a run reads the whole file (Semgrep's parser cannot always, even on valid code) and loads the rule.`
     );
   }
   if (gaps.notRunByTo.length > 0) {
@@ -49557,9 +49772,16 @@ function describeMeasurementGaps(from, to, gaps) {
       `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
     );
   }
-  if (gaps.byFrom.length > 0) {
+  const narrowByFrom = gaps.byFrom.filter(isNarrowGapName);
+  const brokenByFrom = gaps.byFrom.filter((x) => !isNarrowGapName(x));
+  if (brokenByFrom.length > 0) {
     parts.push(
-      `The reference scan ${from.scan_id} did not measure ${gaps.byFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
+      `The reference scan ${from.scan_id} did not measure ${brokenByFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
+    );
+  }
+  if (narrowByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} only partly measured ${narrowByFrom.join(", ")}: findings in those files, or of those rules, are reported as not previously measured, never as new.`
     );
   }
   if (gaps.notRunByFrom.length > 0) {
@@ -49705,10 +49927,25 @@ function slotSources(storage, projectPath, slot) {
   }
   return { picks, hits: [...dedicated.hits, ...legacy.hits] };
 }
-var CARRY_WALK_LIMIT = 200;
-function carryForward(storage, projectPath, slot, source, isSuppressed) {
+var CARRY_WALK_LIMIT = 5e3;
+function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
   const chain = [slotView(source, slot)];
+  const history = storage.scans.runNamesOfType(projectPath, slot);
+  const stillCarry = new StillCarry(history.names, history.anyEmpty);
+  const folds = /* @__PURE__ */ new Map();
+  const foldFor = (holder) => {
+    const sig = holderSignature(holder);
+    let fold = folds.get(sig);
+    if (fold === void 0) {
+      fold = new ChainScopeFold(holder);
+      folds.set(sig, fold);
+    }
+    return fold;
+  };
+  const known = new KnownFindings();
+  for (const f of sourceRows) if (findingInSlot(source, f, slot) && !isSuppressed(f)) known.add(f);
   const out = [];
+  if (!stillCarry.check(chain)) return out;
   let walked = 0;
   for (let offset = 0; walked < CARRY_WALK_LIMIT; offset += PAGE) {
     const page = storage.scans.listCompletedOfTypes(projectPath, [slot], {
@@ -49723,22 +49960,90 @@ function carryForward(storage, projectPath, slot, source, isSuppressed) {
       if (coverage === null || coverage === "none") continue;
       walked += 1;
       const holder = slotView(scan2, slot);
-      if (mayCarryPast(holder, chain)) {
-        const carried = [];
-        for (const finding4 of storage.findings.listByScan(scan2.scan_id)) {
-          if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
-          const gaps = chain.map((asked) => openGapFor(holder, asked, finding4));
-          const gap = gaps[0];
-          if (gap === void 0 || gap === null || gaps.some((g) => g === null)) continue;
-          carried.push({ finding: finding4, gap });
-        }
-        if (carried.length > 0) out.push({ slot, scan: scan2, coverage, findings: carried });
+      const carried = carriedFrom({ storage, scan: scan2, slot, holder, chain, fold: foldFor(holder), isSuppressed, known });
+      if (carried.length > 0) {
+        out.push({ slot, scan: scan2, coverage, findings: carried });
+        for (const { finding: finding4 } of carried) known.add(finding4);
       }
       chain.push(holder);
+      if (!stillCarry.check(chain)) return out;
     }
     if (page.length < PAGE) break;
   }
   return out;
+}
+var KnownFindings = class {
+  identities = /* @__PURE__ */ new Set();
+  bare = /* @__PURE__ */ new Set();
+  add(f) {
+    if (f.identity !== void 0) this.identities.add(f.identity);
+    else this.bare.add(f.fingerprint);
+  }
+  /** A row with these keys would lose to a finding already held. */
+  holds(keys) {
+    return keys.identity !== null && keys.identity !== void 0 ? this.identities.has(keys.identity) : this.bare.has(keys.fingerprint);
+  }
+};
+function carriedFrom(args) {
+  const { storage, scan: scan2, slot, holder, chain, fold, isSuppressed, known } = args;
+  const scopes = /* @__PURE__ */ new Map();
+  const scopeOf = (key) => {
+    let scope = scopes.get(key);
+    if (scope === void 0) {
+      scope = fold.scope(chain, key);
+      scopes.set(key, scope);
+    }
+    return scope;
+  };
+  let everything = false;
+  const tools = /* @__PURE__ */ new Set();
+  const files = /* @__PURE__ */ new Set();
+  const rules = /* @__PURE__ */ new Set();
+  let anyOpen = false;
+  for (const key of producedKeys(holder)) {
+    const scope = scopeOf(key);
+    if (scope.kind === "never") continue;
+    anyOpen = true;
+    const first = scope.constraints[0];
+    if (first === void 0) {
+      if (key === UNKNOWN_FINDING_KEY) {
+        everything = true;
+        break;
+      }
+      for (const tool48 of toolsOfKey(key)) tools.add(tool48);
+      continue;
+    }
+    for (const f of first.files) files.add(f);
+    for (const r of first.rules) rules.add(r);
+  }
+  if (!anyOpen) return [];
+  const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
+    scan2.scan_id,
+    { tools: [...tools], files: [...files], rules: [...rules] },
+    (keys) => known.holds(keys)
+  );
+  const newest = chain[0];
+  const labels = /* @__PURE__ */ new Map();
+  const carried = [];
+  for (const finding4 of rows) {
+    if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
+    const key = findingKey(finding4);
+    const file = finding4.file_path === void 0 ? void 0 : finding4.file_path.replace(/\\/g, "/");
+    if (!scopeAdmits(scopeOf(key), file, finding4.rule_id)) continue;
+    const memo = JSON.stringify([key, file ?? null, finding4.rule_id ?? null]);
+    let gap = labels.get(memo);
+    if (gap === void 0) {
+      gap = newest === void 0 ? null : openGapFor(holder, newest, finding4);
+      labels.set(memo, gap);
+    }
+    if (gap === null) continue;
+    carried.push({ finding: finding4, gap });
+  }
+  return carried;
+}
+function scannersOfGap(gap) {
+  const head = gap.split(" (")[0] ?? gap;
+  return head.split(", ").filter((name) => name.length > 0);
 }
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
@@ -49756,10 +50061,19 @@ function openSetForProject(storage, projectPath, opts = {}) {
       considered.set(p.scan.scan_id, p.scan);
     }
   }
+  const byScan = /* @__PURE__ */ new Map();
+  const rowsOf = (scan2) => {
+    let rows = byScan.get(scan2.scan_id);
+    if (rows === void 0) {
+      rows = storage.findings.listByScan(scan2.scan_id);
+      byScan.set(scan2.scan_id, rows);
+    }
+    return rows;
+  };
   const carried = [];
   for (const p of picked) {
     if (p.slot === "security_full" || p.scan.scan_type !== p.slot) continue;
-    for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, isSuppressed)) {
+    for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, rowsOf(p.scan), isSuppressed)) {
       carried.push(c3);
       considered.set(c3.scan.scan_id, c3.scan);
     }
@@ -49769,22 +50083,23 @@ function openSetForProject(storage, projectPath, opts = {}) {
   const rankOf = (scanId) => rank.get(scanId) ?? order.length;
   picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
   carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
-  const byScan = /* @__PURE__ */ new Map();
   const findings = [];
   const sources = [];
+  const seen = indexFindings([]);
+  const admit = (batch) => {
+    for (const f of batch) {
+      findings.push(f);
+      seen.add(f);
+    }
+  };
   for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
-    let rows = byScan.get(scan2.scan_id);
-    if (rows === void 0) {
-      rows = storage.findings.listByScan(scan2.scan_id);
-      byScan.set(scan2.scan_id, rows);
-    }
-    const seen = indexFindings(findings);
-    let contributed = 0;
-    for (const f of rows) {
+    const batch = [];
+    for (const f of rowsOf(scan2)) {
       if (!findingInSlot(scan2, f, slot) || isSuppressed(f) || seen.has(f)) continue;
-      findings.push({ ...f, scan_id: scan2.scan_id });
-      contributed += 1;
+      batch.push({ ...f, scan_id: scan2.scan_id });
     }
+    admit(batch);
+    const contributed = batch.length;
     sources.push({
       slot,
       scan_id: scan2.scan_id,
@@ -49796,15 +50111,15 @@ function openSetForProject(storage, projectPath, opts = {}) {
     });
   }
   for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
-    const seen = indexFindings(findings);
-    const gaps = [];
-    let contributed = 0;
+    const gaps = /* @__PURE__ */ new Set();
+    const batch = [];
     for (const { finding: finding4, gap } of rows) {
       if (seen.has(finding4)) continue;
-      findings.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
-      contributed += 1;
-      if (!gaps.includes(gap)) gaps.push(gap);
+      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
+      gaps.add(gap);
     }
+    admit(batch);
+    const contributed = batch.length;
     if (contributed === 0) continue;
     sources.push({
       slot,
@@ -49814,20 +50129,33 @@ function openSetForProject(storage, projectPath, opts = {}) {
       finished_at: scan2.finished_at,
       coverage: coverage2,
       findings: contributed,
-      carried_for: gaps
+      carried_for: [...gaps]
     });
   }
   findings.sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
+  sources.sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
   const skipped2 = summarizeSkipped(hits);
   const scans = [...considered.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
-  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full") || skipped2.count > 0 ? "partial" : "full";
+  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full" || s.carried_for !== void 0) || skipped2.count > 0 ? "partial" : "full";
+  const okInSlot = /* @__PURE__ */ new Map();
+  for (const p of picked) {
+    const names = okInSlot.get(p.slot) ?? /* @__PURE__ */ new Set();
+    for (const t of slotView(p.scan, p.slot).tools_run) if (t.status === "ok") names.add(t.name);
+    okInSlot.set(p.slot, names);
+  }
   const bookkeeping = [
     ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
-    ...sources.filter((src) => src.carried_for !== void 0).flatMap((src) => {
-      const scan2 = considered.get(src.scan_id);
-      return scan2 === void 0 ? [] : [{ scan_id: src.scan_id, slot: src.slot, ...slotView(scan2, src.slot) }];
+    ...sources.filter((src) => src.carried_for !== void 0).map((src) => {
+      const scanners = [...new Set((src.carried_for ?? []).flatMap(scannersOfGap))];
+      const ran = okInSlot.get(src.slot) ?? /* @__PURE__ */ new Set();
+      return {
+        scan_id: src.scan_id,
+        slot: src.slot,
+        tools_run: scanners.filter((name) => ran.has(name)).map((name) => ({ name, status: "ok" })),
+        missing_tools: scanners
+      };
     }),
     ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
   ];
@@ -55696,7 +56024,7 @@ async function handler16(input, ctx) {
     not_previously_measured_by_severity: countBySeverity3(d.notPreviouslyMeasured),
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
-    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the types that were measured. ${measuredNote}` : "No significant regression.",
+    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
     ...note,
     ...measuredNote !== null ? { not_measured_note: measuredNote } : {}
