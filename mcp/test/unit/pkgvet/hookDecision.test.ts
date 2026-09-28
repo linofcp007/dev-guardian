@@ -53,6 +53,7 @@ function opts(fetchImpl: typeof fetch, extra: Partial<HookVetOptions> = {}): Hoo
     env: { GUARDIAN_OFFLINE: '0' },
     etcDir: join(home, 'no-etc'),
     nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+    systemLibraryDir: join(home, 'no-library'),
     fetchImpl,
     now: NOW,
     popular: { npm: ['lodash', 'express'], pypi: ['requests'] },
@@ -74,9 +75,11 @@ describe('decideInstallCommand', () => {
     const d = await decideInstallCommand('npm install react-magic-form-helperz', opts(f.fetchImpl));
     expect(d?.deny).toMatch(/react-magic-form-helperz/);
     expect(d?.deny).toMatch(/does not exist/);
-    // Round 2 ruling: the deny carries its own escape hatch.
+    // Round 2 ruling: the deny carries its own escape hatch — for npm, a
+    // registry flag or an inline prefix, either of which takes the command
+    // out of the plain shape (follow-up Part Y: named per tool).
     expect(d?.deny).toContain(
-      'If this package is private or local, re-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0.',
+      'If this package is private or local, re-run the install with an explicit `--registry <url>`, or prefix the command with `GUARDIAN_PKG_VET=0`.',
     );
   });
 
@@ -311,7 +314,9 @@ describe('round 2 — every probe the reviewer reproduced is a WARN (or silent),
     ['npm_config_@corp:registry', 'npm i @corp/lib'],
     ['PIP_INDEX_URL', 'pip install corp-lib'],
     ['UV_DEFAULT_INDEX', 'uv add corp-lib'],
-    ['NUGET_PACKAGES', 'dotnet add package Corp.Lib'],
+    ['NUGET_SOURCE', 'dotnet add package Corp.Lib'],
+    ['NUGET_RESTORE_CONFIG_FILE', 'dotnet add package Corp.Lib'],
+    ['NuGetPackageSourceCredentials_corp', 'dotnet add package Corp.Lib'],
   ])('hook env var %s: %s warns', async (name, command) => {
     const f = fakeRegistry();
     const d = await decideInstallCommand(
@@ -368,7 +373,226 @@ describe('round 2 — the controls stay DENY (one plain statement, allowlisted f
     const f = fakeRegistry();
     const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: { pypi: ['requests'] } }));
     expect(d?.deny).toMatch(/does not exist/);
-    expect(d?.deny).toContain('re-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0');
+    expect(d?.deny).toContain('prefix the command with `GUARDIAN_PKG_VET=0`');
+  });
+
+  // Follow-up Part Y: the escape hatch names the mechanism the tool really
+  // has — composer and Yarn Berry have no registry flag at all.
+  it.each([
+    ['npm i hallucinated-zz-pkg', '`--registry <url>`'],
+    ['pnpm add hallucinated-zz-pkg', '`--registry <url>`'],
+    ['bun add hallucinated-zz-pkg', '`--registry <url>`'],
+    ['pip install hallucinated-zz-pkg', '`--index-url <url>`'],
+    ['uv pip install hallucinated-zz-pkg', '`--index-url <url>`'],
+    ['uv add hallucinated-zz-pkg', '`--index <url>`'],
+    ['poetry add hallucinated-zz-pkg', '`--source <name>`'],
+    ['dotnet add package Acme.Totally.Missing.Pkg', '`--source <url>`'],
+  ])('%s: the hatch names %s', async (command, flag) => {
+    const d = await decideInstallCommand(command, opts(fakeRegistry().fetchImpl, { popular: {} }));
+    expect(d?.deny).toContain(`re-run the install with an explicit ${flag}, or prefix the command with \`GUARDIAN_PKG_VET=0\`.`);
+  });
+
+  it.each([
+    ['composer require zzvendor/notapkg', /composer has no registry flag/],
+    ['yarn add hallucinated-zz-pkg', /Yarn Berry has no registry flag/],
+  ])('%s: no registry flag to name, so only the prefix', async (command, why) => {
+    const d = await decideInstallCommand(command, opts(fakeRegistry().fetchImpl, { popular: {} }));
+    expect(d?.deny).toContain('If this package is private or local, prefix the command with `GUARDIAN_PKG_VET=0`');
+    expect(d?.deny).toMatch(why);
+    expect(d?.deny).not.toMatch(/--registry|--index|--source/);
+  });
+
+  it('from the PowerShell tool the prefix is spelled the PowerShell way', async () => {
+    const d = await decideInstallCommand('npm i hallucinated-zz-pkg', opts(fakeRegistry().fetchImpl, { popular: {}, shell: 'powershell' }));
+    expect(d?.deny).toContain("run `$env:GUARDIAN_PKG_VET = '0'` before it, in the same command");
+    expect(d?.deny).not.toContain('prefix the command with');
+  });
+
+  it.each([
+    'composer require zzvendor/notapkg --no-update',
+    'dotnet add package Acme.Totally.Missing.Pkg --no-restore',
+  ])('%s defers the lookup: a warning, not a deny', async (command) => {
+    const d = await decideInstallCommand(command, opts(fakeRegistry().fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/not found on the public registry/);
+  });
+
+  it.each([
+    ['NUGET_PACKAGES', '/opt/nuget/packages'],
+    ['NUGET_XMLDOC_MODE', 'skip'],
+    ['NUGET_HTTP_CACHE_PATH', '/tmp/nuget-http'],
+  ])('%s names no package source: a missing name is still denied', async (name, value) => {
+    const d = await decideInstallCommand(
+      'dotnet add package Acme.Totally.Missing.Pkg',
+      opts(fakeRegistry().fetchImpl, { popular: {}, env: { GUARDIAN_OFFLINE: '0', [name]: value } }),
+    );
+    expect(d?.deny).toMatch(/does not exist/);
+  });
+});
+
+// Follow-up Part Y: install shapes that were never vetted. A MALICIOUS
+// version is denied in every one of them; a missing name only ever warns —
+// none of them is ONE plain install statement.
+describe('Part Y — shapes that were never vetted: malicious denies, missing names warn', () => {
+  const malicious = (): ReturnType<typeof fakeFetch> =>
+    fakeFetch({
+      'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+      'https://registry.npmjs.org/evil-pkg': npmDoc('1.0.0'),
+      [OSV]: (body) => ({
+        body: {
+          results: (body as { queries: Array<{ package?: { name?: string } }> }).queries.map((q) =>
+            q.package?.name === 'evil-pkg' ? { vulns: [{ id: 'MAL-2026-9' }] } : {},
+          ),
+        },
+      }),
+    });
+
+  it.each([
+    ['`! npm i`, bash', '! npm i evil-pkg', 'bash'],
+    ['a comma list, PowerShell', 'npm i lodash,evil-pkg', 'powershell'],
+    ['a backtick continuation, PowerShell', 'npm i lodash `\n  evil-pkg', 'powershell'],
+    ['a no-break space, PowerShell', `npm i${String.fromCharCode(0xa0)}evil-pkg`, 'powershell'],
+    ['a backslash before a closing ", PowerShell', 'npm i "x\\" evil-pkg', 'powershell'],
+  ] as const)('%s: denied as malicious', async (_label, command, shell) => {
+    const d = await decideInstallCommand(command, opts(malicious().fetchImpl, { shell }));
+    expect(d?.deny).toMatch(/MAL-2026-9/);
+  });
+
+  it.each([
+    ['`! npm i`, bash', '! npm i react-magic-form-helperz', 'bash'],
+    ['a comma list, PowerShell', 'npm i lodash,react-magic-form-helperz', 'powershell'],
+    ['a backtick continuation, PowerShell', 'npm i lodash `\n  react-magic-form-helperz', 'powershell'],
+    ['a no-break space, PowerShell', `npm i${String.fromCharCode(0xa0)}react-magic-form-helperz`, 'powershell'],
+  ] as const)('%s: a missing name warns, never denies', async (_label, command, shell) => {
+    const f = fakeFetch({
+      'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+      'https://registry.npmjs.org/react-magic-form-helperz': { status: 404 },
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand(command, opts(f.fetchImpl, { shell }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/react-magic-form-helperz.*not found on the public registry/s);
+  });
+
+  // Fix round 1 (controller ruling): registry configuration that is there but
+  // could not be read is UNKNOWN — possibly a private registry — so a missing
+  // name warns instead of being denied. A directory where `.npmrc` belongs is
+  // the portable stand-in for a link to a share, a FIFO or a huge file.
+  it('an unreadable project .npmrc: a missing scoped name warns, naming the file', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const f = fakeFetch({ 'https://registry.npmjs.org/@corp%2Finternal': { status: 404 }, [OSV]: osvClean });
+    const d = await decideInstallCommand('npm i @corp/internal', opts(f.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/@corp\/internal.*not found on the public registry/s);
+    expect(d?.context).toContain(`registry configuration at ${join(project, '.npmrc')} could not be read — possibly a private registry`);
+  });
+
+  it('an unreadable .npmrc does not soften a MALICIOUS version: still denied', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const d = await decideInstallCommand('npm i evil-pkg', opts(malicious().fetchImpl));
+    expect(d?.deny).toMatch(/MAL-2026-9/);
+  });
+
+  it('…nor a name OSV lists as malicious that the registry has already removed', async () => {
+    mkdirSync(join(project, '.npmrc'));
+    const f = fakeFetch({
+      'https://registry.npmjs.org/evil-pkg': { status: 404 },
+      [OSV]: () => ({ body: { results: [{ vulns: [{ id: 'MAL-2026-10' }] }] } }),
+    });
+    const d = await decideInstallCommand('npm i evil-pkg', opts(f.fetchImpl));
+    expect(d?.deny).toMatch(/MAL-2026-10/);
+  });
+
+  it('an unreadable workspace manifest is named as one in the warning', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'a', 'package.json'), { recursive: true });
+    const f = fakeFetch({ 'https://registry.npmjs.org/corp-lib': { status: 404 }, [OSV]: osvClean });
+    const d = await decideInstallCommand('npm i corp-lib', opts(f.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain(
+      `workspace manifest at ${join(project, 'packages', 'a', 'package.json')} could not be read — possibly a local workspace package`,
+    );
+  });
+
+  it('the same command with a readable, empty .npmrc is still denied as missing', async () => {
+    writeFileSync(join(project, '.npmrc'), '');
+    const f = fakeFetch({ 'https://registry.npmjs.org/@corp%2Finternal': { status: 404 }, [OSV]: osvClean });
+    expect((await decideInstallCommand('npm i @corp/internal', opts(f.fetchImpl)))?.deny).toMatch(/does not exist/);
+  });
+
+  // Fix round 2: every install of a command was vetted, with no dedup and no
+  // cap — 60 KB of `npm i x; ` (6 800 installs) took ~57 s through the hook,
+  // past its 15 s timeout, after which nothing it found reaches the model.
+  describe('bounded work: one lookup per package, at most 50 packages, the first 512 KB', () => {
+    it('the same package installed 6 800 times is looked up once', async () => {
+      const f = fakeFetch({ 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
+      const t0 = performance.now();
+      expect(await decideInstallCommand('npm i express; '.repeat(6_800), opts(f.fetchImpl))).toBeNull();
+      expect(f.calls.filter((u) => u.endsWith('/express'))).toHaveLength(1);
+      expect(performance.now() - t0).toBeLessThan(3000);
+    });
+
+    it('past 50 distinct packages the rest are not looked up — and the answer says so', async () => {
+      const names = Array.from({ length: 120 }, (_, i) => `pkg-${i}`);
+      const routes: Record<string, Answer | ((body: unknown) => Answer)> = { [OSV]: osvClean };
+      for (const n of names) routes[`https://registry.npmjs.org/${n}`] = npmDoc('1.0.0');
+      const f = fakeFetch(routes);
+      const d = await decideInstallCommand(`npm i ${names.join(' ')}`, opts(f.fetchImpl, { popular: {} }));
+      expect(f.calls.filter((u) => u.startsWith('https://registry.npmjs.org/'))).toHaveLength(50);
+      expect(d?.context).toContain('70 more packages in this command were not vetted (only the first 50 are)');
+    });
+
+    it('a malicious package among the first 50 is still denied', async () => {
+      const d = await decideInstallCommand(`npm i evil-pkg ${Array.from({ length: 80 }, (_, i) => `lodash@4.17.${i}`).join(' ')}`, opts(malicious().fetchImpl));
+      expect(d?.deny).toMatch(/MAL-2026-9/);
+    });
+
+    // Fix round 3: the note was lost when the first 512 KB held no install.
+    it('a command over 512 KB whose start installs nothing still says what was not looked at', async () => {
+      const f = fakeFetch({});
+      const d = await decideInstallCommand(`${'echo x; '.repeat(70_000)}npm i evil-pkg`, opts(f.fetchImpl));
+      expect(d?.context).toContain('past the first 512 KB of this command were not looked for');
+      expect(f.calls).toEqual([]);
+    });
+
+    // Fix round 3: the 50 looked up are the names NOT on the popular list
+    // first, so padding with 50 popular names cannot push a malicious one out.
+    it('padding with 60 popular names does not push a malicious package past the cap', async () => {
+      const popularNames = Array.from({ length: 60 }, (_, i) => `popular-${i}`);
+      const routes: Record<string, Answer | ((body: unknown) => Answer)> = {
+        'https://registry.npmjs.org/evil-pkg': npmDoc('1.0.0'),
+        [OSV]: (body) => ({
+          body: {
+            results: (body as { queries: Array<{ package?: { name?: string } }> }).queries.map((q) =>
+              q.package?.name === 'evil-pkg' ? { vulns: [{ id: 'MAL-2026-11' }] } : {},
+            ),
+          },
+        }),
+      };
+      for (const n of popularNames) routes[`https://registry.npmjs.org/${n}`] = npmDoc('1.0.0');
+      const d = await decideInstallCommand(
+        `npm i ${popularNames.join(' ')} evil-pkg`,
+        opts(fakeFetch(routes).fetchImpl, { popular: { npm: popularNames } }),
+      );
+      expect(d?.deny).toMatch(/MAL-2026-11/);
+    });
+
+    it('a command over 512 KB is vetted from its start, and never denies a missing name (a cut word is not a name)', async () => {
+      const command = `npm i ${Array.from({ length: 60_000 }, (_, i) => `zz-missing-${i}`).join(' ')}`;
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const f = fakeFetch({ [OSV]: osvClean });
+      const all404 = (async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).startsWith('https://registry.npmjs.org/') ? new Response('', { status: 404 }) : f.fetchImpl(input, init)) as typeof fetch;
+      const d = await decideInstallCommand(command, opts(all404, { popular: {} }));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toContain('past the first 512 KB of this command were not looked for');
+    });
+  });
+
+  it('the same comma list from the Bash tool vets nothing: bash hands npm one invalid name', async () => {
+    const f = fakeFetch({});
+    expect(await decideInstallCommand('npm i lodash,evil-pkg', opts(f.fetchImpl, { shell: 'bash' }))).toBeNull();
+    expect(f.calls).toEqual([]);
   });
 
   it('`pip install reqeusts` names the popular package it is close to', async () => {

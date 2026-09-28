@@ -433,3 +433,96 @@ describe('M3 / M5', () => {
     expect(vetted('bun i')).toEqual([]);
   });
 });
+
+// Follow-up Part Y (item 5). Every row below says what is vetted and whether a
+// missing name may be DENIED (`confident`). The rule these protect: a shape
+// added to vetting may only ever add a MALICIOUS deny — a missing-name deny
+// stays reserved for ONE plain install statement.
+describe('Part Y — edge shapes, one table', () => {
+  type Row = [label: string, command: string, shell: 'bash' | 'powershell', names: string[], confident: boolean];
+  const rows: Row[] = [
+    // `--no-update` / `--no-restore` defer the lookup the command would make,
+    // so they no longer count as a plain install.
+    ['composer --no-update', 'composer require zzvendor/notapkg --no-update', 'bash', ['zzvendor/notapkg'], false],
+    ['dotnet --no-restore', 'dotnet add package Acme.Missing.Pkg --no-restore', 'bash', ['Acme.Missing.Pkg'], false],
+    ['dotnet -n', 'dotnet add package Acme.Missing.Pkg -n', 'bash', ['Acme.Missing.Pkg'], false],
+    ['composer --dev (still plain)', 'composer require --dev zzvendor/notapkg', 'bash', ['zzvendor/notapkg'], true],
+    // `2>&1`, `--`, `=`-joined flags
+    ['2>&1', 'npm i hallucinated-zz-pkg 2>&1', 'bash', ['hallucinated-zz-pkg'], false],
+    ['--', 'npm i -- hallucinated-zz-pkg', 'bash', ['hallucinated-zz-pkg'], false],
+    ['=-joined allowlisted value flag', 'uv add --group=dev hallucinated-zz-pkg', 'bash', ['hallucinated-zz-pkg'], true],
+    ['=-joined registry', 'pip install --index-url=https://pypi.corp/simple corp-lib', 'bash', ['corp-lib'], false],
+    ['=-joined npm registry', 'npm i --registry=https://npm.corp corp-lib', 'bash', ['corp-lib'], false],
+    // how the executable is spelled
+    ['npm.cmd', 'npm.cmd i hallucinated-zz-pkg', 'bash', ['hallucinated-zz-pkg'], false],
+    ['upper-case NPM', 'NPM i hallucinated-zz-pkg', 'bash', ['hallucinated-zz-pkg'], false],
+    ['`! npm i`', '! npm i hallucinated-zz-pkg', 'bash', ['hallucinated-zz-pkg'], false],
+    // line endings
+    ['a trailing CRLF', 'npm i hallucinated-zz-pkg\r\n', 'bash', ['hallucinated-zz-pkg'], true],
+    ['CRLF between two installs', 'npm i a-zz-pkg\r\nnpm i b-zz-pkg', 'bash', ['a-zz-pkg', 'b-zz-pkg'], false],
+    // NBSP is no separator to bash — `npm i<NBSP>x` runs nothing — but it is to PowerShell.
+    ['NBSP, bash', 'npm i\u00a0hallucinated-zz-pkg', 'bash', [], false],
+    ['NBSP, PowerShell', 'npm i\u00a0hallucinated-zz-pkg', 'powershell', ['hallucinated-zz-pkg'], false],
+    // PowerShell hands a native command each element of `a,b` as its own argument.
+    ['comma list, PowerShell', 'npm i lodash,evil-zz-pkg', 'powershell', ['lodash', 'evil-zz-pkg'], false],
+    ['comma list, bash (one invalid word)', 'npm i lodash,evil-zz-pkg', 'bash', [], false],
+    // A backtick-newline continues a PowerShell line.
+    ['backtick continuation, PowerShell', 'npm i lodash `\n  evil-zz-pkg', 'powershell', ['lodash', 'evil-zz-pkg'], false],
+    ['backtick continuation, PowerShell CRLF', 'npm i lodash `\r\n  evil-zz-pkg', 'powershell', ['lodash', 'evil-zz-pkg'], false],
+    // `''` inside '…' is one literal quote to PowerShell; to bash, two quoted
+    // spans. Both readings are vetted, and neither is a plain install.
+    ["'' escape, PowerShell", "npm i 'it''s' evil-zz-pkg", 'powershell', ['its', 'evil-zz-pkg'], false],
+    ["adjacent '…''…' spans are never plain", "npm i 'hallucinated''-zz-pkg'", 'bash', ['hallucinated-zz-pkg'], false],
+    // A backslash is literal in PowerShell, so `"x\"` ends at that quote; to
+    // bash it escapes the quote, and the rest of the line is one word.
+    ['a backslash before a closing ", PowerShell', 'npm i "x\\" evil-zz-pkg', 'powershell', ['evil-zz-pkg'], false],
+    ['a backslash before a closing ", bash', 'npm i "x\\" evil-zz-pkg', 'bash', [], false],
+    // A PowerShell install with none of that is exactly what it was.
+    ['plain, PowerShell', 'npm i hallucinated-zz-pkg', 'powershell', ['hallucinated-zz-pkg'], true],
+  ];
+
+  it.each(rows)('%s', (_label, command, shell, names, confident) => {
+    const cmds = parseInstallCommands(command, { shell });
+    expect(cmds.flatMap((c) => c.packages.map((p) => p.name)).sort()).toEqual([...names].sort());
+    if (names.length > 0) expect(cmds.every((c) => c.packages.length === 0 || c.uncertain.length === 0)).toBe(confident);
+  });
+
+  it('a package only the PowerShell reading finds is never deny-eligible for a missing name', () => {
+    const cmds = parseInstallCommands('npm i hallucinated-zz-pkg,other-zz-pkg', { shell: 'powershell' }).filter(
+      (c) => c.packages.length > 0,
+    );
+    expect(cmds.length).toBeGreaterThan(0);
+    for (const c of cmds) expect(c.uncertain.join(' ')).toMatch(/PowerShell/);
+  });
+
+  it('a package both readings find is vetted once', () => {
+    expect(parseInstallCommands('npm i lodash `\n  zod', { shell: 'powershell' }).flatMap((c) => c.packages.map((p) => p.name))).toEqual([
+      'lodash',
+      'zod',
+    ]);
+  });
+});
+
+// Fix round 3: the PowerShell environment check restarted `[^;\n]*` at every
+// `Set-Item` / `New-Item` — quadratic on every command the hook sees.
+describe('parseInstallCommands — linear on the shapes that were not', () => {
+  it.each([
+    ['Set-Item', 'Set-Item '.repeat(28_000)],
+    ['New-Item', 'New-Item '.repeat(28_000)],
+    ['New-Item … then an install', `${'New-Item '.repeat(28_000)}; npm i lodash`],
+  ])('250 KB of %s parses in well under 1 s', (_label, command) => {
+    const t0 = performance.now();
+    parseInstallCommands(command, { shell: 'bash' });
+    parseInstallCommands(command, { shell: 'powershell' });
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  it('the environment check still sees Set-Item Env: and New-Item env: in a statement', () => {
+    for (const command of [
+      'Set-Item Env:NPM_CONFIG_REGISTRY https://npm.corp; npm i x',
+      'New-Item -Path env:PIP_INDEX_URL -Value https://x; pip install y',
+    ]) {
+      expect(parseInstallCommands(command).flatMap((c) => c.uncertain).join(' ')).toMatch(/environment/);
+    }
+  });
+});

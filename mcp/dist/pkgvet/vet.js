@@ -7,7 +7,8 @@
  *   exists           404 → `block` (a name nobody published is most likely a
  *                    hallucinated dependency — and the next thing an attacker
  *                    registers), unless a custom registry, an npmjs auth
- *                    token (scoped names) or a local workspace package
+ *                    token (scoped names), a local workspace package or a
+ *                    registry configuration that could not be read
  *                    explains it (`privateRegistry.ts`), in which case
  *                    `unknown`. The HOOK further denies it only on a
  *                    confident command parse (`hookDecision.ts`)
@@ -218,15 +219,25 @@ function buildResult(w, osv, osvError, now, offlineReason) {
                 ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup`
                 : w.custom.kind === 'workspace'
                     ? `it is a local workspace package (${where})`
-                    : `a custom registry is configured (${where})`;
+                    : w.custom.kind === 'unreadable'
+                        ? w.custom.what === 'workspace manifest'
+                            ? `workspace manifest at ${w.custom.source} could not be read — possibly a local workspace package`
+                            : w.custom.what === 'directory'
+                                ? `directory ${w.custom.source} could not be listed — it may hold registry configuration`
+                                : `registry configuration at ${w.custom.source} could not be read — possibly a private registry`
+                        : `a custom registry is configured (${where})`;
             exists = unknown(`not on ${registry}, but ${why} — possibly a private or local package; not vetted.${didYouMean}`);
         }
         else {
             exists = fail(`does not exist on ${registry} — most likely a hallucinated or mistyped name.${didYouMean}`);
         }
+        // A private registry that is KNOWN to be configured may be serving the
+        // real package under this name, so a removed malicious one only warns; a
+        // configuration that merely could not be read is no such evidence, and the
+        // malicious name is still denied (Part Y fix round 1).
         malicious =
             malIds.length > 0
-                ? w.custom !== null
+                ? w.custom !== null && w.custom.kind !== 'unreadable'
                     ? warn(`OSV lists this name as a malicious package (${malIds.join(', ')}) removed from ${registry}`)
                     : fail(`OSV lists this name as a malicious package (${malIds.join(', ')}), removed from ${registry}`)
                 : osvDown !== undefined

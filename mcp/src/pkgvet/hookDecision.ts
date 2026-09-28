@@ -12,8 +12,8 @@
  *     registry, npmjs auth token (scoped names) or local workspace package
  *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
  *     little — the install would 404 anyway — and a false deny blocks real
- *     work. That deny carries an escape hatch ({@link ESCAPE_HATCH}); a
- *     malicious one does not;
+ *     work. That deny carries an escape hatch ({@link escapeHatch}, named per
+ *     tool and shell); a malicious one does not;
  *   - **warn** (additionalContext) on a missing name that was not denied
  *     ("not found on the public registry — if it is private or local,
  *     ignore this"), a version < 72 h old, install scripts, typosquat
@@ -29,8 +29,10 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
-import { parseInstallCommands } from './parseCommand.js';
-import type { PackageChecks, PackageVetResult, PkgEcosystem } from './types.js';
+import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
+import { loadPopularIndex } from './popular.js';
+import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
+import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
 import { isExactVersion } from './versions.js';
 
@@ -50,6 +52,13 @@ export interface HookVetOptions {
   etcDir?: string;
   platform?: NodeJS.Platform;
   nodeExecPath?: string;
+  systemLibraryDir?: string;
+  /**
+   * The shell that will run the command — the hook's `tool_name`. The
+   * PowerShell tool's commands are also read the way PowerShell reads them
+   * (`parseInstallCommands`), and its escape hatch is spelled for it.
+   */
+  shell?: CommandShell;
 }
 
 export interface HookDecision {
@@ -67,13 +76,84 @@ function firstLine(r: PackageVetResult): string {
   return r.reasons[0] ?? 'no reason recorded';
 }
 
+/** The most packages one hook call looks up; the rest are named as not vetted. */
+export const MAX_VETTED_PACKAGES = 50;
+/** How much of a command is read for installs — the shell guard reads the same 512 KB. */
+const MAX_PARSED_LENGTH = 512 * 1024;
+
+/**
+ * The install commands to vet, bounded (fix round 2): every package that
+ * repeats one already seen (same ecosystem, name and range) is dropped, and
+ * past {@link MAX_VETTED_PACKAGES} the rest are counted, not looked up — 60 KB
+ * of `npm i x; ` once took ~57 s through the hook, past its 15 s timeout. A
+ * command over 512 KB is read from its start only, and then no command may be
+ * denied for a missing name: its last word may have been cut in half.
+ */
+function boundedInstalls(
+  command: string,
+  shell: CommandShell,
+  isPopular: (pkg: PackageSpec) => boolean,
+): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
+  const cut = command.length > MAX_PARSED_LENGTH;
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell });
+  const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
+  const seen = new Set<string>();
+  const unique: PackageSpec[] = [];
+  for (const c of parsed) {
+    for (const pkg of c.packages) {
+      if (seen.has(key(pkg))) continue;
+      seen.add(key(pkg));
+      unique.push(pkg);
+    }
+  }
+  // The names NOT on the popular list first (fix round 3): 50 popular names
+  // in front of a malicious one must not push it past the cap.
+  const chosen = new Set(
+    [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, MAX_VETTED_PACKAGES).map(key),
+  );
+  const commands: InstallCommand[] = [];
+  for (const c of parsed) {
+    const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
+    if (packages.length === 0) continue;
+    const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
+    commands.push({ ...c, packages, uncertain });
+  }
+  return { commands, notVetted: Math.max(0, unique.length - MAX_VETTED_PACKAGES), cut };
+}
+
+/** Whether a package is on its ecosystem's popular list — the lists `vet_packages` itself uses. */
+function popularTest(opts: HookVetOptions): (pkg: PackageSpec) => boolean {
+  const indexes = new Map<PkgEcosystem, PopularIndex | null>();
+  return (pkg) => {
+    let index = indexes.get(pkg.ecosystem);
+    if (index === undefined) {
+      const override = opts.popular?.[pkg.ecosystem];
+      index =
+        override === null
+          ? null
+          : override !== undefined
+            ? buildPopularIndex(pkg.ecosystem, override)
+            : opts.popularDir === undefined
+              ? loadPopularIndex(pkg.ecosystem)
+              : loadPopularIndex(pkg.ecosystem, opts.popularDir);
+      indexes.set(pkg.ecosystem, index);
+    }
+    return index !== null && index.set.has(normalizePackageName(pkg.ecosystem, pkg.name));
+  };
+}
+
+/** The note for a command read only to its first 512 KB. */
+const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
+
 /**
  * `null` when there is nothing to say: no install command, or every package
  * vetted clean.
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
-  const commands = parseInstallCommands(command).filter((c) => c.packages.length > 0);
-  if (commands.length === 0) return null;
+  const shell = opts.shell ?? 'bash';
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts));
+  // A cut command whose start installs nothing still says what was not read.
+  if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
 
   const env = opts.env ?? process.env;
   const offline = env['GUARDIAN_OFFLINE'] === '1';
@@ -91,6 +171,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           etcDir: opts.etcDir,
           platform: opts.platform,
           nodeExecPath: opts.nodeExecPath,
+          systemLibraryDir: opts.systemLibraryDir,
         },
         commandRegistries: c.registries,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
@@ -103,11 +184,13 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const warnings: string[] = [];
   const unverified: string[] = [];
   let malicious = false;
+  let missingIn: string | undefined;
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
       const d = decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
+      else if (d.deny !== undefined) missingIn = missingIn ?? cmd.manager;
       if (d.warn !== undefined) warnings.push(d.warn);
       if (d.unverified !== undefined) unverified.push(d.unverified);
     }
@@ -119,10 +202,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         `dev-guardian blocked this install: ${denies.join(' ')} ` +
         'Check the package name against the project documentation or the registry before installing anything. ' +
         // Controller ruling (round 2): a missing-name deny carries its own
-        // escape hatch — an explicit registry flag takes the command out of
-        // the confident shape, so the agent can always proceed. A MALICIOUS
-        // package gets no such hint.
-        (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : ESCAPE_HATCH),
+        // escape hatch — a registry flag, or an inline prefix, takes the
+        // command out of the confident shape, so the agent can always
+        // proceed. A MALICIOUS package gets no such hint.
+        (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn ?? '', shell)),
     };
   }
   const lines: string[] = [];
@@ -131,13 +214,53 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     for (const w of warnings) lines.push(`  • ${w}`);
   }
   if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(', ')} — not verified.`);
+  if (notVetted > 0) {
+    lines.push(
+      `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,
+    );
+  }
+  if (cut) lines.push(CUT_NOTE);
   return lines.length > 0 ? { context: lines.join('\n') } : null;
 }
 
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';
 
-export const ESCAPE_HATCH =
-  'If this package is private or local, re-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0.';
+/** The flag that names a registry, per package manager (`InstallCommand.manager`). */
+const REGISTRY_FLAG: Readonly<Record<string, string>> = {
+  npm: '`--registry <url>`',
+  pnpm: '`--registry <url>`',
+  bun: '`--registry <url>`',
+  pip: '`--index-url <url>`',
+  'uv-pip': '`--index-url <url>`',
+  uv: '`--index <url>`',
+  poetry: '`--source <name>`',
+  dotnet: '`--source <url>`',
+};
+
+/** Tools with no registry flag to name one with (Yarn classic has one, Berry has not; neither form can be told apart here). */
+const NO_REGISTRY_FLAG: Readonly<Record<string, string>> = {
+  yarn: 'Yarn Berry has no registry flag',
+  composer: 'composer has no registry flag',
+};
+
+/**
+ * The missing-name deny's own escape hatch (controller ruling, round 2): a way
+ * to re-run the install that takes it out of the plain shape, so the agent can
+ * always proceed. It names what the tool really has — a registry flag, or
+ * (composer, Yarn Berry) none — and an inline `GUARDIAN_PKG_VET=0`, spelled
+ * for the shell: a `VAR=x` prefix for bash, `$env:` for PowerShell. Neither
+ * touches the hook's own switch; a malicious version is still denied.
+ */
+export function escapeHatch(manager: string, shell: CommandShell = 'bash'): string {
+  const prefix =
+    shell === 'powershell'
+      ? "run `$env:GUARDIAN_PKG_VET = '0'` before it, in the same command"
+      : 'prefix the command with `GUARDIAN_PKG_VET=0`';
+  const flag = REGISTRY_FLAG[manager];
+  if (flag !== undefined) return `If this package is private or local, re-run the install with an explicit ${flag}, or ${prefix}.`;
+  const none = NO_REGISTRY_FLAG[manager];
+  return `If this package is private or local, ${prefix}${none !== undefined ? ` (${none})` : ''}.`;
+}
 
 const CHECK_KEYS: ReadonlyArray<keyof PackageChecks> = [
   'exists',

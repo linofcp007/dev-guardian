@@ -75,6 +75,29 @@ describe('hookLooseningSettings', () => {
   it('a leading byte-order mark does not hide the keys', () => {
     expect(hookLooseningSettings('\uFEFF{"disableAllHooks":true}')).toEqual(['disableAllHooks: true']);
   });
+
+  // Follow-up Part Y: `enabledPlugins` turning the plugin off switches every
+  // one of its hooks off, exactly like `disableAllHooks`.
+  it('names an enabledPlugins entry that turns dev-guardian off, under any marketplace name', () => {
+    expect(hookLooseningSettings('{"enabledPlugins":{"dev-guardian@dev-guardian":false}}')).toEqual([
+      'enabledPlugins dev-guardian@dev-guardian=false',
+    ]);
+    expect(
+      hookLooseningSettings('{"enabledPlugins":{"other@x":false,"Dev-Guardian@corp-marketplace":false,"dev-guardian":true}}'),
+    ).toEqual(['enabledPlugins Dev-Guardian@corp-marketplace=false']);
+  });
+
+  it('does not name enabledPlugins entries that turn dev-guardian on, or other plugins off', () => {
+    expect(hookLooseningSettings('{"enabledPlugins":{"dev-guardian@dev-guardian":true,"other@x":false}}')).toEqual([]);
+    expect(hookLooseningSettings('{"permissions":{"deny":["dev-guardian@x"]},"dev-guardian@x":false}')).toEqual([]);
+  });
+
+  it('falls back to a pattern for an enabledPlugins fragment', () => {
+    expect(hookLooseningSettings('"dev-guardian@dev-guardian": false')).toEqual([
+      'enabledPlugins dev-guardian@dev-guardian=false',
+    ]);
+    expect(hookLooseningSettings('"dev-guardian@dev-guardian": true')).toEqual([]);
+  });
 });
 
 describe('newlyLoosened', () => {
@@ -88,6 +111,13 @@ describe('newlyLoosened', () => {
 
   it('a new file adds everything it sets', () => {
     expect(newlyLoosened(undefined, '{"disableAllHooks":true}')).toEqual(['disableAllHooks: true']);
+  });
+
+  it('flipping dev-guardian from enabled to disabled is new; keeping it disabled is not', () => {
+    const on = '{"enabledPlugins":{"dev-guardian@dev-guardian":true}}';
+    const off = '{"enabledPlugins":{"dev-guardian@dev-guardian":false}}';
+    expect(newlyLoosened(on, off)).toEqual(['enabledPlugins dev-guardian@dev-guardian=false']);
+    expect(newlyLoosened(off, off.replace('}}', ',"x@y":true}}'))).toEqual([]);
   });
 });
 

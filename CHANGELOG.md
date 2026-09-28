@@ -42,12 +42,14 @@ keeps working (migrations 004–011 are additive).
     error or a rate limit is `unknown`, never `ok`. A name missing from the
     public registry is `unknown`, not `block`, when something explains the 404:
     a custom registry (project, user and global `.npmrc`, npm's default global
-    npmrc, pnpm's rc, yarn/bun config incl. `~/.yarnrc.yml`, user, global and
-    macOS `pip.conf`/`pip.ini`, user/system `uv.toml`, pyproject/uv indexes,
+    npmrc, pnpm's rc, yarn/bun config incl. `~/.yarnrc.yml` and a
+    `.yarnrc.yml` in any parent up to the root, user, global, conda and macOS
+    `pip.conf`/`pip.ini`, user/system `uv.toml`, pyproject/uv indexes,
     composer `repositories`, a non-nuget.org `nuget.config` anywhere up to the
-    filesystem root, registry environment variables — `npm_config_*registry*`,
+    filesystem root or among NuGet's extra user and machine-wide `*.config`,
+    registry environment variables — `npm_config_*registry*`,
     `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`,
-    `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*` — or a non-public `--registry` / `-i`
+    `PIP_*INDEX*`, `UV_*INDEX*`, `NUGET_*SOURCE*|*FEED*|*CONFIG*` — or a non-public `--registry` / `-i`
     / `--source` / `--index` on the command line), an npmjs auth token for a
     scoped name (private scoped packages 404 anonymously), or a local
     workspace package (`package.json` `workspaces`, `pnpm-workspace.yaml`, uv
@@ -60,12 +62,16 @@ keeps working (migrations 004–011 are additive).
     only when the whole command, comments stripped, is ONE plain install
     statement — a bare tool name (no `.venv/bin/pip`, no `sudo`/`env`/`VAR=x`),
     no `&&`/`||`/`;`/`|`/`&`, second line, subshell, `$(…)`, backticks,
-    variables or redirections, and only flags from a small per-tool allowlist
-    that cannot change where a package resolves from. Otherwise it WARNS "not
-    found on the public registry — if it is private or local, ignore this".
-    The missing-name deny names its own escape hatch (an explicit `--registry` /
-    `--index-url` / `--source`, or `GUARDIAN_PKG_VET=0`); a malicious one does
-    not. It warns on the other checks (known vulnerabilities only for an exact
+    variables, redirections, unquoted commas or `'…''…'`, and only flags from a
+    small per-tool allowlist that cannot change where a package resolves from
+    (not `composer --no-update` or `dotnet --no-restore`). Otherwise it WARNS
+    "not found on the public registry — if it is private or local, ignore
+    this". The missing-name deny names its own escape hatch, per tool (the
+    tool's registry flag, or a `GUARDIAN_PKG_VET=0` prefix — composer and Yarn
+    Berry have no registry flag; `$env:` from the PowerShell tool); a
+    malicious one does not. From the PowerShell tool a command is also read as
+    PowerShell reads it (comma lists, backtick continuations): a package only
+    that reading finds can be denied as malicious, never as missing. It warns on the other checks (known vulnerabilities only for an exact
     pin), adds a one-line "not verified" note when it could not vet, and stays
     silent when clean. Paths, tarballs, URLs, git specs (`git@host:repo`
     included), `file:`/`workspace:` protocols, requirement files and flag
@@ -1024,8 +1030,7 @@ keeps working (migrations 004–011 are additive).
   `Write`/`Edit`: a redirection (`>`, `>>`, `>|`, `N>`, `&>`), `tee`,
   `sed -i`, `cp`/`mv`/`install` onto it, `dd of=`, `curl -o`, `wget -O`,
   PowerShell `Set-Content`/`Add-Content`/`Out-File`/`Tee-Object`/
-  `Copy-Item`/`Move-Item` and cmd `copy`/`move`. A write made inside another
-  program (`python -c`, `node -e`) is not seen.
+  `Copy-Item`/`Move-Item` and cmd `copy`/`move`.
 - **An edit of Claude Code's settings that would switch the hooks off is
   denied.** A `Write`/`Edit`/`MultiEdit` of `.claude/settings.json` or
   `settings.local.json` (project or user level) whose result newly sets
@@ -1052,13 +1057,107 @@ keeps working (migrations 004–011 are additive).
   Anything else counts as absent — the protective defaults — and SessionStart
   names it. Not covered: the project and home directories themselves, and a
   path the OS redirects without a link (a mapped drive, a DFS or NFS mount).
-  The install hook's registry configuration reads get the descriptor checks
-  (capped at 1 MiB) but not the link walk. The shell guard denies `mkfifo`,
+  The install hook's registry configuration reads get both checks (capped at
+  1 MiB). The shell guard denies `mkfifo`,
   `mknod`, `ln`, `mklink` (also through `cmd /c`) and PowerShell `New-Item
   -ItemType SymbolicLink|HardLink|Junction` when the path they CREATE is one
   of those files, or a link at `.guardian` or `~/.config/dev-guardian` (never
   when it is only a link's source), and a leading UTF-8 byte-order mark
   (PowerShell 5 writes one) no longer makes a config file unreadable.
+- **The shell guard sees more of what a command does to the hook
+  configuration.** Besides writing a config file, it now denies removing one
+  (`rm`, `del`, `Remove-Item`, a `mv` that moves it away) or
+  `~/.config/dev-guardian` itself; moving or copying a directory onto
+  `.guardian` or `~/.config/dev-guardian` (`mv`, `cp -r`, `rsync -a`,
+  `robocopy`); `rsync`, `perl -pi`, `sort -o`, `truncate`, `sponge`,
+  `Clear-Content` onto one; a relative write after a `cd` into the directory;
+  a redirection inside a quoted `cmd /c "… > file"`; `[IO.File]::` writes;
+  and program text on the command line (`node -e`, `python -c`, `perl -e`,
+  `pwsh -Command` / `-EncodedCommand`, a heredoc fed to `python`) whose
+  string literals name a config path. A shell write of
+  `.claude/settings*.json` is denied when the command names a key that
+  switches the hooks off, and `claude plugin disable|uninstall` of
+  dev-guardian is denied. A program run from a file is still not seen.
+- **`cmd /c` no longer hides a catastrophic command.** `cmd /c rd /s /q C:\`,
+  `cmd /c "rmdir /s /q %USERPROFILE%"`, `cmd /c "rm -rf /"`, `cmd /c "bash -c
+  'rm -rf /'"` and `cmd /c "curl …|sh"` were `ok` — through the PowerShell
+  tool too. Every command of a `cmd /c` line now gets the full assessment of a
+  top-level statement; `%USERPROFILE%`, `%SystemDrive%`, `$env:USERPROFILE`
+  and `C:\Windows` / `C:\Users` / `C:\Program Files` are catastrophic delete
+  targets; cmd's `start` is followed to the program it runs. What is nested
+  past the guard's three levels (`cmd /c cmd /c cmd /c cmd /c rd /s /q C:\`,
+  four `bash -c` or `eval` deep) is still not judged, but it warns "nested
+  more than 3 levels deep" where it was a silent `ok`.
+- **The PowerShell tool's commands are read with PowerShell's quoting too.**
+  Read only as a POSIX shell quotes, a Windows path ending in `\"` escaped its
+  closing quote and swallowed the rest of the line: `Remove-Item "C:\Users\"
+  -Recurse -Force` was `ok`, and so was anything after `Get-ChildItem
+  "C:\temp\" ;`. The guard now also reads the command the way PowerShell does
+  (backslash literal, backtick escapes, `''` and `""`, typographic quotes,
+  here-strings, `<# … #>`, `--%`) — the reading the install hook already
+  had — and the more severe verdict stands; so is the text handed to
+  `pwsh -Command` / `-EncodedCommand`, from either tool. `check --bash …
+  --powershell` does the same from a terminal.
+- **A comment no longer hides the lines after it.** The shell guard read
+  `#` comments as code, so the apostrophe in `# clean the user's build dir`
+  opened a quote that ran to the end of the command and hid `rm -rf /` on the
+  next line, from both tools; the same happened after a here-string whose
+  body held an odd `'`, and a commit message in a here-string that quoted
+  `curl x | sh` was denied. Also closed: a redirection before the command
+  name (`2>/dev/null rm -rf /`); PowerShell's `rmdir` / `rd` / `del` /
+  `erase` with `-Recurse -Force`, `-Recurse:$true` and en or em dashes; and
+  four internal caps that ended in a silent `ok` (40 `nice` runners, five
+  `npx -y` launchers, 256 `[IO.File]::` calls, an `[IO.File]::` call padded
+  past 512 characters — the last now warns). A command inside a PowerShell
+  script block (`Get-ChildItem | ForEach-Object { Remove-Item C:\Users
+  -Recurse -Force }`, `Invoke-Command -ScriptBlock { … }`) is assessed too.
+- **The shell guard and the install hook finish inside the hook's timeout.**
+  The pattern rules were quadratic inside a statement (127 × `chmod
+  -RRR… 777 x` + `rm -rf /` took 27 s through the hook, past its 15 s
+  timeout, after which a command runs unassessed); they are linear now. The
+  command is read to 512 KB and a 2.5 s budget backs the caps up, each named
+  in its warning, checked between the commands of a statement as well as
+  between statements. Work inside one statement was still quadratic (64 KB of
+  `-c -c …` took 15 s; `find -exec`, `git -c`, `python -c`, `| sudo -x`,
+  `time -a … {`, the PowerShell environment check); it is linear now. A
+  command with ~125 000 operands (`rm a a … /`) overflowed the stack, and the
+  hook answered with no decision at all, so the command ran; it is assessed
+  now, and any assessment that fails part-way warns "the assessment failed"
+  (a block found before it still blocks). The install hook looks each package
+  up once, at most 50 per command (60 KB of repeated `npm i x;` took ~57 s),
+  names not on the popular list first, so popular padding cannot push another
+  past the cap. The worst 512 KB shape measured takes up to about 2 s per
+  reading in the shell guard on a loaded machine; the PowerShell tool reads
+  twice, and the 2.5 s budget backs it up.
+- **Padding a line no longer hides a catastrophic command from the shell
+  guard.** The 16 KB ReDoS cap cut each LINE before anything was split, so
+  `true<16 400 spaces>; rm -rf /` was `ok`. The cap now applies to each
+  statement's pattern text (blank runs collapsed first); whatever a cap
+  still drops adds the warning "part of this command was not assessed (over
+  16 KB)" — never a silent `ok`. Each command of a `cmd /c` line is also
+  checked for `claude plugin disable` and for program text, `npx node -e` /
+  `start /b node -e` are read as program text, and a bare CR (a PowerShell
+  line break) ends a statement.
+- **`enabledPlugins` turning dev-guardian off is denied** in a
+  `Write`/`Edit`/`MultiEdit` of Claude Code's settings, like
+  `disableAllHooks`.
+- **A project's `.guardian/hooks-allowlist.json` no longer exempts a match
+  from a secret block the user enabled** — it narrows the warning, as a
+  project `ignorePaths` does.
+- **The install hook's registry configuration reads are link-walked**: a
+  `.npmrc` (or `pip.conf`, `nuget.config`, …) linked to an unreachable
+  `\\host\share` held the hook into its 15 s timeout, and the install then
+  ran unvetted; such a file is now refused unopened. A registry
+  configuration that is there but could not be read (that link, a loop, a
+  directory or FIFO in its place, over 1 MiB, no permission) is unknown, not
+  absent: a missing name then warns "registry configuration at … could not
+  be read — possibly a private registry" instead of being denied.
+  `NUGET_PACKAGES` / `NUGET_XMLDOC_MODE` no longer disable the missing-name
+  deny (only `NUGET_*SOURCE*`, `*FEED*`, `*CONFIG*` and
+  `NUGET_FALLBACK_PACKAGES` count), and a machine-wide NuGet config's local
+  folder (Visual Studio's offline feed) explains a 404 only for a package it
+  holds — every id a `.nupkg` name can split into (`foo.2.1.0.0.nupkg` is
+  `foo`, `foo.2` and `foo.2.1`).
 - **The secret warning reads real key names** (SCREAMING_SNAKE, kebab and
   camelCase, JSON keys, unquoted `.env` assignments, `scheme://user:pass@host`)
   while `${VAR}`, `process.env.X`, placeholders and empty values stay silent;

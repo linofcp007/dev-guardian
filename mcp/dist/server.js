@@ -3852,7 +3852,7 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse7(serialize2(uri, options), options);
+        parse8(serialize2(uri, options), options);
       }
       return uri;
     }
@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative24, options, skipNormalization) {
+    function resolveComponent(base, relative25, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse7(serialize2(base, options), options);
-        relative24 = parse7(serialize2(relative24, options), options);
+        base = parse8(serialize2(base, options), options);
+        relative25 = parse8(serialize2(relative25, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative24.scheme) {
-        target.scheme = relative24.scheme;
-        target.userinfo = relative24.userinfo;
-        target.host = relative24.host;
-        target.port = relative24.port;
-        target.path = removeDotSegments(relative24.path || "");
-        target.query = relative24.query;
+      if (!options.tolerant && relative25.scheme) {
+        target.scheme = relative25.scheme;
+        target.userinfo = relative25.userinfo;
+        target.host = relative25.host;
+        target.port = relative25.port;
+        target.path = removeDotSegments(relative25.path || "");
+        target.query = relative25.query;
       } else {
-        if (relative24.userinfo !== void 0 || relative24.host !== void 0 || relative24.port !== void 0) {
-          target.userinfo = relative24.userinfo;
-          target.host = relative24.host;
-          target.port = relative24.port;
-          target.path = removeDotSegments(relative24.path || "");
-          target.query = relative24.query;
+        if (relative25.userinfo !== void 0 || relative25.host !== void 0 || relative25.port !== void 0) {
+          target.userinfo = relative25.userinfo;
+          target.host = relative25.host;
+          target.port = relative25.port;
+          target.path = removeDotSegments(relative25.path || "");
+          target.query = relative25.query;
         } else {
-          if (!relative24.path) {
+          if (!relative25.path) {
             target.path = base.path;
-            if (relative24.query !== void 0) {
-              target.query = relative24.query;
+            if (relative25.query !== void 0) {
+              target.query = relative25.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative24.path[0] === "/") {
-              target.path = removeDotSegments(relative24.path);
+            if (relative25.path[0] === "/") {
+              target.path = removeDotSegments(relative25.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative24.path;
+                target.path = "/" + relative25.path;
               } else if (!base.path) {
-                target.path = relative24.path;
+                target.path = relative25.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative24.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative25.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative24.query;
+            target.query = relative25.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative24.fragment;
+      target.fragment = relative25.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4192,7 +4192,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme };
     }
-    function parse7(uri, opts) {
+    function parse8(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -4229,7 +4229,7 @@ var require_fast_uri = __commonJS({
       resolveComponent,
       equal,
       serialize: serialize2,
-      parse: parse7
+      parse: parse8
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -8588,7 +8588,7 @@ var require_parse = __commonJS({
       }
       return parsed;
     }
-    function parse7(command, args, options) {
+    function parse8(command, args, options) {
       if (args && !Array.isArray(args)) {
         options = args;
         args = null;
@@ -8607,7 +8607,7 @@ var require_parse = __commonJS({
       };
       return options.shell ? parsed : parseNonShell(parsed);
     }
-    module.exports = parse7;
+    module.exports = parse8;
   }
 });
 
@@ -8666,16 +8666,16 @@ var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
-    var parse7 = require_parse();
+    var parse8 = require_parse();
     var enoent = require_enoent();
     function spawn2(command, args, options) {
-      const parsed = parse7(command, args, options);
+      const parsed = parse8(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
     function spawnSync2(command, args, options) {
-      const parsed = parse7(command, args, options);
+      const parsed = parse8(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
@@ -8683,7 +8683,7 @@ var require_cross_spawn = __commonJS({
     module.exports = spawn2;
     module.exports.spawn = spawn2;
     module.exports.sync = spawnSync2;
-    module.exports._parse = parse7;
+    module.exports._parse = parse8;
     module.exports._enoent = enoent;
   }
 });
@@ -22713,7 +22713,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse7(src, reviver, options) {
+    function parse8(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -22754,7 +22754,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse7;
+    exports.parse = parse8;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
@@ -33917,11 +33917,11 @@ function parseUnionDef(def, refs) {
   return asAnyOf(def, refs);
 }
 var asAnyOf = (def, refs) => {
-  const anyOf = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
+  const anyOf2 = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", `${i2}`]
   })).filter((x) => !!x && (!refs.strictUnions || typeof x === "object" && Object.keys(x).length > 0));
-  return anyOf.length ? { anyOf } : void 0;
+  return anyOf2.length ? { anyOf: anyOf2 } : void 0;
 };
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
@@ -43048,10 +43048,10 @@ function planDotnetRestore(root, target) {
   const withoutLock = [];
   for (const project of projects) {
     const candidates2 = lockFileCandidates(project);
-    const present = candidates2.filter((c3) => existsSync13(c3));
-    lockFiles.push(...present);
+    const present2 = candidates2.filter((c3) => existsSync13(c3));
+    lockFiles.push(...present2);
     absentLockCandidates.push(...candidates2.filter((c3) => !existsSync13(c3)));
-    if (present.length === 0) withoutLock.push(project);
+    if (present2.length === 0) withoutLock.push(project);
   }
   const args = ["restore", target, "--locked-mode", "--nologo", "--verbosity", "quiet"];
   const plan = { target, projects, lockFiles, args, absentLockCandidates };
@@ -48181,9 +48181,9 @@ var reviewPr = makeScanTool({
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
         if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
-        const present = changed.filter((f) => isFileOnDisk(join31(scanRoot, f)));
-        await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present, where });
-        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present.filter(isPython2) });
+        const present2 = changed.filter((f) => isFileOnDisk(join31(scanRoot, f)));
+        await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
+        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir });
       }
       if (!out.cancelled) {
@@ -64354,13 +64354,13 @@ function checkSecurityHeaders(input, findings) {
   const first = completed[0];
   if (first === void 0) return;
   const expected = expectedSecurityHeaders(input.origin);
-  const present = /* @__PURE__ */ new Set();
+  const present2 = /* @__PURE__ */ new Set();
   for (const r of completed) {
     for (const header of expected) {
-      if (r.headers[header] !== void 0) present.add(header);
+      if (r.headers[header] !== void 0) present2.add(header);
     }
   }
-  const missing = expected.filter((h2) => !present.has(h2));
+  const missing = expected.filter((h2) => !present2.has(h2));
   if (missing.length === 0) return;
   findings.push(buildFinding({
     check: "security_headers",
@@ -67038,11 +67038,11 @@ function scannerNotVerified(target, scan2) {
 
 // src/fixpr/verify.ts
 var OUTPUT_HEAD_LINES = 20;
-function judgeScan(targets, before, after) {
+function judgeScan(targets, before, after2) {
   const beforeByFingerprint = new Map(before.findings.map((finding4) => [finding4.fingerprint, finding4]));
-  const afterFingerprints = new Set(after.findings.map((finding4) => finding4.fingerprint));
+  const afterFingerprints = new Set(after2.findings.map((finding4) => finding4.fingerprint));
   const afterKeys = /* @__PURE__ */ new Set();
-  for (const finding4 of after.findings) {
+  for (const finding4 of after2.findings) {
     const key = resolutionKey(finding4);
     if (key !== null) afterKeys.add(key);
   }
@@ -67051,11 +67051,11 @@ function judgeScan(targets, before, after) {
   for (const target of targets) {
     const targetFinding = beforeByFingerprint.get(target);
     const key = targetFinding === void 0 ? null : resolutionKey(targetFinding);
-    const present = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
-    if (present) still_present.push(target);
+    const present2 = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
+    if (present2) still_present.push(target);
     else resolved.push(target);
   }
-  const newFindings = newByRuleAndFile(before.findings, after.findings);
+  const newFindings = newByRuleAndFile(before.findings, after2.findings);
   const new_findings = newFindings.map((finding4) => ({
     fingerprint: finding4.fingerprint,
     severity: finding4.severity,
@@ -67068,11 +67068,11 @@ function judgeScan(targets, before, after) {
     new_findings
   };
 }
-function newByRuleAndFile(before, after) {
+function newByRuleAndFile(before, after2) {
   const beforeKeys = new Set(before.map(ruleFileKey));
   const seenNew = /* @__PURE__ */ new Set();
   const result = [];
-  for (const finding4 of after) {
+  for (const finding4 of after2) {
     const key = ruleFileKey(finding4);
     if (beforeKeys.has(key)) continue;
     if (seenNew.has(key)) continue;
@@ -68784,11 +68784,201 @@ function countBySeverity5(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync55, statSync as statSync21 } from "node:fs";
+import { existsSync as existsSync54, statSync as statSync21 } from "node:fs";
 import { resolve as resolve20 } from "node:path";
 
 // src/hooks/bashGuard.ts
-var MAX_LINE_LENGTH2 = 16 * 1024;
+var BASH_RULES = [
+  // ── Catastrophic: block by default ───────────────────────────────────────
+  {
+    id: "no-preserve-root",
+    level: "block",
+    reason: "Uses --no-preserve-root, defeating the root-deletion safeguard",
+    pattern: /--no-preserve-root/i
+  },
+  {
+    id: "remote-pipe-to-shell",
+    level: "block",
+    reason: "Pipes a downloaded script directly into a shell (curl|wget \u2026 | sh/bash)",
+    // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
+    // shell name — used to fall through this pattern, which only allowed
+    // `sudo` directly followed by the shell.
+    // A flag never contains `|`: `-\S+` spanned pipes and made `| sudo -x|sudo
+    // -x|…` quadratic (fix round 3).
+    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i,
+    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i)
+  },
+  {
+    id: "powershell-iex-download",
+    level: "block",
+    reason: "Downloads and executes remote code via Invoke-Expression",
+    // `irm`/`iwr` are PowerShell's own built-in aliases for
+    // Invoke-RestMethod/Invoke-WebRequest — as common in the wild as the
+    // full names, and the piped-download shape is identical either way.
+    pattern: /(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
+    test: after(/(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)/i, /\|\s*(?:iex|invoke-expression)/i)
+  },
+  {
+    id: "powershell-iex-nested",
+    level: "block",
+    reason: "Downloads and executes remote code via Invoke-Expression",
+    // `iex (irm …)` / `Invoke-Expression (Invoke-RestMethod …)` is the same
+    // hazard as the piped form above, spelled with the download as a nested
+    // call instead of a pipe. `(` is a statement boundary everywhere else in
+    // this file (subshells, command substitution), so this must be
+    // scope:'command' to see across it — narrow enough (iex/Invoke-Expression
+    // immediately opening a paren around a download cmdlet) that it does not
+    // reopen the cross-separator false positives scope:'command' otherwise
+    // reintroduces the download and the pipe are never split across `&&`/`;`
+    // for the same reason the fork-bomb signature needs scope:'command'.
+    pattern: /\b(?:iex|invoke-expression)\s*\(\s*(?:irm|iwr|invoke-restmethod|invoke-webrequest)\b/i,
+    scope: "command"
+  },
+  {
+    id: "powershell-disk-format",
+    level: "block",
+    reason: "Formats or clears an entire disk/volume",
+    pattern: /\b(?:Format-Volume|Clear-Disk)\b/i
+  },
+  {
+    id: "process-substitution-remote-fetch",
+    level: "block",
+    reason: "Executes a downloaded script via process substitution (bash <(curl \u2026))",
+    // `bash <(curl …)` hands bash a fake file whose content is curl's stdout
+    // — the same hazard as `curl … | sh`, spelled with process substitution
+    // instead of a pipe. `<(` is not a statement separator anywhere else in
+    // this file, so scope:'command' (which sees the un-split text) is enough
+    // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
+    // where the whole thing sits inside quotes and is handled separately, by
+    // `isBareRemoteFetch` on the extracted `-c` script text.
+    pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+    scope: "command",
+    test: processSubstitutionFetch
+  },
+  {
+    id: "disk-overwrite",
+    level: "block",
+    reason: "Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/\u2026)",
+    // The `\b` used to sit in front of the whole group, and a leading `\b`
+    // before `>` demands a word character immediately to its left — so the
+    // redirect alternative matched `cat x>/dev/sda` and never the
+    // `cat x > /dev/sda` anybody actually writes. Each alternative anchors
+    // itself now.
+    //
+    // `dd … of=` is deliberately narrower than the rest: it only blocks a
+    // handful of real block-device name families (`sd`/`hd`/`vd`/`xvd`/
+    // `nvme`/`mmcblk`/`disk`/`md`/`dm-`, plus the Windows `\\.\PhysicalDriveN`
+    // spelling) — `dd … of=/dev/null`, `of=/dev/stdout`, `of=/dev/zero` and
+    // an ordinary regular-file target are all common, harmless uses of dd
+    // that this used to block outright by matching any `/dev/` path.
+    // `mkfs`/`wipefs`/`shred` keep matching any `/dev/…` target: unlike dd,
+    // there is no ordinary reason to run any of them against something that
+    // is not a device, so narrowing them has no false positive to fix.
+    // `mkfs`'s target used to have to sit immediately after the command
+    // (`mkfs\s+\/dev\/`), so `mkfs -t ext4 /dev/sdb` — flags between the
+    // command and its target — never matched; `[^\n]*` between them (already
+    // safe here: this rule runs per masked *statement*, so it cannot cross a
+    // `&&`/`;`/newline) fixes that the same way the rest of this alternation
+    // already tolerates flags before its target.
+    pattern: /(?:\bdd\b[^\n]*\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)|\bmkfs(?:\.\w+)?\b[^\n]*\/dev\/|\bwipefs\b[^\n]*\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-))/i,
+    test: anyOf(
+      after(/\bdd\b/i, /\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)/i),
+      after(/\bmkfs(?:\.\w+)?\b/i, /\/dev\//i),
+      after(/\bwipefs\b/i, /\/dev\//i),
+      after(/\bshred\b/i, /\/dev\//i),
+      (t) => />\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)/i.test(t)
+    )
+  },
+  {
+    id: "fork-bomb",
+    level: "block",
+    reason: "Shell fork bomb",
+    // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
+    // characters splitShell() separates on, so this signature only exists
+    // before segmentation. Quoted spans are still masked, so
+    // `echo ':(){ :|:& };:'` stays inert.
+    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    scope: "command"
+  },
+  {
+    id: "chmod-777-root",
+    level: "block",
+    reason: "Recursively makes the filesystem root world-writable",
+    // `chmod 777 -R /` is the same hazard as `chmod -R 777 /` with the flag
+    // and the mode swapped — both orders are real, so both are matched.
+    pattern: /\bchmod\b[^\n]*(?:-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-[a-z]*R[a-z]*\s+\/(?:\s|$))/i,
+    // `-[a-z]*R[a-z]*` backtracked quadratically over a run of R's; a lookahead
+    // for the R and one greedy run cannot.
+    test: after(
+      /\bchmod\b/i,
+      /(?:-(?=[a-z]*R)[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-(?=[a-z]*R)[a-z]*\s+\/(?:\s|$))/i
+    )
+  },
+  // ── Risky: warn only ─────────────────────────────────────────────────────
+  {
+    id: "git-force-push",
+    level: "warn",
+    reason: "Force-push can overwrite remote history",
+    // `+main`/`+master` is git's own shorthand for a forced update of that
+    // ref (a `+` prefix on a push refspec), and `--mirror` force-overwrites
+    // every ref on the remote — same hazard as `--force`, different spelling.
+    pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i,
+    test: after(/\bgit\s+push\b/i, /(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i)
+  },
+  {
+    id: "git-hard-reset",
+    level: "warn",
+    reason: "git reset --hard discards uncommitted work",
+    pattern: /\bgit\s+reset\b[^\n]*--hard\b/i,
+    test: after(/\bgit\s+reset\b/i, /--hard\b/i)
+  },
+  {
+    id: "git-clean-force",
+    level: "warn",
+    reason: "git clean -fd permanently removes untracked files",
+    pattern: /\bgit\s+clean\b[^\n]*-[a-z]*f/i,
+    test: after(/\bgit\s+clean\b/i, /-[a-z]*f/i)
+  },
+  {
+    id: "chmod-777",
+    level: "warn",
+    reason: "chmod 777 grants world-write \u2014 overly permissive",
+    pattern: /\bchmod\b[^\n]*\b0?777\b/i,
+    test: after(/\bchmod\b/i, /\b0?777\b/i)
+  },
+  {
+    id: "history-wipe",
+    level: "warn",
+    reason: "Clears shell history",
+    pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i
+  }
+];
+function after(keyword, tail) {
+  const kw = new RegExp(keyword.source, keyword.flags.replace(/[gy]/g, ""));
+  const tl = new RegExp(tail.source, `${tail.flags.replace(/[gy]/g, "")}g`);
+  return (text) => {
+    const m = kw.exec(text);
+    if (m === null) return false;
+    tl.lastIndex = m.index + m[0].length;
+    return tl.test(text);
+  };
+}
+function anyOf(...tests) {
+  return (text) => tests.some((t) => t(text));
+}
+function processSubstitutionFetch(text) {
+  for (const line of text.split("\n")) {
+    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+    if (shell === null) continue;
+    const shellEnd = shell.index + shell[0].length;
+    for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
+      if (fetch2.index >= shellEnd) return true;
+    }
+  }
+  return false;
+}
+var MAX_STATEMENT_LENGTH = 16 * 1024;
+var MAX_COMMAND_LENGTH = 512 * 1024;
 
 // src/pkgvet/parseCommand.ts
 var NAME_RE = {
@@ -69460,6 +69650,9 @@ var ALLOW = {
     ),
     value: set("--group", "-G", "--optional")
   },
+  // Not `--no-update` / `--no-install` (composer) or `--no-restore` / `-n`
+  // (dotnet): each defers the lookup the command would make, so a name the
+  // public registry lacks is not yet a failed install (follow-up Part Y).
   composer: {
     bool: set(
       "--dev",
@@ -69469,8 +69662,6 @@ var ALLOW = {
       "--with-dependencies",
       "--update-with-dependencies",
       "--update-with-all-dependencies",
-      "--no-update",
-      "--no-install",
       "--no-scripts",
       "--no-progress",
       "-n",
@@ -69481,7 +69672,7 @@ var ALLOW = {
     ),
     value: set()
   },
-  dotnet: { bool: set("--prerelease", "-n", "--no-restore"), value: set("-v", "--version", "-f", "--framework") }
+  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") }
 };
 
 // src/pkgvet/popular.ts
@@ -69640,9 +69831,9 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { existsSync as existsSync54, readdirSync as readdirSync25 } from "node:fs";
+import { lstatSync as lstatSync7, readdirSync as readdirSync25 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname20, join as join75, resolve as resolve19 } from "node:path";
+import { dirname as dirname20, isAbsolute as isAbsolute14, join as join75, parse as parse6, relative as relative24, resolve as resolve19 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync as closeSync2, constants as constants4, fstatSync, lstatSync as lstatSync6, openSync as openSync2, readlinkSync as readlinkSync2, readSync } from "node:fs";
@@ -69726,10 +69917,12 @@ function readText2(path6, maxBytes) {
     }
   }
 }
-function readSmallTextFile(path6, maxBytes, under) {
-  if (under !== void 0 && !walkLinksUnder(under, path6).ok) return void 0;
-  const r = readText2(path6, maxBytes);
-  return r.status === "ok" ? r.text : void 0;
+function readSmallText(path6, maxBytes, under) {
+  if (under !== void 0) {
+    const walk4 = walkLinksUnder(under, path6);
+    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
+  }
+  return readText2(path6, maxBytes);
 }
 
 // src/pkgvet/privateRegistry.ts
@@ -69746,8 +69939,59 @@ function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
 }
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
-function read(path6) {
-  return readSmallTextFile(path6, MAX_REGISTRY_CONFIG_BYTES);
+function isInside4(dir, path6) {
+  const rel2 = relative24(dir, path6);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
+}
+function walkRoot(path6, ctx, under) {
+  const abs = resolve19(path6);
+  if (isRemoteOrDeviceTarget(abs)) return void 0;
+  if (under !== void 0) return under;
+  const holds = (dir2, base) => samePath(dir2, base) || isInside4(dir2, base);
+  const project = ctx.projectDir === void 0 ? void 0 : resolve19(ctx.projectDir);
+  const home = resolve19(homeOf(ctx));
+  if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
+  if (project !== void 0 && isInside4(project, abs)) return project;
+  const dir = dirname20(abs);
+  if (project !== void 0 && holds(dir, project)) return dir;
+  if (isInside4(home, abs)) return home;
+  return parse6(abs).root;
+}
+var firstUnread;
+function noteUnread(path6, what) {
+  firstUnread = firstUnread ?? { path: path6, what };
+}
+function takeUnread() {
+  const unread = firstUnread;
+  firstUnread = void 0;
+  return unread;
+}
+function read(path6, ctx, under, what = "configuration") {
+  const r = readSmallText(path6, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path6, ctx, under));
+  if (r.status === "refused") noteUnread(path6, what);
+  return r.status === "ok" ? r.text : void 0;
+}
+function present(path6) {
+  try {
+    lstatSync7(path6);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function listDir(dir, ctx) {
+  const under = walkRoot(dir, ctx);
+  if (under !== void 0 && !walkLinksUnder(under, dir).ok) {
+    noteUnread(dir, "directory");
+    return [];
+  }
+  try {
+    return readdirSync25(dir);
+  } catch (e) {
+    const code = e.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir, "directory");
+    return [];
+  }
 }
 function samePath(a2, b) {
   const norm = (p) => resolve19(p).replace(/[\\/]+$/, "");
@@ -69761,7 +70005,7 @@ function ancestors(ctx) {
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath(s, dir))) break;
     out.push(dir);
-    if (existsSync54(join75(dir, ".git"))) break;
+    if (present(join75(dir, ".git"))) break;
     const parent = dirname20(dir);
     if (parent === dir) break;
     dir = parent;
@@ -69859,13 +70103,21 @@ function npmConfigFiles(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const files = [];
-  for (const dir of ancestors(ctx)) {
+  const near = ancestors(ctx);
+  for (const dir of near) {
     files.push(
       { path: join75(dir, ".npmrc"), parse: fromNpmrc },
       { path: join75(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
       { path: join75(dir, ".yarnrc"), parse: fromYarnrc },
       { path: join75(dir, "bunfig.toml"), parse: fromBunfig }
     );
+  }
+  const top = near[near.length - 1];
+  if (top !== void 0) {
+    for (let dir = dirname20(top), i2 = 0; i2 < 64; dir = dirname20(dir), i2 += 1) {
+      files.push({ path: join75(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      if (dirname20(dir) === dir) break;
+    }
   }
   const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join75(home, ".config");
   const localAppData = envValue(env, "LOCALAPPDATA") ?? join75(home, "AppData", "Local");
@@ -69889,7 +70141,7 @@ var ENV_REGISTRY = {
   npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
   pypi: /^(?:(?:PIP|UV)_.*INDEX.*|PIP_FIND_LINKS|UV_FIND_LINKS)$/i,
   packagist: /^$/,
-  nuget: /^NUGET_.+$/i
+  nuget: /^(?:NUGET_\w*(?:SOURCE|FEED|CONFIG)\w*|NUGET_FALLBACK_PACKAGES|NuGetPackageSourceCredentials_.+)$/i
 };
 function envRegistry(ecosystem, ctx) {
   for (const [key, raw] of Object.entries(envOf(ctx))) {
@@ -69910,10 +70162,10 @@ function npmRegistry(name, ctx) {
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path: path6, parse: parse7 } of npmConfigFiles(ctx)) {
-    const text = read(path6);
+  for (const { path: path6, parse: parse8 } of npmConfigFiles(ctx)) {
+    const text = read(path6, ctx);
     if (text === void 0) continue;
-    const url = parse7(text, scope);
+    const url = parse8(text, scope);
     if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path6, url };
     if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path6;
   }
@@ -69924,7 +70176,7 @@ function npmRegistry(name, ctx) {
 var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
 var MAX_SCAN_DIRS = 3e3;
 var MAX_SCAN_DEPTH = 5;
-function findManifest(root, file, match) {
+function findManifest(root, file, match, ctx) {
   const queue = [{ dir: root, depth: 0 }];
   let visited = 0;
   while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
@@ -69932,7 +70184,7 @@ function findManifest(root, file, match) {
     if (next === void 0) break;
     visited += 1;
     const manifest = join75(next.dir, file);
-    const text = read(manifest);
+    const text = read(manifest, ctx, root, "workspace manifest");
     if (text !== void 0 && match(text)) return manifest;
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
@@ -69957,7 +70209,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join75(dir, "package.json"))) || existsSync54(join75(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join75(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join75(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", (text) => {
       try {
@@ -69965,7 +70217,7 @@ function npmWorkspacePackage(name, ctx) {
       } catch {
         return false;
       }
-    });
+    }, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -69975,7 +70227,7 @@ function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
     const path6 = join75(dir, "pyproject.toml");
-    const text = read(path6);
+    const text = read(path6, ctx);
     if (text === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? "";
     for (const m of sources.matchAll(/^\s*["']?([A-Za-z0-9._-]+)["']?\s*=/gm)) {
@@ -69986,7 +70238,7 @@ function uvWorkspacePackage(name, ctx) {
       const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
       const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
       return n2 !== void 0 && pep503(n2) === wanted;
-    });
+    }, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -70033,14 +70285,16 @@ function pypiRegistry(name, ctx) {
   );
   const appdata = envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming");
   confs.push(join75(appdata, "pip", "pip.ini"), join75(home, "pip", "pip.ini"));
-  const venv = envValue(env, "VIRTUAL_ENV");
-  if (venv !== void 0) confs.push(join75(venv, "pip.conf"), join75(venv, "pip.ini"));
+  for (const prefix of [envValue(env, "VIRTUAL_ENV"), envValue(env, "CONDA_PREFIX")]) {
+    if (prefix !== void 0) confs.push(join75(prefix, "pip.conf"), join75(prefix, "pip.ini"));
+  }
   confs.push(join75(etc, "pip.conf"), join75(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join75(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
   for (const d of (envValue(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join75(d, "pip", "pip.conf"));
   const programData = envValue(env, "ProgramData") ?? envValue(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join75(programData, "pip", "pip.ini"));
   for (const path6 of confs) {
-    const text = read(path6);
+    const text = read(path6, ctx);
     const url = text === void 0 ? void 0 : fromPipConf(text);
     if (url !== void 0) return { kind: "registry", source: path6, url };
   }
@@ -70049,17 +70303,17 @@ function pypiRegistry(name, ctx) {
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
   uvConfs.push(join75(xdg, "uv", "uv.toml"), join75(appdata, "uv", "uv.toml"), join75(etc, "uv", "uv.toml"));
   for (const path6 of uvConfs) {
-    const text = read(path6);
+    const text = read(path6, ctx);
     const url = text === void 0 ? void 0 : fromUvToml(text);
     if (url !== void 0) return { kind: "registry", source: path6, url };
   }
   for (const dir of ancestors(ctx)) {
     const uvToml = join75(dir, "uv.toml");
-    const uvText = read(uvToml);
+    const uvText = read(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
     const pyproject = join75(dir, "pyproject.toml");
-    const text = read(pyproject);
+    const text = read(pyproject, ctx);
     if (text === void 0) continue;
     const url = fromPyproject(text);
     if (url !== void 0) return { kind: "registry", source: pyproject, url };
@@ -70082,7 +70336,7 @@ function hasRepositories(text) {
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
     const path6 = join75(dir, "composer.json");
-    const text = read(path6);
+    const text = read(path6, ctx);
     if (text === void 0) continue;
     if (hasRepositories(text)) return { kind: "registry", source: path6 };
     break;
@@ -70091,33 +70345,55 @@ function composerRegistry(ctx) {
   const home = homeOf(ctx);
   const composerHome = envValue(env, "COMPOSER_HOME");
   const globals = composerHome !== void 0 ? [join75(composerHome, "config.json")] : [join75(home, ".composer", "config.json"), join75(home, ".config", "composer", "config.json"), join75(envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming"), "Composer", "config.json")];
-  for (const path6 of globals) if (hasRepositories(read(path6))) return { kind: "registry", source: path6 };
+  for (const path6 of globals) if (hasRepositories(read(path6, ctx))) return { kind: "registry", source: path6 };
   return null;
 }
-function nugetConfigIn(dir) {
-  try {
-    const hit = readdirSync25(dir).find((f) => f.toLowerCase() === "nuget.config");
-    return hit === void 0 ? void 0 : join75(dir, hit);
-  } catch {
-    return void 0;
-  }
+function nugetConfigIn(dir, ctx) {
+  const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
+  return hit === void 0 ? void 0 : join75(dir, hit);
 }
-function customNugetSource(text) {
+function customNugetSources(text) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text)?.[1] ?? "";
+  const out = [];
   for (const m of sources.matchAll(/<add\b[^>]*\bvalue\s*=\s*"([^"]+)"/gi)) {
     const url = m[1] ?? "";
-    if (url !== "" && !isPublic("nuget", url)) return url;
+    if (url !== "" && !isPublic("nuget", url)) out.push(url);
   }
-  return void 0;
+  return out;
 }
-function nugetRegistry(ctx) {
+function isLocalFolderSource(source) {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(source) && !/^[\\/]{2}/.test(source);
+}
+function localFeedHas(folder, configPath, id, ctx) {
+  const env = envOf(ctx);
+  const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue(env, name) ?? whole);
+  const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
+  const dir = resolve19(dirname20(configPath), portable.replace(/[\\/]+$/, ""));
+  const lower = id.toLowerCase();
+  return listDir(dir, ctx).some((entry) => {
+    const e = entry.toLowerCase();
+    return e === lower || nupkgIds(e).includes(lower);
+  });
+}
+var NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+function nupkgIds(file) {
+  const m = /^(.+)\.nupkg$/i.exec(file);
+  if (m === null) return [];
+  const parts = (m[1] ?? "").split(".");
+  const ids2 = [];
+  for (let i2 = 1; i2 < parts.length; i2 += 1) {
+    if (NUGET_VERSION.test(parts.slice(i2).join("."))) ids2.push(parts.slice(0, i2).join("."));
+  }
+  return ids2;
+}
+function nugetRegistry(name, ctx) {
   const fromEnv = envRegistry("nuget", ctx);
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
     let dir = resolve19(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
-      const f = nugetConfigIn(dir);
+      const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
       const parent = dirname20(dir);
       if (parent === dir) break;
@@ -70128,33 +70404,58 @@ function nugetRegistry(ctx) {
   const home = homeOf(ctx);
   const appdata = envValue(env, "APPDATA") ?? join75(home, "AppData", "Roaming");
   for (const dir of [join75(appdata, "NuGet"), join75(home, ".nuget", "NuGet"), join75(home, ".config", "NuGet")]) {
-    const f = nugetConfigIn(dir);
+    const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
+  const userDirs = [join75(appdata, "NuGet", "config"), join75(home, ".nuget", "config"), join75(home, ".config", "NuGet", "config")];
+  const machineDirs = [
+    join75(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join75(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+  ];
+  const programFilesX86 = envValue(env, "ProgramFiles(x86)");
+  if (programFilesX86 !== void 0) machineDirs.push(join75(programFilesX86, "NuGet", "Config"));
+  const machineWide = /* @__PURE__ */ new Set();
+  for (const dir of [...userDirs, ...machineDirs]) {
+    for (const f of listDir(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
+      files.push(join75(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join75(dir, f));
+    }
+  }
   for (const path6 of files) {
-    const text = read(path6);
-    const url = text === void 0 ? void 0 : customNugetSource(text);
-    if (url !== void 0) return { kind: "registry", source: path6, url };
+    const text = read(path6, ctx);
+    if (text === void 0) continue;
+    for (const url of customNugetSources(text)) {
+      if (machineWide.has(path6) && isLocalFolderSource(url) && !localFeedHas(url, path6, name, ctx)) continue;
+      return { kind: "registry", source: path6, url };
+    }
   }
   return null;
 }
 function customRegistryFor(ecosystem, name, ctx = {}) {
+  firstUnread = void 0;
+  let found;
   try {
     switch (ecosystem) {
       case "npm":
-        return npmRegistry(name, ctx);
+        found = npmRegistry(name, ctx);
+        break;
       case "pypi":
-        return pypiRegistry(name, ctx);
+        found = pypiRegistry(name, ctx);
+        break;
       case "packagist":
-        return composerRegistry(ctx);
+        found = composerRegistry(ctx);
+        break;
       case "nuget":
-        return nugetRegistry(ctx);
+        found = nugetRegistry(name, ctx);
+        break;
       default:
-        return null;
+        found = null;
     }
   } catch {
-    return null;
+    found = null;
   }
+  const unread = takeUnread();
+  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : found;
 }
 
 // src/pkgvet/registry.ts
@@ -70328,7 +70629,7 @@ var OSV_ECOSYSTEM = {
 // src/pkgvet/versions.ts
 var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
 var DEV_REST = /(?:^|[-._])dev/i;
-function parse6(version2) {
+function parse7(version2) {
   let s = version2.trim().replace(/^[vV=]+/, "");
   const plus = s.indexOf("+");
   if (plus >= 0) s = s.slice(0, plus);
@@ -70374,8 +70675,8 @@ function compareRest(a2, b) {
   return 0;
 }
 function compareVersions2(a2, b) {
-  const pa = parse6(a2);
-  const pb = parse6(b);
+  const pa = parse7(a2);
+  const pb = parse7(b);
   if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
   const r = compareRelease(pa.release, pb.release);
   if (r !== 0) return r;
@@ -70383,7 +70684,7 @@ function compareVersions2(a2, b) {
   return compareRest(pa.rest, pb.rest);
 }
 function isPrerelease(version2) {
-  const p = parse6(version2);
+  const p = parse7(version2);
   return p === null || p.stage < 2;
 }
 var gte = (x) => (v) => compareVersions2(v, x) >= 0;
@@ -70508,7 +70809,7 @@ function pep440Range(range) {
       const prefix = partial2(ver.slice(0, -2));
       if (prefix === null || prefix.nums.length === 0) return null;
       const inPrefix = (v) => {
-        const p = parse6(v);
+        const p = parse7(v);
         return p !== null && prefix.nums.every((n2, i2) => (p.release[i2] ?? 0) === n2);
       };
       if (op === "==") preds.push(inPrefix);
@@ -70516,7 +70817,7 @@ function pep440Range(range) {
       else return null;
       continue;
     }
-    if (parse6(ver) === null) return null;
+    if (parse7(ver) === null) return null;
     switch (op) {
       case "==":
         preds.push(eq(ver));
@@ -70537,11 +70838,11 @@ function pep440Range(range) {
         preds.push(lt(ver));
         break;
       case "~=": {
-        const p = parse6(ver);
+        const p = parse7(ver);
         if (p === null || p.release.length < 2) return null;
         const prefix = p.release.slice(0, -1);
         preds.push(gte(ver), (v) => {
-          const q = parse6(v);
+          const q = parse7(v);
           return q !== null && prefix.every((n2, i2) => (q.release[i2] ?? 0) === n2);
         });
         break;
@@ -70555,7 +70856,7 @@ function pep440Range(range) {
 function nugetRange(range) {
   const r = range.trim();
   const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
-  if (m === null) return parse6(r) === null ? null : [[eq(r)]];
+  if (m === null) return parse7(r) === null ? null : [[eq(r)]];
   const open = m[1];
   const lo = m[2] ?? "";
   const hasComma = r.includes(",");
@@ -70575,11 +70876,11 @@ function isExactVersion(ecosystem, range) {
     case "npm":
       return EXACT_SEMVER.test(r);
     case "pypi":
-      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse6(r) !== null && !/[,<>=!~*]/.test(r);
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse7(r) !== null && !/[,<>=!~*]/.test(r);
     case "packagist":
       return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
     case "nuget":
-      return parse6(r) !== null && !/[[\](),]/.test(r);
+      return parse7(r) !== null && !/[[\](),]/.test(r);
     default:
       return false;
   }
@@ -70757,12 +71058,12 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     if (w.custom !== null) {
       const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
-      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : `a custom registry is configured (${where})`;
+      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? w.custom.what === "workspace manifest" ? `workspace manifest at ${w.custom.source} could not be read \u2014 possibly a local workspace package` : w.custom.what === "directory" ? `directory ${w.custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown2(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? w.custom !== null ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
+    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown2(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -70964,7 +71265,7 @@ async function handler44(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve20(inp.project_path);
-    if (!existsSync55(projectDir) || !statSync21(projectDir).isDirectory()) {
+    if (!existsSync54(projectDir) || !statSync21(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }

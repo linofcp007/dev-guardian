@@ -1,10 +1,12 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { customRegistryFor } from '../../../src/pkgvet/privateRegistry.js';
+import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 
 let project: string;
 let home: string;
@@ -26,6 +28,7 @@ const ctx = (env: Record<string, string> = {}) => ({
   env,
   etcDir: join(home, 'no-etc'),
   nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+  systemLibraryDir: join(home, 'no-library'),
 });
 
 describe('customRegistryFor — npm', () => {
@@ -331,8 +334,183 @@ describe('fix round 2 — registry context the hook could still miss', () => {
     expect(customRegistryFor('pypi', 'requests', ctx({ PIP_NO_INDEX: '0' }))).toBeNull();
   });
 
-  it('nuget: any NUGET_* env var counts', () => {
-    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ NUGET_PACKAGES: '/opt/nuget' }))).toMatchObject({ source: 'NUGET_PACKAGES' });
+  // Follow-up Part Y: only a NUGET_* variable that names a source, a feed or a
+  // config file counts; NUGET_PACKAGES is the package cache.
+  it.each([
+    ['NUGET_SOURCE', 'https://nuget.corp.local/v3/index.json'],
+    ['nuget_feed_url', 'https://nuget.corp.local/v3/index.json'],
+    ['NUGET_RESTORE_CONFIG_FILE', '/ci/nuget.config'],
+    ['NuGetPackageSourceCredentials_corp', 'Username=ci;Password=x'],
+    // Fix round 1 (M3): fallback folders are package sources too.
+    ['NUGET_FALLBACK_PACKAGES', '/opt/nuget-fallback'],
+  ])('nuget: %s counts', (name, value) => {
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ [name]: value }))).toMatchObject({ source: name });
+  });
+
+  it.each([
+    ['NUGET_PACKAGES', '/opt/nuget'],
+    ['NUGET_XMLDOC_MODE', 'skip'],
+    ['NUGET_HTTP_CACHE_PATH', '/tmp/nuget-http'],
+    ['NUGET_CERT_REVOCATION_MODE', 'offline'],
+  ])('nuget: %s does not', (name, value) => {
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ [name]: value }))).toBeNull();
+  });
+});
+
+// Follow-up Part Y (item 5): configuration the package managers read that
+// this did not — each one a false DENY of a private name waiting to happen.
+describe('customRegistryFor — the configuration locations that were still missing (Part Y)', () => {
+  const NUGET_CORP =
+    '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>';
+
+  it('Yarn Berry reads .yarnrc.yml in every ancestor up to the root — above the repository root too', () => {
+    const repo = join(project, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(project, '.yarnrc.yml'), 'npmRegistryServer: "https://npm.corp.local"\n');
+    expect(customRegistryFor('npm', 'corp-lib', { ...ctx(), projectDir: repo })).toMatchObject({
+      url: 'https://npm.corp.local',
+    });
+    // …which is Yarn's rule, not npm's: a parent .npmrc above the repository root still is not read.
+    rmSync(join(project, '.yarnrc.yml'));
+    writeFileSync(join(project, '.npmrc'), 'registry=https://npm.corp.local/\n');
+    expect(customRegistryFor('npm', 'corp-lib', { ...ctx(), projectDir: repo })).toBeNull();
+  });
+
+  it('NuGet machine-wide configs: %ProgramFiles(x86)%\\NuGet\\Config\\*.config', () => {
+    const pf = join(home, 'pf86');
+    mkdirSync(join(pf, 'NuGet', 'Config'), { recursive: true });
+    writeFileSync(join(pf, 'NuGet', 'Config', 'Corp.Offline.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ 'ProgramFiles(x86)': pf }))).toMatchObject({
+      url: 'https://nuget.corp.local/v3/index.json',
+    });
+  });
+
+  it('NuGet machine-wide configs: /etc/opt/NuGet/Config/*.config', () => {
+    const dir = join(home, 'no-etc', 'opt', 'NuGet', 'Config');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).not.toBeNull();
+  });
+
+  it('NuGet machine-wide configs: /Library/Application Support/NuGet/Config/*.config (macOS)', () => {
+    const lib = join(home, 'Library-system');
+    mkdirSync(join(lib, 'Application Support', 'NuGet', 'Config'), { recursive: true });
+    writeFileSync(join(lib, 'Application Support', 'NuGet', 'Config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', { ...ctx(), systemLibraryDir: lib })).not.toBeNull();
+  });
+
+  it('NuGet extra user configs: %APPDATA%\\NuGet\\config\\*.config, ~/.nuget/config/*.config', () => {
+    const appdata = join(home, 'Roaming');
+    mkdirSync(join(appdata, 'NuGet', 'config'), { recursive: true });
+    writeFileSync(join(appdata, 'NuGet', 'config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx({ APPDATA: appdata }))).not.toBeNull();
+    rmSync(appdata, { recursive: true, force: true });
+    mkdirSync(join(home, '.nuget', 'config'), { recursive: true });
+    writeFileSync(join(home, '.nuget', 'config', 'corp.config'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).not.toBeNull();
+  });
+
+  it('a *.config there that names only nuget.org is not custom, and a file not named *.config is not read', () => {
+    const dir = join(home, 'no-etc', 'opt', 'NuGet', 'Config');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'public.config'),
+      '<configuration><packageSources><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>',
+    );
+    writeFileSync(join(dir, 'notes.txt'), NUGET_CORP);
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toBeNull();
+  });
+
+  // Fix round 1 (M2): Visual Studio installs a machine-wide
+  // Microsoft.VisualStudio.Offline.config whose one source is a LOCAL folder
+  // of the packages VS ships. It explains a 404 only for a package that folder
+  // actually holds — otherwise it turned the missing-name deny off on every
+  // machine with Visual Studio.
+  describe('a local-folder source in a machine-wide config (the Visual Studio offline feed)', () => {
+    const offlineFeed = (): string => {
+      const pf = join(home, 'pf86');
+      const feed = join(pf, 'Microsoft SDKs', 'NuGetPackages');
+      mkdirSync(feed, { recursive: true });
+      mkdirSync(join(pf, 'NuGet', 'Config'), { recursive: true });
+      writeFileSync(
+        join(pf, 'NuGet', 'Config', 'Microsoft.VisualStudio.Offline.config'),
+        `<?xml version="1.0" encoding="utf-8"?><configuration><packageSources><add key="Microsoft Visual Studio Offline Packages" value="${feed}\\" /></packageSources></configuration>`,
+      );
+      return feed;
+    };
+    const vsCtx = () => ctx({ 'ProgramFiles(x86)': join(home, 'pf86') });
+
+    it('does not explain a package the folder does not hold', () => {
+      offlineFeed();
+      expect(customRegistryFor('nuget', 'Acme.Totally.Missing.Pkg', vsCtx())).toBeNull();
+    });
+
+    it('explains one it holds — flat `<id>.<version>.nupkg` or hierarchical `<id>/`, any casing', () => {
+      const feed = offlineFeed();
+      writeFileSync(join(feed, 'Microsoft.VisualStudio.Shipped.1.2.3.nupkg'), '');
+      expect(customRegistryFor('nuget', 'microsoft.visualstudio.shipped', vsCtx())).toMatchObject({ kind: 'registry' });
+      mkdirSync(join(feed, 'corp.offline.lib'));
+      expect(customRegistryFor('nuget', 'Corp.Offline.Lib', vsCtx())).toMatchObject({ kind: 'registry' });
+    });
+
+    // Fix round 2: the id ends where the version begins — at the first
+    // dot-separated segment from which the rest parses as a NuGet version.
+    it.each([
+      ['Foo', 'Foo.2FA.1.0.0.nupkg', false],
+      ['Foo.2FA', 'Foo.2FA.1.0.0.nupkg', true],
+      ['Foo', 'Foo.1.0.0-beta.1.nupkg', true],
+      ['Foo', 'Foo.2.1.0.0.nupkg', true],
+      ['Foo', 'Foo.1.0.0+build.5.nupkg', true],
+      ['Foo', 'Foo.Bar.1.0.0.nupkg', false],
+      ['Foo', 'Foo.nupkg', false],
+      // Fix round 3: every split where `id.` is followed by a version counts —
+      // `foo.2.1.0.0` is `foo` 2.1.0.0 AND `foo.2` 1.0.0.
+      ['foo.2', 'foo.2.1.0.0.nupkg', true],
+      ['foo.2.1', 'foo.2.1.0.0.nupkg', true],
+    ] as const)('%s held by %s: %s', (id, file, held) => {
+      const feed = offlineFeed();
+      writeFileSync(join(feed, file), '');
+      const r = customRegistryFor('nuget', id, vsCtx());
+      if (held) expect(r).toMatchObject({ kind: 'registry' });
+      else expect(r).toBeNull();
+    });
+
+    it('a package whose name only starts the same does not count', () => {
+      const feed = offlineFeed();
+      writeFileSync(join(feed, 'Corp.Lib.Extra.1.0.0.nupkg'), '');
+      expect(customRegistryFor('nuget', 'Corp.Lib', vsCtx())).toBeNull();
+    });
+
+    it('a URL source in the same machine-wide directory still counts for every name', () => {
+      offlineFeed();
+      writeFileSync(
+        join(home, 'pf86', 'NuGet', 'Config', 'Corp.config'),
+        '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>',
+      );
+      expect(customRegistryFor('nuget', 'Acme.Totally.Missing.Pkg', vsCtx())).toMatchObject({ url: 'https://nuget.corp.local/v3/index.json' });
+    });
+
+    it('a local folder in a PROJECT nuget.config still counts for every name, as before', () => {
+      writeFileSync(
+        join(project, 'nuget.config'),
+        '<configuration><packageSources><add key="local" value="./packages" /></packageSources></configuration>',
+      );
+      expect(customRegistryFor('nuget', 'Acme.Totally.Missing.Pkg', ctx())).toMatchObject({ kind: 'registry' });
+    });
+  });
+
+  it('pip: $CONDA_PREFIX/pip.conf (a conda environment is pip\'s site)', () => {
+    const conda = join(home, 'miniconda', 'envs', 'app');
+    mkdirSync(conda, { recursive: true });
+    writeFileSync(join(conda, 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    expect(customRegistryFor('pypi', 'corp-lib', ctx({ CONDA_PREFIX: conda }))).not.toBeNull();
+  });
+
+  it('pip: /Library/Application Support/pip/pip.conf (macOS system-wide)', () => {
+    const lib = join(home, 'Library-system');
+    mkdirSync(join(lib, 'Application Support', 'pip'), { recursive: true });
+    writeFileSync(join(lib, 'Application Support', 'pip', 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    expect(customRegistryFor('pypi', 'corp-lib', { ...ctx(), systemLibraryDir: lib })).not.toBeNull();
   });
 });
 
@@ -363,21 +541,230 @@ describe('customRegistryFor — NuGet', () => {
 // Task 23 fix round 2, N1: the install hook reads these files synchronously
 // inside a 15 s hook budget. A FIFO or a device where a config file belongs
 // must never be opened, and an absurdly large one never read.
-describe('customRegistryFor — files that are not small regular files are not read', () => {
-  it('a directory named .npmrc is ignored, not thrown on', () => {
+//
+// Part Y fix round 1 (controller ruling): a registry configuration that is
+// there but was not read is UNKNOWN, never absent — it may well name a private
+// registry. It is reported as `unreadable`, which turns a missing-name deny
+// into a warning, exactly as a readable private registry does.
+describe('customRegistryFor — files that are not small regular files are not read, and are unknown', () => {
+  const unreadable = (path: string): unknown => ({ kind: 'unreadable', source: path, what: 'configuration' });
+
+  it('a directory named .npmrc is not read, and is not "no registry"', () => {
     mkdirSync(join(project, '.npmrc'));
-    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual(unreadable(join(project, '.npmrc')));
   });
 
-  it('an .npmrc over the 1 MiB cap is not read', () => {
+  it('an .npmrc over the 1 MiB cap is not read, and is not "no registry"', () => {
     writeFileSync(join(project, '.npmrc'), `registry=https://npm.acme.local/\n${'#'.repeat(1024 * 1024)}\n`);
-    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual(unreadable(join(project, '.npmrc')));
   });
 
-  it.skipIf(process.platform === 'win32')('a FIFO .npmrc is not opened (POSIX only: Windows has no FIFOs)', () => {
+  it.skipIf(process.platform === 'win32')('a FIFO .npmrc is not opened, and is not "no registry" (POSIX only: Windows has no FIFOs)', () => {
     expect(spawnSync('mkfifo', [join(project, '.npmrc')]).status).toBe(0);
     const t0 = Date.now();
-    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual(unreadable(join(project, '.npmrc')));
     expect(Date.now() - t0).toBeLessThan(1000);
   });
+
+  it('a registry found elsewhere still wins over an unreadable file', () => {
+    mkdirSync(join(project, '.npmrc'));
+    writeFileSync(join(home, '.npmrc'), 'registry=https://npm.corp.local/\n');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ kind: 'registry', url: 'https://npm.corp.local/' });
+  });
+
+  it('every ecosystem: pip.conf, composer.json, nuget.config', () => {
+    mkdirSync(join(home, '.config', 'pip', 'pip.conf'), { recursive: true });
+    expect(customRegistryFor('pypi', 'corp-lib', ctx())).toEqual(unreadable(join(home, '.config', 'pip', 'pip.conf')));
+    mkdirSync(join(project, 'composer.json'));
+    expect(customRegistryFor('packagist', 'corp/lib', ctx())).toEqual(unreadable(join(project, 'composer.json')));
+    mkdirSync(join(project, 'nuget.config'));
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toEqual(unreadable(join(project, 'nuget.config')));
+  });
+
+  // Fix round 2: the message names what was refused, not always "registry configuration".
+  it('an unreadable WORKSPACE MANIFEST is named as one', () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'a', 'package.json'), { recursive: true });
+    expect(customRegistryFor('npm', 'corp-lib', ctx())).toEqual({
+      kind: 'unreadable',
+      source: join(project, 'packages', 'a', 'package.json'),
+      what: 'workspace manifest',
+    });
+  });
+
+  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+    'an ancestor directory that cannot be listed is named as a directory (POSIX, not root)',
+    () => {
+      const sub = join(project, 'sub');
+      mkdirSync(sub);
+      chmodSync(project, 0o300);
+      try {
+        expect(customRegistryFor('nuget', 'Corp.Lib', { ...ctx(), projectDir: sub })).toEqual({
+          kind: 'unreadable',
+          source: project,
+          what: 'directory',
+        });
+      } finally {
+        chmodSync(project, 0o700);
+      }
+    },
+  );
+
+  it('an absent file is absent: nothing configured is still public', () => {
+    expect(customRegistryFor('npm', 'lodash', ctx())).toBeNull();
+    expect(customRegistryFor('pypi', 'requests', ctx())).toBeNull();
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toBeNull();
+  });
+});
+
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'pkgvet-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+// Follow-up Part Y (item 4): these reads had the descriptor checks only. A
+// `.npmrc` linked to `\\<unreachable host>\…` held the install hook on its
+// open past the 15 s timeout (~136 s was measured for the hook config), and
+// the install then ran unvetted. Every read now walks the path's links first,
+// as the hook config reader does, and a file reached through a network or
+// device link is not read. It is UNKNOWN, not absent (fix round 1): it may
+// name a private registry, so a missing name there warns instead of denying.
+describe('customRegistryFor — a file reached through a network or device link is not opened (Part Y)', () => {
+  const WIN = process.platform === 'win32';
+  /**
+   * On POSIX a link target spelled `//tmp/…` is refused by the walk (a UNC
+   * spelling) yet names a LOCAL file — so a reader that follows the link finds
+   * the registry in it, and one that walks first does not. Windows has no such
+   * spelling to test with: Node stores a `\\?\C:\…` link target as the plain
+   * path. There, the unreachable-share test below is the check.
+   */
+  const POSIX_LINKS = CAN_SYMLINK && !WIN;
+  const deviceSpelling = (p: string): string => `/${p}`;
+  const corpNpmrc = (): string => {
+    const real = join(home, 'real-npmrc');
+    writeFileSync(real, 'registry=https://npm.corp.local/\n');
+    return real;
+  };
+
+  it.skipIf(!POSIX_LINKS)('a project .npmrc linked through a //-spelled target is not read (POSIX with symlinks; skipped otherwise)', () => {
+    symlinkSync(deviceSpelling(corpNpmrc()), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(project, '.npmrc'), what: 'configuration' });
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user ~/.npmrc linked that way is not read either (POSIX with symlinks; skipped otherwise)', () => {
+    symlinkSync(deviceSpelling(corpNpmrc()), join(home, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.npmrc'), what: 'configuration' });
+  });
+
+  it.skipIf(!POSIX_LINKS)('nor an .npmrc in a parent directory of the project (POSIX with symlinks; skipped otherwise)', () => {
+    const nested = join(project, 'packages', 'web');
+    mkdirSync(nested, { recursive: true });
+    symlinkSync(deviceSpelling(corpNpmrc()), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', { ...ctx(), projectDir: nested })).toEqual({
+      kind: 'unreadable',
+      source: join(project, '.npmrc'),
+      what: 'configuration',
+    });
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user pip directory linked that way is not walked into (POSIX with symlinks; skipped otherwise)', () => {
+    const real = join(home, 'real-pip');
+    mkdirSync(real);
+    writeFileSync(join(real, 'pip.conf'), '[global]\nindex-url = https://pypi.corp.local/simple\n');
+    mkdirSync(join(home, '.config'), { recursive: true });
+    symlinkSync(deviceSpelling(real), join(home, '.config', 'pip'), 'dir');
+    expect(customRegistryFor('pypi', 'requests', ctx())).toEqual({
+      kind: 'unreadable',
+      source: join(home, '.config', 'pip', 'pip.conf'),
+      what: 'configuration',
+    });
+  });
+
+  it.skipIf(!POSIX_LINKS)('a user NuGet directory linked that way is not listed (POSIX with symlinks; skipped otherwise)', () => {
+    const real = join(home, 'real-nuget');
+    mkdirSync(real);
+    writeFileSync(
+      join(real, 'NuGet.Config'),
+      '<configuration><packageSources><add key="corp" value="https://nuget.corp.local/v3/index.json" /></packageSources></configuration>',
+    );
+    mkdirSync(join(home, '.nuget'), { recursive: true });
+    symlinkSync(deviceSpelling(real), join(home, '.nuget', 'NuGet'), 'dir');
+    expect(customRegistryFor('nuget', 'Corp.Lib', ctx())).toEqual({ kind: 'unreadable', source: join(home, '.nuget', 'NuGet'), what: 'directory' });
+  });
+
+  it.skipIf(!CAN_SYMLINK)('a local link — absolute or relative — is still followed and read (needs symlink rights; skipped without them)', () => {
+    symlinkSync(corpNpmrc(), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ url: 'https://npm.corp.local/' });
+    rmSync(join(project, '.npmrc'));
+    mkdirSync(join(project, 'cfg'));
+    writeFileSync(join(project, 'cfg', 'npmrc'), 'registry=https://npm.rel.local/\n');
+    symlinkSync(join('cfg', 'npmrc'), join(project, '.npmrc'), 'file');
+    expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ url: 'https://npm.rel.local/' });
+  });
+
+  // The real failure: a link to a share that never answers. Run in a child
+  // with a kill, because a blocked synchronous open cannot be interrupted from
+  // inside the process. TEST-NET-1 (192.0.2.1) is never routed. On POSIX
+  // `//192.0.2.1/…` is a local path, so this can only fail on Windows.
+  it.skipIf(!CAN_SYMLINK)(
+    'links to an unreachable share — project, parent and user .npmrc, .git, user pip and NuGet directories — cost no wait (needs symlink rights; skipped without them)',
+    async () => {
+      const UNC = WIN ? '\\\\192.0.2.1\\share' : '//192.0.2.1/share';
+      const sep = WIN ? '\\' : '/';
+      const app = join(project, 'app');
+      mkdirSync(app);
+      symlinkSync(`${UNC}${sep}npmrc`, join(app, '.npmrc'), 'file');
+      symlinkSync(`${UNC}${sep}parent-npmrc`, join(project, '.npmrc'), 'file');
+      symlinkSync(`${UNC}${sep}git`, join(project, '.git'), 'dir');
+      symlinkSync(`${UNC}${sep}user-npmrc`, join(home, '.npmrc'), 'file');
+      mkdirSync(join(home, '.config'), { recursive: true });
+      symlinkSync(`${UNC}${sep}pip`, join(home, '.config', 'pip'), 'dir');
+      mkdirSync(join(home, '.nuget'), { recursive: true });
+      symlinkSync(`${UNC}${sep}nuget`, join(home, '.nuget', 'NuGet'), 'dir');
+      const script = join(home, 'probe.mjs');
+      const moduleUrl = pathToFileURL(resolve(MCP_ROOT, 'src', 'pkgvet', 'privateRegistry.ts')).href;
+      writeFileSync(
+        script,
+        `import { customRegistryFor } from ${JSON.stringify(moduleUrl)};\n` +
+          'const [projectDir, homeDir] = process.argv.slice(2);\n' +
+          "const c = { projectDir, homeDir, env: {}, etcDir: homeDir + '/no-etc', nodeExecPath: homeDir + '/no-node/bin/node' };\n" +
+          'const t0 = Date.now();\n' +
+          "const r = [customRegistryFor('npm', 'lodash', c), customRegistryFor('pypi', 'requests', c), customRegistryFor('nuget', 'Corp.Lib', c)];\n" +
+          'process.stdout.write(JSON.stringify({ r, ms: Date.now() - t0 }));\n',
+      );
+      const out = await new Promise<{ timedOut: boolean; stdout: string }>((done) => {
+        const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, app, home], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        child.stdout.on('data', (d: Buffer) => {
+          stdout += d.toString('utf8');
+        });
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          done({ timedOut: true, stdout });
+        }, 45_000);
+        child.on('exit', () => {
+          clearTimeout(timer);
+          done({ timedOut: false, stdout });
+        });
+      });
+      expect(out.timedOut).toBe(false);
+      const parsed = JSON.parse(out.stdout) as { r: unknown[]; ms: number };
+      expect(parsed.r).toEqual([
+        { kind: 'unreadable', source: join(app, '.npmrc'), what: 'configuration' },
+        { kind: 'unreadable', source: join(home, '.config', 'pip', 'pip.conf'), what: 'configuration' },
+        { kind: 'unreadable', source: join(home, '.nuget', 'NuGet'), what: 'directory' },
+      ]);
+      expect(parsed.ms).toBeLessThan(5000);
+    },
+    60_000,
+  );
 });

@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -56,7 +56,22 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const LEAKY_ENV = /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|COMPOSER|VIRTUAL_ENV$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
+/** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
+const CAN_SYMLINK = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'pkgvet-e2e-symlink-probe-'));
+  try {
+    writeFileSync(join(probe, 't'), 'x');
+    symlinkSync(join(probe, 't'), join(probe, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+const LEAKY_ENV =
+  /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
 function runHook(command: string, routes: Record<string, Route | Route[]>, opts: { tool?: string; env?: Record<string, string> } = {}): HookOut {
   const base: Record<string, string> = {};
@@ -79,6 +94,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       APPDATA: home,
       LOCALAPPDATA: home,
       ProgramData: home,
+      'ProgramFiles(x86)': home,
       XDG_CONFIG_HOME: home,
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
@@ -209,6 +225,56 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
   }, 20_000);
 
+  // Follow-up Part Y (item 4): the registry-context reads were not walked for
+  // a network link. A project `.npmrc` linked to an unreachable share held the
+  // hook on its open until the 15 s kill, and the install then ran unvetted.
+  // TEST-NET-1 (192.0.2.1) is never routed; on POSIX `//192.0.2.1/…` is a
+  // local path, so only Windows can fail this.
+  it.skipIf(!CAN_SYMLINK)(
+    'a project .npmrc linked to an unreachable share: answered at once, not after the hook timeout (needs symlink rights; skipped without them)',
+    () => {
+      const unc = process.platform === 'win32' ? '\\\\192.0.2.1\\share\\npmrc' : '//192.0.2.1/share/npmrc';
+      symlinkSync(unc, join(project, '.npmrc'), 'file');
+      const r = runHook('npm i @corp/internal', {
+        'https://registry.npmjs.org/@corp%2Finternal': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.status).toBe(0);
+      expect(r.ms).toBeLessThan(10_000);
+      // Fix round 1 (controller ruling): a registry configuration that could
+      // not be read may name a private registry — UNKNOWN, so a warning, never
+      // a deny. The reviewer's repro was exactly this: WARN at 166117a, DENY
+      // after the first round.
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(
+        /@corp\/internal.*not found on the public registry.*could not be read — possibly a private registry/s,
+      );
+    },
+    30_000,
+  );
+
+  // Fix round 2: every install was vetted, one by one — 60 KB of `npm i x; `
+  // (6 800 installs) took ~57 s through the hook, past its 15 s timeout.
+  it('fix round 2 — 6 800 installs of one package answer in well under 5 s', () => {
+    const r = runHook('npm i express; '.repeat(6_800), {
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      [OSV]: { osv: {} },
+    });
+    expect(r.status).toBe(0);
+    expect(r.ms).toBeLessThan(5000);
+    expect(r.requests.filter((u) => u.includes('registry.npmjs.org/express'))).toHaveLength(1);
+  }, 30_000);
+
+  it('fix round 1 — an unreadable project .npmrc (here a directory) warns, never denies', () => {
+    mkdirSync(join(project, '.npmrc'));
+    const r = runHook('npm i @corp/internal', {
+      'https://registry.npmjs.org/@corp%2Finternal': { status: 404 },
+      [OSV]: { osv: {} },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not be read — possibly a private registry/);
+  });
+
   it('fix round 1 — a missing name after a `cd` is a warning, never a deny (uncertain parse)', () => {
     const r = runHook('cd packages/web && npm install react-form-autopilot-helperz', {
       'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
@@ -315,8 +381,49 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       });
       expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(
-        're-run the install with an explicit --registry / --index-url / --source, or set GUARDIAN_PKG_VET=0',
+        're-run the install with an explicit `--registry <url>`, or prefix the command with `GUARDIAN_PKG_VET=0`.',
       );
+    });
+
+    it('control: the escape hatch it names really works — the prefixed command is not denied', () => {
+      const r = runHook('GUARDIAN_PKG_VET=0 npm i -D react-form-autopilot-helperz', {
+        'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+        [OSV]: { osv: {} },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not found on the public registry/);
+    });
+  });
+
+  // Follow-up Part Y: PowerShell hands a native command each element of
+  // `a,b` as its own argument and continues a line after a backtick. Those
+  // packages were never vetted; a MALICIOUS one is now denied through the real
+  // hook, while a missing name there only warns.
+  describe('Part Y — PowerShell shapes through the real hook', () => {
+    const routes = (missing: boolean): Record<string, Route> => ({
+      'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+      'https://registry.npmjs.org/evil-helper-zz': missing ? { status: 404 } : npmDoc('1.0.0'),
+      [OSV]: { osv: missing ? {} : { 'evil-helper-zz@1.0.0': ['MAL-2026-0042'] } },
+    });
+
+    it.each([
+      ['a comma list', 'npm i lodash,evil-helper-zz'],
+      ['a backtick continuation', 'npm i lodash `\n  evil-helper-zz'],
+    ])('%s: a malicious package is denied', (_label, command) => {
+      const r = runHook(command, routes(false), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0042');
+    });
+
+    it('a comma list: a missing name warns, never denies', () => {
+      const r = runHook('npm i lodash,evil-helper-zz', routes(true), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/evil-helper-zz.*not found on the public registry/s);
+    });
+
+    it('the PowerShell deny spells its escape hatch the PowerShell way', () => {
+      const r = runHook('npm i evil-helper-zz', routes(true), { tool: 'PowerShell' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain("`$env:GUARDIAN_PKG_VET = '0'`");
     });
   });
 

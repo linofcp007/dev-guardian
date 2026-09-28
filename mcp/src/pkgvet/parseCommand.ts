@@ -26,6 +26,9 @@
  */
 
 import { splitShell, type ShellWord } from '../hooks/bashGuard.js';
+import { powershellAsPosix } from '../hooks/powershellText.js';
+
+export { powershellAsPosix };
 import type { PackageSpec, PkgEcosystem, SkippedSpec } from './types.js';
 
 export interface InstallCommand {
@@ -675,14 +678,53 @@ function flagValue(words: readonly ShellWord[], names: readonly string[]): strin
   return undefined;
 }
 
+/** Which shell will run the command: the Bash tool (POSIX, or Git Bash on Windows) or the PowerShell tool. */
+export type CommandShell = 'bash' | 'powershell';
+
+/** Why a package found only by reading the command as PowerShell does is never denied as missing. */
+const POWERSHELL_READING =
+  'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) — vetted for malicious versions only';
+
+function packageKey(p: PackageSpec): string {
+  return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ''}`;
+}
+
 /**
  * Every install command in `command`, with the packages each would fetch
  * from a registry. `[]` for a command that installs nothing by name —
  * including a bare `npm install` or `pip install -r requirements.txt`.
+ *
+ * The command is read the POSIX way `splitShell` reads every command. For the
+ * PowerShell tool (`shell: 'powershell'`) it is ALSO read the way PowerShell
+ * reads it ({@link powershellAsPosix}): `npm i a,b` hands npm two packages,
+ * a backtick-newline continues the line, `''` inside `'…'` is one quote, and a
+ * no-break space separates words. A package only that second reading finds is
+ * added — and marked uncertain, so it can only ever be denied as MALICIOUS,
+ * never as missing (follow-up Part Y, item 5).
  */
-export function parseInstallCommands(command: string): InstallCommand[] {
-  const out: InstallCommand[] = [];
+export function parseInstallCommands(command: string, opts: { shell?: CommandShell } = {}): InstallCommand[] {
   const text = stripComments(command);
+  const out = parseReading(text, null);
+  if (opts.shell !== 'powershell') return out;
+  const asPowerShell = powershellAsPosix(text);
+  if (asPowerShell === text) return out;
+  const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
+  for (const c of parseReading(asPowerShell, POWERSHELL_READING)) {
+    const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
+    if (packages.length === 0) continue;
+    for (const p of packages) seen.add(packageKey(p));
+    out.push({ ...c, packages, skipped: [] });
+  }
+  return out;
+}
+
+/**
+ * The install commands of one reading of the command. `forced`, when given,
+ * is the reason no package of this reading may be denied as missing;
+ * otherwise the controller ruling's confident-shape test decides.
+ */
+function parseReading(text: string, forced: string | null): InstallCommand[] {
+  const out: InstallCommand[] = [];
   let split;
   try {
     split = splitShell(text);
@@ -691,7 +733,7 @@ export function parseInstallCommands(command: string): InstallCommand[] {
   }
   // Controller ruling, round 2: an ALLOWLIST of confident shapes, not a
   // denylist of uncertainty signals. `null` = deny-eligible.
-  const notConfident = confidentShape(text);
+  const notConfident = forced ?? confidentShape(text);
   const envChange = changesEnvironment(text, split.statements);
   let dirChanged = false;
   for (const statement of split.statements) {
@@ -817,17 +859,24 @@ const ALLOW: Record<string, Allow> = {
       '--no-interaction'),
     value: set('--group', '-G', '--optional'),
   },
+  // Not `--no-update` / `--no-install` (composer) or `--no-restore` / `-n`
+  // (dotnet): each defers the lookup the command would make, so a name the
+  // public registry lacks is not yet a failed install (follow-up Part Y).
   composer: {
     bool: set('--dev', '-W', '--with-all-dependencies', '-w', '--with-dependencies', '--update-with-dependencies',
-      '--update-with-all-dependencies', '--no-update', '--no-install', '--no-scripts', '--no-progress', '-n',
-      '--no-interaction', '-q', '--quiet', '--sort-packages'),
+      '--update-with-all-dependencies', '--no-scripts', '--no-progress', '-n', '--no-interaction', '-q', '--quiet',
+      '--sort-packages'),
     value: set(),
   },
-  dotnet: { bool: set('--prerelease', '-n', '--no-restore'), value: set('-v', '--version', '-f', '--framework') },
+  dotnet: { bool: set('--prerelease'), value: set('-v', '--version', '-f', '--framework') },
 };
 
-/** Characters that, outside quotes, make a command something other than ONE plain simple statement. */
-const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\]]/;
+/**
+ * Characters that, outside quotes, make a command something other than ONE
+ * plain simple statement. `,` too: PowerShell hands a native command each
+ * element of `a,b` as its own argument.
+ */
+const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
 
 function notSingle(why: string): string {
   return `not a single plain install statement (${why})`;
@@ -856,8 +905,10 @@ export function confidentShape(text: string): string | null {
   for (let i = 0; i < t.length; i += 1) {
     const ch = t.charAt(i);
     if (quote === "'") {
-      if (ch === "'") quote = null;
-      else cur += ch;
+      if (ch !== "'") cur += ch;
+      // `'a''b'`: two spans to a POSIX shell, ONE with a literal quote to PowerShell.
+      else if (t.charAt(i + 1) === "'") return notSingle("adjacent '…' spans (PowerShell reads '' as a quote)");
+      else quote = null;
       continue;
     }
     if (quote === '"') {
@@ -973,7 +1024,22 @@ function changesDirectory(words: readonly ShellWord[]): boolean {
 }
 
 const ENV_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx']);
-const POWERSHELL_ENV = /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|\b(?:Set-Item|New-Item)\b[^;\n]*\benv:|SetEnvironmentVariable/i;
+/**
+ * PowerShell setting an environment variable: `$env:X =`,
+ * `SetEnvironmentVariable`, or `Set-Item` / `New-Item` followed by `env:` in
+ * the same `;`/newline segment. The last one was one regex whose `[^;\n]*`
+ * restarted at every `Set-Item` — 250 KB of them took 14 s, on every command
+ * the hook sees (fix round 3). Per segment, one search after the first
+ * cmdlet decides it the same way.
+ */
+function powershellSetsEnv(command: string): boolean {
+  if (/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|SetEnvironmentVariable/i.test(command)) return true;
+  for (const segment of command.split(/[;\n]/)) {
+    const m = /\b(?:Set-Item|New-Item)\b/i.exec(segment);
+    if (m !== null && /\benv:/i.test(segment.slice(m.index + m[0].length))) return true;
+  }
+  return false;
+}
 
 /**
  * Ruling (b): does ANY part of the command set an environment variable —
@@ -983,7 +1049,7 @@ const POWERSHELL_ENV = /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|\b(?:Set-Item|New-Item)
  * so a name missing from the PUBLIC registry proves nothing afterwards.
  */
 function changesEnvironment(command: string, statements: ReadonlyArray<{ commands: ShellWord[][] }>): boolean {
-  if (POWERSHELL_ENV.test(command)) return true;
+  if (powershellSetsEnv(command)) return true;
   for (const statement of statements) {
     for (const words of statement.commands) {
       const start = commandStart(words);
