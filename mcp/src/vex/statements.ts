@@ -7,26 +7,40 @@
  * A statement is built from the scan's CVE rows (`scan_cves`) and its
  * vulnerability findings, tied together by OWN ids only — a finding's rule
  * id and the aliases its scanner recorded (`intel/vulnIds.ts`), never an id
- * its description mentions. Two rows/findings are the same vulnerability in
- * the same package version when they share an own id, name the same package
- * and agree on the version; a finding with no exact version (npm audit's
- * vulnerable range) joins every version group it shares an id with. A
- * finding no row names — a PYSEC- or GHSA-only advisory — is a statement of
- * its own, under its own id. The statement is named by a CVE when the group
- * has one, else by its first own id, and lists every other id as an alias.
+ * its description mentions.
+ *
+ * Rows are the anchors, and two rows of different ids are never one
+ * statement (final review, M-a: OSV's alias set for GHSA-35jh-r3h4-6jhm holds
+ * CVE-2026-4800 as well as CVE-2021-23337, so tying by "any shared id" made
+ * two lodash vulnerabilities one statement; pip-audit's PYSEC-2020-96 carries
+ * CVE-2025-50460, the ms-swift RCE). A finding joins the row, of its package
+ * and version, that its rule id names; failing that, the first of its
+ * aliases, in the scanner's order, that a row names; failing that, it is a
+ * statement of its own — a PYSEC- or GHSA-only advisory — named by its first
+ * CVE alias, else its own rule id, beside every other finding named the same.
+ * A finding with no exact version (npm audit's vulnerable range) joins every
+ * version of its package under the same name. After that, a statement never
+ * lists as an alias an id that names another statement of the document.
  *
  * The status rules, and the only ones:
  *
  *   - `not_affected` ONLY from a VEX suppression — `suppress_finding` with
  *     `vex_status: not_affected` and its justification — active, of this
  *     project, on EVERY finding of the group, all with one justification. It
- *     is the author's own statement, so it wins over reachability. A plain
- *     suppression is a "false positive" note with no VEX justification and
- *     is never read as `not_affected`.
+ *     is the author's own statement, so it wins over reachability. The
+ *     copies' distinct impact statements are all said, joined and bounded
+ *     (final review, M-c). A copy with none is named in the notes (M-d). A
+ *     plain suppression is a "false positive" note with no VEX justification
+ *     and is never read as `not_affected`.
  *   - `affected` when the dependency provider says the package is
  *     `reachable` — a file an HTTP route reaches imports it and loads this
- *     version — the one positive evidence dev-guardian has that the product
- *     loads the vulnerable code on an exposed path.
+ *     version — on a surface snapshot of the tree the dependency scan
+ *     measured: the one positive evidence dev-guardian has that the product
+ *     loads the vulnerable code on an exposed path. A snapshot of another
+ *     tree (`staleSurface`) gives `under_investigation`, with the reach it
+ *     showed and why it is not stated (final review, M-h). A `confirmed`
+ *     verdict would be the other way to `affected`; no provider of this
+ *     version gives one.
  *   - `under_investigation` for everything else, with the reason in
  *     `status_notes`.
  *   - `fixed` never. A vulnerability in the newest scan is present by
@@ -36,10 +50,11 @@
  * vulnerable package version by purl — the SBOM's, else one built from the
  * ecosystem, name and version (`sbom.ts#buildPurl`). Where no purl can be
  * built (an image target names no ecosystem), the statements of one
- * vulnerability would all be about the same (vulnerability, product): they
- * are merged into one, with the most cautious status (affected, then
+ * vulnerability in one package would all be about the same subcomponent:
+ * they are merged into one, with the most cautious status (affected, then
  * under_investigation, then not_affected) and every version named in its
- * notes.
+ * notes. Two packages are never merged (final review, M-e: `org.x:a` and
+ * `org.x:b` sharing a GHSA were one statement).
  */
 
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
@@ -88,6 +103,11 @@ export interface VexInputs {
   now: number;
   /** The latest surface snapshot, prepared; null when there is none. */
   dependency: DependencyIndex | null;
+  /**
+   * Why that snapshot is not of the tree the dependency scan measured, or
+   * null/absent when it is: then no reach it shows is stated `affected`.
+   */
+  staleSurface?: string | null;
   sbom: SbomInventory | null;
 }
 
@@ -105,7 +125,11 @@ export function buildVexStatements(inputs: VexInputs): VexStatement[] {
     }),
   ];
   const drafts = groupMembers(members).map((group) => statementFor(group, inputs, active));
-  return mergeSameSubcomponent(drafts);
+  const statements = mergeSameSubcomponent(drafts);
+  // An id that names a statement of this document is that statement, never
+  // an alias of another one (final review, M-a).
+  const names = new Set(statements.map((s) => vulnIdKey(s.vulnerability)));
+  return statements.map((s) => ({ ...s, aliases: s.aliases.filter((a) => !names.has(vulnIdKey(a))) }));
 }
 
 /* ---------------------------------------------------------------------- *
@@ -151,55 +175,46 @@ function memberOfFinding(finding: Finding): Member | null {
 }
 
 interface Group {
+  /** The statement's id, as spelled by the row or finding that named it. */
+  name: string;
   members: Member[];
   /** Index of the first member, for a stable order (the rows' order first). */
   first: number;
 }
 
 function groupMembers(members: readonly Member[]): Group[] {
-  // Phase 1: same package, same version (or both none), a shared own id.
-  const parent = members.map((_, i) => i);
-  const find = (i: number): number => {
-    let root = i;
-    while (parent[root] !== root) root = parent[root] ?? root;
-    return root;
+  const rows = members.filter((m) => m.row !== undefined);
+  /** The id a member is stated under: see the header. */
+  const nameOf = (m: Member): string => {
+    if (m.row !== undefined) return m.row.cve_id;
+    const rowKeys = new Set(
+      rows.filter((r) => r.pkg === m.pkg && (m.version === null || r.version === m.version)).flatMap((r) => [...r.keys]),
+    );
+    return m.ids.find((id) => rowKeys.has(vulnIdKey(id))) ?? m.ids.find(isCveId) ?? m.ids[0] ?? '';
   };
-  for (let i = 0; i < members.length; i += 1) {
-    for (let j = i + 1; j < members.length; j += 1) {
-      const a = members[i];
-      const b = members[j];
-      if (a === undefined || b === undefined) continue;
-      if (a.pkg === b.pkg && a.version === b.version && intersects(a.keys, b.keys)) {
-        parent[find(j)] = find(i);
-      }
-    }
-  }
-  const byRoot = new Map<number, Group>();
+
+  // Same package, same exact version (or both none), same name.
+  const byKey = new Map<string, Group>();
   members.forEach((member, index) => {
-    const root = find(index);
-    const group = byRoot.get(root) ?? { members: [], first: index };
+    const name = nameOf(member);
+    const key = `${member.pkg}\u0000${member.version ?? '\u0000'}\u0000${vulnIdKey(name)}`;
+    const group = byKey.get(key) ?? { name, members: [], first: index };
     group.members.push(member);
-    byRoot.set(root, group);
+    byKey.set(key, group);
   });
 
-  // Phase 2: a group with no version (a range) joins every version group of
-  // its package it shares an id with, rather than standing apart from them.
-  const groups = [...byRoot.values()];
+  // A group with no version (a range) joins every version group of its
+  // package under the same name, rather than standing apart from them.
+  const groups = [...byKey.values()];
   const exact = groups.filter((g) => g.members[0]?.version !== null);
   const out = [...exact];
   for (const loose of groups.filter((g) => g.members[0]?.version === null)) {
     const pkg = loose.members[0]?.pkg;
-    const keys = new Set(loose.members.flatMap((m) => [...m.keys]));
-    const targets = exact.filter((g) => g.members[0]?.pkg === pkg && g.members.some((m) => intersects(m.keys, keys)));
+    const targets = exact.filter((g) => g.members[0]?.pkg === pkg && vulnIdKey(g.name) === vulnIdKey(loose.name));
     if (targets.length === 0) out.push(loose);
     for (const target of targets) target.members.push(...loose.members);
   }
   return out.sort((a, b) => a.first - b.first);
-}
-
-function intersects(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  for (const key of a) if (b.has(key)) return true;
-  return false;
 }
 
 /* ---------------------------------------------------------------------- *
@@ -211,7 +226,7 @@ function statementFor(group: Group, inputs: VexInputs, active: readonly Suppress
   const findings = uniqueFindings(group.members.flatMap((m) => (m.finding === undefined ? [] : [m.finding])));
   const version = group.members.find((m) => m.version !== null)?.version ?? null;
   const name = rows[0]?.package_name ?? group.members[0]?.name ?? '';
-  const { vulnerability, aliases } = namesOf(group.members);
+  const { vulnerability, aliases } = namesOf(group);
   const subjects = findings.flatMap((f) => {
     const subject = dependencySubjectOf(f);
     return subject === null ? [] : [{ ...subject, version: subject.version ?? version }];
@@ -236,22 +251,35 @@ function statementFor(group: Group, inputs: VexInputs, active: readonly Suppress
   const justifications = new Set(vex.map((s) => s?.vex_justification));
   const first = vex[0];
   if (first !== undefined && vex.every((s) => s !== undefined) && justifications.size === 1 && first.vex_justification !== undefined) {
+    const impact = joinImpacts(vex.map((s) => s?.vex_impact_statement));
     return {
       ...base,
       status: 'not_affected',
       justification: first.vex_justification,
-      ...(first.vex_impact_statement !== undefined ? { impact_statement: first.vex_impact_statement } : {}),
+      ...(impact !== null ? { impact_statement: impact } : {}),
       status_notes: `${label}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`,
     };
   }
+  const lacking = findings.filter((_, i) => vex[i] === undefined);
   const suppressedNote =
     findings.some((f) => active.some((s) => matches(s, f)))
-      ? vex.every((s) => s !== undefined)
+      ? lacking.length === 0
         ? ' Its findings are stated not_affected for different reasons, so no single justification can be published.'
-        : ' The finding is suppressed in dev-guardian without a VEX justification on every copy, so it is not exported as not_affected.'
+        : ' The finding is suppressed in dev-guardian without a VEX justification on every copy ' +
+          `(${nameCopies(lacking)} ${lacking.length === 1 ? 'has' : 'have'} none), so it is not exported as not_affected.`
       : '';
 
   const assessment = assess(subjects, { package_name: name, ecosystem, version, manifest: null }, inputs.dependency);
+  const stale = inputs.staleSurface ?? null;
+  if (assessment?.verdict === 'reachable' && stale !== null) {
+    return {
+      ...base,
+      status: 'under_investigation',
+      status_notes:
+        `${label}: reachable per ${assessment.evidence[0]?.detail ?? 'a file an HTTP route reaches'} — but ` +
+        `${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`,
+    };
+  }
   if (assessment?.verdict === 'reachable') {
     return {
       ...base,
@@ -274,19 +302,43 @@ function statementFor(group: Group, inputs: VexInputs, active: readonly Suppress
   };
 }
 
-/** The group's name — a CVE when it has one — and every other own id once. */
-function namesOf(members: readonly Member[]): { vulnerability: string; aliases: string[] } {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  for (const member of members) {
+/** The group's name, and every other own id of its members once. */
+function namesOf(group: Group): { vulnerability: string; aliases: string[] } {
+  const aliases: string[] = [];
+  const seen = new Set<string>([vulnIdKey(group.name)]);
+  for (const member of group.members) {
     for (const id of member.ids) {
       if (seen.has(vulnIdKey(id))) continue;
       seen.add(vulnIdKey(id));
-      ids.push(id);
+      aliases.push(id);
     }
   }
-  const vulnerability = ids.find(isCveId) ?? ids[0] ?? '';
-  return { vulnerability, aliases: ids.filter((id) => vulnIdKey(id) !== vulnIdKey(vulnerability)) };
+  return { vulnerability: group.name, aliases };
+}
+
+/** At most this many distinct impact statements are joined into one. */
+const MAX_IMPACTS = 3;
+
+/** The copies' distinct impact statements, joined; null when none has one. */
+function joinImpacts(values: ReadonlyArray<string | undefined>): string | null {
+  const distinct = [...new Set(values.flatMap((v) => (v === undefined || v.trim() === '' ? [] : [v.trim()])))];
+  if (distinct.length === 0) return null;
+  const shown = distinct.slice(0, MAX_IMPACTS).join('; ');
+  const more = distinct.length - MAX_IMPACTS;
+  return more > 0 ? `${shown}; and ${more} more on other copies of the finding` : shown;
+}
+
+/** At most this many copies are named in a note. */
+const MAX_NAMED_COPIES = 5;
+
+/** The copies, by file and fingerprint, for a note. */
+function nameCopies(findings: readonly Finding[]): string {
+  const named = findings
+    .slice(0, MAX_NAMED_COPIES)
+    .map((f) => `${f.file_path ?? '(no file)'} [${f.fingerprint.slice(0, 12)}]`)
+    .join(', ');
+  const more = findings.length - MAX_NAMED_COPIES;
+  return more > 0 ? `${named} and ${more} more` : named;
 }
 
 /** The best verdict any copy earns: reachable, then imported, then unknown. */
@@ -345,7 +397,12 @@ const STATUS_CAUTION: Record<VexStatus, number> = { affected: 0, under_investiga
 function mergeSameSubcomponent(drafts: readonly VexStatement[]): VexStatement[] {
   const byKey = new Map<string, VexStatement[]>();
   for (const draft of drafts) {
-    const key = `${vulnIdKey(draft.vulnerability)}|${[...draft.subcomponent_purls].sort().join(',')}`;
+    // With no purl, the package name keeps two packages apart (M-e).
+    const subcomponent =
+      draft.subcomponent_purls.length > 0
+        ? [...draft.subcomponent_purls].sort().join(',')
+        : `no-purl:${draft.package_name.toLowerCase()}`;
+    const key = `${vulnIdKey(draft.vulnerability)}|${subcomponent}`;
     byKey.set(key, [...(byKey.get(key) ?? []), draft]);
   }
   return [...byKey.values()].map(mergeOne);
@@ -358,6 +415,7 @@ function mergeOne(same: readonly VexStatement[]): VexStatement {
   const status = same.map((s) => s.status).sort((a, b) => STATUS_CAUTION[a] - STATUS_CAUTION[b])[0] ?? 'under_investigation';
   const justifications = new Set(same.map((s) => s.justification));
   const agreed = status === 'not_affected' && justifications.size === 1 ? first : null;
+  const impact = agreed === null ? null : joinImpacts(same.map((s) => s.impact_statement));
   const one = <T>(values: readonly T[]): T | null => (new Set(values).size === 1 ? (values[0] ?? null) : null);
   const aliases = [...new Map(same.flatMap((s) => s.aliases).map((a) => [vulnIdKey(a), a])).values()]
     .filter((a) => vulnIdKey(a) !== vulnIdKey(first.vulnerability));
@@ -376,7 +434,7 @@ function mergeOne(same: readonly VexStatement[]): VexStatement {
     severity: maxSeverity(same.map((s) => s.severity)),
     status: status === 'not_affected' && agreed === null ? 'under_investigation' : status,
     ...(agreed?.justification !== undefined ? { justification: agreed.justification } : {}),
-    ...(agreed?.impact_statement !== undefined ? { impact_statement: agreed.impact_statement } : {}),
+    ...(impact !== null ? { impact_statement: impact } : {}),
     ...(affected?.action_statement !== undefined ? { action_statement: affected.action_statement } : {}),
     status_notes: notes,
     subcomponent_purls: first.subcomponent_purls,

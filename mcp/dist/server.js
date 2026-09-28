@@ -74053,7 +74053,9 @@ function buildVexStatements(inputs) {
     })
   ];
   const drafts = groupMembers(members).map((group) => statementFor(group, inputs, active));
-  return mergeSameSubcomponent(drafts);
+  const statements = mergeSameSubcomponent(drafts);
+  const names = new Set(statements.map((s) => vulnIdKey(s.vulnerability)));
+  return statements.map((s) => ({ ...s, aliases: s.aliases.filter((a2) => !names.has(vulnIdKey(a2))) }));
 }
 function memberOfRow(row) {
   return {
@@ -74080,51 +74082,39 @@ function memberOfFinding(finding4) {
   };
 }
 function groupMembers(members) {
-  const parent = members.map((_, i2) => i2);
-  const find = (i2) => {
-    let root = i2;
-    while (parent[root] !== root) root = parent[root] ?? root;
-    return root;
+  const rows = members.filter((m) => m.row !== void 0);
+  const nameOf2 = (m) => {
+    if (m.row !== void 0) return m.row.cve_id;
+    const rowKeys = new Set(
+      rows.filter((r) => r.pkg === m.pkg && (m.version === null || r.version === m.version)).flatMap((r) => [...r.keys])
+    );
+    return m.ids.find((id) => rowKeys.has(vulnIdKey(id))) ?? m.ids.find(isCveId) ?? m.ids[0] ?? "";
   };
-  for (let i2 = 0; i2 < members.length; i2 += 1) {
-    for (let j = i2 + 1; j < members.length; j += 1) {
-      const a2 = members[i2];
-      const b = members[j];
-      if (a2 === void 0 || b === void 0) continue;
-      if (a2.pkg === b.pkg && a2.version === b.version && intersects(a2.keys, b.keys)) {
-        parent[find(j)] = find(i2);
-      }
-    }
-  }
-  const byRoot = /* @__PURE__ */ new Map();
+  const byKey = /* @__PURE__ */ new Map();
   members.forEach((member, index) => {
-    const root = find(index);
-    const group = byRoot.get(root) ?? { members: [], first: index };
+    const name = nameOf2(member);
+    const key = `${member.pkg}\0${member.version ?? "\0"}\0${vulnIdKey(name)}`;
+    const group = byKey.get(key) ?? { name, members: [], first: index };
     group.members.push(member);
-    byRoot.set(root, group);
+    byKey.set(key, group);
   });
-  const groups = [...byRoot.values()];
+  const groups = [...byKey.values()];
   const exact = groups.filter((g) => g.members[0]?.version !== null);
   const out = [...exact];
   for (const loose of groups.filter((g) => g.members[0]?.version === null)) {
     const pkg = loose.members[0]?.pkg;
-    const keys = new Set(loose.members.flatMap((m) => [...m.keys]));
-    const targets = exact.filter((g) => g.members[0]?.pkg === pkg && g.members.some((m) => intersects(m.keys, keys)));
+    const targets = exact.filter((g) => g.members[0]?.pkg === pkg && vulnIdKey(g.name) === vulnIdKey(loose.name));
     if (targets.length === 0) out.push(loose);
     for (const target of targets) target.members.push(...loose.members);
   }
   return out.sort((a2, b) => a2.first - b.first);
-}
-function intersects(a2, b) {
-  for (const key of a2) if (b.has(key)) return true;
-  return false;
 }
 function statementFor(group, inputs, active) {
   const rows = group.members.flatMap((m) => m.row === void 0 ? [] : [m.row]);
   const findings = uniqueFindings(group.members.flatMap((m) => m.finding === void 0 ? [] : [m.finding]));
   const version2 = group.members.find((m) => m.version !== null)?.version ?? null;
   const name = rows[0]?.package_name ?? group.members[0]?.name ?? "";
-  const { vulnerability, aliases } = namesOf(group.members);
+  const { vulnerability, aliases } = namesOf(group);
   const subjects = findings.flatMap((f) => {
     const subject = dependencySubjectOf(f);
     return subject === null ? [] : [{ ...subject, version: subject.version ?? version2 }];
@@ -74146,16 +74136,26 @@ function statementFor(group, inputs, active) {
   const justifications = new Set(vex.map((s) => s?.vex_justification));
   const first = vex[0];
   if (first !== void 0 && vex.every((s) => s !== void 0) && justifications.size === 1 && first.vex_justification !== void 0) {
+    const impact = joinImpacts(vex.map((s) => s?.vex_impact_statement));
     return {
       ...base,
       status: "not_affected",
       justification: first.vex_justification,
-      ...first.vex_impact_statement !== void 0 ? { impact_statement: first.vex_impact_statement } : {},
+      ...impact !== null ? { impact_statement: impact } : {},
       status_notes: `${label}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`
     };
   }
-  const suppressedNote = findings.some((f) => active.some((s) => matches(s, f))) ? vex.every((s) => s !== void 0) ? " Its findings are stated not_affected for different reasons, so no single justification can be published." : " The finding is suppressed in dev-guardian without a VEX justification on every copy, so it is not exported as not_affected." : "";
+  const lacking = findings.filter((_, i2) => vex[i2] === void 0);
+  const suppressedNote = findings.some((f) => active.some((s) => matches(s, f))) ? lacking.length === 0 ? " Its findings are stated not_affected for different reasons, so no single justification can be published." : ` The finding is suppressed in dev-guardian without a VEX justification on every copy (${nameCopies(lacking)} ${lacking.length === 1 ? "has" : "have"} none), so it is not exported as not_affected.` : "";
   const assessment = assess(subjects, { package_name: name, ecosystem, version: version2, manifest: null }, inputs.dependency);
+  const stale = inputs.staleSurface ?? null;
+  if (assessment?.verdict === "reachable" && stale !== null) {
+    return {
+      ...base,
+      status: "under_investigation",
+      status_notes: `${label}: reachable per ${assessment.evidence[0]?.detail ?? "a file an HTTP route reaches"} \u2014 but ${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`
+    };
+  }
   if (assessment?.verdict === "reachable") {
     return {
       ...base,
@@ -74170,18 +74170,31 @@ function statementFor(group, inputs, active) {
     status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
   };
 }
-function namesOf(members) {
-  const ids2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const member of members) {
+function namesOf(group) {
+  const aliases = [];
+  const seen = /* @__PURE__ */ new Set([vulnIdKey(group.name)]);
+  for (const member of group.members) {
     for (const id of member.ids) {
       if (seen.has(vulnIdKey(id))) continue;
       seen.add(vulnIdKey(id));
-      ids2.push(id);
+      aliases.push(id);
     }
   }
-  const vulnerability = ids2.find(isCveId) ?? ids2[0] ?? "";
-  return { vulnerability, aliases: ids2.filter((id) => vulnIdKey(id) !== vulnIdKey(vulnerability)) };
+  return { vulnerability: group.name, aliases };
+}
+var MAX_IMPACTS = 3;
+function joinImpacts(values) {
+  const distinct = [...new Set(values.flatMap((v) => v === void 0 || v.trim() === "" ? [] : [v.trim()]))];
+  if (distinct.length === 0) return null;
+  const shown = distinct.slice(0, MAX_IMPACTS).join("; ");
+  const more = distinct.length - MAX_IMPACTS;
+  return more > 0 ? `${shown}; and ${more} more on other copies of the finding` : shown;
+}
+var MAX_NAMED_COPIES = 5;
+function nameCopies(findings) {
+  const named = findings.slice(0, MAX_NAMED_COPIES).map((f) => `${f.file_path ?? "(no file)"} [${f.fingerprint.slice(0, 12)}]`).join(", ");
+  const more = findings.length - MAX_NAMED_COPIES;
+  return more > 0 ? `${named} and ${more} more` : named;
 }
 function assess(subjects, fallback, index) {
   if (index === null) return null;
@@ -74218,7 +74231,8 @@ var STATUS_CAUTION = { affected: 0, under_investigation: 1, not_affected: 2 };
 function mergeSameSubcomponent(drafts) {
   const byKey = /* @__PURE__ */ new Map();
   for (const draft of drafts) {
-    const key = `${vulnIdKey(draft.vulnerability)}|${[...draft.subcomponent_purls].sort().join(",")}`;
+    const subcomponent = draft.subcomponent_purls.length > 0 ? [...draft.subcomponent_purls].sort().join(",") : `no-purl:${draft.package_name.toLowerCase()}`;
+    const key = `${vulnIdKey(draft.vulnerability)}|${subcomponent}`;
     byKey.set(key, [...byKey.get(key) ?? [], draft]);
   }
   return [...byKey.values()].map(mergeOne);
@@ -74230,6 +74244,7 @@ function mergeOne(same) {
   const status = same.map((s) => s.status).sort((a2, b) => STATUS_CAUTION[a2] - STATUS_CAUTION[b])[0] ?? "under_investigation";
   const justifications = new Set(same.map((s) => s.justification));
   const agreed = status === "not_affected" && justifications.size === 1 ? first : null;
+  const impact = agreed === null ? null : joinImpacts(same.map((s) => s.impact_statement));
   const one = (values) => new Set(values).size === 1 ? values[0] ?? null : null;
   const aliases = [...new Map(same.flatMap((s) => s.aliases).map((a2) => [vulnIdKey(a2), a2])).values()].filter((a2) => vulnIdKey(a2) !== vulnIdKey(first.vulnerability));
   const affected = same.find((s) => s.status === "affected");
@@ -74246,7 +74261,7 @@ function mergeOne(same) {
     severity: maxSeverity(same.map((s) => s.severity)),
     status: status === "not_affected" && agreed === null ? "under_investigation" : status,
     ...agreed?.justification !== void 0 ? { justification: agreed.justification } : {},
-    ...agreed?.impact_statement !== void 0 ? { impact_statement: agreed.impact_statement } : {},
+    ...impact !== null ? { impact_statement: impact } : {},
     ...affected?.action_statement !== void 0 ? { action_statement: affected.action_statement } : {},
     status_notes: notes,
     subcomponent_purls: first.subcomponent_purls
@@ -74318,6 +74333,7 @@ async function handler45(input, ctx) {
     projectPath,
     now: Date.now(),
     dependency: surface?.index ?? null,
+    staleSurface: surface?.stale ?? null,
     sbom: sbom?.inventory ?? null
   });
   const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
@@ -74430,19 +74446,20 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
     );
     return null;
   }
+  let stale = null;
   if (persisted.snapshot.external_imports === void 0) {
     unknowns.push(
       "the attack-surface snapshot was mapped before third-party imports were recorded \u2014 re-run map_attack_surface with force: true; until then no package reads as imported"
     );
   } else if (persisted.tree_hash !== depsScan.tree_hash) {
-    unknowns.push(
-      `the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the dependency scan (tree ${depsScan.tree_hash}): the imports may have changed since`
-    );
+    stale = `the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the dependency scan (tree ${depsScan.tree_hash})`;
+    unknowns.push(`${stale}: the imports may have changed since, so no statement is affected from it`);
   }
   return {
     id: persisted.id,
     capturedAt: persisted.captured_at,
     treeHash: persisted.tree_hash,
+    stale,
     index: prepareDependencyIndex({
       snapshot: persisted.snapshot,
       graph: buildImportGraph(persisted.snapshot.imports),

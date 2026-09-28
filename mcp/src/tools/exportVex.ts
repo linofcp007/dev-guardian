@@ -172,6 +172,7 @@ async function handler(
     projectPath,
     now: Date.now(),
     dependency: surface?.index ?? null,
+    staleSurface: surface?.stale ?? null,
     sbom: sbom?.inventory ?? null,
   });
 
@@ -310,6 +311,8 @@ interface SurfaceRead {
   id: number;
   capturedAt: string;
   treeHash: string;
+  /** Why the snapshot is not of the dependency scan's tree; null when it is. */
+  stale: string | null;
   index: DependencyIndex;
 }
 
@@ -327,27 +330,29 @@ function readSurface(
     );
     return null;
   }
+  let stale: string | null = null;
   if (persisted.snapshot.external_imports === undefined) {
     unknowns.push(
       'the attack-surface snapshot was mapped before third-party imports were recorded — re-run ' +
         'map_attack_surface with force: true; until then no package reads as imported',
     );
   } else if (persisted.tree_hash !== depsScan.tree_hash) {
-    unknowns.push(
+    stale =
       `the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the ` +
-        `dependency scan (tree ${depsScan.tree_hash}): the imports may have changed since`,
-    );
+      `dependency scan (tree ${depsScan.tree_hash})`;
+    unknowns.push(`${stale}: the imports may have changed since, so no statement is affected from it`);
   }
   return {
     id: persisted.id,
     capturedAt: persisted.captured_at,
     treeHash: persisted.tree_hash,
+    stale,
     index: prepareDependencyIndex({
       snapshot: persisted.snapshot,
       graph: buildImportGraph(persisted.snapshot.imports),
       projectPath,
       npmResolver: makeNpmResolver(projectPath),
-        pypiPins: makePypiPinResolver(projectPath),
+      pypiPins: makePypiPinResolver(projectPath),
     }),
   };
 }

@@ -141,6 +141,7 @@ async function handler(input, ctx) {
         projectPath,
         now: Date.now(),
         dependency: surface?.index ?? null,
+        staleSurface: surface?.stale ?? null,
         sbom: sbom?.inventory ?? null,
     });
     const unnamed = statements.filter((s) => s.subcomponent_purls.length === 0).length;
@@ -258,18 +259,22 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
             'imported was not checked, so no statement is affected — they are under_investigation');
         return null;
     }
+    let stale = null;
     if (persisted.snapshot.external_imports === undefined) {
         unknowns.push('the attack-surface snapshot was mapped before third-party imports were recorded — re-run ' +
             'map_attack_surface with force: true; until then no package reads as imported');
     }
     else if (persisted.tree_hash !== depsScan.tree_hash) {
-        unknowns.push(`the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the ` +
-            `dependency scan (tree ${depsScan.tree_hash}): the imports may have changed since`);
+        stale =
+            `the attack-surface snapshot (tree ${persisted.tree_hash}) describes a different tree than the ` +
+                `dependency scan (tree ${depsScan.tree_hash})`;
+        unknowns.push(`${stale}: the imports may have changed since, so no statement is affected from it`);
     }
     return {
         id: persisted.id,
         capturedAt: persisted.captured_at,
         treeHash: persisted.tree_hash,
+        stale,
         index: prepareDependencyIndex({
             snapshot: persisted.snapshot,
             graph: buildImportGraph(persisted.snapshot.imports),

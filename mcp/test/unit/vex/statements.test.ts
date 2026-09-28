@@ -365,3 +365,163 @@ describe('buildVexStatements — subcomponents without an SBOM', () => {
     expect(statements[0]?.status_notes).toMatch(/3\.1\.3/);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Review of part C, final round                                        */
+/* ------------------------------------------------------------------ */
+
+describe('buildVexStatements — an alias never names another statement (M-a)', () => {
+  it('keeps CVE-2026-4800 out of CVE-2021-23337’s aliases when OSV’s alias set holds both', () => {
+    // Measured: OSV's GHSA-35jh-r3h4-6jhm alias set holds CVE-2026-4800, so
+    // the CVE-2021-23337 finding carried it — and the not_affected statement
+    // for CVE-2021-23337 listed CVE-2026-4800, a statement of its own.
+    const statements = buildVexStatements(inputs({
+      cves: [cve(), cve({ cve_id: 'CVE-2026-4800', fixed_version: '4.18.0' })],
+      findings: [
+        finding({ vuln_aliases: ['GHSA-35jh-r3h4-6jhm', 'CVE-2026-4800'] }),
+        finding({
+          fingerprint: 'fp-4800', identity: 'id-4800', rule_id: 'CVE-2026-4800', snippet: 'lodash@4.17.20->4.18.0',
+          vuln_aliases: ['GHSA-r5fr-rjxr-66jc'],
+        }),
+      ],
+      suppressions: [vexSuppression()],
+    }));
+    expect(statements).toHaveLength(2);
+    const byId = new Map(statements.map((s) => [s.vulnerability, s]));
+    expect(byId.get('CVE-2021-23337')).toMatchObject({ status: 'not_affected', aliases: ['GHSA-35jh-r3h4-6jhm'] });
+    expect(byId.get('CVE-2026-4800')).toMatchObject({ status: 'under_investigation', aliases: ['GHSA-r5fr-rjxr-66jc'] });
+  });
+
+  it('keeps an id that names a statement of ANOTHER package out of the aliases (pip-audit PYSEC-2020-96)', () => {
+    // Measured: pip-audit's PYSEC-2020-96 (PyYAML) carries CVE-2025-50460,
+    // the ms-swift RCE — a statement of its own in the same document.
+    const statements = buildVexStatements(inputs({
+      cves: [
+        cve({ cve_id: 'CVE-2020-1747', package_name: 'pyyaml', installed_version: '5.3', fixed_version: '5.3.1' }),
+        cve({ cve_id: 'CVE-2025-50460', package_name: 'ms-swift', installed_version: '2.0.0', fixed_version: '3.0.0' }),
+      ],
+      findings: [
+        finding({
+          fingerprint: 'p96', identity: 'id-p96', tool: 'pip-audit', subcategory: 'dependency', rule_id: 'PYSEC-2020-96',
+          file_path: 'requirements.txt', snippet: 'pyyaml@5.3', vuln_aliases: ['CVE-2020-1747', 'CVE-2025-50460'],
+        }),
+        finding({
+          fingerprint: 'swift', identity: 'id-swift', rule_id: 'CVE-2025-50460', file_path: 'requirements.txt',
+          snippet: 'ms-swift@2.0.0->3.0.0',
+        }),
+      ],
+    }));
+    const byId = new Map(statements.map((s) => [s.vulnerability, s]));
+    expect(byId.get('CVE-2020-1747')?.aliases).toEqual(['PYSEC-2020-96']);
+    expect(byId.get('CVE-2025-50460')?.aliases).toEqual([]);
+  });
+
+  it('never lists as an alias the name of any other statement in the document', () => {
+    const statements = buildVexStatements(inputs({
+      cves: [cve(), cve({ cve_id: 'CVE-2026-4800', fixed_version: '4.18.0' })],
+      findings: [
+        finding({ vuln_aliases: ['GHSA-35jh-r3h4-6jhm', 'CVE-2026-4800'] }),
+        finding({ fingerprint: 'fp-4800', identity: 'id-4800', rule_id: 'CVE-2026-4800', vuln_aliases: ['CVE-2021-23337'] }),
+      ],
+    }));
+    const names = new Set(statements.map((s) => s.vulnerability));
+    for (const s of statements) for (const alias of s.aliases) expect(names.has(alias)).toBe(false);
+  });
+});
+
+describe('buildVexStatements — copies and their statements (M-c, M-d)', () => {
+  const twoCopies = {
+    cves: [cve()],
+    findings: [finding(), finding({ fingerprint: 'fp-nested', identity: 'id-nested', file_path: 'nested/package-lock.json' })],
+  };
+
+  it('joins the copies’ distinct impact statements under one justification, never first-wins', () => {
+    const [s] = buildVexStatements(inputs({
+      ...twoCopies,
+      suppressions: [
+        vexSuppression(),
+        vexSuppression({ id: 2, finding_fingerprint: 'fp-nested', finding_identity: 'id-nested', vex_impact_statement: 'x is a build-time tool' }),
+      ],
+    }));
+    expect(s).toMatchObject({ status: 'not_affected', impact_statement: 'template() is never called; x is a build-time tool' });
+  });
+
+  it('says each impact statement once when copies repeat it', () => {
+    const [s] = buildVexStatements(inputs({
+      ...twoCopies,
+      suppressions: [vexSuppression(), vexSuppression({ id: 2, finding_fingerprint: 'fp-nested', finding_identity: 'id-nested' })],
+    }));
+    expect(s?.impact_statement).toBe('template() is never called');
+  });
+
+  it('bounds the joined impact statement', () => {
+    const copies = Array.from({ length: 6 }, (_, i) =>
+      finding({ fingerprint: `fp-${i}`, identity: `id-${i}`, file_path: `p${i}/package-lock.json` }));
+    const [s] = buildVexStatements(inputs({
+      cves: [cve()],
+      findings: copies,
+      suppressions: copies.map((f, i) =>
+        vexSuppression({ id: i + 1, finding_fingerprint: f.fingerprint, finding_identity: f.identity, vex_impact_statement: `reason ${i}` })),
+    }));
+    expect(s?.impact_statement).toMatch(/^reason 0; reason 1; reason 2/);
+    expect(s?.impact_statement).not.toMatch(/reason 5/);
+    expect(s?.impact_statement).toMatch(/3 more/);
+  });
+
+  it('names the copy still lacking a VEX justification', () => {
+    const [s] = buildVexStatements(inputs({ ...twoCopies, suppressions: [vexSuppression()] }));
+    expect(s?.status).toBe('under_investigation');
+    expect(s?.status_notes).toMatch(/nested\/package-lock\.json/);
+    expect(s?.status_notes).not.toMatch(/[^/]package-lock\.json.*nested/);
+  });
+});
+
+describe('buildVexStatements — packages without an ecosystem, and Java archives (M-e)', () => {
+  it('gives two packages that share an advisory and have no purl two statements', () => {
+    const image = 'registry/app:1 (debian 12)';
+    const statements = buildVexStatements(inputs({
+      cves: [
+        cve({ cve_id: 'GHSA-aaaa-bbbb-cccc', package_name: 'org.x:a', installed_version: '1.0' }),
+        cve({ cve_id: 'GHSA-aaaa-bbbb-cccc', package_name: 'org.x:b', installed_version: '1.0' }),
+      ],
+      findings: [
+        finding({ fingerprint: 'a', identity: 'id-a', rule_id: 'GHSA-aaaa-bbbb-cccc', file_path: image, snippet: 'org.x:a@1.0->1.1' }),
+        finding({ fingerprint: 'b', identity: 'id-b', rule_id: 'GHSA-aaaa-bbbb-cccc', file_path: image, snippet: 'org.x:b@1.0->1.1' }),
+      ],
+      suppressions: [vexSuppression({ finding_fingerprint: 'a', finding_identity: 'id-a' })],
+    }));
+    expect(statements.map((s) => [s.package_name, s.status])).toEqual([
+      ['org.x:a', 'not_affected'],
+      ['org.x:b', 'under_investigation'],
+    ]);
+  });
+
+  it('names a package Trivy found in a .jar by its maven purl', () => {
+    const [s] = buildVexStatements(inputs({
+      cves: [cve({ cve_id: 'CVE-2021-44228', package_name: 'org.apache.logging.log4j:log4j-core', installed_version: '2.14.1', fixed_version: '2.15.0' })],
+      findings: [finding({
+        fingerprint: 'l4j', identity: 'id-l4j', rule_id: 'CVE-2021-44228', file_path: 'app/lib/service.jar',
+        snippet: 'org.apache.logging.log4j:log4j-core@2.14.1->2.15.0',
+      })],
+    }));
+    expect(s?.subcomponent_purls).toEqual(['pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1']);
+  });
+});
+
+describe('buildVexStatements — affected only from a snapshot of this tree (M-h)', () => {
+  it('is under_investigation, with the reason, when the reaching snapshot maps another tree', () => {
+    const [s] = buildVexStatements(inputs({
+      dependency: dependencyFor('src/db.ts'),
+      staleSurface: 'the attack-surface snapshot maps another tree (t-old) than the dependency scan (t-new)',
+    }));
+    expect(s?.status).toBe('under_investigation');
+    expect(s?.status_notes).toMatch(/another tree \(t-old\)/);
+    expect(s?.status_notes).toMatch(/src\/db\.ts/);
+    expect(s?.action_statement).toBeUndefined();
+  });
+
+  it('is still affected when the snapshot is of this tree', () => {
+    const [s] = buildVexStatements(inputs({ dependency: dependencyFor('src/db.ts'), staleSurface: null }));
+    expect(s?.status).toBe('affected');
+  });
+});

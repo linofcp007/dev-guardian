@@ -323,5 +323,15 @@ describe('export_vex', () => {
     const r = await exportVex();
 
     expect(r.unknowns.join(' | ')).toMatch(/different tree/);
+    // The route reaches lodash in THAT tree; nothing says it still does
+    // (final review, M-h).
+    expect(r.statements).toMatchObject({ affected: 0, under_investigation: 2 });
+    if (r.file_path === null) throw new Error('no document written');
+    const doc = JSON.parse(readFileSync(r.file_path, 'utf8')) as {
+      statements: Array<{ vulnerability: { name: string }; status: string; status_notes?: string }>;
+    };
+    const lodash = doc.statements.find((s) => s.vulnerability.name === 'CVE-2021-23337');
+    expect(lodash?.status).toBe('under_investigation');
+    expect(lodash?.status_notes).toMatch(/tree-surface/);
   });
 });
