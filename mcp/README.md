@@ -88,6 +88,7 @@ One SQLite file per project, `.guardian/guardian.db`, shared by every process th
 | `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results |
 | `finding_validations` | `validate_finding` verdicts |
 | `agent_config_hashes` | `audit_agent_config`'s per-server hashes, to flag a changed MCP entry |
+| `mcp_tool_pins`, `mcp_server_pins` | `audit_mcp_tools`'s per-tool definition hashes, to flag a tool that changed under the same name |
 | `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the migration version |
 
 Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working.
