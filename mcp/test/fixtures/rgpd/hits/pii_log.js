@@ -28,6 +28,8 @@ function registo(user, users, req, email, nif_cliente, clienteNif, formData, cli
   console.log(user.iban.slice(-4), user.email); // BUG: the email is whole (excluded: last four of the IBAN)
   logger.info('normalizado', email.toLowerCase()); // BUG: a METHOD call on the name still returns the address
   logger.info('contacto', user.phone.number); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
+  const semContacto = users.filter((u) => { logger.warn('sem contacto', u.email); return true; }).length; // BUG: a log call INSIDE a callback whose result's `.length` is read (the $V lambda limit)
+  return semContacto;
 }
 
 module.exports = { registo };

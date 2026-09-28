@@ -138,7 +138,10 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // attribute-read guard must leave alone: `email.toLowerCase()` (a METHOD
   // call still returns the address) and `user.phone.number` (an attribute
   // whose name is not an id, a date or a size still holds the value).
-  'pii_log.js': { [PII_JS]: 23 },
+  // Twenty-four after its review: a log call INSIDE a callback whose result's
+  // `.length` is read — the guard's `$V` was the whole `users.filter(...)`
+  // call, callback and log call included, and swallowed it.
+  'pii_log.js': { [PII_JS]: 24 },
   // The same rule through the TypeScript parser: a typed member, a type
   // assertion, a typed parameter, a subscript.
   'pii_log.ts': { [PII_JS]: 4 },
@@ -150,21 +153,29 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // after fix round 1: `$cliente->NIF`, the fully-qualified
   // `\Illuminate\Support\Facades\Log::`, `Log::channel(...)->`,
   // `logger()->` and `logger(...)`. Twenty after the application-code round:
-  // `$email->toString()` and `$cliente->telefone->numero` (see pii_log.js).
-  'pii_log.php': { [PII_PHP]: 20 },
+  // `$email->toString()` and `$cliente->telefone->numero` (see pii_log.js);
+  // twenty-one after its review: a log call inside an arrow `fn` whose
+  // result's `->id` is read (see pii_log.js).
+  'pii_log.php': { [PII_PHP]: 21 },
   // Thirteen: fix round 1 added keyword arguments whose value is a plain
   // name (`extra={"email": email}`, structlog's `nif=nif_cliente`),
   // structlog's `bind(...)` and an all-caps attribute. Eighteen after the
   // application-code round: `email.lower()`, `user.phone.as_e164`
   // (django-phonenumber-field), a LOGGER inside a Django management command,
   // and `print()` in two classes that are not management commands — one of
-  // them a model that merely happens to be named `Command`.
-  'pii_log.py': { [PII_PY]: 18 },
+  // them a model that merely happens to be named `Command`. Twenty after its
+  // review: a log call inside a `lambda` whose result's `.id` is read (see
+  // pii_log.js), and `print()` in `class Command(ProcessoCommand)` — a base
+  // that merely ends in `Command` is not one of Django's.
+  'pii_log.py': { [PII_PY]: 20 },
   // Thirteen: fix round 2 added `Cliente.Email` — a PascalCase PROPERTY, which
   // the type-constant exclusion (`Campos.EMAIL`) must not take for a type.
   // Fifteen after the application-code round: `email.ToLowerInvariant()` and
-  // `mensagem.Email.Address` (see pii_log.js).
-  'PiiLog.cs': { [PII_CS]: 15 },
+  // `mensagem.Email.Address` (see pii_log.js). Seventeen after its review:
+  // `emails.ElementAt(0)` (LINQ's `ElementAt` returns the element, it is not
+  // a date ending in `At`) and a log call inside a LINQ lambda whose
+  // `.Count()` is read (see pii_log.js).
+  'PiiLog.cs': { [PII_CS]: 17 },
   // Two GA4 loaders (the stock snippet, and `type="text/javascript"`, which
   // still executes); three Meta pixels — AFTER a consent function that has
   // already closed, inside a function merely NAMED after consent, inside a
@@ -559,9 +570,137 @@ describe('the attribute-read guard name list', () => {
   it.each([
     'address', 'Address', 'number', 'numero', 'as_e164', 'national_number', 'value', 'Value', 'to', 'subject',
     'domain', 'lower', 'toLowerCase', 'ToLowerInvariant', 'format', 'Format', 'update', 'data', 'identity', 'item',
+    // LINQ's `ElementAt` returns the element itself; it only LOOKS like a
+    // date ending in `At` (review of the application-code round).
+    'ElementAt',
   ])('does not name metadata, so the value is still judged: %s', (name) => {
     expect(isMetadata(name)).toBe(false);
   });
+
+  /**
+   * The guard's `$V` must not hold a function body. `$V` is whatever the
+   * attribute is read on, of any size: in
+   * `users.filter((u) => { logger.warn(u.email) }).length` it is the whole
+   * `users.filter(...)` call, log call included, and the guard excluded the
+   * finding inside it (review of the application-code round: four true
+   * positives lost, one per language). A `$V` whose text holds a lambda,
+   * an arrow, a `function` or a `delegate` is not a value whose metadata is
+   * read. PHP gets its own copy: `=>` is PHP's array-pair separator, so there
+   * the body marker is `fn`/`function`, never `=>`.
+   */
+  function valueRegexes(): Map<string, string> {
+    const found = new Map<string, string>();
+    const walk = (rule: string, node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(rule, child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$V' && typeof regex === 'string') {
+          if (found.has(rule)) throw new Error(`two $V regexes in ${rule}`);
+          found.set(rule, regex);
+        }
+      }
+      for (const value of Object.values(node)) walk(rule, value);
+    };
+    for (const r of packRules()) if (r.id.startsWith('rgpd-pii-in-log-')) walk(r.id, r);
+    return found;
+  }
+
+  const valueRegex = (rule: string): RegExp => {
+    const re = valueRegexes().get(rule);
+    if (re === undefined) throw new Error(`no $V regex in ${rule}`);
+    return new RegExp(re);
+  };
+
+  it('limits $V in every log rule: one body-marker regex for JS, Python and C#, its own for PHP', () => {
+    const regexes = valueRegexes();
+    expect([...regexes.keys()].sort()).toEqual([PII_CS, PII_JS, PII_PHP, PII_PY].sort());
+    expect(new Set([regexes.get(PII_JS), regexes.get(PII_PY), regexes.get(PII_CS)]).size).toBe(1);
+    expect(regexes.get(PII_PHP)).not.toBe(regexes.get(PII_JS));
+  });
+
+  it.each([
+    'email', 'user.email', 'get_bot(item["email"], 3)', 'lookup(email)', 'findBot(req.body[\'email\'])',
+    'obter_function_id(email)', 'lambda_client.get(email)', 'functionality(email)',
+  ])('JS/Python/C#: keeps the guard for a plain value: %s', (text) => {
+    expect(valueRegex(PII_JS).test(text)).toBe(true);
+  });
+
+  it.each([
+    'users.filter((u) => { console.warn(u.email); return true; })',
+    'queue.add(function () { logger.info(user.email); })',
+    'scheduler.add_job(lambda: logger.info("%s", user.email))',
+    'users.Where(u => { _logger.LogInformation("{E}", u.Email); return true; })',
+    'users.Where(delegate (User u) { _logger.LogInformation("{E}", u.Email); return true; })',
+    'users.filter((u) => {\n  logger.warn(u.email);\n})',
+  ])('JS/Python/C#: drops the guard when $V holds a function body: %s', (text) => {
+    expect(valueRegex(PII_JS).test(text)).toBe(false);
+  });
+
+  it.each(['$email', 'obter_bot($data[\'email\'])', 'f([\'e\' => $email])', '$this->bots[$email]'])(
+    'PHP: keeps the guard for a plain value, array pairs included: %s',
+    (text) => {
+      expect(valueRegex(PII_PHP).test(text)).toBe(true);
+    },
+  );
+
+  it.each([
+    '$fila->adicionar(fn () => $this->logger->info(\'x\', [\'e\' => $user->email]))',
+    '$fila->adicionar(function () use ($user) { error_log($user->email); })',
+  ])('PHP: drops the guard when $V holds a function body: %s', (text) => {
+    expect(valueRegex(PII_PHP).test(text)).toBe(false);
+  });
+});
+
+/**
+ * The Python print sink skips a Django management command: `class Command`
+ * whose base is one of Django's (`BaseCommand`, `AppCommand`, `LabelCommand`,
+ * `TemplateCommand`, the pre-1.10 `NoArgsCommand`, a project's
+ * `...BaseCommand`), or `module.Command` — a command extending a built-in
+ * one. The first version accepted any base ending in `Command`
+ * (`ProcessCommand`, `ICommand`), which are not Django's (review of the
+ * application-code round).
+ */
+describe('the Django management command base regex', () => {
+  const baseRegex = (): RegExp => {
+    const found: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const mr = (node as Record<string, unknown>)['metavariable-regex'];
+      if (mr !== null && typeof mr === 'object') {
+        const { metavariable, regex } = mr as { metavariable?: unknown; regex?: unknown };
+        if (metavariable === '$BASE' && typeof regex === 'string') found.push(regex);
+      }
+      for (const value of Object.values(node)) walk(value);
+    };
+    for (const r of packRules()) if (r.id === PII_PY) walk(r);
+    const [only, ...rest] = found;
+    if (only === undefined || rest.length > 0) throw new Error(`expected one $BASE regex, found ${String(found.length)}`);
+    return new RegExp(only);
+  };
+
+  it.each([
+    'BaseCommand', 'AppCommand', 'LabelCommand', 'TemplateCommand', 'NoArgsCommand', 'ZulipBaseCommand',
+    'base.BaseCommand', 'templates.TemplateCommand', 'django.core.management.base.BaseCommand',
+    'sendtestemail.Command', 'email_de_teste.Command',
+  ])('is a Django command base: %s', (base) => {
+    expect(baseRegex().test(base)).toBe(true);
+  });
+
+  it.each(['ProcessCommand', 'ProcessoCommand', 'ICommand', 'Command', 'BaseModel', 'CommandBase', 'RunserverCommand'])(
+    'is not: %s',
+    (base) => {
+      expect(baseRegex().test(base)).toBe(false);
+    },
+  );
 });
 
 /**

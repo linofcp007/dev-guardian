@@ -5,6 +5,7 @@ import logging
 import math
 
 from django.core.management.base import BaseCommand
+from django.core.management.templates import TemplateCommand
 
 logger = logging.getLogger(__name__)
 
@@ -47,3 +48,19 @@ class Command(BaseCommand):
 
     def resumo(self, email):
         print("sessoes ativas de", email)
+
+
+class Command(email_de_teste.Command):
+    # A command that EXTENDS one of Django's own (`module.Command`), the form
+    # a project uses to override a built-in command: still a management
+    # command (the `.Command` alternative of the $BASE regex).
+    def handle(self, *args, **kwargs):
+        print("enviado para", kwargs["email"])
+
+
+class Command(TemplateCommand):
+    # A scaffolding command on Django's `TemplateCommand` (the base of
+    # `startapp` and `startproject`): a management command all the same (the
+    # `Template` alternative of the $BASE regex).
+    def handle(self, **options):
+        print("modelo criado para", options["email"])

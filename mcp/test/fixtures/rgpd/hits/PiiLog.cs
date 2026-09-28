@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Serilog;
 
@@ -18,7 +19,7 @@ public class Registo
         _log = log;
     }
 
-    public void Registar(Cliente cliente, string email, string nifCliente, IDictionary<string, string> form, Mensagem mensagem)
+    public int Registar(Cliente cliente, string email, string nifCliente, IDictionary<string, string> form, Mensagem mensagem, List<Cliente> clientes, List<string> emails)
     {
         _logger.LogInformation("Login {Email}", cliente.Email); // BUG: structured argument
         _logger.LogWarning($"NIF {cliente.Nif}"); // BUG: interpolated string
@@ -34,6 +35,8 @@ public class Registo
         _logger.LogInformation("{A} {B}", cliente.Iban[^4..], cliente.Email); // BUG: the email (excluded: last four)
         _logger.LogInformation("Normalizado {E}", email.ToLowerInvariant()); // BUG: a METHOD call on the name still returns the address
         _logger.LogInformation("Para {E}", mensagem.Email.Address); // BUG: a NEUTRAL attribute of the value still holds it (the $ATTR name list)
+        _logger.LogInformation("Primeiro {E}", emails.ElementAt(0)); // BUG: ElementAt returns the element itself, not a date (the $ATTR name list)
+        return clientes.Where(c => { _logger.LogInformation("Ativo {E}", c.Email); return true; }).Count(); // BUG: a log call INSIDE a lambda whose result's `.Count()` is read (the $V lambda limit)
     }
 
     private static string Mask(string value) => new string('*', value.Length);

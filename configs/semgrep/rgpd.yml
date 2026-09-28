@@ -279,10 +279,17 @@
 # - Log: o guarda da leitura de atributo decide pelo NOME do atributo: um
 #   `email.data_envio` ou um `email.subject` continuam a disparar, e um
 #   atributo que guardasse o valor com um nome da lista (`phone.id` a guardar
-#   o numero) seria excluido.
+#   o numero) seria excluido. O caso portugues mais provavel é o NIF: em
+#   codigo portugues o `id` de um contribuinte é muitas vezes o proprio NIF,
+#   e `log(contribuinte.id)` ou `log(nif.id)` sao excluidos como se fossem um
+#   id interno.
 # - Log: o `print()` de um comando de gestao do Django nao conta, mesmo num
-#   comando que corre como daemon e cuja saida vai para um ficheiro de log;
-#   um logger dentro do mesmo comando conta.
+#   comando que corre como daemon e cuja saida vai para um ficheiro de log, e
+#   tambem nao conta com `file=sys.stderr` ou outro `file=`; um logger dentro
+#   do mesmo comando conta. Um comando que estende outro importado com um
+#   ALIAS (`from ...runserver import Command as RunserverCommand`) nao é
+#   reconhecido como comando, e o `print()` dele dispara; o `modulo.Command`
+#   é reconhecido.
 # - Rastreadores: GA carregado por codigo JS que monta o `<script>`
 #   (`s.src = '...gtag/js'`), `react-ga4`, o Google Tag Manager (o GTM pode
 #   gerir o consentimento por dentro), `wp_register_script` seguido de
@@ -378,7 +385,25 @@ rules:
   # A lista: `id`, `pk`, `uuid`, `guid` e os sufixos `_id`/`Id`/`ID`,
   # `_uuid`/`Uuid`, `Guid`; as datas `_at`/`At`, `_em`/`Em` (`enviado_em`),
   # `_date`/`Date`, `_time`/`Time`, `timestamp`; e `length`, `size`, `count`.
-  # Efeito lateral: `email.Length` do C#, que era um ponto cego, sai tambem.
+  # O `At` nao conta depois de `Element`: o `ElementAt` do LINQ devolve o
+  # proprio elemento (`emails.ElementAt(0)`), esta em hits/ (revisao desta
+  # ronda). Efeito lateral: `email.Length` do C#, que era um ponto cego, sai
+  # tambem.
+  #
+  # O `$V` NAO PODE CONTER O CORPO DE UMA FUNÇAO (revisao desta ronda). O
+  # `$V` é aquilo em que o atributo é lido, e nao tem tamanho maximo: em
+  # `users.filter((u) => { logger.warn(u.email) }).length` é a chamada
+  # `users.filter(...)` inteira, com o callback e a chamada de log la
+  # dentro, e o guarda excluia o achado que estava dentro dela. A primeira
+  # versao perdeu assim quatro verdadeiros positivos, um por linguagem — um
+  # `.length` depois de um `filter` com callback, o `.Count()` depois de um
+  # `Where` do LINQ, o `.id` do job de um `add_job(lambda: ...)`, o `->id`
+  # de um `fn () =>` do PHP —, todos em hits/. Por isso um `metavariable-regex`
+  # sobre o `$V` recusa o guarda quando o texto do `$V` tem `=>`, `function`,
+  # `lambda` ou `delegate`. No PHP a copia é outra: `=>` é o separador dos
+  # arrays (`['e' => $email]`), e ali o corpo de uma função é `fn` ou
+  # `function`. O teste avalia os dois regexes contra textos que tem e nao
+  # tem corpo.
   #
   # O EIXO 2 DA ABLAÇAO VAI ACUSAR os dois guardas, e é o guarda a funcionar:
   # as duas ultimas linhas de cada fixture de hits poem um bug AO LADO de um
@@ -459,8 +484,11 @@ rules:
           patterns:
             - pattern: $V.$ATTR
             - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
                 metavariable: $ATTR
-                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
             - focus-metavariable: $V
 
   # PHP: WordPress primeiro, porque é onde o PHP escreve dados pessoais em
@@ -555,8 +583,11 @@ rules:
           patterns:
             - pattern: $V->$ATTR
             - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*\b(?:fn|function)\b)'
+            - metavariable-regex:
                 metavariable: $ATTR
-                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
             - focus-metavariable: $V
 
   # Python: `logging` e qualquer recetor chamado logger/log (incluindo o
@@ -586,13 +617,25 @@ rules:
                   metavariable: $METHOD
                   regex: '^(?:debug|info|warning|warn|error|exception|critical|fatal|log|bind)$'
           # O `print()` de um comando de gestao do Django (`class Command`,
-          # que é o nome que o Django carrega, com uma base `...Command`) é a
-          # saida do comando no terminal de quem o correu — o mesmo canal que o
+          # que é o nome que o Django carrega) é a saida do comando no
+          # terminal de quem o correu — o mesmo canal que o
           # `self.stdout.write`, que a regra nunca leu como log. Medido em
           # codigo de aplicação: 23 dos 27 falsos positivos desta regra no
           # Zulip eram isto (`show_admins`, `deactivate_user`...). Um logger
           # dentro do comando continua a contar, e um modelo que por acaso se
           # chama `Command` tambem (hits/).
+          #
+          # A BASE tem de ser do Django: `BaseCommand`, `AppCommand`,
+          # `LabelCommand`, `TemplateCommand` (a base do `startapp` e do
+          # `startproject`), o `NoArgsCommand` anterior ao Django 1.10, a
+          # base de um projeto que termina em `BaseCommand`
+          # (`ZulipBaseCommand`), ou `modulo.Command` — um
+          # comando que estende um dos do proprio Django, como o
+          # `sendtestemail.Command` do Zulip. A primeira versao aceitava
+          # qualquer base terminada em `Command` (`ProcessCommand`,
+          # `ICommand`), que nao sao do Django (revisao desta ronda; em
+          # hits/). O `file=sys.stderr` nao muda nada: o `print()` inteiro de
+          # um comando fica de fora — ver os pontos cegos.
           - patterns:
               - pattern-inside: print(...)
               - pattern-not-inside:
@@ -602,7 +645,7 @@ rules:
                           ...
                     - metavariable-regex:
                         metavariable: $BASE
-                        regex: '^(?:.*\.)?\w*Command$'
+                        regex: '^(?:(?:.*\.)?(?:App|Label|Template|NoArgs|\w*Base)Command|.+\.Command)$'
       - pattern-either:
           - patterns:
               - pattern: $OBJ.$FIELD
@@ -649,8 +692,11 @@ rules:
           patterns:
             - pattern: $V.$ATTR
             - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
                 metavariable: $ATTR
-                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
             - focus-metavariable: $V
 
   # C#: `ILogger` (os `LogX` de extensao e o `Log(level, ...)`), o `Log`
@@ -723,8 +769,11 @@ rules:
           patterns:
             - pattern: $V.$ATTR
             - metavariable-regex:
+                metavariable: $V
+                regex: '^(?![\s\S]*(?:\blambda\b|=>|\bfunction\b|\bdelegate\b))'
+            - metavariable-regex:
                 metavariable: $ATTR
-                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
+                regex: '^(?:[A-Za-z0-9_]*(?:_id|_ids|Id|Ids|ID|_pk|_uuid|Uuid|UUID|Guid|GUID|_at|(?<!Element)At|_em|Em|_date|Date|_time|Time|[Tt]imestamp)|id|pk|uuid|guid|length|Length|size|Size|count|Count)$'
             - focus-metavariable: $V
 
   # ---------------------------------------------------------------------------
