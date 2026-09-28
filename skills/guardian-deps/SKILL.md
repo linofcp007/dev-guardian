@@ -14,10 +14,10 @@ Gestão de dependências: CVEs, plano de upgrades, vetting do que acabou de entr
 
 ### Triagem de cada CVE
 
-1. **É explorável neste contexto?** A função vulnerável é usada pelo código (procura imports/calls)? O input chega de fonte não-confiável? Se "não" a qualquer uma → severidade reduzida.
+1. **É explorável neste contexto?** A função vulnerável é usada pelo código (procura imports/calls)? O input chega de fonte não-confiável? Se "não" a qualquer uma → severidade reduzida. Com um snapshot de `map_attack_surface`, `validate_finding { project_path: "<project>", providers: ["dependency"] }` diz, por CVE de npm ou PyPI, se o package é importado por um ficheiro que uma rota alcança (`reachable`), só importado (`imported`) ou `unknown` — nunca `unreachable`: um package transitivo ou importado dinamicamente não aparece, e isso não é prova de que não é usado.
 2. **Há versão corrigida?** Sim → entra no plano. Não → procura workarounds no advisory.
 3. **É dev-only?** Reduz a severidade, mas não ignora (ataques à build chain são reais).
-4. **Está explorado ativamente?** `prioritize_findings { project_path: "<project>" }` pesa os CVEs que estão no CISA KEV ou com EPSS alto (offline, não há boost — nunca inventado).
+4. **Está explorado ativamente?** `prioritize_findings { project_path: "<project>" }` pesa os CVEs que estão no CISA KEV ou com EPSS alto (offline, não há boost — nunca inventado) e dá a cada CVE a decisão SSVC da CISA (`Act` / `Attend` / `Track*` / `Track`). Passa `mission_wellbeing` (`low` / `medium` / `high`) se o utilizador souber o peso do sistema; lê `ssvc.assumed` antes de citar a decisão — um ponto assumido é falta de dados, não um facto.
 
 ### Apresentar
 
@@ -95,6 +95,16 @@ Vulnerabilidades conhecidas não são o único risco — packages maliciosos tam
 ## 8. SBOM
 
 `generate_sbom { project_path: "<project>", format: "cyclonedx-json" }` (Syft; Trivy como fallback) — o ficheiro fica em `.guardian/reports/sbom-<scan>/` (`file_path`). Entre releases, `sbom_diff { project_path: "<project>" }` compara os dois SBOMs mais recentes. Útil para responder depressa a um CVE novo ("usamos a lib X?").
+
+### VEX
+
+`export_vex { project_path: "<project>" }` escreve um documento OpenVEX (ou CycloneDX com `format: "cyclonedx"`) em `.guardian/reports/vex-*/`, uma declaração por CVE do scan de dependências mais recente. Nunca inventa um estado:
+
+- `not_affected` só quando o utilizador o declarou: `suppress_finding` com `vex_status: "not_affected"` e uma `justification` OpenVEX (por exemplo `vulnerable_code_not_in_execute_path`), mais um `impact_statement` opcional. Pergunta sempre a justificação — não a escolhas tu;
+- `affected` quando um ficheiro que uma rota alcança importa o package;
+- `under_investigation` no resto; `fixed` nunca.
+
+Corre antes `generate_sbom` (dá os purls) e `map_attack_surface` (dá a alcançabilidade), e mostra ao utilizador a lista `unknowns` — é o que o documento não sabe.
 
 ## Frequência sugerida
 

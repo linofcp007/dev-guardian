@@ -38,7 +38,8 @@ cache that avoids re-running unchanged scans.
   severity; `unreachable` is never available for Ruby, Java, C#, or PHP. It
   IS produced — and can be wrong — for a file reached only by a CLI/cron/queue
   entry point, or an unresolvable dynamic import — see its tool description
-  for the full limits
+  for the full limits. For a dependency CVE (npm, PyPI) its `dependency`
+  provider says whether a file a route reaches imports the package
 
 **Quality**
 - "review before PR" → `review_pr`
@@ -47,6 +48,9 @@ cache that avoids re-running unchanged scans.
 **Deps**
 - "upgrade plan" → `deps_update_plan` (npm/pip/composer/cargo/go/bundler/dotnet)
 - "audit deps" → `deps_audit`
+- "VEX / are we affected by this CVE?" → `export_vex` (OpenVEX or CycloneDX, from
+  the latest deps scan); `suppress_finding` with `vex_status: not_affected` and a
+  justification is how a CVE is stated not_affected
 
 **Compliance**
 - "GDPR / SOC2 / ISO27001" → `compliance_check` + `compliance_evidence`
@@ -88,7 +92,7 @@ cache that avoids re-running unchanged scans.
 - "what's new since last scan?" → `diff_scans`
 - "set baseline" → `set_baseline`
 - "noise reduction" → `triage_findings`
-- "prioritise" → `prioritize_findings`
+- "prioritise" → `prioritize_findings` (a CISA SSVC decision per CVE finding, beside the score)
 - "how do I fix X?" → `suggest_fix` (returns context; you write the patch)
 - "apply the fixes a scanner already has and open a PR" → `create_fix_pr` —
   applies `deps_update_plan`'s pinned version bumps and Semgrep `--autofix`
