@@ -19,10 +19,13 @@ function entryKey(entry) {
  * are exposed as their own synthetic source — labelled distinctly — so a
  * stale or malicious server declared for some OTHER project in the user's
  * global config is not silently skipped just because its path does not
- * match the project being audited.
+ * match the project being audited. With `onlyProject` (`audit_mcp_tools`,
+ * which starts servers with this project as their working directory) only
+ * that project's entry is expanded: another project's server is not this
+ * project's to run.
  */
-function expandNestedProjectSources(source) {
-    if (source.label !== '~/.claude.json' || !source.exists || source.json === undefined)
+function expandNestedProjectSources(source, onlyProject) {
+    if (source.nestedProjects !== true || !source.exists || source.json === undefined)
         return [];
     const root = source.json;
     if (root === null || typeof root !== 'object' || Array.isArray(root))
@@ -31,14 +34,17 @@ function expandNestedProjectSources(source) {
     if (projects === null || typeof projects !== 'object' || Array.isArray(projects))
         return [];
     const out = [];
+    const wanted = onlyProject === undefined ? undefined : normalizeProjectKey(onlyProject);
     for (const [projectKey, value] of Object.entries(projects)) {
+        if (wanted !== undefined && normalizeProjectKey(projectKey) !== wanted)
+            continue;
         if (value === null || typeof value !== 'object' || Array.isArray(value))
             continue;
         const mcpServers = value['mcpServers'];
         if (mcpServers === null || typeof mcpServers !== 'object' || Array.isArray(mcpServers))
             continue;
         out.push({
-            label: `~/.claude.json (project: ${projectKey})`,
+            label: `${source.label} (project: ${projectKey})`,
             kind: 'user',
             absolutePath: source.absolutePath,
             mcpServersField: 'mcpServers',
@@ -49,6 +55,15 @@ function expandNestedProjectSources(source) {
     return out;
 }
 /**
+ * A project path as Claude Code keys it and as this server resolves it,
+ * compared equal: forward slashes, no trailing slash, and case-insensitive
+ * on Windows (`C:/Work/x` and `c:\work\x\` are one project there).
+ */
+export function normalizeProjectKey(path) {
+    const forward = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    return process.platform === 'win32' ? forward.toLowerCase() : forward;
+}
+/**
  * Every MCP server entry the read sources declare — shared by
  * `audit_agent_config` (static checks) and `audit_mcp_tools` (which starts
  * only the entries the caller names). A source that exists and could not be
@@ -56,7 +71,7 @@ function expandNestedProjectSources(source) {
  * plugin's `plugin.json` may do that): nothing here follows it, and saying
  * nothing would read as "no servers there".
  */
-export function collectMcpEntries(sources) {
+export function collectMcpEntries(sources, options = {}) {
     const warnings = [];
     const sourcesRead = [];
     const sourcesMissing = [];
@@ -74,11 +89,14 @@ export function collectMcpEntries(sources) {
         }
         sourcesRead.push(source.label);
         allSources.push(source);
-        allSources.push(...expandNestedProjectSources(source));
+        allSources.push(...expandNestedProjectSources(source, options.onlyProject));
         const pathForm = mcpServersPath(source);
         if (pathForm !== null) {
-            warnings.push(`${source.label}: ${source.mcpServersField ?? 'mcpServers'} is a path ("${pathForm}"), not an inline ` +
-                'object; the servers declared in that file were not read from here');
+            // The file was read, but the servers it points at were not: a gap.
+            const reason = `${source.mcpServersField ?? 'mcpServers'} is a path ("${pathForm}"), not an inline object; ` +
+                'the servers declared in that file were not read';
+            warnings.push(`${source.label}: ${reason}`);
+            sourcesUnreadable.push({ source: source.label, reason });
         }
     }
     const entries = [];

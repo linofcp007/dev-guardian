@@ -69637,6 +69637,23 @@ function hashConfigValue(value) {
 }
 
 // src/agentaudit/mcpServers.ts
+function remoteAddress(raw, sourceLabel) {
+  const str6 = (k) => typeof raw[k] === "string" ? raw[k] : void 0;
+  const type = str6("type")?.toLowerCase();
+  const gemini = /(^|\/)\.gemini\/settings\.json$/.test(sourceLabel);
+  const httpUrl = str6("httpUrl");
+  const url2 = str6("url");
+  const serverUrl = str6("serverUrl");
+  const address = httpUrl ?? url2 ?? serverUrl;
+  if (address === void 0) return void 0;
+  let transport;
+  if (type === "sse") transport = "sse";
+  else if (type !== void 0 && type !== "stdio") transport = "http";
+  else if (httpUrl !== void 0) transport = "http";
+  else if (gemini && url2 !== void 0) transport = "sse";
+  else transport = /\/sse\/?(?:[?#]|$)/i.test(address) ? "sse" : "http";
+  return { url: address, transport };
+}
 function extractMcpServers(source) {
   if (!source.exists || source.mcpServersField === null || source.json === void 0) return [];
   const container = getObject(source.json, source.mcpServersField);
@@ -69652,8 +69669,11 @@ function extractMcpServers(source) {
     if (Array.isArray(args) && args.every((a2) => typeof a2 === "string")) entry.args = args;
     const cwd = raw["cwd"];
     if (typeof cwd === "string") entry.cwd = cwd;
-    const url2 = raw["url"];
-    if (typeof url2 === "string") entry.url = url2;
+    const remote = remoteAddress(raw, source.label);
+    if (remote !== void 0) {
+      entry.url = remote.url;
+      entry.remoteTransport = remote.transport;
+    }
     const type = raw["type"];
     if (typeof type === "string") entry.type = type;
     const env = raw["env"];
@@ -70207,19 +70227,21 @@ function checkUnexpandedVars(source) {
 function entryKey(entry) {
   return `${entry.sourceLabel}::${entry.name}`;
 }
-function expandNestedProjectSources(source) {
-  if (source.label !== "~/.claude.json" || !source.exists || source.json === void 0) return [];
+function expandNestedProjectSources(source, onlyProject) {
+  if (source.nestedProjects !== true || !source.exists || source.json === void 0) return [];
   const root = source.json;
   if (root === null || typeof root !== "object" || Array.isArray(root)) return [];
   const projects = root["projects"];
   if (projects === null || typeof projects !== "object" || Array.isArray(projects)) return [];
   const out = [];
+  const wanted = onlyProject === void 0 ? void 0 : normalizeProjectKey(onlyProject);
   for (const [projectKey, value] of Object.entries(projects)) {
+    if (wanted !== void 0 && normalizeProjectKey(projectKey) !== wanted) continue;
     if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
     const mcpServers = value["mcpServers"];
     if (mcpServers === null || typeof mcpServers !== "object" || Array.isArray(mcpServers)) continue;
     out.push({
-      label: `~/.claude.json (project: ${projectKey})`,
+      label: `${source.label} (project: ${projectKey})`,
       kind: "user",
       absolutePath: source.absolutePath,
       mcpServersField: "mcpServers",
@@ -70229,7 +70251,11 @@ function expandNestedProjectSources(source) {
   }
   return out;
 }
-function collectMcpEntries(sources) {
+function normalizeProjectKey(path8) {
+  const forward = path8.replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? forward.toLowerCase() : forward;
+}
+function collectMcpEntries(sources, options = {}) {
   const warnings = [];
   const sourcesRead = [];
   const sourcesMissing = [];
@@ -70247,12 +70273,12 @@ function collectMcpEntries(sources) {
     }
     sourcesRead.push(source.label);
     allSources.push(source);
-    allSources.push(...expandNestedProjectSources(source));
+    allSources.push(...expandNestedProjectSources(source, options.onlyProject));
     const pathForm = mcpServersPath(source);
     if (pathForm !== null) {
-      warnings.push(
-        `${source.label}: ${source.mcpServersField ?? "mcpServers"} is a path ("${pathForm}"), not an inline object; the servers declared in that file were not read from here`
-      );
+      const reason = `${source.mcpServersField ?? "mcpServers"} is a path ("${pathForm}"), not an inline object; the servers declared in that file were not read`;
+      warnings.push(`${source.label}: ${reason}`);
+      sourcesUnreadable.push({ source: source.label, reason });
     }
   }
   const entries2 = [];
@@ -70381,9 +70407,15 @@ function readText2(path8, maxBytes) {
     const st = fstatSync(fd);
     if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
     if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
-    const buf = Buffer.alloc(maxBytes + 1);
+    let buf = Buffer.allocUnsafe(st.size + 1);
     let total = 0;
-    while (total < buf.length) {
+    for (; ; ) {
+      if (total === buf.length) {
+        if (buf.length > maxBytes) break;
+        const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
+        buf.copy(bigger, 0, 0, total);
+        buf = bigger;
+      }
       const n2 = readSync(fd, buf, total, buf.length - total, null);
       if (n2 === 0) break;
       total += n2;
@@ -70584,14 +70616,27 @@ function hostPathEnv() {
 function hostConfigPath(host) {
   return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
 }
-var USER_DESCRIPTORS = [
-  { label: "~/.claude.json", kind: "user", mcpServersField: "mcpServers", resolve: () => join75(homedir3(), ".claude.json") },
-  {
-    label: "~/.claude/settings.json",
-    kind: "user",
-    mcpServersField: null,
-    resolve: () => join75(homedir3(), ".claude", "settings.json")
-  },
+function claudeCodeDescriptors() {
+  const dir = process.env["CLAUDE_CONFIG_DIR"];
+  const custom3 = dir !== void 0 && dir !== "";
+  return [
+    {
+      label: custom3 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
+      kind: "user",
+      mcpServersField: "mcpServers",
+      resolve: () => custom3 ? join75(dir, ".claude.json") : join75(homedir3(), ".claude.json"),
+      maxBytes: MAX_CLAUDE_JSON_BYTES,
+      nestedProjects: true
+    },
+    {
+      label: custom3 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
+      kind: "user",
+      mcpServersField: null,
+      resolve: () => custom3 ? join75(dir, "settings.json") : join75(homedir3(), ".claude", "settings.json")
+    }
+  ];
+}
+var OTHER_USER_DESCRIPTORS = [
   {
     label: "claude_desktop_config.json",
     kind: "user",
@@ -70608,18 +70653,32 @@ var USER_DESCRIPTORS = [
   { label: "~/.gemini/settings.json", kind: "user", mcpServersField: "mcpServers", resolve: () => hostConfigPath("gemini") }
 ];
 function configSourceDescriptors(includeUserConfig) {
-  return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
+  return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...claudeCodeDescriptors(), ...OTHER_USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
 }
 var MAX_CONFIG_BYTES = 256 * 1024;
+var MAX_CLAUDE_JSON_BYTES = 16 * 1024 * 1024;
+function parseJson(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return parseJsonc(raw);
+  }
+}
 function readConfigSources(projectPath, includeUserConfig) {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne2(descriptor, projectPath));
 }
-var REFUSAL_MESSAGE = {
-  "not-a-regular-file": "not a regular file (a FIFO, a device, a directory or a pipe) and was not read",
-  "too-large": `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
-  unreadable: "could not be read (permissions, a link loop, or an I/O error)",
-  "remote-link": "reached through a link to a network or device path, and was not opened"
-};
+function refusalMessage(reason, cap) {
+  switch (reason) {
+    case "not-a-regular-file":
+      return "not a regular file (a FIFO, a device, a directory or a pipe) and was not read";
+    case "too-large":
+      return `file exceeds the ${cap}-byte size cap and was not read`;
+    case "unreadable":
+      return "could not be read (permissions, a link loop, or an I/O error)";
+    case "remote-link":
+      return "reached through a link to a network or device path, and was not opened";
+  }
+}
 function isWithin(root, path8) {
   const rel2 = relative24(root, path8);
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute14(rel2);
@@ -70635,17 +70694,19 @@ function readOne2(descriptor, projectPath) {
     label: descriptor.label,
     kind: descriptor.kind,
     absolutePath,
-    mcpServersField: descriptor.mcpServersField
+    mcpServersField: descriptor.mcpServersField,
+    ...descriptor.nestedProjects === true ? { nestedProjects: true } : {}
   };
   if (absolutePath === "") return { ...base, exists: false };
-  const read2 = readSmallText(absolutePath, MAX_CONFIG_BYTES, walkRoot(descriptor.kind, projectPath, absolutePath));
+  const cap = descriptor.maxBytes ?? MAX_CONFIG_BYTES;
+  const read2 = readSmallText(absolutePath, cap, walkRoot(descriptor.kind, projectPath, absolutePath));
   if (read2.status === "absent") return { ...base, exists: false };
   if (read2.status === "refused") {
-    return { ...base, exists: true, refusal: read2.reason, parseError: REFUSAL_MESSAGE[read2.reason] };
+    return { ...base, exists: true, refusal: read2.reason, parseError: refusalMessage(read2.reason, cap) };
   }
   const raw = read2.text;
   try {
-    const json = parseJsonc(raw);
+    const json = parseJson(raw);
     return { ...base, exists: true, raw, json };
   } catch (e) {
     return { ...base, exists: true, raw, parseError: `invalid JSON: ${e.message}` };

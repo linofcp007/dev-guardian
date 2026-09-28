@@ -98,6 +98,16 @@ describe('audit_agent_config', () => {
     expect(scan?.tools_run).toContainEqual(expect.objectContaining({ name: 'agent-audit:.mcp.json', status: 'failed' }));
   });
 
+  it('calls coverage partial when a plugin.json declares its mcpServers as a path it does not follow (M8)', async () => {
+    const dir = makeTempDir('agent-audit-');
+    writeJson(dir, '.claude-plugin/plugin.json', { name: 'p', mcpServers: './servers.json' });
+    const plugin = makePlugin();
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult & {
+      coverage: string;
+    };
+    expect(r.coverage).toBe('partial');
+  });
+
   it("reads a plugin's .claude-plugin/plugin.json mcpServers", async () => {
     const dir = makeTempDir('agent-audit-');
     writeJson(dir, '.claude-plugin/plugin.json', {
@@ -315,17 +325,21 @@ describe('audit_agent_config', () => {
   describe('include_user_config', () => {
     const originalHome = process.env['HOME'];
     const originalUserProfile = process.env['USERPROFILE'];
+    const originalConfigDir = process.env['CLAUDE_CONFIG_DIR'];
 
     afterEach(() => {
       if (originalHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = originalHome;
       if (originalUserProfile === undefined) delete process.env['USERPROFILE'];
       else process.env['USERPROFILE'] = originalUserProfile;
+      if (originalConfigDir === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir;
     });
 
     function pointHomeAt(dir: string): void {
       process.env['HOME'] = dir;
       process.env['USERPROFILE'] = dir;
+      delete process.env['CLAUDE_CONFIG_DIR'];
     }
 
     it('does NOT read ~/.claude.json by default, even when it contains something dangerous', async () => {

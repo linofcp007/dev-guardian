@@ -9,7 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { MAX_CONFIG_BYTES, readConfigSources } from '../../../src/agentaudit/configSources.js';
+import { MAX_CLAUDE_JSON_BYTES, MAX_CONFIG_BYTES, readConfigSources } from '../../../src/agentaudit/configSources.js';
 import { claudeDesktopConfigPath } from '../../../src/hostsetup/mcpConfig.js';
 import { detectOs } from '../../../src/platform/osDetect.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -115,6 +115,7 @@ describe('readConfigSources — the wider host set', () => {
     HOME: process.env['HOME'],
     USERPROFILE: process.env['USERPROFILE'],
     APPDATA: process.env['APPDATA'],
+    CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
   };
 
   afterEach(() => {
@@ -128,7 +129,41 @@ describe('readConfigSources — the wider host set', () => {
     process.env['HOME'] = dir;
     process.env['USERPROFILE'] = dir;
     process.env['APPDATA'] = join(dir, 'AppData', 'Roaming');
+    delete process.env['CLAUDE_CONFIG_DIR'];
   }
+
+  // Fix round 3, I9: Claude Code reads its global config from
+  // $CLAUDE_CONFIG_DIR when set (.claude.json and settings.json directly in
+  // it). Reading ~/.claude.json instead audited ANOTHER account's servers.
+  it('reads .claude.json and settings.json from CLAUDE_CONFIG_DIR when it is set', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    writeAt(join(home, '.claude.json'), { mcpServers: { wrong: { command: 'node' } } });
+    const ccd = makeTempDir('agentaudit-ccd-');
+    writeAt(join(ccd, '.claude.json'), { mcpServers: { right: { command: 'node' } } });
+    writeAt(join(ccd, 'settings.json'), { permissions: { allow: [] } });
+    process.env['CLAUDE_CONFIG_DIR'] = ccd;
+
+    const sources = readConfigSources(makeTempDir('agentaudit-cfg-'), true);
+    const global = sources.find((s) => s.label === '$CLAUDE_CONFIG_DIR/.claude.json');
+    expect(global?.absolutePath).toBe(join(ccd, '.claude.json'));
+    expect(global?.json).toEqual({ mcpServers: { right: { command: 'node' } } });
+    expect(sources.find((s) => s.label === '$CLAUDE_CONFIG_DIR/settings.json')?.exists).toBe(true);
+    expect(sources.some((s) => s.label === '~/.claude.json')).toBe(false);
+  });
+
+  // ~/.claude.json accumulates every project's history: 55-82 KB on this
+  // machine, and far more on a long-used one. It gets a cap of its own.
+  it('reads a ~/.claude.json over the 256 KiB cap of other configs, up to its own 16 MiB cap', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    const pad = 'x'.repeat(MAX_CONFIG_BYTES * 2);
+    writeAt(join(home, '.claude.json'), { mcpServers: { a: { command: 'node' } }, pad });
+    const big = readConfigSources(makeTempDir('agentaudit-cfg-'), true).find((s) => s.label === '~/.claude.json');
+    expect(big?.parseError).toBeUndefined();
+    expect(big?.json).toMatchObject({ mcpServers: { a: { command: 'node' } } });
+    expect(MAX_CLAUDE_JSON_BYTES).toBe(16 * 1024 * 1024);
+  });
 
   function writeAt(path: string, content: unknown): void {
     mkdirSync(dirname(path), { recursive: true });

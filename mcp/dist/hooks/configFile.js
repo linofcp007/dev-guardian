@@ -149,9 +149,19 @@ function readText(path, maxBytes) {
             return { status: 'refused', reason: 'not-a-regular-file' };
         if (st.size > maxBytes)
             return { status: 'refused', reason: 'too-large' };
-        const buf = Buffer.alloc(maxBytes + 1);
+        // Sized from the descriptor, not the cap: a caller with a 16 MiB cap
+        // must not zero-fill 16 MiB to read a 1 KiB file. The buffer grows (up
+        // to cap + 1) only when the file grew after the fstat.
+        let buf = Buffer.allocUnsafe(st.size + 1);
         let total = 0;
-        while (total < buf.length) {
+        for (;;) {
+            if (total === buf.length) {
+                if (buf.length > maxBytes)
+                    break;
+                const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
+                buf.copy(bigger, 0, 0, total);
+                buf = bigger;
+            }
             const n = readSync(fd, buf, total, buf.length - total, null);
             if (n === 0)
                 break;

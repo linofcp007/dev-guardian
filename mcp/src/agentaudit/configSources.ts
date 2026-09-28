@@ -55,6 +55,10 @@ export interface ConfigSourceDescriptor {
   mcpServersField: McpServersField;
   /** Resolve the absolute path to read, given the project root. */
   resolve: (projectPath: string) => string;
+  /** Size cap for this file; {@link MAX_CONFIG_BYTES} when absent. */
+  maxBytes?: number;
+  /** Claude Code's global config: `projects[<path>].mcpServers` hold per-project servers. */
+  nestedProjects?: true;
 }
 
 export interface ConfigSource {
@@ -72,6 +76,8 @@ export interface ConfigSource {
   parseError?: string;
   /** Set when the reader refused the file unopened or unread (see the module doc). */
   refusal?: RefusalReason;
+  /** Claude Code's global config (`~/.claude.json`, or under `CLAUDE_CONFIG_DIR`). */
+  nestedProjects?: true;
 }
 
 const PROJECT_DESCRIPTORS: ConfigSourceDescriptor[] = [
@@ -132,14 +138,34 @@ function hostConfigPath(host: HostName): string {
   return resolveMcpConfigPath(host, 'global', hostPathEnv()) ?? '';
 }
 
-const USER_DESCRIPTORS: ConfigSourceDescriptor[] = [
-  { label: '~/.claude.json', kind: 'user', mcpServersField: 'mcpServers', resolve: () => join(homedir(), '.claude.json') },
-  {
-    label: '~/.claude/settings.json',
-    kind: 'user',
-    mcpServersField: null,
-    resolve: () => join(homedir(), '.claude', 'settings.json'),
-  },
+/**
+ * Claude Code's own global files. With `CLAUDE_CONFIG_DIR` set (as Claude Code
+ * honours it), `.claude.json` and `settings.json` live directly in that
+ * directory; reading `~/.claude.json` instead audits whatever account last
+ * used the default location. Labelled by where they came from.
+ */
+function claudeCodeDescriptors(): ConfigSourceDescriptor[] {
+  const dir = process.env['CLAUDE_CONFIG_DIR'];
+  const custom = dir !== undefined && dir !== '';
+  return [
+    {
+      label: custom ? '$CLAUDE_CONFIG_DIR/.claude.json' : '~/.claude.json',
+      kind: 'user',
+      mcpServersField: 'mcpServers',
+      resolve: () => (custom ? join(dir, '.claude.json') : join(homedir(), '.claude.json')),
+      maxBytes: MAX_CLAUDE_JSON_BYTES,
+      nestedProjects: true,
+    },
+    {
+      label: custom ? '$CLAUDE_CONFIG_DIR/settings.json' : '~/.claude/settings.json',
+      kind: 'user',
+      mcpServersField: null,
+      resolve: () => (custom ? join(dir, 'settings.json') : join(homedir(), '.claude', 'settings.json')),
+    },
+  ];
+}
+
+const OTHER_USER_DESCRIPTORS: ConfigSourceDescriptor[] = [
   {
     label: 'claude_desktop_config.json',
     kind: 'user',
@@ -161,7 +187,9 @@ const USER_DESCRIPTORS: ConfigSourceDescriptor[] = [
  * user-scoped only when `includeUserConfig` is true.
  */
 export function configSourceDescriptors(includeUserConfig: boolean): ConfigSourceDescriptor[] {
-  return includeUserConfig ? [...PROJECT_DESCRIPTORS, ...USER_DESCRIPTORS] : [...PROJECT_DESCRIPTORS];
+  return includeUserConfig
+    ? [...PROJECT_DESCRIPTORS, ...claudeCodeDescriptors(), ...OTHER_USER_DESCRIPTORS]
+    : [...PROJECT_DESCRIPTORS];
 }
 
 /**
@@ -172,17 +200,40 @@ export function configSourceDescriptors(includeUserConfig: boolean): ConfigSourc
  */
 export const MAX_CONFIG_BYTES = 256 * 1024;
 
+/**
+ * Claude Code's global config is the exception: it accumulates every
+ * project's history (55-82 KB on this machine, far more on a long-used one).
+ * Parsed with `JSON.parse` first (1-2 ms/MiB, against ~150 ms/MiB for the
+ * JSONC parser), the JSONC parser only when that fails.
+ */
+export const MAX_CLAUDE_JSON_BYTES = 16 * 1024 * 1024;
+
+/** Strict JSON first — far faster on a large file — and JSONC only when that fails. */
+function parseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return parseJsonc(raw);
+  }
+}
+
 /** Reads and parses every applicable config source. Missing files are `exists: false`, never thrown. */
 export function readConfigSources(projectPath: string, includeUserConfig: boolean): ConfigSource[] {
   return configSourceDescriptors(includeUserConfig).map((descriptor) => readOne(descriptor, projectPath));
 }
 
-const REFUSAL_MESSAGE: Record<RefusalReason, string> = {
-  'not-a-regular-file': 'not a regular file (a FIFO, a device, a directory or a pipe) and was not read',
-  'too-large': `file exceeds the ${MAX_CONFIG_BYTES}-byte size cap and was not read`,
-  unreadable: 'could not be read (permissions, a link loop, or an I/O error)',
-  'remote-link': 'reached through a link to a network or device path, and was not opened',
-};
+function refusalMessage(reason: RefusalReason, cap: number): string {
+  switch (reason) {
+    case 'not-a-regular-file':
+      return 'not a regular file (a FIFO, a device, a directory or a pipe) and was not read';
+    case 'too-large':
+      return `file exceeds the ${cap}-byte size cap and was not read`;
+    case 'unreadable':
+      return 'could not be read (permissions, a link loop, or an I/O error)';
+    case 'remote-link':
+      return 'reached through a link to a network or device path, and was not opened';
+  }
+}
 
 function isWithin(root: string, path: string): boolean {
   const rel = relative(root, path);
@@ -211,18 +262,20 @@ function readOne(descriptor: ConfigSourceDescriptor, projectPath: string): Confi
     kind: descriptor.kind,
     absolutePath,
     mcpServersField: descriptor.mcpServersField,
+    ...(descriptor.nestedProjects === true ? { nestedProjects: true as const } : {}),
   };
   // '' is a host with no config location on this OS.
   if (absolutePath === '') return { ...base, exists: false };
 
-  const read = readSmallText(absolutePath, MAX_CONFIG_BYTES, walkRoot(descriptor.kind, projectPath, absolutePath));
+  const cap = descriptor.maxBytes ?? MAX_CONFIG_BYTES;
+  const read = readSmallText(absolutePath, cap, walkRoot(descriptor.kind, projectPath, absolutePath));
   if (read.status === 'absent') return { ...base, exists: false };
   if (read.status === 'refused') {
-    return { ...base, exists: true, refusal: read.reason, parseError: REFUSAL_MESSAGE[read.reason] };
+    return { ...base, exists: true, refusal: read.reason, parseError: refusalMessage(read.reason, cap) };
   }
   const raw = read.text;
   try {
-    const json = parseJsonc(raw);
+    const json = parseJson(raw);
     return { ...base, exists: true, raw, json };
   } catch (e) {
     return { ...base, exists: true, raw, parseError: `invalid JSON: ${(e as Error).message}` };

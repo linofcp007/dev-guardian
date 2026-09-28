@@ -8,6 +8,29 @@
  *
  * Pure function. No I/O.
  */
+function remoteAddress(raw, sourceLabel) {
+    const str = (k) => (typeof raw[k] === 'string' ? raw[k] : undefined);
+    const type = str('type')?.toLowerCase();
+    const gemini = /(^|\/)\.gemini\/settings\.json$/.test(sourceLabel);
+    const httpUrl = str('httpUrl');
+    const url = str('url');
+    const serverUrl = str('serverUrl');
+    const address = httpUrl ?? url ?? serverUrl;
+    if (address === undefined)
+        return undefined;
+    let transport;
+    if (type === 'sse')
+        transport = 'sse';
+    else if (type !== undefined && type !== 'stdio')
+        transport = 'http';
+    else if (httpUrl !== undefined)
+        transport = 'http';
+    else if (gemini && url !== undefined)
+        transport = 'sse';
+    else
+        transport = /\/sse\/?(?:[?#]|$)/i.test(address) ? 'sse' : 'http';
+    return { url: address, transport };
+}
 export function extractMcpServers(source) {
     if (!source.exists || source.mcpServersField === null || source.json === undefined)
         return [];
@@ -29,9 +52,11 @@ export function extractMcpServers(source) {
         const cwd = raw['cwd'];
         if (typeof cwd === 'string')
             entry.cwd = cwd;
-        const url = raw['url'];
-        if (typeof url === 'string')
-            entry.url = url;
+        const remote = remoteAddress(raw, source.label);
+        if (remote !== undefined) {
+            entry.url = remote.url;
+            entry.remoteTransport = remote.transport;
+        }
         const type = raw['type'];
         if (typeof type === 'string')
             entry.type = type;

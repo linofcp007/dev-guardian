@@ -74,7 +74,10 @@ function readInChild(project: string, includeUser: boolean, home: string, timeou
       'const readMs = Date.now() - t0;\n' +
       'process.stdout.write(JSON.stringify({ readMs, sources: sources.map((s) => ({ label: s.label, exists: s.exists, refusal: s.refusal, parseError: s.parseError })) }));\n',
   );
-  const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming') };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming') };
+  // Claude Code's own override would point .claude.json elsewhere (this
+  // machine sets it): the child must see only the fake home.
+  delete env['CLAUDE_CONFIG_DIR'];
   return new Promise((done) => {
     const child = spawn(process.execPath, [...TSX_NODE_ARGS, script, project, includeUser ? '1' : '0'], {
       stdio: ['ignore', 'pipe', 'pipe'],
