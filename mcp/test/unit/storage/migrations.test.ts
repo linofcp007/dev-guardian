@@ -421,4 +421,29 @@ describe('migrations runner', () => {
     };
     expect(row.project_path).toBe('/main');
   });
+
+  it('upgrades a pre-014 database: suppressions gain VEX columns, and an existing one claims no VEX status', () => {
+    // An existing suppression was a plain "false positive" — it must not
+    // start reading as a VEX `not_affected` statement after the upgrade.
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    // Whatever the newest pre-014 migration is once parallel branches merge.
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path)
+       VALUES ('fp-old', 'reviewed', '2026-01-01T00:00:00.000Z', '/p')`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const row = db
+      .prepare(`SELECT vex_status, vex_justification, vex_impact_statement FROM suppressions`)
+      .get();
+    expect(row).toEqual({ vex_status: null, vex_justification: null, vex_impact_statement: null });
+    expect(new Storage(db).suppressions.listAll()[0]?.vex_status).toBeUndefined();
+  });
 });

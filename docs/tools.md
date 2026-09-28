@@ -53,7 +53,7 @@ The dev-guardian MCP server registers **57 tools** and **18 resources**. This pa
 | [`security_scan_full`](#security_scan_full) | Full security scan | `project_path`, `severity_min`, `auto_fix`, `allow_dirty`, `local_only`, `force` |
 | [`set_baseline`](#set_baseline) | Set regression baseline | `project_path`, `scan_id`, `scan_type`, `note` |
 | [`suggest_fix`](#suggest_fix) | Gather fix context for the model | `project_path`, `finding_fingerprint`, `context_lines` |
-| [`suppress_finding`](#suppress_finding) | Suppress finding | `project_path`, `finding_fingerprint`, `reason`, `expires_at` |
+| [`suppress_finding`](#suppress_finding) | Suppress finding | `project_path`, `finding_fingerprint`, `reason`, `expires_at`, `vex_status`, `justification`, `impact_statement` |
 | [`triage_findings`](#triage_findings) | Heuristic triage of findings | `project_path` |
 | [`validate_finding`](#validate_finding) | Qualify findings by reachability | `project_path`, `fingerprint`, `providers` |
 | [`vet_packages`](#vet_packages) | Vet packages before installing | `ecosystem`, `packages`, `project_path` |
@@ -571,7 +571,7 @@ Assemble structured context about a finding (source snippet, surrounding lines, 
 
 ### `suppress_finding`
 
-Mark a finding of project\_path (default: the server's working directory) — named by the fingerprint a scan response shows — as a false positive. Resources that surface open findings exclude it while the suppression is active — including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires\_at for a temporary snooze.
+Mark a finding of project\_path (default: the server's working directory) — named by the fingerprint a scan response shows — as a false positive. Resources that surface open findings exclude it while the suppression is active — including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires\_at for a temporary snooze. For a CVE finding, vex\_status: not\_affected with an OpenVEX justification (and optional impact\_statement) also makes it a VEX statement that export\_vex publishes.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -579,6 +579,9 @@ Mark a finding of project\_path (default: the server's working directory) — na
 | `finding_fingerprint` | string | yes | — | SHA-256 fingerprint of the finding to suppress (from a previous scan response). |
 | `reason` | string | yes | — | Why this finding is being suppressed. Required. |
 | `expires_at` | string | no | — | ISO-8601 expiry. When omitted, the suppression never expires. |
+| `vex_status` | one of "not\_affected" | no | — | Also record a VEX statement: the product is not\_affected by the finding's CVE. Requires justification; only for a finding that names a CVE. export\_vex publishes it. |
+| `justification` | one of "component\_not\_present", "vulnerable\_code\_not\_present", "vulnerable\_code\_not\_in\_execute\_path", "vulnerable\_code\_cannot\_be\_controlled\_by\_adversary", "inline\_mitigations\_already\_exist" | no | — | OpenVEX justification for vex\_status not\_affected. Required with it. |
+| `impact_statement` | string | no | — | Optional free-text VEX impact statement, with vex\_status. |
 
 ### `triage_findings`
 

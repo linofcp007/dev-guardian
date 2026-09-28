@@ -23,10 +23,20 @@
  * unscoped: it has no production caller left (its SQL predicate is the
  * pre-011 fingerprint/identity match, kept for what it is — a yes/no lookup,
  * not a listing), so there is no project in scope to filter by.
+ *
+ * Since migration 014 a suppression may also be a VEX `not_affected`
+ * statement (`vex_status`, `vex_justification`, `vex_impact_statement`),
+ * which `export_vex` publishes. It hides the finding exactly like any other
+ * suppression; the VEX columns only add what it says to a VEX consumer.
  */
 
 import type { DB, Statement } from './db.js';
-import type { Suppression } from '../types.js';
+import {
+  OPENVEX_JUSTIFICATIONS,
+  type OpenVexJustification,
+  type Suppression,
+  type VexSuppressionStatus,
+} from '../types.js';
 import { nowIso } from './repoUtil.js';
 
 interface SuppressionRow {
@@ -38,6 +48,10 @@ interface SuppressionRow {
   expires_at: string | null;
   created_by: string | null;
   project_path: string | null;
+  /** Migration 014; NULL on every ordinary suppression. */
+  vex_status: string | null;
+  vex_justification: string | null;
+  vex_impact_statement: string | null;
 }
 
 export interface InsertSuppressionInput {
@@ -54,11 +68,18 @@ export interface InsertSuppressionInput {
    * omitting it means at match time.
    */
   project_path?: string;
+  /** A VEX `not_affected` statement (migration 014); give the justification with it. */
+  vex_status?: VexSuppressionStatus;
+  vex_justification?: OpenVexJustification;
+  vex_impact_statement?: string;
 }
 
 export class SuppressionsRepo {
   private readonly insertStmt: Statement<
-    [string, string | null, string, string, string | null, string | null, string | null]
+    [
+      string, string | null, string, string, string | null, string | null, string | null,
+      string | null, string | null, string | null,
+    ]
   >;
   private readonly listActiveStmt: Statement<[string], SuppressionRow>;
   private readonly listAllStmt: Statement<[], SuppressionRow>;
@@ -70,9 +91,10 @@ export class SuppressionsRepo {
   constructor(db: DB) {
     this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
-        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path
+        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path,
+        vex_status, vex_justification, vex_impact_statement
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.listActiveStmt = db.prepare<[string], SuppressionRow>(`
@@ -150,6 +172,9 @@ export class SuppressionsRepo {
       input.expires_at ?? null,
       input.created_by ?? null,
       input.project_path ?? null,
+      input.vex_status ?? null,
+      input.vex_justification ?? null,
+      input.vex_impact_statement ?? null,
     );
     return Number(info.lastInsertRowid);
   }
@@ -207,5 +232,17 @@ function rowToSuppression(row: SuppressionRow): Suppression {
   if (row.expires_at !== null) s.expires_at = row.expires_at;
   if (row.created_by !== null) s.created_by = row.created_by;
   if (row.project_path !== null) s.project_path = row.project_path;
+  // Only the values suppress_finding writes are read back as VEX: anything
+  // else in the column (a hand edit, a future build's status) states nothing
+  // this build can export, so it reads as an ordinary suppression.
+  if (row.vex_status === 'not_affected' && isJustification(row.vex_justification)) {
+    s.vex_status = 'not_affected';
+    s.vex_justification = row.vex_justification;
+    if (row.vex_impact_statement !== null) s.vex_impact_statement = row.vex_impact_statement;
+  }
   return s;
+}
+
+function isJustification(value: string | null): value is OpenVexJustification {
+  return (OPENVEX_JUSTIFICATIONS as readonly (string | null)[]).includes(value);
 }

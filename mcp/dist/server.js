@@ -39162,6 +39162,13 @@ function isDepsAuditScan(scan2) {
   if (scan2.scan_type === "deps_audit") return true;
   return scan2.scan_type === "deps" && scan2.meta?.["bot_configured"] !== void 0;
 }
+var OPENVEX_JUSTIFICATIONS = [
+  "component_not_present",
+  "vulnerable_code_not_present",
+  "vulnerable_code_not_in_execute_path",
+  "vulnerable_code_cannot_be_controlled_by_adversary",
+  "inline_mitigations_already_exist"
+];
 var DOMAIN_ERROR_CODES = [
   "missing_scanner",
   "no_bash_shell",
@@ -39586,9 +39593,10 @@ var SuppressionsRepo = class {
   constructor(db) {
     this.insertStmt = db.prepare(`
       INSERT INTO suppressions (
-        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path
+        finding_fingerprint, finding_identity, reason, created_at, expires_at, created_by, project_path,
+        vex_status, vex_justification, vex_impact_statement
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.listActiveStmt = db.prepare(`
       SELECT * FROM suppressions
@@ -39643,7 +39651,10 @@ var SuppressionsRepo = class {
       nowIso(),
       input.expires_at ?? null,
       input.created_by ?? null,
-      input.project_path ?? null
+      input.project_path ?? null,
+      input.vex_status ?? null,
+      input.vex_justification ?? null,
+      input.vex_impact_statement ?? null
     );
     return Number(info.lastInsertRowid);
   }
@@ -39692,7 +39703,15 @@ function rowToSuppression(row) {
   if (row.expires_at !== null) s.expires_at = row.expires_at;
   if (row.created_by !== null) s.created_by = row.created_by;
   if (row.project_path !== null) s.project_path = row.project_path;
+  if (row.vex_status === "not_affected" && isJustification(row.vex_justification)) {
+    s.vex_status = "not_affected";
+    s.vex_justification = row.vex_justification;
+    if (row.vex_impact_statement !== null) s.vex_impact_statement = row.vex_impact_statement;
+  }
   return s;
+}
+function isJustification(value) {
+  return OPENVEX_JUSTIFICATIONS.includes(value);
 }
 
 // src/storage/surfaceRepo.ts
@@ -54240,17 +54259,74 @@ function failDomain8(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
+// src/intel/rank.ts
+var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
+var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
+function findingCveIds(finding4) {
+  const ids2 = /* @__PURE__ */ new Set();
+  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
+    ids2.add(finding4.rule_id.toUpperCase());
+  }
+  for (const text of [finding4.title, finding4.message]) {
+    if (text === void 0) continue;
+    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
+  }
+  return [...ids2];
+}
+var CVE_CAPABLE_TOOLS = ["trivy", "npm-audit", "wpscan", "pip-audit"];
+function isUncorrelatedFinding(finding4) {
+  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
+}
+function exploitabilitySignal(cveIds, intel) {
+  let kev = false;
+  let maxEpss = null;
+  const contributed = [];
+  for (const id of cveIds) {
+    const entry = intel.get(id);
+    if (entry === void 0 || entry.status !== "ok") continue;
+    let matters = false;
+    if (entry.kev) {
+      kev = true;
+      matters = true;
+    }
+    if (entry.epss_score !== void 0) {
+      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
+      matters = true;
+    }
+    if (matters) contributed.push(id);
+  }
+  return { kev, max_epss: maxEpss, cve_ids: contributed };
+}
+function rankByExploitability(items, cveIdsOf, intel) {
+  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
+  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
+    const sa = signals2[a2.index];
+    const sb = signals2[b.index];
+    if (sa === void 0 || sb === void 0) return 0;
+    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
+    const ea = sa.max_epss ?? -1;
+    const eb = sb.max_epss ?? -1;
+    if (ea !== eb) return eb - ea;
+    return a2.index - b.index;
+  }).map((x) => x.item);
+}
+
 // src/tools/suppressFinding.ts
 var inputSchema5 = {
   project_path: ProjectPath,
   finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("SHA-256 fingerprint of the finding to suppress (from a previous scan response)."),
   reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
-  expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires.")
+  expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires."),
+  vex_status: external_exports.enum(["not_affected"]).optional().describe(
+    "Also record a VEX statement: the product is not_affected by the finding's CVE. Requires justification; only for a finding that names a CVE. export_vex publishes it."
+  ),
+  justification: external_exports.enum(OPENVEX_JUSTIFICATIONS).optional().describe("OpenVEX justification for vex_status not_affected. Required with it."),
+  impact_statement: external_exports.string().min(1).max(1e3).optional().describe("Optional free-text VEX impact statement, with vex_status.")
 };
 var tool11 = {
   name: "suppress_finding",
   title: "Suppress finding",
-  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze.",
+  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a CVE finding, vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes.",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
@@ -54263,6 +54339,8 @@ async function handler8(input, ctx) {
       "finding_fingerprint and reason are required."
     );
   }
+  const vexProblem = vexArgumentProblem(inp);
+  if (vexProblem !== null) return failDomain9("unsupported_target", vexProblem);
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -54276,7 +54354,19 @@ async function handler8(input, ctx) {
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
   }
+  const cveIds = findingCveIds(located.finding);
+  if (inp.vex_status !== void 0 && cveIds.length === 0) {
+    return failDomain9(
+      "unsupported_target",
+      `vex_status needs a finding that names a CVE, and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) names none. Suppress it without vex_status, or suppress the dependency finding itself.`
+    );
+  }
   const identity3 = located.finding.identity;
+  const vex = inp.vex_status !== void 0 && inp.justification !== void 0 ? {
+    status: inp.vex_status,
+    justification: inp.justification,
+    ...inp.impact_statement !== void 0 ? { impact_statement: inp.impact_statement } : {}
+  } : null;
   const id = ctx.storage.suppressions.insert({
     finding_fingerprint: inp.finding_fingerprint,
     ...identity3 !== void 0 ? { finding_identity: identity3 } : {},
@@ -54285,7 +54375,12 @@ async function handler8(input, ctx) {
     created_by: "user",
     // Scopes the suppression to THIS project at match time (migration 011) —
     // already resolved above to look the finding up, so no extra lookup.
-    project_path: projectPath
+    project_path: projectPath,
+    ...vex !== null ? {
+      vex_status: vex.status,
+      vex_justification: vex.justification,
+      ...vex.impact_statement !== void 0 ? { vex_impact_statement: vex.impact_statement } : {}
+    } : {}
   });
   return {
     ok: true,
@@ -54295,8 +54390,19 @@ async function handler8(input, ctx) {
     // (written before schema 7, or by a tool that computes none), so the
     // suppression matches it by fingerprint only and lapses if lines shift.
     finding_identity: identity3 ?? null,
-    expires_at: inp.expires_at ?? null
+    expires_at: inp.expires_at ?? null,
+    // Null for an ordinary suppression: it states nothing in VEX terms.
+    vex: vex === null ? null : { ...vex, cve_ids: cveIds }
   };
+}
+function vexArgumentProblem(inp) {
+  if (inp.vex_status !== void 0 && inp.justification === void 0) {
+    return `vex_status not_affected needs a justification: one of ${OPENVEX_JUSTIFICATIONS.join(", ")}.`;
+  }
+  if (inp.vex_status === void 0 && (inp.justification !== void 0 || inp.impact_statement !== void 0)) {
+    return "justification and impact_statement describe a VEX statement: pass vex_status: not_affected with them.";
+  }
+  return null;
 }
 function failDomain9(code, message3) {
   return { ok: false, error: { code, message: message3 } };
@@ -56409,58 +56515,6 @@ function fallbackResult(id, row, reason) {
   if (row.epss_score !== null) entry.epss_score = row.epss_score;
   if (row.epss_percentile !== null) entry.epss_percentile = row.epss_percentile;
   return entry;
-}
-
-// src/intel/rank.ts
-var CVE_ID_RE = /CVE-\d{4}-\d+/gi;
-var CVE_ID_ONLY_RE = /^CVE-\d{4}-\d+$/i;
-function findingCveIds(finding4) {
-  const ids2 = /* @__PURE__ */ new Set();
-  if (finding4.rule_id !== void 0 && CVE_ID_ONLY_RE.test(finding4.rule_id)) {
-    ids2.add(finding4.rule_id.toUpperCase());
-  }
-  for (const text of [finding4.title, finding4.message]) {
-    if (text === void 0) continue;
-    for (const match of text.matchAll(CVE_ID_RE)) ids2.add(match[0].toUpperCase());
-  }
-  return [...ids2];
-}
-var CVE_CAPABLE_TOOLS = ["trivy", "npm-audit", "wpscan", "pip-audit"];
-function isUncorrelatedFinding(finding4) {
-  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
-}
-function exploitabilitySignal(cveIds, intel) {
-  let kev = false;
-  let maxEpss = null;
-  const contributed = [];
-  for (const id of cveIds) {
-    const entry = intel.get(id);
-    if (entry === void 0 || entry.status !== "ok") continue;
-    let matters = false;
-    if (entry.kev) {
-      kev = true;
-      matters = true;
-    }
-    if (entry.epss_score !== void 0) {
-      if (maxEpss === null || entry.epss_score > maxEpss) maxEpss = entry.epss_score;
-      matters = true;
-    }
-    if (matters) contributed.push(id);
-  }
-  return { kev, max_epss: maxEpss, cve_ids: contributed };
-}
-function rankByExploitability(items, cveIdsOf, intel) {
-  const signals2 = items.map((item) => exploitabilitySignal(cveIdsOf(item), intel));
-  return items.map((item, index) => ({ item, index })).sort((a2, b) => {
-    const sa = signals2[a2.index];
-    const sb = signals2[b.index];
-    if (sa === void 0 || sb === void 0) return 0;
-    if (sa.kev !== sb.kev) return sa.kev ? -1 : 1;
-    const ea = sa.max_epss ?? -1;
-    const eb = sb.max_epss ?? -1;
-    if (ea !== eb) return eb - ea;
-    return a2.index - b.index;
-  }).map((x) => x.item);
 }
 
 // src/tools/riskScore.ts

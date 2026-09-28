@@ -83,6 +83,17 @@ export function isDepsAuditScan(scan) {
     return scan.scan_type === 'deps' && scan.meta?.['bot_configured'] !== undefined;
 }
 export const TOOL_RUN_STATUSES = ['ok', 'skipped', 'failed'];
+/**
+ * OpenVEX's `not_affected` justification labels (OpenVEX spec v0.2.0, "Status
+ * Justifications" — the labels of CISA's VEX Status Justifications, June 2022).
+ */
+export const OPENVEX_JUSTIFICATIONS = [
+    'component_not_present',
+    'vulnerable_code_not_present',
+    'vulnerable_code_not_in_execute_path',
+    'vulnerable_code_cannot_be_controlled_by_adversary',
+    'inline_mitigations_already_exist',
+];
 export const HTTP_METHODS = [
     'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ANY',
 ];

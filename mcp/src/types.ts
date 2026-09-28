@@ -282,7 +282,33 @@ export interface Suppression {
    * had. Present on every suppression `suppress_finding` writes from now on.
    */
   project_path?: string;
+  /**
+   * Migration 014: the suppression is also a VEX statement that the product
+   * is `not_affected` by the CVE the finding names, for `vex_justification`'s
+   * reason. Absent on an ordinary suppression — which states nothing in VEX
+   * terms and is never exported as `not_affected`.
+   */
+  vex_status?: VexSuppressionStatus;
+  /** Present exactly when `vex_status` is (suppress_finding requires it). */
+  vex_justification?: OpenVexJustification;
+  vex_impact_statement?: string;
 }
+
+/** The only VEX status a suppression can carry: the others are not reasons to hide a finding. */
+export type VexSuppressionStatus = 'not_affected';
+
+/**
+ * OpenVEX's `not_affected` justification labels (OpenVEX spec v0.2.0, "Status
+ * Justifications" — the labels of CISA's VEX Status Justifications, June 2022).
+ */
+export const OPENVEX_JUSTIFICATIONS = [
+  'component_not_present',
+  'vulnerable_code_not_present',
+  'vulnerable_code_not_in_execute_path',
+  'vulnerable_code_cannot_be_controlled_by_adversary',
+  'inline_mitigations_already_exist',
+] as const;
+export type OpenVexJustification = (typeof OPENVEX_JUSTIFICATIONS)[number];
 
 export interface Baseline {
   id: number;

@@ -23,6 +23,9 @@ version bump.
   PoC), Automatable from the dependency provider's exposure, Technical Impact from severity, and the
   new `mission_wellbeing` parameter (default `medium`). A point with no data takes the more severe
   value and is listed in `ssvc.assumed`; `summary.ssvc` counts the decisions. The score is unchanged.
+- `suppress_finding` takes `vex_status: not_affected` with a required OpenVEX `justification` and an
+  optional `impact_statement`, for a finding that names a CVE (migration 014; existing suppressions
+  state nothing in VEX terms).
 
 ## [3.0.0] - 2026-09-28
 
