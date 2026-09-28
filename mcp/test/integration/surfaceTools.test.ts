@@ -1520,6 +1520,90 @@ describe('map_attack_surface', () => {
     // would assert on entries that legitimately do not exist.
     expect(snapshot?.coverage.filter((c) => c.unresolved_imports > 0)).toEqual([]);
   });
+
+  /**
+   * Third-party imports: the specifiers the resolvers leave unresolved
+   * because they name a package, not a project file. They used to be only
+   * counted (`coverage[].unresolved_imports`); validate_finding's dependency
+   * provider needs to know WHICH file imports WHICH package, so they are now
+   * persisted — project-relative like `imports`, the relative leftovers (a
+   * missing `./x`) excluded because they name no package.
+   */
+  it('persists the bare import specifiers as external_imports, project-relative', async () => {
+    const projectPath = surfaceProject();
+    const abs = (rel: string): string => join(projectPath, rel);
+    const importMatch = (rel: string, module: string, symbol?: string): unknown => ({
+      check_id: 'guardian-import',
+      path: abs(rel),
+      start: { line: 1 },
+      extra: {
+        metadata: { guardian_kind: 'import' },
+        metavars: {
+          $MODULE: { abstract_content: module },
+          ...(symbol === undefined ? {} : { $SYMBOL: { abstract_content: symbol } }),
+        },
+      },
+    });
+
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(
+      JSON.stringify({
+        results: [
+          importMatch('api/server.ts', "'express'", 'express'),
+          importMatch('api/server.ts', "'lodash/merge'", 'merge'),
+          importMatch('api/server.ts', "'./gone.js'", 'gone'),
+          // Semgrep 1.86.0 joins a dotted Python module with a space.
+          importMatch('pyapp/views.py', 'yaml urls', 'x'),
+        ],
+        paths: { scanned: [abs('api/server.ts'), abs('pyapp/views.py')] },
+      }),
+    );
+
+    const ctx = makeCtx();
+    const result = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+    const snapshot = ctx.storage.surface.getById(result.snapshot_id)?.snapshot;
+
+    expect(snapshot?.external_imports).toEqual([
+      { file: 'api/server.ts', specifier: 'express', language: 'typescript' },
+      { file: 'api/server.ts', specifier: 'lodash/merge', language: 'typescript' },
+      { file: 'pyapp/views.py', specifier: 'yaml.urls', language: 'python' },
+    ]);
+  });
+
+  it('does not reuse a cached snapshot captured before external imports were recorded', async () => {
+    // Every snapshot persisted before this field existed lacks it. Served
+    // from the cache, it would read to the dependency provider as "no
+    // package is imported anywhere" for up to a day — so it is recomputed.
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    vi.mocked(runProcess).mockResolvedValue(okRun());
+    vi.mocked(readJsonSafe).mockReturnValue(SEMGREP_OUTPUT);
+
+    const ctx = makeCtx();
+    const projectPath = surfaceProject();
+    const first = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+    // Rewrite the persisted row the way an older build stored it.
+    const row = ctx.storage.rawHandle()
+      .prepare('SELECT json FROM surface_snapshots WHERE id = ?')
+      .get(first.snapshot_id) as { json: string };
+    const legacy = JSON.parse(row.json) as Record<string, unknown>;
+    delete legacy['external_imports'];
+    ctx.storage.rawHandle()
+      .prepare('UPDATE surface_snapshots SET json = ? WHERE id = ?')
+      .run(JSON.stringify(legacy), first.snapshot_id);
+
+    const second = okResult<{ snapshot_id: number }>(
+      await tool().handler({ project_path: projectPath }, ctx),
+    );
+
+    expect(second.snapshot_id).not.toBe(first.snapshot_id);
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+    expect(ctx.storage.surface.getById(second.snapshot_id)?.snapshot.external_imports).toEqual([]);
+  });
 });
 
 describe('map_attack_surface — spec import and diff', () => {

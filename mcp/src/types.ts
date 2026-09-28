@@ -558,6 +558,20 @@ export interface AttackSurfaceSnapshot {
    */
   imports: { file: string; module_file: string }[];
   /**
+   * The imports that name a package rather than a project file — `express`,
+   * `lodash/merge`, `yaml`, `github.com/gin-gonic/gin` — one per (file,
+   * specifier), `file` project-relative POSIX like `imports`. Stdlib modules
+   * are here too; nothing tells them apart from a package by the text alone.
+   * Read by `validate_finding`'s dependency provider to decide whether a
+   * vulnerable package is imported, and whether by a file a route reaches
+   * (`surface/moduleEdges.ts#externalImports` says what is left out).
+   *
+   * ABSENT (never `[]`) on every snapshot persisted before it was recorded:
+   * "this snapshot never looked" must not read as "nothing imports any
+   * package", so a reader checks `=== undefined` first.
+   */
+  external_imports?: { file: string; specifier: string; language: string }[];
+  /**
    * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
    * syntax error confined to one file): the routes outside the unparsed span
    * are in `routes`, the ones inside it may be missing. Present only when

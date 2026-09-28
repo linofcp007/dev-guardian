@@ -63595,6 +63595,26 @@ function resolveModuleEdges(edges, projectFiles) {
   }
   return { resolved, unresolved };
 }
+function externalImports(unresolved) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const edge of unresolved) {
+    if (!namesAPackage(edge)) continue;
+    byKey.set(`${edge.file}\0${edge.specifier}`, edge);
+  }
+  return [...byKey.values()].sort(
+    (a2, b) => codeUnitOrder(a2.file, b.file) || codeUnitOrder(a2.specifier, b.specifier)
+  );
+}
+function namesAPackage(edge) {
+  const specifier = edge.specifier;
+  if (specifier.length === 0) return false;
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return false;
+  if (edge.language === "rust" && /^(crate|self|super)::/.test(specifier)) return false;
+  return true;
+}
+function codeUnitOrder(a2, b) {
+  return a2 < b ? -1 : a2 > b ? 1 : 0;
+}
 function resolveSpecifier(edge, index) {
   switch (edge.language) {
     case "typescript":
@@ -64919,7 +64939,7 @@ async function handler39(input, ctx) {
       tree_hash: treeHash,
       freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString()
     });
-    if (cached2) {
+    if (cached2 && cached2.snapshot.external_imports !== void 0) {
       return summarize4(cached2.snapshot, cached2.id, cachedToolsRun(cached2.snapshot), ctx, projectPath);
     }
   }
@@ -65142,7 +65162,12 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
     // comment in types.ts promises. RouteRecord.file/ImportRecord.file stay
     // absolute and native-separator — a separate, pre-existing mismatch that
     // `validate/staticProvider.ts` relativizes on its own side.
-    imports: resolvedEdges
+    imports: resolvedEdges,
+    // The unresolved edges that name a package, in the same project-relative
+    // space (the edges were relativized above, before resolution). They were
+    // only ever counted in `coverage[].unresolved_imports`; the dependency
+    // provider needs to know which file imports which package.
+    external_imports: externalImports(unresolvedEdges)
   };
 }
 function importSpecs(projectPath, specPaths2) {

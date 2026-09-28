@@ -8,6 +8,12 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- `map_attack_surface` persists the import specifiers it cannot resolve to a project file — the
+  third-party packages — as `external_imports` on the snapshot; they were only counted. A cached
+  snapshot without the field is recomputed rather than served.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

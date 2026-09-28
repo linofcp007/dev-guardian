@@ -226,6 +226,47 @@ export function resolveModuleEdges(
 }
 
 /**
+ * The unresolved edges that name a PACKAGE rather than a project file — the
+ * third-party (and standard-library) imports, persisted on the snapshot as
+ * `external_imports` for `validate_finding`'s dependency provider
+ * (`validate/dependencyProvider.ts`), which matches a vulnerable package's
+ * name against them.
+ *
+ * Dropped, because they name no package: a relative or absolute path that
+ * failed to resolve (a missing `./x`, Python's `.models`) and Rust's
+ * `crate::`/`self::`/`super::` paths, which are the crate's own code. Keeping
+ * them would let a package whose name happens to equal such a path read as
+ * imported — the one direction the provider must never err in.
+ *
+ * Every other language's unresolved specifier is kept as written (a Java or
+ * C# namespace, a Go module path): whether it can be matched to a package is
+ * the provider's question, not this one's. One entry per (file, specifier),
+ * sorted, so a snapshot does not change with the order Semgrep reported in.
+ */
+export function externalImports(unresolved: readonly ModuleEdge[]): ModuleEdge[] {
+  const byKey = new Map<string, ModuleEdge>();
+  for (const edge of unresolved) {
+    if (!namesAPackage(edge)) continue;
+    byKey.set(`${edge.file}\u0000${edge.specifier}`, edge);
+  }
+  return [...byKey.values()].sort(
+    (a, b) => codeUnitOrder(a.file, b.file) || codeUnitOrder(a.specifier, b.specifier),
+  );
+}
+
+function namesAPackage(edge: ModuleEdge): boolean {
+  const specifier = edge.specifier;
+  if (specifier.length === 0) return false;
+  if (specifier.startsWith('.') || specifier.startsWith('/')) return false;
+  if (edge.language === 'rust' && /^(crate|self|super)::/.test(specifier)) return false;
+  return true;
+}
+
+function codeUnitOrder(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
  * Zero, one or many target files. Only Go can name more than one — a Go
  * import names a package DIRECTORY, and every file in it is imported — but
  * the plural shape is the contract for all of them, because "resolved to

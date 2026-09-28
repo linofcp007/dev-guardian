@@ -54,7 +54,7 @@ import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
 import { extractSurface, languageFromPath } from '../surface/extract.js';
-import { extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.js';
+import { externalImports, extractModuleEdges, resolveModuleEdges, } from '../surface/moduleEdges.js';
 import { recoverMetavars, } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
@@ -187,7 +187,10 @@ async function handler(input, ctx) {
             tree_hash: treeHash,
             freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
         });
-        if (cached) {
+        // A snapshot persisted before `external_imports` was recorded is not
+        // reused: served from the cache, it would tell the dependency provider
+        // nothing about which packages are imported for up to a day.
+        if (cached && cached.snapshot.external_imports !== undefined) {
             return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx, projectPath);
         }
     }
@@ -496,6 +499,11 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
         // absolute and native-separator — a separate, pre-existing mismatch that
         // `validate/staticProvider.ts` relativizes on its own side.
         imports: resolvedEdges,
+        // The unresolved edges that name a package, in the same project-relative
+        // space (the edges were relativized above, before resolution). They were
+        // only ever counted in `coverage[].unresolved_imports`; the dependency
+        // provider needs to know which file imports which package.
+        external_imports: externalImports(unresolvedEdges),
     };
 }
 /**

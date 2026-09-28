@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  externalImports,
   extractModuleEdges,
   resolveModuleEdges,
   RESOLVABLE_LANGUAGES,
@@ -301,6 +302,45 @@ describe('resolveModuleEdges', () => {
       [edge('src/app.ts', './routes/users', 'typescript')], files,
     );
     expect(resolved).toEqual([{ file: 'src/app.ts', module_file: 'src\\routes\\users.ts' }]);
+  });
+});
+
+describe('externalImports', () => {
+  // The unresolved edges that name a PACKAGE — what validate_finding's
+  // dependency provider matches a vulnerable package against. A relative
+  // specifier that failed to resolve names a missing project file, not a
+  // package, and a Rust `crate::`/`self::`/`super::` path is the crate's own
+  // code: keeping either would let a package whose name happens to match
+  // read as imported.
+  it('keeps bare specifiers and drops relative, absolute and crate-internal ones', () => {
+    const unresolved = [
+      edge('src/app.ts', 'express', 'typescript'),
+      edge('src/app.ts', '@babel/core', 'typescript'),
+      edge('src/app.ts', 'lodash/merge', 'javascript'),
+      edge('src/app.ts', './missing.js', 'typescript'),
+      edge('src/app.ts', '../gone', 'typescript'),
+      edge('src/app.ts', '/abs/path.js', 'javascript'),
+      edge('app/views.py', 'yaml', 'python'),
+      edge('app/views.py', '.models', 'python'),
+      edge('src/main.rs', 'crate::settings::Config', 'rust'),
+      edge('src/main.rs', 'self::db', 'rust'),
+      edge('src/main.rs', 'super::util', 'rust'),
+      edge('src/main.rs', 'actix_web::web', 'rust'),
+      edge('Order.java', 'com.example.Service', 'java'),
+    ];
+    expect(externalImports(unresolved)).toEqual([
+      edge('Order.java', 'com.example.Service', 'java'),
+      edge('app/views.py', 'yaml', 'python'),
+      edge('src/app.ts', '@babel/core', 'typescript'),
+      edge('src/app.ts', 'express', 'typescript'),
+      edge('src/app.ts', 'lodash/merge', 'javascript'),
+      edge('src/main.rs', 'actix_web::web', 'rust'),
+    ]);
+  });
+
+  it('records each (file, specifier) once, however many times the file imports it', () => {
+    const twice = [edge('src/a.ts', 'react', 'typescript'), edge('src/a.ts', 'react', 'typescript')];
+    expect(externalImports(twice)).toEqual([edge('src/a.ts', 'react', 'typescript')]);
   });
 });
 
