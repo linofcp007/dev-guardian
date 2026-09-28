@@ -268,10 +268,12 @@ function recordSemgrepRun(args) {
     const { ctx, result, outFile, notes, via, configs, tools_run, missing_tools, parser_inputs } = args;
     const raw = readJsonSafe(outFile);
     // Whatever the verdict, the findings the report holds are real. The
-    // container's configs are named inside its /src mount.
-    const rulesRoot = via !== null ? CONTAINER_PROJECT_ROOT : ctx.rulesProjectPath;
+    // container's configs are named inside its /src mount, where it runs.
+    const rules = via !== null
+        ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT }
+        : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
     if (raw)
-        parser_inputs.push({ parser: semgrepParserFor(configs, rulesRoot), input: raw });
+        parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
     const check = checkSemgrepReport({
         raw,
         exitCode: result.exitCode,
@@ -280,7 +282,7 @@ function recordSemgrepRun(args) {
         // The container fallback reports paths under its mount, not the host's.
         projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
         // A rule that did not load is named as its findings are stored.
-        ruleIdOf: localRuleIdNormalizer(configs, rulesRoot),
+        ruleIdOf: localRuleIdNormalizer(configs, rules),
     });
     const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes];
     if (check.verdict === 'ok') {
@@ -413,9 +415,9 @@ async function runSemgrepOnScope(args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.rulesProjectPath),
+        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
     });
-    const parser = semgrepParserFor(plan.rulePacks, ctx.rulesProjectPath);
+    const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
     for (const raw of run.reports)
         parser_inputs.push({ parser, input: raw });
     const entry = { ...run.toolRun };

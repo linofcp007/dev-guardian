@@ -1014,16 +1014,23 @@ keeps working (migrations 004–011 are additive).
   the whole absolute path when it does not run from under it
   (`C.Users.….plugins.cache.<version>.configs.semgrep.<rule>`) — and both
   the fingerprint and the identity hash `rule_id`. So a new install path
-  (every version, every CI runner) made every finding of the plugin's own
-  packs new: baselines stopped matching, suppressions stopped applying. A
-  project's own rule did the same whenever Semgrep ran from elsewhere
-  (`review_pr` on a ref, `create_fix_pr`'s worktree). The parser now stores
-  a canonical id — a pack rule's own id, a project rule's id from the
-  project root (what Semgrep gives it there) — and stored findings are
-  re-keyed once at startup (the canonical id, the fingerprint and identity a
-  fresh scan computes), with their suppressions and cached validations.
-  `dev-guardian scan` already named a project rule from the project root, so
-  a committed `.guardian/baseline.json` is unaffected.
+  (every version) made every finding of the plugin's own packs new:
+  suppressions stopped applying, the open set held both copies. A project's
+  own rule did the same whenever Semgrep ran from elsewhere (`review_pr` on
+  a ref, `create_fix_pr`'s worktree). The parser now stores a rule of the
+  plugin's own packs — found from the plugin's root, not from any directory
+  named `configs/semgrep` — under its own id, and a project rule under the
+  id Semgrep gives it from the project root (what every scan run from the
+  project always stored); a rule file anywhere else keeps Semgrep's own id,
+  so two files that define the same rule id stay two rules. Stored
+  plugin-pack findings are re-keyed at startup (the own id, the fingerprint
+  and identity a fresh scan computes, their suppressions and cached
+  validations): in batches that commit as they go, so a start that is
+  stopped keeps its progress, and on each later start for rows an older
+  plugin process wrote since (200 000 rows: about 40 s once, on a loaded
+  machine; nothing new: 1 ms). A committed `.guardian/baseline.json` is
+  unaffected: `dev-guardian scan` runs no plugin pack, and a project rule's
+  id did not change.
 - **`scan_dast` over a surface whose route recovery failed** read coverage
   `full`: `map_attack_surface` persists a snapshot whose
   `semgrep-metavar-recovery` step lost some matches, with nothing in

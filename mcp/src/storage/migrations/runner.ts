@@ -8,10 +8,11 @@
  *
  * Migrations are SQL only (no JS hooks): keep the surface area small and the
  * audit trail trivial — what you read in the .sql file is what runs. The one
- * data step SQL cannot express runs after them, once, in `runMigrations`:
- * re-keying stored local-rule findings to the rule's own id
- * (`../localRuleIds.ts` — it needs sha256). It changes values, never the
- * schema, and records itself in `schema_meta`.
+ * data step SQL cannot express runs after them, in `runMigrations`:
+ * re-keying stored plugin-pack findings to the rule's own id
+ * (`../localRuleIds.ts` — it needs sha256 and the plugin's packs). It changes
+ * values, never the schema, commits in batches, and records how far it got in
+ * `schema_meta`, so every start carries on from there.
  *
  * ---- Numbering convention ------------------------------------------------
  *

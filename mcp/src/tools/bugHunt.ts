@@ -408,10 +408,10 @@ export const BUG_SUBCATEGORIES: ReadonlySet<string> = new Set([
  * `severity_min` had already been fixed for (see `scanToolFactory.ts`).
  * `categories` is now a response-only view, {@link categoriesView}.
  */
-function bugCategoryParserFor(packs: readonly string[], rulesProjectPath: string): ScannerParser {
-  // A local pack's rule is stored under its canonical id, never under the
-  // path of the plugin's install (runners/semgrepRuleIds.ts).
-  const base = semgrepParserFor(packs, rulesProjectPath);
+function bugCategoryParserFor(packs: readonly string[], ctx: Pick<InvokeContext, 'projectPath' | 'rulesProjectPath'>): ScannerParser {
+  // A plugin pack's rule is stored under its own id, never under the path of
+  // the plugin's install (runners/semgrepRuleIds.ts).
+  const base = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   return {
     name: semgrepParser.name,
     parse(input, ctx): ParserOutput {
@@ -664,7 +664,7 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
     ctx.plugin,
     ctx.rulesProjectPath,
   );
-  const categoryParser = bugCategoryParserFor(configuredPacks, ctx.rulesProjectPath);
+  const categoryParser = bugCategoryParserFor(configuredPacks, ctx);
 
   if (ctx.scope !== null) {
     return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
@@ -842,7 +842,7 @@ function judgeBugHuntRun(
     outcome: run.outcome,
     targets: 1,
     projectPath: ctx.projectPath,
-    ruleIdOf: localRuleIdNormalizer(packs, ctx.rulesProjectPath),
+    ruleIdOf: localRuleIdNormalizer(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
   });
   if (check.verdict === 'ok') return { toolRun: { name: 'semgrep', status: 'ok' }, missing: false };
   if (check.verdict === 'partial' && check.partial !== undefined) {
@@ -917,7 +917,7 @@ async function invokeBugHuntOnScope(args: {
   }
   const runOn = (use: readonly string[]) =>
     semgrepOnFiles({
-      ruleIdOf: localRuleIdNormalizer(use, ctx.rulesProjectPath),
+      ruleIdOf: localRuleIdNormalizer(use, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath }),
       configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
       files,
       cwd: ctx.projectPath,
@@ -945,7 +945,7 @@ async function invokeBugHuntOnScope(args: {
   const first = await runOn(packs);
   const failures = failuresOf(first.reports);
   if (failures.length === 0) {
-    for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
+    for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
     tools_run.push(first.toolRun);
     // Scanned nothing, or some files only partly parsed or rules not loaded (`ok` + missing).
     const narrower = first.partial.length > 0 || first.failedRules.length > 0;
@@ -967,7 +967,7 @@ async function invokeBugHuntOnScope(args: {
   }
   const retryFailures = failuresOf(retry.reports);
   if (retryFailures.length > 0) return reportGap([...failures, ...retryFailures]);
-  for (const raw of retry.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
+  for (const raw of retry.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
   tools_run.push({
     ...retry.toolRun,
     reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]

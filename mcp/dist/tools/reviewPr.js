@@ -212,11 +212,11 @@ async function runSemgrep(ctx, input, out, args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.projectPath),
+        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot }),
     });
     // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
     // project's rules by their absolute path; stored canonical, as scan_sast's.
-    const parser = semgrepParserFor(plan.rulePacks, ctx.projectPath);
+    const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
     for (const raw of run.reports)
         out.parser_inputs.push({ parser, input: raw });
     out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
