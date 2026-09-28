@@ -553,8 +553,8 @@ describe('bug_hunt', () => {
         | undefined;
       expect(run?.status).toBe('ok');
       const reason = run?.reason ?? '';
-      expect(reason).toMatch(/^1 rule\(s\) did not load: bugfix-js-error-handling-empty-catch — Invalid pattern for JavaScript/);
-      expect(reason).toContain('Semgrep ran every other rule over 1 file(s) and their findings are kept');
+      expect(reason).toMatch(/^Semgrep ran, but 1 rule\(s\) did not load: bugfix-js-error-handling-empty-catch — Invalid pattern for JavaScript/);
+      expect(reason).toContain('Findings of the other rules over 1 file(s) are kept');
       // Named as its findings are: the rule's own id, not the install path.
       expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['bugfix-js-error-handling-empty-catch']);
       expect(r.missing_tools).toContain('semgrep');

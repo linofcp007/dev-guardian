@@ -43748,7 +43748,7 @@ function checkSemgrepReport(args) {
     }
   }
   const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
-  if ((exitClean || exitCode === 2) && scanned > 0) {
+  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
       return {
@@ -43764,6 +43764,10 @@ function describePartialParse(partial3, consequence) {
   const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
   const files = new Set(partial3.map((p) => p.file)).size;
   return `partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`;
+}
+function describeRulesNotLoaded(rules, scanned) {
+  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
+  return `Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ${scanned} file(s) are kept; fix or remove the rule and re-run`;
 }
 function describeErrors(errors) {
   return errors.map((entry) => {
@@ -43846,6 +43850,7 @@ async function scanFileBatches(opts) {
   const reportFiles = [];
   const failures = [];
   const partial3 = [];
+  const failedRules = [];
   let cancelled = false;
   let scanned = 0;
   for (const [i2, batch] of batches.entries()) {
@@ -43877,7 +43882,11 @@ async function scanFileBatches(opts) {
       targets: opts.requireScanned === true ? 0 : batch.length
     });
     scanned += verdict.scanned ?? 0;
-    for (const p of verdict.partial ?? []) partial3.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
+    for (const p of verdict.partial ?? []) {
+      const file = toRelativeIfPossible(p.file, opts.cwd);
+      if (!partial3.some((q) => q.file === file && q.type === p.type)) partial3.push({ ...p, file });
+    }
+    for (const r of verdict.failedRules ?? []) if (!failedRules.some((q) => q.rule_id === r.rule_id)) failedRules.push(r);
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i2 + 1}/${batches.length}: ` : "";
       failures.push(`${label}${verdict.reason ?? "failed"}`);
@@ -43896,22 +43905,34 @@ async function scanFileBatches(opts) {
       reportFiles,
       cancelled,
       nothingScanned: true,
-      partial: partial3
+      partial: partial3,
+      failedRules
     };
   }
-  const toolRun = failures.length === 0 && !cancelled ? partial3.length > 0 ? {
-    name: opts.name,
-    status: "ok",
-    reason: `${described} scanned; ${describePartialParse(partial3, "findings in the unparsed spans may be missing")}`,
-    partially_parsed: partial3
-  } : { name: opts.name, status: "ok", reason: `${described} scanned` } : {
-    name: opts.name,
-    status: "failed",
-    reason: cancelled && failures.length === 0 ? "cancelled" : `${described}: ${failures.join("; ")}`
-  };
-  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial: partial3 };
+  let toolRun;
+  if (failures.length === 0 && !cancelled) {
+    toolRun = {
+      name: opts.name,
+      status: "ok",
+      reason: [
+        `${described} scanned`,
+        ...failedRules.length > 0 ? [describeRulesNotLoaded(failedRules, scanned)] : [],
+        ...partial3.length > 0 ? [describePartialParse(partial3, "findings in the unparsed spans may be missing")] : []
+      ].join("; ")
+    };
+    if (partial3.length > 0) toolRun.partially_parsed = partial3;
+    if (failedRules.length > 0) toolRun.failed_rules = failedRules;
+  } else {
+    toolRun = {
+      name: opts.name,
+      status: "failed",
+      reason: cancelled && failures.length === 0 ? "cancelled" : `${described}: ${failures.join("; ")}`
+    };
+  }
+  return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial: partial3, failedRules };
 }
 function semgrepOnFiles(args) {
+  const ruleIdOf = args.ruleIdOf;
   return scanFileBatches({
     name: "semgrep",
     command: "semgrep",
@@ -43924,11 +43945,15 @@ function semgrepOnFiles(args) {
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...args.onLog ? { onLog: args.onLog } : {},
-    // The shared judge's `partial` verdict is no failure of the batch.
+    // The shared judge's `partial` verdict is no failure of the batch, and
+    // neither are rules that did not load while the others ran.
     check: (args2) => {
-      const c3 = checkSemgrepReport(args2);
+      const c3 = checkSemgrepReport({ ...args2, ...ruleIdOf !== void 0 ? { ruleIdOf } : {} });
       if (c3.verdict === "partial" && c3.partial !== void 0) {
         return { ok: true, scanned: c3.scanned, partial: c3.partial };
+      }
+      if (c3.rules_not_loaded !== void 0 && c3.rules_not_loaded.length > 0) {
+        return { ok: true, scanned: c3.scanned, partial: c3.partial ?? [], failedRules: c3.rules_not_loaded };
       }
       return { ok: c3.ok, scanned: c3.scanned, ...c3.reason !== void 0 ? { reason: c3.reason } : {} };
     },
@@ -44271,7 +44296,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records as its target) and any rules registered for this project with register_custom_rules. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced), reading their SARIF per target framework \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed is partial coverage, named. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so this is unavoidable in the default mode. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
+    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records as its target) and any rules registered for this project with register_custom_rules. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced), reading their SARIF per target framework \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named. Output JSON is written to .guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses to build an auto config with metrics off, so this is unavoidable in the default mode. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
     scan_type: "sast",
     category: "security",
     supportsScope: true,
@@ -44407,7 +44432,9 @@ function recordSemgrepRun(args) {
     outcome: result.outcome,
     targets: 1,
     // The container fallback reports paths under its mount, not the host's.
-    projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath
+    projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
+    // A rule that did not load is named as its findings are stored.
+    ruleIdOf: localRuleIdNormalizer(configs, rulesRoot)
   });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes];
   if (check2.verdict === "ok") {
@@ -44432,6 +44459,23 @@ function recordSemgrepRun(args) {
       status: "skipped",
       reason: [...reasons, "semgrep scanned 0 files \u2014 nothing here is a language its rules cover"].join("; ")
     });
+    missing_tools.push("semgrep");
+    return;
+  }
+  const notLoaded = check2.rules_not_loaded;
+  if (notLoaded !== void 0 && notLoaded.length > 0) {
+    const run = {
+      name: "semgrep",
+      status: "ok",
+      reason: [
+        ...reasons,
+        describeRulesNotLoaded(notLoaded, check2.scanned),
+        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : []
+      ].join("; "),
+      failed_rules: notLoaded
+    };
+    if (check2.partial !== void 0) run.partially_parsed = check2.partial;
+    tools_run.push(run);
     missing_tools.push("semgrep");
     return;
   }
@@ -44496,14 +44540,16 @@ async function runSemgrepOnScope(args) {
     reportDir,
     env: ctx.scriptEnv,
     signal: ctx.signal,
-    ...ctx.onLog ? { onLog: ctx.onLog } : {}
+    ...ctx.onLog ? { onLog: ctx.onLog } : {},
+    ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.rulesProjectPath)
   });
   const parser = semgrepParserFor(plan.rulePacks, ctx.rulesProjectPath);
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry = { ...run.toolRun };
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== void 0).join("; ");
   tools_run.push(entry);
-  if (run.nothingScanned || entry.status === "ok" && run.partial.length > 0) missing_tools.push("semgrep");
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0;
+  if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
 }
 async function runBanditOnScope(args) {
   const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
@@ -47419,12 +47465,11 @@ function judgeBugHuntRun(raw, run, ctx, packs) {
   }
   const notLoaded = check2.rules_not_loaded;
   if (notLoaded !== void 0 && notLoaded.length > 0) {
-    const named = notLoaded.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
     const toolRun = {
       name: "semgrep",
       status: "ok",
       reason: [
-        `${notLoaded.length} rule(s) did not load: ${named}. Semgrep ran every other rule over ${check2.scanned} file(s) and their findings are kept; fix or remove the rule and re-run`,
+        describeRulesNotLoaded(notLoaded, check2.scanned),
         ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "bugs in the unparsed spans may be missing")] : []
       ].join("; "),
       failed_rules: notLoaded
@@ -47454,6 +47499,7 @@ async function invokeBugHuntOnScope(args) {
     return finish("completed");
   }
   const runOn = (use) => semgrepOnFiles({
+    ruleIdOf: localRuleIdNormalizer(use, ctx.rulesProjectPath),
     configArgs: [...use.map((pack) => `--config=${pack}`), ...input.auto_fix === true ? ["--autofix"] : []],
     files,
     cwd: ctx.projectPath,
@@ -47481,7 +47527,8 @@ async function invokeBugHuntOnScope(args) {
   if (failures.length === 0) {
     for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
     tools_run.push(first.toolRun);
-    if (first.nothingScanned || first.toolRun.status === "ok" && first.partial.length > 0) missing_tools.push("semgrep");
+    const narrower = first.partial.length > 0 || first.failedRules.length > 0;
+    if (first.nothingScanned || first.toolRun.status === "ok" && narrower) missing_tools.push("semgrep");
     return finish(first.cancelled ? "cancelled" : "completed");
   }
   const survivors = survivingPacks(packs, failures);
@@ -48520,12 +48567,13 @@ async function runSemgrep2(ctx, input, out, args) {
     reportDir: args.reportDir,
     env: ctx.scriptEnv,
     signal: ctx.signal,
-    ...ctx.onLog ? { onLog: ctx.onLog } : {}
+    ...ctx.onLog ? { onLog: ctx.onLog } : {},
+    ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.projectPath)
   });
   const parser = semgrepParserFor(plan.rulePacks, ctx.projectPath);
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
   out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...gap !== null ? [gap] : []]));
-  const partial3 = run.toolRun.status === "ok" && run.partial.length > 0;
+  const partial3 = run.toolRun.status === "ok" && (run.partial.length > 0 || run.failedRules.length > 0);
   if (run.nothingScanned || gap !== null || partial3) out.missing_tools.push("semgrep");
   out.cancelled ||= run.cancelled;
 }

@@ -31,7 +31,14 @@
  * error in one file) is PARTIAL: `ok` and listed missing, the files named in
  * its reason and `partially_parsed` (what the CI gate's
  * `--accept-partial-parse` matches). Anything fatal is `failed` with the
- * errors as its reason. The findings such a run did report are still
+ * errors as its reason — except rules that did not load while the others
+ * ran (a typo'd pattern in the project's `.semgrep.yml` or a registered
+ * rule: exit 2, `paths.scanned` filled, the judge's `rules_not_loaded`).
+ * That is a narrower gap, as in bug_hunt: `ok` and missing, the rules in
+ * `failed_rules`, never coverage none and "install semgrep" for a Semgrep
+ * that ran, and never a row the open set skips; the other rules' findings
+ * resolve and the broken rule's earlier ones stay open, not re-measured
+ * (`history/runCompare.ts`). The findings such a run did report are still
  * recorded — they are real.
  *
  * ---- .NET: the SDK's own security analyzers, read from SARIF -----------
@@ -87,6 +94,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
 import {
   buildSemgrepDockerArgs,
   CONTAINER_PROJECT_ROOT,
@@ -103,7 +111,7 @@ import {
 import type { ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { hasDotnetProject, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
-import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
@@ -135,8 +143,8 @@ registerToolModule(
       'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
       '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
       "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
-      'nothing or reported errors is never complete: a file it only partly parsed is partial ' +
-      'coverage, named. Output JSON is written to ' +
+      'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
+      'did not load, is partial coverage, named. Output JSON is written to ' +
       '.guardian/reports/sast-<scan>/ and parsed into Findings. PRIVACY: --config=auto downloads ' +
       'rules from the Semgrep registry and sends usage metrics to Semgrep Inc.; Semgrep refuses ' +
       'to build an auto config with metrics off, so this is unavoidable in the default mode. ' +
@@ -333,6 +341,8 @@ function recordSemgrepRun(args: Collect & {
     targets: 1,
     // The container fallback reports paths under its mount, not the host's.
     projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
+    // A rule that did not load is named as its findings are stored.
+    ruleIdOf: localRuleIdNormalizer(configs, rulesRoot),
   });
   const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes];
 
@@ -363,6 +373,25 @@ function recordSemgrepRun(args: Collect & {
       status: 'skipped',
       reason: [...reasons, 'semgrep scanned 0 files — nothing here is a language its rules cover'].join('; '),
     });
+    missing_tools.push('semgrep');
+    return;
+  }
+  const notLoaded = check.rules_not_loaded;
+  if (notLoaded !== undefined && notLoaded.length > 0) {
+    // Rules that did not load while the others ran (the module comment): a
+    // narrower gap — ran, `ok` AND missing, the rules named.
+    const run: ToolRun = {
+      name: 'semgrep',
+      status: 'ok',
+      reason: [
+        ...reasons,
+        describeRulesNotLoaded(notLoaded, check.scanned),
+        ...(check.partial !== undefined ? [describePartialParse(check.partial, 'findings in the unparsed spans may be missing')] : []),
+      ].join('; '),
+      failed_rules: notLoaded,
+    };
+    if (check.partial !== undefined) run.partially_parsed = check.partial;
+    tools_run.push(run);
     missing_tools.push('semgrep');
     return;
   }
@@ -457,6 +486,7 @@ async function runSemgrepOnScope(args: Collect & {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+    ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.rulesProjectPath),
   });
   const parser = semgrepParserFor(plan.rulePacks, ctx.rulesProjectPath);
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
@@ -464,8 +494,10 @@ async function runSemgrepOnScope(args: Collect & {
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
   tools_run.push(entry);
   // No rule applied to any file in scope: a gap, not a clean result. Files
-  // only partly parsed: ran, with a narrower gap inside it (`ok` + missing).
-  if (run.nothingScanned || (entry.status === 'ok' && run.partial.length > 0)) missing_tools.push('semgrep');
+  // only partly parsed, rules that did not load: ran, with a narrower gap
+  // inside it (`ok` + missing).
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0;
+  if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
 }
 
 /** Bandit over a scope's `.py` files; no entry at all when it holds none. */

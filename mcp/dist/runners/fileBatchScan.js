@@ -14,7 +14,10 @@
  * calls partial (Semgrep: some files only partly parsed —
  * `semgrepReport.ts`) is not a failure: the run is `ok`, its reason and
  * `partially_parsed` name those files, and the result carries them in
- * `partial` for the caller to list the scanner missing as well.
+ * `partial` for the caller to list the scanner missing as well. So is a
+ * Semgrep batch whose only errors are rules that did not load (the judge's
+ * `rules_not_loaded`): the rules go to `failed_rules` and `failedRules`,
+ * once each however many batches reported them.
  */
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +25,7 @@ import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from './semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from './semgrepReport.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 export async function scanFileBatches(opts) {
     const probeReport = join(opts.reportDir, `${opts.reportPrefix}-000.json`);
@@ -34,6 +37,7 @@ export async function scanFileBatches(opts) {
     const reportFiles = [];
     const failures = [];
     const partial = [];
+    const failedRules = [];
     let cancelled = false;
     let scanned = 0;
     for (const [i, batch] of batches.entries()) {
@@ -66,8 +70,14 @@ export async function scanFileBatches(opts) {
             targets: opts.requireScanned === true ? 0 : batch.length,
         });
         scanned += verdict.scanned ?? 0;
-        for (const p of verdict.partial ?? [])
-            partial.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
+        for (const p of verdict.partial ?? []) {
+            const file = toRelativeIfPossible(p.file, opts.cwd);
+            if (!partial.some((q) => q.file === file && q.type === p.type))
+                partial.push({ ...p, file });
+        }
+        for (const r of verdict.failedRules ?? [])
+            if (!failedRules.some((q) => q.rule_id === r.rule_id))
+                failedRules.push(r);
         if (!verdict.ok) {
             const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
             failures.push(`${label}${verdict.reason ?? 'failed'}`);
@@ -89,26 +99,37 @@ export async function scanFileBatches(opts) {
             cancelled,
             nothingScanned: true,
             partial,
+            failedRules,
         };
     }
-    const toolRun = failures.length === 0 && !cancelled
-        ? partial.length > 0
-            ? {
-                name: opts.name,
-                status: 'ok',
-                reason: `${described} scanned; ${describePartialParse(partial, 'findings in the unparsed spans may be missing')}`,
-                partially_parsed: partial,
-            }
-            : { name: opts.name, status: 'ok', reason: `${described} scanned` }
-        : {
+    let toolRun;
+    if (failures.length === 0 && !cancelled) {
+        toolRun = {
+            name: opts.name,
+            status: 'ok',
+            reason: [
+                `${described} scanned`,
+                ...(failedRules.length > 0 ? [describeRulesNotLoaded(failedRules, scanned)] : []),
+                ...(partial.length > 0 ? [describePartialParse(partial, 'findings in the unparsed spans may be missing')] : []),
+            ].join('; '),
+        };
+        if (partial.length > 0)
+            toolRun.partially_parsed = partial;
+        if (failedRules.length > 0)
+            toolRun.failed_rules = failedRules;
+    }
+    else {
+        toolRun = {
             name: opts.name,
             status: 'failed',
             reason: cancelled && failures.length === 0 ? 'cancelled' : `${described}: ${failures.join('; ')}`,
         };
-    return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial };
+    }
+    return { toolRun, reports, reportFiles, cancelled, nothingScanned: false, partial, failedRules };
 }
 /** `scanFileBatches` for Semgrep: `--json --quiet --output <f> -- files`, UTF-8 mode, GC3 check. */
 export function semgrepOnFiles(args) {
+    const ruleIdOf = args.ruleIdOf;
     return scanFileBatches({
         name: 'semgrep',
         command: 'semgrep',
@@ -121,11 +142,15 @@ export function semgrepOnFiles(args) {
         env: pythonUtf8Env(args.env),
         signal: args.signal,
         ...(args.onLog ? { onLog: args.onLog } : {}),
-        // The shared judge's `partial` verdict is no failure of the batch.
+        // The shared judge's `partial` verdict is no failure of the batch, and
+        // neither are rules that did not load while the others ran.
         check: (args) => {
-            const c = checkSemgrepReport(args);
+            const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}) });
             if (c.verdict === 'partial' && c.partial !== undefined) {
                 return { ok: true, scanned: c.scanned, partial: c.partial };
+            }
+            if (c.rules_not_loaded !== undefined && c.rules_not_loaded.length > 0) {
+                return { ok: true, scanned: c.scanned, partial: c.partial ?? [], failedRules: c.rules_not_loaded };
             }
             return { ok: c.ok, scanned: c.scanned, ...(c.reason !== undefined ? { reason: c.reason } : {}) };
         },

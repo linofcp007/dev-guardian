@@ -126,12 +126,19 @@ export interface ToolRun {
   partially_parsed?: PartialParse[];
   /**
    * Rules a Semgrep run did not load (a rule parse error) while the rest of
-   * its rules ran — bug_hunt's broken-rule shape, `ok` AND missing. Their
+   * its rules ran — scan_sast's and bug_hunt's broken-rule shape, `ok` AND
+   * missing. Their
    * findings were not looked for: `history/runCompare.ts` reads a finding of
    * one of these rules as not re-measured. `rule_id` is the id the rule's
    * findings are stored under. Absent on every other run.
    */
-  failed_rules?: Array<{ rule_id: string; message: string }>;
+  failed_rules?: FailedRule[];
+}
+
+/** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */
+export interface FailedRule {
+  rule_id: string;
+  message: string;
 }
 
 export interface Finding {

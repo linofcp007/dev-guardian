@@ -94,7 +94,7 @@ export function checkSemgrepReport(args) {
         }
     }
     const failed = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
-    if ((exitClean || exitCode === 2) && scanned > 0) {
+    if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
         const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
         if (ruleGap !== null) {
             return {
@@ -114,6 +114,18 @@ export function describePartialParse(partial, consequence) {
     const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
     const files = new Set(partial.map((p) => p.file)).size;
     return `partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`;
+}
+/**
+ * The reason a run whose rules did not all load carries — every caller's
+ * wording, so none of them reads "semgrep failed" or "install semgrep" for a
+ * Semgrep that ran: `Semgrep ran, but 1 rule(s) did not load: <id> — <why>.
+ * Findings of the other rules over N file(s) are kept; fix or remove the
+ * rule and re-run`. It stays true when no other rule loaded.
+ */
+export function describeRulesNotLoaded(rules, scanned) {
+    const named = rules.map((r) => `${r.rule_id} — ${r.message}`).join('; ');
+    return (`Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ` +
+        `${scanned} file(s) are kept; fix or remove the rule and re-run`);
 }
 /** `type: message` per `errors[]` entry (`type` may be a string or `[name, …]`). */
 function describeErrors(errors) {

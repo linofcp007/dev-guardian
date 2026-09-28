@@ -982,7 +982,11 @@ keeps working (migrations 004–011 are additive).
   otherwise not re-measured, named `trivy-image (<image>)`. References are
   compared as Docker resolves them (`nginx`, `nginx:latest` and
   `docker.io/library/nginx:latest` are one image). Rows written before keep
-  today's reading.
+  today's reading. A misconfiguration does not record whether the Dockerfile
+  pass or the image pass found it, so one from a scan that also scanned an
+  image stays not re-measured (and open, carried) until that image is
+  scanned again — even when a later Dockerfile pass no longer reports it:
+  the conservative reading.
 - **The open set dropped findings a newer scan did not look at again.** A
   slot's newest scan was its whole answer, so a partly parsed file, a Semgrep
   that failed beside an ok Bandit, or a scan of image B made every older
@@ -1043,14 +1047,18 @@ keeps working (migrations 004–011 are additive).
   (`semgrep-wp`), which judged Semgrep by its exit code alone, use it too: a
   partly parsed file or a run that scanned nothing no longer reads `ok` at
   coverage full (`scan_wordpress` with no `.php` file is not applicable).
-  A `bug_hunt` rule that did not load while the other rules ran is a
-  narrower gap, not a failed Semgrep: the judge names such rules
-  (`rules_not_loaded`: a rule error with its `rule_id`), and `bug_hunt`
-  records Semgrep `ok` and missing with them in `tools_run[].failed_rules`
-  and a reason naming each — never coverage none and "NO scanner ran …
-  Install semgrep" for a Semgrep that ran, and never a row the open set
-  skips; an earlier finding of that rule stays open as not re-measured. Its
-  retry after a dead registry pack is judged the same way. A comparison
+  A rule that did not load while the other rules ran (a typo'd pattern in
+  `.semgrep.yml`, a registered rule or a bugfix pack) is a narrower gap, not
+  a failed Semgrep: the judge names such rules (`rules_not_loaded`: a rule
+  error with its `rule_id`), and `scan_sast` (whole-project, the Docker
+  fallback and scoped runs), `bug_hunt` and `review_pr` record Semgrep `ok`
+  and missing with them in `tools_run[].failed_rules` and a reason naming
+  each ("Semgrep ran, but 1 rule(s) did not load: …") — never coverage none
+  and "NO scanner ran … Install semgrep" for a Semgrep that ran, and never a
+  row the open set skips; the other rules' findings resolve as usual, and an
+  earlier finding of the broken rule stays open as not re-measured.
+  `bug_hunt`'s retry after a dead registry pack is judged the same way. A
+  rule error that names no rule stays `failed`. A comparison
   (`diff_scans`, `regression_alert`, `set_baseline`, the dashboard) reads a
   Semgrep finding in a partly parsed file as not measured by that run —
   never resolved, never new — and names it `semgrep (partly parsed: …)`;

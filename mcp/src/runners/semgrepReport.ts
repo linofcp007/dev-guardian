@@ -47,7 +47,7 @@
  * not done.
  */
 
-import type { PartialParse } from '../types.js';
+import type { FailedRule, PartialParse } from '../types.js';
 import type { ProcessOutcome } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from './scannerParsers/index.js';
 
@@ -72,22 +72,24 @@ export interface SemgrepReportCheck {
   partial?: PartialParse[];
   /**
    * `failed` only, when all that went wrong is that some RULES did not load
-   * while the others ran: a settled exit 0, 1 or 2 that scanned files, where
-   * every `errors[]` entry is either a rule error naming its `rule_id`
-   * (`Rule parse error`, measured on 1.176.1: exit 2, the other rules still
-   * run and `paths.scanned` is filled) or a per-file problem (in `partial`).
-   * Semgrep is installed and scanned — not "semgrep missing". The verdict
-   * stays `failed`, so a caller that reads nothing else is unchanged;
-   * bug_hunt records it as a narrower gap (`ToolRun.failed_rules`).
+   * while the others ran: a settled exit 0, 1 or 2 that scanned files (or a
+   * batch judged with `targets: 0`, whose scanned count its caller judges
+   * over the whole run), where every `errors[]` entry is either a rule
+   * error naming its `rule_id` (`Rule parse error`, measured on 1.176.1:
+   * exit 2, the other rules still run and `paths.scanned` is filled — also
+   * when every rule failed, so "scanned" does not prove a rule ran) or a
+   * per-file problem (in `partial`). Semgrep is installed and scanned — not
+   * "semgrep missing". The verdict stays `failed`, so a caller that reads
+   * nothing else is unchanged (compliance_check, fixpr, map_attack_surface);
+   * scan_sast, bug_hunt and every batched run (`fileBatchScan.ts`) record
+   * it as a narrower gap: Semgrep `ok` and missing, the rules in
+   * `ToolRun.failed_rules` ({@link describeRulesNotLoaded}).
    */
   rules_not_loaded?: RuleNotLoaded[];
 }
 
 /** A rule a Semgrep run did not load, by its stored id, and Semgrep's reason. */
-export interface RuleNotLoaded {
-  rule_id: string;
-  message: string;
-}
+export type RuleNotLoaded = FailedRule;
 
 /** Longest error text carried into a reason. */
 const MAX_ERROR_TEXT = 300;
@@ -152,7 +154,7 @@ export function checkSemgrepReport(args: {
     }
   }
   const failed: SemgrepReportCheck = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
-  if ((exitClean || exitCode === 2) && scanned > 0) {
+  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
       return {
@@ -173,6 +175,21 @@ export function describePartialParse(partial: readonly PartialParse[], consequen
   const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
   const files = new Set(partial.map((p) => p.file)).size;
   return `partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`;
+}
+
+/**
+ * The reason a run whose rules did not all load carries — every caller's
+ * wording, so none of them reads "semgrep failed" or "install semgrep" for a
+ * Semgrep that ran: `Semgrep ran, but 1 rule(s) did not load: <id> — <why>.
+ * Findings of the other rules over N file(s) are kept; fix or remove the
+ * rule and re-run`. It stays true when no other rule loaded.
+ */
+export function describeRulesNotLoaded(rules: readonly RuleNotLoaded[], scanned: number): string {
+  const named = rules.map((r) => `${r.rule_id} — ${r.message}`).join('; ');
+  return (
+    `Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ` +
+    `${scanned} file(s) are kept; fix or remove the rule and re-run`
+  );
 }
 
 /** `type: message` per `errors[]` entry (`type` may be a string or `[name, …]`). */

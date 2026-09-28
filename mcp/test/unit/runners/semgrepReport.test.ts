@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkSemgrepReport, describePartialParse } from '../../../src/runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded } from '../../../src/runners/semgrepReport.js';
 
 const report = (over: Record<string, unknown> = {}): string =>
   JSON.stringify({ results: [], errors: [], paths: { scanned: ['a.py'] }, ...over });
@@ -240,12 +240,28 @@ describe('checkSemgrepReport: rules that did not load while the others ran', () 
     ['a rule error that names no rule', { errors: [{ type: 'Rule parse error', level: 'error', message: 'bad' }] }, 2],
     ['beside a config error', { errors: [RULE_ERROR, { type: 'SemgrepError', level: 'error', message: 'Invalid YAML file' }] }, 2],
     ['beside an error that is not tied to a file', { errors: [RULE_ERROR, { type: 'Timeout', level: 'error', message: 'x' }] }, 2],
-    ['on a run that scanned nothing', { errors: [RULE_ERROR], paths: { scanned: [] } }, 2],
+    ['on a whole-project run that scanned nothing', { errors: [RULE_ERROR], paths: { scanned: [] } }, 2],
     ['on exit 7 (the whole config did not load)', { errors: [RULE_ERROR] }, 7],
   ])('never on %s — that is semgrep failing', (_label, over, exitCode) => {
     const r = checkSemgrepReport({ raw: report(over), exitCode, outcome: 'failed', targets: 1 });
     expect(r.verdict).toBe('failed');
     expect(r.rules_not_loaded).toBeUndefined();
+  });
+
+  it('on a batch judged with targets 0 (its caller judges "scanned" over the run): a batch no rule applies to still names the rule', () => {
+    // Measured on 1.176.1: a .py batch under a JavaScript pack with one bad
+    // rule exits 2 with the rule error and `paths.scanned: []`.
+    const r = checkSemgrepReport({ raw: report({ errors: [RULE_ERROR], paths: { scanned: [] } }), exitCode: 2, outcome: 'failed', targets: 0, ruleIdOf: strip });
+    expect(r.rules_not_loaded?.map((x) => x.rule_id)).toEqual(['broken-rule']);
+  });
+
+  it('describeRulesNotLoaded says Semgrep ran, names each rule and why, and never "install"', () => {
+    const text = describeRulesNotLoaded([{ rule_id: 'y', message: 'Invalid pattern' }, { rule_id: 'z', message: 'bad' }], 3);
+    expect(text).toBe(
+      'Semgrep ran, but 2 rule(s) did not load: y — Invalid pattern; z — bad. ' +
+        'Findings of the other rules over 3 file(s) are kept; fix or remove the rule and re-run',
+    );
+    expect(text).not.toMatch(/install/i);
   });
 
   it('never on a run that did not finish', () => {

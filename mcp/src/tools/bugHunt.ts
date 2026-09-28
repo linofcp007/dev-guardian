@@ -119,7 +119,7 @@ import {
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
 import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
@@ -868,13 +868,11 @@ function judgeBugHuntRun(
   }
   const notLoaded = check.rules_not_loaded;
   if (notLoaded !== undefined && notLoaded.length > 0) {
-    const named = notLoaded.map((r) => `${r.rule_id} — ${r.message}`).join('; ');
     const toolRun: ToolRun = {
       name: 'semgrep',
       status: 'ok',
       reason: [
-        `${notLoaded.length} rule(s) did not load: ${named}. Semgrep ran every other rule over ` +
-          `${check.scanned} file(s) and their findings are kept; fix or remove the rule and re-run`,
+        describeRulesNotLoaded(notLoaded, check.scanned),
         ...(check.partial !== undefined ? [describePartialParse(check.partial, 'bugs in the unparsed spans may be missing')] : []),
       ].join('; '),
       failed_rules: notLoaded,
@@ -919,6 +917,7 @@ async function invokeBugHuntOnScope(args: {
   }
   const runOn = (use: readonly string[]) =>
     semgrepOnFiles({
+      ruleIdOf: localRuleIdNormalizer(use, ctx.rulesProjectPath),
       configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
       files,
       cwd: ctx.projectPath,
@@ -948,8 +947,9 @@ async function invokeBugHuntOnScope(args: {
   if (failures.length === 0) {
     for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
     tools_run.push(first.toolRun);
-    // Scanned nothing, or some files only partly parsed (`ok` + missing).
-    if (first.nothingScanned || (first.toolRun.status === 'ok' && first.partial.length > 0)) missing_tools.push('semgrep');
+    // Scanned nothing, or some files only partly parsed or rules not loaded (`ok` + missing).
+    const narrower = first.partial.length > 0 || first.failedRules.length > 0;
+    if (first.nothingScanned || (first.toolRun.status === 'ok' && narrower)) missing_tools.push('semgrep');
     return finish(first.cancelled ? 'cancelled' : 'completed');
   }
   const survivors = survivingPacks(packs, failures);

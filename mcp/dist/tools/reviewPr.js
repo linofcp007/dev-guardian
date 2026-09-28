@@ -38,6 +38,7 @@ import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
+import { localRuleIdNormalizer } from '../runners/semgrepRuleIds.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -211,6 +212,7 @@ async function runSemgrep(ctx, input, out, args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+        ruleIdOf: localRuleIdNormalizer(plan.rulePacks, ctx.projectPath),
     });
     // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
     // project's rules by their absolute path; stored canonical, as scan_sast's.
@@ -219,8 +221,9 @@ async function runSemgrep(ctx, input, out, args) {
         out.parser_inputs.push({ parser, input: raw });
     out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
     // Scanned nothing at all, not every changed file, or some only partly
-    // parsed (`ok` + missing, runners/semgrepReport.ts): a gap, not a clean result.
-    const partial = run.toolRun.status === 'ok' && run.partial.length > 0;
+    // parsed or rules that did not load (`ok` + missing, runners/semgrepReport.ts):
+    // a gap, not a clean result.
+    const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0);
     if (run.nothingScanned || gap !== null || partial)
         out.missing_tools.push('semgrep');
     out.cancelled ||= run.cancelled;
