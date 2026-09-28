@@ -247,6 +247,40 @@ Limites a respeitar sempre que apresentares um `unreachable`:
 - **Granularidade de ficheiro, não de função.** Um finding dentro de um
   helper nunca chamado, mas cujo ficheiro É importado, lê `reachable`.
 
+## Servidores MCP — `audit_agent_config` e `audit_mcp_tools`
+
+Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
+
+1. `audit_agent_config { project_path: "<project>" }` primeiro. Lê as
+   configurações (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
+   `.gemini/settings.json`, `.claude-plugin/plugin.json`; com
+   `include_user_config: true` também as do utilizador — Claude Code, Claude
+   Desktop, Cursor, Windsurf, Gemini) **sem executar nada**, e diz que
+   servidores estão declarados.
+2. `audit_mcp_tools { project_path: "<project>", servers: ["<nome>"] }` só
+   para os servidores que o utilizador pediu para auditar — os nomes são
+   dele, nunca os escolhas nem passes a lista inteira sem perguntar. **Esta
+   tool executa código de terceiros**: arranca o comando de cada servidor
+   nomeado com um ambiente mínimo (mais o `env` da própria entrada), envia
+   `initialize` e os pedidos de listagem de tools, prompts e resources,
+   **nunca chama `tools/call`**, e mata a árvore de processos no fim.
+   Servidores remotos (http/sse) só com `allow_remote: true`, que o
+   utilizador tem de pedir.
+3. Lê `coverage` e `servers[].status` antes dos findings: um servidor
+   `skipped` (não declarado, remoto sem `allow_remote`) ou `failed` (não
+   arrancou, não respondeu em `timeout_ms`) não foi auditado — não é um
+   resultado limpo.
+4. Os findings dizem em que tool e em que campo (descrição, `inputSchema`,
+   …) está o problema: instruções ao modelo, Unicode escondido, pedidos para
+   ler chaves ou configurações, para esconder algo do utilizador, para enviar
+   dados para um URL ou num parâmetro, instruções sobre outras tools
+   (*shadowing*). `mcp-tool-definition-changed` (high) é um *rug pull*: a
+   mesma tool com outra definição desde a auditoria anterior — reportado uma
+   vez, e a nova definição passa a ser a referência. Uma referência a
+   ficheiros de credenciais num servidor cujo trabalho é precisamente esse
+   (um gestor de segredos, um auditor de configuração) é esperada: diz isso
+   ao utilizador em vez de a apresentar como ataque.
+
 ## Quando não correr scans completos
 
 - Em commits triviais (1-2 linhas): só hooks pre-commit chegam

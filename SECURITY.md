@@ -31,7 +31,7 @@ going public; we will credit reporters who want it.
 In scope: the MCP server (`mcp/`), the CLI (`cli/dev-guardian.mjs`), the
 guardrail hooks (`hooks/`), the skills and slash commands, the bundled configs
 and CI templates (`configs/`), and the supply-chain logic in `scan_skill`,
-`vet_packages` and `audit_agent_config`.
+`vet_packages`, `audit_agent_config` and `audit_mcp_tools`.
 
 Out of scope: vulnerabilities in the third-party scanners dev-guardian
 orchestrates (Semgrep, Trivy, gitleaks, Syft, WPScan, …) — report those to
@@ -86,6 +86,22 @@ their respective projects.
   names one of those keys, and so is `claude plugin disable|uninstall` of
   dev-guardian.
   See [docs/hooks.md](docs/hooks.md).
+- **`audit_mcp_tools` executes third-party code.** It starts the MCP servers
+  named in its `servers` argument — their `command` and `args`, as the host
+  would launch them — **only for the server names the caller lists
+  explicitly**: there is no wildcard and no default, and a name no config
+  declares is skipped. Each runs with a **minimal environment** (the MCP
+  SDK's default allowlist — `PATH`, `HOME` / `USERPROFILE` and a few more,
+  plus the variables Windows adds to every process — **plus the entry's own
+  `env`**), never this server's full environment, and a `${VAR}` placeholder
+  is passed literally rather than filled from it; its working directory is
+  the project. The audit sends `initialize` and the list methods only and
+  **never calls `tools/call`**; it **contacts remote (http/sse) servers only
+  with `allow_remote: true`**; and it **kills the server's process tree
+  afterwards** (the process group on POSIX, `taskkill /T` on Windows),
+  whether the server answered or not. What a started server does while it
+  runs — its own network requests included — is that server's code: run the
+  audit only for servers you would let the host start.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -111,6 +127,7 @@ project's own build and test commands.
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check_source` ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
 | The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_rest_audit`, the CLI's DAST health check | per call |
 | The URL you name | `scan_skill` given an HTTP(S) or git URL | per call |
+| A remote MCP server you name | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
 
 ### Requests the scanners and tools dev-guardian runs make
 
@@ -133,6 +150,7 @@ project's own build and test commands.
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
 | Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, curl from GitHub releases) | `install_toolchain` | only when asked; `dry_run` prints the commands |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
+| Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
 
 `map_attack_surface` itself sends nothing, but the Semgrep it runs does what
 the rows above say: its version check, and metrics when you are logged in. The

@@ -84,6 +84,12 @@ Tools take a `project_path`; when it is omitted they use the server's working di
 
 For a project-scoped config, prefer the host's own workspace variable or `cwd` setting to a path that depends on where the host was launched. Claude Code in particular does **not** expand `${CLAUDE_PROJECT_DIR}` inside a project `.mcp.json` — the literal string reaches `node` and the server fails to start. It starts project servers in the project root, so a relative path works there; `${CLAUDE_PLUGIN_ROOT}` is expanded, but only in a plugin's own `plugin.json`. `audit_agent_config` flags an unexpanded `${VAR}` in a project `.mcp.json`.
 
+## Auditing the MCP servers a project declares
+
+`audit_agent_config` reads every host config above without running anything: the project's `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json` and a plugin's `.claude-plugin/plugin.json`, and with `include_user_config` the user-level ones — `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`, Windsurf's `~/.codeium/windsurf/mcp_config.json` and `~/.gemini/settings.json`, at the same paths `mcp-config --write` uses.
+
+`audit_mcp_tools` goes one step further for the servers you name in `servers`: it starts each one as the host would, lists the tools, prompts and resources it serves, and checks those definitions for tool poisoning, hidden Unicode, instructions to read secrets or hide actions from the user, exfiltration through a URL or a parameter, and cross-server shadowing. Each tool is pinned (sha256 of its name, description, input schema and annotations), so a definition that changes under the same name — a "rug pull" — is reported on the next audit. It **executes those servers' code**: only the names you list, with a minimal environment plus the entry's own `env`, never `tools/call`, remote servers only with `allow_remote: true`, and the process tree killed afterwards — see [SECURITY.md](../SECURITY.md).
+
 ## This repository's own configs
 
 A checkout of dev-guardian configures itself for every host (`.mcp.json`, `.cursor/`, `.vscode/mcp.json`, `.gemini/settings.json`, `.windsurf/rules/`, `.github/copilot-instructions.md`, root `AGENTS.md` and `GEMINI.md`), pointing at its own `mcp/dist/server.js`. The rules copies are generated from `mcp/src/hostsetup/rulesTemplate.ts` by `npm run build`; edit the template, not the copies.

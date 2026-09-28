@@ -14,6 +14,15 @@ version bump.
   `include_user_config` also Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`,
   Windsurf's `~/.codeium/windsurf/mcp_config.json` and `~/.gemini/settings.json` (the paths
   `mcp-config --write` uses). An `mcpServers` given as a path to another file is a warning.
+- New tool `audit_mcp_tools` (58 tools): starts the MCP servers named in `servers` and checks the
+  tool, prompt, resource and template definitions they actually serve — tool poisoning, hidden
+  Unicode, instructions to read secrets or agent config, to hide actions from the user, to send
+  data to a URL or smuggle it in a parameter, cross-server shadowing, base64 blobs, oversized
+  descriptions. Each tool is pinned; a definition changed since the previous audit is a high
+  `mcp-tool-definition-changed` ("rug pull"). It executes the named servers only, with a minimal
+  environment plus the entry's own `env`, never calls `tools/call`, contacts remote servers only
+  with `allow_remote`, and kills the process tree after. Scan type `mcp_tool_audit`.
+- Migration `012`: `mcp_tool_pins` and `mcp_server_pins`.
 
 ## [3.0.0] - 2026-09-28
 
