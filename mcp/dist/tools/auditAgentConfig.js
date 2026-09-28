@@ -32,11 +32,15 @@ const inputSchema = {
         .boolean()
         .optional()
         .default(false)
-        .describe('Also read the USER-level config, shared across every project on this machine: ~/.claude.json, ' +
-        '~/.claude/settings.json, Claude Desktop\'s claude_desktop_config.json, ~/.cursor/mcp.json, ' +
-        'Windsurf\'s ~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it ' +
-        'is outside this project and auditing it here would mix one project\'s report with settings ' +
-        'that affect every other project too.'),
+        // Third person on purpose: an imperative "read ~/.claude.json" in a tool
+        // description is an instruction to the model as far as the model can
+        // tell, and audit_mcp_tools flagged exactly that here (fix round 3, M7).
+        .describe('When true, the audit also reads the USER-level config, shared across every project on this ' +
+        'machine: ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json), ~/.claude/settings.json, Claude ' +
+        'Desktop\'s claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf\'s ' +
+        '~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside ' +
+        'this project and auditing it here would mix one project\'s report with settings that affect ' +
+        'every other project too.'),
     severity_min: SeverityMin,
 };
 const tool = {

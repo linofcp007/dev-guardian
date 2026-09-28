@@ -49,6 +49,15 @@ version bump.
   a repeated cursor, as a named `partial`; every failure says what stopped it; cancelling stops
   launching; the whole audit has a budget (`GUARDIAN_MCP_AUDIT_BUDGET_MS`, 10 min). Pins are keyed
   by `[source, name]`, which no two entries share.
+- `audit_mcp_tools`' checks: hidden Unicode is Unicode's own `Default_Ignorable_Code_Point` and
+  `Bidi_Control` classes (variation-selector smuggling decoded; an emoji's own VS16 or ZWJ is left
+  alone); the text rules also read NFKC with Cyrillic/Greek look-alikes folded, and a word mixing
+  them with Latin is `mcp-tool-homoglyph`; `bcc`/`cc:` to an address, a URL with a data
+  placeholder, a markdown image with a query and a "developer mode" persona are caught; a
+  sensitive-file reference must be a directive to the model (a tool naming the files it reads
+  itself is not — 0 high/medium findings on 8 real servers); every string and object key of a
+  schema is read, and a depth or size bound reached makes the result partial; shadowing is one
+  token pass per field (1000 x 1000 tool names: 10.3 s before).
 
 ## [3.0.0] - 2026-09-28
 

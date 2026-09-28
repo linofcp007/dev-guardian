@@ -76,7 +76,7 @@ Audit the AI-agent workspace configuration in this project (and, opt-in, the use
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the project to audit. Defaults to the current working directory. |
-| `include_user_config` | boolean | no | `false` | Also read the USER-level config, shared across every project on this machine: ~/.claude.json, ~/.claude/settings.json, Claude Desktop's claude\_desktop\_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp\_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too. |
+| `include_user_config` | boolean | no | `false` | When true, the audit also reads the USER-level config, shared across every project on this machine: ~/.claude.json (or $CLAUDE\_CONFIG\_DIR/.claude.json), ~/.claude/settings.json, Claude Desktop's claude\_desktop\_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp\_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 
 ### `audit_executive`

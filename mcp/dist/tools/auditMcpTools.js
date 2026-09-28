@@ -41,7 +41,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { collectMcpEntries } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
-import { analyzeServerListing, MCP_AUDIT_TOOL_NAME, normalizeListing, } from '../mcpaudit/analyze.js';
+import { analyzeServerListingDetailed, MCP_AUDIT_TOOL_NAME, normalizeListing, } from '../mcpaudit/analyze.js';
 import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { isListed, probeServer } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
@@ -316,7 +316,20 @@ async function runAudit(ctx, run, callMeta) {
     const findings = [];
     const newPins = [];
     for (const { report, listing, complete } of probed) {
-        findings.push(...analyzeServerListing(listing, others));
+        const analysis = analyzeServerListingDetailed(listing, others);
+        findings.push(...analysis.findings);
+        if (analysis.cuts.length > 0) {
+            // Listed in full, analysed in part: partial, with what was not read.
+            const cutReason = `analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`;
+            const runName = `${MCP_AUDIT_TOOL_NAME}:${report.server_key ?? report.name}`;
+            report.status = 'partial';
+            report.reason = report.reason === undefined ? cutReason : `${report.reason}; ${cutReason}`;
+            const run = toolsRun.find((t) => t.name === runName);
+            if (run !== undefined)
+                run.reason = `partial: ${report.reason}`;
+            if (!missingTools.includes(runName))
+                missingTools.push(runName);
+        }
         const comparison = comparePins(listing, ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey), ctx.storage.mcpToolPins.hasServer(projectPath, listing.serverKey), { complete });
         findings.push(...comparison.findings);
         report.pins = {

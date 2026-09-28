@@ -12,7 +12,7 @@
  * Pure function over its inputs. No I/O.
  */
 import { makeFinding } from '../runners/scannerParsers/index.js';
-import { escapeInvisible, findEncodedBlob, OVERSIZED_DESCRIPTION_CHARS, scanInvisible, TEXT_RULES, } from './rules.js';
+import { escapeInvisible, findEncodedBlob, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, readAs, scanInvisible, TEXT_RULES, } from './rules.js';
 /**
  * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
  * per-server `tools_run` names (`mcp-tool-audit:<source>::<server>`).
@@ -100,36 +100,69 @@ export function normalizeListing(raw) {
     });
     return { tools, prompts, resources, resourceTemplates, malformed };
 }
-/** Deep enough for any real schema; a deeper one is cut rather than walked for ever. */
-const MAX_DEPTH = 24;
-/** Every string in `value`, and every property NAME of a schema (`properties.<name>`). */
-function walkStrings(value, path, item, out, depth = 0) {
-    if (depth > MAX_DEPTH)
-        return;
-    if (typeof value === 'string') {
-        out.push({ item, path, text: value });
-        return;
+/**
+ * Bounds of one walk, so a hostile schema cannot make the analysis itself
+ * the denial of service. Fix round 3, M2: the first cut stopped at depth 24
+ * SILENTLY and read object keys only inside `properties`; now every string
+ * and every key is read, and a walk that hits a bound says so — the listing
+ * is then only partly analysed, which the tool reports as partial.
+ */
+const MAX_DEPTH = 128;
+const MAX_NODES_PER_WALK = 50_000;
+/**
+ * Every string in `value` and every object key (a key can carry text the
+ * model reads as well as a value can), iteratively. A bound reached is
+ * pushed to `cuts`.
+ */
+function walkStrings(value, root, item, out, cuts) {
+    const stack = [{ v: value, path: root, depth: 0 }];
+    let nodes = 0;
+    let tooDeep = false;
+    while (stack.length > 0) {
+        const top = stack.pop();
+        if (top === undefined)
+            break;
+        nodes += 1;
+        if (nodes > MAX_NODES_PER_WALK) {
+            cuts.push(`${item} ${root}: more than ${MAX_NODES_PER_WALK} nodes; the rest was not analysed`);
+            return;
+        }
+        const { v, path, depth } = top;
+        if (typeof v === 'string') {
+            out.push({ item, path, text: v });
+            continue;
+        }
+        if (v === null || typeof v !== 'object')
+            continue;
+        if (depth >= MAX_DEPTH) {
+            tooDeep = true;
+            continue;
+        }
+        if (Array.isArray(v)) {
+            for (let i = v.length - 1; i >= 0; i -= 1)
+                stack.push({ v: v[i], path: `${path}[${i}]`, depth: depth + 1 });
+            continue;
+        }
+        const entries = Object.entries(v);
+        for (let i = entries.length - 1; i >= 0; i -= 1) {
+            const entry = entries[i];
+            if (entry === undefined)
+                continue;
+            const [key, child] = entry;
+            const childPath = `${path}.${key}`;
+            out.push({ item, path: `${childPath} (key)`, text: key });
+            stack.push({ v: child, path: childPath, depth: depth + 1 });
+        }
     }
-    if (Array.isArray(value)) {
-        value.forEach((v, i) => walkStrings(v, `${path}[${i}]`, item, out, depth + 1));
-        return;
-    }
-    if (value === null || typeof value !== 'object')
-        return;
-    const isPropertyMap = /(^|\.)(properties|patternProperties|\$defs|definitions)$/.test(path);
-    for (const [key, v] of Object.entries(value)) {
-        const childPath = path === '' ? key : `${path}.${key}`;
-        if (isPropertyMap)
-            out.push({ item, path: `${childPath} (name)`, text: key });
-        walkStrings(v, childPath, item, out, depth + 1);
-    }
+    if (tooDeep)
+        cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
 }
 /** A name as it may appear in a finding: visible, and short. */
 function shortName(name) {
     const visible = escapeInvisible(name);
     return visible.length > 80 ? `${visible.slice(0, 80)}…` : visible;
 }
-function fieldsOf(listing) {
+function fieldsOf(listing, cuts) {
     const out = [];
     if (listing.instructions !== undefined) {
         out.push({ item: 'server instructions', path: 'instructions', text: listing.instructions });
@@ -141,9 +174,9 @@ function fieldsOf(listing) {
             out.push({ item, path: 'title', text: t.title });
         if (t.description !== undefined)
             out.push({ item, path: 'description', text: t.description });
-        walkStrings(t.inputSchema, 'inputSchema', item, out);
-        walkStrings(t.outputSchema, 'outputSchema', item, out);
-        walkStrings(t.annotations, 'annotations', item, out);
+        walkStrings(t.inputSchema, 'inputSchema', item, out, cuts);
+        walkStrings(t.outputSchema, 'outputSchema', item, out, cuts);
+        walkStrings(t.annotations, 'annotations', item, out, cuts);
     }
     for (const p of listing.prompts) {
         const item = `prompt '${shortName(p.name)}'`;
@@ -152,7 +185,7 @@ function fieldsOf(listing) {
             out.push({ item, path: 'title', text: p.title });
         if (p.description !== undefined)
             out.push({ item, path: 'description', text: p.description });
-        walkStrings(p.arguments, 'arguments', item, out);
+        walkStrings(p.arguments, 'arguments', item, out, cuts);
     }
     const resources = [
         ...listing.resources.map((r) => ({ r, kind: 'resource' })),
@@ -179,21 +212,52 @@ function excerpt(text, index) {
     const body = escapeInvisible(text.slice(start, end)).replace(/\s+/g, ' ').trim();
     return `${start > 0 ? '…' : ''}${body}${end < text.length ? '…' : ''}`;
 }
+/**
+ * Every text rule, on the text as written AND as it reads (`readAs`: NFKC,
+ * look-alike letters folded to Latin) — `Іgnоrе рrеvіоus іnstruсtіоns` in
+ * Cyrillic look-alikes, or in full-width letters, matches no ASCII pattern
+ * as written (fix round 3, I4).
+ */
 function textRuleHits(field) {
     const hits = [];
+    const folded = readAs(field.text);
+    const texts = folded === field.text ? [field.text] : [field.text, folded];
     for (const rule of TEXT_RULES) {
         if (rule.id === 'mcp-tool-cross-server-shadowing')
             continue; // needs the other servers; see below
-        for (const pattern of rule.patterns) {
-            pattern.lastIndex = 0;
-            const m = pattern.exec(field.text);
-            if (m === null)
-                continue;
-            hits.push({ ...ruleMeta(rule.id), field, index: m.index });
-            break;
+        let hit = null;
+        for (const [i, text] of texts.entries()) {
+            for (const pattern of rule.patterns) {
+                pattern.lastIndex = 0;
+                const m = pattern.exec(text);
+                if (m === null)
+                    continue;
+                hit = {
+                    ...ruleMeta(rule.id),
+                    field,
+                    index: Math.min(m.index, field.text.length),
+                    ...(i === 1 ? { detail: 'written with look-alike or compatibility characters' } : {}),
+                };
+                break;
+            }
+            if (hit !== null)
+                break;
         }
+        if (hit !== null)
+            hits.push(hit);
     }
     return hits;
+}
+function homoglyphHit(field) {
+    const mixed = mixedScriptWord(field.text);
+    if (mixed === null)
+        return null;
+    return {
+        ...ruleMeta('mcp-tool-homoglyph'),
+        field,
+        index: mixed.index,
+        detail: `${JSON.stringify(escapeInvisible(mixed.word))} reads as ${JSON.stringify(readAs(mixed.word))}`,
+    };
 }
 function ruleMeta(id) {
     const rule = TEXT_RULES.find((r) => r.id === id);
@@ -208,6 +272,16 @@ function ruleMeta(id) {
             label: 'hidden Unicode',
             explain: 'The text carries characters that render as nothing or reorder what is shown — invisible to anyone ' +
                 'reviewing the tool list, read in full by the model.',
+        };
+    }
+    if (id === 'mcp-tool-homoglyph') {
+        return {
+            rule: id,
+            severity: 'medium',
+            subcategory: 'mcp_tool_poisoning',
+            label: 'look-alike letters from another script',
+            explain: 'A word mixes Latin letters with Cyrillic or Greek look-alikes — it reads as one thing to a reviewer ' +
+                'and is another string to every text check. Ordinary text in another alphabet does not trip this.',
         };
     }
     if (id === 'mcp-tool-encoded-blob') {
@@ -233,16 +307,12 @@ function hiddenUnicodeHit(field) {
     const scan = scanInvisible(field.text);
     if (scan === null)
         return null;
-    const decoded = scan.decodedTags.trim();
+    const tags = scan.decodedTags.trim();
+    const selectors = scan.decodedSelectors.trim();
     const detail = `${scan.count} invisible code point(s): ${scan.kinds.join(', ')}` +
-        (decoded === '' ? '' : `; the tag characters spell ${JSON.stringify(decoded.slice(0, 200))}`);
-    let index = 0;
-    for (const ch of field.text) {
-        if (scanInvisible(ch) !== null)
-            break;
-        index += ch.length;
-    }
-    return { ...ruleMeta('mcp-tool-hidden-unicode'), field, index, detail };
+        (tags === '' ? '' : `; the tag characters spell ${JSON.stringify(tags.slice(0, 200))}`) +
+        (selectors === '' ? '' : `; the variation selectors spell ${JSON.stringify(escapeInvisible(selectors).slice(0, 200))}`);
+    return { ...ruleMeta('mcp-tool-hidden-unicode'), field, index: Math.max(0, scan.index), detail };
 }
 function blobHit(field) {
     const blob = findEncodedBlob(field.text);
@@ -268,9 +338,6 @@ function oversizedHit(field) {
         detail: `${field.text.length} characters`,
     };
 }
-function escapeRegExp(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 /**
  * A tool name is matched bare only when it cannot be an ordinary word —
  * `send_email`, `readFile`, `git.push` — and otherwise only in quotes or
@@ -279,26 +346,56 @@ function escapeRegExp(s) {
 function distinctive(name) {
     return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
 }
-function nameMention(name) {
-    const n = escapeRegExp(name);
-    return distinctive(name)
-        ? new RegExp(`(^|[^A-Za-z0-9_-])${n}($|[^A-Za-z0-9_-])`)
-        : new RegExp(`[\`'"]${n}[\`'"]`);
-}
-function shadowingHits(field, listing, others) {
-    const meta = ruleMeta('mcp-tool-cross-server-shadowing');
+function buildShadowIndex(listing, others) {
     const own = new Set(listing.tools.map((t) => t.name));
+    const bare = new Map();
+    const quoted = new Map();
     for (const other of others) {
         if (other.serverKey === listing.serverKey)
             continue;
         for (const toolName of other.toolNames) {
             if (own.has(toolName))
                 continue;
-            const m = nameMention(toolName).exec(field.text);
-            if (m !== null) {
-                return [{ ...meta, field, index: m.index, detail: `it names '${toolName}', a tool of server '${other.serverName}'` }];
+            if (!quoted.has(toolName))
+                quoted.set(toolName, other.serverName);
+            if (distinctive(toolName) && !bare.has(toolName))
+                bare.set(toolName, other.serverName);
+        }
+    }
+    return { bare, quoted };
+}
+/** The first other-server tool name `text` mentions, with where. */
+function mentionedToolName(text, index) {
+    if (index.bare.size > 0) {
+        for (const m of text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
+            const token = m[0].replace(/[.-]+$/, '');
+            const candidates = [token, ...token.split('.')];
+            for (const c of candidates) {
+                const server = index.bare.get(c);
+                if (server !== undefined)
+                    return { name: c, server, at: m.index };
             }
         }
+    }
+    if (index.quoted.size > 0) {
+        for (const m of text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
+            const quotedName = m[1];
+            if (quotedName === undefined)
+                continue;
+            const server = index.quoted.get(quotedName);
+            if (server !== undefined)
+                return { name: quotedName, server, at: m.index };
+        }
+    }
+    return null;
+}
+function shadowingHits(field, listing, index) {
+    const meta = ruleMeta('mcp-tool-cross-server-shadowing');
+    const mention = mentionedToolName(field.text, index);
+    if (mention !== null) {
+        return [
+            { ...meta, field, index: mention.at, detail: `it names '${mention.name}', a tool of server '${mention.server}'` },
+        ];
     }
     // `mcp__<server>__<tool>`: how Claude Code names another server's tool.
     for (const m of field.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
@@ -319,6 +416,9 @@ function itemKey(hit) {
     return `${hit.rule}\u0000${hit.field.item}`;
 }
 export function analyzeServerListing(listing, others) {
+    return analyzeServerListingDetailed(listing, others).findings;
+}
+export function analyzeServerListingDetailed(listing, others) {
     const groups = new Map();
     const add = (hit) => {
         if (hit === null)
@@ -330,13 +430,16 @@ export function analyzeServerListing(listing, others) {
         else
             group.push(hit);
     };
-    for (const field of fieldsOf(listing)) {
+    const cuts = [];
+    const shadowIndex = buildShadowIndex(listing, others);
+    for (const field of fieldsOf(listing, cuts)) {
         for (const hit of textRuleHits(field))
             add(hit);
         add(hiddenUnicodeHit(field));
+        add(homoglyphHit(field));
         add(blobHit(field));
         add(oversizedHit(field));
-        for (const hit of shadowingHits(field, listing, others))
+        for (const hit of shadowingHits(field, listing, shadowIndex))
             add(hit);
     }
     const findings = [];
@@ -366,7 +469,7 @@ export function analyzeServerListing(listing, others) {
             fix_available: false,
         }));
     }
-    return findings;
+    return { findings, cuts: cuts.map(escapeInvisible) };
 }
 const RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function rank(s) {

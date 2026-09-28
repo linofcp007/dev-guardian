@@ -14838,7 +14838,7 @@ var init_readable = __esm({
         encoding,
         preserveNewlines
       });
-      const readable2 = new Readable3({
+      const readable3 = new Readable3({
         read: read2,
         destroy: callbackify2(onReadableDestroy.bind(void 0, { subprocessStdout, subprocess, waitReadableDestroy })),
         highWaterMark: readableHighWaterMark,
@@ -14848,10 +14848,10 @@ var init_readable = __esm({
       onStdoutFinished({
         subprocessStdout,
         onStdoutDataDone,
-        readable: readable2,
+        readable: readable3,
         subprocess
       });
-      return readable2;
+      return readable3;
     };
     getSubprocessStdout = (subprocess, from, concurrentStreams) => {
       const subprocessStdout = getFromStream(subprocess, from);
@@ -14876,29 +14876,29 @@ var init_readable = __esm({
         onStdoutDataDone
       };
     };
-    onRead = async (readable2, onStdoutData, onStdoutDataDone) => {
+    onRead = async (readable3, onStdoutData, onStdoutDataDone) => {
       try {
         const { value, done } = await onStdoutData.next();
         if (done) {
           onStdoutDataDone.resolve();
         } else {
-          readable2.push(value);
+          readable3.push(value);
         }
       } catch {
       }
     };
-    onStdoutFinished = async ({ subprocessStdout, onStdoutDataDone, readable: readable2, subprocess, subprocessStdin }) => {
+    onStdoutFinished = async ({ subprocessStdout, onStdoutDataDone, readable: readable3, subprocess, subprocessStdin }) => {
       try {
         await waitForSubprocessStdout(subprocessStdout);
         await subprocess;
         await safeWaitForSubprocessStdin(subprocessStdin);
         await onStdoutDataDone;
-        if (readable2.readable) {
-          readable2.push(null);
+        if (readable3.readable) {
+          readable3.push(null);
         }
       } catch (error2) {
         await safeWaitForSubprocessStdin(subprocessStdin);
-        destroyOtherReadable(readable2, error2);
+        destroyOtherReadable(readable3, error2);
       }
     };
     onReadableDestroy = async ({ subprocessStdout, subprocess, waitReadableDestroy }, error2) => {
@@ -37868,10 +37868,10 @@ function assignIdentities(findings, opts = {}) {
   const contentKeys = /* @__PURE__ */ new Map();
   let currentPath = null;
   let currentLines = null;
-  const linesOf = (readable2) => {
-    if (readable2 !== currentPath) {
-      currentPath = readable2;
-      const text = opts.readSource === void 0 ? null : opts.readSource(readable2);
+  const linesOf = (readable3) => {
+    if (readable3 !== currentPath) {
+      currentPath = readable3;
+      const text = opts.readSource === void 0 ? null : opts.readSource(readable3);
       currentLines = text === null ? null : text.split(/\r\n|\r|\n/);
     }
     return currentLines;
@@ -38026,7 +38026,7 @@ function locate(filePath, projectPath) {
   const key = normalizePathPosix(path8).replace(/^(\.\/)+/, "");
   return { key, readable: insideProject ? path8.replace(/\\/g, "/") : null };
 }
-function contentSource(f, readable2, linesOf) {
+function contentSource(f, readable3, linesOf) {
   const dependency = dependencyCoordinates(f);
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
@@ -38038,8 +38038,8 @@ ${f.rule_id ?? ""}${locator}`;
   }
   if (isHistoryLocator(f) && f.snippet !== void 0) return `text
 ${collapse(f.snippet)}`;
-  if (readable2 !== null && f.line_start !== void 0) {
-    const fileLines = linesOf(readable2);
+  if (readable3 !== null && f.line_start !== void 0) {
+    const fileLines = linesOf(readable3);
     const lines = fileLines === null ? null : sourceLines(fileLines, f.line_start, f.line_end);
     if (lines !== null) return `text
 ${collapse(lines)}`;
@@ -70734,7 +70734,7 @@ function readOne2(descriptor, projectPath) {
 var inputSchema27 = {
   project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project to audit. Defaults to the current working directory."),
   include_user_config: external_exports.boolean().optional().default(false).describe(
-    "Also read the USER-level config, shared across every project on this machine: ~/.claude.json, ~/.claude/settings.json, Claude Desktop's claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
+    "When true, the audit also reads the USER-level config, shared across every project on this machine: ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json), ~/.claude/settings.json, Claude Desktop's claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
   ),
   severity_min: SeverityMin
 };
@@ -70834,7 +70834,31 @@ var SKILL_TEXT_RULE_IDS = /* @__PURE__ */ new Set([
 var isPathOnlyPattern = (p) => p.source.includes(String.raw`\.claude\/`);
 var SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap((r) => r.patterns).filter((p) => !isPathOnlyPattern(p));
 var CONCEAL_SKILL_PATTERNS = SKILL_RULES.find((r) => r.id === "pi-conceal-from-user")?.patterns ?? [];
-var READ_VERB = String.raw`\b(read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather)\s+`;
+var READ_VERB = String.raw`(?:read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather|get)\s+`;
+var DIRECTIVE = String.raw`(?:^|[.!?:;,(]\s*|\b(?:you\s+(?:must|should|need\s+to|have\s+to)|please|first|then|and|also|always|now)\s+)`;
+var SAME_SENTENCE = String.raw`(?:(?![.!?](?:\s|$))[^\n]){0,80}?`;
+var SENSITIVE_PATH = [
+  String.raw`~[\/\\]\.ssh\b`,
+  String.raw`\.ssh[\/\\]`,
+  String.raw`\bid_(?:rsa|dsa|ecdsa|ed25519)\b`,
+  String.raw`\bauthorized_keys\b`,
+  String.raw`\bmcp\.json\b`,
+  String.raw`\bmcp_config\.json\b`,
+  String.raw`claude_desktop_config\.json`,
+  String.raw`\.claude\.json\b`,
+  String.raw`~[\/\\]\.claude[\/\\]`,
+  String.raw`\.claude[\/\\]memory\b`,
+  String.raw`\.aws[\/\\]credentials`,
+  String.raw`\.netrc\b`,
+  String.raw`\.npmrc\b`,
+  String.raw`\.pypirc\b`,
+  String.raw`\.git-credentials\b`,
+  String.raw`\.docker[\/\\]config\.json`,
+  String.raw`\.kube[\/\\]config\b`,
+  String.raw`\/etc\/(?:passwd|shadow)\b`,
+  // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`.
+  String.raw`(?:^|[\s\x60'"(\/\\])\.env(?:\.[\w-]+)?(?![\w-])`
+].join("|");
 var OWNER = String.raw`(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
 var SECRET_NOUN = String.raw`(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 var DATA_NOUN = String.raw`\b(data|contents?|conversation|chat|history|messages?|files?|results?|outputs?|keys?|tokens?|secrets?|credentials?|env(ironment)?|variables|everything|context|prompts?)\b`;
@@ -70845,20 +70869,23 @@ var TEXT_RULES = [
     subcategory: "mcp_tool_poisoning",
     label: "instructions aimed at the model",
     explain: "The text carries directives aimed at the model rather than a description of what the tool does \u2014 instruction overrides, <IMPORTANT>/<system> blocks, jailbreak or persistence phrasing. The host loads it into the model context with every tool list.",
-    patterns: [MCP_DESCRIPTION_POISONING, ...SKILL_TEXT_PATTERNS]
+    patterns: [
+      MCP_DESCRIPTION_POISONING,
+      ...SKILL_TEXT_PATTERNS,
+      // A "developer mode" persona (fix round 3, I5).
+      /\b(enable|enter|activate|switch\s+(?:on|to|into)|turn\s+on|go\s+into|you\s+are\s+(?:now\s+)?in)\s+(?:the\s+)?developer\s+mode\b/i,
+      /\bdeveloper\s+mode\s+(?:is\s+)?(?:enabled|activated|on)\b/i
+    ]
   },
   {
     id: "mcp-tool-sensitive-file-access",
     severity: "high",
     subcategory: "data_exfiltration",
-    label: "a reference to credential or agent-config files",
-    explain: "The text points the model at SSH keys, cloud or package-registry credentials, .env files or an MCP host config \u2014 files a tool description has no reason to ask for. A secrets-manager server may legitimately name them; any other server should not.",
+    label: "an instruction to read credential or agent-config files",
+    explain: "The text tells the model to read, include or send SSH keys, cloud or package-registry credentials, .env files or an MCP host config \u2014 files a tool description has no reason to ask the model for. A tool that only names the files it reads itself does not trip this.",
     patterns: [
-      /(~\/\.ssh\b|\.ssh\/|\bid_(rsa|dsa|ecdsa|ed25519)\b|\bauthorized_keys\b)/i,
-      /(\bmcp\.json\b|\bmcp_config\.json\b|claude_desktop_config\.json|\.claude\.json\b|~\/\.claude\/|\.claude\/memory\b)/i,
-      /(\.aws\/credentials|\.netrc\b|\.npmrc\b|\.pypirc\b|\.git-credentials\b|\.docker\/config\.json|\.kube\/config\b|\/etc\/(passwd|shadow)\b)/i,
-      /(^|[\s`'"(/])\.env(\.[\w-]+)?(?![\w-])/i,
-      new RegExp(`${READ_VERB}${OWNER}${SECRET_NOUN}`, "i")
+      new RegExp(`${DIRECTIVE}${READ_VERB}${SAME_SENTENCE}(?:${SENSITIVE_PATH})`, "i"),
+      new RegExp(`${DIRECTIVE}${READ_VERB}${OWNER}${SECRET_NOUN}`, "i")
     ]
   },
   {
@@ -70889,7 +70916,16 @@ var TEXT_RULES = [
         "i"
       ),
       /\b(send|forward|bcc|cc|redirect|copy)\b[^.\n]{0,80}\b(to|bcc)\s+[\w.+-]+@[\w-]+\.[\w.-]+/i,
-      /\bmust\s+(be\s+)?sent\s+to\s+[\w.+-]+@[\w-]+\.[\w.-]+/i
+      /\bmust\s+(be\s+)?sent\s+to\s+[\w.+-]+@[\w-]+\.[\w.-]+/i,
+      // "Always bcc audit@…", "cc: attacker@…" (fix round 3, I5).
+      /\bb?cc\b\s*:?\s*[\w.+-]+@[\w-]+(?:\.[\w-]+)+/i,
+      // A URL whose query the model is to fill with data: `?d=<conversation summary>`.
+      new RegExp(
+        String.raw`https?:\/\/[^\s"'<>)]+[?&][\w.-]+=\s*(?:<[^>\n]{0,80}?|\{\{?[^}\n]{0,80}?|\[[^\]\n]{0,80}?)` + String.raw`\b(conversation|chat|history|summary|messages?|context|prompts?|secrets?|tokens?|keys?|passwords?|credentials?|env|contents?|data|files?|previous)\b`,
+        "i"
+      ),
+      // A markdown image with a query: rendering it sends the query to that host.
+      /!\[[^\]\n]*\]\(\s*<?https?:\/\/[^)\s>]+\?[^)\s]+\)/i
     ]
   },
   {
@@ -70919,38 +70955,63 @@ var TEXT_RULES = [
     ]
   }
 ];
+var INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u{FFF9}-\u{FFFB}]/u;
+var PICTOGRAPHIC = new RegExp("\\p{Extended_Pictographic}", "u");
+var IDEOGRAPHIC = new RegExp("\\p{Ideographic}", "u");
 function invisibleKind(code) {
+  const ch = String.fromCodePoint(code);
+  if (!INVISIBLE.test(ch)) return null;
   if (code >= 917504 && code <= 917631) return "tag characters";
-  if (code >= 8203 && code <= 8205 || // zero-width space / non-joiner / joiner
-  code >= 8288 && code <= 8292 || // word joiner, invisible operators
-  code === 65279 || // zero-width no-break space (BOM)
-  code === 6158) {
-    return "zero-width characters";
+  if (code >= 65024 && code <= 65039 || code >= 917760 && code <= 917999) return "variation selectors";
+  if (new RegExp("\\p{Bidi_Control}", "u").test(ch)) return "bidi controls";
+  return "zero-width and other invisible characters";
+}
+function isLegitimate(code, prev, next) {
+  const prevCh = prev === void 0 ? "" : String.fromCodePoint(prev);
+  const nextCh = next === void 0 ? "" : String.fromCodePoint(next);
+  if (code === 65038 || code === 65039) {
+    return PICTOGRAPHIC.test(prevCh) || /[0-9#*]/.test(prevCh) && next === 8419;
   }
-  if (code === 8206 || // LRM
-  code === 8207 || // RLM
-  code >= 8234 && code <= 8238 || // embeddings / overrides
-  code >= 8294 && code <= 8297) {
-    return "bidi controls";
+  if (code === 8205) {
+    const prevIsEmoji = PICTOGRAPHIC.test(prevCh) || prev === 65039 || prev !== void 0 && prev >= 127995 && prev <= 127999;
+    return prevIsEmoji && PICTOGRAPHIC.test(nextCh);
   }
-  return null;
+  if (code >= 917760 && code <= 917999) return IDEOGRAPHIC.test(prevCh);
+  return false;
+}
+function readable2(text) {
+  if (text.length === 0) return false;
+  let printable = 0;
+  for (const ch of text) {
+    const c3 = ch.codePointAt(0) ?? 0;
+    if (c3 >= 32 && c3 !== 127 && c3 !== 65533) printable += 1;
+  }
+  return printable / [...text].length >= 0.9;
 }
 function scanInvisible(text) {
+  const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
   const kinds = /* @__PURE__ */ new Set();
   let count2 = 0;
   let decodedTags = "";
-  for (const ch of text) {
-    const code = ch.codePointAt(0);
-    if (code === void 0) continue;
+  const selectorBytes = [];
+  let index = -1;
+  let offset = 0;
+  for (let i2 = 0; i2 < points.length; i2 += 1) {
+    const code = points[i2] ?? 0;
     const kind = invisibleKind(code);
-    if (kind === null) continue;
-    kinds.add(kind);
-    count2 += 1;
-    if (kind === "tag characters" && code >= 917536 && code <= 917630) {
-      decodedTags += String.fromCharCode(code - 917504);
+    if (kind !== null && !isLegitimate(code, points[i2 - 1], points[i2 + 1])) {
+      kinds.add(kind);
+      count2 += 1;
+      if (index < 0) index = offset;
+      if (kind === "tag characters" && code >= 917536 && code <= 917630) decodedTags += String.fromCharCode(code - 917504);
+      if (code >= 65024 && code <= 65039) selectorBytes.push(code - 65024);
+      else if (code >= 917760 && code <= 917999) selectorBytes.push(code - 917760 + 16);
     }
+    offset += code > 65535 ? 2 : 1;
   }
-  return count2 === 0 ? null : { kinds: [...kinds], count: count2, decodedTags };
+  if (count2 === 0) return null;
+  const selectors = selectorBytes.length >= 4 ? Buffer.from(selectorBytes).toString("utf8") : "";
+  return { kinds: [...kinds], count: count2, decodedTags, decodedSelectors: readable2(selectors) ? selectors : "", index };
 }
 function escapeInvisible(text) {
   let out = "";
@@ -70959,6 +71020,93 @@ function escapeInvisible(text) {
     out += code !== void 0 && invisibleKind(code) !== null ? `\\u{${code.toString(16).toUpperCase()}}` : ch;
   }
   return out;
+}
+var CONFUSABLES = {
+  // Cyrillic
+  \u0430: "a",
+  \u0410: "A",
+  \u0412: "B",
+  \u0435: "e",
+  \u0415: "E",
+  \u0451: "e",
+  \u0401: "E",
+  \u041A: "K",
+  \u043A: "k",
+  \u041C: "M",
+  \u041D: "H",
+  \u043E: "o",
+  \u041E: "O",
+  \u0440: "p",
+  \u0420: "P",
+  \u0441: "c",
+  \u0421: "C",
+  \u0422: "T",
+  \u0443: "y",
+  \u0423: "Y",
+  \u0445: "x",
+  \u0425: "X",
+  \u0456: "i",
+  \u0406: "I",
+  \u0457: "i",
+  \u0407: "I",
+  \u0458: "j",
+  \u0408: "J",
+  \u0455: "s",
+  \u0405: "S",
+  "\u0501": "d",
+  "\u051B": "q",
+  "\u051D": "w",
+  "\u051C": "W",
+  \u04BB: "h",
+  \u04BA: "H",
+  \u04AF: "y",
+  \u04AE: "Y",
+  \u0261: "g",
+  // Greek
+  \u0391: "A",
+  \u0392: "B",
+  \u0395: "E",
+  \u0396: "Z",
+  \u0397: "H",
+  \u0399: "I",
+  \u039A: "K",
+  \u039C: "M",
+  \u039D: "N",
+  \u039F: "O",
+  \u03A1: "P",
+  \u03A4: "T",
+  \u03A5: "Y",
+  \u03A7: "X",
+  \u03BF: "o",
+  \u03BD: "v",
+  \u03C1: "p",
+  \u03B9: "i",
+  \u03BA: "k",
+  \u03C5: "u",
+  \u03C7: "x",
+  \u03B1: "a"
+};
+function readAs(text) {
+  let out = "";
+  for (const ch of text.normalize("NFKC")) out += CONFUSABLES[ch] ?? ch;
+  return out;
+}
+function mixedScriptWord(text) {
+  for (const m of text.matchAll(/[\p{L}\p{M}]{4,}/gu)) {
+    const word = m[0];
+    let latin = false;
+    let lookAlike = false;
+    let otherForeign = false;
+    for (const ch of word) {
+      if (new RegExp("\\p{Script=Latin}", "u").test(ch)) latin = true;
+      else if (/[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(ch)) {
+        if (CONFUSABLES[ch] !== void 0) lookAlike = true;
+        else otherForeign = true;
+      }
+    }
+    if (latin && lookAlike && !otherForeign) return { word, index: m.index };
+  }
+  return null;
 }
 var BASE64_RUN = /[A-Za-z0-9+/_-]{100,}={0,2}/g;
 function findEncodedBlob(text) {
@@ -70972,8 +71120,8 @@ function findEncodedBlob(text) {
       const code = ch.codePointAt(0) ?? 0;
       if (code >= 32 && code < 127 || code === 10 || code === 13 || code === 9) printable += 1;
     }
-    const readable2 = decoded.length > 0 && printable / decoded.length >= 0.9;
-    return { length: run.length, decodedText: readable2 ? decoded : null };
+    const readable3 = decoded.length > 0 && printable / decoded.length >= 0.9;
+    return { length: run.length, decodedText: readable3 ? decoded : null };
   }
   return null;
 }
@@ -71043,30 +71191,51 @@ function normalizeListing(raw) {
   });
   return { tools, prompts, resources, resourceTemplates, malformed };
 }
-var MAX_DEPTH = 24;
-function walkStrings(value, path8, item, out, depth = 0) {
-  if (depth > MAX_DEPTH) return;
-  if (typeof value === "string") {
-    out.push({ item, path: path8, text: value });
-    return;
+var MAX_DEPTH = 128;
+var MAX_NODES_PER_WALK = 5e4;
+function walkStrings(value, root, item, out, cuts) {
+  const stack = [{ v: value, path: root, depth: 0 }];
+  let nodes = 0;
+  let tooDeep = false;
+  while (stack.length > 0) {
+    const top = stack.pop();
+    if (top === void 0) break;
+    nodes += 1;
+    if (nodes > MAX_NODES_PER_WALK) {
+      cuts.push(`${item} ${root}: more than ${MAX_NODES_PER_WALK} nodes; the rest was not analysed`);
+      return;
+    }
+    const { v, path: path8, depth } = top;
+    if (typeof v === "string") {
+      out.push({ item, path: path8, text: v });
+      continue;
+    }
+    if (v === null || typeof v !== "object") continue;
+    if (depth >= MAX_DEPTH) {
+      tooDeep = true;
+      continue;
+    }
+    if (Array.isArray(v)) {
+      for (let i2 = v.length - 1; i2 >= 0; i2 -= 1) stack.push({ v: v[i2], path: `${path8}[${i2}]`, depth: depth + 1 });
+      continue;
+    }
+    const entries2 = Object.entries(v);
+    for (let i2 = entries2.length - 1; i2 >= 0; i2 -= 1) {
+      const entry = entries2[i2];
+      if (entry === void 0) continue;
+      const [key, child] = entry;
+      const childPath = `${path8}.${key}`;
+      out.push({ item, path: `${childPath} (key)`, text: key });
+      stack.push({ v: child, path: childPath, depth: depth + 1 });
+    }
   }
-  if (Array.isArray(value)) {
-    value.forEach((v, i2) => walkStrings(v, `${path8}[${i2}]`, item, out, depth + 1));
-    return;
-  }
-  if (value === null || typeof value !== "object") return;
-  const isPropertyMap = /(^|\.)(properties|patternProperties|\$defs|definitions)$/.test(path8);
-  for (const [key, v] of Object.entries(value)) {
-    const childPath = path8 === "" ? key : `${path8}.${key}`;
-    if (isPropertyMap) out.push({ item, path: `${childPath} (name)`, text: key });
-    walkStrings(v, childPath, item, out, depth + 1);
-  }
+  if (tooDeep) cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
 }
 function shortName(name) {
   const visible = escapeInvisible(name);
   return visible.length > 80 ? `${visible.slice(0, 80)}\u2026` : visible;
 }
-function fieldsOf(listing) {
+function fieldsOf(listing, cuts) {
   const out = [];
   if (listing.instructions !== void 0) {
     out.push({ item: "server instructions", path: "instructions", text: listing.instructions });
@@ -71076,16 +71245,16 @@ function fieldsOf(listing) {
     out.push({ item, path: "name", text: t.name });
     if (t.title !== void 0) out.push({ item, path: "title", text: t.title });
     if (t.description !== void 0) out.push({ item, path: "description", text: t.description });
-    walkStrings(t.inputSchema, "inputSchema", item, out);
-    walkStrings(t.outputSchema, "outputSchema", item, out);
-    walkStrings(t.annotations, "annotations", item, out);
+    walkStrings(t.inputSchema, "inputSchema", item, out, cuts);
+    walkStrings(t.outputSchema, "outputSchema", item, out, cuts);
+    walkStrings(t.annotations, "annotations", item, out, cuts);
   }
   for (const p of listing.prompts) {
     const item = `prompt '${shortName(p.name)}'`;
     out.push({ item, path: "name", text: p.name });
     if (p.title !== void 0) out.push({ item, path: "title", text: p.title });
     if (p.description !== void 0) out.push({ item, path: "description", text: p.description });
-    walkStrings(p.arguments, "arguments", item, out);
+    walkStrings(p.arguments, "arguments", item, out, cuts);
   }
   const resources = [
     ...listing.resources.map((r) => ({ r, kind: "resource" })),
@@ -71110,17 +71279,39 @@ function excerpt(text, index) {
 }
 function textRuleHits(field2) {
   const hits = [];
+  const folded = readAs(field2.text);
+  const texts = folded === field2.text ? [field2.text] : [field2.text, folded];
   for (const rule of TEXT_RULES) {
     if (rule.id === "mcp-tool-cross-server-shadowing") continue;
-    for (const pattern of rule.patterns) {
-      pattern.lastIndex = 0;
-      const m = pattern.exec(field2.text);
-      if (m === null) continue;
-      hits.push({ ...ruleMeta(rule.id), field: field2, index: m.index });
-      break;
+    let hit = null;
+    for (const [i2, text] of texts.entries()) {
+      for (const pattern of rule.patterns) {
+        pattern.lastIndex = 0;
+        const m = pattern.exec(text);
+        if (m === null) continue;
+        hit = {
+          ...ruleMeta(rule.id),
+          field: field2,
+          index: Math.min(m.index, field2.text.length),
+          ...i2 === 1 ? { detail: "written with look-alike or compatibility characters" } : {}
+        };
+        break;
+      }
+      if (hit !== null) break;
     }
+    if (hit !== null) hits.push(hit);
   }
   return hits;
+}
+function homoglyphHit(field2) {
+  const mixed = mixedScriptWord(field2.text);
+  if (mixed === null) return null;
+  return {
+    ...ruleMeta("mcp-tool-homoglyph"),
+    field: field2,
+    index: mixed.index,
+    detail: `${JSON.stringify(escapeInvisible(mixed.word))} reads as ${JSON.stringify(readAs(mixed.word))}`
+  };
 }
 function ruleMeta(id) {
   const rule = TEXT_RULES.find((r) => r.id === id);
@@ -71134,6 +71325,15 @@ function ruleMeta(id) {
       subcategory: "mcp_tool_poisoning",
       label: "hidden Unicode",
       explain: "The text carries characters that render as nothing or reorder what is shown \u2014 invisible to anyone reviewing the tool list, read in full by the model."
+    };
+  }
+  if (id === "mcp-tool-homoglyph") {
+    return {
+      rule: id,
+      severity: "medium",
+      subcategory: "mcp_tool_poisoning",
+      label: "look-alike letters from another script",
+      explain: "A word mixes Latin letters with Cyrillic or Greek look-alikes \u2014 it reads as one thing to a reviewer and is another string to every text check. Ordinary text in another alphabet does not trip this."
     };
   }
   if (id === "mcp-tool-encoded-blob") {
@@ -71156,14 +71356,10 @@ function ruleMeta(id) {
 function hiddenUnicodeHit(field2) {
   const scan2 = scanInvisible(field2.text);
   if (scan2 === null) return null;
-  const decoded = scan2.decodedTags.trim();
-  const detail = `${scan2.count} invisible code point(s): ${scan2.kinds.join(", ")}` + (decoded === "" ? "" : `; the tag characters spell ${JSON.stringify(decoded.slice(0, 200))}`);
-  let index = 0;
-  for (const ch of field2.text) {
-    if (scanInvisible(ch) !== null) break;
-    index += ch.length;
-  }
-  return { ...ruleMeta("mcp-tool-hidden-unicode"), field: field2, index, detail };
+  const tags = scan2.decodedTags.trim();
+  const selectors = scan2.decodedSelectors.trim();
+  const detail = `${scan2.count} invisible code point(s): ${scan2.kinds.join(", ")}` + (tags === "" ? "" : `; the tag characters spell ${JSON.stringify(tags.slice(0, 200))}`) + (selectors === "" ? "" : `; the variation selectors spell ${JSON.stringify(escapeInvisible(selectors).slice(0, 200))}`);
+  return { ...ruleMeta("mcp-tool-hidden-unicode"), field: field2, index: Math.max(0, scan2.index), detail };
 }
 function blobHit(field2) {
   const blob = findEncodedBlob(field2.text);
@@ -71182,28 +71378,51 @@ function oversizedHit(field2) {
     detail: `${field2.text.length} characters`
   };
 }
-function escapeRegExp4(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 function distinctive(name) {
   return name.length >= 4 && /[_.-]|[a-z][A-Z]/.test(name);
 }
-function nameMention(name) {
-  const n2 = escapeRegExp4(name);
-  return distinctive(name) ? new RegExp(`(^|[^A-Za-z0-9_-])${n2}($|[^A-Za-z0-9_-])`) : new RegExp(`[\`'"]${n2}[\`'"]`);
-}
-function shadowingHits(field2, listing, others) {
-  const meta = ruleMeta("mcp-tool-cross-server-shadowing");
+function buildShadowIndex(listing, others) {
   const own = new Set(listing.tools.map((t) => t.name));
+  const bare = /* @__PURE__ */ new Map();
+  const quoted = /* @__PURE__ */ new Map();
   for (const other of others) {
     if (other.serverKey === listing.serverKey) continue;
     for (const toolName of other.toolNames) {
       if (own.has(toolName)) continue;
-      const m = nameMention(toolName).exec(field2.text);
-      if (m !== null) {
-        return [{ ...meta, field: field2, index: m.index, detail: `it names '${toolName}', a tool of server '${other.serverName}'` }];
+      if (!quoted.has(toolName)) quoted.set(toolName, other.serverName);
+      if (distinctive(toolName) && !bare.has(toolName)) bare.set(toolName, other.serverName);
+    }
+  }
+  return { bare, quoted };
+}
+function mentionedToolName(text, index) {
+  if (index.bare.size > 0) {
+    for (const m of text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_.-]*/g)) {
+      const token = m[0].replace(/[.-]+$/, "");
+      const candidates2 = [token, ...token.split(".")];
+      for (const c3 of candidates2) {
+        const server = index.bare.get(c3);
+        if (server !== void 0) return { name: c3, server, at: m.index };
       }
     }
+  }
+  if (index.quoted.size > 0) {
+    for (const m of text.matchAll(/[`'"]([^`'"\n]{1,128})[`'"]/g)) {
+      const quotedName = m[1];
+      if (quotedName === void 0) continue;
+      const server = index.quoted.get(quotedName);
+      if (server !== void 0) return { name: quotedName, server, at: m.index };
+    }
+  }
+  return null;
+}
+function shadowingHits(field2, listing, index) {
+  const meta = ruleMeta("mcp-tool-cross-server-shadowing");
+  const mention = mentionedToolName(field2.text, index);
+  if (mention !== null) {
+    return [
+      { ...meta, field: field2, index: mention.at, detail: `it names '${mention.name}', a tool of server '${mention.server}'` }
+    ];
   }
   for (const m of field2.text.matchAll(/\bmcp__([\w-]+?)__[\w-]+/g)) {
     if (m[1] !== void 0 && m[1] !== listing.serverName) {
@@ -71221,7 +71440,7 @@ function shadowingHits(field2, listing, others) {
 function itemKey(hit) {
   return `${hit.rule}\0${hit.field.item}`;
 }
-function analyzeServerListing(listing, others) {
+function analyzeServerListingDetailed(listing, others) {
   const groups = /* @__PURE__ */ new Map();
   const add = (hit) => {
     if (hit === null) return;
@@ -71230,12 +71449,15 @@ function analyzeServerListing(listing, others) {
     if (group === void 0) groups.set(key, [hit]);
     else group.push(hit);
   };
-  for (const field2 of fieldsOf(listing)) {
+  const cuts = [];
+  const shadowIndex = buildShadowIndex(listing, others);
+  for (const field2 of fieldsOf(listing, cuts)) {
     for (const hit of textRuleHits(field2)) add(hit);
     add(hiddenUnicodeHit(field2));
+    add(homoglyphHit(field2));
     add(blobHit(field2));
     add(oversizedHit(field2));
-    for (const hit of shadowingHits(field2, listing, others)) add(hit);
+    for (const hit of shadowingHits(field2, listing, shadowIndex)) add(hit);
   }
   const findings = [];
   for (const hits of groups.values()) {
@@ -71265,7 +71487,7 @@ function analyzeServerListing(listing, others) {
       })
     );
   }
-  return findings;
+  return { findings, cuts: cuts.map(escapeInvisible) };
 }
 var RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function rank(s) {
@@ -74987,7 +75209,17 @@ async function runAudit(ctx, run, callMeta) {
   const findings = [];
   const newPins = [];
   for (const { report, listing, complete } of probed) {
-    findings.push(...analyzeServerListing(listing, others));
+    const analysis = analyzeServerListingDetailed(listing, others);
+    findings.push(...analysis.findings);
+    if (analysis.cuts.length > 0) {
+      const cutReason = `analysis cut: ${analysis.cuts.slice(0, 3).join("; ")}`;
+      const runName = `${MCP_AUDIT_TOOL_NAME}:${report.server_key ?? report.name}`;
+      report.status = "partial";
+      report.reason = report.reason === void 0 ? cutReason : `${report.reason}; ${cutReason}`;
+      const run2 = toolsRun.find((t) => t.name === runName);
+      if (run2 !== void 0) run2.reason = `partial: ${report.reason}`;
+      if (!missingTools.includes(runName)) missingTools.push(runName);
+    }
     const comparison = comparePins(
       listing,
       ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),

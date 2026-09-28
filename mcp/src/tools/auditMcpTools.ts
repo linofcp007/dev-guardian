@@ -44,7 +44,7 @@ import type { PluginContext } from '../context.js';
 import { collectMcpEntries, type CollectedMcpEntries } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
 import {
-  analyzeServerListing,
+  analyzeServerListingDetailed,
   MCP_AUDIT_TOOL_NAME,
   normalizeListing,
   type OtherServer,
@@ -408,7 +408,18 @@ async function runAudit(
   const findings: Finding[] = [];
   const newPins: Array<{ serverKey: string; pins: McpPin[]; complete: boolean }> = [];
   for (const { report, listing, complete } of probed) {
-    findings.push(...analyzeServerListing(listing, others));
+    const analysis = analyzeServerListingDetailed(listing, others);
+    findings.push(...analysis.findings);
+    if (analysis.cuts.length > 0) {
+      // Listed in full, analysed in part: partial, with what was not read.
+      const cutReason = `analysis cut: ${analysis.cuts.slice(0, 3).join('; ')}`;
+      const runName = `${MCP_AUDIT_TOOL_NAME}:${report.server_key ?? report.name}`;
+      report.status = 'partial';
+      report.reason = report.reason === undefined ? cutReason : `${report.reason}; ${cutReason}`;
+      const run = toolsRun.find((t) => t.name === runName);
+      if (run !== undefined) run.reason = `partial: ${report.reason}`;
+      if (!missingTools.includes(runName)) missingTools.push(runName);
+    }
     const comparison = comparePins(
       listing,
       ctx.storage.mcpToolPins.getServerPins(projectPath, listing.serverKey),
