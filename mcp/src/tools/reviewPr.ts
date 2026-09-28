@@ -46,7 +46,7 @@ import {
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -251,7 +251,10 @@ async function runSemgrep(
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
-  for (const raw of run.reports) out.parser_inputs.push({ parser: semgrepParser, input: raw });
+  // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
+  // project's rules by their absolute path; stored canonical, as scan_sast's.
+  const parser = semgrepParserFor(plan.rulePacks, ctx.projectPath);
+  for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
   out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
   // Scanned nothing at all, not every changed file, or some only partly
   // parsed (`ok` + missing, runners/semgrepReport.ts): a gap, not a clean result.

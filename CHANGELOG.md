@@ -1002,6 +1002,21 @@ keeps working (migrations 004–011 are additive).
   `sources` stay newest first. The walk is linear in the history it covers:
   250 scans x 1000 findings with a gap in every scan took 10-15.5 s, now
   under 0.3 s (200 x 300: 4.2 s, now 0.06 s).
+- **A bug_hunt or RGPD finding changed identity with every plugin update.**
+  Semgrep names a rule from a local file by that file's directory, dotted —
+  the whole absolute path when it does not run from under it
+  (`C.Users.….plugins.cache.<version>.configs.semgrep.<rule>`) — and both
+  the fingerprint and the identity hash `rule_id`. So a new install path
+  (every version, every CI runner) made every finding of the plugin's own
+  packs new: baselines stopped matching, suppressions stopped applying. A
+  project's own rule did the same whenever Semgrep ran from elsewhere
+  (`review_pr` on a ref, `create_fix_pr`'s worktree). The parser now stores
+  a canonical id — a pack rule's own id, a project rule's id from the
+  project root (what Semgrep gives it there) — and stored findings are
+  re-keyed once at startup (the canonical id, the fingerprint and identity a
+  fresh scan computes), with their suppressions and cached validations.
+  `dev-guardian scan` already named a project rule from the project root, so
+  a committed `.guardian/baseline.json` is unaffected.
 - **`scan_dast` over a surface whose route recovery failed** read coverage
   `full`: `map_attack_surface` persists a snapshot whose
   `semgrep-metavar-recovery` step lost some matches, with nothing in

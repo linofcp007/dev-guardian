@@ -7,7 +7,11 @@
  * order, each in its own transaction.
  *
  * Migrations are SQL only (no JS hooks): keep the surface area small and the
- * audit trail trivial — what you read in the .sql file is what runs.
+ * audit trail trivial — what you read in the .sql file is what runs. The one
+ * data step SQL cannot express runs after them, once, in `runMigrations`:
+ * re-keying stored local-rule findings to the rule's own id
+ * (`../localRuleIds.ts` — it needs sha256). It changes values, never the
+ * schema, and records itself in `schema_meta`.
  *
  * ---- Numbering convention ------------------------------------------------
  *
@@ -37,6 +41,7 @@
  */
 
 import type { DB } from '../db.js';
+import { rekeyStoredLocalRuleIds } from '../localRuleIds.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +85,13 @@ export function runMigrations(db: DB): void {
     // first — never takes the write lock here at all.
     if (migration.version <= getCurrentVersion(db)) continue;
     applyMigration(db, migration);
+  }
+  // Fails open: a database this step could not re-key keeps working exactly
+  // as before (the old ids simply stay), and the next start tries again.
+  try {
+    rekeyStoredLocalRuleIds(db);
+  } catch {
+    /* see above */
   }
 }
 

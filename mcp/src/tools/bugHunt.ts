@@ -120,7 +120,7 @@ import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
   AllowDirty,
@@ -407,13 +407,18 @@ export const BUG_SUBCATEGORIES: ReadonlySet<string> = new Set([
  * `severity_min` had already been fixed for (see `scanToolFactory.ts`).
  * `categories` is now a response-only view, {@link categoriesView}.
  */
-const bugCategoryParser: ScannerParser = {
-  name: semgrepParser.name,
-  parse(input, ctx): ParserOutput {
-    const out = semgrepParser.parse(input, ctx);
-    return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
-  },
-};
+function bugCategoryParserFor(packs: readonly string[], rulesProjectPath: string): ScannerParser {
+  // A local pack's rule is stored under its canonical id, never under the
+  // path of the plugin's install (runners/semgrepRuleIds.ts).
+  const base = semgrepParserFor(packs, rulesProjectPath);
+  return {
+    name: semgrepParser.name,
+    parse(input, ctx): ParserOutput {
+      const out = base.parse(input, ctx);
+      return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
+    },
+  };
+}
 
 /**
  * `categories` as a view over the stored findings: the ones whose
@@ -658,7 +663,7 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
     ctx.plugin,
     ctx.rulesProjectPath,
   );
-  const categoryParser = bugCategoryParser;
+  const categoryParser = bugCategoryParserFor(configuredPacks, ctx.rulesProjectPath);
 
   if (ctx.scope !== null) {
     return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
@@ -891,7 +896,7 @@ async function invokeBugHuntOnScope(args: {
   const first = await runOn(packs);
   const failures = failuresOf(first.reports);
   if (failures.length === 0) {
-    for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+    for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
     tools_run.push(first.toolRun);
     // Scanned nothing, or some files only partly parsed (`ok` + missing).
     if (first.nothingScanned || (first.toolRun.status === 'ok' && first.partial.length > 0)) missing_tools.push('semgrep');
@@ -912,7 +917,7 @@ async function invokeBugHuntOnScope(args: {
   }
   const retryFailures = failuresOf(retry.reports);
   if (retryFailures.length > 0) return reportGap([...failures, ...retryFailures]);
-  for (const raw of retry.reports) parser_inputs.push({ parser: bugCategoryParser, input: raw });
+  for (const raw of retry.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx.rulesProjectPath), input: raw });
   tools_run.push({
     ...retry.toolRun,
     reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]

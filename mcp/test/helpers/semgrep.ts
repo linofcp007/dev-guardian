@@ -63,6 +63,8 @@ export interface SemgrepRun {
 export interface SemgrepOptions {
   /** Overrides the bound for this call (and `GUARDIAN_TEST_SEMGREP_TIMEOUT_MS`). */
   readonly timeoutMs?: number;
+  /** The working directory (Semgrep names a local rule relative to it when it can). */
+  readonly cwd?: string;
 }
 
 function semgrepCommand(): { file: string; prefix: string[] } {
@@ -104,6 +106,7 @@ export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}
       timeout: timeoutMs,
       killSignal: 'SIGKILL',
       windowsHide: true,
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     });
   } finally {
     closeSync(out);

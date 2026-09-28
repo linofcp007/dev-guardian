@@ -34,6 +34,12 @@ export interface ParserContext {
    * per-finding path from the scanner's output and ignores this field.
    */
   source_file?: string;
+  /**
+   * Semgrep only: maps a `check_id` to the rule's own id, without the path
+   * prefix Semgrep derives from a local config's location
+   * (`runners/semgrepRuleIds.ts`). Set by `semgrepParserFor`.
+   */
+  semgrep_rule_id?: (checkId: string) => string;
 }
 
 export interface ParserCveInput {

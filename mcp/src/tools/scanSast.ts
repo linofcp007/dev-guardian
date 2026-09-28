@@ -85,7 +85,7 @@ import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import {
   buildSemgrepDockerArgs,
@@ -259,7 +259,7 @@ async function runSemgrep(args: Collect & {
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
-    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: null, tools_run, missing_tools, parser_inputs });
+    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, tools_run, missing_tools, parser_inputs });
     return;
   }
 
@@ -303,7 +303,7 @@ async function runSemgrep(args: Collect & {
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
-  recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, tools_run, missing_tools, parser_inputs });
+  recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
 }
 
 /**
@@ -317,11 +317,15 @@ function recordSemgrepRun(args: Collect & {
   notes: readonly string[];
   /** `docker (<image>)` for the container fallback, else null. */
   via: string | null;
+  /** The `--config` values the run passed: a local rule is stored under its canonical id (runners/semgrepRuleIds.ts). */
+  configs: readonly string[];
 }): void {
-  const { ctx, result, outFile, notes, via, tools_run, missing_tools, parser_inputs } = args;
+  const { ctx, result, outFile, notes, via, configs, tools_run, missing_tools, parser_inputs } = args;
   const raw = readJsonSafe(outFile);
-  // Whatever the verdict, the findings the report holds are real.
-  if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
+  // Whatever the verdict, the findings the report holds are real. The
+  // container's configs are named inside its /src mount.
+  const rulesRoot = via !== null ? CONTAINER_PROJECT_ROOT : ctx.rulesProjectPath;
+  if (raw) parser_inputs.push({ parser: semgrepParserFor(configs, rulesRoot), input: raw });
   const check = checkSemgrepReport({
     raw,
     exitCode: result.exitCode,
@@ -454,7 +458,8 @@ async function runSemgrepOnScope(args: Collect & {
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
-  for (const raw of run.reports) parser_inputs.push({ parser: semgrepParser, input: raw });
+  const parser = semgrepParserFor(plan.rulePacks, ctx.rulesProjectPath);
+  for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
   tools_run.push(entry);

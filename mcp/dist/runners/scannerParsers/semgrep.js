@@ -15,6 +15,7 @@
  */
 import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
 import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
+import { localRuleIdNormalizer } from '../semgrepRuleIds.js';
 import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const SEMGREP_TOOL_NAME = 'semgrep';
 export const semgrepParser = {
@@ -31,12 +32,29 @@ export const semgrepParser = {
         return { findings, cves: [] };
     },
 };
+/**
+ * {@link semgrepParser} for a run that passed these `--config` values,
+ * resolved for `projectPath`: a rule from one of their local files is stored
+ * under its canonical id — the plugin pack's rule under its own id, the
+ * project's rule under its id from the project root — never under the path
+ * of the machine it ran on (`runners/semgrepRuleIds.ts`: that path moves
+ * with every plugin install and every checkout, and `rule_id` is part of a
+ * finding's identity). Registry ids are passed through unchanged.
+ */
+export function semgrepParserFor(configs, projectPath) {
+    const normalize = localRuleIdNormalizer(configs, projectPath);
+    return {
+        name: SEMGREP_TOOL_NAME,
+        parse: (input, ctx = {}) => semgrepParser.parse(input, { ...ctx, semgrep_rule_id: normalize }),
+    };
+}
 function mapResult(raw, ctx) {
     const extra = getProp(raw, 'extra');
     const start = getProp(raw, 'start');
     const end = getProp(raw, 'end');
     const metadata = getProp(extra, 'metadata');
-    const checkId = getString(raw, 'check_id');
+    const reportedId = getString(raw, 'check_id');
+    const checkId = reportedId === undefined ? undefined : (ctx.semgrep_rule_id?.(reportedId) ?? reportedId);
     const message = getString(extra, 'message');
     const filePath = getString(raw, 'path');
     if (!checkId || !filePath)
