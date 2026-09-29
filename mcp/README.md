@@ -111,7 +111,8 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
 - `wp_vuln_check_source` caches the Wordfence feed in the user cache directory, never in the project.
 - `wp_vuln_check` writes its WPScan report under the install's `.guardian/reports/` when the install is on this machine, else under `wp-vuln-check/<site>-<hash>/` in that user cache directory — never the server's working directory. Each site there keeps its newest N reports, N being the scan retention (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all).
-- Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards.
+- Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards — and a scan's report directory, `guardian-reports-<tool>-…`, when `.guardian` or `.guardian/reports` in the project is a link (a junction included) or not a directory: reports are never written through one.
+- Every write into the project goes through `src/platform/projectFs.ts`: never through a link or a directory that leads out of the project, always a temp file beside the target renamed into place. Every read of a project file goes through it too — contained in the project, regular files only, bounded — and `test/unit/platform/rawRepoFsSites.test.ts` fails on a raw `fs` call it does not list.
 
 ## Adding a scan tool
 
