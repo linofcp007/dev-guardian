@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve26.call(this, root, ref);
+      let _sch = resolve27.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve26(root, ref) {
+    function resolve27(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve26(baseURI, relativeURI, options) {
+    function resolve27(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative27, options, skipNormalization) {
+    function resolveComponent(base, relative28, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse8(serialize2(base, options), options);
-        relative27 = parse8(serialize2(relative27, options), options);
+        relative28 = parse8(serialize2(relative28, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative27.scheme) {
-        target.scheme = relative27.scheme;
-        target.userinfo = relative27.userinfo;
-        target.host = relative27.host;
-        target.port = relative27.port;
-        target.path = removeDotSegments(relative27.path || "");
-        target.query = relative27.query;
+      if (!options.tolerant && relative28.scheme) {
+        target.scheme = relative28.scheme;
+        target.userinfo = relative28.userinfo;
+        target.host = relative28.host;
+        target.port = relative28.port;
+        target.path = removeDotSegments(relative28.path || "");
+        target.query = relative28.query;
       } else {
-        if (relative27.userinfo !== void 0 || relative27.host !== void 0 || relative27.port !== void 0) {
-          target.userinfo = relative27.userinfo;
-          target.host = relative27.host;
-          target.port = relative27.port;
-          target.path = removeDotSegments(relative27.path || "");
-          target.query = relative27.query;
+        if (relative28.userinfo !== void 0 || relative28.host !== void 0 || relative28.port !== void 0) {
+          target.userinfo = relative28.userinfo;
+          target.host = relative28.host;
+          target.port = relative28.port;
+          target.path = removeDotSegments(relative28.path || "");
+          target.query = relative28.query;
         } else {
-          if (!relative27.path) {
+          if (!relative28.path) {
             target.path = base.path;
-            if (relative27.query !== void 0) {
-              target.query = relative27.query;
+            if (relative28.query !== void 0) {
+              target.query = relative28.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative27.path[0] === "/") {
-              target.path = removeDotSegments(relative27.path);
+            if (relative28.path[0] === "/") {
+              target.path = removeDotSegments(relative28.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative27.path;
+                target.path = "/" + relative28.path;
               } else if (!base.path) {
-                target.path = relative27.path;
+                target.path = relative28.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative27.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative28.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative27.query;
+            target.query = relative28.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative27.fragment;
+      target.fragment = relative28.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize2,
-      resolve: resolve26,
+      resolve: resolve27,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve26, reject) {
+        return new Promise(function(resolve27, reject) {
           isexe(path8, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve26(is);
+              resolve27(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve26, reject) => {
+      const step = (i2) => new Promise((resolve27, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve26(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve27(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path8.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve26(subStep(p, i2, 0));
+        resolve27(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve26, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve27, reject) => {
         if (ii === pathExt.length)
-          return resolve26(step(i2 + 1));
+          return resolve27(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve26(p + ext);
+              return resolve27(p + ext);
           }
-          return resolve26(subStep(p, i2, ii + 1));
+          return resolve27(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve26, reject) => {
-        Object.assign(methods, { resolve: resolve26, reject });
+      const promise = new Promise((resolve27, reject) => {
+        Object.assign(methods, { resolve: resolve27, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve26 = promise.resolve.bind(promise);
-      return { resolve: resolve26, promises };
+      const resolve27 = promise.resolve.bind(promise);
+      return { resolve: resolve27, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve26, promises }, subprocess) => {
-      resolve26();
+    waitForConcurrentStreams = async ({ resolve: resolve27, promises }, subprocess) => {
+      resolve27();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -19446,10 +19446,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep13, value } = collItem;
+        const { start, key, sep: sep14, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep13?.[0],
+          next: key ?? sep14?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -19463,7 +19463,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep13) {
+          if (!keyProps.anchor && !keyProps.tag && !sep14) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -19487,7 +19487,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep13 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep14 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -19503,7 +19503,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep13, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep14, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -19594,7 +19594,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep13 = "";
+        let sep14 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -19608,13 +19608,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep13 + cb;
-              sep13 = "";
+                comment += sep14 + cb;
+              sep14 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep13 += source;
+                sep14 += source;
               hasSpace = true;
               break;
             default:
@@ -19657,18 +19657,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep13, value } = collItem;
+        const { start, key, sep: sep14, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep13?.[0],
+          next: key ?? sep14?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep13 && !value) {
+          if (!props.anchor && !props.tag && !sep14 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -19722,8 +19722,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep13 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep13, null, props, onError);
+        if (!isMap2 && !sep14 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep14, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -19735,7 +19735,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep13 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep14 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -19746,8 +19746,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap2 && !props.found && ctx.options.strict) {
-              if (sep13)
-                for (const st of sep13) {
+              if (sep14)
+                for (const st of sep14) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -19764,7 +19764,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep13, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep14, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -19944,7 +19944,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep13 = "";
+      let sep14 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -19961,24 +19961,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep13 + indent.slice(trimIndent) + content;
-          sep13 = "\n";
+          value += sep14 + indent.slice(trimIndent) + content;
+          sep14 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep13 === " ")
-            sep13 = "\n";
-          else if (!prevMoreIndented && sep13 === "\n")
-            sep13 = "\n\n";
-          value += sep13 + indent.slice(trimIndent) + content;
-          sep13 = "\n";
+          if (sep14 === " ")
+            sep14 = "\n";
+          else if (!prevMoreIndented && sep14 === "\n")
+            sep14 = "\n\n";
+          value += sep14 + indent.slice(trimIndent) + content;
+          sep14 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep13 === "\n")
+          if (sep14 === "\n")
             value += "\n";
           else
-            sep13 = "\n";
+            sep14 = "\n";
         } else {
-          value += sep13 + content;
-          sep13 = " ";
+          value += sep14 + content;
+          sep14 = " ";
           prevMoreIndented = false;
         }
       }
@@ -20161,25 +20161,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep13 = " ";
+      let sep14 = " ";
       let pos = line.lastIndex;
       while (match = line.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep13 === "\n")
-            res += sep13;
+          if (sep14 === "\n")
+            res += sep14;
           else
-            sep13 = "\n";
+            sep14 = "\n";
         } else {
-          res += sep13 + lm;
-          sep13 = " ";
+          res += sep14 + lm;
+          sep14 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep13 + (match?.[1] ?? "");
+      return res + sep14 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -20989,14 +20989,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep13, value }) {
+    function stringifyItem({ start, key, sep: sep14, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep13)
-        for (const st of sep13)
+      if (sep14)
+        for (const st of sep14)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -22163,18 +22163,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep13;
+          let sep14;
           if (scalar.end) {
-            sep13 = scalar.end;
-            sep13.push(this.sourceToken);
+            sep14 = scalar.end;
+            sep14.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep13 = [this.sourceToken];
+            sep14 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep13 }]
+            items: [{ start, key: scalar, sep: sep14 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -22327,15 +22327,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep13 = it.sep;
-                  sep13.push(this.sourceToken);
+                  const sep14 = it.sep;
+                  sep14.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep13 }]
+                    items: [{ start: start2, key, sep: sep14 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -22529,13 +22529,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep13 = fc.end.splice(1, fc.end.length);
-            sep13.push(this.sourceToken);
+            const sep14 = fc.end.splice(1, fc.end.length);
+            sep14.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep13 }]
+              items: [{ start, key: fc, sep: sep14 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -35195,7 +35195,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve26) => setTimeout(resolve26, pollInterval));
+        await new Promise((resolve27) => setTimeout(resolve27, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -35212,7 +35212,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve26, reject) => {
+    return new Promise((resolve27, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35290,7 +35290,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve26(parseResult.data);
+            resolve27(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35551,12 +35551,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve26, reject) => {
+    return new Promise((resolve27, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve26, interval);
+      const timeoutId = setTimeout(resolve27, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36869,7 +36869,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve26) => setTimeout(resolve26, pollInterval));
+      await new Promise((resolve27) => setTimeout(resolve27, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37557,19 +37557,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve26) => {
+    return new Promise((resolve27) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve26();
+        resolve27();
       } else {
-        this._stdout.once("drain", resolve26);
+        this._stdout.once("drain", resolve27);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve25 } from "node:path";
+import { resolve as resolve26 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync } from "node:fs";
@@ -42546,7 +42546,7 @@ var FIXPOINT_FILES_NAMED = 5;
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
   const { raw, exitCode, outcome, targets, projectPath } = args;
-  const relative27 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
+  const relative28 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
   if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
     return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
@@ -42563,8 +42563,8 @@ function checkSemgrepReport(args) {
   const exitClean = exitCode === 0 || exitCode === 1;
   const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? /* @__PURE__ */ new Set(), args.nonPackTaintRules ?? true);
   const fixpoint = all.scan;
-  const fixpointFiles = relative27(fixpoint.files);
-  const packGap = all.pack.functions > 0 ? { files: relative27(all.pack.files), functions: all.pack.functions } : null;
+  const fixpointFiles = relative28(fixpoint.files);
+  const packGap = all.pack.functions > 0 ? { files: relative28(all.pack.files), functions: all.pack.functions } : null;
   const withPackGap = (check2) => packGap === null ? check2 : { ...check2, plugin_pack_fixpoint: packGap };
   const problems = [];
   if (!exitClean) problems.push(`exit ${String(exitCode)}`);
@@ -42587,7 +42587,7 @@ function checkSemgrepReport(args) {
         scanned,
         errors: errors.length,
         reason,
-        partial: [...relative27(partial3), ...fixpointFiles]
+        partial: [...relative28(partial3), ...fixpointFiles]
       });
     }
   }
@@ -42598,7 +42598,7 @@ function checkSemgrepReport(args) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
-      const files = [...relative27(ruleGap.files), ...fixpointFiles];
+      const files = [...relative28(ruleGap.files), ...fixpointFiles];
       return withPackGap({
         ...someRan,
         rules_not_loaded: ruleGap.rules,
@@ -45108,7 +45108,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve26) => this.waiting.push(resolve26));
+    await new Promise((resolve27) => this.waiting.push(resolve27));
     this.active += 1;
   }
   release() {
@@ -54202,6 +54202,19 @@ registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
 import { existsSync as existsSync20, writeFileSync as writeFileSync7 } from "node:fs";
+
+// src/fixpr/childEnv.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+var store = new AsyncLocalStorage();
+function withPackageManagerEnv(env, fn) {
+  return store.run(env, fn);
+}
+function packageManagerEnvOptions() {
+  const env = store.getStore();
+  return env === void 0 ? {} : { env, extendEnv: false };
+}
+
+// src/tools/depsAudit.ts
 import { join as join38, relative as relative15 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
@@ -54691,7 +54704,7 @@ async function tryNativeAudit(opts) {
     command: opts.command,
     args: opts.args,
     cwd: opts.ctx.projectPath,
-    env: opts.ctx.scriptEnv,
+    ...auditEnv(opts.ctx),
     signal: opts.ctx.signal,
     onLog: opts.ctx.onLog
   });
@@ -54737,6 +54750,10 @@ async function tryNativeAudit(opts) {
     opts.missing_tools?.push(opts.command);
   }
 }
+function auditEnv(ctx) {
+  const pm = packageManagerEnvOptions();
+  return "env" in pm ? { env: pm.env, extendEnv: false } : { env: ctx.scriptEnv };
+}
 function findRequirementsFiles(projectPath) {
   const out = [];
   const inside = (abs) => projectPathKind(projectPath, abs) === "file";
@@ -54778,7 +54795,7 @@ async function runPipAudit(opts) {
       command: "pip-audit",
       args,
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog
     });
@@ -54837,7 +54854,7 @@ async function runDotnetSca(opts) {
       command: "dotnet",
       args: plan.args,
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog
     });
@@ -54859,7 +54876,7 @@ async function runDotnetSca(opts) {
       command: "dotnet",
       args: ["list", target, "package", "--vulnerable", "--include-transitive", "--format", "json", "--no-restore"],
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog
     });
@@ -56029,9 +56046,9 @@ function carriedFrom(args) {
       for (const tool50 of toolsOfKey(key)) tools.add(tool50);
       continue;
     }
-    const lookup = admitLookup(scope.admit);
-    for (const f of lookup.files) files.add(f);
-    for (const r of lookup.rules) rules2.add(r);
+    const lookup2 = admitLookup(scope.admit);
+    for (const f of lookup2.files) files.add(f);
+    for (const r of lookup2.rules) rules2.add(r);
   }
   if (!anyOpen) return [];
   const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
@@ -56354,7 +56371,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve26 = (name, ecosystem, file, version2) => {
+  const resolve27 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -56411,7 +56428,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve26(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve27(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -56421,7 +56438,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve26(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve27(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -56429,10 +56446,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve26(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve27(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText4("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve26(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve27(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -56444,7 +56461,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve26(name, "dotnet", relative16(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve27(name, "dotnet", relative16(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -56481,6 +56498,7 @@ async function runNpmOutdated(projectPath, cves) {
   const manager = detectNpmPackageManager(projectPath);
   if (manager.name !== "npm") return planForNonNpmManager(projectPath, cves, manager);
   const result = await execa("npm", ["outdated", "--json"], {
+    ...packageManagerEnvOptions(),
     cwd: projectPath,
     reject: false,
     timeout: 6e4
@@ -56761,6 +56779,7 @@ async function pnpmVersionOf(root) {
   }
   try {
     const r = await execa("pnpm", ["--version"], {
+      ...packageManagerEnvOptions(),
       cwd: root,
       reject: false,
       timeout: 15e3,
@@ -57116,6 +57135,7 @@ function parseRunnerJson(ecosystem, label, stdout, failures) {
 }
 async function runComposerOutdated(projectPath, cves) {
   const result = await execa("composer", ["outdated", "--locked", "--format=json"], {
+    ...packageManagerEnvOptions(),
     cwd: projectPath,
     reject: false,
     timeout: 9e4
@@ -57161,6 +57181,7 @@ async function runComposerOutdated(projectPath, cves) {
 }
 async function runCargoOutdated(projectPath, cves) {
   const result = await execa("cargo", ["outdated", "--format", "json"], {
+    ...packageManagerEnvOptions(),
     cwd: projectPath,
     reject: false,
     timeout: 9e4
@@ -57199,6 +57220,7 @@ async function runCargoOutdated(projectPath, cves) {
 }
 async function runGoOutdated(projectPath, cves) {
   const result = await execa("go", ["list", "-m", "-u", "-json", "all"], {
+    ...packageManagerEnvOptions(),
     cwd: projectPath,
     reject: false,
     timeout: 9e4
@@ -57235,6 +57257,7 @@ async function runGoOutdated(projectPath, cves) {
 }
 async function runBundlerOutdated(projectPath, cves) {
   const result = await execa("bundle", ["outdated", "--parseable"], {
+    ...packageManagerEnvOptions(),
     cwd: projectPath,
     reject: false,
     timeout: 9e4
@@ -57275,7 +57298,12 @@ async function runDotnetOutdated(projectPath, cves) {
       failures.push({ ecosystem: "dotnet", target: rel2, code: plan.blocked.code, reason: plan.blocked.reason });
       continue;
     }
-    const restore = await execa("dotnet", plan.args, { cwd: projectPath, reject: false, timeout: 5 * 6e4 });
+    const restore = await execa("dotnet", plan.args, {
+      ...packageManagerEnvOptions(),
+      cwd: projectPath,
+      reject: false,
+      timeout: 5 * 6e4
+    });
     const created = removeCreatedLockFiles(plan);
     if (created.length > 0) {
       failures.push({
@@ -57296,6 +57324,7 @@ async function runDotnetOutdated(projectPath, cves) {
       continue;
     }
     const r = await execa("dotnet", ["list", target, "package", "--outdated", "--format", "json", "--no-restore"], {
+      ...packageManagerEnvOptions(),
       cwd: projectPath,
       reject: false,
       timeout: 9e4
@@ -57306,6 +57335,7 @@ async function runDotnetOutdated(projectPath, cves) {
       continue;
     }
     const fallback = await execa("dotnet", ["list", target, "package", "--outdated", "--no-restore"], {
+      ...packageManagerEnvOptions(),
       cwd: projectPath,
       reject: false,
       timeout: 9e4
@@ -75345,11 +75375,142 @@ function collectAnonymousExposures(ctx, projectPath) {
 }
 
 // src/tools/createFixPr.ts
-import { isAbsolute as isAbsolute15, join as join79, relative as relative24 } from "node:path";
+import { rmSync as rmSync13 } from "node:fs";
+import { isAbsolute as isAbsolute15, join as join81, relative as relative25 } from "node:path";
 
 // src/fixpr/apply.ts
 import { existsSync as existsSync40, rmSync as rmSync9 } from "node:fs";
-import { isAbsolute as isAbsolute14, join as join75, relative as relative23, resolve as resolve19, sep as sep12 } from "node:path";
+import { isAbsolute as isAbsolute14, join as join76, relative as relative23, resolve as resolve19, sep as sep12 } from "node:path";
+
+// src/fixpr/testCommandEnv.ts
+import { homedir as homedir3 } from "node:os";
+import { join as join75 } from "node:path";
+var EXACT = new Set(
+  [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "CI",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "GOPATH",
+    "GOROOT",
+    "GOCACHE",
+    "GOMODCACHE",
+    "JAVA_HOME",
+    "DOTNET_ROOT"
+  ].map((n2) => n2.toUpperCase())
+);
+var PREFIXES = ["LC_", "NODE_", "PYTHON"];
+var CREDENTIAL = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|API_?KEY|PRIVATE_?KEY|SESSION|COOKIE/i;
+function testEnvAllows(name) {
+  const upper = name.toUpperCase();
+  if (upper.startsWith("GUARDIAN_") || upper.startsWith("NPM_CONFIG_")) return false;
+  if (CREDENTIAL.test(upper)) return false;
+  return EXACT.has(upper) || PREFIXES.some((p) => upper.startsWith(p));
+}
+function testCommandEnv(source = process.env) {
+  const out = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value !== void 0 && testEnvAllows(name)) out[name] = value;
+  }
+  return out;
+}
+var PM_CONFIG_PREFIXES = [
+  "NPM_CONFIG_",
+  "YARN_",
+  "PIP_",
+  "COMPOSER_",
+  "CARGO_REGISTRIES_",
+  "CARGO_REGISTRY_",
+  "CARGO_NET_",
+  "CARGO_HTTP_",
+  "BUNDLE_",
+  "NUGET_",
+  "NUGETPACKAGESOURCECREDENTIALS_"
+];
+var PM_CONFIG_EXACT = /* @__PURE__ */ new Set([
+  "GOPROXY",
+  "GOPRIVATE",
+  "GONOPROXY",
+  "GONOSUMDB",
+  "GONOSUMCHECK",
+  "GOSUMDB",
+  "GOINSECURE",
+  "GOFLAGS",
+  "GOTOOLCHAIN",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY"
+]);
+function isPackageManagerConfigVar(name) {
+  const upper = name.toUpperCase();
+  return PM_CONFIG_EXACT.has(upper) || PM_CONFIG_PREFIXES.some((p) => upper.startsWith(p));
+}
+var MAX_USER_CONFIG_BYTES = 1024 * 1024;
+var VAR_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-[^}]*)?\}/g;
+function lookup(source, name) {
+  const exact = source[name];
+  if (exact !== void 0) return [name, exact];
+  if (process.platform !== "win32") return void 0;
+  const upper = name.toUpperCase();
+  for (const [k, v] of Object.entries(source)) if (k.toUpperCase() === upper && v !== void 0) return [k, v];
+  return void 0;
+}
+function userPackageManagerConfigFiles(source = process.env, home = homedir3()) {
+  const userconfig = lookup(source, "NPM_CONFIG_USERCONFIG")?.[1] ?? lookup(source, "npm_config_userconfig")?.[1];
+  const npmrc = userconfig !== void 0 && userconfig !== "" ? userconfig : join75(home, ".npmrc");
+  return [npmrc, join75(home, ".yarnrc"), join75(home, ".yarnrc.yml")];
+}
+function userConfigReferences(files) {
+  const names = /* @__PURE__ */ new Set();
+  for (const file of files) {
+    const text2 = readSmallTextFile(file, MAX_USER_CONFIG_BYTES);
+    if (text2 === void 0) continue;
+    for (const m of text2.matchAll(VAR_REFERENCE)) if (m[1] !== void 0) names.add(m[1]);
+  }
+  return [...names].sort();
+}
+function packageManagerEnv(source = process.env, home = homedir3()) {
+  const out = testCommandEnv(source);
+  for (const [name, value] of Object.entries(source)) {
+    if (value !== void 0 && isPackageManagerConfigVar(name)) out[name] = value;
+  }
+  for (const ref of userConfigReferences(userPackageManagerConfigFiles(source, home))) {
+    const hit = lookup(source, ref);
+    if (hit !== void 0 && !hit[0].toUpperCase().startsWith("GUARDIAN_")) out[hit[0]] = hit[1];
+  }
+  return out;
+}
+
+// src/fixpr/apply.ts
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -75366,7 +75527,7 @@ async function applyGroup(opts) {
 }
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
-  const missing = plan.files.filter((f) => !existsSync40(join75(worktreePath, f)));
+  const missing = plan.files.filter((f) => !existsSync40(join76(worktreePath, f)));
   if (missing.length > 0) {
     return {
       applied: false,
@@ -75382,12 +75543,12 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   const fixed = ["--metrics=off", ...plan.configs.map((c3) => `--config=${c3}`), "--autofix", "--json", "--quiet"];
   const batches = batchArgs(plan.files, {
     command: SEMGREP_COMMAND,
-    fixedArgs: [...fixed, "--output", join75(plan.dir, "fix-000.json"), "--"]
+    fixedArgs: [...fixed, "--output", join76(plan.dir, "fix-000.json"), "--"]
   });
   const commands = [];
   for (let i2 = 0; i2 < batches.length; i2++) {
     const batch = batches[i2] ?? [];
-    const report = join75(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
+    const report = join76(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
     rmSync9(report, { force: true });
     const result = await runSemgrep(
       {
@@ -75457,7 +75618,14 @@ async function runCommand(run, worktreePath, timeoutMs, lockfileOnly, commandLin
   if (refused2 !== null) {
     return { command: commandLine, outcome: "failed", exit_code: null, stderr_head: refused2 };
   }
-  const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+  const result = await run({
+    command: argv.command,
+    args: argv.args,
+    cwd: worktreePath,
+    env: packageManagerEnv(),
+    extendEnv: false,
+    timeoutMs
+  });
   const invoked = [argv.command, ...argv.args].join(" ");
   commands.push(invoked);
   return result.outcome === "completed" ? null : buildFailure(invoked, result);
@@ -75938,7 +76106,7 @@ function errorMessage2(e) {
 var import_yaml9 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync7, rmSync as rmSync10, statSync as statSync12, writeFileSync as writeFileSync15 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { basename as basename8, dirname as dirname19, join as join76 } from "node:path";
+import { basename as basename8, dirname as dirname19, join as join77 } from "node:path";
 var MAX_RULE_CONFIG_BYTES = 16 * 1024 * 1024;
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
@@ -75979,14 +76147,14 @@ function planSemgrepFix(sources, tmpRoot = tmpdir8()) {
       reason: `rule(s) ${[...new Set(unresolved)].join(", ")} are in no local rule file the originating scan loaded, and that scan did not use the Semgrep registry \u2014 refusing to guess where the fix comes from`
     };
   }
-  const dir = mkdtempSync7(join76(tmpRoot, "guardian-fixpr-sg-"));
+  const dir = mkdtempSync7(join77(tmpRoot, "guardian-fixpr-sg-"));
   const configs = [];
   const configLabels = [];
   let n2 = 0;
   for (const [file, picked] of byFile) {
-    const sub = join76(dir, `rules-${String(n2++).padStart(3, "0")}`);
+    const sub = join77(dir, `rules-${String(n2++).padStart(3, "0")}`);
     mkdirSync9(sub);
-    const copy = join76(sub, basename8(file));
+    const copy = join77(sub, basename8(file));
     writeFileSync15(copy, (0, import_yaml9.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
     configLabels.push(`${[...picked.keys()].join(", ")} from ${basename8(file)}`);
@@ -76082,23 +76250,152 @@ function fromPyprojectToml(content) {
 
 // src/fixpr/testEnv.ts
 import { existsSync as existsSync41 } from "node:fs";
-import { join as join77 } from "node:path";
+import { join as join78 } from "node:path";
 var INSTALL_TIMEOUT_MS = 15 * 6e4;
 async function prepareTestEnvironment(opts) {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== "npm") return { ok: true, command: null };
-  const hasLock = existsSync41(join77(treePath, "package-lock.json")) || existsSync41(join77(treePath, "npm-shrinkwrap.json"));
+  const hasLock = existsSync41(join78(treePath, "package-lock.json")) || existsSync41(join78(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
   const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
   if (ignored.outcome !== "completed") return { ok: true, command: null };
   const command = "npm ci --ignore-scripts";
-  const result = await run({ command: "npm", args: ["ci", "--ignore-scripts"], cwd: treePath, timeoutMs: INSTALL_TIMEOUT_MS });
+  const result = await run({
+    command: "npm",
+    args: ["ci", "--ignore-scripts"],
+    cwd: treePath,
+    env: packageManagerEnv(),
+    extendEnv: false,
+    timeoutMs: INSTALL_TIMEOUT_MS
+  });
   if (result.outcome !== "completed") {
     const line = result.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
     return { ok: false, command, reason: `${command} ${result.outcome}${line !== void 0 ? `: ${line}` : ""}` };
   }
   return { ok: true, command };
+}
+
+// src/fixpr/repoPackageConfig.ts
+import { mkdtempSync as mkdtempSync8, renameSync as renameSync3, rmSync as rmSync11 } from "node:fs";
+import { dirname as dirname20, join as join79, relative as relative24, resolve as resolve20, sep as sep13 } from "node:path";
+var TOP_LEVEL = /* @__PURE__ */ new Set([".npmrc", ".pnpmrc", ".yarnrc", ".yarnrc.yml", "pip.conf", "pip.ini", ".pip", "nuget.config"]);
+var NESTED = {
+  ".cargo": /* @__PURE__ */ new Set(["config.toml", "config"]),
+  ".bundle": /* @__PURE__ */ new Set(["config"])
+};
+function dirsUpToRoot(root, projectDir) {
+  const out = [];
+  const top = resolve20(root);
+  for (let dir = resolve20(projectDir); isWithinDir(top, dir); dir = dirname20(dir)) {
+    out.push(dir);
+    if (dir === top || dirname20(dir) === dir) break;
+  }
+  return out;
+}
+function repoPackageConfigPaths(root, projectDir) {
+  const out = [];
+  for (const dir of dirsUpToRoot(root, projectDir)) {
+    for (const entry of listProjectDir(root, dir)) {
+      const lower = entry.name.toLowerCase();
+      if (TOP_LEVEL.has(lower)) out.push(join79(dir, entry.name));
+      const nested = NESTED[lower];
+      if (nested !== void 0 && entry.kind === "directory") {
+        for (const inner of listProjectDir(root, join79(dir, entry.name))) {
+          if (nested.has(inner.name.toLowerCase())) out.push(join79(dir, entry.name, inner.name));
+        }
+      }
+    }
+  }
+  return out;
+}
+function setAsidePackageConfig(root, projectDir) {
+  const paths = repoPackageConfigPaths(root, projectDir);
+  const holding = paths.length > 0 ? mkdtempSync8(join79(dirname20(resolve20(root)), ".guardian-fixpr-config-")) : null;
+  const moves = [];
+  try {
+    paths.forEach((from, i2) => {
+      if (holding === null) return;
+      const to = join79(holding, String(i2));
+      renameSync3(from, to);
+      moves.push({ from, to });
+    });
+  } catch (e) {
+    for (const m of moves.reverse()) renameSync3(m.to, m.from);
+    if (holding !== null) rmSync11(holding, { recursive: true, force: true });
+    throw e;
+  }
+  let restored = false;
+  return {
+    moved: moves.map((m) => relative24(resolve20(root), m.from).split(sep13).join("/")),
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      for (const m of [...moves].reverse()) renameSync3(m.to, m.from);
+    },
+    dispose: () => {
+      if (holding !== null) rmSync11(holding, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  };
+}
+function composerChoosesRepository(projectDir) {
+  const manifest = readProjectJson(projectDir, "composer.json");
+  if (typeof manifest !== "object" || manifest === null) return null;
+  const repos = manifest["repositories"];
+  const declared = Array.isArray(repos) ? repos.length > 0 : typeof repos === "object" && repos !== null && Object.keys(repos).length > 0;
+  return declared ? "the project's composer.json declares its own package repositories; dev-guardian doesn't install from a repository-chosen source" : null;
+}
+var INDEX_OPTION = /^\s*(?:-[if](?![A-Za-z-])|-[if]\S|--(?:index-url|extra-index-url|find-links|trusted-host)(?=[\s=]|$))/;
+var INCLUDE = /^\s*(?:-[rc](?![A-Za-z-])\s*=?\s*|-[rc](?=\S)|--(?:requirement|constraint)(?:\s*=\s*|\s+))(\S+)/;
+function rootRequirementFiles(projectDir) {
+  const out = [];
+  for (const { name } of listProjectDir(projectDir, projectDir)) {
+    if (/^requirements.*\.txt$/i.test(name)) out.push(name);
+  }
+  for (const { name } of listProjectDir(projectDir, join79(projectDir, "requirements"))) {
+    if (name.toLowerCase().endsWith(".txt")) out.push(`requirements/${name}`);
+  }
+  return out;
+}
+function requirementsChooseIndex(projectDir, extra = []) {
+  const queue = [.../* @__PURE__ */ new Set([...rootRequirementFiles(projectDir), ...extra])];
+  const seen = /* @__PURE__ */ new Set();
+  for (let file = queue.shift(); file !== void 0; file = queue.shift()) {
+    const key = resolve20(projectDir, file);
+    if (seen.has(key) || seen.size > 200) continue;
+    seen.add(key);
+    const text2 = readProjectTextOrUndefined(projectDir, file, MAX_REQUIREMENTS_BYTES);
+    if (text2 === void 0) continue;
+    for (const raw of text2.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+      const line = raw.replace(/(^|\s)#.*$/, "");
+      const option = INDEX_OPTION.exec(line);
+      if (option !== null) {
+        const name = option[0].trim().split(/[\s=]/)[0] ?? option[0].trim();
+        return `${file.split(sep13).join("/")}: ${name.startsWith("--") ? name : name.slice(0, 2)}`;
+      }
+      const include = INCLUDE.exec(line);
+      if (include?.[1] !== void 0) queue.push(relative24(projectDir, resolve20(dirname20(key), include[1])));
+    }
+  }
+  return null;
+}
+var MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
+function pipIndexRefusal(where) {
+  return `the project's requirements choose a package index (${where}); dev-guardian doesn't install from a repository-chosen index`;
+}
+function installRefusal(opts) {
+  if (opts.stepEcosystems.includes("composer")) {
+    const composer = composerChoosesRepository(opts.projectDir);
+    if (composer !== null) return composer;
+  }
+  if (opts.stepEcosystems.includes("pip") || opts.rescanTools.includes("deps_audit")) {
+    const where = requirementsChooseIndex(
+      opts.projectDir,
+      opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f))
+    );
+    if (where !== null) return pipIndexRefusal(where);
+  }
+  return null;
 }
 
 // src/fixpr/treeState.ts
@@ -76180,65 +76477,6 @@ function scannerNotVerified(target, scan2) {
     default:
       return target.tool;
   }
-}
-
-// src/fixpr/testCommandEnv.ts
-var EXACT = new Set(
-  [
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "TEMP",
-    "TMP",
-    "TMPDIR",
-    "LANG",
-    "LANGUAGE",
-    "TZ",
-    "TERM",
-    "CI",
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "PROGRAMDATA",
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "COMMONPROGRAMFILES",
-    "NUMBER_OF_PROCESSORS",
-    "PROCESSOR_ARCHITECTURE",
-    "OS",
-    "VIRTUAL_ENV",
-    "CONDA_PREFIX",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-    "RUSTUP_TOOLCHAIN",
-    "GOPATH",
-    "GOROOT",
-    "GOCACHE",
-    "GOMODCACHE",
-    "JAVA_HOME",
-    "DOTNET_ROOT"
-  ].map((n2) => n2.toUpperCase())
-);
-var PREFIXES = ["LC_", "NODE_", "PYTHON"];
-var CREDENTIAL = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|API_?KEY|PRIVATE_?KEY|SESSION|COOKIE/i;
-function testEnvAllows(name) {
-  const upper = name.toUpperCase();
-  if (upper.startsWith("GUARDIAN_") || upper.startsWith("NPM_CONFIG_")) return false;
-  if (CREDENTIAL.test(upper)) return false;
-  return EXACT.has(upper) || PREFIXES.some((p) => upper.startsWith(p));
-}
-function testCommandEnv(source = process.env) {
-  const out = {};
-  for (const [name, value] of Object.entries(source)) {
-    if (value !== void 0 && testEnvAllows(name)) out[name] = value;
-  }
-  return out;
 }
 
 // src/fixpr/verify.ts
@@ -76354,14 +76592,14 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync42, mkdtempSync as mkdtempSync8, realpathSync as realpathSync8, rmSync as rmSync11 } from "node:fs";
+import { existsSync as existsSync42, mkdtempSync as mkdtempSync9, realpathSync as realpathSync8, rmSync as rmSync12 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
-import { join as join78, resolve as resolve20 } from "node:path";
+import { join as join80, resolve as resolve21 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync8(join78(tmpdir9(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync9(join80(tmpdir9(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage3(e)}` };
   }
@@ -76446,7 +76684,7 @@ function samePathKey(path8) {
   try {
     real = realpathSync8.native(path8);
   } catch {
-    real = resolve20(path8);
+    real = resolve21(path8);
   }
   const posix2 = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix2.toLowerCase() : posix2;
@@ -76494,7 +76732,7 @@ function firstNonEmptyLine2(text2) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync11(dir, { recursive: true, force: true });
+    rmSync12(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -76522,7 +76760,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 var tool45 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Package managers get it plus your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs are set aside (package_config_set_aside), and a repo-chosen pip index or Composer repository refuses the fix. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -76681,22 +76919,40 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
   if (!created.ok) {
     return { steps: [], error: `could not create a worktree to plan in: ${created.reason}`, runnerFailures: [] };
   }
+  let setAside = null;
   try {
     const meta = {
       ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {},
       ...callMeta?.progressToken !== void 0 ? { progressToken: callMeta.progressToken } : {},
       originProjectPath: projectPath
     };
-    const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
+    const planDir = inWorktree(created.worktree.path, prefix);
+    setAside = setAsidePackageConfig(created.worktree.path, planDir);
+    const composerRefused = composerChoosesRepository(planDir);
+    const planFailures = [];
+    if (composerRefused !== null) {
+      rmSync13(join81(planDir, "composer.json"), { force: true });
+      planFailures.push({ ecosystem: "composer", code: "repository_chosen_by_project", reason: composerRefused });
+    }
+    const result = await withPackageManagerEnv(
+      packageManagerEnv(),
+      () => depsPlanTool.handler({ project_path: planDir }, ctx, meta)
+    );
     if (!result.ok) return { steps: [], error: `deps_update_plan failed: ${result.error.message}`, runnerFailures: [] };
     const r = result;
     return {
       steps: Array.isArray(r.plan) ? r.plan : [],
       error: null,
-      runnerFailures: Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : []
+      runnerFailures: [
+        ...planFailures,
+        ...Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : []
+      ]
     };
+  } catch (e) {
+    return { steps: [], error: `could not prepare the planning tree: ${errorMessage4(e)}`, runnerFailures: [] };
   } finally {
     await created.worktree.remove();
+    setAside?.dispose();
   }
 }
 function isRunnerFailure(v) {
@@ -76705,10 +76961,10 @@ function isRunnerFailure(v) {
   return typeof o2["ecosystem"] === "string" && typeof o2["code"] === "string" && typeof o2["reason"] === "string";
 }
 function inWorktree(root, prefix) {
-  return join79(root, ...prefix.split("/").filter((segment) => segment.length > 0));
+  return join81(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute15(filePath) ? relative24(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute15(filePath) ? relative25(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -76761,10 +77017,25 @@ async function processGroup(opts) {
   const { worktree } = created;
   let keepBranch = !apply;
   let semgrepFix;
+  let setAside = null;
   try {
     const projectDir = inWorktree(worktree.path, prefix);
-    const derivedTest = deriveTestCommand(readManifests(projectDir));
     const commands = [];
+    setAside = setAsidePackageConfig(worktree.path, projectDir);
+    if (setAside.moved.length > 0) base.package_config_set_aside = setAside.moved;
+    const refused2 = installRefusal({
+      projectDir,
+      stepEcosystems: group.candidates.flatMap((c3) => (c3.steps ?? []).map((st) => st.ecosystem)),
+      stepFiles: group.candidates.flatMap((c3) => (c3.steps ?? []).flatMap((st) => st.file !== void 0 ? [st.file] : [])),
+      rescanTools: findings.flatMap((f) => {
+        const o2 = origins.get(f.fingerprint);
+        return o2 === void 0 ? [] : [o2.toolName];
+      })
+    });
+    if (refused2 !== null) {
+      return { ...base, commands, outcome: "refused", scan: null, tests: null, pr: null, note: `refused: ${refused2}` };
+    }
+    const derivedTest = deriveTestCommand(readManifests(projectDir));
     const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
     if (env.command !== null) commands.push(`${env.command} (test environment)`);
     if (!env.ok) {
@@ -76816,7 +77087,10 @@ async function processGroup(opts) {
         note: applyFailedNote(applied.failure)
       };
     }
-    const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
+    const rescan = await withPackageManagerEnv(
+      packageManagerEnv(),
+      () => rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta)
+    );
     if (!rescan.ok) {
       return {
         ...base,
@@ -76863,6 +77137,7 @@ async function processGroup(opts) {
         note: "verified: dry run (apply=false) \u2014 re-run with apply=true to open a pull request"
       };
     }
+    setAside.restore();
     const title = buildPrTitle(group, targets.length);
     const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
@@ -76878,6 +77153,7 @@ async function processGroup(opts) {
     };
   } finally {
     await worktree.remove();
+    setAside?.dispose();
     if (!keepBranch) {
       await deleteLocalBranch({ projectPath, branch });
     }
@@ -76896,14 +77172,27 @@ function baseTreeProvider(projectPath, prefix, derived) {
     const created = await createWorktree({ projectPath, branch: null });
     if (!created.ok) return { ok: false, reason: created.reason };
     const dir = inWorktree(created.worktree.path, prefix);
+    let setAside;
+    try {
+      setAside = setAsidePackageConfig(created.worktree.path, dir);
+    } catch (e) {
+      await created.worktree.remove();
+      return { ok: false, reason: `could not set the project's package-manager configuration aside: ${errorMessage4(e)}` };
+    }
     const env = await prepareTestEnvironment({ treePath: dir, derived });
     if (!env.ok) {
       await created.worktree.remove();
+      setAside.dispose();
       return { ok: false, reason: env.reason };
     }
-    return { ok: true, path: dir, dispose: async () => {
-      await created.worktree.remove();
-    } };
+    return {
+      ok: true,
+      path: dir,
+      dispose: async () => {
+        await created.worktree.remove();
+        setAside.dispose();
+      }
+    };
   };
 }
 function prNote(pr) {
@@ -77950,22 +78239,22 @@ function analyzeAgentConfig(sources, previousHashes) {
 }
 
 // src/agentaudit/configSources.ts
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname20, isAbsolute as isAbsolute16, join as join81, relative as relative25 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname21, isAbsolute as isAbsolute16, join as join83, relative as relative26 } from "node:path";
 
 // src/hostsetup/mcpConfig.ts
-import { join as join80, resolve as resolve21 } from "node:path";
+import { join as join82, resolve as resolve22 } from "node:path";
 var SERVER_ID = "dev-guardian";
 function claudeDesktopConfigPath(env) {
   switch (env.os) {
     case "win32": {
-      const appData = env.appData ?? join80(env.home, "AppData", "Roaming");
-      return join80(appData, "Claude", "claude_desktop_config.json");
+      const appData = env.appData ?? join82(env.home, "AppData", "Roaming");
+      return join82(appData, "Claude", "claude_desktop_config.json");
     }
     case "darwin":
-      return join80(env.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+      return join82(env.home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
     case "linux":
-      return join80(env.home, ".config", "Claude", "claude_desktop_config.json");
+      return join82(env.home, ".config", "Claude", "claude_desktop_config.json");
     default:
       return null;
   }
@@ -77974,15 +78263,15 @@ function resolveMcpConfigPath(host, scope, env) {
   const { projectPath, home } = env;
   switch (host) {
     case "cursor":
-      return scope === "global" ? join80(home, ".cursor", "mcp.json") : join80(projectPath, ".cursor", "mcp.json");
+      return scope === "global" ? join82(home, ".cursor", "mcp.json") : join82(projectPath, ".cursor", "mcp.json");
     case "gemini":
-      return scope === "global" ? join80(home, ".gemini", "settings.json") : join80(projectPath, ".gemini", "settings.json");
+      return scope === "global" ? join82(home, ".gemini", "settings.json") : join82(projectPath, ".gemini", "settings.json");
     case "codex":
-      return scope === "global" ? join80(home, ".codex", "config.toml") : join80(projectPath, ".codex", "config.toml");
+      return scope === "global" ? join82(home, ".codex", "config.toml") : join82(projectPath, ".codex", "config.toml");
     case "copilot":
-      return join80(projectPath, ".vscode", "mcp.json");
+      return join82(projectPath, ".vscode", "mcp.json");
     case "windsurf":
-      return join80(home, ".codeium", "windsurf", "mcp_config.json");
+      return join82(home, ".codeium", "windsurf", "mcp_config.json");
     case "claude-desktop":
       return claudeDesktopConfigPath(env);
     case "cline":
@@ -78082,36 +78371,36 @@ function parseJsonc(text2) {
 
 // src/agentaudit/configSources.ts
 var PROJECT_DESCRIPTORS = [
-  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join81(p, ".mcp.json") },
+  { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join83(p, ".mcp.json") },
   {
     label: ".claude/settings.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join81(p, ".claude", "settings.json")
+    resolve: (p) => join83(p, ".claude", "settings.json")
   },
   {
     label: ".claude/settings.local.json",
     kind: "project",
     mcpServersField: null,
-    resolve: (p) => join81(p, ".claude", "settings.local.json")
+    resolve: (p) => join83(p, ".claude", "settings.local.json")
   },
   {
     label: ".cursor/mcp.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join81(p, ".cursor", "mcp.json")
+    resolve: (p) => join83(p, ".cursor", "mcp.json")
   },
   {
     label: ".vscode/mcp.json",
     kind: "project",
     mcpServersField: "servers",
-    resolve: (p) => join81(p, ".vscode", "mcp.json")
+    resolve: (p) => join83(p, ".vscode", "mcp.json")
   },
   {
     label: ".gemini/settings.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join81(p, ".gemini", "settings.json")
+    resolve: (p) => join83(p, ".gemini", "settings.json")
   },
   // A Claude Code plugin declares its own servers here, launched with
   // `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's root (this directory).
@@ -78119,11 +78408,11 @@ var PROJECT_DESCRIPTORS = [
     label: ".claude-plugin/plugin.json",
     kind: "project",
     mcpServersField: "mcpServers",
-    resolve: (p) => join81(p, ".claude-plugin", "plugin.json")
+    resolve: (p) => join83(p, ".claude-plugin", "plugin.json")
   }
 ];
 function hostPathEnv() {
-  return { os: detectOs(), home: homedir3(), appData: process.env["APPDATA"], projectPath: "" };
+  return { os: detectOs(), home: homedir4(), appData: process.env["APPDATA"], projectPath: "" };
 }
 function hostConfigPath(host) {
   return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
@@ -78136,7 +78425,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
       kind: "user",
       mcpServersField: "mcpServers",
-      resolve: () => custom3 ? join81(dir, ".claude.json") : join81(homedir3(), ".claude.json"),
+      resolve: () => custom3 ? join83(dir, ".claude.json") : join83(homedir4(), ".claude.json"),
       maxBytes: MAX_CLAUDE_JSON_BYTES,
       nestedProjects: true
     },
@@ -78144,7 +78433,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
       kind: "user",
       mcpServersField: null,
-      resolve: () => custom3 ? join81(dir, "settings.json") : join81(homedir3(), ".claude", "settings.json")
+      resolve: () => custom3 ? join83(dir, "settings.json") : join83(homedir4(), ".claude", "settings.json")
     }
   ];
 }
@@ -78192,13 +78481,13 @@ function refusalMessage(reason, cap) {
   }
 }
 function isWithin(root, path8) {
-  const rel2 = relative25(root, path8);
+  const rel2 = relative26(root, path8);
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute16(rel2);
 }
 function walkRoot(kind, projectPath, path8) {
   if (kind === "project") return projectPath;
-  const home = homedir3();
-  return isWithin(home, path8) ? home : dirname20(dirname20(path8));
+  const home = homedir4();
+  return isWithin(home, path8) ? home : dirname21(dirname21(path8));
 }
 function readOne2(descriptor, projectPath) {
   const absolutePath = descriptor.resolve(projectPath);
@@ -79358,7 +79647,7 @@ async function analyzeServerListingAsync(listing, others, options = {}) {
       break;
     }
     if (steps.next().done === true) break;
-    await new Promise((resolve26) => setImmediate(resolve26));
+    await new Promise((resolve27) => setImmediate(resolve27));
   }
   return finishRun(run, others);
 }
@@ -81700,7 +81989,7 @@ var SSEClientTransport = class {
   }
   _startOrAuth() {
     const fetchImpl = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
-    return new Promise((resolve26, reject) => {
+    return new Promise((resolve27, reject) => {
       this._eventSource = new EventSource(this._url.href, {
         ...this._eventSourceInit,
         fetch: async (url2, init) => {
@@ -81721,7 +82010,7 @@ var SSEClientTransport = class {
       this._abortController = new AbortController();
       this._eventSource.onerror = (event) => {
         if (event.code === 401 && this._authProvider) {
-          this._authThenStart().then(resolve26, reject);
+          this._authThenStart().then(resolve27, reject);
           return;
         }
         const error2 = new SseError(event.code, event.message, event);
@@ -81743,7 +82032,7 @@ var SSEClientTransport = class {
           void this.close();
           return;
         }
-        resolve26();
+        resolve27();
       });
       this._eventSource.onmessage = (event) => {
         const messageEvent = event;
@@ -82274,7 +82563,7 @@ var StreamableHTTPClientTransport = class {
 // src/mcpaudit/launch.ts
 import { spawn as spawn2 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter, extname as extname2, isAbsolute as isAbsolute17, resolve as resolve22 } from "node:path";
+import { delimiter, extname as extname2, isAbsolute as isAbsolute17, resolve as resolve23 } from "node:path";
 var SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
 var ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
 var URL_END = /[\s"'<>|`]/;
@@ -82467,7 +82756,7 @@ async function resolveCommand(command, env, cwd, deadline) {
   let candidates2;
   const skipped2 = [];
   if (/[\\/]/.test(command) || isAbsolute17(command)) {
-    candidates2 = withExts(resolve22(cwd, command));
+    candidates2 = withExts(resolve23(cwd, command));
   } else {
     const dirs = (envValue(env, "PATH") ?? "").split(delimiter).filter((d) => d !== "");
     candidates2 = [];
@@ -82476,7 +82765,7 @@ async function resolveCommand(command, env, cwd, deadline) {
         skipped2.push(dir);
         continue;
       }
-      candidates2.push(...withExts(resolve22(dir, command)));
+      candidates2.push(...withExts(resolve23(dir, command)));
     }
   }
   const search2 = (async () => {
@@ -82642,7 +82931,7 @@ var ProbeStdioTransport = class {
       this.resumeLater(child.stderr);
     });
     child.stdin?.on("error", (e) => this.onerror?.(e));
-    const spawned = new Promise((resolve26) => child.once("spawn", () => resolve26("spawned")));
+    const spawned = new Promise((resolve27) => child.once("spawn", () => resolve27("spawned")));
     this.done = child.then((result) => {
       this.exited = {
         exitCode: result.exitCode ?? null,
@@ -82683,14 +82972,14 @@ var ProbeStdioTransport = class {
     void this.close();
   }
   send(message3) {
-    return new Promise((resolve26, reject) => {
+    return new Promise((resolve27, reject) => {
       const stdin = this.child?.stdin;
       if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
         reject(new Error("Not connected"));
         return;
       }
-      if (stdin.write(serializeMessage(message3))) resolve26();
-      else stdin.once("drain", () => resolve26());
+      if (stdin.write(serializeMessage(message3))) resolve27();
+      else stdin.once("drain", () => resolve27());
     });
   }
   /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
@@ -82754,8 +83043,8 @@ function signalGroup2(pid, signal) {
 }
 async function settlesWithin(p, ms) {
   let timer;
-  const timeout = new Promise((resolve26) => {
-    timer = setTimeout(() => resolve26(false), ms);
+  const timeout = new Promise((resolve27) => {
+    timer = setTimeout(() => resolve27(false), ms);
     timer.unref();
   });
   const settled = await Promise.race([p.then(() => true, () => true), timeout]);
@@ -83398,7 +83687,7 @@ function countBySeverity6(findings) {
 
 // src/tools/vetPackages.ts
 import { existsSync as existsSync43, statSync as statSync13 } from "node:fs";
-import { resolve as resolve24 } from "node:path";
+import { resolve as resolve25 } from "node:path";
 
 // src/hooks/bashGuard.ts
 var BASH_RULES = [
@@ -83743,10 +84032,10 @@ function parseComposer(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const bad = notAPackage(raw);
   if (bad !== null) return skip(raw, bad);
-  const sep13 = raw.search(/[:=\s]/);
-  let name = sep13 > 0 ? raw.slice(0, sep13) : raw;
-  let range = sep13 > 0 ? raw.slice(sep13 + 1) : void 0;
-  if (sep13 < 0 && raw.includes("@") && !raw.startsWith("@")) {
+  const sep14 = raw.search(/[:=\s]/);
+  let name = sep14 > 0 ? raw.slice(0, sep14) : raw;
+  let range = sep14 > 0 ? raw.slice(sep14 + 1) : void 0;
+  if (sep14 < 0 && raw.includes("@") && !raw.startsWith("@")) {
     const at = raw.indexOf("@");
     name = raw.slice(0, at);
     range = raw.slice(at + 1);
@@ -84519,7 +84808,7 @@ var ALLOW = {
 
 // src/pkgvet/popular.ts
 import { readFileSync as readFileSync18 } from "node:fs";
-import { join as join82 } from "node:path";
+import { join as join84 } from "node:path";
 
 // src/pkgvet/typosquat.ts
 function damerauLevenshtein(a2, b, max) {
@@ -84651,14 +84940,14 @@ function findTyposquatTarget(index, name, opts = {}) {
 
 // src/pkgvet/popular.ts
 function defaultPopularDir() {
-  return join82(resolveConfigsDir(), "popular-packages");
+  return join84(resolveConfigsDir(), "popular-packages");
 }
 function parsePopularList(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 var cache = /* @__PURE__ */ new Map();
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
-  const path8 = join82(dir, `${ecosystem}.txt`);
+  const path8 = join84(dir, `${ecosystem}.txt`);
   const hit = cache.get(path8);
   if (hit !== void 0) return hit;
   let index = null;
@@ -84674,8 +84963,8 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync12, readdirSync as readdirSync18 } from "node:fs";
-import { homedir as homedir4 } from "node:os";
-import { dirname as dirname21, isAbsolute as isAbsolute18, join as join83, parse as parse6, relative as relative26, resolve as resolve23 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+import { dirname as dirname22, isAbsolute as isAbsolute18, join as join85, parse as parse6, relative as relative27, resolve as resolve24 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -84694,19 +84983,19 @@ function isPublicRegistryUrl(ecosystem, url2) {
 }
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside3(dir, path8) {
-  const rel2 = relative26(dir, path8);
+  const rel2 = relative27(dir, path8);
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute18(rel2);
 }
 function walkRoot2(path8, ctx, under) {
-  const abs = resolve23(path8);
+  const abs = resolve24(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
   const holds = (dir2, base) => samePath3(dir2, base) || isInside3(dir2, base);
-  const project = ctx.projectDir === void 0 ? void 0 : resolve23(ctx.projectDir);
-  const home = resolve23(homeOf(ctx));
+  const project = ctx.projectDir === void 0 ? void 0 : resolve24(ctx.projectDir);
+  const home = resolve24(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside3(project, abs)) return project;
-  const dir = dirname21(abs);
+  const dir = dirname22(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside3(home, abs)) return home;
   return parse6(abs).root;
@@ -84760,19 +85049,19 @@ function listDir(dir, ctx) {
   }
 }
 function samePath3(a2, b) {
-  const norm = (p) => resolve23(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve24(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
-  const stops = [ctx.homeDir, homedir4()].filter((x) => typeof x === "string");
+  const stops = [ctx.homeDir, homedir5()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve23(ctx.projectDir);
+  let dir = resolve24(ctx.projectDir);
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
-    if (present(join83(dir, ".git"))) break;
-    const parent = dirname21(dir);
+    if (present(join85(dir, ".git"))) break;
+    const parent = dirname22(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -84782,7 +85071,7 @@ function envOf(ctx) {
   return ctx.env ?? process.env;
 }
 function homeOf(ctx) {
-  return ctx.homeDir ?? homedir4();
+  return ctx.homeDir ?? homedir5();
 }
 function envValue2(env, name) {
   const v = env[name] ?? env[name.toLowerCase()];
@@ -84872,35 +85161,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors(ctx);
   for (const dir of near) {
     files.push(
-      { path: join83(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join83(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join83(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join83(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join85(dir, ".npmrc"), parse: fromNpmrc },
+      { path: join85(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
+      { path: join85(dir, ".yarnrc"), parse: fromYarnrc },
+      { path: join85(dir, "bunfig.toml"), parse: fromBunfig }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
-    for (let dir = dirname21(top), i2 = 0; i2 < 64; dir = dirname21(dir), i2 += 1) {
-      files.push({ path: join83(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
-      if (dirname21(dir) === dir) break;
+    for (let dir = dirname22(top), i2 = 0; i2 < 64; dir = dirname22(dir), i2 += 1) {
+      files.push({ path: join85(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      if (dirname22(dir) === dir) break;
     }
   }
-  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join83(home, ".config");
-  const localAppData = envValue2(env, "LOCALAPPDATA") ?? join83(home, "AppData", "Local");
+  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join85(home, ".config");
+  const localAppData = envValue2(env, "LOCALAPPDATA") ?? join85(home, "AppData", "Local");
   files.push(
-    { path: envValue2(env, "NPM_CONFIG_USERCONFIG") ?? join83(home, ".npmrc"), parse: fromNpmrc },
-    { path: join83(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join83(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join83(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join83(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join83(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join83(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join83(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue2(env, "NPM_CONFIG_USERCONFIG") ?? join85(home, ".npmrc"), parse: fromNpmrc },
+    { path: join85(home, ".yarnrc.yml"), parse: fromYarnrcYml },
+    { path: join85(home, ".yarnrc"), parse: fromYarnrc },
+    { path: join85(home, ".bunfig.toml"), parse: fromBunfig },
+    { path: join85(xdg, ".bunfig.toml"), parse: fromBunfig },
+    { path: join85(xdg, "pnpm", "rc"), parse: fromNpmrc },
+    { path: join85(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
+    { path: join85(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
   const globalConfig2 = envValue2(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join83(envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming"), "npm") : dirname21(dirname21(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join83(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join85(envValue2(env, "APPDATA") ?? join85(home, "AppData", "Roaming"), "npm") : dirname22(dirname22(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join85(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
 var ENV_REGISTRY = {
@@ -84959,7 +85248,7 @@ function workspaceIndex(root, file, nameOf2, ctx) {
     }
     const next = queue[at];
     if (next === void 0) break;
-    const manifest = join83(next.dir, file);
+    const manifest = join85(next.dir, file);
     const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(manifest, ctx, root));
     if (r.status === "refused") index.unread = index.unread ?? { path: manifest, what: "workspace manifest" };
     else if (r.status === "ok") {
@@ -84973,7 +85262,7 @@ function workspaceIndex(root, file, nameOf2, ctx) {
     } catch {
       continue;
     }
-    for (const e of entries2) queue.push({ dir: join83(next.dir, e), depth: next.depth + 1 });
+    for (const e of entries2) queue.push({ dir: join85(next.dir, e), depth: next.depth + 1 });
   }
   ctx.cache?.workspaces.set(key, index);
   return index;
@@ -85011,7 +85300,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read(join83(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join83(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read(join85(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join85(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;
@@ -85022,7 +85311,7 @@ var pep503 = (n2) => n2.trim().toLowerCase().replace(/[-_.]+/g, "-");
 function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
-    const path8 = join83(dir, "pyproject.toml");
+    const path8 = join85(dir, "pyproject.toml");
     const text2 = read(path8, ctx);
     if (text2 === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
@@ -85069,22 +85358,22 @@ function pypiRegistry(name, ctx) {
   const confs = [];
   const explicit = envValue2(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join83(home, ".config");
+  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join85(home, ".config");
   confs.push(
-    join83(xdg, "pip", "pip.conf"),
-    join83(home, ".pip", "pip.conf"),
-    join83(home, "Library", "Application Support", "pip", "pip.conf")
+    join85(xdg, "pip", "pip.conf"),
+    join85(home, ".pip", "pip.conf"),
+    join85(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming");
-  confs.push(join83(appdata, "pip", "pip.ini"), join83(home, "pip", "pip.ini"));
+  const appdata = envValue2(env, "APPDATA") ?? join85(home, "AppData", "Roaming");
+  confs.push(join85(appdata, "pip", "pip.ini"), join85(home, "pip", "pip.ini"));
   for (const prefix of [envValue2(env, "VIRTUAL_ENV"), envValue2(env, "CONDA_PREFIX")]) {
-    if (prefix !== void 0) confs.push(join83(prefix, "pip.conf"), join83(prefix, "pip.ini"));
+    if (prefix !== void 0) confs.push(join85(prefix, "pip.conf"), join85(prefix, "pip.ini"));
   }
-  confs.push(join83(etc, "pip.conf"), join83(etc, "xdg", "pip", "pip.conf"));
-  confs.push(join83(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue2(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join83(d, "pip", "pip.conf"));
+  confs.push(join85(etc, "pip.conf"), join85(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join85(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
+  for (const d of (envValue2(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join85(d, "pip", "pip.conf"));
   const programData = envValue2(env, "ProgramData") ?? envValue2(env, "PROGRAMDATA");
-  if (programData !== void 0) confs.push(join83(programData, "pip", "pip.ini"));
+  if (programData !== void 0) confs.push(join85(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
     const text2 = read(path8, ctx);
     const url2 = text2 === void 0 ? void 0 : fromPipConf(text2);
@@ -85093,18 +85382,18 @@ function pypiRegistry(name, ctx) {
   const uvConfs = [];
   const uvExplicit = envValue2(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
-  uvConfs.push(join83(xdg, "uv", "uv.toml"), join83(appdata, "uv", "uv.toml"), join83(etc, "uv", "uv.toml"));
+  uvConfs.push(join85(xdg, "uv", "uv.toml"), join85(appdata, "uv", "uv.toml"), join85(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
     const text2 = read(path8, ctx);
     const url2 = text2 === void 0 ? void 0 : fromUvToml(text2);
     if (url2 !== void 0) return { kind: "registry", source: path8, url: url2 };
   }
   for (const dir of ancestors(ctx)) {
-    const uvToml = join83(dir, "uv.toml");
+    const uvToml = join85(dir, "uv.toml");
     const uvText = read(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
-    const pyproject = join83(dir, "pyproject.toml");
+    const pyproject = join85(dir, "pyproject.toml");
     const text2 = read(pyproject, ctx);
     if (text2 === void 0) continue;
     const url2 = fromPyproject(text2);
@@ -85127,7 +85416,7 @@ function hasRepositories(text2) {
 }
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
-    const path8 = join83(dir, "composer.json");
+    const path8 = join85(dir, "composer.json");
     const text2 = read(path8, ctx);
     if (text2 === void 0) continue;
     if (hasRepositories(text2)) return { kind: "registry", source: path8 };
@@ -85136,13 +85425,13 @@ function composerRegistry(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue2(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join83(composerHome, "config.json")] : [join83(home, ".composer", "config.json"), join83(home, ".config", "composer", "config.json"), join83(envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const globals = composerHome !== void 0 ? [join85(composerHome, "config.json")] : [join85(home, ".composer", "config.json"), join85(home, ".config", "composer", "config.json"), join85(envValue2(env, "APPDATA") ?? join85(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path8 of globals) if (hasRepositories(read(path8, ctx))) return { kind: "registry", source: path8 };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
   const hit = listDir(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
-  return hit === void 0 ? void 0 : join83(dir, hit);
+  return hit === void 0 ? void 0 : join85(dir, hit);
 }
 function customNugetSources(text2) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text2)?.[1] ?? "";
@@ -85160,7 +85449,7 @@ function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
   const expanded = folder.replace(/%([^%]+)%/g, (whole2, name) => envValue2(env, name) ?? whole2);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve23(dirname21(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve24(dirname22(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -85183,34 +85472,34 @@ function nugetRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve23(ctx.projectDir);
+    let dir = resolve24(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
-      const parent = dirname21(dir);
+      const parent = dirname22(dir);
       if (parent === dir) break;
       dir = parent;
     }
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming");
-  for (const dir of [join83(appdata, "NuGet"), join83(home, ".nuget", "NuGet"), join83(home, ".config", "NuGet")]) {
+  const appdata = envValue2(env, "APPDATA") ?? join85(home, "AppData", "Roaming");
+  for (const dir of [join85(appdata, "NuGet"), join85(home, ".nuget", "NuGet"), join85(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
-  const userDirs = [join83(appdata, "NuGet", "config"), join83(home, ".nuget", "config"), join83(home, ".config", "NuGet", "config")];
+  const userDirs = [join85(appdata, "NuGet", "config"), join85(home, ".nuget", "config"), join85(home, ".config", "NuGet", "config")];
   const machineDirs = [
-    join83(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
-    join83(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+    join85(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join85(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
   const programFilesX86 = envValue2(env, "ProgramFiles(x86)");
-  if (programFilesX86 !== void 0) machineDirs.push(join83(programFilesX86, "NuGet", "Config"));
+  if (programFilesX86 !== void 0) machineDirs.push(join85(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
     for (const f of listDir(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
-      files.push(join83(dir, f));
-      if (machineDirs.includes(dir)) machineWide.add(join83(dir, f));
+      files.push(join85(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join85(dir, f));
     }
   }
   for (const path8 of files) {
@@ -85824,8 +86113,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const { spec } = w;
   const eco = spec.ecosystem;
   const registry2 = REGISTRY_NAME[eco];
-  const lookup = w.lookup;
-  const info = lookup?.kind === "found" ? lookup.info : void 0;
+  const lookup2 = w.lookup;
+  const info = lookup2?.kind === "found" ? lookup2.info : void 0;
   const extraWarn = [];
   const extraUnknown = [];
   const typosquat = !w.popularLoaded ? unknown3("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
@@ -85838,20 +86127,20 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   let vulnerabilities;
   let publishAge;
   let installScripts = eco === "npm" ? unknown3("not checked") : na("install-script check is npm-only");
-  if (lookup === void 0) {
+  if (lookup2 === void 0) {
     const why = offlineReason ?? "registry not consulted";
     exists = unknown3(why);
     malicious = unknown3(why);
     vulnerabilities = unknown3(why);
     publishAge = unknown3(why);
     if (eco === "npm") installScripts = unknown3(why);
-  } else if (lookup.kind === "error") {
-    exists = unknown3(`${registry2} lookup failed: ${lookup.reason}`);
+  } else if (lookup2.kind === "error") {
+    exists = unknown3(`${registry2} lookup failed: ${lookup2.reason}`);
     malicious = osvDown !== void 0 ? unknown3(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
-    vulnerabilities = unknown3(`version unknown: ${lookup.reason}`);
-    publishAge = unknown3(`version unknown: ${lookup.reason}`);
-    if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup.reason}`);
-  } else if (lookup.kind === "not_found") {
+    vulnerabilities = unknown3(`version unknown: ${lookup2.reason}`);
+    publishAge = unknown3(`version unknown: ${lookup2.reason}`);
+    if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup2.reason}`);
+  } else if (lookup2.kind === "not_found") {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     const custom3 = w.custom ?? null;
     if (custom3 !== null) {
@@ -85926,7 +86215,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   if (vulnIds.length > 0) result.vulnerability_ids = vulnIds;
   if (w.scripts !== void 0 && w.scripts.length > 0) result.install_scripts = w.scripts;
   if (w.typo !== null) result.similar_to = w.typo.similar_to;
-  if (lookup?.kind === "not_found") result.not_on_public_registry = true;
+  if (lookup2?.kind === "not_found") result.not_on_public_registry = true;
   if (w.versionMissing === true) result.requested_version_unpublished = true;
   return result;
 }
@@ -86081,7 +86370,7 @@ async function handler45(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve24(inp.project_path);
+    projectDir = resolve25(inp.project_path);
     if (!existsSync43(projectDir) || !statSync13(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
@@ -86117,7 +86406,7 @@ async function handler45(input, _ctx, callMeta) {
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync44, readFileSync as readFileSync19, writeFileSync as writeFileSync16 } from "node:fs";
-import { basename as basename9, join as join84, posix, win32 } from "node:path";
+import { basename as basename9, join as join86, posix, win32 } from "node:path";
 
 // src/vex/render.ts
 var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
@@ -86330,7 +86619,7 @@ async function handler46(input, ctx) {
   };
   const document = format2 === "openvex" ? renderOpenVex(statements, meta) : renderCycloneDxVex(statements, meta);
   const dir = ensureReportDir(projectPath, documentId, "vex");
-  const filePath = join84(dir, format2 === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
+  const filePath = join86(dir, format2 === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
   writeFileSync16(filePath, `${JSON.stringify(document, null, 2)}
 `, "utf8");
   return {
@@ -86909,7 +87198,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve25(process.cwd());
+  const projectPath = resolve26(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

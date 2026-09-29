@@ -121,6 +121,7 @@
  *     by its structured package, never by words in its advisory.
  */
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { rmSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import { applyGroup } from '../fixpr/apply.js';
@@ -130,6 +131,9 @@ import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists } from '
 import { disposeSemgrepFixPlan, planSemgrepFix } from '../fixpr/semgrepFix.js';
 import { deriveTestCommand, TEST_MANIFESTS } from '../fixpr/testCommand.js';
 import { prepareTestEnvironment } from '../fixpr/testEnv.js';
+import { withPackageManagerEnv } from '../fixpr/childEnv.js';
+import { composerChoosesRepository, installRefusal, setAsidePackageConfig, } from '../fixpr/repoPackageConfig.js';
+import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
 import { projectTreeState } from '../fixpr/treeState.js';
 import { rescanOriginOf, scannerNotVerified } from '../fixpr/rescan.js';
 import { judgeScan, judgeTests, mayOpenPr } from '../fixpr/verify.js';
@@ -180,7 +184,10 @@ const tool = {
         'rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the ' +
         "project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, " +
         "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
-        'environment that carries no token or credential of this server. Every open finding ' +
+        'environment that carries no token or credential of this server. Package managers get it plus ' +
+        "your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs " +
+        'are set aside (package_config_set_aside), and a repo-chosen pip index or Composer repository ' +
+        'refuses the fix. Every open finding ' +
         'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
         'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
         '`filtered_reason`. ' +
@@ -416,24 +423,46 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     if (!created.ok) {
         return { steps: [], error: `could not create a worktree to plan in: ${created.reason}`, runnerFailures: [] };
     }
+    let setAside = null;
     try {
         const meta = {
             ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
             ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
             originProjectPath: projectPath,
         };
-        const result = await depsPlanTool.handler({ project_path: inWorktree(created.worktree.path, prefix) }, ctx, meta);
+        // The planner runs `npm outdated`, `composer outdated`, `cargo outdated`,
+        // `go list -m -u`, `bundle outdated` and `dotnet restore` in this tree:
+        // the repository's own package-manager configuration is set aside first,
+        // and every one of them runs with the package-manager environment.
+        const planDir = inWorktree(created.worktree.path, prefix);
+        setAside = setAsidePackageConfig(created.worktree.path, planDir);
+        const composerRefused = composerChoosesRepository(planDir);
+        const planFailures = [];
+        if (composerRefused !== null) {
+            // composer.json IS the manifest: it cannot be set aside in the fix's
+            // tree, so Composer is not planned at all.
+            rmSync(join(planDir, 'composer.json'), { force: true });
+            planFailures.push({ ecosystem: 'composer', code: 'repository_chosen_by_project', reason: composerRefused });
+        }
+        const result = await withPackageManagerEnv(packageManagerEnv(), () => depsPlanTool.handler({ project_path: planDir }, ctx, meta));
         if (!result.ok)
             return { steps: [], error: `deps_update_plan failed: ${result.error.message}`, runnerFailures: [] };
         const r = result;
         return {
             steps: Array.isArray(r.plan) ? r.plan : [],
             error: null,
-            runnerFailures: Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : [],
+            runnerFailures: [
+                ...planFailures,
+                ...(Array.isArray(r.runner_failures) ? r.runner_failures.filter(isRunnerFailure) : []),
+            ],
         };
+    }
+    catch (e) {
+        return { steps: [], error: `could not prepare the planning tree: ${errorMessage(e)}`, runnerFailures: [] };
     }
     finally {
         await created.worktree.remove();
+        setAside?.dispose();
     }
 }
 function isRunnerFailure(v) {
@@ -517,6 +546,7 @@ async function processGroup(opts) {
     // A dry run's worktree is detached: there is no branch to delete at all.
     let keepBranch = !apply;
     let semgrepFix;
+    let setAside = null;
     try {
         // The test command must be known BEFORE applyGroup runs — it decides
         // lockfileOnly, which applyGroup needs as an input — so manifests are
@@ -527,8 +557,27 @@ async function processGroup(opts) {
         // whole repository): where the fix, the test run and the re-scan happen.
         // Git operations (openPr) use the worktree root.
         const projectDir = inWorktree(worktree.path, prefix);
-        const derivedTest = deriveTestCommand(readManifests(projectDir));
         const commands = [];
+        // Before any package manager runs here: the repository's own
+        // package-manager configuration (`.npmrc`, `.yarnrc*`, pip's, Cargo's,
+        // Bundler's, NuGet's) is moved out of this tree — it would decide where
+        // the user's credentials go — and put back before anything is committed.
+        setAside = setAsidePackageConfig(worktree.path, projectDir);
+        if (setAside.moved.length > 0)
+            base.package_config_set_aside = setAside.moved;
+        const refused = installRefusal({
+            projectDir,
+            stepEcosystems: group.candidates.flatMap((c) => (c.steps ?? []).map((st) => st.ecosystem)),
+            stepFiles: group.candidates.flatMap((c) => (c.steps ?? []).flatMap((st) => (st.file !== undefined ? [st.file] : []))),
+            rescanTools: findings.flatMap((f) => {
+                const o = origins.get(f.fingerprint);
+                return o === undefined ? [] : [o.toolName];
+            }),
+        });
+        if (refused !== null) {
+            return { ...base, commands, outcome: 'refused', scan: null, tests: null, pr: null, note: `refused: ${refused}` };
+        }
+        const derivedTest = deriveTestCommand(readManifests(projectDir));
         // The same dependency install the base-commit tree gets, if any — see
         // fixpr/testEnv.ts: the test differential compares like with like.
         const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
@@ -585,7 +634,7 @@ async function processGroup(opts) {
                 note: applyFailedNote(applied.failure),
             };
         }
-        const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
+        const rescan = await withPackageManagerEnv(packageManagerEnv(), () => rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta));
         if (!rescan.ok) {
             return {
                 ...base,
@@ -636,6 +685,9 @@ async function processGroup(opts) {
                 note: 'verified: dry run (apply=false) — re-run with apply=true to open a pull request',
             };
         }
+        // The pull request is the fix and nothing else: what was set aside goes
+        // back first, so the commit neither deletes nor changes it.
+        setAside.restore();
         const title = buildPrTitle(group, targets.length);
         const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
         const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
@@ -657,6 +709,7 @@ async function processGroup(opts) {
         // "teardown verified by observing the world" discipline rather than
         // trusting a fire-and-forget call.
         await worktree.remove();
+        setAside?.dispose();
         // C2: best-effort, like worktree.remove() above — a branch that fails to
         // delete is a stray local ref, not a lie the tool tells.
         if (!keepBranch) {
@@ -685,12 +738,30 @@ function baseTreeProvider(projectPath, prefix, derived) {
         if (!created.ok)
             return { ok: false, reason: created.reason };
         const dir = inWorktree(created.worktree.path, prefix);
+        // Prepared exactly like the fix's tree: its own package-manager
+        // configuration set aside first (never put back — the tree is disposable).
+        let setAside;
+        try {
+            setAside = setAsidePackageConfig(created.worktree.path, dir);
+        }
+        catch (e) {
+            await created.worktree.remove();
+            return { ok: false, reason: `could not set the project's package-manager configuration aside: ${errorMessage(e)}` };
+        }
         const env = await prepareTestEnvironment({ treePath: dir, derived });
         if (!env.ok) {
             await created.worktree.remove();
+            setAside.dispose();
             return { ok: false, reason: env.reason };
         }
-        return { ok: true, path: dir, dispose: async () => { await created.worktree.remove(); } };
+        return {
+            ok: true,
+            path: dir,
+            dispose: async () => {
+                await created.worktree.remove();
+                setAside.dispose();
+            },
+        };
     };
 }
 /**

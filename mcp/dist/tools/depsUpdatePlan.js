@@ -115,6 +115,7 @@ import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { matchesAny } from '../platform/glob.js';
 import { listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, projectPathKind, readProjectJson, readProjectTextOrUndefined, } from '../platform/projectFs.js';
 import { compareSemver } from '../platform/semverCompare.js';
@@ -607,6 +608,7 @@ async function runNpmOutdated(projectPath, cves) {
     if (manager.name !== 'npm')
         return planForNonNpmManager(projectPath, cves, manager);
     const result = await execa('npm', ['outdated', '--json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 60_000,
@@ -1059,6 +1061,7 @@ async function pnpmVersionOf(root) {
     }
     try {
         const r = await execa('pnpm', ['--version'], {
+            ...packageManagerEnvOptions(),
             cwd: root,
             reject: false,
             timeout: 15_000,
@@ -1684,6 +1687,7 @@ async function runComposerOutdated(projectPath, cves) {
     // It is also the right source: the lock is what the fix edits and what CI
     // installs from.
     const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1736,6 +1740,7 @@ async function runComposerOutdated(projectPath, cves) {
 async function runCargoOutdated(projectPath, cves) {
     // Requires `cargo install cargo-outdated`.
     const result = await execa('cargo', ['outdated', '--format', 'json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1776,6 +1781,7 @@ async function runCargoOutdated(projectPath, cves) {
 async function runGoOutdated(projectPath, cves) {
     // `go list -m -u -json all` emits one JSON object per line.
     const result = await execa('go', ['list', '-m', '-u', '-json', 'all'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1819,6 +1825,7 @@ async function runBundlerOutdated(projectPath, cves) {
     // `bundle outdated --parseable` emits machine-friendly lines:
     // gem-name (newest 1.2.3, installed 1.2.0)
     const result = await execa('bundle', ['outdated', '--parseable'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1884,7 +1891,12 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
             continue;
         }
-        const restore = await execa('dotnet', plan.args, { cwd: projectPath, reject: false, timeout: 5 * 60_000 });
+        const restore = await execa('dotnet', plan.args, {
+            ...packageManagerEnvOptions(),
+            cwd: projectPath,
+            reject: false,
+            timeout: 5 * 60_000,
+        });
         const created = removeCreatedLockFiles(plan);
         if (created.length > 0) {
             failures.push({
@@ -1905,6 +1917,7 @@ async function runDotnetOutdated(projectPath, cves) {
             continue;
         }
         const r = await execa('dotnet', ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
+            ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
             timeout: 90_000,
@@ -1917,6 +1930,7 @@ async function runDotnetOutdated(projectPath, cves) {
             continue;
         }
         const fallback = await execa('dotnet', ['list', target, 'package', '--outdated', '--no-restore'], {
+            ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
             timeout: 90_000,

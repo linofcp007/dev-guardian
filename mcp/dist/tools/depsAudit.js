@@ -38,6 +38,7 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 import { existsSync, writeFileSync } from 'node:fs';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { listProjectDir, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
@@ -278,7 +279,7 @@ async function tryNativeAudit(opts) {
         command: opts.command,
         args: opts.args,
         cwd: opts.ctx.projectPath,
-        env: opts.ctx.scriptEnv,
+        ...auditEnv(opts.ctx),
         signal: opts.ctx.signal,
         onLog: opts.ctx.onLog,
     });
@@ -342,6 +343,19 @@ async function tryNativeAudit(opts) {
         // executive summary do not read the result as fully covered.
         opts.missing_tools?.push(opts.command);
     }
+}
+/**
+ * The environment of a package-manager process this tool starts: the scan's
+ * own, except while `create_fix_pr` re-scans a fix — then the
+ * package-manager environment (`fixpr/childEnv.ts`), with `extendEnv: false`,
+ * so `npm audit`, `pip-audit` (which installs the requirements into a
+ * temporary virtualenv, running an sdist's build code) and `dotnet restore`
+ * see no token or credential beyond the user's own package-manager
+ * configuration.
+ */
+function auditEnv(ctx) {
+    const pm = packageManagerEnvOptions();
+    return 'env' in pm ? { env: pm.env, extendEnv: false } : { env: ctx.scriptEnv };
 }
 // --------------------------------------------------------------- pip-audit
 /**
@@ -435,7 +449,7 @@ async function runPipAudit(opts) {
             command: 'pip-audit',
             args,
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
@@ -525,7 +539,7 @@ async function runDotnetSca(opts) {
             command: 'dotnet',
             args: plan.args,
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
@@ -550,7 +564,7 @@ async function runDotnetSca(opts) {
             command: 'dotnet',
             args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });

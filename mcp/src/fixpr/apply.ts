@@ -60,6 +60,7 @@ import { checkSemgrepReport } from '../runners/semgrepReport.js';
 import { runSemgrep, SEMGREP_COMMAND } from '../runners/semgrepRun.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import type { SemgrepFixPlan } from './semgrepFix.js';
+import { packageManagerEnv } from './testCommandEnv.js';
 import type { FixCandidate, FixGroup, UpgradeStep } from './types.js';
 
 export interface ApplyResult {
@@ -233,7 +234,17 @@ async function runCommand(
   if (refused !== null) {
     return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: refused };
   }
-  const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+  // A package manager, fetching: never with this server's environment — the
+  // allowlist plus the user's own package-manager configuration
+  // (`fixpr/testCommandEnv.ts#packageManagerEnv`).
+  const result = await run({
+    command: argv.command,
+    args: argv.args,
+    cwd: worktreePath,
+    env: packageManagerEnv(),
+    extendEnv: false,
+    timeoutMs,
+  });
   const invoked = [argv.command, ...argv.args].join(' ');
   commands.push(invoked);
   // `outcome !== 'completed'`, never a list of failure outcomes: a

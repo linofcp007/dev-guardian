@@ -134,6 +134,9 @@ describe('create_fix_pr — what its description promises', () => {
     expect(tool.description.length).toBeLessThanOrEqual(1500);
     expect(tool.description).toMatch(/dry run[^.]*runs the project's own test command/i);
     expect(tool.description).toMatch(/project's (own )?code/i);
+    // Round 2: the repository's package-manager configuration, and what refuses a fix.
+    expect(tool.description).toMatch(/\.npmrc\/\.yarnrc[^;]*set aside/);
+    expect(tool.description).toMatch(/pip index or Composer repository refuses the fix/);
     const apply = tool.inputSchema['apply']?.description ?? '';
     expect(apply).not.toMatch(/never leaves the machine/);
     expect(apply).toMatch(/test command/);
