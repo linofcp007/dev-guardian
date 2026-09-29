@@ -5,6 +5,7 @@ import { Storage } from '../../../src/storage/index.js';
 import {
   DEFAULT_RETENTION_SCANS,
   PRUNE_BATCH,
+  PRUNE_BATCH_ROWS,
   RETENTION_START_DELAY_MS,
   deletePrunableScans,
   deleteScans,
@@ -868,5 +869,73 @@ describe('reapOrphanedScans', () => {
     };
     expect(() => reapOrphanedScans(failing, (l) => lines.push(l))).not.toThrow();
     expect(lines.join('\n')).toMatch(/reaper failed \(continuing\): database is locked/);
+  });
+});
+
+// Round 5 (retention review): the first delete batch took 1.7–2.6 s — 50
+// scans, ~18k finding rows in one write transaction, beyond the 1 s budget
+// and on the way to another process's 5 s busy timeout with bigger scans.
+// A batch is now bounded by the rows it deletes as well as by its scans.
+describe('retention batches are sized by the rows they delete', () => {
+  /** `n` scans of '/p1', oldest first, each holding `perScan` findings (plus seedScan's one CVE row). */
+  function seedHeavy(storage: Storage, n: number, perScan: number): string[] {
+    const ids = Array.from({ length: n }, (_, i) => `h${i}`);
+    for (const id of ids) {
+      seedScan(storage, id, '/p1');
+      storage.findings.bulkInsert(
+        Array.from({ length: perScan - 1 }, (_, k) => ({
+          fingerprint: `fp-${id}-${k}`,
+          scan_id: id,
+          tool: 'semgrep',
+          severity: 'high' as const,
+          category: 'security' as const,
+          title: 'x',
+          fix_available: false,
+        })),
+      );
+    }
+    return ids;
+  }
+
+  const rowsOf = (db: GuardianDatabase): number => count(db, 'findings') + count(db, 'scan_cves');
+
+  it(`one transaction deletes at most ${PRUNE_BATCH_ROWS} finding and CVE rows`, () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 51, 360);
+    const before = rowsOf(db);
+
+    const first = pruneScans(db, 1, { maxBatches: 1 });
+
+    expect(before - rowsOf(db)).toBeLessThanOrEqual(PRUNE_BATCH_ROWS);
+    expect(first.deleted).toBe(Math.floor(PRUNE_BATCH_ROWS / 361));
+    expect(first.remaining).toBe(50 - first.deleted);
+    // And the whole backlog still goes, batch by batch.
+    expect(pruneScans(db, 1)).toMatchObject({ remaining: 0, complete: true });
+    expect(scanIds(db)).toEqual(['h50']);
+  });
+
+  it('a scan larger than the cap is deleted alone, in a transaction of its own', () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 1, PRUNE_BATCH_ROWS + 1000);
+    seedMany(storage, 3);
+    const first = pruneScans(db, 1, { maxBatches: 1 });
+    expect(first.deleted).toBe(1);
+    expect(scanIds(db)).toEqual(['s0', 's1', 's2']);
+  });
+
+  it('the background schedule deletes at most the cap per tick', () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 51, 360);
+    const timers = manualTimers();
+    scheduleRetention(storage, () => {}, { env: { GUARDIAN_RETENTION_SCANS: '1' }, defer: timers.defer });
+    let before = rowsOf(db);
+    const perTick: number[] = [];
+    while (timers.runNext()) {
+      const after = rowsOf(db);
+      if (after !== before) perTick.push(before - after);
+      before = after;
+    }
+    expect(Math.max(...perTick)).toBeLessThanOrEqual(PRUNE_BATCH_ROWS);
+    expect(scanIds(db)).toEqual(['h50']);
   });
 });

@@ -44674,6 +44674,29 @@ function describeOpenSet(set2) {
 // src/storage/maintenance.ts
 var DEFAULT_RETENTION_SCANS = 50;
 var PRUNE_BATCH = 50;
+var PRUNE_BATCH_ROWS = 5e3;
+function takePruneBatch(db, pending, maxScans, maxRows = PRUNE_BATCH_ROWS) {
+  const head = pending.slice(0, Math.max(1, maxScans));
+  if (head.length <= 1) return pending.splice(0, head.length);
+  const list2 = head.map(() => "?").join(", ");
+  const rows = /* @__PURE__ */ new Map();
+  for (const table of ["findings", "scan_cves"]) {
+    for (const r of db.prepare(
+      `SELECT scan_id AS id, COUNT(*) AS n FROM ${table} WHERE scan_id IN (${list2}) GROUP BY scan_id`
+    ).all(...head)) {
+      rows.set(r.id, (rows.get(r.id) ?? 0) + r.n);
+    }
+  }
+  let total = 0;
+  let take = 0;
+  for (const id of head) {
+    const n2 = rows.get(id) ?? 0;
+    if (take > 0 && total + n2 > maxRows) break;
+    total += n2;
+    take += 1;
+  }
+  return pending.splice(0, take);
+}
 var RETENTION_BUDGET_MS = 1e3;
 var RETENTION_START_DELAY_MS = 2e3;
 var RETENTION_BATCH_GAP_MS = 20;
@@ -44882,7 +44905,7 @@ function scheduleRetention(storage, log, options = {}) {
         protect = openSetSourceIds(storage, listed);
         pending = listed.filter((id) => !protect.has(id));
       }
-      deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep, protect);
+      deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), limit.keep, protect);
       left = pending.length;
     } catch (error2) {
       log(`retention failed (continuing): ${describe(error2)}`);

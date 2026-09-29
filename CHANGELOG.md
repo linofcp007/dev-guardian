@@ -145,6 +145,13 @@ version bump.
   their orchestrated parents), computed once per start for the projects with something to prune:
   20 ms on 10,000 findings, 126 ms on 120,000 (20 projects, 26 MB), 363 ms on 480,000 (60
   projects, 104 MB), inside retention's 1 s background budget.
+- A retention batch is bounded by the rows it deletes, not only by its 50 scans: at most 5,000
+  finding and CVE rows per write transaction (a single larger scan is deleted alone — splitting
+  one scan over transactions would let a reader or a baseline set in between see it half gone).
+  Fifty scans of ~360 findings held the write lock 1.7–2.6 s in review, beyond the 1 s budget and
+  on the way to another process's 5 s busy timeout; the same backlog now goes 13 scans (4,693
+  rows) at a time — measured here 53–125 ms for the first, cold transaction and 13–20 ms for the
+  rest, where the one 50-scan transaction took 109–148 ms on the same machine.
 - Suppressions and baselines from 2.0.0 apply again. 2.0.0 stored a project as typed (`c:\Users\…`),
   migration 011 scoped legacy suppressions to that spelling, and 3.0.0 stores scans under the
   canonical `C:\Users\…`; every reader compares exactly, so they lapsed (reproduced by seeding the

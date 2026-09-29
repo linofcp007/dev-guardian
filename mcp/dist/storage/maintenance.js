@@ -65,10 +65,52 @@ import { openSetForProject } from '../history/openSet.js';
 import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 export const DEFAULT_RETENTION_SCANS = 50;
 /**
- * Scans deleted per write transaction. With every referencing column indexed
- * a batch this size holds the write lock for milliseconds, not seconds.
+ * Scans deleted per write transaction, at most. With every referencing column
+ * indexed a batch this size holds the write lock for milliseconds, not
+ * seconds — when its scans are small ({@link PRUNE_BATCH_ROWS}).
  */
 export const PRUNE_BATCH = 50;
+/**
+ * Finding and CVE rows deleted per write transaction, at most: the scans of a
+ * batch are taken while their rows add up to no more than this. Fifty scans
+ * of ~360 findings (~18k rows) held the write lock 1.7–2.6 s in the retention
+ * review — beyond the 1 s budget, and with bigger scans on the way to another
+ * process's 5 s busy timeout. A single scan larger than this is deleted alone:
+ * splitting ONE scan's rows over several transactions would let a reader, or
+ * a baseline set in between, see it half deleted.
+ */
+export const PRUNE_BATCH_ROWS = 5000;
+/**
+ * Takes the next batch off the front of `pending` — oldest first — and
+ * returns it: at most `maxScans` scans whose finding and `scan_cves` rows add
+ * up to at most `maxRows`, and always at least one. The counts are plain,
+ * indexed reads (`findings.scan_id`, `scan_cves.scan_id`), outside the write
+ * transaction.
+ */
+export function takePruneBatch(db, pending, maxScans, maxRows = PRUNE_BATCH_ROWS) {
+    const head = pending.slice(0, Math.max(1, maxScans));
+    if (head.length <= 1)
+        return pending.splice(0, head.length);
+    const list = head.map(() => '?').join(', ');
+    const rows = new Map();
+    for (const table of ['findings', 'scan_cves']) {
+        for (const r of db
+            .prepare(`SELECT scan_id AS id, COUNT(*) AS n FROM ${table} WHERE scan_id IN (${list}) GROUP BY scan_id`)
+            .all(...head)) {
+            rows.set(r.id, (rows.get(r.id) ?? 0) + r.n);
+        }
+    }
+    let total = 0;
+    let take = 0;
+    for (const id of head) {
+        const n = rows.get(id) ?? 0;
+        if (take > 0 && total + n > maxRows)
+            break;
+        total += n;
+        take += 1;
+    }
+    return pending.splice(0, take);
+}
 /** Work (not wall-clock) time retention may spend per server start. */
 export const RETENTION_BUDGET_MS = 1000;
 /** How long after connecting retention starts, so the host's handshake goes first. */
@@ -300,7 +342,7 @@ export function pruneScans(db, keep, budget = {}) {
             break;
         if (budget.budgetMs !== undefined && now() - started >= budget.budgetMs)
             break;
-        deleted += deletePrunableScans(db, pending.splice(0, batchSize), keep, protect);
+        deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), keep, protect);
         batches += 1;
     }
     return { deleted, remaining: pending.length, complete: pending.length === 0 };
@@ -457,7 +499,7 @@ export function scheduleRetention(storage, log, options = {}) {
                 protect = openSetSourceIds(storage, listed);
                 pending = listed.filter((id) => !protect.has(id));
             }
-            deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep, protect);
+            deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), limit.keep, protect);
             left = pending.length;
         }
         catch (error) {
