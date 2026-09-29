@@ -24,14 +24,18 @@ const inside = (outer: string, inner: string): boolean => {
 
 describe('every worker points Semgrep away from the home directory', () => {
   it.each(['SEMGREP_SETTINGS_FILE', 'SEMGREP_LOG_FILE', 'SEMGREP_VERSION_CACHE_PATH'])(
-    '%s is set, inside the run directory, never under the home directory',
+    '%s is set, inside the run directory, and not where Semgrep keeps its own files',
     (name) => {
       const value = process.env[name];
       expect(value, name).toBeTypeOf('string');
       const runDir = process.env['GUARDIAN_TEST_RUN_DIR'];
       expect(runDir, 'GUARDIAN_TEST_RUN_DIR (the global setup) is set').toBeTypeOf('string');
       expect(inside(String(runDir), String(value)), `${name}=${String(value)}`).toBe(true);
-      expect(inside(homedir(), String(value)), `${name}=${String(value)}`).toBe(false);
+      // Not "not under the home directory": on Windows the temp directory is
+      // itself under it (AppData\Local\Temp).
+      for (const dir of [join(homedir(), '.semgrep'), join(homedir(), '.cache')]) {
+        expect(inside(dir, String(value)), `${name}=${String(value)}`).toBe(false);
+      }
     },
   );
 
