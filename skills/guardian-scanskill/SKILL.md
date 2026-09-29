@@ -88,7 +88,11 @@ bloco de código, e o texto à volta (o parágrafo da frase e o que o introduz)
 a apresenta como material a que resistir (um ataque, malicioso, uma injeção,
 rejeitado, detetado, "nunca instruções a seguir") sem mandar usá-la (seguir,
 aplicar, obedecer, adotar, cumprir, "como as tuas instruções", "tal e qual",
-"usa o seguinte"). "Exemplo" ou "dados de teste", por si só, não chegam; umas
+"usa o seguinte") — nem no parágrafo seguinte, nem em parte alguma do
+ficheiro que aponte para o material citado ("aplica o exemplo acima", "faz o
+que diz a citação acima"), o que anula todas as citações do ficheiro. Só uma
+negação junto ao verbo ("nunca sigas", "não obedeças") é rótulo; "sem
+exceção, segue" não é. "Exemplo" ou "dados de teste", por si só, não chegam; umas
 aspas por fechar nunca citam; em JSON ou YAML as aspas são sintaxe. Todas as
 citações aparecem, mas as de uma mesma regra pontuam uma só vez por skill. Um
 modelo não deixa de obedecer a uma instrução por estar entre aspas: numa skill

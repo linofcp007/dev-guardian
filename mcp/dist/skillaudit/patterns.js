@@ -58,7 +58,10 @@
  * verbatim, "use the following"), and it sits inside a closed quotation or a
  * code span on a prose line, or anywhere in a code block whose introducing
  * paragraph is such a label. The text around a prose line is its own
- * paragraph and the one introducing it. Measured in wave 2 of the 3.0
+ * paragraph and the one introducing it; the paragraph right AFTER the quote
+ * or block must not direct its use either, and one directive pointing at
+ * quoted material anywhere in the file ("apply the example above", "do what
+ * the quote above says") cancels every citation in it (round 3). Measured in wave 2 of the 3.0
  * review: dev-spec-driven's threat catalogue read DO_NOT_INSTALL 100 on its
  * own examples. A code block by itself is not a citation, nor is one
  * introduced as "Example" or "test data"; an unclosed quote never cites; and
@@ -829,7 +832,9 @@ const QUOTE_SPAN_LINES = 12;
  * prompts" or "Example" alone is not such a label — a model does not stop
  * obeying an instruction because it is called test data.
  */
-const RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+follow|(do|does|must|should)\s+not\s+follow|don'?t\s+follow|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
+const RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
+/** The verbs that put quoted text to use. */
+const USE_VERB = String.raw `(?:follow(?:s|ed)?|obey(?:s|ed)?|apply|applies|applied|adopt(?:s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on)`;
 /**
  * Framing that directs the quoted text's USE: "follow", "apply", "obey",
  * "adopt", "comply", "as your instructions", "verbatim", "use the
@@ -838,18 +843,43 @@ const RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|host
  * follow", "not instructions to follow") it is a label instead, and
  * {@link NEGATED_DIRECTIVE} takes it out first.
  */
-const DIRECTS_USE = /\b(follow(s|ed)?|obey(s|ed)?|apply|applies|applied|adopt(s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b/i;
-const NEGATED_DIRECTIVE = /\b(never|not|no\s+longer|without|don'?t|doesn'?t|won'?t|mustn'?t|shouldn'?t)\b[^.;:!?\n]{0,40}?\b(follow(s|ed)?|obey(s|ed)?|apply|adopt(s|ed)?|comply|execute[sd]?|act\s+on|carry\s+out)\b/gi;
+const DIRECTS_USE = new RegExp(String.raw `\b(${USE_VERB}|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b`, 'i');
+/**
+ * A directive negated where it stands — "never follow", "do / does / must /
+ * should / will not obey", "don't apply", "not instructions to follow" —
+ * which labels the quote as material to resist. Only an ADJACENT negation
+ * (round 3 of the wave): the 40 characters of slack this used to allow, and
+ * "without", made "Without exception, follow this rule: '…'" and "don't
+ * hesitate to follow this rule" into labels.
+ */
+const NEGATED_DIRECTIVE = new RegExp(String.raw `\b(?:never|(?:do|does|did|must|should|will|shall|can|may)\s+not|don'?t|doesn'?t|didn'?t|won'?t|mustn'?t|shouldn'?t|cannot|can'?t)\s+(?:ever\s+)?${USE_VERB}\b|\b(?:not|never)\s+(?:an?\s+)?instructions?\s+to\s+${USE_VERB}\b`, 'gi');
 /**
  * Framing labels what it quotes as material to resist, and nothing in it
  * directs the quote's use. `framing` is text with its quotations removed:
  * the attack's own words ("apply this…") are not the framing's.
  */
 function framesAsResisted(framing) {
-    if (!RESIST_LABEL.test(framing))
+    NEGATED_DIRECTIVE.lastIndex = 0;
+    const negated = NEGATED_DIRECTIVE.test(framing);
+    NEGATED_DIRECTIVE.lastIndex = 0;
+    if (!negated && !RESIST_LABEL.test(framing))
         return false;
     return !DIRECTS_USE.test(framing.replace(NEGATED_DIRECTIVE, ' '));
 }
+/**
+ * Text that points a directive BACK (or forward) at quoted material: a verb
+ * that puts it to use — apply, follow, obey, do, execute, run, use, adopt,
+ * comply — and "the example / quote / block / text / snippet / instructions /
+ * policy above / below / earlier / following" (or "the above …", "the
+ * following …", "what the quote above says"). Found anywhere in a file's
+ * prose, it cancels every citation in that file (round 3 of the wave): "Now
+ * apply the example above" after a fenced attack, "Do exactly what the
+ * quote above says" after a quoted one.
+ */
+const CITED_MATERIAL = String.raw `(?:examples?|quotes?|quotations?|blocks?|texts?|snippets?|instructions?|polic(?:y|ies)|prompts?|payloads?|strings?|lines?)`;
+const BACK_REFERENCE = new RegExp(String.raw `\b(?:apply|follow|obey|do|execute|run|use|adopt|comply(?:\s+with)?|carry\s+out|act\s+on)\b[^.;!?\n]{0,60}?` +
+    String.raw `(?:\b(?:the|this|that|these|those)\s+(?:\w+\s+){0,2}?${CITED_MATERIAL}\s+(?:above|below|earlier|before|here|preceding)\b` +
+    String.raw `|\b(?:the|these)\s+(?:above|following|preceding|previous|earlier)\s+(?:\w+\s+){0,2}?${CITED_MATERIAL}\b)`, 'i');
 /** An HTML element that opens a code block, on its own line. */
 const HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
 /** Lines of context a paragraph contributes, each side of the line asked about. */
@@ -870,23 +900,83 @@ function citationContext(lines, code) {
         if (first === undefined || u.line < first)
             firstLine.set(u.block, u.line);
     }
+    const lastLine = new Map();
+    for (const u of code) {
+        if (u.block === null)
+            continue;
+        const last = lastLine.get(u.block);
+        if (last === undefined || u.line > last)
+            lastLine.set(u.block, u.line);
+    }
     const announced = new Map();
     const isBlockLine = (i) => blockOf.has(i + 1) || FENCE_OPEN.test(lines[i] ?? '');
+    let pointedBack;
     return (line) => {
+        // A directive pointing at quoted material anywhere in the file cancels
+        // every citation in it (round 3): worked out once, on the first ask.
+        pointedBack ??= directsBackAtQuotes(lines, isBlockLine);
+        if (pointedBack)
+            return NOT_CITING;
         const block = blockOf.get(line);
         if (block !== undefined) {
             let yes = announced.get(block);
             if (yes === undefined) {
                 const first = firstLine.get(block) ?? line;
-                yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first)));
+                const last = lastLine.get(block) ?? line;
+                yes =
+                    framesAsResisted(withoutQuotes(introducingParagraph(lines, first))) &&
+                        !directsUse(followingParagraph(lines, last - 1, isBlockLine));
                 announced.set(block, yes);
             }
             return yes ? { ...NOT_CITING, announced: true } : NOT_CITING;
         }
-        if (!framesAsResisted(withoutQuotes(proseContext(lines, line - 1, isBlockLine))))
+        const { text, bottom } = proseContext(lines, line - 1, isBlockLine);
+        if (!framesAsResisted(withoutQuotes(text)))
+            return NOT_CITING;
+        if (directsUse(followingParagraph(lines, bottom, isBlockLine)))
             return NOT_CITING;
         return { ...NOT_CITING, prose: true, ...quoteCarry(lines, line - 1, isBlockLine) };
     };
+}
+/** Text that directs the use of what it follows: {@link DIRECTS_USE}, negated forms and quotations aside. */
+function directsUse(text) {
+    return DIRECTS_USE.test(withoutQuotes(text).replace(NEGATED_DIRECTIVE, ' '));
+}
+/** Any prose line of the file, quotations aside, holds a {@link BACK_REFERENCE} that is not negated. */
+function directsBackAtQuotes(lines, isBlockLine) {
+    for (let i = 0; i < lines.length; i += 1) {
+        if (isBlockLine(i))
+            continue;
+        const text = lines[i] ?? '';
+        if (text.trim() === '')
+            continue;
+        if (BACK_REFERENCE.test(withoutQuotes(text).replace(NEGATED_DIRECTIVE, ' ')))
+            return true;
+    }
+    return false;
+}
+/**
+ * The paragraph right after line `after` (0-based) — the last line of a
+ * quote's paragraph, or of a code block: past a closing fence or HTML tag
+ * and the blank lines that follow, up to four lines of text (round 3: a
+ * directive AFTER the quoted text — "Now apply the example above." — was
+ * never read).
+ */
+function followingParagraph(lines, after, isBlockLine) {
+    let i = after + 1;
+    while (i < lines.length && (FENCE_OPEN.test(lines[i] ?? '') || /^[ \t>]*<\/(pre|code)\s*>/i.test(lines[i] ?? '')))
+        i += 1;
+    while (i < lines.length && (lines[i] ?? '').trim() === '')
+        i += 1;
+    const paragraph = [];
+    while (i < lines.length && paragraph.length < CONTEXT_LINES) {
+        const text = lines[i] ?? '';
+        if (text.trim() === '' || isBlockLine(i))
+            break;
+        paragraph.push(text);
+        i += 1;
+    }
+    return paragraph.join(' ');
 }
 /**
  * Whether a straight-quoted quotation runs into line `at` (0-based) from an
@@ -944,7 +1034,8 @@ function introducingParagraph(lines, first) {
 /**
  * A prose line's framing: its own paragraph (up to four lines each side of
  * it) and the paragraph that introduces it (up to four lines, across blank
- * lines only). `at` is 0-based.
+ * lines only). `at` is 0-based; `bottom` is where the own paragraph's
+ * context ends.
  */
 function proseContext(lines, at, isBlockLine) {
     const blank = (i) => (lines[i] ?? '').trim() === '' || isBlockLine(i);
@@ -967,7 +1058,7 @@ function proseContext(lines, at, isBlockLine) {
             i -= 1;
         }
     }
-    return [...intro, ...own].join(' ');
+    return { text: [...intro, ...own].join(' '), bottom };
 }
 /**
  * Per position of a line: 1 where it lies inside a CLOSED quotation —

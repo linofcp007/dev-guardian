@@ -296,8 +296,12 @@ version bump.
     prose line, or in a code block, AND the text around them — their paragraph and the one introducing it — labels
     them as material to resist (attack, malicious, injection, rejected, detected, "never instructions to follow")
     and does not direct their use (follow, apply, obey, adopt, comply, "as your instructions", verbatim, "use the
-    following"). "Example" or "test data" alone is not a label, an unclosed quote never cites, and in JSON or YAML
-    a quote is syntax. Every citation is listed; a rule's citations score once per skill. dev-spec-driven's threat
+    following") — neither in the paragraph right after the quote or block, nor anywhere in the file as a directive
+    pointing at quoted material ("now apply the example above", "do exactly what the quote above says"), which
+    cancels every citation in that file. Only a negation next to its verb ("never follow", "must not obey",
+    "don't apply", "not instructions to follow") is a label: "Without exception, follow this rule" and "don't
+    hesitate to follow" are directives. "Example" or "test data" alone is not a label, an unclosed quote never
+    cites, and in JSON or YAML a quote is syntax. Every citation is listed; a rule's citations score once per skill. dev-spec-driven's threat
     catalogue had read DO_NOT_INSTALL 100 on its own examples and reads REVIEW 25. A model does not stop obeying
     an instruction because it is quoted, so a citation still scores; what this cannot tell apart is an attacker
     who quotes his injection under an attack label with no directive.

@@ -70319,13 +70319,28 @@ function frontmatterDescription(lines) {
 }
 var NOT_CITING = { prose: false, announced: false, quoteOpenAtStart: false, quoteClosesAfter: false };
 var QUOTE_SPAN_LINES = 12;
-var RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+follow|(do|does|must|should)\s+not\s+follow|don'?t\s+follow|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
-var DIRECTS_USE = /\b(follow(s|ed)?|obey(s|ed)?|apply|applies|applied|adopt(s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b/i;
-var NEGATED_DIRECTIVE = /\b(never|not|no\s+longer|without|don'?t|doesn'?t|won'?t|mustn'?t|shouldn'?t)\b[^.;:!?\n]{0,40}?\b(follow(s|ed)?|obey(s|ed)?|apply|adopt(s|ed)?|comply|execute[sd]?|act\s+on|carry\s+out)\b/gi;
+var RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
+var USE_VERB = String.raw`(?:follow(?:s|ed)?|obey(?:s|ed)?|apply|applies|applied|adopt(?:s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on)`;
+var DIRECTS_USE = new RegExp(
+  String.raw`\b(${USE_VERB}|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b`,
+  "i"
+);
+var NEGATED_DIRECTIVE = new RegExp(
+  String.raw`\b(?:never|(?:do|does|did|must|should|will|shall|can|may)\s+not|don'?t|doesn'?t|didn'?t|won'?t|mustn'?t|shouldn'?t|cannot|can'?t)\s+(?:ever\s+)?${USE_VERB}\b|\b(?:not|never)\s+(?:an?\s+)?instructions?\s+to\s+${USE_VERB}\b`,
+  "gi"
+);
 function framesAsResisted(framing) {
-  if (!RESIST_LABEL.test(framing)) return false;
+  NEGATED_DIRECTIVE.lastIndex = 0;
+  const negated = NEGATED_DIRECTIVE.test(framing);
+  NEGATED_DIRECTIVE.lastIndex = 0;
+  if (!negated && !RESIST_LABEL.test(framing)) return false;
   return !DIRECTS_USE.test(framing.replace(NEGATED_DIRECTIVE, " "));
 }
+var CITED_MATERIAL = String.raw`(?:examples?|quotes?|quotations?|blocks?|texts?|snippets?|instructions?|polic(?:y|ies)|prompts?|payloads?|strings?|lines?)`;
+var BACK_REFERENCE = new RegExp(
+  String.raw`\b(?:apply|follow|obey|do|execute|run|use|adopt|comply(?:\s+with)?|carry\s+out|act\s+on)\b[^.;!?\n]{0,60}?` + String.raw`(?:\b(?:the|this|that|these|those)\s+(?:\w+\s+){0,2}?${CITED_MATERIAL}\s+(?:above|below|earlier|before|here|preceding)\b` + String.raw`|\b(?:the|these)\s+(?:above|following|preceding|previous|earlier)\s+(?:\w+\s+){0,2}?${CITED_MATERIAL}\b)`,
+  "i"
+);
 var HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
 var CONTEXT_LINES = 4;
 function citationContext(lines, code) {
@@ -70337,22 +70352,59 @@ function citationContext(lines, code) {
     const first = firstLine6.get(u2.block);
     if (first === void 0 || u2.line < first) firstLine6.set(u2.block, u2.line);
   }
+  const lastLine = /* @__PURE__ */ new Map();
+  for (const u2 of code) {
+    if (u2.block === null) continue;
+    const last = lastLine.get(u2.block);
+    if (last === void 0 || u2.line > last) lastLine.set(u2.block, u2.line);
+  }
   const announced = /* @__PURE__ */ new Map();
   const isBlockLine = (i2) => blockOf.has(i2 + 1) || FENCE_OPEN.test(lines[i2] ?? "");
+  let pointedBack;
   return (line) => {
+    pointedBack ??= directsBackAtQuotes(lines, isBlockLine);
+    if (pointedBack) return NOT_CITING;
     const block = blockOf.get(line);
     if (block !== void 0) {
       let yes = announced.get(block);
       if (yes === void 0) {
         const first = firstLine6.get(block) ?? line;
-        yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first)));
+        const last = lastLine.get(block) ?? line;
+        yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first))) && !directsUse(followingParagraph(lines, last - 1, isBlockLine));
         announced.set(block, yes);
       }
       return yes ? { ...NOT_CITING, announced: true } : NOT_CITING;
     }
-    if (!framesAsResisted(withoutQuotes(proseContext(lines, line - 1, isBlockLine)))) return NOT_CITING;
+    const { text: text2, bottom } = proseContext(lines, line - 1, isBlockLine);
+    if (!framesAsResisted(withoutQuotes(text2))) return NOT_CITING;
+    if (directsUse(followingParagraph(lines, bottom, isBlockLine))) return NOT_CITING;
     return { ...NOT_CITING, prose: true, ...quoteCarry(lines, line - 1, isBlockLine) };
   };
+}
+function directsUse(text2) {
+  return DIRECTS_USE.test(withoutQuotes(text2).replace(NEGATED_DIRECTIVE, " "));
+}
+function directsBackAtQuotes(lines, isBlockLine) {
+  for (let i2 = 0; i2 < lines.length; i2 += 1) {
+    if (isBlockLine(i2)) continue;
+    const text2 = lines[i2] ?? "";
+    if (text2.trim() === "") continue;
+    if (BACK_REFERENCE.test(withoutQuotes(text2).replace(NEGATED_DIRECTIVE, " "))) return true;
+  }
+  return false;
+}
+function followingParagraph(lines, after2, isBlockLine) {
+  let i2 = after2 + 1;
+  while (i2 < lines.length && (FENCE_OPEN.test(lines[i2] ?? "") || /^[ \t>]*<\/(pre|code)\s*>/i.test(lines[i2] ?? ""))) i2 += 1;
+  while (i2 < lines.length && (lines[i2] ?? "").trim() === "") i2 += 1;
+  const paragraph = [];
+  while (i2 < lines.length && paragraph.length < CONTEXT_LINES) {
+    const text2 = lines[i2] ?? "";
+    if (text2.trim() === "" || isBlockLine(i2)) break;
+    paragraph.push(text2);
+    i2 += 1;
+  }
+  return paragraph.join(" ");
 }
 function quoteCarry(lines, at, isBlockLine) {
   const inParagraph = (i2) => i2 >= 0 && i2 < lines.length && (lines[i2] ?? "").trim() !== "" && !isBlockLine(i2);
@@ -70404,7 +70456,7 @@ function proseContext(lines, at, isBlockLine) {
       i2 -= 1;
     }
   }
-  return [...intro, ...own].join(" ");
+  return { text: [...intro, ...own].join(" "), bottom };
 }
 function quotedPositions(text2, carry) {
   const inside = new Uint8Array(text2.length);
