@@ -149,6 +149,16 @@ version bump.
     on the same 75 skills: `writing-rules` stays 40 and `mcp-integration` 20;
     plugin-dev's `hook-development`, already DO_NOT_INSTALL from its own
     scripts, gains a high for a real `nc … statsd.local 8125` line.
+- **dev-guardian's own `skills/` scored DO_NOT_INSTALL (60) under
+  `scan_skill`** — already 55 at 3.0.0. `guardian-scanskill`'s "what it
+  detects" table quoted the phrases the prompt-level rules catch (an
+  instruction override, a request for the system prompt, a demand to be used
+  on every request). The table now describes each category without quoting a
+  working payload, and the skill's body is in European Portuguese like the
+  rest; table rows are NOT scored lower, which would hide a real injection
+  written as one. `skills/` now reads 5, SAFE (one low), and `commands/` 0. A
+  test holds every skill and command to no high or critical finding from any
+  pass, and each directory to SAFE or REVIEW.
 
 ## [3.0.0] - 2026-09-29
 
