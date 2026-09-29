@@ -43161,6 +43161,18 @@ async function loadProjectExclusions(projectPath) {
     semgrepAnchor
   };
 }
+var PROBE_CHILD = ".guardian-probe-7f3a";
+function submodulesNotIgnored(projectPath, submodules) {
+  if (submodules.length === 0) return [];
+  let text2;
+  try {
+    text2 = readFileSync12(join13(projectPath, GUARDIAN_IGNORE_FILE), "utf8");
+  } catch {
+    return [...submodules];
+  }
+  const matcher = compileIgnore(text2);
+  return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
+}
 function projectPathTest(projectPath) {
   const exists = /* @__PURE__ */ new Map();
   const onDisk2 = (segments) => {
@@ -47394,11 +47406,14 @@ function withProjectConfig(run, files, decides) {
 async function semgrepCoverageGaps(projectPath, opts = {}) {
   const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== void 0 ? { only: opts.files } : {});
   if (opts.submodules !== void 0) {
-    const out2 = { oversized: sized.files, submodules: [...opts.submodules].sort() };
+    const out2 = {
+      oversized: sized.files,
+      submodules: submodulesNotIgnored(projectPath, opts.submodules).sort()
+    };
     if (sized.incomplete !== void 0) out2.incomplete = sized.incomplete;
     return out2;
   }
-  const all = await initialisedSubmodules(projectPath);
+  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
   const among = opts.among ?? opts.files;
   const submodules = among === void 0 ? all : all.filter((sub) => among.some((p) => {
     const posix2 = p.split("\\").join("/");
@@ -48513,6 +48528,7 @@ async function noteSubmodules(projectPath, result, range) {
     }
     submodules = await gitlinksAmong(projectPath, range.head, changed);
   }
+  submodules = submodulesNotIgnored(projectPath, submodules);
   if (submodules.length === 0) return;
   const note = describeSubmodules(submodules);
   const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === "ok") ?? result.tools_run.find((t) => t.status === "ok") ?? result.tools_run[0];

@@ -157,7 +157,9 @@ version bump.
   files (a `vendor/lib` with an `eval` and a committed AWS key, measured) were never scanned while `scan_sast` and
   `scan_secrets` read coverage full. An initialised submodule with content is now a named gap — "submodule
   contents not scanned: vendor/lib", the pass `ok` and listed missing, coverage partial — and still not scanned
-  (scan it as its own project).
+  (scan it as its own project). One the project's `.guardianignore` excludes — by name (`libs/core`), by a
+  directory above it (`libs/`) or all of its contents (`libs/core/**`) — is not the project's to scan and no gap,
+  for Semgrep and gitleaks alike; excluding only some of its files (`libs/core/*.js`) leaves it one.
 - Both gaps (files over Semgrep's size limit, submodules) are applied by every Semgrep caller from one place,
   `runners/semgrepCoverageGaps.ts`: `scan_sast` (native, Docker fallback and scoped), `bug_hunt`, `scan_wordpress`,
   `review_pr`, `compliance_check`'s RGPD pack and `map_attack_surface` (a route in an unread file is missing, so

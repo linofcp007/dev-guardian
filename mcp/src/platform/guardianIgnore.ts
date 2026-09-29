@@ -311,6 +311,30 @@ export async function loadProjectExclusions(
   };
 }
 
+/** A name no file has, to ask whether EVERYTHING inside a directory is excluded (`libs/core/**`). */
+const PROBE_CHILD = '.guardian-probe-7f3a';
+
+/**
+ * The submodules (project-relative directories) the project's
+ * `.guardianignore` leaves in (round 4, item 6). One it excludes — by name
+ * (`libs/core`), by a directory above it (`libs/`), or all of its contents
+ * (`libs/core/**`) — is not the project's to scan, so its unscanned
+ * contents are no gap; one it excludes only part of (`libs/core/*.js`) still
+ * is. A `.guardianignore` that cannot be read excludes nothing here: the gap
+ * stays named.
+ */
+export function submodulesNotIgnored(projectPath: string, submodules: readonly string[]): string[] {
+  if (submodules.length === 0) return [];
+  let text: string;
+  try {
+    text = readFileSync(join(projectPath, GUARDIAN_IGNORE_FILE), 'utf8');
+  } catch {
+    return [...submodules];
+  }
+  const matcher = compileIgnore(text);
+  return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
+}
+
 /**
  * Is a finding's `file_path` a path IN the project — the file itself, or a
  * directory it would sit in (a secret in a file a later commit deleted)? A

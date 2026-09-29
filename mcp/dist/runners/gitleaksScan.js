@@ -77,6 +77,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
 import { openPrivateReportDir, sanitizeGitleaksReport } from '../secrets/verify/rawReport.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
 import { changedFiles, countCommits, describeSubmodules, git, gitlinksAmong, initialisedSubmodules, repoState, resolveCommit, shallowBoundary, uncommittedFiles, } from './git.js';
@@ -244,6 +245,8 @@ range) {
         }
         submodules = await gitlinksAmong(projectPath, range.head, changed);
     }
+    // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
+    submodules = submodulesNotIgnored(projectPath, submodules);
     if (submodules.length === 0)
         return;
     const note = describeSubmodules(submodules);

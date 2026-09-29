@@ -17,6 +17,7 @@ import {
   GUARDIAN_IGNORE_FILE,
   loadProjectExclusions,
   semgrepExcludeArgs,
+  submodulesNotIgnored,
   trivySkipArgs,
 } from '../../../src/platform/guardianIgnore.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -266,5 +267,30 @@ describe('loadProjectExclusions', () => {
     // The result filter still honours it exactly.
     expect(ex.ignores('data/new.py')).toBe(true);
     expect(ex.ignores('x/data/keep.py')).toBe(false);
+  });
+});
+
+/**
+ * Round 4, item 6: an initialised submodule the project's `.guardianignore`
+ * excludes is not the project's to scan — no "submodule contents not
+ * scanned" gap. It used to be named whatever the ignore file said.
+ */
+describe('submodulesNotIgnored', () => {
+  const project = (ignore: string | null): string => {
+    const dir = makeTempDir('guardian-ignore-submodules-');
+    if (ignore !== null) writeFileSync(join(dir, GUARDIAN_IGNORE_FILE), ignore);
+    return dir;
+  };
+
+  it.each([['libs/core'], ['libs/'], ['libs/core/**'], ['/libs/core/']])('%s excludes the submodule libs/core', (pattern) => {
+    expect(submodulesNotIgnored(project(`${pattern}\n`), ['libs/core', 'vendor/x'])).toEqual(['vendor/x']);
+  });
+
+  it('a pattern that excludes only some of its files leaves it a gap', () => {
+    expect(submodulesNotIgnored(project('libs/core/*.js\n'), ['libs/core'])).toEqual(['libs/core']);
+  });
+
+  it('no .guardianignore excludes nothing', () => {
+    expect(submodulesNotIgnored(project(null), ['libs/core'])).toEqual(['libs/core']);
   });
 });

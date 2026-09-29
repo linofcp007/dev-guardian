@@ -163,6 +163,22 @@ describe('initialised submodules are a named gap (real scanners)', () => {
     },
   );
 
+  // Round 4, item 6: a submodule the project's .guardianignore excludes is no gap.
+  it.skipIf(!SEMGREP || !GITLEAKS)('a submodule .guardianignore excludes is no gap, for Semgrep and gitleaks', async () => {
+    for (const pattern of ['vendor/lib', 'vendor/', 'vendor/lib/**']) {
+      const top = await superproject();
+      writeFileSync(join(top, '.guardianignore'), `${pattern}\n`);
+      await git(top, 'add', '.guardianignore');
+      await git(top, 'commit', '-q', '-m', 'ignore the submodule');
+      const sast = await run('scan_sast', top, { local_only: true });
+      expect(sast.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '', pattern).not.toMatch(/submodule/);
+      expect(sast.missing_tools, pattern).not.toContain('semgrep');
+      const secrets = await run('scan_secrets', top);
+      for (const t of secrets.tools_run) expect(t.reason ?? '', pattern).not.toMatch(/submodule/);
+      expect(secrets.missing_tools, pattern).not.toContain('gitleaks');
+    }
+  });
+
   it.skipIf(!SEMGREP)('a submodule declared but not initialised (no content) is no gap', async () => {
     const top = await superproject();
     const clone = resolveProjectPath(makeTempDir('submodule-clone-')).path;

@@ -13,7 +13,8 @@
  *   - **Git submodules.** Semgrep lists its targets with git, which holds an
  *     initialised submodule as one gitlink, so none of its files is scanned
  *     (measured: a `vendor/lib` with an `eval` read full). They are named,
- *     never scanned: a submodule is its own project.
+ *     never scanned: a submodule is its own project. One the project's
+ *     `.guardianignore` excludes is not named (round 4, item 6).
  *   - **A listing that stopped early** (the walk outside git reached its
  *     directory ceiling): files below it were not checked for their size, so
  *     the run cannot be called complete either.
@@ -25,6 +26,7 @@
  */
 
 import { describeOversized, oversizedSourceFilesAsync, type OversizedFile } from '../frameworks/projectLanguages.js';
+import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
 import type { ToolRun } from '../types.js';
 import { describeSubmodules, initialisedSubmodules } from './git.js';
 
@@ -57,11 +59,14 @@ export async function semgrepCoverageGaps(
 ): Promise<SemgrepCoverageGaps> {
   const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== undefined ? { only: opts.files } : {});
   if (opts.submodules !== undefined) {
-    const out: SemgrepCoverageGaps = { oversized: sized.files, submodules: [...opts.submodules].sort() };
+    const out: SemgrepCoverageGaps = {
+      oversized: sized.files,
+      submodules: submodulesNotIgnored(projectPath, opts.submodules).sort(),
+    };
     if (sized.incomplete !== undefined) out.incomplete = sized.incomplete;
     return out;
   }
-  const all = await initialisedSubmodules(projectPath);
+  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
   const among = opts.among ?? opts.files;
   const submodules =
     among === undefined
