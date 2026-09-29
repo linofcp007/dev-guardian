@@ -176,18 +176,20 @@ export function checkSemgrepReport(args: {
    */
   ruleIdOf?: (checkId: string) => string;
   /**
-   * The stored ids of the plugin's own packs' rules (`configs/semgrep/`,
-   * what scan_sast and review_pr append). A fixpoint timeout that names one
-   * of them as its only rule is the pack's gap, not the scan's
-   * ({@link PluginPackFixpoint}). None when omitted.
+   * The plugin's own packs' rules (`configs/semgrep/`, what scan_sast and
+   * review_pr append) as Semgrep spells them in THIS run, prefix included
+   * (`semgrepRuleIds.ts#pluginPackCheckIds`) — matched against the raw id a
+   * fixpoint timeout names, never a normalised one: a project rule named
+   * like a pack rule is spelled bare, and is not the pack's (round 4, A-1).
+   * A timeout whose only rule is one of them is the pack's gap, not the
+   * scan's ({@link PluginPackFixpoint}). None when omitted.
    */
-  pluginPackRuleIds?: ReadonlySet<string>;
+  pluginPackCheckIds?: ReadonlySet<string>;
   /**
-   * Whether any config of the run besides the plugin's packs can hold a
-   * taint rule (`semgrepRuleIds.ts#mayHoldTaintRules`: a registry pack can,
-   * a local file only if it declares one). Default true. When false, a
-   * timeout that names a pack rule first of several is the pack's too:
-   * every rule that can time out is the pack's.
+   * Whether any config of the run besides the plugin's packs may hold a
+   * taint rule (`semgrepRuleIds.ts#mayHoldTaintRules`: unless proven not
+   * to). Default true. When false, a timeout that names a pack rule first
+   * of several is the pack's too: every rule that can time out is the pack's.
    */
   nonPackTaintRules?: boolean;
 }): SemgrepReportCheck {
@@ -211,12 +213,7 @@ export function checkSemgrepReport(args: {
   // Functions the taint analysis gave up on (the module comment): per file,
   // project-relative, beside `errors[]` rather than in it. Those of the
   // plugin's pack alone are its own gap, and never the verdict's.
-  const all = fixpointTimeoutsOf(
-    root,
-    args.ruleIdOf ?? ((id) => id),
-    args.pluginPackRuleIds ?? new Set(),
-    args.nonPackTaintRules ?? true,
-  );
+  const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? new Set(), args.nonPackTaintRules ?? true);
   const fixpoint = all.scan;
   const fixpointFiles = relative(fixpoint.files);
   const packGap: PluginPackFixpoint | null =
@@ -308,18 +305,18 @@ export interface PluginPackFixpoint {
  */
 function fixpointTimeoutsOf(
   root: unknown,
-  ruleIdOf: (checkId: string) => string,
-  packRuleIds: ReadonlySet<string>,
+  packCheckIds: ReadonlySet<string>,
   nonPackTaintRules: boolean,
 ): { scan: FixpointTally; pack: FixpointTally } {
   const scan = new FixpointTally(FIXPOINT_TIMEOUT_TYPE);
   const pack = new FixpointTally(FIXPOINT_TIMEOUT_PACK_TYPE);
   for (const entry of asArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts'))) {
     const rules = rulesOf(getString(entry, 'message'));
-    // The pack's alone when its rule is the only one named — or when it is
-    // named first of several and no other config of the run can hold a taint
-    // rule at all (then every rule that can time out is the pack's).
-    const firstIsPack = rules !== null && packRuleIds.size > 0 && packRuleIds.has(ruleIdOf(rules.first));
+    // The pack's alone when its rule — as Semgrep spells the PACK's, raw,
+    // prefix included — is the only one named, or is named first of several
+    // and no other config of the run can hold a taint rule at all (then
+    // every rule that can time out is the pack's).
+    const firstIsPack = rules !== null && packCheckIds.has(rules.first);
     const isPack = firstIsPack && (rules.count === 1 || !nonPackTaintRules);
     (isPack ? pack : scan).add(getString(getProp(entry, 'location'), 'path'));
   }

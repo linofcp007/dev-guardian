@@ -249,22 +249,23 @@ export function semgrepOnFiles(args: {
    * findings are, and a run in which none loaded is failed. `loadedFrom`
    * narrows "none loaded" to the configs that make the scan (scan_sast's
    * project and registered rules — not the plugin's LLM pack); default: all.
-   * `packRuleIds`: the stored ids of the plugin's packs' rules, whose own
-   * fixpoint timeouts are the pack's gap (`semgrepReport.ts`);
-   * `nonPackTaintRules`: whether any other config can hold a taint rule.
+   * `packCheckIds`: the plugin's packs' rules as Semgrep spells them in this
+   * run (`semgrepRuleIds.ts#pluginPackCheckIds`), whose own fixpoint
+   * timeouts are the pack's gap (`semgrepReport.ts`);
+   * `nonPackTaintRules`: whether any other config may hold a taint rule.
    */
   rules?: {
     configs: readonly string[];
     ctx: RuleIdContext;
     loadedFrom?: readonly string[];
-    packRuleIds?: ReadonlySet<string>;
+    packCheckIds?: ReadonlySet<string>;
     nonPackTaintRules?: boolean;
   };
 }): Promise<FileBatchScanResult> {
   const rules = args.rules;
   const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
   const pack = {
-    ...(rules?.packRuleIds !== undefined ? { pluginPackRuleIds: rules.packRuleIds } : {}),
+    ...(rules?.packCheckIds !== undefined ? { pluginPackCheckIds: rules.packCheckIds } : {}),
     ...(rules?.nonPackTaintRules !== undefined ? { nonPackTaintRules: rules.nonPackTaintRules } : {}),
   };
   return scanFileBatches({

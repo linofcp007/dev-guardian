@@ -41,7 +41,7 @@ import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { semgrepEngineOf } from '../runners/semgrepReport.js';
-import { mayHoldTaintRules, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
+import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
@@ -218,7 +218,7 @@ async function runSemgrep(ctx, input, out, args) {
             ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot },
             loadedFrom: plan.ruleConfigs,
             // The plugin's pack's own fixpoint timeouts are its gap, not the review's.
-            packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+            packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: args.scanRoot }),
             nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs),
         },
     });

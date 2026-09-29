@@ -167,7 +167,7 @@ export function semgrepOnFiles(args) {
     const rules = args.rules;
     const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
     const pack = {
-        ...(rules?.packRuleIds !== undefined ? { pluginPackRuleIds: rules.packRuleIds } : {}),
+        ...(rules?.packCheckIds !== undefined ? { pluginPackCheckIds: rules.packCheckIds } : {}),
         ...(rules?.nonPackTaintRules !== undefined ? { nonPackTaintRules: rules.nonPackTaintRules } : {}),
     };
     return scanFileBatches({

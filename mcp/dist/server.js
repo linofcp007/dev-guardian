@@ -37955,24 +37955,44 @@ function mayHoldTaintRules(configs, readAt = (c3) => c3) {
     if (kind === null) return true;
     const at = readAt(config2);
     if (kind === "file") {
-      if (fileHoldsTaintRule(at) !== false) return true;
+      if (fileMayHoldTaintRule(at)) return true;
       continue;
     }
     const files = yamlFilesUnder(at, TAINT_SCAN_FILE_LIMIT);
-    if (files === null || files.some((file) => fileHoldsTaintRule(file) !== false)) return true;
+    if (files === null || files.some((file) => fileMayHoldTaintRule(file))) return true;
   }
   return false;
 }
-function fileHoldsTaintRule(file) {
-  let doc;
+var TAINT_TOKENS = /taint|pattern-sources|pattern-sinks/i;
+function fileMayHoldTaintRule(file) {
+  let text;
   try {
-    doc = (0, import_yaml.parse)(readFileSync6(file, "utf8"));
+    text = readFileSync6(file, "utf8");
   } catch {
-    return null;
+    return true;
   }
-  const rules = doc !== null && typeof doc === "object" ? doc.rules : void 0;
-  if (!Array.isArray(rules)) return null;
-  return rules.some((rule) => rule !== null && typeof rule === "object" && rule.mode === "taint");
+  if (TAINT_TOKENS.test(text)) return true;
+  try {
+    (0, import_yaml.parse)(text);
+  } catch {
+    return true;
+  }
+  return false;
+}
+function pluginPackCheckIds(packConfigs, opts = {}) {
+  const out = /* @__PURE__ */ new Set();
+  for (const config2 of packConfigs) {
+    const fp = flavourOf(config2, opts.cwd);
+    const absolute = fp.isAbsolute(config2) ? config2 : opts.cwd !== void 0 ? fp.resolve(opts.cwd, config2) : config2;
+    const underCwd = opts.cwd === void 0 ? null : insideRelative(fp, opts.cwd, absolute);
+    const prefixes = /* @__PURE__ */ new Set([semgrepConfigPrefix(config2), semgrepConfigPrefix(absolute), ...underCwd !== null ? [semgrepConfigPrefix(underCwd)] : []]);
+    const ids2 = ruleIdsInFile(opts.readAt !== void 0 ? opts.readAt(config2) : config2);
+    for (const prefix of prefixes) {
+      if (prefix.length === 0) continue;
+      for (const id of ids2) out.add(`${prefix}.${id}`);
+    }
+  }
+  return out;
 }
 function yamlFilesUnder(dir, limit) {
   const out = [];
@@ -40994,12 +41014,7 @@ function checkSemgrepReport(args) {
   const errorEntries = asArray(getProp(root, "errors"));
   const errors = describeErrors(errorEntries);
   const exitClean = exitCode === 0 || exitCode === 1;
-  const all = fixpointTimeoutsOf(
-    root,
-    args.ruleIdOf ?? ((id) => id),
-    args.pluginPackRuleIds ?? /* @__PURE__ */ new Set(),
-    args.nonPackTaintRules ?? true
-  );
+  const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? /* @__PURE__ */ new Set(), args.nonPackTaintRules ?? true);
   const fixpoint = all.scan;
   const fixpointFiles = relative25(fixpoint.files);
   const packGap = all.pack.functions > 0 ? { files: relative25(all.pack.files), functions: all.pack.functions } : null;
@@ -41050,12 +41065,12 @@ function nameAFew(names, separator = ", ") {
   const more = names.length - FIXPOINT_FILES_NAMED;
   return [...names.slice(0, FIXPOINT_FILES_NAMED), ...more > 0 ? [`+${more} more`] : []].join(separator);
 }
-function fixpointTimeoutsOf(root, ruleIdOf, packRuleIds, nonPackTaintRules) {
+function fixpointTimeoutsOf(root, packCheckIds, nonPackTaintRules) {
   const scan2 = new FixpointTally(FIXPOINT_TIMEOUT_TYPE);
   const pack = new FixpointTally(FIXPOINT_TIMEOUT_PACK_TYPE);
   for (const entry of asArray(getProp(getProp(root, "time"), "fixpoint_timeouts"))) {
     const rules = rulesOf(getString(entry, "message"));
-    const firstIsPack = rules !== null && packRuleIds.size > 0 && packRuleIds.has(ruleIdOf(rules.first));
+    const firstIsPack = rules !== null && packCheckIds.has(rules.first);
     const isPack = firstIsPack && (rules.count === 1 || !nonPackTaintRules);
     (isPack ? pack : scan2).add(getString(getProp(entry, "location"), "path"));
   }
@@ -44426,7 +44441,7 @@ function semgrepOnFiles(args) {
   const rules = args.rules;
   const ruleIdOf = rules === void 0 ? void 0 : localRuleIdNormalizer(rules.configs, rules.ctx);
   const pack = {
-    ...rules?.packRuleIds !== void 0 ? { pluginPackRuleIds: rules.packRuleIds } : {},
+    ...rules?.packCheckIds !== void 0 ? { pluginPackCheckIds: rules.packCheckIds } : {},
     ...rules?.nonPackTaintRules !== void 0 ? { nonPackTaintRules: rules.nonPackTaintRules } : {}
   };
   return scanFileBatches({
@@ -44999,7 +45014,12 @@ function judgeSemgrepRun(args) {
     // A rule that did not load is named as its findings are stored.
     ruleIdOf: localRuleIdNormalizer(configs, rules),
     // A fixpoint timeout of the plugin's pack alone is its gap, not the scan's.
-    pluginPackRuleIds: new Set(packConfigs.flatMap((file) => ruleIdsInFile(file))),
+    // Spelled as Semgrep spells the pack in this run (the container's mount
+    // in Docker), read on the host.
+    pluginPackCheckIds: pluginPackCheckIds(
+      configs.filter((c3) => !loadedFrom.includes(c3)),
+      { cwd: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath, readAt }
+    ),
     nonPackTaintRules: mayHoldTaintRules(loadedFrom, readAt)
   });
   const packGap = check2.plugin_pack_fixpoint;
@@ -45139,7 +45159,7 @@ async function runSemgrepOnScope(args) {
       configs: plan.rulePacks,
       ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
       loadedFrom: plan.ruleConfigs,
-      packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+      packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: ctx.projectPath }),
       nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
     }
   });
@@ -49330,7 +49350,7 @@ async function runSemgrep2(ctx, input, out, args) {
       ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot },
       loadedFrom: plan.ruleConfigs,
       // The plugin's pack's own fixpoint timeouts are its gap, not the review's.
-      packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+      packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: args.scanRoot }),
       nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
     }
   });

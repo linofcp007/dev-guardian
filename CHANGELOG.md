@@ -63,7 +63,11 @@ version bump.
   with no model call in it (6 to 22 per run on `mcp/src`), which made CI red on most loaded runs
   with nothing to accept. It is recorded (`Fixpoint timeout (plugin pack)`, so history still reads
   those files as not re-measured), named in a note and in `plugin_packs.llm: partial`, and never
-  makes the run partial or reaches the gate. Semgrep before 1.170 does not emit the field (1.86.0
+  makes the run partial or reaches the gate. "The pack's alone" is read strictly: its rule as the
+  pack's own file is spelled in that run (never a bare id, which a project rule of the same name
+  has), and a timeout naming several rules only when no other config may hold a taint rule — a
+  local config may unless its text names none of `taint`, `pattern-sources`, `pattern-sinks`.
+  Semgrep before 1.170 does not emit the field (1.86.0
   through 1.120.1, measured): the run carries a named note instead, said once beside the LLM
   pack's version note. This makes fixpoint timeouts visible, not every loss of taint analysis:
   semgrep-core also stops tracking a function past a fixed number of tainted variables (a chain of

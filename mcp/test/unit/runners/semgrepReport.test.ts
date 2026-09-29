@@ -451,7 +451,8 @@ describe('checkSemgrepReport: taint fixpoint timeouts (time.fixpoint_timeouts)',
  */
 describe('checkSemgrepReport: fixpoint timeouts attributed by rule', () => {
   const PREFIX = 'C.Users.dev..claude.plugins.cache.dev-guardian.3.0.0.configs.semgrep';
-  const PACK = new Set(['llm-output-to-interpreter-js', 'llm-request-in-system-prompt-js']);
+  // The pack's rules as Semgrep spells them in the run (pluginPackCheckIds): prefixed, never bare.
+  const PACK = new Set([`${PREFIX}.llm-output-to-interpreter-js`, `${PREFIX}.llm-request-in-system-prompt-js`]);
   const strip = (id: string): string => (id.startsWith(`${PREFIX}.`) ? id.slice(PREFIX.length + 1) : id);
   const at = (path: string, rules: string) => ({
     error_type: 'Fixpoint timeout',
@@ -466,7 +467,7 @@ describe('checkSemgrepReport: fixpoint timeouts attributed by rule', () => {
       outcome: 'completed',
       targets: 1,
       ruleIdOf: strip,
-      pluginPackRuleIds: PACK,
+      pluginPackCheckIds: PACK,
     });
 
   it('only a pack rule: the run stays ok, the pack gap recorded with its own type', () => {
@@ -493,6 +494,8 @@ describe('checkSemgrepReport: fixpoint timeouts attributed by rule', () => {
   it.each([
     ['a registry rule', 'rules: 1, first: javascript.lang.security.audit.detect-eval'],
     ['a project rule', 'rules: 1, first: my-rules.no-exec'],
+    // Round 4, A-1: a project-root rule named like a pack rule is spelled bare.
+    ['a project-root rule whose id equals a pack rule\'s', 'rules: 1, first: llm-output-to-interpreter-js'],
     ['more than one rule, the first a pack rule (the others are unknown)', `rules: 2, first: ${PREFIX}.llm-output-to-interpreter-js`],
     ['a message that names no rule', 'no rule list here'],
   ])('%s: the scan\'s — partial, as before', (_label, rules) => {
@@ -516,7 +519,7 @@ describe('checkSemgrepReport: fixpoint timeouts attributed by rule', () => {
   it('several rules, the first a pack rule: the pack\'s only when no other config can hold a taint rule', () => {
     const entry = at('hooks/bashGuard.ts', `rules: 2, first: ${PREFIX}.llm-request-in-system-prompt-js`);
     const raw = report({ paths: { scanned: ['hooks/bashGuard.ts'] }, time: { fixpoint_timeouts: [entry] } });
-    const base = { raw, exitCode: 0, outcome: 'completed' as const, targets: 1, ruleIdOf: strip, pluginPackRuleIds: PACK };
+    const base = { raw, exitCode: 0, outcome: 'completed' as const, targets: 1, ruleIdOf: strip, pluginPackCheckIds: PACK };
     expect(checkSemgrepReport({ ...base, nonPackTaintRules: false }).verdict).toBe('ok');
     expect(checkSemgrepReport({ ...base, nonPackTaintRules: false }).plugin_pack_fixpoint?.functions).toBe(1);
     expect(checkSemgrepReport({ ...base, nonPackTaintRules: true }).verdict).toBe('partial');
@@ -582,6 +585,50 @@ describe('mayHoldTaintRules', () => {
     expect(mayHoldTaintRules([rulesDir])).toBe(false);
     writeFileSync(join(rulesDir, 'nested', 'b.yaml'), TAINT);
     expect(mayHoldTaintRules([rulesDir])).toBe(true);
+  });
+
+  // Round 4, A-2: Semgrep 1.176.1 runs a rule with a `taint:` block and no
+  // `mode:` as a taint rule. The test is on tokens, never on a key.
+  it('any file naming taint, pattern-sources or pattern-sinks may — a `taint:` block with no mode, a comment, any case', async () => {
+    const { mayHoldTaintRules } = await import('../../../src/runners/semgrepRuleIds.js');
+    const { makeTempDir } = await import('../../helpers/tempDir.js');
+    const { writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dir = makeTempDir('taint-tokens-');
+    const files: Record<string, string> = {
+      'block.yml':
+        'rules:\n  - id: b\n    languages: [python]\n    severity: WARNING\n    message: m\n' +
+        '    taint:\n      sources:\n        - pattern: input()\n      sinks:\n        - pattern: exec(...)\n',
+      'comment.yml': `# TAINT is not used here\n${SEARCH}`,
+      'sinks.yml': `${SEARCH}# pattern-sinks\n`,
+    };
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+      expect([name, mayHoldTaintRules([join(dir, name)])]).toEqual([name, true]);
+    }
+    writeFileSync(join(dir, 'search.yml'), SEARCH);
+    expect(mayHoldTaintRules([join(dir, 'search.yml')])).toBe(false);
+  });
+});
+
+describe('pluginPackCheckIds', () => {
+  it('spells each pack rule as Semgrep does in the run — the full path natively, guardian-packs in Docker — never bare', async () => {
+    const { pluginPackCheckIds, semgrepConfigPrefix } = await import('../../../src/runners/semgrepRuleIds.js');
+    const { makeTempDir } = await import('../../helpers/tempDir.js');
+    const { writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dir = makeTempDir('pack-ids-');
+    const pack = join(dir, 'llm.yml');
+    writeFileSync(pack, 'rules:\n  - id: llm-a\n    pattern: x\n    message: m\n    languages: [python]\n    severity: INFO\n');
+    const native = pluginPackCheckIds([pack], { cwd: makeTempDir('proj-') });
+    expect([...native]).toEqual([`${semgrepConfigPrefix(pack)}.llm-a`]);
+    expect(native.has('llm-a')).toBe(false);
+    const docker = pluginPackCheckIds(['/guardian-packs/llm.yml'], { cwd: '/src', readAt: () => pack });
+    expect([...docker]).toEqual(['guardian-packs.llm-a']);
+    // A pack inside Semgrep's working directory is also spelled relative to it.
+    const inside = pluginPackCheckIds([pack], { cwd: dir });
+    expect(inside.has(`${semgrepConfigPrefix(pack)}.llm-a`)).toBe(true);
+    expect(inside.has('llm-a')).toBe(false);
   });
 });
 

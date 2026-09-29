@@ -116,7 +116,7 @@ export function checkSemgrepReport(args) {
     // Functions the taint analysis gave up on (the module comment): per file,
     // project-relative, beside `errors[]` rather than in it. Those of the
     // plugin's pack alone are its own gap, and never the verdict's.
-    const all = fixpointTimeoutsOf(root, args.ruleIdOf ?? ((id) => id), args.pluginPackRuleIds ?? new Set(), args.nonPackTaintRules ?? true);
+    const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? new Set(), args.nonPackTaintRules ?? true);
     const fixpoint = all.scan;
     const fixpointFiles = relative(fixpoint.files);
     const packGap = all.pack.functions > 0 ? { files: relative(all.pack.files), functions: all.pack.functions } : null;
@@ -183,15 +183,16 @@ export function nameAFew(names, separator = ', ') {
  * many functions in all; and how many entries named no file — split into
  * the scan's and the plugin's pack's ({@link PluginPackFixpoint}).
  */
-function fixpointTimeoutsOf(root, ruleIdOf, packRuleIds, nonPackTaintRules) {
+function fixpointTimeoutsOf(root, packCheckIds, nonPackTaintRules) {
     const scan = new FixpointTally(FIXPOINT_TIMEOUT_TYPE);
     const pack = new FixpointTally(FIXPOINT_TIMEOUT_PACK_TYPE);
     for (const entry of asArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts'))) {
         const rules = rulesOf(getString(entry, 'message'));
-        // The pack's alone when its rule is the only one named — or when it is
-        // named first of several and no other config of the run can hold a taint
-        // rule at all (then every rule that can time out is the pack's).
-        const firstIsPack = rules !== null && packRuleIds.size > 0 && packRuleIds.has(ruleIdOf(rules.first));
+        // The pack's alone when its rule — as Semgrep spells the PACK's, raw,
+        // prefix included — is the only one named, or is named first of several
+        // and no other config of the run can hold a taint rule at all (then
+        // every rule that can time out is the pack's).
+        const firstIsPack = rules !== null && packCheckIds.has(rules.first);
         const isPack = firstIsPack && (rules.count === 1 || !nonPackTaintRules);
         (isPack ? pack : scan).add(getString(getProp(entry, 'location'), 'path'));
     }

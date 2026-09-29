@@ -320,16 +320,23 @@
 # do ponto fixo em cinco corridas, todos das duas regras JS. Contados como os
 # outros, tornavam o `scan_sast` parcial e o gate de CI vermelho em quase
 # todas as corridas com carga, sem nada que o utilizador pudesse aceitar. Por
-# isso um timeout cuja UNICA regra é deste pack (`[rules: 1, first: llm-...]`,
-# depois do normalizador de ids) é uma lacuna do PACK: fica guardado com o
-# tipo `Fixpoint timeout (plugin pack)` (um resultado que falte nesse ficheiro
-# continua "nao re-medido"), numa nota com o nome disto e em
-# `plugin_packs.llm: partial` — e nao torna a corrida parcial nem chega ao
-# gate. Com varias regras (`rules: 2, first: llm-...`), o Semgrep so nomeia a
+# isso um timeout cuja UNICA regra é deste pack é uma lacuna do PACK: fica
+# guardado com o tipo `Fixpoint timeout (plugin pack)` (um resultado que
+# falte nesse ficheiro continua "nao re-medido"), numa nota com o nome disto
+# e em `plugin_packs.llm: partial` — e nao torna a corrida parcial nem chega
+# ao gate. A regra reconhece-se pela GRAFIA do proprio pack, tal como vem na
+# mensagem: o prefixo do caminho do ficheiro (`[rules: 1, first:
+# C.Users....configs.semgrep.llm-...]`), ou `guardian-packs.` em Docker —
+# nunca pelo id normalizado, porque uma regra na raiz do projeto com o mesmo
+# nome vem SEM prefixo (`first: llm-...`) e nao é do pack (revisao 4, A-1).
+# Com varias regras (`rules: 2, first: ...`), o Semgrep so nomeia a
 # primeira: conta como do pack so quando nenhuma outra config da corrida pode
-# ter uma regra de taint (um ficheiro local sem `mode: taint`; o registo pode
-# sempre); senao, e com qualquer outra regra ou uma mensagem sem regra, é da
-# corrida, como antes. Medido no corpus desta ronda, o pack sozinho, duas
+# ter uma regra de taint — e uma config local pode, a menos que se prove o
+# contrario: basta o texto nomear `taint`, `pattern-sources` ou
+# `pattern-sinks`, em qualquer sitio, ou nao se deixar ler (revisao 4, A-2:
+# o Semgrep 1.176.1 corre como taint uma regra com um bloco `taint:` e sem
+# `mode:`); o registo pode sempre. Senao, e com qualquer outra regra ou uma
+# mensagem sem regra, é da corrida, como antes. Medido no corpus desta ronda, o pack sozinho, duas
 # varreduras: 553 e 527 timeouts, 364 e 343 com uma so regra (311 e 288 das
 # duas regras JS), 189 e 184 com duas ou mais, nenhum sem regra. Numa copia do
 # `mcp/src` com um `.semgrep.yml` trivial em `local_only`, tres corridas

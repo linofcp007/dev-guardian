@@ -347,8 +347,10 @@ actually makes.
   LibreChat): the run is partial with the files named, type `Fixpoint
   timeout`, gated exactly like a per-rule `Timeout`, and on an engine without
   the field the run carries a named note instead. The exception is a timeout
-  whose only rule is one of the plugin's own packs' (`[rules: 1, first:
-  llm-…]`): that is the pack's gap — its JS rules have no literal to prefilter
+  whose only rule is one of the plugin's own packs', as the pack's rule is
+  spelled in that run (its config-path prefix, or `guardian-packs.` in
+  Docker — never a bare id, which a project-root rule of the same name has):
+  that is the pack's gap — its JS rules have no literal to prefilter
   on and time out on code with no model call in it — recorded as `Fixpoint
   timeout (plugin pack)`, noted, never the run's partial verdict nor the gate's.
   The **eighth** mode leaves no trace anywhere: semgrep-core tracks a fixed

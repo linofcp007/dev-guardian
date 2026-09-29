@@ -49,6 +49,9 @@ vi.mock('../../src/runners/semgrepRuleIds.js', async () => {
 });
 
 import type { PluginContext } from '../../src/context.js';
+import { evaluateGate } from '../../src/ci/gate.js';
+import { CI_EXIT } from '../../src/ci/types.js';
+import type { ToolRun } from '../../src/types.js';
 import { CUSTOM_RULES_META_KEY, customRulesMetaKey } from '../../src/platform/customRules.js';
 import { planSemgrepConfigs } from '../../src/runners/semgrepConfigs.js';
 import { ruleIdsInFile, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
@@ -1331,6 +1334,15 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
     message: `Fixpoint timeout while performing taint analysis at ${path}:10:2 [${rules}]`,
   });
   const PACK_RULE = `${semgrepConfigPrefix(LLM_PACK)}.llm-output-to-interpreter-js`;
+  /** The CI gate's exit code for this scan_sast result as its only step (ci/gate.ts). */
+  const gateExit = (r: { tools_run: unknown[]; missing_tools: string[] }): number =>
+    evaluateGate({
+      findings: [],
+      baseline: null,
+      failOn: 'high',
+      steps: [{ tool: 'scan_sast', ran: true, tools_run: r.tools_run as ToolRun[], missing_tools: r.missing_tools }],
+      droppedBaselineEntries: 0,
+    }).exitCode;
 
   it("the plugin pack's own fixpoint timeout: ok, full, a named note, plugin_packs.llm partial — and history not re-measured", async () => {
     await import('../../src/tools/diffScans.js');
@@ -1380,6 +1392,7 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
     expect(r.missing_tools).not.toContain('semgrep');
     expect(coverage(r)).toBe('full');
     expect(run.plugin_packs?.['llm']?.status).toBe('partial');
+    expect(gateExit(r)).toBe(CI_EXIT.PASS);
     // A project rule that IS a taint rule makes the same timeout ambiguous again.
     writeFileSync(
       join(project, '.semgrep.yml'),
@@ -1390,6 +1403,51 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
     const again = await runSast(project, makePlugin(project), { local_only: true });
     expect(semgrepRun(again)?.status).toBe('ok');
     expect(again.missing_tools).toContain('semgrep');
+    expect(gateExit(again)).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
+  // Round 4, A-1: a project-root rule whose id equals a pack rule's is spelled
+  // bare by Semgrep; the pack's own rule carries its config-path prefix.
+  // Matched through the normalised id, the project rule's timeout read as the
+  // pack's: full coverage, CI exit 0. Control: the same rule named otherwise.
+  it("a project rule named like a pack rule is not the pack's: partial, the gate exits 2 — as its differently named control", async () => {
+    const taintRule = (id: string): string =>
+      `rules:\n  - id: ${id}\n    mode: taint\n    languages: [python]\n    severity: WARNING\n    message: m\n` +
+      '    pattern-sources:\n      - pattern: input(...)\n    pattern-sinks:\n      - pattern: exec(...)\n';
+    for (const id of ['llm-output-to-interpreter-py', 'my-taint-exec']) {
+      const project = makeTempDir('sast-fixpoint-collide-');
+      writeFileSync(join(project, '.semgrep.yml'), taintRule(id), 'utf8');
+      mockSemgrepOnPath(0, {
+        ...FIXPOINT_REPORT,
+        time: { fixpoint_timeouts: [packFixpoint('sql/base.py', `rules: 1, first: ${id}`)] },
+      });
+      const r = await runSast(project, makePlugin(project), { local_only: true });
+      const run = semgrepRun(r) as SemgrepRun & { plugin_packs?: unknown };
+      expect([id, run.partially_parsed?.map((p) => p.type)]).toEqual([id, ['Fixpoint timeout']]);
+      expect([id, run.plugin_packs]).toEqual([id, undefined]);
+      expect([id, coverage(r), gateExit(r)]).toEqual([id, 'partial', CI_EXIT.INCOMPLETE_SCAN]);
+    }
+  });
+
+  // Round 4, A-2: Semgrep 1.176.1 runs a rule with a `taint:` block and no
+  // `mode:`. Grouped with the pack's rule in one function, the timeout names
+  // the pack rule first of two; read by `mode` alone, the project's rules
+  // looked taint-free and the pack took the group.
+  it("a project rule with a `taint:` block and no mode keeps a two-rule group the scan's: partial, the gate exits 2", async () => {
+    const project = makeTempDir('sast-fixpoint-taint-block-');
+    writeFileSync(
+      join(project, '.semgrep.yml'),
+      'rules:\n  - id: my-taint-exec\n    languages: [python]\n    severity: WARNING\n    message: m\n' +
+        '    taint:\n      sources:\n        - pattern: input(...)\n      sinks:\n        - pattern: exec(...)\n',
+      'utf8',
+    );
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      time: { fixpoint_timeouts: [packFixpoint('sql/base.py', `rules: 2, first: ${PACK_RULE.replace('-js', '-py')}`)] },
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(semgrepRun(r)?.partially_parsed?.map((p) => p.type)).toEqual(['Fixpoint timeout']);
+    expect([coverage(r), gateExit(r)]).toEqual(['partial', CI_EXIT.INCOMPLETE_SCAN]);
   });
 
   it("a scoped (batched) run attributes the pack's timeout the same way", async () => {

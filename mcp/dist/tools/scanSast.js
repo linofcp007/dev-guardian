@@ -94,7 +94,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
-import { localRuleIdNormalizer, mayHoldTaintRules, noRuleLoaded, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, mayHoldTaintRules, noRuleLoaded, pluginPackCheckIds, ruleIdsInFile, } from '../runners/semgrepRuleIds.js';
 import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, fromContainerPath, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
@@ -322,7 +322,9 @@ function judgeSemgrepRun(args) {
         // A rule that did not load is named as its findings are stored.
         ruleIdOf: localRuleIdNormalizer(configs, rules),
         // A fixpoint timeout of the plugin's pack alone is its gap, not the scan's.
-        pluginPackRuleIds: new Set(packConfigs.flatMap((file) => ruleIdsInFile(file))),
+        // Spelled as Semgrep spells the pack in this run (the container's mount
+        // in Docker), read on the host.
+        pluginPackCheckIds: pluginPackCheckIds(configs.filter((c) => !loadedFrom.includes(c)), { cwd: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath, readAt }),
         nonPackTaintRules: mayHoldTaintRules(loadedFrom, readAt),
     });
     const packGap = check.plugin_pack_fixpoint;
@@ -493,7 +495,7 @@ async function runSemgrepOnScope(args) {
             configs: plan.rulePacks,
             ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
             loadedFrom: plan.ruleConfigs,
-            packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+            packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: ctx.projectPath }),
             nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs),
         },
     });
