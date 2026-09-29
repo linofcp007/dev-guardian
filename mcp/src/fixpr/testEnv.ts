@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess } from '../runners/processRunner.js';
 import type { DerivedTestCommand } from './testCommand.js';
+import { packageManagerEnv } from './testCommandEnv.js';
 
 /** How long one dependency install may take. */
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -48,7 +49,18 @@ export async function prepareTestEnvironment(opts: {
   if (ignored.outcome !== 'completed') return { ok: true, command: null };
 
   const command = 'npm ci --ignore-scripts';
-  const result = await run({ command: 'npm', args: ['ci', '--ignore-scripts'], cwd: treePath, timeoutMs: INSTALL_TIMEOUT_MS });
+  // A fetch: the package-manager environment, never this server's
+  // (`testCommandEnv.ts#packageManagerEnv`). `--ignore-scripts` stops a
+  // lifecycle script, not where the fetch goes or which token it carries —
+  // that is why the tree's own `.npmrc` is set aside before this runs.
+  const result = await run({
+    command: 'npm',
+    args: ['ci', '--ignore-scripts'],
+    cwd: treePath,
+    env: packageManagerEnv(),
+    extendEnv: false,
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
   if (result.outcome !== 'completed') {
     const line = result.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
     return { ok: false, command, reason: `${command} ${result.outcome}${line !== undefined ? `: ${line}` : ''}` };

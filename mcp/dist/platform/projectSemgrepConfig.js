@@ -49,8 +49,9 @@
  * a real scan that lost one rule, which `scan_sast` surfaces via Semgrep's
  * exit 2 rather than by refusing the config.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { describeReadRefusal, presentInProject, readProjectText } from './projectFs.js';
 import { parse as parseYaml } from 'yaml';
 import { readManifest } from '../configdrift/manifest.js';
 /**
@@ -74,9 +75,12 @@ export function inspectProjectSemgrepConfigs(projectPath) {
         // A recorded target that is no longer on disk is drift, not breakage —
         // `detectConfigDrift` reports it as `target_missing` and the advisory
         // stays quiet about it, so saying it a second time here would be noise.
-        if (!existsSync(absolute))
+        if (!presentInProject(projectPath, candidate.target))
             continue;
-        const verdict = classify(absolute);
+        // The target is named by the manifest — the repository's file — so it is
+        // read contained in the project (`platform/projectFs.ts`): a target that
+        // climbs out, links out, or is a FIFO is unusable, never handed to Semgrep.
+        const verdict = classifyText(readProjectText(projectPath, candidate.target, MAX_SEMGREP_CONFIG_BYTES));
         if (verdict.ok) {
             usable.push({ path: absolute, target: candidate.target, via: candidate.via });
         }
@@ -99,16 +103,16 @@ export function resolveProjectSemgrepConfigs(projectPath) {
  * to a lost rule (exit 2, everything still scanned) rather than a lost scan.
  */
 export function isLoadableSemgrepConfig(path) {
-    return classify(path).ok;
+    return classifyText(readSmallText(path, MAX_SEMGREP_CONFIG_BYTES)).ok;
 }
-function classify(path) {
-    let text;
-    try {
-        text = readFileSync(path, 'utf8');
-    }
-    catch {
+/** The largest project Semgrep config read; the plugin's own largest pack is a few hundred KB. */
+const MAX_SEMGREP_CONFIG_BYTES = 16 * 1024 * 1024;
+function classifyText(read) {
+    if (read.status === 'absent')
         return { ok: false, reason: 'unreadable' };
-    }
+    if (read.status === 'refused')
+        return { ok: false, reason: describeReadRefusal(read.reason) };
+    const text = read.text;
     let doc;
     try {
         doc = parseYaml(text);

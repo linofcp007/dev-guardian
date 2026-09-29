@@ -39,9 +39,13 @@
  * and a user who registers `.semgrep/` and later deletes it would otherwise
  * poison every subsequent scan. Vanished entries are dropped.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { readSmallText } from '../hooks/configFile.js';
+import { listProjectDir } from './projectFs.js';
+/** The largest Semgrep rules file validated; the plugin's own largest pack is a few hundred KB. */
+const MAX_RULES_FILE_BYTES = 16 * 1024 * 1024;
 /**
  * The 2.0.x GLOBAL `runtime_meta` key. Still read (see the module comment),
  * never written. Per-project registrations live under
@@ -70,13 +74,24 @@ const PATTERN_KEYS = [
  * which the scan's own `errors[]` reports.
  */
 export function validateSemgrepRulesFile(path) {
-    let text;
-    try {
-        text = readFileSync(path, 'utf8');
-    }
-    catch {
+    // Bounded and regular-files-only (`hooks/configFile.ts`): a registered
+    // directory is often the project's own `rules/`, and a FIFO or a
+    // `/dev/zero` link in it was read without end. Not contained: the user
+    // registered this path, wherever it is.
+    const read = readSmallText(path, MAX_RULES_FILE_BYTES);
+    if (read.status === 'absent')
         return { ok: false, reason: 'unreadable' };
+    if (read.status === 'refused') {
+        return {
+            ok: false,
+            reason: read.reason === 'too-large'
+                ? `larger than ${MAX_RULES_FILE_BYTES / (1024 * 1024)} MiB`
+                : read.reason === 'not-a-regular-file'
+                    ? 'not a regular file'
+                    : 'unreadable',
+        };
     }
+    const text = read.text;
     let doc;
     try {
         doc = parseYaml(text);
@@ -143,30 +158,20 @@ const SEMGREP_SEVERITIES = [
  *  `node_modules` are never entered. */
 export function yamlFilesUnder(dir) {
     const out = [];
+    // `listProjectDir`, rooted at `dir`: a directory link is never descended
+    // (no loop, nothing listed outside `dir`); a linked `.yml` is kept, and its
+    // read is judged by `validateSemgrepRulesFile`.
     const walk = (d, depth) => {
         if (depth > 8)
             return;
-        let names;
-        try {
-            names = readdirSync(d).sort();
-        }
-        catch {
-            return;
-        }
-        for (const name of names) {
+        const entries = listProjectDir(dir, d).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        for (const { name, kind } of entries) {
             if (name === '.git' || name === 'node_modules')
                 continue;
             const abs = join(d, name);
-            let isDir;
-            try {
-                isDir = statSync(abs).isDirectory();
-            }
-            catch {
-                continue;
-            }
-            if (isDir)
+            if (kind === 'directory')
                 walk(abs, depth + 1);
-            else if (/\.ya?ml$/i.test(name))
+            else if ((kind === 'file' || kind === 'link') && /\.ya?ml$/i.test(name))
                 out.push(abs);
         }
     };

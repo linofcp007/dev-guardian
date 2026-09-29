@@ -17,7 +17,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { ensureReportDir } from './scanHelpers.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -164,9 +165,10 @@ async function handler(
 
     const reportPaths: string[] = [];
     if (inp.write_reports !== false) {
-      const outDir = join(basePath, '.guardian', 'reports', `skill-audit-${scanId.slice(0, 8)}`);
       try {
-        mkdirSync(outDir, { recursive: true });
+        // A verified real directory of the project's, or a temp one
+        // (`ensureReportDir`): never created through a `.guardian` link.
+        const outDir = ensureReportDir(basePath, scanId, 'skill-audit');
         const sarifPath = join(outDir, 'report.sarif');
         const jsonPath = join(outDir, 'report.json');
         writeFileSync(sarifPath, toSarif(findings, { toolName: 'guardian-scanskill' }), 'utf8');

@@ -63,7 +63,8 @@
  * how a 2.0.x suppression or `baseline.json` keeps working.
  */
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
+import { readProjectBytes } from '../platform/projectFs.js';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { normalizePathPosix } from './findingFingerprint.js';
 /** What modern Semgrep puts in `extra.lines` without `semgrep login`. */
@@ -208,19 +209,12 @@ export function rekeyStoredIdentities(rows, projectPath) {
 export function makeSourceReader(projectPath) {
     const root = realOrResolved(projectPath);
     return (filePath) => {
-        const lexical = resolve(root, filePath);
-        if (!isInside(root, lexical))
-            return null;
-        try {
-            const real = realpathSync.native(lexical);
-            const stat = statSync(real);
-            if (!isInside(root, real) || !stat.isFile() || stat.size > MAX_SOURCE_BYTES)
-                return null;
-            return readFileSync(real, 'utf8');
-        }
-        catch {
-            return null;
-        }
+        // `platform/projectFs.ts` judges containment and the file on the opened
+        // descriptor — a `stat` then a read could be handed a different file.
+        // Bytes, decoded as `readFileSync(…, 'utf8')` did: a byte-order mark is
+        // kept, so no stored identity moves.
+        const r = readProjectBytes(root, filePath, MAX_SOURCE_BYTES);
+        return r.status === 'ok' ? r.bytes.toString('utf8') : null;
     };
 }
 /**
@@ -426,10 +420,6 @@ function splitCoordinate(coordinate, allowBareName) {
     if (allowBareName && coordinate !== '' && at < 0)
         return { name: coordinate, version: '' };
     return null;
-}
-function isInside(root, candidate) {
-    const rel = relative(root, candidate);
-    return rel !== '' && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`);
 }
 function realOrResolved(p) {
     try {

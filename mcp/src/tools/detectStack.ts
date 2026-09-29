@@ -18,7 +18,8 @@
  * stack-aware behaviour.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { listProjectDir } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -96,13 +97,8 @@ function enrichDotnet(snap: StackSnapshot, projectPath: string): void {
 
   const hasFile = (rel: string): boolean => existsSync(join(projectPath, rel));
   const anyMatching = (rel: string, suffix: string): boolean => {
-    try {
-      const target = rel === '' ? projectPath : join(projectPath, rel);
-      if (!existsSync(target)) return false;
-      return readdirSync(target).some((name) => name.endsWith(suffix));
-    } catch {
-      return false;
-    }
+    const target = rel === '' ? projectPath : join(projectPath, rel);
+    return listProjectDir(projectPath, target).some(({ name }) => name.endsWith(suffix));
   };
 
   const hasCsproj = anyMatching('', '.csproj') || anyDeepMatching(projectPath, '.csproj', 3);
@@ -144,25 +140,15 @@ function anyDeepMatching(root: string, suffix: string, maxDepth: number): boolea
     'build',
     'packages',
   ]);
+  // `platform/projectFs.ts`: names only, and a directory link is never
+  // descended — the walk used to list whatever a link pointed at, in or out
+  // of the project.
   function walk(dir: string, depth: number): boolean {
     if (depth > maxDepth) return false;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return false;
-    }
-    for (const name of entries) {
+    for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name) || name.startsWith('.')) continue;
-      const abs = join(dir, name);
       if (name.endsWith(suffix)) return true;
-      try {
-        // Cheap stat → directory descent. We use existsSync on a dirent
-        // path; for an unreadable entry we just continue.
-        if (readdirSync(abs).length >= 0 && walk(abs, depth + 1)) return true;
-      } catch {
-        /* not a directory or unreadable */
-      }
+      if (kind === 'directory' && walk(join(dir, name), depth + 1)) return true;
     }
     return false;
   }

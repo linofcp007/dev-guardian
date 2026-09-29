@@ -83,8 +83,9 @@
  * `mapMisconfiguration`).
  */
 
-import { readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from '../platform/projectFs.js';
+import { join, relative } from 'node:path';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import { actionlintParser } from '../runners/scannerParsers/actionlint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -149,58 +150,22 @@ const WORKFLOW_EXTENSIONS = ['.yml', '.yaml'];
  */
 function listWorkflowFiles(projectPath: string, exclusions: ProjectExclusions | null): string[] {
   const dir = join(projectPath, WORKFLOWS_DIR);
-  if (!realWithinProject(projectPath, dir, false)) return [];
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  // `listProjectDir` lists nothing when the directory resolves outside the
+  // project; a linked workflow file is kept only when it resolves to a
+  // regular file inside it (`platform/projectFs.ts`).
   const abs: string[] = [];
-  for (const e of entries) {
+  for (const e of listProjectDir(projectPath, dir)) {
     if (!WORKFLOW_EXTENSIONS.some((ext) => e.name.toLowerCase().endsWith(ext))) continue;
     const candidate = join(dir, e.name);
-    if (e.isFile()) {
+    if (e.kind === 'file') {
       abs.push(candidate);
-    } else if (e.isSymbolicLink() && realWithinProject(projectPath, candidate, true)) {
+    } else if (e.kind === 'link' && projectPathKind(projectPath, candidate) === 'file') {
       abs.push(candidate);
     }
   }
   const relPaths = abs.map((a) => toPosixPath(relative(projectPath, a))).sort();
   if (exclusions === null) return relPaths;
   return relPaths.filter((p) => !exclusions.ignores(p));
-}
-
-/**
- * Whether `candidate` (already known to exist) resolves — following any
- * symlink on its own path or at its end — to something inside `root`.
- * `requireFile` additionally requires the resolved target to be a regular
- * file (for a workflow FILE candidate); false for a directory candidate
- * (`.github/workflows` itself), which only needs to resolve inside the
- * project, not be any particular type.
- */
-function realWithinProject(root: string, candidate: string, requireFile: boolean): boolean {
-  let real: string;
-  try {
-    real = realpathSync.native(candidate);
-  } catch {
-    return false; // does not exist, or a broken link
-  }
-  if (requireFile) {
-    try {
-      if (!statSync(real).isFile()) return false;
-    } catch {
-      return false;
-    }
-  }
-  let realRoot: string;
-  try {
-    realRoot = realpathSync.native(root);
-  } catch {
-    return false;
-  }
-  const rel = relative(realRoot, real);
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 interface WorkflowScannerSpec {

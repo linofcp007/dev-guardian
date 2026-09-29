@@ -141,3 +141,15 @@ describe('check --file — UTF-16 (review M3)', () => {
     expect(check('--file', 'blob.bin').status).toBe(0);
   });
 });
+
+describe('check — repository text in the human output (review of 3.0.0, item 2)', () => {
+  it('a file name carrying a right-to-left override is printed with it escaped', () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const name = `invoice${rlo}sj.exe`;
+    writeFileSync(join(dir, name), KEY);
+    const r = check('--file', name);
+    expect(r.status).toBe(1);
+    expect(r.stdout.includes(rlo)).toBe(false);
+    expect(r.stdout).toContain('invoice\\u{202E}sj.exe');
+  });
+});

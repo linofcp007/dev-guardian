@@ -30,6 +30,7 @@
  */
 
 import type { Finding } from '../types.js';
+import { untrustedText } from '../platform/untrustedText.js';
 import { toSarif, type SarifSuppressed } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
 import { CI_EXIT, type BaselineSource, type CiExitCode, type ExclusionReset, type RulesSource } from './types.js';
@@ -136,7 +137,10 @@ export function renderHuman(v: GateVerdict): string {
     }
   }
 
-  return `${lines.join('\n')}\n`;
+  // Titles, paths and gap reasons come from the scanned repository and its
+  // scanners: control, bidi and zero-width characters are written as visible
+  // `\u{XXXX}` before they reach a terminal (`platform/untrustedText.ts`).
+  return `${untrustedText(lines.join('\n'))}\n`;
 }
 
 function shortCommit(commit: string): string {

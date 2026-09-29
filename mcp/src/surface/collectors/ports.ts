@@ -9,8 +9,9 @@
  * network or inspects a running host.
  */
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { readProjectTextOrUndefined } from '../../platform/projectFs.js';
 
 const DOCKERFILES = ['Dockerfile', 'dockerfile'];
 const COMPOSE_FILES = [
@@ -47,7 +48,7 @@ export function collectPorts(projectPath: string): { port: number; source: strin
     seenDockerfiles.add(canonical);
 
     const source = basename(canonical);
-    for (const line of readLines(canonical)) {
+    for (const line of readLines(projectPath, canonical)) {
       const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
       if (match?.[1] === undefined) continue;
       for (const token of match[1].split(/\s+/)) {
@@ -61,7 +62,7 @@ export function collectPorts(projectPath: string): { port: number; source: strin
   }
 
   for (const name of COMPOSE_FILES) {
-    for (const line of readLines(join(projectPath, name))) {
+    for (const line of readLines(projectPath, name)) {
       // Long form: `published: 8080`
       const published = /^\s*published:\s*"?(\d+)"?\s*$/.exec(line);
       if (published?.[1] !== undefined) {
@@ -79,13 +80,13 @@ export function collectPorts(projectPath: string): { port: number; source: strin
   return out;
 }
 
-function readLines(path: string): string[] {
-  if (!existsSync(path)) return [];
-  try {
-    return readFileSync(path, 'utf8').split(/\r?\n/);
-  } catch {
-    return [];
-  }
+/**
+ * A Dockerfile or compose file's lines — the repository's file, read
+ * bounded, regular files only and never through a link out of the project
+ * (`platform/projectFs.ts`); `[]` for anything else.
+ */
+function readLines(projectPath: string, path: string): string[] {
+  return (readProjectTextOrUndefined(projectPath, path) ?? '').split(/\r?\n/);
 }
 
 /**

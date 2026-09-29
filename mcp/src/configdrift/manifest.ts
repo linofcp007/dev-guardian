@@ -34,12 +34,15 @@
  * take a scan down with it.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { readProjectText, writeProjectFile } from '../platform/projectFs.js';
 
 /** Path of the manifest relative to the project root. POSIX-shaped by design
  *  — it is also the string shown to users and written into headers. */
 export const MANIFEST_RELATIVE_PATH = '.dev-guardian/configs.json';
+
+/** The largest manifest read; one entry per installed config, a few KB. */
+export const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 /** Bumped only for a shape change that older readers cannot interpret. */
 export const MANIFEST_SCHEMA_VERSION = 1;
@@ -89,9 +92,13 @@ export function emptyManifest(): ConfigManifest {
  * cost the entry it damaged, not drift tracking for the other three configs.
  */
 export function readManifest(projectPath: string): ConfigManifest | null {
+  // Bounded and contained (`platform/projectFs.ts`): the manifest is the
+  // repository's file, link or FIFO or not.
+  const read = readProjectText(projectPath, MANIFEST_RELATIVE_PATH, MAX_MANIFEST_BYTES);
+  if (read.status !== 'ok') return null;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(manifestPath(projectPath), 'utf8'));
+    raw = JSON.parse(read.text);
   } catch {
     return null;
   }
@@ -128,14 +135,12 @@ export function writeManifest(projectPath: string, manifest: ConfigManifest): bo
     schema_version: manifest.schema_version,
     entries: [...manifest.entries].sort((a, b) => a.target.localeCompare(b.target)),
   };
-  try {
-    const path = manifestPath(projectPath);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(sorted, null, 2)}\n`, 'utf8');
-    return true;
-  } catch {
-    return false;
-  }
+  // Replaced through a temp file, never written through a link: a
+  // `.dev-guardian` directory or a manifest that links out of the project is
+  // refused (`platform/projectFs.ts`).
+  return writeProjectFile(projectPath, MANIFEST_RELATIVE_PATH, `${JSON.stringify(sorted, null, 2)}\n`, {
+    mode: 'replace',
+  }).ok;
 }
 
 /** Replaces any entry with the same target, preserving the rest. */

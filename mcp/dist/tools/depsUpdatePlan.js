@@ -110,12 +110,14 @@
  *   5. Order the result by `prefer` (default: security, then patch, then
  *      minor, then major).
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { matchesAny } from '../platform/glob.js';
+import { listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, projectPathKind, readProjectJson, readProjectTextOrUndefined, } from '../platform/projectFs.js';
 import { compareSemver } from '../platform/semverCompare.js';
 import { classifyRestoreFailure, findDotnetTargets, lockFileCandidates, planDotnetRestore, projectsForTarget, readPackageReferences, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { compareVersions, compareVersionsLoose, isCleanVersion, isLooseVersion, minCleanVersionAbove, minCleanVersionAboveLoose, } from '../deps/versionCompare.js';
@@ -377,23 +379,13 @@ function readDependencyEvidence(projectPath) {
         if (version)
             e.versions.add(version);
     };
+    // Every manifest and lockfile is the repository's: read bounded, never
+    // through a link out of the project (`platform/projectFs.ts`).
     const readJson = (file) => {
-        try {
-            const parsed = JSON.parse(readFileSync(join(projectPath, file), 'utf8'));
-            return parsed && typeof parsed === 'object' ? parsed : undefined;
-        }
-        catch {
-            return undefined;
-        }
+        const parsed = readProjectJson(projectPath, file, PROJECT_LOCKFILE_MAX_BYTES);
+        return parsed && typeof parsed === 'object' ? parsed : undefined;
     };
-    const readText = (file) => {
-        try {
-            return readFileSync(join(projectPath, file), 'utf8');
-        }
-        catch {
-            return '';
-        }
-    };
+    const readText = (file) => readProjectTextOrUndefined(projectPath, file, PROJECT_LOCKFILE_MAX_BYTES) ?? '';
     const declareKeys = (obj, ecosystem, file) => {
         if (obj && typeof obj === 'object')
             for (const k of Object.keys(obj))
@@ -493,13 +485,9 @@ function readDependencyEvidence(projectPath) {
     // `dependencies.<framework>.<package>.resolved`, direct and transitive.
     for (const project of projects) {
         for (const lock of lockFileCandidates(project)) {
-            let parsed;
-            try {
-                parsed = JSON.parse(readFileSync(lock, 'utf8'));
-            }
-            catch {
+            const parsed = readProjectJson(projectPath, lock, PROJECT_LOCKFILE_MAX_BYTES);
+            if (parsed === undefined)
                 continue;
-            }
             const frameworks = parsed?.dependencies;
             if (!frameworks || typeof frameworks !== 'object')
                 continue;
@@ -620,6 +608,7 @@ async function runNpmOutdated(projectPath, cves) {
     if (manager.name !== 'npm')
         return planForNonNpmManager(projectPath, cves, manager);
     const result = await execa('npm', ['outdated', '--json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 60_000,
@@ -891,16 +880,14 @@ function detectNpmPackageManager(projectPath) {
             break;
         dir = parent;
     }
-    try {
-        const pkg = JSON.parse(readFileSync(join(projectPath, 'package.json'), 'utf8'));
-        const pm = typeof pkg['packageManager'] === 'string' ? pkg['packageManager'] : '';
+    const pkg = readProjectJson(projectPath, 'package.json');
+    if (typeof pkg === 'object' && pkg !== null) {
+        const declared = pkg['packageManager'];
+        const pm = typeof declared === 'string' ? declared : '';
         const m = /^(pnpm|yarn)@/.exec(pm);
         if (m?.[1] === 'pnpm' || m?.[1] === 'yarn') {
             return { name: m[1], evidence: 'package.json "packageManager"', root: projectPath };
         }
-    }
-    catch {
-        /* unreadable package.json — fall through */
     }
     if (existsSync(join(projectPath, 'node_modules', '.pnpm'))) {
         return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
@@ -930,17 +917,21 @@ function workspaceIncludes(root, projectPath) {
     if (rel === '' || rel.startsWith('..'))
         return false;
     const patterns = [];
+    // `root` is the enclosing workspace — the repository's too, so its files
+    // are read contained in it (`platform/projectFs.ts`).
     try {
-        const doc = parseYaml(readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8'));
+        const text = readProjectTextOrUndefined(root, 'pnpm-workspace.yaml');
+        const doc = text === undefined ? undefined : parseYaml(text);
         const packages = typeof doc === 'object' && doc !== null ? doc['packages'] : undefined;
         if (Array.isArray(packages))
             patterns.push(...packages.filter((p) => typeof p === 'string'));
     }
     catch {
-        /* absent or unparseable — no pnpm declaration */
+        /* unparseable — no pnpm declaration */
     }
-    try {
-        const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    const rootPkg = readProjectJson(root, 'package.json');
+    if (typeof rootPkg === 'object' && rootPkg !== null) {
+        const pkg = rootPkg;
         const ws = pkg['workspaces'];
         const list = Array.isArray(ws)
             ? ws
@@ -949,9 +940,6 @@ function workspaceIncludes(root, projectPath) {
                 : undefined;
         if (Array.isArray(list))
             patterns.push(...list.filter((p) => typeof p === 'string'));
-    }
-    catch {
-        /* absent or unparseable — no npm/yarn declaration */
     }
     return patterns.length > 0 && matchesAny(rel, patterns);
 }
@@ -1039,14 +1027,9 @@ const PNPM_WORKSPACE_SETTINGS_SINCE = '10.5.0';
  */
 async function pnpmVersionOf(root) {
     let manifest = {};
-    try {
-        const parsed = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-        if (typeof parsed === 'object' && parsed !== null)
-            manifest = parsed;
-    }
-    catch {
-        /* no readable manifest: no pin */
-    }
+    const parsed = readProjectJson(root, 'package.json');
+    if (typeof parsed === 'object' && parsed !== null)
+        manifest = parsed;
     const pm = typeof manifest['packageManager'] === 'string' ? manifest['packageManager'] : '';
     const pinned = /^pnpm@(\d+\.\d+\.\d+)/.exec(pm)?.[1];
     if (pinned !== undefined)
@@ -1068,19 +1051,17 @@ async function pnpmVersionOf(root) {
             return { version, evidence: `pnpm ${e['version']} (package.json "devEngines.packageManager")` };
         }
     }
-    try {
-        const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+    const lock = readProjectTextOrUndefined(root, 'pnpm-lock.yaml', PROJECT_LOCKFILE_MAX_BYTES);
+    if (lock !== undefined) {
         const lv = /^lockfileVersion:\s*['"]?(\d+)(?:\.(\d+))?/m.exec(lock);
         const major = lv?.[1] === undefined ? NaN : Number(lv[1]);
         if (Number.isInteger(major) && major < 9) {
             return { version: '8.0.0', evidence: `pnpm 8 or older (pnpm-lock.yaml lockfileVersion ${lv?.[1] ?? '?'}.${lv?.[2] ?? '0'})` };
         }
     }
-    catch {
-        /* no lock at the root */
-    }
     try {
         const r = await execa('pnpm', ['--version'], {
+            ...packageManagerEnvOptions(),
             cwd: root,
             reject: false,
             timeout: 15_000,
@@ -1140,7 +1121,9 @@ function readNpmDirectDependencies(projectPath) {
     // names, and every comparison against this set must agree on case.
     const out = new Set();
     try {
-        const raw = readFileSync(join(projectPath, 'package.json'), 'utf8');
+        const raw = readProjectTextOrUndefined(projectPath, 'package.json');
+        if (raw === undefined)
+            return out;
         const pkg = JSON.parse(raw);
         for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
             const deps = pkg[field];
@@ -1185,14 +1168,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
         }
     };
     // The lockfile lives at `lockDir` — the workspace root for a member.
-    const readText = (file) => {
-        try {
-            return readFileSync(join(lockDir, file), 'utf8');
-        }
-        catch {
-            return undefined;
-        }
-    };
+    const readText = (file) => readProjectTextOrUndefined(lockDir, file, PROJECT_LOCKFILE_MAX_BYTES);
     if (manager === 'npm') {
         const raw = readText('package-lock.json') ?? readText('npm-shrinkwrap.json');
         if (raw !== undefined) {
@@ -1253,7 +1229,7 @@ function readNpmResolvedPackages(projectPath, manager, lockDir = projectPath) {
         }
     }
     if (out.size === 0) {
-        for (const pkg of listNodeModulesPackages(join(projectPath, 'node_modules')))
+        for (const pkg of listNodeModulesPackages(projectPath))
             add(pkg.name, pkg.version, pkg.topLevel);
     }
     return out;
@@ -1273,74 +1249,46 @@ function collectLockV1Deps(deps, add, topLevel) {
  * `package.json` declares — the fallback when no lockfile says. Walks pnpm's
  * flat `.pnpm/<encoded>/node_modules/<realName>` store too (fix round 3):
  * pnpm's TOP-LEVEL `node_modules/<name>` entries are symlinks into `.pnpm/`,
- * which `Dirent.isDirectory()` does not follow; the store holds every
- * installed package — direct AND transitive — as a real directory.
+ * and are followed — through links that stay inside the project only
+ * (`projectPathKind`), so a `node_modules/<name>` linking out of it is
+ * neither listed nor read. The store holds every installed package — direct
+ * AND transitive — as a real directory.
  */
-function listNodeModulesPackages(nodeModulesDir) {
+function listNodeModulesPackages(projectPath) {
     const out = [];
+    const nodeModulesDir = join(projectPath, 'node_modules');
+    const isDir = (p) => projectPathKind(projectPath, p) === 'directory';
     const push = (dir, name, topLevel) => {
         let version;
-        try {
-            const pj = JSON.parse(readFileSync(join(dir, name, 'package.json'), 'utf8'));
-            if (typeof pj['version'] === 'string')
-                version = pj['version'];
-        }
-        catch {
-            /* no readable package.json — name only */
+        const pj = readProjectJson(projectPath, join(dir, name, 'package.json'));
+        if (typeof pj === 'object' && pj !== null) {
+            const v = pj['version'];
+            if (typeof v === 'string')
+                version = v;
         }
         out.push({ name, version, topLevel });
     };
     const collect = (dir, topLevel) => {
-        let entries;
-        try {
-            entries = readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const name of entries) {
+        for (const { name } of listProjectDir(projectPath, dir)) {
             if (name.startsWith('.'))
                 continue;
-            if (!safeIsDirectory(join(dir, name)))
-                continue; // follows a pnpm top-level symlink too
+            if (!isDir(join(dir, name)))
+                continue; // follows a pnpm top-level symlink that stays inside
             if (name.startsWith('@')) {
-                let scoped = [];
-                try {
-                    scoped = readdirSync(join(dir, name));
+                for (const inner of listProjectDir(projectPath, join(dir, name))) {
+                    if (isDir(join(dir, name, inner.name)))
+                        push(dir, `${name}/${inner.name}`, topLevel);
                 }
-                catch {
-                    continue;
-                }
-                for (const inner of scoped)
-                    if (safeIsDirectory(join(dir, name, inner)))
-                        push(dir, `${name}/${inner}`, topLevel);
                 continue;
             }
             push(dir, name, topLevel);
         }
     };
     collect(nodeModulesDir, true);
-    try {
-        for (const storeEntry of readdirSync(join(nodeModulesDir, '.pnpm'))) {
-            collect(join(nodeModulesDir, '.pnpm', storeEntry, 'node_modules'), false);
-        }
-    }
-    catch {
-        /* no .pnpm store */
+    for (const storeEntry of listProjectDir(projectPath, join(nodeModulesDir, '.pnpm'))) {
+        collect(join(nodeModulesDir, '.pnpm', storeEntry.name, 'node_modules'), false);
     }
     return out;
-}
-/** `statSync`-based directory check that FOLLOWS symlinks (unlike
- *  `Dirent.isDirectory()`, which reflects the dirent itself) — needed for
- *  pnpm's own top-level `node_modules/<name>` entries, each a symlink into
- *  `.pnpm/`. */
-function safeIsDirectory(p) {
-    try {
-        return statSync(p).isDirectory();
-    }
-    catch {
-        return false;
-    }
 }
 function buildOverrideStep(input) {
     return {
@@ -1498,35 +1446,17 @@ function buildPipSecurityStep(opts) {
 function findPipRequirementsFiles(projectPath) {
     const out = [];
     const tryRead = (relPath) => {
-        try {
-            out.push({ relPath, content: readFileSync(join(projectPath, relPath), 'utf8') });
-        }
-        catch {
-            /* unreadable — skip */
-        }
+        const content = readProjectTextOrUndefined(projectPath, relPath);
+        if (content !== undefined)
+            out.push({ relPath, content });
     };
-    let rootEntries = [];
-    try {
-        rootEntries = readdirSync(projectPath);
-    }
-    catch {
-        return out;
-    }
-    for (const name of rootEntries) {
+    for (const { name } of listProjectDir(projectPath, projectPath)) {
         if (/^requirements.*\.txt$/i.test(name))
             tryRead(name);
     }
-    const reqDir = join(projectPath, 'requirements');
-    if (existsSync(reqDir)) {
-        try {
-            for (const name of readdirSync(reqDir)) {
-                if (name.toLowerCase().endsWith('.txt'))
-                    tryRead(join('requirements', name));
-            }
-        }
-        catch {
-            /* best-effort */
-        }
+    for (const { name } of listProjectDir(projectPath, join(projectPath, 'requirements'))) {
+        if (name.toLowerCase().endsWith('.txt'))
+            tryRead(join('requirements', name));
     }
     return out;
 }
@@ -1668,13 +1598,9 @@ function joinContinuedLines(content) {
  */
 function parsePyprojectPins(projectPath) {
     const out = [];
-    let raw;
-    try {
-        raw = readFileSync(join(projectPath, 'pyproject.toml'), 'utf8');
-    }
-    catch {
+    const raw = readProjectTextOrUndefined(projectPath, 'pyproject.toml');
+    if (raw === undefined)
         return out;
-    }
     const projectTable = extractProjectTableText(raw);
     if (projectTable === null)
         return out; // no [project] table at all — nothing PEP 621 defines to read
@@ -1761,6 +1687,7 @@ async function runComposerOutdated(projectPath, cves) {
     // It is also the right source: the lock is what the fix edits and what CI
     // installs from.
     const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1813,6 +1740,7 @@ async function runComposerOutdated(projectPath, cves) {
 async function runCargoOutdated(projectPath, cves) {
     // Requires `cargo install cargo-outdated`.
     const result = await execa('cargo', ['outdated', '--format', 'json'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1853,6 +1781,7 @@ async function runCargoOutdated(projectPath, cves) {
 async function runGoOutdated(projectPath, cves) {
     // `go list -m -u -json all` emits one JSON object per line.
     const result = await execa('go', ['list', '-m', '-u', '-json', 'all'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1896,6 +1825,7 @@ async function runBundlerOutdated(projectPath, cves) {
     // `bundle outdated --parseable` emits machine-friendly lines:
     // gem-name (newest 1.2.3, installed 1.2.0)
     const result = await execa('bundle', ['outdated', '--parseable'], {
+        ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
         timeout: 90_000,
@@ -1961,7 +1891,12 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
             continue;
         }
-        const restore = await execa('dotnet', plan.args, { cwd: projectPath, reject: false, timeout: 5 * 60_000 });
+        const restore = await execa('dotnet', plan.args, {
+            ...packageManagerEnvOptions(),
+            cwd: projectPath,
+            reject: false,
+            timeout: 5 * 60_000,
+        });
         const created = removeCreatedLockFiles(plan);
         if (created.length > 0) {
             failures.push({
@@ -1982,6 +1917,7 @@ async function runDotnetOutdated(projectPath, cves) {
             continue;
         }
         const r = await execa('dotnet', ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
+            ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
             timeout: 90_000,
@@ -1994,6 +1930,7 @@ async function runDotnetOutdated(projectPath, cves) {
             continue;
         }
         const fallback = await execa('dotnet', ['list', target, 'package', '--outdated', '--no-restore'], {
+            ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
             timeout: 90_000,

@@ -34,8 +34,9 @@
 
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
+import { hashProjectFile } from '../platform/projectFs.js';
 
 export interface TreeHashOptions {
   /**
@@ -83,17 +84,13 @@ export async function computeTreeHash(
 
   const hash = createHash('sha256');
   for (const rel of files) {
-    const abs = join(root, rel);
-    let contentHash: string;
-    try {
-      const bytes = await readFile(abs);
-      contentHash = createHash('sha256').update(bytes).digest('hex');
-    } catch {
-      // File vanished between listing and reading (race with the user) —
-      // hash a stable sentinel so the hash still reflects "this file was
-      // expected but unreadable" deterministically.
-      contentHash = 'missing';
-    }
+    // `hashProjectFile` streams a regular file's content, hashes a link by its
+    // target text without following it, and never opens anything else: git
+    // lists a committed symlink as a file, and `readFile` on one to
+    // `/dev/zero` read without end on every scan. A file that vanished
+    // between listing and reading (race with the user) hashes as the stable
+    // sentinel `missing`.
+    const contentHash = await hashProjectFile(root, rel);
     hash.update(`${rel}:${contentHash}\n`);
   }
   return hash.digest('hex');

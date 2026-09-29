@@ -14,7 +14,7 @@
  *   - launchSettings.json (developer secrets often live here)
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { describeReadRefusal, listProjectDir, readProjectText } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -139,22 +139,22 @@ async function handler(input, ctx) {
     let scanned = 0;
     const rel = (file) => relative(projectPath, file).replace(/\\/g, '/');
     for (const file of files) {
-        let content;
-        try {
-            // Massive files (likely not config but build output drifting in) are
-            // not read at all.
-            const size = statSync(file).size;
-            if (size > MAX_FILE_BYTES) {
-                notScanned.push({ file: rel(file), reason: `over 2 MB (${size} bytes)` });
-                continue;
-            }
-            content = readFileSync(file, 'utf8');
-        }
-        catch (e) {
-            const code = e.code;
-            notScanned.push({ file: rel(file), reason: `could not be read (${code ?? e.message})` });
+        // Read through `platform/projectFs.ts`: contained in the project, regular
+        // files only, and at most 2 MB (massive files — likely not config but
+        // build output drifting in — are not read at all).
+        const read = readProjectText(projectPath, file, MAX_FILE_BYTES);
+        if (read.status === 'absent') {
+            notScanned.push({ file: rel(file), reason: 'could not be read (ENOENT)' });
             continue;
         }
+        if (read.status === 'refused') {
+            notScanned.push({
+                file: rel(file),
+                reason: read.reason === 'too-large' ? 'over 2 MB' : `not read: ${describeReadRefusal(read.reason)}`,
+            });
+            continue;
+        }
+        const content = read.text;
         scanned += 1;
         const lines = content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i += 1) {
@@ -236,28 +236,16 @@ function collectConfigFiles(root, maxDepth) {
     function walk(dir, depth) {
         if (depth > maxDepth)
             return;
-        let entries;
-        try {
-            entries = readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const name of entries) {
+        // A directory link is never descended (`platform/projectFs.ts`); a linked
+        // config file is kept, and its read judges where it leads.
+        for (const { name, kind } of listProjectDir(root, dir)) {
             if (SKIP_DIRS.has(name))
                 continue;
             const abs = join(dir, name);
-            let stat;
-            try {
-                stat = statSync(abs);
-            }
-            catch {
-                continue;
-            }
-            if (stat.isDirectory()) {
+            if (kind === 'directory') {
                 walk(abs, depth + 1);
             }
-            else if (TARGET_FILES.some((re) => re.test(name)) && existsSync(abs)) {
+            else if ((kind === 'file' || kind === 'link') && TARGET_FILES.some((re) => re.test(name))) {
                 out.push(abs);
             }
         }

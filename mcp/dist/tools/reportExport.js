@@ -22,7 +22,7 @@
  * audit_executive row, its sub-scans' (and their children's), since the
  * row itself lists sub-tools, not scanners.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { describeWriteRefusal, writeProjectFile } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { owaspCoverage } from '../frameworks/coverage.js';
@@ -105,11 +105,11 @@ async function handler(input, ctx) {
                 sections: [markdownToSafeHtml(inp.content_markdown)],
                 lang,
             });
-        const outDir = join(projectPath, '.guardian', 'reports', `report-${slugify(title)}`);
-        mkdirSync(outDir, { recursive: true });
         const fileName = narrativeFormat === 'markdown' ? 'report.md' : 'report.html';
-        const outFile = join(outDir, fileName);
-        writeFileSync(outFile, content, 'utf8');
+        const written = writeReport(projectPath, `report-${slugify(title)}`, fileName, content);
+        if (!written.ok)
+            return failDomain('unsupported_target', written.reason);
+        const outFile = written.path;
         return {
             ok: true,
             kind: 'narrative',
@@ -168,10 +168,10 @@ async function handler(input, ctx) {
     const runs = coverageRunsOfScan(ctx, scan);
     const owasp = owaspCoverage(runs, findings, await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan.project_path)));
     const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
-    const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
-    mkdirSync(outDir, { recursive: true });
-    const outFile = join(outDir, fileName);
-    writeFileSync(outFile, content, 'utf8');
+    const written = writeReport(projectPath, `export-${scanId.slice(0, 8)}`, fileName, content);
+    if (!written.ok)
+        return failDomain('unsupported_target', written.reason);
+    const outFile = written.path;
     return {
         ok: true,
         kind: 'scan',
@@ -183,6 +183,20 @@ async function handler(input, ctx) {
         cves_count: cves.length,
         ...((latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
     };
+}
+/**
+ * Writes `.guardian/reports/<dirName>/<fileName>` through `platform/projectFs.ts`.
+ * Both names are predictable (`report-<title>`, `export-<scan id>`), so a
+ * repository can carry that path as a link; the report is written through a
+ * temp file renamed into place, never through a link or a directory that is
+ * one.
+ */
+function writeReport(projectPath, dirName, fileName, content) {
+    const rel = join('.guardian', 'reports', dirName, fileName);
+    const w = writeProjectFile(projectPath, rel, content, { mode: 'replace' });
+    if (!w.ok)
+        return { ok: false, reason: `the report was not written to ${rel}: ${describeWriteRefusal(w.reason, w.detail)}` };
+    return { ok: true, path: join(projectPath, rel) };
 }
 /** The scan ids a row delegates to: an orchestrated security_full's children, an audit's sub-scans. */
 function delegatedScanIds(scan) {

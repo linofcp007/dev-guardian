@@ -11,16 +11,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-// One file in these projects cannot be read: `Locked.config` (EACCES).
+// One file in these projects cannot be read: `Locked.config` (EACCES). The
+// scan reads through `platform/projectFs.ts`, which opens the file and judges
+// the descriptor, so the denial is on the open.
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
-  const readFileSync = ((path: unknown, ...rest: unknown[]) => {
+  const openSync = ((path: unknown, ...rest: unknown[]) => {
     if (typeof path === 'string' && path.endsWith('Locked.config')) {
       throw Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' });
     }
-    return (actual.readFileSync as (...a: unknown[]) => unknown)(path, ...rest);
-  }) as typeof actual.readFileSync;
-  return { ...actual, default: { ...actual, readFileSync }, readFileSync };
+    return (actual.openSync as (...a: unknown[]) => unknown)(path, ...rest);
+  }) as typeof actual.openSync;
+  return { ...actual, default: { ...actual, openSync }, openSync };
 });
 
 import type { PluginContext } from '../../src/context.js';
@@ -93,7 +95,7 @@ describe('scan_dotnet_secrets (review M4)', () => {
     const out = await scan(dir);
     expect(out.files_scanned).toBe(1);
     expect(out.files_not_scanned).toEqual([
-      { file: 'Locked.config', reason: expect.stringMatching(/EACCES/) },
+      { file: 'Locked.config', reason: expect.stringMatching(/could not be read/) },
       { file: 'appsettings.Huge.json', reason: expect.stringMatching(/over 2 MB/) },
     ]);
     expect(out.tools_run).toEqual([

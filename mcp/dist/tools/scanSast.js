@@ -104,10 +104,14 @@ import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConf
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, semgrepEngineOf, withPluginPackFixpoint, } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { readSmallTextFile } from '../hooks/configFile.js';
 import { applySemgrepCoverageGaps, markMissing, scannedNothingBecause, semgrepCoverageGaps, } from '../runners/semgrepCoverageGaps.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
+/** The largest .NET solution, project or `.props` file read; a real one is well under this. */
+const MAX_DOTNET_PROJECT_FILE_BYTES = 4 * 1024 * 1024;
 /** How long one `dotnet build` of one target may take. */
 const DOTNET_BUILD_TIMEOUT_MS = 10 * 60_000;
 registerToolModule(makeScanTool({
@@ -837,14 +841,14 @@ const SARIF_TARGETS = [
 function customAfterTargetsSetters(projectPath) {
     const sets = /<CustomAfterMicrosoftCommonTargets\b/i;
     const out = new Set();
+    // Bounded, regular files only (`hooks/configFile.ts`): the paths come from
+    // the repository's solution and project files, which may name `/dev/zero`
+    // or a FIFO. Not contained: a solution references projects beside the
+    // scanned directory, and the build reads them whatever this does.
     const check = (file) => {
-        try {
-            if (sets.test(readFileSync(file, 'utf8')))
-                out.add(relative(projectPath, file).split(sep).join('/'));
-        }
-        catch {
-            /* absent or unreadable — nothing set there */
-        }
+        const text = readSmallTextFile(file, MAX_DOTNET_PROJECT_FILE_BYTES);
+        if (text !== undefined && sets.test(text))
+            out.add(relative(projectPath, file).split(sep).join('/'));
     };
     const root = resolve(projectPath);
     for (const target of findDotnetTargets(projectPath)) {
@@ -899,33 +903,21 @@ function describeBuildFailure(result) {
 }
 /** A `.csproj` / `.fsproj` / `.sln` / `.slnx` at the project root. */
 function hasRootDotnetSignal(projectPath) {
-    try {
-        return readdirSync(projectPath).some((n) => /\.(csproj|fsproj|sln|slnx)$/i.test(n));
-    }
-    catch {
-        return false;
-    }
+    return listProjectDir(projectPath, projectPath).some(({ name }) => /\.(csproj|fsproj|sln|slnx)$/i.test(name));
 }
 /**
  * Whether the project references Security Code Scan: a root project file or
  * `Directory.Build.props` naming the package. We never add it to a project.
  */
 function projectReferencesScs(projectPath) {
-    let files;
-    try {
-        files = readdirSync(projectPath).filter((n) => /\.(csproj|fsproj)$/i.test(n) || n === 'Directory.Build.props');
-    }
-    catch {
-        return false;
-    }
+    const files = listProjectDir(projectPath, projectPath)
+        .map((e) => e.name)
+        .filter((n) => /\.(csproj|fsproj)$/i.test(n) || n === 'Directory.Build.props');
     for (const file of files) {
-        try {
-            if (/security[-_.]?code[-_.]?scan/i.test(readFileSync(join(projectPath, file), 'utf8')))
-                return true;
-        }
-        catch {
-            /* unreadable — not a reference */
-        }
+        // The repository's file: bounded, never through a link out of the project.
+        const text = readProjectTextOrUndefined(projectPath, file, MAX_DOTNET_PROJECT_FILE_BYTES);
+        if (text !== undefined && /security[-_.]?code[-_.]?scan/i.test(text))
+            return true;
     }
     return false;
 }

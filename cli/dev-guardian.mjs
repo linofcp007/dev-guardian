@@ -141,6 +141,15 @@ import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
 import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
+import { untrustedText } from '../mcp/dist/platform/untrustedText.js';
+import {
+  describeReadRefusal,
+  describeWriteRefusal,
+  isWithinDir,
+  PROJECT_LOCKFILE_MAX_BYTES,
+  readProjectText,
+  writeProjectFile,
+} from '../mcp/dist/platform/projectFs.js';
 
 // `storage/*` and `dashboard/*` are NOT statically imported here (contrast
 // the five imports directly above, which are pure — no `node:sqlite`
@@ -645,16 +654,32 @@ function parseCheckArgs(argv) {
   return { value: { ...out, min: out.min ?? 'medium' } };
 }
 
-function loadAllowlist(projectDir) {
+/** The largest `.guardian/*.json` configuration the CLI reads; a real one is a few KB. */
+const MAX_REPO_CONFIG_BYTES = 1024 * 1024;
+
+/**
+ * A JSON file inside the repository, parsed — or `null` when it is absent,
+ * not JSON, or refused. Read through `platform/projectFs.ts`: bounded,
+ * regular files only, never through a link out of the repository. Every
+ * caller is lenient by design (a missing or broken file is "no config"), and
+ * a checkout a pull request controls can put a FIFO or a `/dev/zero` link at
+ * any of these names — `readFileSync` blocked on the first and read the
+ * second without end, until the CI job's own timeout.
+ */
+function readRepoJson(projectPath, relPath) {
+  const r = readProjectText(projectPath, relPath, MAX_REPO_CONFIG_BYTES);
+  if (r.status !== 'ok') return null;
   try {
-    const p = resolve(projectDir, '.guardian', 'hooks-allowlist.json');
-    if (!existsSync(p)) return [];
-    const data = JSON.parse(readFileSync(p, 'utf8'));
-    if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
-    if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
+    return JSON.parse(r.text);
   } catch {
-    /* ignore */
+    return null;
   }
+}
+
+function loadAllowlist(projectDir) {
+  const data = readRepoJson(projectDir, join('.guardian', 'hooks-allowlist.json'));
+  if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
+  if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
   return [];
 }
 
@@ -674,7 +699,7 @@ function cmdCheck(argv) {
     } else {
       const icon = a.level === 'block' ? '⛔' : a.level === 'warn' ? '⚠️ ' : '✅';
       process.stdout.write(`${icon} ${a.level.toUpperCase()}\n`);
-      for (const r of a.reasons) process.stdout.write(`  • ${r}\n`);
+      for (const r of a.reasons) process.stdout.write(`  • ${untrustedText(r)}\n`);
     }
     process.exit(a.level === 'ok' ? 0 : 1);
   }
@@ -700,11 +725,16 @@ function cmdCheck(argv) {
     if (opts.json) {
       process.stdout.write(JSON.stringify({ file: filePath, hits }) + '\n');
     } else if (hits.length === 0) {
-      process.stdout.write(`✅ No secrets detected in ${opts.file}\n`);
+      process.stdout.write(`✅ No secrets detected in ${untrustedText(opts.file, { multiline: false })}\n`);
     } else {
-      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${opts.file}:\n`);
+      // The file's name and what matched in it are the repository's text:
+      // control, bidi and zero-width characters are written as visible
+      // `\u{XXXX}` before they reach the terminal (`platform/untrustedText.ts`).
+      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${untrustedText(opts.file, { multiline: false })}:\n`);
       for (const h of hits) {
-        process.stdout.write(`  • ${h.title} (${h.confidence}) — line ${h.line}: ${h.preview}\n`);
+        process.stdout.write(
+          `  • ${untrustedText(h.title)} (${h.confidence}) — line ${h.line}: ${untrustedText(h.preview, { multiline: false })}\n`,
+        );
       }
     }
     process.exit(hits.length > 0 ? 1 : 0);
@@ -794,6 +824,21 @@ async function loadCiModules() {
 const APP_START_TIMEOUT_MS = 60_000;
 
 /**
+ * `.guardian/baseline.json`'s text, `null` when there is none — or a usage
+ * error when one is there and was refused (a link out of the repository, a
+ * FIFO, a device, or larger than a lockfile may be). Refused is NOT read as
+ * "no baseline": the committed baseline is what the gate subtracts, and a
+ * pull request must not be able to swap in a file from outside the checkout,
+ * nor make the job wait on a FIFO.
+ */
+function readBaselineOrExit(projectPath, relPath) {
+  const r = readProjectText(projectPath, relPath, PROJECT_LOCKFILE_MAX_BYTES);
+  if (r.status === 'ok') return r.text;
+  if (r.status === 'absent') return null;
+  return usageError(`${relPath} was not read: ${describeReadRefusal(r.reason)}`);
+}
+
+/**
  * The pwn-request guard (the design of record). `--start-command` may be supplied
  * only on argv — never honoured from a file inside the scanned repository,
  * because that file can arrive via a pull request from a fork, and a CLI
@@ -811,13 +856,7 @@ const APP_START_TIMEOUT_MS = 60_000;
  */
 function findStartCommandInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.start_command) {
     return configPath;
   }
@@ -845,13 +884,7 @@ function startCommandRefusalMessage(configPath) {
  */
 function findAcceptPartialParseInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.accept_partial_parse !== undefined) {
     return configPath;
   }
@@ -1397,8 +1430,7 @@ async function cmdScan(argv) {
       tree_differs: baselineAtRef.treeDiffers,
     };
   } else {
-    const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-    baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+    baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
     baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
   }
   const parsedBaseline = parseBaseline(baselineText);
@@ -1518,8 +1550,7 @@ async function cmdBaseline(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-  const baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+  const baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
   const parsedBaseline = parseBaseline(baselineText);
   const previousFile = parsedBaseline ? parsedBaseline.file : null;
 
@@ -1532,8 +1563,18 @@ async function cmdBaseline(argv) {
   // repository too. What is actually true of this write, and not of
   // --sarif's, is that it is IMPLICIT — always `.guardian/baseline.json`,
   // never a path the caller names — where --sarif's is explicit and opt-in.
-  mkdirSync(dirname(baselinePath), { recursive: true });
-  writeFileSync(baselinePath, serialiseBaseline(updated));
+  // Through `platform/projectFs.ts`: a temp file renamed into place, never
+  // written through a link (a dangling one created its target outside the
+  // project) or a `.guardian` directory that links out.
+  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
+  const written = writeProjectFile(projectPath, BASELINE_RELATIVE_PATH, serialiseBaseline(updated), {
+    mode: 'replace',
+  });
+  if (!written.ok) {
+    return usageError(
+      `baseline not written to ${BASELINE_RELATIVE_PATH}: ${describeWriteRefusal(written.reason, written.detail)}`,
+    );
+  }
 
   // evaluateGate is reused here ONLY for its `coverage`/`coverageGaps`
   // computation (never re-derived — see scanCoverage.ts's own contract) so
@@ -1572,7 +1613,7 @@ async function cmdBaseline(argv) {
         "and whoever's change triggers that run will look responsible for debt this baseline " +
         'never actually captured. Gaps:\n',
     );
-    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${gap}\n`);
+    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${untrustedText(gap)}\n`);
   }
 
   // Never CI_EXIT.GATE_FAILED: this command has no gate. Full coverage is a
@@ -2161,13 +2202,7 @@ function createFile(outPath, content) {
  */
 function findAttestInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.attest !== undefined) return configPath;
   return null;
 }
@@ -2709,8 +2744,21 @@ async function cmdDashboard(argv) {
   // destination directory may not exist yet (a custom --out is not required
   // to sit under the project's own .guardian/, which openDatabase already
   // created).
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, html);
+  //
+  // A destination inside the project — the default `.guardian/dashboard.html`
+  // among them — is the repository's path, which a checkout can make a link:
+  // written through `platform/projectFs.ts` (a temp file renamed into place,
+  // never through a link or a directory that links out). An `--out` outside
+  // the project is the operator's own choice and written as given.
+  if (isWithinDir(projectPath, outPath)) {
+    const written = writeProjectFile(projectPath, outPath, html, { mode: 'replace' });
+    if (!written.ok) {
+      return usageError(`dashboard not written to ${outPath}: ${describeWriteRefusal(written.reason, written.detail)}`);
+    }
+  } else {
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, html);
+  }
 
   process.stdout.write(`${outPath}\n`);
 

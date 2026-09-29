@@ -398,6 +398,22 @@ describe('renderSarif', () => {
 });
 
 describe('renderHuman', () => {
+  it("escapes a finding's control, bidi and zero-width characters before they reach the terminal (review of 3.0.0, item 2)", () => {
+    const esc = String.fromCodePoint(0x1b);
+    const rlo = String.fromCodePoint(0x202e);
+    const zwsp = String.fromCodePoint(0x200b);
+    const v = evaluateGate(
+      input({
+        findings: [finding({ title: `key${zwsp} found ${esc}]0;owned${String.fromCodePoint(7)}`, file_path: `src/a${rlo}sj.exe` })],
+      }),
+    );
+    const text = renderHuman(v);
+    for (const raw of [esc, rlo, zwsp, String.fromCodePoint(7)]) expect(text.includes(raw)).toBe(false);
+    expect(text).toContain('src/a\\u{202E}sj.exe');
+    expect(text).toContain('\\u{001B}]0;owned\\u{0007}');
+    expect(text.split('\n').length).toBeGreaterThan(3);
+  });
+
   it('names every coverage gap, not only the finding count', () => {
     const v = evaluateGate(input({ steps: [step({ tools_run: [], missing_tools: ['semgrep'] })] }));
     expect(renderHuman(v)).toMatch(/semgrep/);

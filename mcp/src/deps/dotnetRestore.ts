@@ -34,8 +34,13 @@
  * trust boundary both tools' descriptions name.
  */
 
-import { type Dirent, existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { readSmallTextFile } from '../hooks/configFile.js';
+import { listProjectDir } from '../platform/projectFs.js';
+
+/** The largest `.sln` / project / `.props` file read; a real one is well under this. */
+const MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
 
 const SKIP_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
 /** How deep the no-solution `.csproj` walk goes. Only decides which projects
@@ -51,12 +56,10 @@ const PROJECT_EXTENSIONS = new Set(['.csproj', '.fsproj', '.vbproj']);
  * finds.
  */
 export function findDotnetTargets(projectPath: string): string[] {
-  let rootEntries: string[];
-  try {
-    rootEntries = readdirSync(projectPath).sort();
-  } catch {
-    return [];
-  }
+  const rootEntries = listProjectDir(projectPath, projectPath)
+    .filter((e) => e.kind === 'file')
+    .map((e) => e.name)
+    .sort();
   const sln =
     rootEntries.find((n) => n.toLowerCase().endsWith('.sln')) ??
     rootEntries.find((n) => n.toLowerCase().endsWith('.slnx'));
@@ -66,22 +69,18 @@ export function findDotnetTargets(projectPath: string): string[] {
 
 function findProjectFiles(projectPath: string): string[] {
   const out: string[] = [];
-  // `Dirent` types, not `statSync`: a symlinked directory is not followed
-  // (no cycles), and the walk costs one syscall per directory, not per entry
-  // — it runs for every `deps_update_plan` call, .NET project or not.
+  // `listProjectDir` (entry types, not `statSync`): a symlinked directory is
+  // not followed (no cycles, nothing outside the project), and the walk costs
+  // one syscall per directory, not per entry — it runs for every
+  // `deps_update_plan` call, .NET project or not.
   const walk = (dir: string, depth: number): void => {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-    } catch {
-      return;
-    }
+    const entries = listProjectDir(projectPath, dir).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (SKIP_DIRS.has(entry.name)) continue;
       const abs = join(dir, entry.name);
-      if (entry.isDirectory()) walk(abs, depth + 1);
-      else if (entry.isFile() && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
+      if (entry.kind === 'directory') walk(abs, depth + 1);
+      else if (entry.kind === 'file' && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
     }
   };
   walk(projectPath, 0);
@@ -95,12 +94,18 @@ function resolveFromFile(file: string, written: string): string {
   return isAbsolute(normalised) ? resolve(normalised) : resolve(dirname(file), normalised);
 }
 
+/**
+ * A solution, project or `.props` file's text — `''` for anything that is
+ * absent, not a regular file, or over {@link MAX_DOTNET_FILE_BYTES}. Bounded
+ * and regular-files-only (`hooks/configFile.ts`), because every path here
+ * comes from a repository file: a `.sln` entry or a `ProjectReference` naming
+ * `/dev/zero` or a FIFO was read without end. NOT contained in the scanned
+ * directory: a solution legitimately references projects beside it, and
+ * `dotnet restore` follows them whatever this reads — only a regex runs over
+ * the text, and none of it is echoed.
+ */
 function readText(path: string): string {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '';
-  }
+  return readSmallTextFile(path, MAX_DOTNET_FILE_BYTES) ?? '';
 }
 
 /** Project files a solution lists — `.sln` `Project(...) = "Name", "path", …`

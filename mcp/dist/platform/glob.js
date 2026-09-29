@@ -8,7 +8,7 @@
  * Node 22 line this server supports, and print an `ExperimentalWarning` the
  * first time they run.
  */
-import { readdirSync, statSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from './projectFs.js';
 import { join, relative, sep } from 'node:path';
 /** True when `pattern` contains a glob metacharacter. */
 export function hasGlobMagic(pattern) {
@@ -89,37 +89,26 @@ const SKIP_DIRS = new Set(['.git', 'node_modules']);
 const MAX_VISITED = 50_000;
 /**
  * Every existing file or directory under `root` whose POSIX relative path
- * matches `pattern` (relative to `root`), sorted. Symlinks are followed by
- * `statSync` but never descended through twice; `.git` and `node_modules`
- * are never entered.
+ * matches `pattern` (relative to `root`), sorted. `root` is the project, so
+ * the walk is `platform/projectFs.ts`'s: a directory link is never descended
+ * (no loop, nothing outside `root` listed), and a link matches only when it
+ * resolves inside `root`. `.git` and `node_modules` are never entered.
  */
 export function expandGlob(root, pattern) {
     const re = globToRegExp(pattern);
     const out = [];
     let visited = 0;
     const walk = (dir) => {
-        let names;
-        try {
-            names = readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const name of names) {
+        for (const { name, kind } of listProjectDir(root, dir)) {
             if (visited++ > MAX_VISITED)
                 return;
             const abs = join(dir, name);
             const rel = relative(root, abs).split(sep).join('/');
-            let isDir = false;
-            try {
-                isDir = statSync(abs).isDirectory();
-            }
-            catch {
+            if (kind === 'link' && projectPathKind(root, abs) === 'outside')
                 continue;
-            }
             if (re.test(rel))
                 out.push(abs);
-            if (isDir && !SKIP_DIRS.has(name))
+            if (kind === 'directory' && !SKIP_DIRS.has(name))
                 walk(abs);
         }
     };

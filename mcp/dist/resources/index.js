@@ -12,6 +12,7 @@
  * see `paging.ts#serverProjectPath`.
  */
 import { ResourceTemplate, } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { untrustedValue } from '../platform/untrustedText.js';
 import { QueryTolerantUriTemplate } from './paging.js';
 export const RESOURCES = [];
 export function registerResourceModule(resource) {
@@ -19,6 +20,14 @@ export function registerResourceModule(resource) {
         throw new Error(`Resource '${resource.name}' is already registered`);
     }
     RESOURCES.push(resource);
+}
+/**
+ * A resource payload as the host receives it: every string in it — keys
+ * included — passed through `untrustedValue` (`platform/untrustedText.ts`),
+ * like every tool result, since a resource serves the same stored findings.
+ */
+export function resourceText(json) {
+    return JSON.stringify(untrustedValue(json));
 }
 export function attachAllResources(server, ctx) {
     for (const resource of RESOURCES) {
@@ -33,7 +42,7 @@ export function attachAllResources(server, ctx) {
             server.registerResource(resource.name, template, { description: resource.description, mimeType }, async (uri, params) => {
                 const { json } = await resource.handler(uri, params, ctx);
                 return {
-                    contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
+                    contents: [{ uri: uri.href, mimeType, text: resourceText(json) }],
                 };
             });
         }
@@ -41,7 +50,7 @@ export function attachAllResources(server, ctx) {
             server.registerResource(resource.name, resource.uri, { description: resource.description, mimeType }, async (uri) => {
                 const { json } = await resource.handler(uri, {}, ctx);
                 return {
-                    contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
+                    contents: [{ uri: uri.href, mimeType, text: resourceText(json) }],
                 };
             });
         }

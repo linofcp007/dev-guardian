@@ -79,10 +79,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, type Dirent } from 'node:fs';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { readdirSync, type Dirent } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { git, splitNul } from '../runners/git.js';
 import { OWASP_SCAN_TYPES } from './coverage.js';
 import { canonicalLanguage, languageOfFile, SOURCE_LANGUAGES, type SourceLanguage } from './languages.js';
@@ -213,30 +214,31 @@ interface IgnoreTexts {
   guardian: string | null;
 }
 
-function readTextSync(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
+/** The largest ignore file read; a real one is a few KB. */
+const MAX_IGNORE_FILE_BYTES = 1024 * 1024;
+
+/**
+ * An ignore file at the project root — the repository's: bounded, regular
+ * files only, never through a link out of the project
+ * (`platform/projectFs.ts`). Small enough to read synchronously on the async
+ * path too.
+ */
+function readTextSync(root: string, name: string): string | null {
+  return readProjectTextOrUndefined(root, name, MAX_IGNORE_FILE_BYTES) ?? null;
 }
 
-async function readTextAsync(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch {
-    return null;
-  }
+async function readTextAsync(root: string, name: string): Promise<string | null> {
+  return readTextSync(root, name);
 }
 
 function ignoreTextsSync(root: string, guardianFrom: string = root): IgnoreTexts {
-  return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(guardianFrom, GUARDIAN_IGNORE_FILE)) };
+  return { semgrep: readTextSync(root, '.semgrepignore'), guardian: readTextSync(guardianFrom, GUARDIAN_IGNORE_FILE) };
 }
 
 async function ignoreTextsAsync(root: string, guardianFrom: string = root): Promise<IgnoreTexts> {
   const [semgrep, guardian] = await Promise.all([
-    readTextAsync(join(root, '.semgrepignore')),
-    readTextAsync(join(guardianFrom, GUARDIAN_IGNORE_FILE)),
+    readTextAsync(root, '.semgrepignore'),
+    readTextAsync(guardianFrom, GUARDIAN_IGNORE_FILE),
   ]);
   return { semgrep, guardian };
 }

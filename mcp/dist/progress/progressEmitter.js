@@ -23,6 +23,7 @@
  * interface so tests can verify exactly what would be sent without
  * spinning up an MCP transport.
  */
+import { untrustedText } from '../platform/untrustedText.js';
 const NOOP = {
     emit: () => { },
     note: () => { },
@@ -55,7 +56,16 @@ export function sendMonotonic(notifier, payload) {
         if (oldest.done !== true)
             perToken.delete(oldest.value);
     }
-    notifier.send({ ...payload, progress });
+    // A message can be a scanner's stderr line (`note()`) or name a file of
+    // the scanned repository: the host shows it as it is, so its control, bidi
+    // and zero-width characters — and line breaks: a progress message is one
+    // line — are written as visible `\u{XXXX}` (`platform/untrustedText.ts`),
+    // as in every tool result.
+    notifier.send({
+        ...payload,
+        progress,
+        ...(payload.message !== undefined ? { message: untrustedText(payload.message, { multiline: false }) } : {}),
+    });
 }
 export function makeProgressEmitter(options) {
     if (options.token === undefined || options.token === null)

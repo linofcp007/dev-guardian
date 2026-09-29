@@ -90,9 +90,10 @@
  * a link is unlinked and replaced, never written through.
  */
 import { execa } from 'execa';
-import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
+import { readProjectText } from '../platform/projectFs.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
 import { git, repoState, resolveCommit, showPrefix, splitNul } from '../runners/git.js';
 import { REPO_CONFIG } from '../runners/repoConfig.js';
@@ -412,17 +413,17 @@ async function ignoredButPresent(projectPath, at, files) {
     if (r.exitCode !== 0)
         throw new CiRefError(`git ls-files --ignored failed: ${firstLine(r.stderr)}`);
     for (const path of splitNul(r.stdout)) {
-        let tree;
-        try {
-            tree = readFileSync(join(projectPath, ...path.split('/')));
-        }
-        catch {
+        // The pull request's own file: bounded, regular files only, never through
+        // a link out of the project (`platform/projectFs.ts`). One that is there
+        // but refused (a FIFO, a link out, oversized) is named as modified — it
+        // is present and nothing vouches for it.
+        const tree = readProjectText(projectPath, path, CONFIG_MAX_BYTES);
+        if (tree.status === 'absent')
             continue;
-        }
         const atRef = await readAtRef(projectPath, at, path, CONFIG_MAX_BYTES).catch(() => null);
         if (atRef === null)
             out.set(path, 'added');
-        else if (!atRef.equals(tree))
+        else if (tree.status !== 'ok' || atRef.toString('utf8') !== tree.text)
             out.set(path, 'modified');
     }
     return out;
@@ -542,8 +543,13 @@ export async function resetExclusionsFromRef(projectPath, at, env = process.env)
             removed.push(shown(rel));
             continue;
         }
-        if (here !== null && here.isFile() && same(readFileSync(abs), bytes))
-            continue;
+        if (here !== null && here.isFile()) {
+            // Bounded, regular files only (`platform/projectFs.ts`): the checkout's
+            // copy is the pull request's, and a huge one is simply replaced.
+            const current = readProjectText(repoRoot, rel, CONFIG_MAX_BYTES);
+            if (current.status === 'ok' && same(Buffer.from(current.text, 'utf8'), bytes))
+                continue;
+        }
         if (here !== null)
             unlinkSync(abs);
         mkdirSync(dirname(abs), { recursive: true });

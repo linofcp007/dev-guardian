@@ -69,6 +69,7 @@
  */
 import { resolutionKey } from '../fingerprint/findingIdentity.js';
 import { runProcess } from '../runners/processRunner.js';
+import { testCommandEnv } from './testCommandEnv.js';
 /** How many lines of a failing run's output ride along in the verdict —
  *  enough for a reader to recognise which tests broke, not the whole log. */
 const OUTPUT_HEAD_LINES = 20;
@@ -158,10 +159,16 @@ export async function judgeTests(opts) {
     }
     const run = opts.run ?? runProcess;
     const command = [derived.command, ...derived.args].join(' ');
+    // The project's own code (`scripts.test`, `conftest.py`, `build.rs`), on a
+    // dry run too: never with this server's environment, only the allowlisted
+    // one (`testCommandEnv.ts`) — no token or cloud credential reaches it.
+    const env = testCommandEnv();
     const worktreeResult = await run({
         command: derived.command,
         args: derived.args,
         cwd: worktreePath,
+        env,
+        extendEnv: false,
         timeoutMs,
     });
     if (!hasFailed(worktreeResult)) {
@@ -190,6 +197,8 @@ export async function judgeTests(opts) {
             command: derived.command,
             args: derived.args,
             cwd: baseTree.path,
+            env,
+            extendEnv: false,
             timeoutMs,
         });
     }

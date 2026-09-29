@@ -38,7 +38,9 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { listProjectDir, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import {
   classifyRestoreFailure,
@@ -286,12 +288,9 @@ const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
  * not read here.
  */
 export function projectNpmRegistry(projectPath: string): string | null {
-  let text: string;
-  try {
-    text = readFileSync(join(projectPath, '.npmrc'), 'utf8');
-  } catch {
-    return null;
-  }
+  // The repository's file: bounded, never through a link out of the project.
+  const text = readProjectTextOrUndefined(projectPath, '.npmrc', 1024 * 1024);
+  if (text === undefined) return null;
   let registry: string | null = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -323,7 +322,7 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
     command: opts.command,
     args: opts.args,
     cwd: opts.ctx.projectPath,
-    env: opts.ctx.scriptEnv,
+    ...auditEnv(opts.ctx),
     signal: opts.ctx.signal,
     onLog: opts.ctx.onLog,
   });
@@ -392,6 +391,20 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
   }
 }
 
+/**
+ * The environment of a package-manager process this tool starts: the scan's
+ * own, except while `create_fix_pr` re-scans a fix — then the
+ * package-manager environment (`fixpr/childEnv.ts`), with `extendEnv: false`,
+ * so `npm audit`, `pip-audit` (which installs the requirements into a
+ * temporary virtualenv, running an sdist's build code) and `dotnet restore`
+ * see no token or credential beyond the user's own package-manager
+ * configuration.
+ */
+function auditEnv(ctx: { scriptEnv: NodeJS.ProcessEnv }): { env: NodeJS.ProcessEnv; extendEnv?: false } {
+  const pm = packageManagerEnvOptions();
+  return 'env' in pm ? { env: pm.env, extendEnv: false } : { env: ctx.scriptEnv };
+}
+
 // --------------------------------------------------------------- pip-audit
 
 /**
@@ -403,24 +416,15 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
  */
 function findRequirementsFiles(projectPath: string): string[] {
   const out: string[] = [];
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(projectPath);
-  } catch {
-    return out;
-  }
-  for (const name of entries) {
-    if (/^requirements.*\.txt$/i.test(name)) out.push(join(projectPath, name));
+  // `platform/projectFs.ts`: a `requirements/` that links out of the project
+  // is not listed, and a file that links out is not handed to pip-audit.
+  const inside = (abs: string): boolean => projectPathKind(projectPath, abs) === 'file';
+  for (const { name } of listProjectDir(projectPath, projectPath)) {
+    if (/^requirements.*\.txt$/i.test(name) && inside(join(projectPath, name))) out.push(join(projectPath, name));
   }
   const reqDir = join(projectPath, 'requirements');
-  if (existsSync(reqDir)) {
-    try {
-      for (const name of readdirSync(reqDir)) {
-        if (name.toLowerCase().endsWith('.txt')) out.push(join(reqDir, name));
-      }
-    } catch {
-      /* ignore — best-effort */
-    }
+  for (const { name } of listProjectDir(projectPath, reqDir)) {
+    if (name.toLowerCase().endsWith('.txt') && inside(join(reqDir, name))) out.push(join(reqDir, name));
   }
   return out;
 }
@@ -503,7 +507,7 @@ async function runPipAudit(opts: {
       command: 'pip-audit',
       args,
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
@@ -609,7 +613,7 @@ async function runDotnetSca(opts: {
       command: 'dotnet',
       args: plan.args,
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
@@ -636,7 +640,7 @@ async function runDotnetSca(opts: {
       command: 'dotnet',
       args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
       cwd: ctx.projectPath,
-      env: ctx.scriptEnv,
+      ...auditEnv(ctx),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });

@@ -10,7 +10,7 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { detectConfigDrift } from '../../../src/configdrift/detect.js';
 import { hashConfigText } from '../../../src/configdrift/hash.js';
@@ -153,5 +153,38 @@ describe('detectConfigDrift', () => {
     userCopy(h, SHIPPED_V1);
     record(h);
     expect(detect(h).entries.map((e) => e.state)).toEqual(['source_missing']);
+  });
+});
+
+/**
+ * `.dev-guardian/configs.json` is a file in the scanned repository, and its
+ * `source` and `target` are joined to `configs/` and to the project. Detection
+ * runs on the scan path, so a manifest naming `/dev/zero` (or any file of the
+ * user's) was read by every scan.
+ */
+describe('detectConfigDrift — a hostile manifest', () => {
+  it('never reads a source or a target that climbs out of its own root', () => {
+    const h = harness();
+    const outside = makeTempDir('drift-outside-');
+    writeFileSync(join(outside, 'secret.yml'), SHIPPED_V1, 'utf8');
+    shipped(h, SHIPPED_V1);
+    userCopy(h, SHIPPED_V1);
+    const climb = (root: string): string => relative(root, join(outside, 'secret.yml'));
+    record(h, { source: climb(h.configsDir) });
+    expect(detect(h).entries.map((e) => e.state)).toEqual(['source_missing']);
+    record(h, { target: climb(h.projectPath) });
+    expect(detect(h).entries.map((e) => e.state)).toEqual(['target_missing']);
+  });
+
+  it.skipIf(process.platform === 'win32')('a manifest naming /dev/zero is answered at once (POSIX)', () => {
+    const h = harness();
+    shipped(h, SHIPPED_V1);
+    userCopy(h, SHIPPED_V1);
+    const t0 = Date.now();
+    record(h, { source: relative(h.configsDir, '/dev/zero') });
+    expect(detect(h).entries.map((e) => e.state)).toEqual(['source_missing']);
+    record(h, { target: relative(h.projectPath, '/dev/zero') });
+    expect(detect(h).entries.map((e) => e.state)).toEqual(['target_missing']);
+    expect(Date.now() - t0).toBeLessThan(2000);
   });
 });

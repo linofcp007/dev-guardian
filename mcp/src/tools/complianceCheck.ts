@@ -44,7 +44,8 @@
  *     real, just not the whole answer.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
@@ -295,26 +296,17 @@ function walk(
   out: string[],
 ): void {
   if (depth > maxDepth) return;
-  let entries: string[];
-  try {
-    entries = readdirSync(dir) as unknown as string[];
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
+  // `platform/projectFs.ts`: a directory link is never descended, and a link
+  // counts as a file only when it resolves to one inside the project.
+  for (const { name: entry, kind } of listProjectDir(root, dir)) {
     if (entry.startsWith('.') && entry !== '.github' && entry !== '.gitlab') continue;
     if (entry === 'node_modules' || entry === '.guardian' || entry === 'dist' || entry === 'build')
       continue;
     const abs = join(dir, entry);
-    try {
-      const s = statSync(abs);
-      if (s.isDirectory()) {
-        if (depth + 1 <= maxDepth) walk(root, abs, depth + 1, maxDepth, out);
-      } else if (s.isFile()) {
-        out.push(abs.slice(root.length + 1).replace(/\\/g, '/'));
-      }
-    } catch {
-      /* skip */
+    if (kind === 'directory') {
+      if (depth + 1 <= maxDepth) walk(root, abs, depth + 1, maxDepth, out);
+    } else if (kind === 'file' || (kind === 'link' && projectPathKind(root, abs) === 'file')) {
+      out.push(abs.slice(root.length + 1).replace(/\\/g, '/'));
     }
   }
 }
