@@ -433,4 +433,45 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/GUARDIAN_OFFLINE/);
   });
+
+  // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s
+  // through the hook with GUARDIAN_OFFLINE=1 — past Claude Code's 15 s, after
+  // which the command runs with no verdict.
+  describe('a 3000-directory monorepo (review I4)', () => {
+    const NAMES = Array.from({ length: 17 }, (_, i) => `zz-no-such-pkg-${String(i).padStart(2, '0')}`);
+    const monorepo = (): void => {
+      mkdirSync(join(project, '.git'));
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+      for (let i = 0; i < 3000; i += 1) {
+        const dir = join(project, 'packages', `p${String(i).padStart(4, '0')}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@mono/p${String(i).padStart(4, '0')}` }));
+      }
+    };
+
+    it('17 packages offline answer well inside the deadline', () => {
+      monorepo();
+      const r = runHook(`npm i ${NAMES.join(' ')}`, {}, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect(r.ms).toBeLessThan(8000);
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not verified/);
+    }, 120_000);
+
+    it('17 names the registry does not have are all answered, well inside the deadline', () => {
+      monorepo();
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes);
+      expect(r.ms).toBeLessThan(8000);
+      const said = `${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`;
+      for (const name of NAMES) expect(said).toContain(name);
+    }, 120_000);
+
+    it('GUARDIAN_PKG_VET_DEADLINE_MS=0: every package reads "time budget", never silence', () => {
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '0' } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/time budget/);
+    });
+  });
 });

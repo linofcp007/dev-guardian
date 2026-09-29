@@ -47,6 +47,14 @@ const POPULAR_DIR = join(PLUGIN_ROOT, 'configs', 'popular-packages');
 
 const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
 
+/**
+ * When this hook call started: package vetting's one deadline
+ * (`GUARDIAN_PKG_VET_DEADLINE_MS`, 8 s by default) counts from here, so the
+ * shell guard's own time comes out of it and the whole call stays well under
+ * Claude Code's 15 s timeout (review I4).
+ */
+const HOOK_STARTED = Date.now();
+
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[guardian-hook] ${msg}\n`);
 }
@@ -539,7 +547,8 @@ async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
  * Install-time package vetting for `npm i|install|add`, `pnpm add`, `yarn
  * add`, `bun add`, `pip install`, `uv add`, `uv pip install`, `poetry add`,
  * `composer require` and `dotnet add package`. The logic — command parsing,
- * the registry/OSV lookups under a 3 s total network budget, the verdict and
+ * the registry/OSV lookups under a 3 s total network budget and one 8 s
+ * deadline for the whole hook call, the verdict and
  * the wording — lives in `mcp/dist/pkgvet/hookDecision.js`; this only calls
  * it. Returns `{ deny?, context? }`, or `null` when there is nothing to say
  * (no install command, every package clean) or anything at all went wrong:
@@ -557,7 +566,7 @@ async function vetInstallCommand(command, cwd, toolName) {
     // The PowerShell tool's commands are also read the way PowerShell reads
     // them (comma lists, backtick continuations) — see `parseInstallCommands`.
     const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
-    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell });
+    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell, startedAt: HOOK_STARTED });
   } catch (err) {
     debug(`package vetting skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
     return null;

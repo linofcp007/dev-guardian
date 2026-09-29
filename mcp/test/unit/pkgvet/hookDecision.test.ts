@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { decideInstallCommand, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
 
@@ -610,4 +610,95 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
     expect(d?.deny).toMatch(/MAL-2026-3/);
     expect(d?.deny).not.toMatch(/GUARDIAN_PKG_VET/);
   });
+});
+
+// Review of 3.0.0, I4: whether a local workspace explains a 404 was computed
+// for EVERY package, before the network, by walking up to 3000 workspace
+// directories each time — 17 packages in a 3000-directory monorepo took
+// 16.5 s with GUARDIAN_OFFLINE=1, past Claude Code's 15 s hook timeout, after
+// which the command runs with no verdict at all.
+describe('decideInstallCommand — a large monorepo stays inside the vetting deadline (review I4)', () => {
+  let mono: string;
+  const NAMES = Array.from({ length: 17 }, (_, i) => `zz-no-such-pkg-${String(i).padStart(2, '0')}`);
+
+  beforeAll(() => {
+    mono = mkdtempSync(join(tmpdir(), 'pkgvet-mono-'));
+    mkdirSync(join(mono, '.git'));
+    writeFileSync(join(mono, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+    for (let i = 0; i < 3000; i += 1) {
+      const dir = join(mono, 'packages', `p${String(i).padStart(4, '0')}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@mono/p${String(i).padStart(4, '0')}` }));
+    }
+  }, 120_000);
+  afterAll(() => rmSync(mono, { recursive: true, force: true }));
+
+  const all404 = (mal?: string): typeof fetch =>
+    (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url.startsWith('https://registry.npmjs.org/')) return new Response('', { status: 404 });
+      if (url === OSV) {
+        const queries = (JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string } }> }).queries;
+        return new Response(
+          JSON.stringify({ results: queries.map((q) => (q.package.name === mal ? { vulns: [{ id: 'MAL-2026-9' }] } : {})) }),
+        );
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+
+  it('17 missing names: every one is answered, well inside the deadline', async () => {
+    const t0 = Date.now();
+    const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono }));
+    const ms = Date.now() - t0;
+    expect(ms).toBeLessThan(8000);
+    for (const name of NAMES) expect(`${d?.deny ?? ''}${d?.context ?? ''}`).toContain(name);
+  }, 60_000);
+
+  it('offline, the workspace is not walked at all', async () => {
+    const t0 = Date.now();
+    const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '1' } }));
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(d?.context).toMatch(/not verified/);
+    for (const name of NAMES) expect(d?.context).toContain(name);
+  }, 60_000);
+
+  it('a name that IS a workspace package still explains its 404', async () => {
+    const d = await decideInstallCommand('npm i @mono/p0100', opts(all404(), { cwd: mono }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/local workspace package/);
+  }, 60_000);
+
+  // The walk stops at 3000 directories; this workspace has 3002. A name past
+  // the stop used to read as absent — and a workspace package was DENIED as
+  // hallucinated. It is unknown now.
+  it('a name the walk did not reach is unknown, never absent', async () => {
+    const d = await decideInstallCommand('npm i @mono/p2999', opts(all404(), { cwd: mono }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/more than 3000 directories and was not read to its end/);
+  }, 60_000);
+
+  it('past the deadline, what is left reads "not verified (time budget)" — never silence', async () => {
+    const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono, deadlineAt: Date.now() - 1 }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/time budget/);
+    for (const name of NAMES) expect(d?.context).toContain(name);
+  });
+
+  it('GUARDIAN_PKG_VET_DEADLINE_MS sets the deadline', async () => {
+    const d = await decideInstallCommand(
+      `npm i ${NAMES.join(' ')}`,
+      opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '0', GUARDIAN_PKG_VET_DEADLINE_MS: '0' } }),
+    );
+    expect(d?.context).toMatch(/time budget/);
+  });
+
+  it('a malicious name is still denied when the deadline cuts the workspace walk short', async () => {
+    const t0 = Date.now();
+    const d = await decideInstallCommand(
+      `npm i ${NAMES.join(' ')} zz-evil`,
+      opts(all404('zz-evil'), { cwd: mono, deadlineAt: Date.now() + 1500 }),
+    );
+    expect(Date.now() - t0).toBeLessThan(4000);
+    expect(d?.deny).toMatch(/MAL-2026-9/);
+  }, 60_000);
 });

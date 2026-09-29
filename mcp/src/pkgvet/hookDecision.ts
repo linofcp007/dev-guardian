@@ -31,6 +31,7 @@
 
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { loadPopularIndex } from './popular.js';
+import { registryCache } from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
@@ -59,6 +60,28 @@ export interface HookVetOptions {
    * (`parseInstallCommands`), and its escape hatch is spelled for it.
    */
   shell?: CommandShell;
+  /** When the hook call started (epoch ms); the deadline counts from here. Default: now. */
+  startedAt?: number;
+  /** The deadline itself (epoch ms), overriding `startedAt` + {@link vetDeadlineMs} (tests). */
+  deadlineAt?: number;
+}
+
+/** The vetting deadline's default: well under Claude Code's 15 s hook timeout. */
+export const DEFAULT_DEADLINE_MS = 8000;
+/** The most `GUARDIAN_PKG_VET_DEADLINE_MS` may raise it to: past the hook's 15 s, the command runs with no verdict. */
+const MAX_DEADLINE_MS = 14_000;
+
+/**
+ * The one deadline on a hook call's vetting (review I4), in ms from the start
+ * of the call: `GUARDIAN_PKG_VET_DEADLINE_MS` (0-14000), else 8000. Local
+ * work — reading registry configuration, walking a workspace — used to run
+ * unbounded before the 3 s network budget: 17 packages in a 3000-directory
+ * monorepo took 16.5 s, and Claude Code kills a hook at 15 s.
+ */
+export function vetDeadlineMs(env: Readonly<Record<string, string | undefined>>): number {
+  const raw = env['GUARDIAN_PKG_VET_DEADLINE_MS']?.trim();
+  if (raw === undefined || !/^\d+$/.test(raw)) return DEFAULT_DEADLINE_MS;
+  return Math.min(Number(raw), MAX_DEADLINE_MS);
 }
 
 export interface HookDecision {
@@ -158,11 +181,16 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const env = opts.env ?? process.env;
   const offline = env['GUARDIAN_OFFLINE'] === '1';
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
+  // One deadline for the whole call, and one cache, shared by every command
+  // of the line (review I4).
+  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
+  const cache = registryCache();
   const batches = await Promise.all(
     commands.map((c) =>
       vetPackages(c.packages, {
         budgetMs,
         offline,
+        deadlineAt,
         now: opts.now ?? Date.now(),
         registry: {
           projectDir: opts.cwd,
@@ -172,6 +200,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           platform: opts.platform,
           nodeExecPath: opts.nodeExecPath,
           systemLibraryDir: opts.systemLibraryDir,
+          cache,
         },
         commandRegistries: c.registries,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),

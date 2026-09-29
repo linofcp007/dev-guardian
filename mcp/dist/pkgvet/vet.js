@@ -36,7 +36,7 @@
  */
 import { queryOsv } from '../runners/osv.js';
 import { loadPopularIndex } from './popular.js';
-import { customRegistryFor, isPublicRegistryUrl } from './privateRegistry.js';
+import { customRegistryFor, isPublicRegistryUrl, MAX_WORKSPACE_DIRS, registryCache, } from './privateRegistry.js';
 import { lookupRegistry, npmFullDocument, npmVersionScripts, nugetCanonicalId, nugetPublished, } from './registry.js';
 import { buildPopularIndex, findTyposquatTarget } from './typosquat.js';
 import { OSV_ECOSYSTEM, } from './types.js';
@@ -54,6 +54,8 @@ const REGISTRY_NAME = {
     packagist: 'Packagist',
     nuget: 'nuget.org',
 };
+/** The reason a check did not run because the vetting deadline had passed. */
+export const TIME_BUDGET = 'vetting time budget exhausted';
 function popularIndexFor(ecosystem, opts) {
     const override = opts.popular?.[ecosystem];
     if (override === null)
@@ -213,19 +215,24 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     }
     else if (lookup.kind === 'not_found') {
         const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : '';
-        if (w.custom !== null) {
-            const where = `${w.custom.source}${w.custom.url !== undefined ? `: ${w.custom.url}` : ''}`;
-            const why = w.custom.kind === 'auth'
+        const custom = w.custom ?? null;
+        if (custom !== null) {
+            const where = `${custom.source}${custom.url !== undefined ? `: ${custom.url}` : ''}`;
+            const why = custom.kind === 'auth'
                 ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup`
-                : w.custom.kind === 'workspace'
+                : custom.kind === 'workspace'
                     ? `it is a local workspace package (${where})`
-                    : w.custom.kind === 'unreadable'
-                        ? w.custom.what === 'workspace manifest'
-                            ? `workspace manifest at ${w.custom.source} could not be read — possibly a local workspace package`
-                            : w.custom.what === 'directory'
-                                ? `directory ${w.custom.source} could not be listed — it may hold registry configuration`
-                                : `registry configuration at ${w.custom.source} could not be read — possibly a private registry`
-                        : `a custom registry is configured (${where})`;
+                    : custom.kind === 'unchecked'
+                        ? custom.cut === 'time'
+                            ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})`
+                            : `the workspace at ${custom.source} has more than ${MAX_WORKSPACE_DIRS} directories and was not read to its end — it may hold the package`
+                        : custom.kind === 'unreadable'
+                            ? custom.what === 'workspace manifest'
+                                ? `workspace manifest at ${custom.source} could not be read — possibly a local workspace package`
+                                : custom.what === 'directory'
+                                    ? `directory ${custom.source} could not be listed — it may hold registry configuration`
+                                    : `registry configuration at ${custom.source} could not be read — possibly a private registry`
+                            : `a custom registry is configured (${where})`;
             exists = unknown(`not on ${registry}, but ${why} — possibly a private or local package; not vetted.${didYouMean}`);
         }
         else {
@@ -237,7 +244,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
         // malicious name is still denied (Part Y fix round 1).
         malicious =
             malIds.length > 0
-                ? w.custom !== null && w.custom.kind !== 'unreadable'
+                ? custom !== null && custom.kind !== 'unreadable' && custom.kind !== 'unchecked'
                     ? warn(`OSV lists this name as a malicious package (${malIds.join(', ')}) removed from ${registry}`)
                     : fail(`OSV lists this name as a malicious package (${malIds.join(', ')}), removed from ${registry}`)
                 : osvDown !== undefined
@@ -359,6 +366,14 @@ function buildResult(w, osv, osvError, now, offlineReason) {
 export async function vetPackages(specs, opts = {}) {
     const now = opts.now ?? Date.now();
     const offline = opts.offline ?? process.env['GUARDIAN_OFFLINE'] === '1';
+    // Every lookup of this call shares one cache: each registry file is read,
+    // and each workspace walked, once however many packages there are (I4).
+    const registry = {
+        ...(opts.registry ?? {}),
+        cache: opts.registry?.cache ?? registryCache(),
+        deadlineAt: opts.deadlineAt ?? opts.registry?.deadlineAt,
+    };
+    const withCache = { ...opts, registry };
     const indexes = new Map();
     const work = specs.map((spec) => {
         if (!indexes.has(spec.ecosystem))
@@ -368,7 +383,6 @@ export async function vetPackages(specs, opts = {}) {
             spec,
             typo: index === null ? null : findTyposquatTarget(index, spec.name),
             popularLoaded: index !== null,
-            custom: customFor(spec, opts),
         };
     });
     if (offline) {
@@ -378,7 +392,10 @@ export async function vetPackages(specs, opts = {}) {
     if (fetchImpl === undefined) {
         return work.map((w) => buildResult(w, undefined, undefined, now, 'no fetch implementation available'));
     }
-    const budgetMs = opts.budgetMs ?? TOOL_BUDGET_MS;
+    const left = opts.deadlineAt === undefined ? Number.POSITIVE_INFINITY : opts.deadlineAt - Date.now();
+    if (left <= 0)
+        return work.map((w) => buildResult(w, undefined, undefined, now, TIME_BUDGET));
+    const budgetMs = Math.max(1, Math.min(opts.budgetMs ?? TOOL_BUDGET_MS, left));
     const deadline = Date.now() + budgetMs;
     // A plain, REF'd timer rather than `AbortSignal.timeout()`: that one is
     // unref'd, so a hook process whose only pending work is a request that
@@ -389,13 +406,32 @@ export async function vetPackages(specs, opts = {}) {
     const signal = opts.signal === undefined ? budget.signal : AbortSignal.any([opts.signal, budget.signal]);
     const http = { fetchImpl, signal };
     try {
-        return await networkRounds(work, http, signal, deadline, now);
+        return await networkRounds(work, http, signal, deadline, now, (w) => explain404(w, withCache));
     }
     finally {
         clearTimeout(timer);
     }
 }
-async function networkRounds(work, http, signal, deadline, now) {
+/**
+ * What explains a name the registry does not have — looked for once the
+ * network is done, so reading files can never eat into its budget, and only
+ * while the deadline has not passed (review I4).
+ */
+function explain404(w, opts) {
+    if (w.custom !== undefined)
+        return;
+    const deadlineAt = opts.registry?.deadlineAt;
+    if (deadlineAt !== undefined && Date.now() > deadlineAt) {
+        const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(w.spec.ecosystem, u));
+        w.custom =
+            onCommandLine !== undefined
+                ? { kind: 'registry', source: 'the command line', url: onCommandLine }
+                : { kind: 'unchecked', source: 'the vetting deadline', cut: 'time' };
+        return;
+    }
+    w.custom = customFor(w.spec, opts);
+}
+async function networkRounds(work, http, signal, deadline, now, explain) {
     const fetchImpl = http.fetchImpl;
     // Round 1: the registry, once per distinct name.
     const lookups = new Map();
@@ -429,6 +465,9 @@ async function networkRounds(work, http, signal, deadline, now) {
     // Round 2: one OSV batch, plus the per-version extras, in parallel.
     if (signal.aborted) {
         const why = 'network budget exhausted before OSV was consulted';
+        for (const w of work)
+            if (w.lookup?.kind === 'not_found')
+                explain(w);
         return work.map((w) => buildResult(w, undefined, why, now, undefined));
     }
     let osvError;
@@ -454,6 +493,9 @@ async function networkRounds(work, http, signal, deadline, now) {
     if (signal.aborted && osv.online === false && osvError === undefined) {
         osvError = 'network budget exhausted before OSV answered';
     }
+    for (const w of work)
+        if (w.lookup?.kind === 'not_found')
+            explain(w);
     return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? undefined : osv.error), now, undefined));
 }
 /** The worst verdict of a set: block > warn > unknown > ok. */

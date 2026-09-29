@@ -81862,6 +81862,10 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 import { lstatSync as lstatSync8, readdirSync as readdirSync26 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname21, isAbsolute as isAbsolute16, join as join81, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
+function registryCache() {
+  return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
+}
+var MAX_WORKSPACE_DIRS = 3e3;
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -81902,8 +81906,20 @@ function takeUnread() {
   firstUnread = void 0;
   return unread;
 }
+var firstUnchecked;
+function takeUnchecked() {
+  const unchecked = firstUnchecked;
+  firstUnchecked = void 0;
+  return unchecked;
+}
 function read(path8, ctx, under, what = "configuration") {
-  const r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(path8, ctx, under));
+  const root = walkRoot2(path8, ctx, under);
+  const key = `${path8}\0${root ?? ""}`;
+  let r = ctx.cache?.reads.get(key);
+  if (r === void 0) {
+    r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, root);
+    ctx.cache?.reads.set(key, r);
+  }
   if (r.status === "refused") noteUnread(path8, what);
   return r.status === "ok" ? r.text : void 0;
 }
@@ -82110,18 +82126,32 @@ function npmRegistry(name, ctx) {
   return local === void 0 ? null : { kind: "workspace", source: local };
 }
 var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
-var MAX_SCAN_DIRS = 3e3;
+var MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS;
 var MAX_SCAN_DEPTH = 5;
-function findManifest(root, file, match, ctx) {
+function workspaceIndex(root, file, nameOf2, ctx) {
+  const key = `${file}\0${root}`;
+  const cached2 = ctx.cache?.workspaces.get(key);
+  if (cached2 !== void 0) return cached2;
+  const index = { names: /* @__PURE__ */ new Map() };
   const queue = [{ dir: root, depth: 0 }];
-  let visited = 0;
-  while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
-    const next = queue.shift();
+  for (let at = 0; at < queue.length; at += 1) {
+    if (at >= MAX_SCAN_DIRS) {
+      index.cut = "size";
+      break;
+    }
+    if (ctx.deadlineAt !== void 0 && Date.now() > ctx.deadlineAt) {
+      index.cut = "time";
+      break;
+    }
+    const next = queue[at];
     if (next === void 0) break;
-    visited += 1;
     const manifest = join81(next.dir, file);
-    const text2 = read(manifest, ctx, root, "workspace manifest");
-    if (text2 !== void 0 && match(text2)) return manifest;
+    const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(manifest, ctx, root));
+    if (r.status === "refused") index.unread = index.unread ?? { path: manifest, what: "workspace manifest" };
+    else if (r.status === "ok") {
+      const name = nameOf2(r.text);
+      if (name !== void 0 && !index.names.has(name)) index.names.set(name, manifest);
+    }
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
@@ -82131,7 +82161,29 @@ function findManifest(root, file, match, ctx) {
     }
     for (const e of entries2) queue.push({ dir: join81(next.dir, e), depth: next.depth + 1 });
   }
+  ctx.cache?.workspaces.set(key, index);
+  return index;
+}
+function findManifest(root, file, nameOf2, wanted, ctx) {
+  const index = workspaceIndex(root, file, nameOf2, ctx);
+  const hit = index.names.get(wanted);
+  if (hit !== void 0) return hit;
+  if (index.unread !== void 0) noteUnread(index.unread.path, index.unread.what);
+  if (index.cut !== void 0) firstUnchecked = firstUnchecked ?? { root, cut: index.cut };
   return void 0;
+}
+function npmManifestName(text2) {
+  try {
+    const name = JSON.parse(text2).name;
+    return typeof name === "string" ? name : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function pyprojectName(text2) {
+  const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
+  const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
+  return n2 === void 0 ? void 0 : pep503(n2);
 }
 function hasWorkspaces(packageJson) {
   if (packageJson === void 0) return false;
@@ -82147,13 +82199,7 @@ function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
     const isRoot = hasWorkspaces(read(join81(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join81(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
-    const hit = findManifest(dir, "package.json", (text2) => {
-      try {
-        return JSON.parse(text2).name === name;
-      } catch {
-        return false;
-      }
-    }, ctx);
+    const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -82170,11 +82216,7 @@ function uvWorkspacePackage(name, ctx) {
       if (pep503(m[1] ?? "") === wanted) return path8;
     }
     if (!/^\s*\[tool\.uv\.workspace\]/m.test(text2)) continue;
-    const hit = findManifest(dir, "pyproject.toml", (t) => {
-      const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
-      const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
-      return n2 !== void 0 && pep503(n2) === wanted;
-    }, ctx);
+    const hit = findManifest(dir, "pyproject.toml", pyprojectName, wanted, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -82369,6 +82411,7 @@ function nugetRegistry(name, ctx) {
 }
 function customRegistryFor(ecosystem, name, ctx = {}) {
   firstUnread = void 0;
+  firstUnchecked = void 0;
   let found;
   try {
     switch (ecosystem) {
@@ -82391,7 +82434,10 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
     found = null;
   }
   const unread = takeUnread();
-  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : found;
+  const unchecked = takeUnchecked();
+  if (found !== null) return found;
+  if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
+  return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
 
 // src/pkgvet/registry.ts
@@ -82877,6 +82923,7 @@ var REGISTRY_NAME = {
   packagist: "Packagist",
   nuget: "nuget.org"
 };
+var TIME_BUDGET = "vetting time budget exhausted";
 function popularIndexFor(ecosystem, opts) {
   const override = opts.popular?.[ecosystem];
   if (override === null) return null;
@@ -82992,14 +83039,15 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup.reason}`);
   } else if (lookup.kind === "not_found") {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
-    if (w.custom !== null) {
-      const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
-      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? w.custom.what === "workspace manifest" ? `workspace manifest at ${w.custom.source} could not be read \u2014 possibly a local workspace package` : w.custom.what === "directory" ? `directory ${w.custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
+    const custom3 = w.custom ?? null;
+    if (custom3 !== null) {
+      const where = `${custom3.source}${custom3.url !== void 0 ? `: ${custom3.url}` : ""}`;
+      const why = custom3.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom3.kind === "workspace" ? `it is a local workspace package (${where})` : custom3.kind === "unchecked" ? custom3.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom3.source} has more than ${MAX_WORKSPACE_DIRS} directories and was not read to its end \u2014 it may hold the package` : custom3.kind === "unreadable" ? custom3.what === "workspace manifest" ? `workspace manifest at ${custom3.source} could not be read \u2014 possibly a local workspace package` : custom3.what === "directory" ? `directory ${custom3.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom3.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
+    malicious = malIds.length > 0 ? custom3 !== null && custom3.kind !== "unreadable" && custom3.kind !== "unchecked" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -83071,6 +83119,12 @@ function buildResult(w, osv, osvError, now, offlineReason) {
 async function vetPackages(specs, opts = {}) {
   const now = opts.now ?? Date.now();
   const offline = opts.offline ?? process.env["GUARDIAN_OFFLINE"] === "1";
+  const registry2 = {
+    ...opts.registry ?? {},
+    cache: opts.registry?.cache ?? registryCache(),
+    deadlineAt: opts.deadlineAt ?? opts.registry?.deadlineAt
+  };
+  const withCache = { ...opts, registry: registry2 };
   const indexes = /* @__PURE__ */ new Map();
   const work = specs.map((spec) => {
     if (!indexes.has(spec.ecosystem)) indexes.set(spec.ecosystem, popularIndexFor(spec.ecosystem, opts));
@@ -83078,8 +83132,7 @@ async function vetPackages(specs, opts = {}) {
     return {
       spec,
       typo: index === null ? null : findTyposquatTarget(index, spec.name),
-      popularLoaded: index !== null,
-      custom: customFor(spec, opts)
+      popularLoaded: index !== null
     };
   });
   if (offline) {
@@ -83089,19 +83142,31 @@ async function vetPackages(specs, opts = {}) {
   if (fetchImpl === void 0) {
     return work.map((w) => buildResult(w, void 0, void 0, now, "no fetch implementation available"));
   }
-  const budgetMs = opts.budgetMs ?? TOOL_BUDGET_MS;
+  const left = opts.deadlineAt === void 0 ? Number.POSITIVE_INFINITY : opts.deadlineAt - Date.now();
+  if (left <= 0) return work.map((w) => buildResult(w, void 0, void 0, now, TIME_BUDGET));
+  const budgetMs = Math.max(1, Math.min(opts.budgetMs ?? TOOL_BUDGET_MS, left));
   const deadline = Date.now() + budgetMs;
   const budget = new AbortController();
   const timer = setTimeout(() => budget.abort(new Error("network budget exhausted")), budgetMs);
   const signal = opts.signal === void 0 ? budget.signal : AbortSignal.any([opts.signal, budget.signal]);
   const http = { fetchImpl, signal };
   try {
-    return await networkRounds(work, http, signal, deadline, now);
+    return await networkRounds(work, http, signal, deadline, now, (w) => explain404(w, withCache));
   } finally {
     clearTimeout(timer);
   }
 }
-async function networkRounds(work, http, signal, deadline, now) {
+function explain404(w, opts) {
+  if (w.custom !== void 0) return;
+  const deadlineAt = opts.registry?.deadlineAt;
+  if (deadlineAt !== void 0 && Date.now() > deadlineAt) {
+    const onCommandLine = (opts.commandRegistries ?? []).find((u2) => !isPublicRegistryUrl(w.spec.ecosystem, u2));
+    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
+    return;
+  }
+  w.custom = customFor(w.spec, opts);
+}
+async function networkRounds(work, http, signal, deadline, now, explain) {
   const fetchImpl = http.fetchImpl;
   const lookups = /* @__PURE__ */ new Map();
   const pending = work.map((w) => {
@@ -83126,6 +83191,7 @@ async function networkRounds(work, http, signal, deadline, now) {
   });
   if (signal.aborted) {
     const why = "network budget exhausted before OSV was consulted";
+    for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
     return work.map((w) => buildResult(w, void 0, why, now, void 0));
   }
   let osvError;
@@ -83152,6 +83218,7 @@ async function networkRounds(work, http, signal, deadline, now) {
   if (signal.aborted && osv.online === false && osvError === void 0) {
     osvError = "network budget exhausted before OSV answered";
   }
+  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
   return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
 }
 function worstVerdict(results) {
