@@ -144,6 +144,13 @@ let readSmallTextFile = () => undefined;
 let guardedPath = (p) => p;
 /** `hardLinkedTo` from the same module: which guarded file a path is a hard link to (review round 3, item 5). */
 let hardLinkedTo = () => undefined;
+/**
+ * `writesRegistry` from `mcp/dist/hooks/dataRegistry.js`: whether a write
+ * reaches dev-guardian's registry of trusted databases (review 3.0 wave 2,
+ * round 2). Until it is loaded, and if it cannot be, nothing does (fail-open,
+ * and SessionStart says the guard is off).
+ */
+let writesRegistry = () => false;
 
 async function loadConfigReader() {
   try {
@@ -154,6 +161,8 @@ async function loadConfigReader() {
     const paths = await import(pathToFileURL(join(DIST_HOOKS, 'guardedPath.js')).href);
     if (typeof paths.guardedPath === 'function') guardedPath = paths.guardedPath;
     if (typeof paths.hardLinkedTo === 'function') hardLinkedTo = paths.hardLinkedTo;
+    const registry = await import(pathToFileURL(join(DIST_HOOKS, 'dataRegistry.js')).href);
+    if (typeof registry.writesRegistry === 'function') writesRegistry = registry.writesRegistry;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -541,6 +550,7 @@ const GUARD_MODULES = [
   { file: join(DIST_HOOKS, 'secretScan.js'), name: 'the secret scan', export: 'scanForSecrets' },
   { file: join(DIST_PKGVET, 'hookDecision.js'), name: 'package vetting', export: 'decideInstallCommand' },
   { file: join(DIST_HOOKS, 'settingsGuard.js'), name: "the Claude Code settings guard", export: 'newlyLoosened' },
+  { file: join(DIST_HOOKS, 'dataRegistry.js'), name: 'the database registry guard', export: 'writesRegistry' },
 ];
 
 /**
@@ -773,6 +783,33 @@ function guardianConfigWriteGuard(toolName, input, cwd, root) {
   });
 }
 
+/**
+ * Refuses an assistant's Write / Edit / MultiEdit / NotebookEdit into
+ * dev-guardian's registry of trusted databases, `<user data dir>/registry`
+ * (review 3.0 wave 2, round 2): an entry there is what `db adopt --yes`
+ * writes, and which database to trust is the user's decision. The path is
+ * compared as the filesystem opens it (NTFS stream suffixes, trailing dots,
+ * 8.3 names, links) and a hard link to an entry by device and inode — see
+ * `mcp/src/hooks/dataRegistry.ts`. Gated like `guardianConfigWriteGuard`.
+ */
+function guardianRegistryWriteGuard(toolName, input, cwd) {
+  const rawPath = extractFilePath(toolName, input);
+  if (!rawPath) return;
+  let hit = false;
+  try {
+    hit = writesRegistry(resolve(cwd, rawPath));
+  } catch (err) {
+    debug(`registry guard skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!hit) return;
+  emit('PreToolUse', {
+    permissionDecision: 'deny',
+    permissionDecisionReason:
+      "dev-guardian: this is dev-guardian's registry of trusted databases. Which database to trust is the user's " +
+      'decision — ask them to run `dev-guardian db adopt` themselves, in a terminal.',
+  });
+}
+
 /** The largest Claude Code settings file read to judge an edit of it. */
 const SETTINGS_MAX_BYTES = 1024 * 1024;
 
@@ -923,6 +960,7 @@ async function main() {
         await claudeSettingsWriteGuard(toolName, input, cwd, root); // likewise
       }
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
+        guardianRegistryWriteGuard(toolName, input, cwd); // likewise
         return handlePreToolUseWrite(toolName, input, cwd, root, cfg, allowlist);
       }
       return noop();

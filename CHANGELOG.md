@@ -609,10 +609,55 @@ version bump.
 - **The shell guard denies `dev-guardian db adopt --yes`.** Adopting a project's database makes it trusted, and a
   hostile repository can ship one that hides findings — so it is the user's decision, taken after reading the
   summary `db adopt` prints without `--yes`. Nothing stopped the assistant from running it through Bash or
-  PowerShell. It is denied now however the CLI is launched (`dev-guardian`, `node …/cli/dev-guardian.mjs`, `npx`,
+  PowerShell. It is denied now when the CLI is run directly (`dev-guardian`, `node …/cli/dev-guardian.mjs`, `npx`,
   through `env`, `sudo`, `bash -c`, `cmd /c`, `pwsh -Command`) and wherever `--yes` (or `--yes=…`) stands, with its
   own message: "db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt`
   without --yes". `db adopt` without `--yes` and every other CLI command stay allowed.
+- **`New-Item -i HardLink … -v <config>` still made the hard link.** The abbreviation rule above counted a
+  one-letter prefix as ambiguous, but PowerShell (pwsh 7.6 and 5.1 alike) never lets a common parameter make one
+  so: `-i` is `-ItemType`, `-v` is `-Value`, `-p` is `-Path`. A prefix now names the parameter it alone begins;
+  `-t` (`-Type` or `-Target`), which PowerShell refuses, names none.
+- **A quoted `-OutVariable 'r'` tainted every variable.** Its name was masked like any quoted text and read as "any
+  variable", so in `$resp = irm URL -OutVariable 'r'; $cmd = 'npm test'; iex $cmd` the `iex` of a literal was
+  denied. A quoted name where a name goes (`-OutVariable`, `-ov`, `Tee-Object -Variable`, `-Name`, right after
+  `Set-` / `New-` / `Get-Variable`) now names that variable only, as the unquoted one does; a name computed at run
+  time (`-OutVariable $n`) still stands for any.
+- **The xargs deny names the safe form.** A download written into xargs's program through its replacement string
+  (`… | jq -r … | xargs -I{} sh -c 'git clone …/{}'`) is denied under its own rule, `xargs-download-program`, whose
+  message shows how to hand each line over as data instead: `xargs -I{} sh -c '… "$1"' _ {}` — which passes.
+- **`curl … | xargs -0 sh -c 'eval "$0"'` ran the download.** xargs hands each line to the script as an argument,
+  and a script that `eval`s a positional parameter — or runs one as its command (`"$0"`, `$@`) — runs it. Such a
+  `-c` script now counts as reading its stdin as a program; `sh -c 'echo "$0"'` and `eval` of a literal do not.
+- **`| pixi run python -` and `| uvx python -` ran the download.** `pixi run` joins the run wrappers the guard looks
+  behind, and `uvx` / `uv tool run` are read the same way: an interpreter reading stdin as its program is denied;
+  `uvx ruff check -` and `pixi run python script.py` are not.
+- **A download saved through a pipe, then run, only warned.** `curl -o /usr/local/bin/tool URL && … && tool` was
+  denied, and `curl URL | sudo tee /usr/local/bin/tool > /dev/null && … && tool` only warned (for the `sudo`). What a
+  download that writes to its stdout is piped into now saves the download — `tee` / `Tee-Object`, `sponge`,
+  `dd of=`, `Out-File`, `Set-Content`, a redirection of the reader (`| gunzip > tool`) — and running that file (by
+  path, by interpreter, or by its bare name in a PATH directory) is denied like `curl -o` then run.
+- **An archive downloaded and extracted into a PATH directory ran unseen.** `curl URL | tar xz -C /usr/local/bin &&
+  tool` was `ok`. An extraction (`tar` / `bsdtar` with `x`, `--extract`; `unzip -d`) of a download — piped in, or
+  saved earlier and not checked — into a PATH directory, the working directory after a `cd` there included, now
+  makes a later run of a file there a download run: by its path, or by any bare name but a builtin or a file tool
+  (`chmod`, `ls`, `which`, `echo`, …), since the archive's names are unknown. Extracting into another directory,
+  listing (`tar tz`), or extracting a checked archive stays allowed. An archive extracted into the working directory
+  and run from there (`./configure`) is still not judged.
+- **`db adopt --yes` through `Start-Process`, `env -S` and `find -exec` is denied too, and the rule is documented as
+  what it is: a speed bump.** `Start-Process node -ArgumentList '…dev-guardian.mjs db adopt --yes'` (its program
+  and argument list, list or string), `env -S '…'` — now read as a nested command line, so `env -S 'rm -rf /'` is
+  denied as `rm -rf /` — and `find … -exec dev-guardian db adopt --yes \;` joined the direct forms. The other
+  indirect launches (`npm run`, `make`, aliases, program text, `ssh`, `docker run`, `--yes` in a variable, …) are
+  listed in docs/hooks.md as not recognised; docs/hooks.md no longer says "however the CLI is launched".
+- **dev-guardian's registry of trusted databases is guarded like the hook configuration.** The entry `db adopt --yes`
+  writes, `<data dir>/registry/<db_id>.json`, could be written by the assistant directly — with the Write tool, or
+  from the shell. The registry (under `GUARDIAN_DATA_DIR`, `%LOCALAPPDATA%\dev-guardian`, `$XDG_DATA_HOME/dev-guardian`
+  or `~/.local/share/dev-guardian`) is now refused to an assistant's `Write` / `Edit` / `MultiEdit` / `NotebookEdit`
+  — NTFS stream spellings, trailing dots, 8.3 names, links and hard links to an entry included — and to the shell
+  writes the shell guard models (rule `guardian-registry-write`): redirections, `tee`, `cp` / `mv` / `install` /
+  `rsync`, PowerShell and cmd copies, `[IO.File]` writes, links in it, hard links to an entry, the registry or the
+  data directory replaced, and program text naming it. Reading it, removing an entry and the rest of the data
+  directory stay allowed. SessionStart names the guard when its module cannot be loaded.
 
 ## [3.0.0] - 2026-09-29
 
