@@ -12,16 +12,18 @@
  * usage error. Reproduced directly before this fix.
  */
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
+// Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 /**
  * Fix round 1, item 7 (escalated from minor by the controller, review round
@@ -56,7 +58,7 @@ function sandboxedEnv(): NodeJS.ProcessEnv {
 }
 
 function runCliSpawn(args: string[], timeout = TIMEOUT_MS) {
-  return spawnSync(process.execPath, [CLI, ...args], {
+  return spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     env: sandboxedEnv(),
     timeout,

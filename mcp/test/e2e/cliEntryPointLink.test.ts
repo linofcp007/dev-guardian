@@ -33,16 +33,18 @@
  * mechanism is gone.
  */
 
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const REAL_CLI_DIR = resolve(REPO_ROOT, 'cli');
 const TIMEOUT_MS = 15_000;
+// Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 const sandbox = mkdtempSync(join(tmpdir(), 'guardian-cli-link-'));
 const linkDir = join(sandbox, 'cli-link');
@@ -60,6 +62,9 @@ try {
     } (${e instanceof Error ? e.message : String(e)}). This is the one test proving the symlink entry-point ` +
       'fix; its absence here means that fix is UNVERIFIED in this run, not that it is fine.\n',
   );
+  // Every test below is then skipped, and vitest runs no afterAll in a file
+  // with nothing to run: the sandbox goes now or never.
+  rmSync(sandbox, { recursive: true, force: true });
 }
 
 afterAll(() => {
@@ -71,7 +76,7 @@ describe('cli/dev-guardian.mjs — entry-point guard through a directory junctio
     'main() still runs through the link — catastrophic bash is BLOCKED (exit 1), never silently ok (exit 0)',
     () => {
       const linkedCli = join(linkDir, 'dev-guardian.mjs');
-      const r = spawnSync(process.execPath, [linkedCli, 'check', '--bash', 'rm -rf /'], {
+      const r = spawnSyncCapped(process.execPath, [linkedCli, 'check', '--bash', 'rm -rf /'], {
         encoding: 'utf8',
         timeout: TIMEOUT_MS,
       });
@@ -87,7 +92,7 @@ describe('cli/dev-guardian.mjs — entry-point guard through a directory junctio
 
   it.skipIf(!canLink)('an ordinary, well-formed invocation through the link still works end to end', () => {
     const linkedCli = join(linkDir, 'dev-guardian.mjs');
-    const r = spawnSync(process.execPath, [linkedCli, '--help'], { encoding: 'utf8', timeout: TIMEOUT_MS });
+    const r = spawnSyncCapped(process.execPath, [linkedCli, '--help'], { encoding: 'utf8', timeout: TIMEOUT_MS });
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/dev-guardian/);
   });

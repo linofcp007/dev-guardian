@@ -25,18 +25,28 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { detectOs } from '../../src/platform/osDetect.js';
 import { candidatesFor } from '../../src/platform/shellProbe.js';
 import { isWslLauncher, resolveExecutable } from '../helpers/resolveExecutable.js';
 import { rmDirOrDefer } from '../helpers/tempDir.js';
-import { isInstalled } from '../helpers/toolchain.js';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 const ACTIONLINT_INSTALLED = await isInstalled('actionlint');
 const ZIZMOR_INSTALLED = await isInstalled('zizmor');
+/** `GUARDIAN_REQUIRE_LINTERS=1`: a missing actionlint or zizmor fails instead of skipping (docs/env.md). */
+const REQUIRE_LINTERS = process.env['GUARDIAN_REQUIRE_LINTERS'] === '1';
+/** Hang-breakers — nothing asserts by reaching them. actionlint, zizmor and a bash step take a second. */
+const LINTER_TIMEOUT_MS = 30_000;
+const BASH_TIMEOUT_MS = 30_000;
+// Above every cap a test with the default timeout runs under, so a hung
+// child is reported by its cap — naming it — and not by vitest's 10 s
+// default failing the test after the fact (review 3.0, R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(Math.max(TIMEOUT_MS, LINTER_TIMEOUT_MS, BASH_TIMEOUT_MS)) });
 
 /**
  * A bash that can actually run a script, chosen the way the server chooses one
@@ -61,7 +71,7 @@ const PROBE_BASH: string | null = (() => {
     if (abs === null || (process.platform === 'win32' && isWslLauncher(abs))) continue;
     const r = spawnSync(abs, [...candidate.args_prefix, '-c', 'exit 0'], {
       stdio: 'ignore',
-      timeout: 10_000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     if (r.error === undefined && r.status === 0) return abs;
   }
@@ -94,7 +104,7 @@ afterEach(() => {
 const PINNED_TEST_SHA = 'a'.repeat(40);
 
 function runCli(args: string[], envOverrides: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args], {
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     env: { ...process.env, NO_COLOR: '1', GUARDIAN_CI_INIT_PIN_SHA: PINNED_TEST_SHA, ...envOverrides },
     timeout: TIMEOUT_MS,
@@ -108,7 +118,7 @@ function runCliNoPin(args: string[]) {
   // only checks `!== undefined`) and fail COMMIT_SHA_SHAPE.
   const { GUARDIAN_CI_INIT_PIN_SHA: _unused, ...restEnv } = process.env;
   const env = { ...restEnv, NO_COLOR: '1' };
-  const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -324,12 +334,16 @@ describe('ci-init fix round 1: the GitHub template is accepted by real actionlin
     }
   });
 
+  it.runIf(REQUIRE_LINTERS)('GUARDIAN_REQUIRE_LINTERS=1 — actionlint and zizmor must both be on PATH', () => {
+    expect({ actionlint: ACTIONLINT_INSTALLED, zizmor: ZIZMOR_INSTALLED }).toEqual({ actionlint: true, zizmor: true });
+  });
+
   it.skipIf(!ACTIONLINT_INSTALLED)('actionlint accepts the rendered GitHub template with zero errors', () => {
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write']);
     expect(r.status).toBe(0);
     const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
-    const result = spawnSync('actionlint', [workflowPath], { encoding: 'utf8' });
+    const result = spawnSyncCapped('actionlint', [workflowPath], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
     expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   });
 
@@ -338,7 +352,7 @@ describe('ci-init fix round 1: the GitHub template is accepted by real actionlin
     const r = runCli(['ci-init', 'github', '--project', project, '--write']);
     expect(r.status).toBe(0);
     const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
-    const result = spawnSync('zizmor', ['--format=json', workflowPath], { encoding: 'utf8' });
+    const result = spawnSyncCapped('zizmor', ['--format=json', workflowPath], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
     const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
     expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
   });
@@ -446,10 +460,11 @@ describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (gi
       const outputFile = join(project, '.github_output_test');
       // The block is skipped when PROBE_BASH is null; never fall back to a bare `bash`.
       if (PROBE_BASH === null) throw new Error(NO_BASH_REASON);
-      const result = spawnSync(PROBE_BASH, ['-c', script], {
+      const result = spawnSyncCapped(PROBE_BASH, ['-c', script], {
         cwd: project,
         env: { ...process.env, GITHUB_OUTPUT: outputFile },
         encoding: 'utf8',
+        timeout: BASH_TIMEOUT_MS,
       });
       expect(result.status, `probe script failed:\n${script}\nstderr: ${result.stderr}`).toBe(0);
       return readFileSync(outputFile, 'utf8').trim();
@@ -885,10 +900,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
         );
         writeFileSync(join(dir, 'dev-guardian-results.sarif'), sarif(complete));
         writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\n${script}`);
-        const r = spawnSync(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], {
+        const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], {
           cwd: dir,
           encoding: 'utf8',
-          timeout: 30_000,
+          timeout: BASH_TIMEOUT_MS,
           env: { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir, REAL_NODE: process.execPath },
         });
         const label = `${JSON.stringify(argv)} exit ${code}, complete ${complete}`;
@@ -979,7 +994,7 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const dir = makeProject();
       for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content);
       writeFileSync(join(dir, 'check.sh'), script);
-      const r = spawnSync(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+      const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS });
       expect(r.status === 0, `${name}: exit ${r.status}\n${r.stderr}`).toBe(pass);
     }
   }, 120_000); // six bash + node spawns: seconds each on a loaded Windows machine
@@ -1009,7 +1024,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
     expect(r.status).toBe(0);
-    const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+    const result = spawnSyncCapped('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+      encoding: 'utf8',
+      timeout: LINTER_TIMEOUT_MS,
+    });
     expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   });
 
@@ -1027,7 +1045,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const project = makeProject();
       const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
       expect(r.status).toBe(0);
-      const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const result = spawnSyncCapped('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+        encoding: 'utf8',
+        timeout: LINTER_TIMEOUT_MS,
+      });
       const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
       expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
     });
@@ -1038,7 +1059,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const project = makeProject();
       const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
       expect(r.status).toBe(0);
-      const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const result = spawnSyncCapped('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+        encoding: 'utf8',
+        timeout: LINTER_TIMEOUT_MS,
+      });
       expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
     });
   });
@@ -1056,8 +1080,9 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
     expect(r.status).toBe(0);
-    const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+    const result = spawnSyncCapped('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
       encoding: 'utf8',
+      timeout: LINTER_TIMEOUT_MS,
     });
     const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
     expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
@@ -1146,7 +1171,7 @@ describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass
       writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript(c.target, c.extra)}`);
       const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir };
       for (const key of Object.keys(env)) if (/^(CI_MERGE_REQUEST_|BITBUCKET_PR_|BASE_SHA$)/.test(key)) delete env[key];
-      const r = spawnSync(PROBE_BASH ?? 'bash', ['step.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000, env: { ...env, ...c.env } });
+      const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['step.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS, env: { ...env, ...c.env } });
       expect(r.status, `${label}: ${r.stderr}`).toBe(0);
       const args = readFileSync(join(dir, 'args.txt'), 'utf8').split('\n').filter((l) => l.length > 0);
       expect(args, label).toEqual(c.expect);
@@ -1167,10 +1192,10 @@ describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass
     writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript('gitlab')}`);
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith('CI_MERGE_REQUEST_')) delete env[key];
-    const r = spawnSync(PROBE_BASH ?? 'bash', ['step.sh'], {
+    const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['step.sh'], {
       cwd: dir,
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: BASH_TIMEOUT_MS,
       env: { ...env, CI_MERGE_REQUEST_IID: '7' },
     });
     expect(r.status).toBe(3);

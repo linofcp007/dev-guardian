@@ -19,7 +19,8 @@ import { cpSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFil
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
@@ -29,6 +30,9 @@ const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
 /** Hang-breaker only; nothing here asserts by reaching it — every case is a
  *  fast, dependency-free regex pass with no real scanner involved. */
 const TIMEOUT_MS = 15_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 /** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
 const CAN_SYMLINK = ((): boolean => {
@@ -57,7 +61,7 @@ function runHook(
   },
 ): HookResult {
   const home = opts.homeDir ?? opts.cwd;
-  const r = spawnSync(process.execPath, [opts.hook ?? HOOK], {
+  const r = spawnSyncCapped(process.execPath, [opts.hook ?? HOOK], {
     cwd: opts.cwd,
     input: JSON.stringify(payload),
     encoding: 'utf8',
@@ -170,7 +174,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
       const command = 'Remove-Item "C:\\Users\\" -Recurse -Force';
       const run = (extra: string[]) =>
-        spawnSync(process.execPath, [cli, 'check', '--bash', command, '--json', ...extra], {
+        spawnSyncCapped(process.execPath, [cli, 'check', '--bash', command, '--json', ...extra], {
           encoding: 'utf8',
           timeout: TIMEOUT_MS,
         });
@@ -963,7 +967,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const file = join(projectDir, 'bundle.min.js');
       writeFileSync(file, oneLine);
       const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
-      const r = spawnSync(process.execPath, [cli, 'check', '--file', file, '--min', 'high'], {
+      const r = spawnSyncCapped(process.execPath, [cli, 'check', '--file', file, '--min', 'high'], {
         cwd: projectDir,
         encoding: 'utf8',
         timeout: TIMEOUT_MS,
@@ -1552,7 +1556,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
   });
 
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
-    const r = spawnSync(process.execPath, [HOOK], {
+    const r = spawnSyncCapped(process.execPath, [HOOK], {
       cwd: projectDir,
       input: 'not json at all {{{',
       encoding: 'utf8',

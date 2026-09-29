@@ -13,15 +13,20 @@
  * Requires a built `mcp/dist` (`npm run build`).
  */
 
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
+/** Hang-breaker for one CLI run; nothing asserts by reaching it. */
+const TIMEOUT_MS = 30_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 const KEY = 'const k = "AKIAIOSFODNN7EXAMPLE";\n';
 
 let dir: string;
@@ -31,7 +36,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function check(...args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, [CLI, 'check', ...args], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+  const r = spawnSyncCapped(process.execPath, [CLI, 'check', ...args], { cwd: dir, encoding: 'utf8', timeout: TIMEOUT_MS });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -79,7 +84,7 @@ describe('check — arguments (review M3)', () => {
 // SECURITY.md now use).
 describe('scan --help: what --local-only does and does not keep local', () => {
   it('names the plugin packs that still run and the traffic that still goes out', () => {
-    const r = spawnSync(process.execPath, [CLI, 'scan', '--help'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+    const r = spawnSyncCapped(process.execPath, [CLI, 'scan', '--help'], { cwd: dir, encoding: 'utf8', timeout: TIMEOUT_MS });
     expect(r.status).toBe(0);
     const out = r.stdout ?? '';
     const start = out.indexOf('  --local-only');
