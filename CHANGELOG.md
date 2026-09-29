@@ -456,6 +456,10 @@ version bump.
   `pipenv`, `pdm`, `rye`, `hatch`, `conda run`) the interpreter was never looked for. A run wrapper whose program is
   an interpreter reading stdin — or `uv run -` — now reads it as a shell does; `uv run python script.py`, `-m` and
   `-c` read stdin as data, as before.
+- **`curl … | xargs -0 -I{} sh -c '{}'` ran the download.** `| xargs -0 sh -c` was denied, but xargs's replacement
+  string writes each line it reads into the `-c` script as well — and that was `ok`. A shell's `-c` script or an
+  interpreter's program text holding the replacement string (`-I R`, `-i`, `--replace`, BSD's `-J`) now reads its
+  stdin as a program; `xargs -n1 sh -c 'echo "$0"'`, which passes each line as an argument, does not.
 
 ## [3.0.0] - 2026-09-29
 

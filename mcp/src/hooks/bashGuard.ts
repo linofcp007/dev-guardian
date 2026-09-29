@@ -975,7 +975,8 @@ const RUNNER_VALUED: Readonly<Record<string, { short: string; long: ReadonlySet<
   timeout: { short: 'sk', long: new Set(['signal', 'kill-after']) },
   stdbuf: { short: 'ioe', long: new Set(['input', 'output', 'error']) },
   xargs: {
-    short: 'adEILnPs',
+    // `J` is BSD's `-J replstr`.
+    short: 'adEIJLnPs',
     long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
   },
   watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
@@ -3214,7 +3215,11 @@ function runWrapperReadsStdin(words: readonly ShellWord[]): boolean {
  * `xargs [options] sh -c` with no script after `-c` (review round 3, item 2):
  * xargs appends what it reads on stdin, so that text becomes the `-c` script —
  * `curl … | xargs -0 sh -c` runs the download. Also an interpreter's `-c` /
- * `-e` left without its program text.
+ * `-e` left without its program text. And (review 3.0, wave 2) a `-c` script
+ * or program text holding xargs's replacement string (`-I{}`, `-i`,
+ * `--replace`, BSD's `-J`): `xargs -I{} sh -c '{}'` writes each line it reads
+ * into the program — `sh -c 'echo "$0"'`, where the line is an argument, does
+ * not.
  */
 function xargsRunsStdin(words: readonly ShellWord[], at: number): boolean {
   const rest = withoutRedirectWords(words.slice(at));
@@ -3222,8 +3227,49 @@ function xargsRunsStdin(words: readonly ShellWord[], at: number): boolean {
   const name = commandName(rest[i]?.value ?? '');
   const last = rest[rest.length - 1]?.value ?? '';
   if (i >= rest.length - 1) return false;
-  if (SCRIPT_SHELLS.has(name) || name === 'su') return DASH_C.test(last);
-  return isInterpreter(name) && /^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last);
+  const replace = xargsReplacement(rest.slice(1, i).map((w) => w.value));
+  if (SCRIPT_SHELLS.has(name) || name === 'su') {
+    if (DASH_C.test(last)) return true;
+    const c = rest.findIndex((w, k) => k > i && !w.quoted && DASH_C.test(w.value));
+    const script = c < 0 ? undefined : rest[c + 1]?.value;
+    return replace !== undefined && script !== undefined && script.includes(replace);
+  }
+  if (!isInterpreter(name)) return false;
+  if (/^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last)) return true;
+  return replace !== undefined && inlineCode(rest, i).some((code) => code.includes(replace));
+}
+
+/**
+ * The string xargs replaces with each line it reads, from its own options:
+ * `-I R` / `-IR`, `-i` / `-iR` and `--replace[=R]` (`{}` when none is given),
+ * BSD's `-J R`; none without one of them.
+ */
+function xargsReplacement(options: readonly string[]): string | undefined {
+  let replace: string | undefined;
+  for (let k = 0; k < options.length; k += 1) {
+    const o = options[k] ?? '';
+    if (o === '--replace') replace = '{}';
+    else if (o.startsWith('--replace=')) replace = o.slice('--replace='.length) || '{}';
+    else if (/^-[^-]/.test(o)) {
+      for (let c = 1; c < o.length; c += 1) {
+        const letter = o.charAt(c);
+        const attached = o.slice(c + 1);
+        if (letter === 'I' || letter === 'J') {
+          replace = attached !== '' ? attached : options[(k += 1)];
+          break;
+        }
+        if (letter === 'i') {
+          replace = attached !== '' ? attached : '{}';
+          break;
+        }
+        if ('adELnPs'.includes(letter)) {
+          if (attached === '') k += 1;
+          break;
+        }
+      }
+    }
+  }
+  return replace === '' ? undefined : replace;
 }
 
 /** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
