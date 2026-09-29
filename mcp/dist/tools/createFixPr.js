@@ -186,8 +186,8 @@ const tool = {
         "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
         'environment that carries no token or credential of this server. Package managers get it plus ' +
         "your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs " +
-        'are set aside (package_config_set_aside), and a repo-chosen pip index or Composer repository ' +
-        'refuses the fix. Every open finding ' +
+        'are set aside (package_config_set_aside), and a repo-chosen pip index or download URL (a direct ' +
+        'reference, a bare or VCS URL) or Composer repository refuses the fix. Every open finding ' +
         'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
         'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
         '`filtered_reason`. ' +
@@ -567,6 +567,7 @@ async function processGroup(opts) {
             base.package_config_set_aside = setAside.moved;
         const refused = installRefusal({
             projectDir,
+            checkoutRoot: worktree.path,
             stepEcosystems: group.candidates.flatMap((c) => (c.steps ?? []).map((st) => st.ecosystem)),
             stepFiles: group.candidates.flatMap((c) => (c.steps ?? []).flatMap((st) => (st.file !== undefined ? [st.file] : []))),
             rescanTools: findings.flatMap((f) => {

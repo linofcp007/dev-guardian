@@ -78577,6 +78577,23 @@ function composerChoosesRepository(projectDir) {
 }
 var INDEX_OPTION = /^\s*(?:-[if](?![A-Za-z-])|-[if]\S|--(?:index-url|extra-index-url|find-links|trusted-host)(?=[\s=]|$))/;
 var INCLUDE = /^\s*(?:-[rc](?![A-Za-z-])\s*=?\s*|-[rc](?=\S)|--(?:requirement|constraint)(?:\s*=\s*|\s+))(\S+)/;
+var REMOTE_SOURCES = [
+  ["a VCS URL", /(?:^|[\s@=])((?:git|hg|svn|bzr)\+\S+)/i],
+  ["a direct reference", /^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*((?!file:)\S+)/i],
+  ["a URL", /^\s*(?:(?:-e|--editable)(?:\s*=\s*|\s+))?((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i],
+  ["an include from a URL", /^\s*(?:-[rc]|--requirement|--constraint)(?:\s*=\s*|\s*)((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i]
+];
+function urlHost(url2) {
+  const m = /^((?:[a-z]+\+)?[a-z][a-z0-9+.-]*:\/\/)(?:[^@/?#]*@)?([^/?#:]*)/i.exec(url2);
+  return m !== null ? `${m[1] ?? ""}${m[2] ?? ""}` : url2.split(/[/?#]/)[0] ?? url2;
+}
+function remoteSourceOn(line) {
+  for (const [what, re] of REMOTE_SOURCES) {
+    const url2 = re.exec(line)?.[1];
+    if (url2 !== void 0) return `${what} (${urlHost(url2)})`;
+  }
+  return null;
+}
 function rootRequirementFiles(projectDir) {
   const out = [];
   for (const { name } of listProjectDir(projectDir, projectDir)) {
@@ -78587,22 +78604,26 @@ function rootRequirementFiles(projectDir) {
   }
   return out;
 }
-function requirementsChooseIndex(projectDir, extra = []) {
+function requirementsChooseSource(projectDir, extra = [], checkoutRoot = projectDir) {
   const queue = [.../* @__PURE__ */ new Set([...rootRequirementFiles(projectDir), ...extra])];
   const seen = /* @__PURE__ */ new Set();
+  const shown = (key) => relative27(projectDir, key).split(sep17).join("/");
   for (let file = queue.shift(); file !== void 0; file = queue.shift()) {
     const key = resolve24(projectDir, file);
     if (seen.has(key) || seen.size > 200) continue;
     seen.add(key);
-    const text2 = readProjectTextOrUndefined(projectDir, file, MAX_REQUIREMENTS_BYTES2);
-    if (text2 === void 0) continue;
-    for (const raw of text2.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+    const read3 = readProjectText(checkoutRoot, key, MAX_REQUIREMENTS_BYTES2);
+    if (read3.status === "absent") continue;
+    if (read3.status === "refused") return { where: `${shown(key)}: ${describeReadRefusal(read3.reason)}`, kind: "unchecked" };
+    for (const raw of read3.text.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
       const line = raw.replace(/(^|\s)#.*$/, "");
       const option = INDEX_OPTION.exec(line);
       if (option !== null) {
         const name = option[0].trim().split(/[\s=]/)[0] ?? option[0].trim();
-        return `${file.split(sep17).join("/")}: ${name.startsWith("--") ? name : name.slice(0, 2)}`;
+        return { where: `${shown(key)}: ${name.startsWith("--") ? name : name.slice(0, 2)}`, kind: "index" };
       }
+      const remote = remoteSourceOn(line);
+      if (remote !== null) return { where: `${shown(key)}: ${remote}`, kind: "remote" };
       const include = INCLUDE.exec(line);
       if (include?.[1] !== void 0) queue.push(relative27(projectDir, resolve24(dirname22(key), include[1])));
     }
@@ -78613,17 +78634,28 @@ var MAX_REQUIREMENTS_BYTES2 = 4 * 1024 * 1024;
 function pipIndexRefusal(where) {
   return `the project's requirements choose a package index (${where}); dev-guardian doesn't install from a repository-chosen index`;
 }
+function pipSourceRefusal(choice) {
+  switch (choice.kind) {
+    case "index":
+      return pipIndexRefusal(choice.where);
+    case "remote":
+      return `the project's requirements fetch from a host they name (${choice.where}); dev-guardian doesn't install from a repository-chosen source`;
+    case "unchecked":
+      return `the project's requirements could not all be read to check where they install from (${choice.where}); dev-guardian doesn't install from requirements it cannot check`;
+  }
+}
 function installRefusal(opts) {
   if (opts.stepEcosystems.includes("composer")) {
     const composer = composerChoosesRepository(opts.projectDir);
     if (composer !== null) return composer;
   }
   if (opts.stepEcosystems.includes("pip") || opts.rescanTools.includes("deps_audit")) {
-    const where = requirementsChooseIndex(
+    const choice = requirementsChooseSource(
       opts.projectDir,
-      opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f))
+      opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f)),
+      opts.checkoutRoot ?? opts.projectDir
     );
-    if (where !== null) return pipIndexRefusal(where);
+    if (choice !== null) return pipSourceRefusal(choice);
   }
   return null;
 }
@@ -78990,7 +79022,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 var tool45 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Package managers get it plus your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs are set aside (package_config_set_aside), and a repo-chosen pip index or Composer repository refuses the fix. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Package managers get it plus your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs are set aside (package_config_set_aside), and a repo-chosen pip index or download URL (a direct reference, a bare or VCS URL) or Composer repository refuses the fix. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -79255,6 +79287,7 @@ async function processGroup(opts) {
     if (setAside.moved.length > 0) base.package_config_set_aside = setAside.moved;
     const refused2 = installRefusal({
       projectDir,
+      checkoutRoot: worktree.path,
       stepEcosystems: group.candidates.flatMap((c3) => (c3.steps ?? []).map((st) => st.ecosystem)),
       stepFiles: group.candidates.flatMap((c3) => (c3.steps ?? []).flatMap((st) => st.file !== void 0 ? [st.file] : [])),
       rescanTools: findings.flatMap((f) => {

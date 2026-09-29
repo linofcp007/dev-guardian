@@ -350,14 +350,25 @@ their respective projects.
   as `${VAR}` — so a token you configured for your own registry still
   reaches it, and only it. A fix whose requirements (or a file they include
   with `-r` / `-c`) set `-i`, `--index-url`, `--extra-index-url`,
-  `--find-links` or `--trusted-host` is refused when it would install from
-  them — a pip step, or any re-scan by `deps_audit` — and so is a Composer
-  fix whose `composer.json` declares `repositories` (the manifest the fix
-  edits cannot be set aside); the planner does not plan Composer there
-  either. Not covered: a lockfile's own `resolved` URLs (npm sends a token
-  only to the host it was configured for), a direct-URL or VCS requirement,
-  and the scans a user runs outside `create_fix_pr`, which keep their
-  environment and the repository's configuration.
+  `--find-links` or `--trusted-host`, or name the host a requirement comes
+  from themselves — a direct reference (`name @ https://…`), a bare URL, a
+  VCS URL (`git+…`, `hg+…`, `svn+…`, `bzr+…`, `-e` included) or an include
+  from a URL (`-r https://…`) — is refused when it would install from them —
+  a pip step, or any re-scan by `deps_audit` — with the file and the host
+  named in the group's note; so is one whose requirements could not all be
+  read to check (a FIFO, over 4 MiB, an include out of the checkout).
+  `file:` URLs and local paths pass. So is a Composer fix whose
+  `composer.json` declares `repositories` (the manifest the fix edits cannot
+  be set aside); the planner does not plan Composer there either. A
+  lockfile's own `resolved` URLs still choose where npm fetches each locked
+  tarball from, but not where your token goes: measured with real npm (11.17
+  and the one `node:22` ships) and two local registries, `npm ci` and
+  `npm install` fetched a tarball the lock placed on another host without
+  any `Authorization` header, while the tarball on your own registry carried
+  your token — npm scopes a token to the host it was configured for, and a
+  test holds `create_fix_pr` to it. Not covered: the scans a user runs
+  outside `create_fix_pr`, which keep their environment and the repository's
+  configuration.
 
 ## Network egress
 

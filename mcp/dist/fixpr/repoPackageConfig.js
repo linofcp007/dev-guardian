@@ -32,7 +32,7 @@
  */
 import { mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { isWithinDir, listProjectDir, readProjectJson, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { describeReadRefusal, isWithinDir, listProjectDir, readProjectJson, readProjectText } from '../platform/projectFs.js';
 /** Names moved aside in each directory, lower-cased (the match is case-insensitive). */
 const TOP_LEVEL = new Set(['.npmrc', '.pnpmrc', '.yarnrc', '.yarnrc.yml', 'pip.conf', 'pip.ini', '.pip', 'nuget.config']);
 /** `<dir>/<name>` → the files in it that are moved aside. */
@@ -134,6 +134,41 @@ export function composerChoosesRepository(projectDir) {
 const INDEX_OPTION = /^\s*(?:-[if](?![A-Za-z-])|-[if]\S|--(?:index-url|extra-index-url|find-links|trusted-host)(?=[\s=]|$))/;
 /** `-r` / `--requirement` / `-c` / `--constraint`, and the file they name. */
 const INCLUDE = /^\s*(?:-[rc](?![A-Za-z-])\s*=?\s*|-[rc](?=\S)|--(?:requirement|constraint)(?:\s*=\s*|\s+))(\S+)/;
+/**
+ * A requirement that pip fetches from a host the LINE names, not from an
+ * index — as much the repository's choice of where the user's machine
+ * downloads (and builds) code from as `--index-url`, and refused the same
+ * way (review of 3.0, W2E). Each is `[what it is, pattern]`; the pattern's
+ * first group is the URL. `file:` URLs and plain paths are local and pass:
+ *
+ *   - a VCS URL, alone, after `-e` / `--editable`, or as a direct reference:
+ *     `git+https://…`, `hg+…`, `svn+…`, `bzr+…`, any transport;
+ *   - a PEP 508 direct reference: `name @ https://…` (extras and markers
+ *     allowed);
+ *   - a bare URL, alone or after `-e` / `--editable`: `https://…/pkg.tar.gz`;
+ *   - an include of a URL: `-r https://…/requirements.txt`, `-c …`, which
+ *     pip downloads and then reads — its lines unseen here.
+ */
+const REMOTE_SOURCES = [
+    ['a VCS URL', /(?:^|[\s@=])((?:git|hg|svn|bzr)\+\S+)/i],
+    ['a direct reference', /^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*((?!file:)\S+)/i],
+    ['a URL', /^\s*(?:(?:-e|--editable)(?:\s*=\s*|\s+))?((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i],
+    ['an include from a URL', /^\s*(?:-[rc]|--requirement|--constraint)(?:\s*=\s*|\s*)((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i],
+];
+/** `scheme://host` of a URL for a result — never its path, query or credentials. */
+function urlHost(url) {
+    const m = /^((?:[a-z]+\+)?[a-z][a-z0-9+.-]*:\/\/)(?:[^@/?#]*@)?([^/?#:]*)/i.exec(url);
+    return m !== null ? `${m[1] ?? ''}${m[2] ?? ''}` : url.split(/[/?#]/)[0] ?? url;
+}
+/** The first remote source on a (comment-stripped) requirement line, described. */
+function remoteSourceOn(line) {
+    for (const [what, re] of REMOTE_SOURCES) {
+        const url = re.exec(line)?.[1];
+        if (url !== undefined)
+            return `${what} (${urlHost(url)})`;
+    }
+    return null;
+}
 /** The requirement files the re-scan's pip-audit reads, as `deps_audit` finds them. */
 function rootRequirementFiles(projectDir) {
     const out = [];
@@ -149,32 +184,50 @@ function rootRequirementFiles(projectDir) {
 }
 /**
  * The first requirement file — among the project's own and every file they
- * include with `-r` or `-c`, constraints included — that chooses a package
- * index (`-i`, `--index-url`, `--extra-index-url`, `-f`, `--find-links`,
- * `--trusted-host`), as `<file>: <option>`; or null. `extra` names more
- * files to start from (a fix's own requirements file). Read through
- * `platform/projectFs.ts`: an include that leaves the project is not read,
- * and reads as choosing nothing.
+ * include with `-r` or `-c`, constraints included — that chooses where pip
+ * installs from, or null:
+ *
+ *   - `index`: a package-index option (`-i`, `--index-url`,
+ *     `--extra-index-url`, `-f`, `--find-links`, `--trusted-host`), as
+ *     `<file>: <option>`;
+ *   - `remote`: a line that fetches from a host it names — a VCS URL, a
+ *     direct reference, a bare URL, an include from a URL
+ *     ({@link REMOTE_SOURCES}) — as `<file>: <what> (<scheme>://<host>)`;
+ *   - `unchecked`: a file in that set that is there and could not be read
+ *     (a FIFO, over the size cap, a link out of the checkout), or an include
+ *     that leaves the checkout — pip would read it, so "chooses nothing"
+ *     cannot be said of it.
+ *
+ * `extra` names more files to start from (a fix's own requirements file).
+ * Read through `platform/projectFs.ts`, contained in `checkoutRoot` (the
+ * whole checkout the project sits in — a monorepo's `-r ../shared/…` is the
+ * repository's too); `projectDir` when not given.
  */
-export function requirementsChooseIndex(projectDir, extra = []) {
+export function requirementsChooseSource(projectDir, extra = [], checkoutRoot = projectDir) {
     const queue = [...new Set([...rootRequirementFiles(projectDir), ...extra])];
     const seen = new Set();
+    const shown = (key) => relative(projectDir, key).split(sep).join('/');
     for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
         const key = resolve(projectDir, file);
         if (seen.has(key) || seen.size > 200)
             continue;
         seen.add(key);
-        const text = readProjectTextOrUndefined(projectDir, file, MAX_REQUIREMENTS_BYTES);
-        if (text === undefined)
+        const read = readProjectText(checkoutRoot, key, MAX_REQUIREMENTS_BYTES);
+        if (read.status === 'absent')
             continue;
+        if (read.status === 'refused')
+            return { where: `${shown(key)}: ${describeReadRefusal(read.reason)}`, kind: 'unchecked' };
         // A `\` at the end of a line continues it (pip's own rule).
-        for (const raw of text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+        for (const raw of read.text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
             const line = raw.replace(/(^|\s)#.*$/, '');
             const option = INDEX_OPTION.exec(line);
             if (option !== null) {
                 const name = option[0].trim().split(/[\s=]/)[0] ?? option[0].trim();
-                return `${file.split(sep).join('/')}: ${name.startsWith('--') ? name : name.slice(0, 2)}`;
+                return { where: `${shown(key)}: ${name.startsWith('--') ? name : name.slice(0, 2)}`, kind: 'index' };
             }
+            const remote = remoteSourceOn(line);
+            if (remote !== null)
+                return { where: `${shown(key)}: ${remote}`, kind: 'remote' };
             const include = INCLUDE.exec(line);
             if (include?.[1] !== undefined)
                 queue.push(relative(projectDir, resolve(dirname(key), include[1])));
@@ -182,11 +235,29 @@ export function requirementsChooseIndex(projectDir, extra = []) {
     }
     return null;
 }
+/** {@link requirementsChooseSource}'s `where` for an index option only; null for anything else. */
+export function requirementsChooseIndex(projectDir, extra = []) {
+    const choice = requirementsChooseSource(projectDir, extra);
+    return choice?.kind === 'index' ? choice.where : null;
+}
 /** The largest requirements file read; a real one is a few KB. */
 const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
 /** The refusal reason for a repository-chosen pip index. */
 export function pipIndexRefusal(where) {
     return `the project's requirements choose a package index (${where}); dev-guardian doesn't install from a repository-chosen index`;
+}
+/** The refusal reason for any {@link PipSourceChoice}. */
+export function pipSourceRefusal(choice) {
+    switch (choice.kind) {
+        case 'index':
+            return pipIndexRefusal(choice.where);
+        case 'remote':
+            return (`the project's requirements fetch from a host they name (${choice.where}); ` +
+                "dev-guardian doesn't install from a repository-chosen source");
+        case 'unchecked':
+            return (`the project's requirements could not all be read to check where they install from (${choice.where}); ` +
+                "dev-guardian doesn't install from requirements it cannot check");
+    }
 }
 /**
  * Why a group must not be attempted in this checkout, or null: a Composer
@@ -194,7 +265,10 @@ export function pipIndexRefusal(where) {
  * ({@link composerChoosesRepository}); or a pip step, or a re-scan by
  * `deps_audit` (whose pip-audit installs every requirements file into a
  * temporary virtualenv — running an sdist's build code), where the
- * requirements choose a package index ({@link requirementsChooseIndex}).
+ * requirements choose a package index, fetch from a host a line names, or
+ * cannot all be read to check ({@link requirementsChooseSource}).
+ * `checkoutRoot`: the whole checkout `projectDir` sits in, which the
+ * requirements files are read within.
  */
 export function installRefusal(opts) {
     if (opts.stepEcosystems.includes('composer')) {
@@ -203,9 +277,9 @@ export function installRefusal(opts) {
             return composer;
     }
     if (opts.stepEcosystems.includes('pip') || opts.rescanTools.includes('deps_audit')) {
-        const where = requirementsChooseIndex(opts.projectDir, opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f)));
-        if (where !== null)
-            return pipIndexRefusal(where);
+        const choice = requirementsChooseSource(opts.projectDir, opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f)), opts.checkoutRoot ?? opts.projectDir);
+        if (choice !== null)
+            return pipSourceRefusal(choice);
     }
     return null;
 }

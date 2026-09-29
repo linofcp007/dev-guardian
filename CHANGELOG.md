@@ -952,6 +952,18 @@ them again. Scans made on the fallback meanwhile are not merged back.
   `--extra-index-url`, `--find-links`, `--trusted-host`) is refused when pip would install from them (a pip step,
   or a re-scan by `deps_audit`), with the new outcome `refused`; so is a Composer fix whose `composer.json`
   declares `repositories`, which is not planned either.
+- **`create_fix_pr`: a pip requirement that names its own host is refused like an index.** A direct reference
+  (`name @ https://…`), a bare URL, a VCS URL (`git+…`, `hg+…`, `svn+…`, `bzr+…`, after `-e` too) or an include
+  from a URL (`-r https://…`, which pip downloads and reads) makes pip fetch — and build — from a host the
+  repository chose, as `--index-url` does, and was not looked for. Each is now refused when pip would install
+  from it (a pip step, or a re-scan by `deps_audit`), the note naming the file, what the line is and its
+  `scheme://host` (never its path or credentials); `file:` URLs and local paths pass. A requirements file in
+  that set that could not be read to check — a FIFO, over 4 MiB, an include that leaves the checkout — is
+  refused too, where it used to read as choosing nothing; includes are now read within the whole checkout, so a
+  monorepo's `-r ../shared/…` is checked rather than skipped. Measured separately, with real npm and two local
+  registries: a `package-lock.json` whose `resolved` URLs point at another host makes `npm ci` and
+  `npm install` fetch those tarballs from it, but without the user's token (npm scopes it to the configured
+  host; the tarball on the user's own registry carried it). A test now holds `create_fix_pr` to that.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.
