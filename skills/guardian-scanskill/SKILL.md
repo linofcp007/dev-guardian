@@ -67,7 +67,10 @@ inline, incluindo um ficheiro descarregado e executado mais abaixo, e as
 regras de prosa leem, escritos como frases, um script remoto entregue a uma
 shell, um programa descarregado e depois executado (ou colado num terminal a
 partir de uma página), um ficheiro ou uma pasta de credenciais enviados para
-um URL e o ambiente inteiro enviado para um URL. Num ficheiro de
+um URL e o ambiente inteiro enviado para um URL. Os comandos que a
+configuração de um plugin manda correr — os hooks do `hooks.json` e os
+servidores MCP do `plugin.json` e do `.mcp.json` — passam pelas mesmas regras
+de código que um script. Num ficheiro de
 instruções, um comando que descarrega ou envia algo só pontua um nível abaixo
 quando um marcador de documentação (reticências, `<url>`, `example.com`)
 ocupa o lugar do alvo — sem alvo nenhum não desce, porque esconder o alvo é

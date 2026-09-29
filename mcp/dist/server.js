@@ -70776,6 +70776,26 @@ async function analyzeSkill(files, opts = {}) {
         !repeat
       );
     }
+    for (const cmd of executedCommands(file)) {
+      for (const m of scanContent(cmd.text, true)) {
+        push(
+          makeFinding({
+            tool: TOOL,
+            rule_id: m.rule.id,
+            severity: m.severity,
+            category: "security",
+            subcategory: m.rule.category,
+            title: m.rule.title,
+            message: `${m.rule.message} Found in a command ${cmd.what}, which the host runs as written.`,
+            file_path: file.relPath,
+            line_start: cmd.line,
+            line_end: cmd.line,
+            snippet: m.snippet
+          }),
+          file.isExecutable
+        );
+      }
+    }
     for (const m of matchSignatures(file.content)) {
       push(
         makeFinding({
@@ -70880,6 +70900,39 @@ async function analyzeSkill(files, opts = {}) {
     executable_files: executableFiles,
     hidden_unicode_files: hiddenUnicodeFiles
   };
+}
+function executedCommands(file) {
+  const name = file.relPath.split("/").pop()?.toLowerCase() ?? "";
+  const inClaudeDir = /(^|\/)\.claude\/settings(\.local)?\.json$/i.test(file.relPath);
+  if (!["hooks.json", "plugin.json", ".mcp.json", "mcp.json"].includes(name) && !inClaudeDir) return [];
+  let json;
+  try {
+    json = JSON.parse(file.content);
+  } catch {
+    return [];
+  }
+  const out = [];
+  const walk4 = (node, depth) => {
+    if (depth > 12 || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk4(item, depth + 1);
+      return;
+    }
+    const obj = node;
+    const command = obj["command"];
+    if (typeof command === "string" && command.trim() !== "") {
+      const args = Array.isArray(obj["args"]) ? obj["args"].filter((a2) => typeof a2 === "string") : [];
+      const at = file.content.indexOf(JSON.stringify(command));
+      out.push({
+        text: [command, ...args].join(" "),
+        line: at === -1 ? 1 : file.content.slice(0, at).split(/\r?\n/).length,
+        what: obj["type"] === "command" || name === "hooks.json" ? `a hook in ${name}` : `an MCP server in ${name}`
+      });
+    }
+    for (const value of Object.values(obj)) walk4(value, depth + 1);
+  };
+  walk4(json, 0);
+  return out;
 }
 function isMarkdownLike(relPath) {
   const name = relPath.split("/").pop() ?? "";
@@ -71445,7 +71498,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) and the commands a plugin's hooks.json, plugin.json and .mcp.json run are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };

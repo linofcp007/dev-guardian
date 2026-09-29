@@ -72,7 +72,8 @@ const tool = {
         'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
         'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
         'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced, indented ' +
-        'and <pre> blocks, inline code and prose) are scored like the skill\'s own scripts, including a file ' +
+        'and <pre> blocks, inline code and prose) and the commands a plugin\'s hooks.json, plugin.json and ' +
+        '.mcp.json run are scored like the skill\'s own scripts, including a file ' +
         'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
         'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
         'fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack ' +

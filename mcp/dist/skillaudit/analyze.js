@@ -88,6 +88,27 @@ export async function analyzeSkill(files, opts = {}) {
                 snippet: m.snippet,
             }), file.isExecutable, !repeat);
         }
+        // 1b. The commands a plugin's configuration runs. A `.json` file is not
+        // code, so its strings never met the code rules — but the host executes
+        // a hook's `command` on every matching event, and an MCP server's
+        // `command` + `args` when it starts (round 2 of the wave).
+        for (const cmd of executedCommands(file)) {
+            for (const m of scanContent(cmd.text, true)) {
+                push(makeFinding({
+                    tool: TOOL,
+                    rule_id: m.rule.id,
+                    severity: m.severity,
+                    category: 'security',
+                    subcategory: m.rule.category,
+                    title: m.rule.title,
+                    message: `${m.rule.message} Found in a command ${cmd.what}, which the host runs as written.`,
+                    file_path: file.relPath,
+                    line_start: cmd.line,
+                    line_end: cmd.line,
+                    snippet: m.snippet,
+                }), file.isExecutable);
+            }
+        }
         // 2. YARA signatures.
         for (const m of matchSignatures(file.content)) {
             push(makeFinding({
@@ -191,6 +212,51 @@ export async function analyzeSkill(files, opts = {}) {
         executable_files: executableFiles,
         hidden_unicode_files: hiddenUnicodeFiles,
     };
+}
+/**
+ * The command lines a plugin's configuration makes the host run: every
+ * `command` string (with its `args`, when they are strings) in a
+ * `hooks.json`, a `plugin.json`, an `.mcp.json` / `mcp.json`, or a
+ * `.claude/settings*.json` — hooks and MCP servers alike. Each carries the
+ * line its `command` sits on.
+ */
+function executedCommands(file) {
+    const name = file.relPath.split('/').pop()?.toLowerCase() ?? '';
+    const inClaudeDir = /(^|\/)\.claude\/settings(\.local)?\.json$/i.test(file.relPath);
+    if (!['hooks.json', 'plugin.json', '.mcp.json', 'mcp.json'].includes(name) && !inClaudeDir)
+        return [];
+    let json;
+    try {
+        json = JSON.parse(file.content);
+    }
+    catch {
+        return [];
+    }
+    const out = [];
+    const walk = (node, depth) => {
+        if (depth > 12 || node === null || typeof node !== 'object')
+            return;
+        if (Array.isArray(node)) {
+            for (const item of node)
+                walk(item, depth + 1);
+            return;
+        }
+        const obj = node;
+        const command = obj['command'];
+        if (typeof command === 'string' && command.trim() !== '') {
+            const args = Array.isArray(obj['args']) ? obj['args'].filter((a) => typeof a === 'string') : [];
+            const at = file.content.indexOf(JSON.stringify(command));
+            out.push({
+                text: [command, ...args].join(' '),
+                line: at === -1 ? 1 : file.content.slice(0, at).split(/\r?\n/).length,
+                what: obj['type'] === 'command' || name === 'hooks.json' ? `a hook in ${name}` : `an MCP server in ${name}`,
+            });
+        }
+        for (const value of Object.values(obj))
+            walk(value, depth + 1);
+    };
+    walk(json, 0);
+    return out;
 }
 /** Markdown or plain text, where an indented block is code: `.md`, `.txt`, `.rst`, `.adoc`, or no extension. */
 function isMarkdownLike(relPath) {

