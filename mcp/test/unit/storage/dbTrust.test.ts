@@ -584,7 +584,8 @@ describe('provenance: only a database registered for its own path is trusted', (
     for (let t = now - 2 * 3600_000, i = 0; t <= now + 2 * 86_400_000; t += 9 * 60_000, i++) {
       rows.push(scanOf(canonicalPath(series), `planted-${i}`, new Date(t)));
     }
-    legacyDatabase(series, rows.join('\n'));
+    // One transaction: 334 autocommitted inserts took 70 s on Docker's overlay file system.
+    legacyDatabase(series, `BEGIN; ${rows.join('\n')} COMMIT;`);
     expectForeign(series, /created before dev-guardian 3\.0\.1/);
   });
 
