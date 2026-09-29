@@ -287,6 +287,45 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(res.coverage).toBe('partial');
   });
 
+  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout is only in
+  // `time.fixpoint_timeouts` — `errors: []` — and is read the same way.
+  it('a changed file whose taint analysis timed out (time.fixpoint_timeouts): ok, listed missing, the file named', async () => {
+    const dir = await repo('main', { 'agent.py': 'x = 0\n' });
+    write(dir, 'agent.py', 'x = 1\n');
+    await commitAll(dir);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') {
+        const { out, targets } = semgrepTargets(call.args);
+        const location = { path: targets[0], start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } };
+        writeFileSync(
+          out,
+          JSON.stringify({
+            version: '1.176.1',
+            results: [],
+            errors: [],
+            paths: { scanned: targets },
+            time: { fixpoint_timeouts: [{ error_type: 'Fixpoint timeout', severity: 'warn', message: 'Fixpoint timeout', location }] },
+          }),
+        );
+        return ok(0);
+      }
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      return ok();
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string }> }
+      | undefined;
+    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): agent\.py/);
+    expect(semgrep?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['agent.py', 'Fixpoint timeout']]);
+    expect(res.missing_tools).toContain('semgrep');
+    expect(res.coverage).toBe('partial');
+  });
+
   it('one batch of files no rule targets does not fail a run whose other batches scanned', async () => {
     const dir = await repo('main', { 'keep.txt': 'x\n' });
     const long = 'a-rather-long-directory-name-to-push-the-command-line-over-the-limit';

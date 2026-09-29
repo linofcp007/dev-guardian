@@ -799,11 +799,15 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     const project = makeTempDir('sast-llm-oldsemgrep-');
     for (const [version, noted] of [['1.170.1', true], ['1.86.0', true], ['1.176.1', false], ['1.180.0', false]] as const) {
       captured.length = 0;
-      mockSemgrepOnPath(0, { ...CLEAN_REPORT, version });
+      // As each engine writes it: 1.170 and later always carry `time.fixpoint_timeouts`.
+      mockSemgrepOnPath(0, { ...CLEAN_REPORT, version, ...(version === '1.86.0' ? {} : { time: { fixpoint_timeouts: [] } }) });
       const r = await runSast(project, makePlugin(project));
       const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
       expect([version, /llm\.yml.*measured on Semgrep 1\.176\.1.*child_process/.test(reason)]).toEqual([version, noted]);
+      // 1.86.0 also cannot report fixpoint timeouts: one note, the engine named once.
+      expect([version, (reason.match(/this Semgrep/g) ?? []).length]).toEqual([version, noted ? 1 : 0]);
     }
+    expect(true).toBe(true);
   });
 
   it('local_only in the Docker fallback with no project rules is still no scan — the pack alone is not a SAST ruleset', async () => {
@@ -1218,5 +1222,120 @@ describe('scan_sast: a partly parsed file keeps its older finding in the open se
       components: { findings: { open_findings: number } };
     };
     expect(r.components.findings.open_findings).toBe(2);
+  });
+});
+
+/**
+ * Review of the LLM pack, round 2 (I-C): a taint rule that runs out of
+ * budget on one function gives that function up, and Semgrep says so only
+ * under `time.fixpoint_timeouts` — `errors: []`, `paths.scanned` full. It is
+ * read like a per-rule Timeout: the file was not fully analysed, so the run
+ * is partial with the file named, and a finding missing from that file is
+ * not re-measured, never fixed. An engine that cannot report the field gets
+ * a named note instead.
+ */
+describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
+  // The 1.176.1 shape, verbatim but for the path.
+  const fixpoint = (path: string) => ({
+    error_type: 'Fixpoint timeout',
+    severity: 'warn',
+    message: `Fixpoint timeout while performing taint analysis at ${path}:113:8 [rules: 1, first: llm-output-to-interpreter-py]`,
+    location: { path, start: { line: 113, col: 9, offset: 4419 }, end: { line: 113, col: 14, offset: 4424 } },
+  });
+  const hit = (path: string) => ({
+    check_id: 'python.lang.security.audit.eval-detected',
+    path,
+    start: { line: 178 },
+    end: { line: 178 },
+    extra: { severity: 'WARNING', message: 'eval', lines: 'eval(llm_output)' },
+  });
+  const FIXPOINT_REPORT = {
+    version: '1.176.1',
+    results: [],
+    errors: [],
+    paths: { scanned: ['sql/base.py', 'app.py'] },
+    time: { fixpoint_timeouts: [fixpoint('sql/base.py')] },
+  };
+  type SemgrepRun = { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string; functions?: number }> };
+  const semgrepRun = (r: { tools_run: unknown[] }): SemgrepRun | undefined =>
+    (r.tools_run as Array<SemgrepRun & { name: string }>).find((t) => t.name === 'semgrep');
+  const coverage = (r: unknown): string => (r as { coverage: string }).coverage;
+
+  function expectPartialOnFixpoint(r: { tools_run: unknown[]; missing_tools: string[] }): void {
+    const run = semgrepRun(r);
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): sql\/base\.py/);
+    expect(run?.partially_parsed?.map((p) => [p.file, p.type, p.functions])).toEqual([['sql/base.py', 'Fixpoint timeout', 1]]);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(coverage(r)).toBe('partial');
+  }
+
+  it('native whole-project run: errors [] and every file scanned, yet partial — the file named', async () => {
+    const project = makeTempDir('sast-fixpoint-');
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project)));
+  });
+
+  it('a scoped (batched) run reads it the same way', async () => {
+    const project = makeTempDir('sast-fixpoint-scope-');
+    mkdirSync(join(project, 'sql'));
+    writeFileSync(join(project, 'sql', 'base.py'), 'x = 1\n', 'utf8');
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project), { scope: { paths: ['sql/base.py'] } }));
+  });
+
+  it('the Docker fallback reads it the same way, the container path mapped back', async () => {
+    const project = makeTempDir('sast-fixpoint-docker-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        const report = {
+          ...FIXPOINT_REPORT,
+          paths: { scanned: ['/src/sql/base.py'] },
+          time: { fixpoint_timeouts: [fixpoint('/src/sql/base.py')] },
+        };
+        writeFileSync(host, JSON.stringify(report), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project)));
+  });
+
+  it('a finding missing from a file in the fixpoint set is not re-measured, never resolved; one elsewhere is resolved', async () => {
+    await import('../../src/tools/diffScans.js');
+    const project = makeTempDir('sast-fixpoint-history-');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath(1, { ...FIXPOINT_REPORT, results: [hit('sql/base.py'), hit('app.py')], time: { fixpoint_timeouts: [] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    await runSast(project, plugin);
+
+    const diff = okResult<{ summary: Record<string, number>; not_measured?: string[] }>(
+      await getTool('diff_scans').handler({ project_path: project, scan_type: 'sast' }, plugin),
+    );
+    expect(diff.summary).toMatchObject({ resolved: 1, not_remeasured: 1, new: 0 });
+    expect(diff.not_measured).toEqual(['semgrep (partly parsed: sql/base.py)']);
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    expect(set.findings.map((f) => `${f.file_path}${f.not_remeasured === true ? ' (not re-measured)' : ''}`)).toEqual([
+      'sql/base.py (not re-measured)',
+    ]);
+  });
+
+  it('an engine that does not report the field: a named note, not a partial', async () => {
+    const project = makeTempDir('sast-fixpoint-old-');
+    mockSemgrepOnPath(0, { ...CLEAN_REPORT, version: '1.120.1' });
+    const r = await runSast(project, makePlugin(project));
+    const run = semgrepRun(r);
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/this Semgrep \(1\.120\.1\) does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected/);
+    expect(run?.reason?.match(/this Semgrep/g)).toHaveLength(1);
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(coverage(r)).toBe('full');
+    // An engine that does report it, with nothing to report: no note.
+    mockSemgrepOnPath(0, { ...CLEAN_REPORT, version: '1.176.1', time: { fixpoint_timeouts: [] } });
+    expect(semgrepRun(await runSast(project, makePlugin(project)))?.reason ?? '').not.toMatch(/fixpoint/);
   });
 });

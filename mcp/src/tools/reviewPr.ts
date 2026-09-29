@@ -48,7 +48,8 @@ import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
+import { semgrepEngineOf } from '../runners/semgrepReport.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -256,7 +257,12 @@ async function runSemgrep(
   // project's rules by their absolute path; stored canonical, as scan_sast's.
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
-  out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
+  // What the engine cannot do — report taint fixpoint timeouts, resolve the
+  // LLM pack's node: imports — said once, as scan_sast says it.
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  out.tools_run.push(
+    withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : []), ...(engineNote !== null ? [engineNote] : [])]),
+  );
   // Scanned nothing at all, not every changed file, or some only partly
   // parsed or rules that did not load (`ok` + missing, runners/semgrepReport.ts):
   // a gap, not a clean result.

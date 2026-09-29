@@ -1253,4 +1253,29 @@ describe('a Semgrep run that only partly parsed some files', () => {
     expect(d.note).toMatch(/reference scan \S+ only partly measured semgrep \(partly parsed/);
     expect(d.note).not.toMatch(/failed, or was not installed/);
   });
+
+  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout lands in
+  // `partially_parsed` too, one entry per file, and a loaded scan of a real
+  // project names hundreds of them (644 functions on LibreChat). A finding
+  // there is still not re-measured, and the scan's gap name lists a few
+  // files, then counts the rest — once each, whatever the types.
+  it('a fixpoint-timeout file is not re-measured like any other; the gap name names a few files, then "+N more"', async () => {
+    const files = Array.from({ length: 8 }, (_, i) => `src/f${i}.py`);
+    const run: ToolRun = {
+      name: 'semgrep',
+      status: 'ok',
+      reason: 'partial',
+      partially_parsed: [
+        { file: 'src/f0.py', type: 'PartialParsing', message: 'x' },
+        ...files.map((file) => ({ file, type: 'Fixpoint timeout', message: 'x', functions: 1 })),
+      ],
+    };
+    const { s, p } = pair('src/f7.py', run);
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(d.not_measured).toEqual(['semgrep (partly parsed: src/f0.py, src/f1.py, src/f2.py, src/f3.py, src/f4.py, +3 more)']);
+    // Control: a finding in a file outside the list is resolved.
+    const control = pair('src/other.py', run);
+    expect((await diff(control.s, control.p)).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+  });
 });

@@ -341,7 +341,12 @@ actually makes.
   function *incomplete* rather than empty — one corpus scan timed out on the
   very function holding that true positive and still reported it — so it is
   a file whose result cannot be trusted, not a proof of a loss. The harness
-  adds those files to `abortedFiles`; `scan_sast` does not read the field yet.
+  adds those files to `abortedFiles`, and the product's Semgrep judge
+  (`mcp/src/runners/semgrepReport.ts`) reads the field from every run's plain
+  report — never `--time`, which only adds profiling (94 MB against 1.7 MB on
+  LibreChat): the run is partial with the files named, type `Fixpoint
+  timeout`, gated exactly like a per-rule `Timeout`, and on an engine without
+  the field the run carries a named note instead.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather

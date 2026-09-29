@@ -38350,19 +38350,19 @@ function runningScanIsOrphan(row, options = {}) {
 }
 function reapReason(row, ctx) {
   const started = Date.parse(row.started_at);
-  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+  const olderThan2 = (ms) => Number.isNaN(started) || ctx.now - started > ms;
   const pid = row.owner_pid;
   if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
     if (pid === ctx.ownPid) {
       return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
     }
     if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
-    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
+    if (olderThan2(LIVE_OWNER_REAP_AFTER_MS)) {
       return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
     }
     return null;
   }
-  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
+  if (olderThan2(UNKNOWN_OWNER_REAP_AFTER_MS)) {
     return "owner unknown on this host and the scan started more than 6 h ago";
   }
   return null;
@@ -40780,6 +40780,323 @@ function candidates(projectPath) {
   return out;
 }
 
+// src/runners/scannerParsers/index.ts
+function toPosixPath(p) {
+  if (!p) return p;
+  return p.replace(/^[a-zA-Z]:/, "").replace(/\\/g, "/");
+}
+function toRelativeIfPossible(filePath, projectPath) {
+  if (!filePath || !projectPath) return toPosixPath(filePath);
+  const posixFile = toPosixPath(filePath);
+  const posixRoot = toPosixPath(projectPath).replace(/\/$/, "");
+  if (posixFile.startsWith(`${posixRoot}/`)) {
+    return posixFile.slice(posixRoot.length + 1);
+  }
+  if (posixFile === posixRoot) return "";
+  return posixFile;
+}
+var SNIPPET_MAX_BYTES2 = 1024;
+function clampSnippet(snippet) {
+  if (snippet === void 0 || snippet === null) return void 0;
+  if (snippet.length === 0) return void 0;
+  return snippet.length > SNIPPET_MAX_BYTES2 ? snippet.slice(0, SNIPPET_MAX_BYTES2) : snippet;
+}
+function makeFinding(input) {
+  const snippet = clampSnippet(input.snippet);
+  const fingerprintInput = {
+    tool: input.tool
+  };
+  if (input.rule_id !== void 0) fingerprintInput.rule_id = input.rule_id;
+  if (input.file_path !== void 0) fingerprintInput.file_path = input.file_path;
+  if (input.line_start !== void 0) fingerprintInput.line_start = input.line_start;
+  if (input.line_end !== void 0) fingerprintInput.line_end = input.line_end;
+  if (snippet !== void 0) fingerprintInput.snippet = snippet;
+  const fingerprint = computeFingerprint(fingerprintInput);
+  const finding4 = {
+    fingerprint,
+    tool: input.tool,
+    severity: input.severity,
+    category: input.category,
+    title: input.title,
+    fix_available: input.fix_available ?? false
+  };
+  if (input.rule_id !== void 0) finding4.rule_id = input.rule_id;
+  if (input.subcategory !== void 0) finding4.subcategory = input.subcategory;
+  if (input.message !== void 0) finding4.message = input.message;
+  if (input.file_path !== void 0) finding4.file_path = input.file_path;
+  if (input.line_start !== void 0) finding4.line_start = input.line_start;
+  if (input.line_end !== void 0) finding4.line_end = input.line_end;
+  if (snippet !== void 0) finding4.snippet = snippet;
+  return finding4;
+}
+function normalizeSeverity(raw) {
+  if (!raw) return "medium";
+  const normalized = raw.toString().trim().toLowerCase();
+  switch (normalized) {
+    case "info":
+    case "informational":
+    case "unknown":
+    case "note":
+      return "info";
+    case "low":
+    case "minor":
+      return "low";
+    case "medium":
+    case "moderate":
+    case "warning":
+      return "medium";
+    case "high":
+    case "error":
+    case "major":
+      return "high";
+    case "critical":
+    case "severe":
+    case "blocker":
+      return "critical";
+    default:
+      return "medium";
+  }
+}
+function getProp(obj, key) {
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    return obj[key];
+  }
+  return void 0;
+}
+function getString(obj, key) {
+  const v = getProp(obj, key);
+  return typeof v === "string" ? v : void 0;
+}
+function getNumber(obj, key) {
+  const v = getProp(obj, key);
+  return typeof v === "number" && Number.isFinite(v) ? v : void 0;
+}
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+function parseInputAsJson(input) {
+  if (typeof input !== "string") return input;
+  if (input.trim() === "") return null;
+  try {
+    return JSON.parse(input);
+  } catch {
+    return null;
+  }
+}
+
+// src/runners/semgrepReport.ts
+var MAX_ERROR_TEXT = 300;
+var FIXPOINT_TIMEOUT_TYPE = "Fixpoint timeout";
+var FIXPOINT_FILES_NAMED = 5;
+var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
+function checkSemgrepReport(args) {
+  const { raw, exitCode, outcome, targets, projectPath } = args;
+  const relative25 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
+  if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
+  }
+  if (raw === null) {
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
+  }
+  const root = parseInputAsJson(raw);
+  if (root === null || typeof root !== "object" || Array.isArray(root)) {
+    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
+  }
+  const scanned = asArray(getProp(getProp(root, "paths"), "scanned")).length;
+  const errorEntries = asArray(getProp(root, "errors"));
+  const errors = describeErrors(errorEntries);
+  const exitClean = exitCode === 0 || exitCode === 1;
+  const fixpoint = fixpointTimeoutsOf(root);
+  const fixpointFiles = relative25(fixpoint.files);
+  const problems = [];
+  if (!exitClean) problems.push(`exit ${String(exitCode)}`);
+  if (targets > 0 && scanned === 0) problems.push(`scanned 0 of ${targets} target(s)`);
+  if (errors.length > 0) {
+    problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join("; "))}`);
+  }
+  if (fixpoint.functions > 0) problems.push(describeFixpointTimeouts(fixpointFiles, fixpoint.unscoped));
+  if (problems.length === 0) return { ok: true, verdict: "ok", scanned, errors: 0 };
+  const reason = problems.join("; ");
+  if (exitClean && scanned === 0 && errors.length === 0 && fixpoint.functions === 0) {
+    return { ok: false, verdict: "scanned_nothing", scanned, errors: 0, reason };
+  }
+  if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
+    const partial3 = errors.length > 0 ? perFileErrors(errorEntries) : [];
+    if (partial3 !== null) {
+      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: [...relative25(partial3), ...fixpointFiles] };
+    }
+  }
+  const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
+  const configError = ruleConfigError(errorEntries);
+  if (configError !== null) failed.rule_config_error = configError;
+  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0) && fixpoint.unscoped === 0) {
+    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+    if (ruleGap !== null) {
+      const { rule_config_error: _whole, ...someRan } = failed;
+      const files = [...relative25(ruleGap.files), ...fixpointFiles];
+      return {
+        ...someRan,
+        rules_not_loaded: ruleGap.rules,
+        ...files.length > 0 ? { partial: files } : {}
+      };
+    }
+  }
+  return failed;
+}
+function fixpointTimeoutsOf(root) {
+  const entries2 = asArray(getProp(getProp(root, "time"), "fixpoint_timeouts"));
+  const files = [];
+  let unscoped = 0;
+  for (const entry of entries2) {
+    const path8 = getString(getProp(entry, "location"), "path");
+    if (path8 === void 0 || path8.length === 0) {
+      unscoped += 1;
+      continue;
+    }
+    const file = toPosixPath(path8);
+    const known = files.find((f) => f.file === file);
+    if (known !== void 0) {
+      known.functions = (known.functions ?? 0) + 1;
+      known.message = fixpointMessage(known.functions);
+    } else {
+      files.push({ file, type: FIXPOINT_TIMEOUT_TYPE, message: fixpointMessage(1), functions: 1 });
+    }
+  }
+  return { files, functions: entries2.length, unscoped };
+}
+function fixpointMessage(functions) {
+  return `taint analysis gave up on ${functions} function(s) here (Semgrep fixpoint timeout)`;
+}
+function describeFixpointTimeouts(files, unscoped = 0) {
+  const functions = files.reduce((n2, f) => n2 + (f.functions ?? 1), 0) + unscoped;
+  const named = files.slice(0, FIXPOINT_FILES_NAMED).map((f) => f.file);
+  const more = files.length - named.length;
+  const list2 = [...named, ...more > 0 ? [`+${more} more`] : []].join(", ");
+  return `taint analysis incomplete (Semgrep fixpoint timeout) in ${functions} function(s)` + (unscoped > 0 ? `, ${unscoped} of them in no named file` : "") + (files.length > 0 ? ` across ${files.length} file(s): ${list2}` : "");
+}
+function semgrepEngineOf(raw) {
+  if (raw === null || raw === void 0) return {};
+  const root = parseInputAsJson(raw);
+  if (root === null || typeof root !== "object" || Array.isArray(root)) return {};
+  const version2 = getString(root, "version");
+  if (version2 === void 0 || version2.length === 0) return {};
+  if (Array.isArray(getProp(getProp(root, "time"), "fixpoint_timeouts"))) return { version: version2, fixpointTimeoutsReported: true };
+  const scanned = asArray(getProp(getProp(root, "paths"), "scanned")).length;
+  return scanned > 0 ? { version: version2, fixpointTimeoutsReported: false } : { version: version2 };
+}
+function describePartialParse(partial3, consequence) {
+  const parsed = partial3.filter((p) => p.type !== FIXPOINT_TIMEOUT_TYPE);
+  const fixpoint = partial3.filter((p) => p.type === FIXPOINT_TIMEOUT_TYPE);
+  const parts = [];
+  if (parsed.length > 0) {
+    const listed = parsed.map((p) => `${p.type}: ${p.file}`).join("; ");
+    const files = new Set(parsed.map((p) => p.file)).size;
+    parts.push(`partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`);
+  }
+  if (fixpoint.length > 0) {
+    parts.push(`partial: ${describeFixpointTimeouts(fixpoint)} \u2014 taint findings in those functions may be missing`);
+  }
+  return parts.join("; ");
+}
+function describeRulesNotLoaded(rules, scanned) {
+  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
+  return `Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ${scanned} file(s) are kept; fix or remove the rule and re-run`;
+}
+function describeNoRuleLoaded(rules) {
+  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
+  return `no rule loaded: Semgrep ran, but every one of its ${rules.length} rule(s) failed to load (${named}) \u2014 nothing was scanned for; fix or remove the rules and re-run`;
+}
+function errorMessage(entry) {
+  return getString(entry, "message") ?? getString(entry, "short_msg") ?? getString(entry, "long_msg");
+}
+function describeErrors(errors) {
+  return errors.map((entry) => {
+    const rawType = getProp(entry, "type");
+    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) ? String(rawType[0]) : "error";
+    const message3 = errorMessage(entry) ?? "(no message)";
+    return `${type}: ${message3.split(/\r?\n/)[0] ?? message3}`;
+  });
+}
+function ruleConfigError(errors) {
+  if (errors.length === 0) return null;
+  const described = [];
+  let rules = 0;
+  for (const entry of errors) {
+    const type = errorType(entry) ?? "";
+    const text = (errorMessage(entry) ?? "").split(/\r?\n/)[0] ?? "";
+    if (/rule|language/i.test(type)) {
+      rules += 1;
+      described.push(`${type}: ${text}`);
+    } else if (type === "SemgrepError") {
+      described.push(`${type}: ${text}`);
+    } else {
+      return null;
+    }
+  }
+  return rules > 0 ? clip(described.join("; ")) : null;
+}
+function errorType(entry) {
+  const rawType = getProp(entry, "type");
+  return typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
+}
+function perFileError(entry) {
+  const type = errorType(entry);
+  if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
+  const file = targetFileOf(entry, getProp(entry, "type"));
+  if (file === null || /\.ya?ml$/i.test(file)) return null;
+  const message3 = getString(entry, "message") ?? type;
+  return { file, type, message: message3.split(/\r?\n/)[0] ?? message3 };
+}
+function pushOnce(out, p) {
+  if (!out.some((q) => q.file === p.file && q.type === p.type)) out.push(p);
+}
+function perFileErrors(errors) {
+  const out = [];
+  for (const entry of errors) {
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(out, p);
+  }
+  return out.length > 0 ? out : null;
+}
+function rulesNotLoaded(errors, ruleIdOf) {
+  const rules = [];
+  const files = [];
+  for (const entry of errors) {
+    const type = errorType(entry);
+    const ruleId = getString(entry, "rule_id");
+    if (type !== null && /rule/i.test(type) && ruleId !== void 0 && ruleId.length > 0) {
+      const lines = (getString(entry, "message") ?? type).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+      const id = ruleIdOf(ruleId);
+      if (!rules.some((r) => r.rule_id === id)) rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
+      continue;
+    }
+    const p = perFileError(entry);
+    if (p === null) return null;
+    pushOnce(files, p);
+  }
+  return rules.length > 0 ? { rules, files } : null;
+}
+function targetFileOf(entry, rawType) {
+  const path8 = getString(entry, "path");
+  if (path8 !== void 0 && path8.length > 0) return path8;
+  const span = asArray(getProp(entry, "spans"))[0];
+  const spanFile = span === void 0 ? void 0 : getString(span, "file");
+  if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
+  if (Array.isArray(rawType)) {
+    const location = asArray(rawType[1])[0];
+    const locationPath = location === void 0 ? void 0 : getString(location, "path");
+    if (locationPath !== void 0 && locationPath.length > 0) return locationPath;
+  }
+  return null;
+}
+function clip(text) {
+  return text.length > MAX_ERROR_TEXT ? `${text.slice(0, MAX_ERROR_TEXT - 1)}\u2026` : text;
+}
+function pythonUtf8Env(env) {
+  return { ...env ?? process.env, PYTHONUTF8: "1" };
+}
+
 // src/runners/semgrepConfigs.ts
 var LLM_RULES_FILE = "llm.yml";
 function llmRulesPath() {
@@ -40787,21 +41104,35 @@ function llmRulesPath() {
 }
 var CONTAINER_PACKS_ROOT = "/guardian-packs";
 var LLM_PACK_MEASURED_SEMGREP = "1.176.1";
-function llmPackVersionNote(version2) {
-  if (version2 === void 0) return null;
+function olderThan(version2, than) {
   const parse8 = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
   const have = parse8(version2);
-  const need = parse8(LLM_PACK_MEASURED_SEMGREP);
-  if (have.some((n2) => Number.isNaN(n2))) return null;
+  const need = parse8(than);
+  if (have.some((n2) => Number.isNaN(n2)) || need.some((n2) => Number.isNaN(n2))) return false;
   for (let i2 = 0; i2 < 3; i2 += 1) {
     const a2 = have[i2] ?? 0;
     const b = need[i2] ?? 0;
-    if (a2 !== b) {
-      if (a2 > b) return null;
-      return `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version2}, which does not resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 the pack's child_process coverage is reduced (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
-    }
+    if (a2 !== b) return a2 < b;
   }
+  return false;
+}
+function semgrepEngineNote(engine, opts) {
+  const version2 = engine.version;
+  if (version2 === void 0) return null;
+  const fixpoint = engine.fixpointTimeoutsReported === false;
+  const llm = opts.llmPack && olderThan(version2, LLM_PACK_MEASURED_SEMGREP);
+  const childProcess = `resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 ${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
+  const fixpointNote = "does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected";
+  if (fixpoint && llm) return `this Semgrep (${version2}) ${fixpointNote}; nor does it ${childProcess}`;
+  if (fixpoint) return `this Semgrep (${version2}) ${fixpointNote}`;
+  if (llm) return `this Semgrep (${version2}) does not ${childProcess}`;
   return null;
+}
+function withSemgrepEngineNote(run, raw) {
+  if (run.status !== "ok") return run;
+  const note = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: false });
+  if (note === null) return run;
+  return { ...run, reason: [run.reason, note].filter((s) => s !== void 0).join("; ") };
 }
 function planSemgrepConfigs(projectPath, plugin, localOnly) {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
@@ -42259,112 +42590,6 @@ function firstLine2(text) {
 // src/runners/scannerParsers/trivy.ts
 import { existsSync as existsSync13, readdirSync as readdirSync9, readFileSync as readFileSync14 } from "node:fs";
 import { dirname as dirname9, join as join18 } from "node:path";
-
-// src/runners/scannerParsers/index.ts
-function toPosixPath(p) {
-  if (!p) return p;
-  return p.replace(/^[a-zA-Z]:/, "").replace(/\\/g, "/");
-}
-function toRelativeIfPossible(filePath, projectPath) {
-  if (!filePath || !projectPath) return toPosixPath(filePath);
-  const posixFile = toPosixPath(filePath);
-  const posixRoot = toPosixPath(projectPath).replace(/\/$/, "");
-  if (posixFile.startsWith(`${posixRoot}/`)) {
-    return posixFile.slice(posixRoot.length + 1);
-  }
-  if (posixFile === posixRoot) return "";
-  return posixFile;
-}
-var SNIPPET_MAX_BYTES2 = 1024;
-function clampSnippet(snippet) {
-  if (snippet === void 0 || snippet === null) return void 0;
-  if (snippet.length === 0) return void 0;
-  return snippet.length > SNIPPET_MAX_BYTES2 ? snippet.slice(0, SNIPPET_MAX_BYTES2) : snippet;
-}
-function makeFinding(input) {
-  const snippet = clampSnippet(input.snippet);
-  const fingerprintInput = {
-    tool: input.tool
-  };
-  if (input.rule_id !== void 0) fingerprintInput.rule_id = input.rule_id;
-  if (input.file_path !== void 0) fingerprintInput.file_path = input.file_path;
-  if (input.line_start !== void 0) fingerprintInput.line_start = input.line_start;
-  if (input.line_end !== void 0) fingerprintInput.line_end = input.line_end;
-  if (snippet !== void 0) fingerprintInput.snippet = snippet;
-  const fingerprint = computeFingerprint(fingerprintInput);
-  const finding4 = {
-    fingerprint,
-    tool: input.tool,
-    severity: input.severity,
-    category: input.category,
-    title: input.title,
-    fix_available: input.fix_available ?? false
-  };
-  if (input.rule_id !== void 0) finding4.rule_id = input.rule_id;
-  if (input.subcategory !== void 0) finding4.subcategory = input.subcategory;
-  if (input.message !== void 0) finding4.message = input.message;
-  if (input.file_path !== void 0) finding4.file_path = input.file_path;
-  if (input.line_start !== void 0) finding4.line_start = input.line_start;
-  if (input.line_end !== void 0) finding4.line_end = input.line_end;
-  if (snippet !== void 0) finding4.snippet = snippet;
-  return finding4;
-}
-function normalizeSeverity(raw) {
-  if (!raw) return "medium";
-  const normalized = raw.toString().trim().toLowerCase();
-  switch (normalized) {
-    case "info":
-    case "informational":
-    case "unknown":
-    case "note":
-      return "info";
-    case "low":
-    case "minor":
-      return "low";
-    case "medium":
-    case "moderate":
-    case "warning":
-      return "medium";
-    case "high":
-    case "error":
-    case "major":
-      return "high";
-    case "critical":
-    case "severe":
-    case "blocker":
-      return "critical";
-    default:
-      return "medium";
-  }
-}
-function getProp(obj, key) {
-  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-    return obj[key];
-  }
-  return void 0;
-}
-function getString(obj, key) {
-  const v = getProp(obj, key);
-  return typeof v === "string" ? v : void 0;
-}
-function getNumber(obj, key) {
-  const v = getProp(obj, key);
-  return typeof v === "number" && Number.isFinite(v) ? v : void 0;
-}
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-function parseInputAsJson(input) {
-  if (typeof input !== "string") return input;
-  if (input.trim() === "") return null;
-  try {
-    return JSON.parse(input);
-  } catch {
-    return null;
-  }
-}
-
-// src/runners/scannerParsers/trivy.ts
 var TRIVY_TOOL_NAME = "trivy";
 var trivyParser = {
   name: TRIVY_TOOL_NAME,
@@ -43936,163 +44161,6 @@ function signalGroup(pid, signal) {
   }
 }
 
-// src/runners/semgrepReport.ts
-var MAX_ERROR_TEXT = 300;
-var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
-function checkSemgrepReport(args) {
-  const { raw, exitCode, outcome, targets, projectPath } = args;
-  const relative25 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
-  if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
-    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
-  }
-  if (raw === null) {
-    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep wrote no JSON report (exit ${String(exitCode)})` };
-  }
-  const root = parseInputAsJson(raw);
-  if (root === null || typeof root !== "object" || Array.isArray(root)) {
-    return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep report is not valid JSON (exit ${String(exitCode)})` };
-  }
-  const scanned = asArray(getProp(getProp(root, "paths"), "scanned")).length;
-  const errorEntries = asArray(getProp(root, "errors"));
-  const errors = describeErrors(errorEntries);
-  const exitClean = exitCode === 0 || exitCode === 1;
-  const problems = [];
-  if (!exitClean) problems.push(`exit ${String(exitCode)}`);
-  if (targets > 0 && scanned === 0) problems.push(`scanned 0 of ${targets} target(s)`);
-  if (errors.length > 0) {
-    problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join("; "))}`);
-  }
-  if (problems.length === 0) return { ok: true, verdict: "ok", scanned, errors: 0 };
-  const reason = problems.join("; ");
-  if (exitClean && scanned === 0 && errors.length === 0) {
-    return { ok: false, verdict: "scanned_nothing", scanned, errors: 0, reason };
-  }
-  if (exitClean && scanned > 0 && errors.length > 0) {
-    const partial3 = perFileErrors(errorEntries);
-    if (partial3 !== null) {
-      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: relative25(partial3) };
-    }
-  }
-  const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
-  const configError = ruleConfigError(errorEntries);
-  if (configError !== null) failed.rule_config_error = configError;
-  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
-    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
-    if (ruleGap !== null) {
-      const { rule_config_error: _whole, ...someRan } = failed;
-      return {
-        ...someRan,
-        rules_not_loaded: ruleGap.rules,
-        ...ruleGap.files.length > 0 ? { partial: relative25(ruleGap.files) } : {}
-      };
-    }
-  }
-  return failed;
-}
-function describePartialParse(partial3, consequence) {
-  const listed = partial3.map((p) => `${p.type}: ${p.file}`).join("; ");
-  const files = new Set(partial3.map((p) => p.file)).size;
-  return `partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`;
-}
-function describeRulesNotLoaded(rules, scanned) {
-  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
-  return `Semgrep ran, but ${rules.length} rule(s) did not load: ${named}. Findings of the other rules over ${scanned} file(s) are kept; fix or remove the rule and re-run`;
-}
-function describeNoRuleLoaded(rules) {
-  const named = rules.map((r) => `${r.rule_id} \u2014 ${r.message}`).join("; ");
-  return `no rule loaded: Semgrep ran, but every one of its ${rules.length} rule(s) failed to load (${named}) \u2014 nothing was scanned for; fix or remove the rules and re-run`;
-}
-function errorMessage(entry) {
-  return getString(entry, "message") ?? getString(entry, "short_msg") ?? getString(entry, "long_msg");
-}
-function describeErrors(errors) {
-  return errors.map((entry) => {
-    const rawType = getProp(entry, "type");
-    const type = typeof rawType === "string" ? rawType : Array.isArray(rawType) ? String(rawType[0]) : "error";
-    const message3 = errorMessage(entry) ?? "(no message)";
-    return `${type}: ${message3.split(/\r?\n/)[0] ?? message3}`;
-  });
-}
-function ruleConfigError(errors) {
-  if (errors.length === 0) return null;
-  const described = [];
-  let rules = 0;
-  for (const entry of errors) {
-    const type = errorType(entry) ?? "";
-    const text = (errorMessage(entry) ?? "").split(/\r?\n/)[0] ?? "";
-    if (/rule|language/i.test(type)) {
-      rules += 1;
-      described.push(`${type}: ${text}`);
-    } else if (type === "SemgrepError") {
-      described.push(`${type}: ${text}`);
-    } else {
-      return null;
-    }
-  }
-  return rules > 0 ? clip(described.join("; ")) : null;
-}
-function errorType(entry) {
-  const rawType = getProp(entry, "type");
-  return typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
-}
-function perFileError(entry) {
-  const type = errorType(entry);
-  if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
-  const file = targetFileOf(entry, getProp(entry, "type"));
-  if (file === null || /\.ya?ml$/i.test(file)) return null;
-  const message3 = getString(entry, "message") ?? type;
-  return { file, type, message: message3.split(/\r?\n/)[0] ?? message3 };
-}
-function pushOnce(out, p) {
-  if (!out.some((q) => q.file === p.file && q.type === p.type)) out.push(p);
-}
-function perFileErrors(errors) {
-  const out = [];
-  for (const entry of errors) {
-    const p = perFileError(entry);
-    if (p === null) return null;
-    pushOnce(out, p);
-  }
-  return out.length > 0 ? out : null;
-}
-function rulesNotLoaded(errors, ruleIdOf) {
-  const rules = [];
-  const files = [];
-  for (const entry of errors) {
-    const type = errorType(entry);
-    const ruleId = getString(entry, "rule_id");
-    if (type !== null && /rule/i.test(type) && ruleId !== void 0 && ruleId.length > 0) {
-      const lines = (getString(entry, "message") ?? type).split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-      const id = ruleIdOf(ruleId);
-      if (!rules.some((r) => r.rule_id === id)) rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
-      continue;
-    }
-    const p = perFileError(entry);
-    if (p === null) return null;
-    pushOnce(files, p);
-  }
-  return rules.length > 0 ? { rules, files } : null;
-}
-function targetFileOf(entry, rawType) {
-  const path8 = getString(entry, "path");
-  if (path8 !== void 0 && path8.length > 0) return path8;
-  const span = asArray(getProp(entry, "spans"))[0];
-  const spanFile = span === void 0 ? void 0 : getString(span, "file");
-  if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
-  if (Array.isArray(rawType)) {
-    const location = asArray(rawType[1])[0];
-    const locationPath = location === void 0 ? void 0 : getString(location, "path");
-    if (locationPath !== void 0 && locationPath.length > 0) return locationPath;
-  }
-  return null;
-}
-function clip(text) {
-  return text.length > MAX_ERROR_TEXT ? `${text.slice(0, MAX_ERROR_TEXT - 1)}\u2026` : text;
-}
-function pythonUtf8Env(env) {
-  return { ...env ?? process.env, PYTHONUTF8: "1" };
-}
-
 // src/runners/fileBatchScan.ts
 async function scanFileBatches(opts) {
   const probeReport = join22(opts.reportDir, `${opts.reportPrefix}-000.json`);
@@ -44768,8 +44836,8 @@ function judgeSemgrepRun(args) {
     // A rule that did not load is named as its findings are stored.
     ruleIdOf: localRuleIdNormalizer(configs, rules)
   });
-  const versionNote = configs.length > loadedFrom.length ? llmPackVersionNote(semgrepVersionOf(raw)) : null;
-  const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...versionNote !== null ? [versionNote] : []];
+  const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
+  const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
     if (reasons.length > 0) run.reason = reasons.join("; ");
@@ -44912,8 +44980,8 @@ async function runSemgrepOnScope(args) {
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry = { ...run.toolRun };
-  const versionNote = plan.pluginPacks.length > 0 ? llmPackVersionNote(semgrepVersionOf(run.reports[0] ?? null)) : null;
-  const scopeNotes = [...plan.notes, ...versionNote !== null ? [versionNote] : []];
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const scopeNotes = [...plan.notes, ...engineNote !== null ? [engineNote] : []];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== void 0).join("; ");
   if (entry.status === "failed" && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;
@@ -45084,10 +45152,6 @@ function customAfterTargetsSetters(projectPath) {
     }
   }
   return [...out].sort();
-}
-function semgrepVersionOf(raw) {
-  if (raw === null || raw === void 0) return void 0;
-  return getString(parseInputAsJson(raw), "version");
 }
 function onlyPluginPackRan(packFiles, failed) {
   if (packFiles.length === 0) return false;
@@ -47939,6 +48003,10 @@ async function invokeBugHunt(input, ctx) {
   };
 }
 function judgeBugHuntRun(raw, run, ctx, packs) {
+  const judged = judgeBugHuntReport(raw, run, ctx, packs);
+  return { ...judged, toolRun: withSemgrepEngineNote(judged.toolRun, raw) };
+}
+function judgeBugHuntReport(raw, run, ctx, packs) {
   const check2 = checkSemgrepReport({
     raw,
     exitCode: run.exitCode,
@@ -48048,7 +48116,7 @@ async function invokeBugHuntOnScope(args) {
   const failures = failuresOf(first.reports);
   if (failures.length === 0) {
     for (const raw of first.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
-    tools_run.push(first.toolRun);
+    tools_run.push(withSemgrepEngineNote(first.toolRun, first.reports[0] ?? null));
     const narrower = first.partial.length > 0 || first.failedRules.length > 0;
     if (first.nothingScanned || first.toolRun.status === "ok" && narrower) missing_tools.push("semgrep");
     return finish(first.cancelled ? "cancelled" : "completed");
@@ -48068,9 +48136,10 @@ async function invokeBugHuntOnScope(args) {
   const retryFailures = failuresOf(retry2.reports);
   if (retryFailures.length > 0) return reportGap([...failures, ...retryFailures]);
   for (const raw of retry2.reports) parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
+  const retried = withSemgrepEngineNote(retry2.toolRun, retry2.reports[0] ?? null);
   tools_run.push({
-    ...retry2.toolRun,
-    reason: [`ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`, retry2.toolRun.reason].filter((s) => s !== void 0).join("; ")
+    ...retried,
+    reason: [`ran with ${survivors.join(", ")} only \u2014 ${describeConfigFailures(failures)}`, retried.reason].filter((s) => s !== void 0).join("; ")
   });
   missing_tools.push("semgrep");
   return finish("completed");
@@ -49094,7 +49163,10 @@ async function runSemgrep2(ctx, input, out, args) {
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
-  out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...gap !== null ? [gap] : []]));
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  out.tools_run.push(
+    withNotes(run.toolRun, [...plan.notes, ...gap !== null ? [gap] : [], ...engineNote !== null ? [engineNote] : []])
+  );
   const partial3 = run.toolRun.status === "ok" && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial3) out.missing_tools.push("semgrep");
   out.cancelled ||= run.cancelled;
@@ -50501,13 +50573,18 @@ var StillCarry = class {
 function isNarrowGapName(name) {
   return / \((partly parsed|rules not loaded): /.test(name);
 }
+var NARROW_GAP_FILES_NAMED = 5;
 function narrowGapNames(book) {
   const names = [];
   for (const run of book.tools_run) {
     if (run.status !== "ok") continue;
-    const parsed = run.partially_parsed ?? [];
+    const parsed = [...new Set((run.partially_parsed ?? []).map((pp) => pp.file))];
     const failed = run.failed_rules ?? [];
-    if (parsed.length > 0) names.push(`${run.name} (partly parsed: ${parsed.map((pp) => pp.file).join(", ")})`);
+    if (parsed.length > 0) {
+      const more = parsed.length - NARROW_GAP_FILES_NAMED;
+      const listed = [...parsed.slice(0, NARROW_GAP_FILES_NAMED), ...more > 0 ? [`+${more} more`] : []];
+      names.push(`${run.name} (partly parsed: ${listed.join(", ")})`);
+    }
     if (failed.length > 0) names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(", ")})`);
   }
   return names;
@@ -58851,16 +58928,21 @@ function recordSemgrepWp(args) {
   const { raw, run, projectPath, tools_run, missing_tools } = args;
   const check2 = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1, projectPath });
   if (check2.verdict === "ok") {
-    tools_run.push({ name: "semgrep-wp", status: "ok" });
+    tools_run.push(withSemgrepEngineNote({ name: "semgrep-wp", status: "ok" }, raw));
     return;
   }
   if (check2.verdict === "partial" && check2.partial !== void 0) {
-    tools_run.push({
-      name: "semgrep-wp",
-      status: "ok",
-      reason: describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
-      partially_parsed: check2.partial
-    });
+    tools_run.push(
+      withSemgrepEngineNote(
+        {
+          name: "semgrep-wp",
+          status: "ok",
+          reason: describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
+          partially_parsed: check2.partial
+        },
+        raw
+      )
+    );
     missing_tools.push("semgrep-wp");
     return;
   }

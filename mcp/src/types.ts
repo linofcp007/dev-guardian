@@ -584,6 +584,12 @@ export interface PartialParse {
   type: string;
   /** The first line of Semgrep's message. */
   message: string;
+  /**
+   * `Fixpoint timeout` entries only (`runners/semgrepReport.ts`): how many
+   * functions of this file the taint analysis gave up on. One entry per
+   * file, however many functions.
+   */
+  functions?: number;
 }
 
 /**

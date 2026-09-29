@@ -41,6 +41,26 @@ version bump.
   gave up on a function, never reported in `errors[]`) as it excludes rule timeouts.
 - `GUARDIAN_LLM_SRC`: the axis-3 corpus of `npm run ablate -- llm`.
 
+### Fixed
+
+- **A Semgrep run whose taint analysis gave up on a function no longer reads as complete.** When a
+  taint rule's analysis of one function runs past its budget, Semgrep drops that function and
+  reports it only under `time.fixpoint_timeouts` — `errors[]` empty, every file scanned — so every
+  such run read `ok`, coverage full. Measured: 644 on LibreChat and 77 on this repo's `mcp/src`
+  under `p/default` and the plugin's packs, and one true positive of the LLM pack
+  (`langchain_experimental/sql/base.py:178`) dropped out of 3 scans in 17 on a loaded machine. The
+  shared Semgrep judge now reads the field from the plain report (never `--time`, which grows
+  LibreChat's report from 1.7 MB to 94 MB) on every Semgrep run: `scan_sast` native, scoped and
+  Docker, `review_pr`, `bug_hunt`, `scan_wordpress`. The run is partial — "taint analysis
+  incomplete (Semgrep fixpoint timeout) in N function(s) across M file(s): a.py, +K more" — and the
+  files are stored in `partially_parsed` (type `Fixpoint timeout`, one entry per file): a finding
+  missing from one of them is not re-measured, never fixed (`diff_scans` and `regression_alert` now
+  name a few of a scan's partly measured files, then count the rest), and the CI gate treats it exactly as a
+  per-file `Timeout` (exit 2, never accepted by `--accept-partial-parse`). Under load most real
+  JS/Python scans now read partial; that is what they are. Semgrep before 1.170 does not emit the
+  field (1.86.0 through 1.120.1, measured): the run carries a named note that incomplete taint
+  analysis cannot be detected, said once beside the LLM pack's version note.
+
 ## [3.0.0] - 2026-09-28
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

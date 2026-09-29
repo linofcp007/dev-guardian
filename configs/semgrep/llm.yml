@@ -295,8 +295,15 @@
 # dois sentidos (o gpt-researcher 25 e 10, o AnythingLLM 36 e 45) — é da
 # carga da maquina, nao do pack. A ablação exclui estes
 # ficheiros como exclui os timeouts de regra (`mcp/test/ablate/semgrep.ts`).
-# O `scan_sast` ainda NAO os le: uma corrida com um timeout do ponto fixo
-# sai `ok`, e um resultado que caiu nao deixa rasto no relatorio.
+# O produto tambem os le (revisao 2, I-C), do relatorio normal e sem
+# `--time` (que so acrescenta perfis: 94 MB contra 1,7 MB no LibreChat): em
+# todas as corridas do Semgrep — `scan_sast` nativo, com ambito e em Docker,
+# `review_pr`, `bug_hunt`, `scan_wordpress` — um ficheiro com um timeout do
+# ponto fixo torna a corrida parcial, com o ficheiro nomeado
+# (`mcp/src/runners/semgrepReport.ts`), como um timeout de regra; um
+# resultado que falte nesse ficheiro fica "nao re-medido", nunca
+# "resolvido". Num Semgrep que nao escreve o campo (antes do 1.170) a
+# corrida leva uma nota com o nome disto, e nao passa a parcial.
 #
 # ---------------------------------------------------------------------------
 # A ABLAÇAO (`npm run ablate -- llm`).

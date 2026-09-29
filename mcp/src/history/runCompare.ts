@@ -776,14 +776,27 @@ function isNarrowGapName(name: string): boolean {
   return / \((partly parsed|rules not loaded): /.test(name);
 }
 
-/** `semgrep (partly parsed: a.php, b.js)` / `(rules not loaded: …)` for each run with a narrower gap. */
+/** How many files a run's narrower-gap name lists before "+N more" ({@link narrowGapNames}). */
+const NARROW_GAP_FILES_NAMED = 5;
+
+/**
+ * `semgrep (partly parsed: a.php, b.js)` / `(rules not loaded: …)` for each
+ * run with a narrower gap. The files are named once each and only the first
+ * few, then counted (`+N more`): a loaded scan's taint fixpoint timeouts put
+ * hundreds of files there (`runners/semgrepReport.ts`). Only a label — which
+ * finding is not re-measured is decided from `partially_parsed` itself.
+ */
 function narrowGapNames(book: Bookkeeping): string[] {
   const names: string[] = [];
   for (const run of book.tools_run) {
     if (run.status !== 'ok') continue;
-    const parsed = run.partially_parsed ?? [];
+    const parsed = [...new Set((run.partially_parsed ?? []).map((pp) => pp.file))];
     const failed = run.failed_rules ?? [];
-    if (parsed.length > 0) names.push(`${run.name} (partly parsed: ${parsed.map((pp) => pp.file).join(', ')})`);
+    if (parsed.length > 0) {
+      const more = parsed.length - NARROW_GAP_FILES_NAMED;
+      const listed = [...parsed.slice(0, NARROW_GAP_FILES_NAMED), ...(more > 0 ? [`+${more} more`] : [])];
+      names.push(`${run.name} (partly parsed: ${listed.join(', ')})`);
+    }
     if (failed.length > 0) names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(', ')})`);
   }
   return names;

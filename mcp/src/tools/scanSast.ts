@@ -30,7 +30,11 @@
  * warn-level `PartialParsing` — PHP's `const NAMESPACE` on 1.176.1 — a syntax
  * error in one file) is PARTIAL: `ok` and listed missing, the files named in
  * its reason and `partially_parsed` (what the CI gate's
- * `--accept-partial-parse` matches). Anything fatal is `failed` with the
+ * `--accept-partial-parse` matches). So is a run whose taint analysis gave
+ * up on a function (`time.fixpoint_timeouts`, never in `errors[]`): the file
+ * is named with type `Fixpoint timeout`, which the gate never accepts — the
+ * same as a per-rule `Timeout`. An engine that cannot report those (before
+ * 1.170) carries a named note instead. Anything fatal is `failed` with the
  * errors as its reason — except rules that did not load while the others
  * ran (a typo'd pattern in the project's `.semgrep.yml` or a registered
  * rule: exit 2, `paths.scanned` filled, the judge's `rules_not_loaded`).
@@ -114,12 +118,18 @@ import { hasFileWithExtension } from '../runners/projectFiles.js';
 import {
   CONTAINER_PACKS_ROOT,
   hasDotnetProject,
-  llmPackVersionNote,
   LLM_RULES_FILE,
   planSemgrepConfigs,
+  semgrepEngineNote,
 } from '../runners/semgrepConfigs.js';
-import { getString, parseInputAsJson } from '../runners/scannerParsers/index.js';
-import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
+import {
+  checkSemgrepReport,
+  describeNoRuleLoaded,
+  describePartialParse,
+  describeRulesNotLoaded,
+  pythonUtf8Env,
+  semgrepEngineOf,
+} from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
@@ -388,10 +398,10 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
     // A rule that did not load is named as its findings are stored.
     ruleIdOf: localRuleIdNormalizer(configs, rules),
   });
-  // The pack ran on an engine older than the one it was measured on: say
-  // what that engine misses (runners/semgrepConfigs.ts).
-  const versionNote = configs.length > loadedFrom.length ? llmPackVersionNote(semgrepVersionOf(raw)) : null;
-  const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(versionNote !== null ? [versionNote] : [])];
+  // What the engine that ran cannot do — report fixpoint timeouts, resolve
+  // the pack's node: imports — said once (runners/semgrepConfigs.ts).
+  const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
+  const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(engineNote !== null ? [engineNote] : [])];
 
   if (check.verdict === 'ok') {
     const run: ToolRun = { name: 'semgrep', status: 'ok' };
@@ -579,8 +589,8 @@ async function runSemgrepOnScope(args: Collect & {
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
-  const versionNote = plan.pluginPacks.length > 0 ? llmPackVersionNote(semgrepVersionOf(run.reports[0] ?? null)) : null;
-  const scopeNotes = [...plan.notes, ...(versionNote !== null ? [versionNote] : [])];
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const scopeNotes = [...plan.notes, ...(engineNote !== null ? [engineNote] : [])];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== undefined).join('; ');
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;
@@ -833,12 +843,6 @@ function customAfterTargetsSetters(projectPath: string): string[] {
     }
   }
   return [...out].sort();
-}
-
-/** The `version` a Semgrep JSON report carries, or undefined. */
-function semgrepVersionOf(raw: unknown): string | undefined {
-  if (raw === null || raw === undefined) return undefined;
-  return getString(parseInputAsJson(raw), 'version');
 }
 
 /**

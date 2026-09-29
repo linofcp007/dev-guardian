@@ -5,7 +5,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkSemgrepReport, describePartialParse, describeRulesNotLoaded } from '../../../src/runners/semgrepReport.js';
+import {
+  checkSemgrepReport,
+  describePartialParse,
+  describeRulesNotLoaded,
+  FIXPOINT_TIMEOUT_TYPE,
+  semgrepEngineOf,
+} from '../../../src/runners/semgrepReport.js';
+import { semgrepEngineNote } from '../../../src/runners/semgrepConfigs.js';
 
 const report = (over: Record<string, unknown> = {}): string =>
   JSON.stringify({ results: [], errors: [], paths: { scanned: ['a.py'] }, ...over });
@@ -327,6 +334,164 @@ describe('checkSemgrepReport: a refused rule configuration', () => {
     });
     expect(r.rules_not_loaded?.map((x) => x.rule_id)).toEqual(['y']);
     expect(r.rule_config_error).toBeUndefined();
+  });
+});
+
+/**
+ * Review of the LLM pack, round 2 (I-C): a taint rule whose dataflow analysis
+ * of one function runs past its budget is given up on that function. Semgrep
+ * says so only under `time.fixpoint_timeouts` — never in `errors[]`, and
+ * `paths.scanned` stays full — so the judge read such a run as complete. It
+ * is the same class as a per-rule Timeout: the file was not fully analysed.
+ */
+describe('checkSemgrepReport: taint fixpoint timeouts (time.fixpoint_timeouts)', () => {
+  // The 1.176.1 shape, verbatim but for the path (LangChain experimental, measured).
+  const fixpoint = (path: string, line = 152): Record<string, unknown> => ({
+    error_type: 'Fixpoint timeout',
+    severity: 'warn',
+    message: `Fixpoint timeout while performing taint analysis at ${path}:${line}:4 [rules: 1, first: llm-output-to-interpreter-py]`,
+    location: { path, start: { line, col: 5, offset: 5084 }, end: { line, col: 34, offset: 5113 } },
+  });
+  const time = (...entries: unknown[]): Record<string, unknown> => ({ time: { fixpoint_timeouts: entries } });
+  const check = (over: Record<string, unknown>, exitCode = 0, projectPath?: string) =>
+    checkSemgrepReport({
+      raw: report(over),
+      exitCode,
+      outcome: exitCode === 0 ? 'completed' : 'failed',
+      targets: 1,
+      ...(projectPath !== undefined ? { projectPath } : {}),
+    });
+
+  it('errors: [] and every file scanned, but a fixpoint timeout: partial, the file named — never ok', () => {
+    const r = check({ paths: { scanned: ['sql/base.py', 'b.ts'] }, ...time(fixpoint('sql/base.py', 113)) });
+    expect(r.ok).toBe(false);
+    expect(r.verdict).toBe('partial');
+    expect(r.errors).toBe(0);
+    expect(r.partial).toEqual([
+      {
+        file: 'sql/base.py',
+        type: FIXPOINT_TIMEOUT_TYPE,
+        message: 'taint analysis gave up on 1 function(s) here (Semgrep fixpoint timeout)',
+        functions: 1,
+      },
+    ]);
+    expect(r.reason).toBe('taint analysis incomplete (Semgrep fixpoint timeout) in 1 function(s) across 1 file(s): sql/base.py');
+  });
+
+  it('one entry per file, the functions counted; project-relative and /-separated (Windows, the container)', () => {
+    const win = check(
+      { ...time(fixpoint('libs\\sql\\base.py', 113), fixpoint('libs\\sql\\base.py', 200), fixpoint('C:\\p\\b.ts')) },
+      1,
+      'C:\\p',
+    );
+    expect(win.verdict).toBe('partial');
+    expect(win.partial?.map((p) => [p.file, p.functions])).toEqual([['libs/sql/base.py', 2], ['b.ts', 1]]);
+    expect(win.reason).toMatch(/in 3 function\(s\) across 2 file\(s\): libs\/sql\/base\.py, b\.ts$/);
+    const container = check({ ...time(fixpoint('/src/app/x.py')) }, 0, '/src');
+    expect(container.partial?.map((p) => p.file)).toEqual(['app/x.py']);
+  });
+
+  it('names a few files, then "+N more"', () => {
+    const r = check({ ...time(...Array.from({ length: 8 }, (_, i) => fixpoint(`f${i}.py`))) });
+    expect(r.partial).toHaveLength(8);
+    expect(r.reason).toBe(
+      'taint analysis incomplete (Semgrep fixpoint timeout) in 8 function(s) across 8 file(s): f0.py, f1.py, f2.py, f3.py, f4.py, +3 more',
+    );
+  });
+
+  it('beside a per-file parse error: partial, both kept', () => {
+    const parse = { level: 'warn', type: 'PartialParsing', message: 'Syntax error at a.php:3', path: 'a.php' };
+    const r = check({ errors: [parse], ...time(fixpoint('b.py')) });
+    expect(r.verdict).toBe('partial');
+    expect(r.partial?.map((p) => `${p.type}:${p.file}`)).toEqual(['PartialParsing:a.php', 'Fixpoint timeout:b.py']);
+  });
+
+  it('beside rules that did not load: the fixpoint files join the per-file problems', () => {
+    const rule = { code: 2, level: 'error', type: 'Rule parse error', rule_id: 'y', message: 'Rule parse error in rule y:\n bad' };
+    const r = check({ errors: [rule], ...time(fixpoint('b.py')) }, 2);
+    expect(r.rules_not_loaded?.map((x) => x.rule_id)).toEqual(['y']);
+    expect(r.partial?.map((p) => `${p.type}:${p.file}`)).toEqual(['Fixpoint timeout:b.py']);
+  });
+
+  it('an entry that names no file cannot be scoped: failed, the conservative reading (as for an error naming none)', () => {
+    const r = check({ ...time({ error_type: 'Fixpoint timeout', severity: 'warn', message: 'Fixpoint timeout' }) });
+    expect(r.verdict).toBe('failed');
+    expect(r.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\), 1 of them in no named file/);
+  });
+
+  it('an empty list, or none at all (engines before 1.170): ok', () => {
+    expect(check({ ...time() }).verdict).toBe('ok');
+    expect(check({}).verdict).toBe('ok');
+  });
+
+  it('describePartialParse: the parse files as before, the fixpoint files bounded, each with its own consequence', () => {
+    const parse = { file: 'a.php', type: 'PartialParsing', message: 'x' };
+    const fix = (file: string, functions: number) => ({ file, type: FIXPOINT_TIMEOUT_TYPE, message: 'm', functions });
+    expect(describePartialParse([parse, fix('b.py', 2), fix('c.ts', 1)], 'findings in the unparsed spans may be missing')).toBe(
+      'partial: 1 file(s) only partly parsed — findings in the unparsed spans may be missing (PartialParsing: a.php); ' +
+        'partial: taint analysis incomplete (Semgrep fixpoint timeout) in 3 function(s) across 2 file(s): b.py, c.ts — ' +
+        'taint findings in those functions may be missing',
+    );
+    const many = Array.from({ length: 7 }, (_, i) => fix(`f${i}.py`, 1));
+    expect(describePartialParse(many, 'x')).toMatch(/across 7 file\(s\): f0\.py, f1\.py, f2\.py, f3\.py, f4\.py, \+2 more — /);
+  });
+});
+
+/**
+ * Whether the engine that wrote a report says anything about fixpoint
+ * timeouts: 1.170.1 and 1.176.1 always carry `time.fixpoint_timeouts` (an
+ * empty list on a clean run, with or without `--time`); 1.86.0, 1.95.0,
+ * 1.99.0 and 1.120.1 never do (measured). Absence only counts on a report
+ * that names its version and scanned files.
+ */
+describe('semgrepEngineOf', () => {
+  it('reads the version and whether fixpoint timeouts are reported', () => {
+    expect(semgrepEngineOf(report({ version: '1.176.1', time: { fixpoint_timeouts: [] } }))).toEqual({
+      version: '1.176.1',
+      fixpointTimeoutsReported: true,
+    });
+    expect(semgrepEngineOf(report({ version: '1.120.1' }))).toEqual({ version: '1.120.1', fixpointTimeoutsReported: false });
+  });
+
+  it('says nothing it cannot know: no version, nothing scanned, no report', () => {
+    expect(semgrepEngineOf(report())).toEqual({});
+    expect(semgrepEngineOf(report({ version: '1.120.1', paths: { scanned: [] } }))).toEqual({ version: '1.120.1' });
+    expect(semgrepEngineOf(null)).toEqual({});
+    expect(semgrepEngineOf('{nope')).toEqual({});
+  });
+});
+
+/**
+ * The one note a run carries about its engine: an engine that cannot report
+ * fixpoint timeouts, and one older than the LLM pack was measured on, said
+ * once — never two sentences each starting "this Semgrep (x.y.z)".
+ */
+describe('semgrepEngineNote', () => {
+  const FIXPOINT = 'does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected';
+
+  it('an engine without the field: the named note, pack or no pack', () => {
+    expect(semgrepEngineNote({ version: '1.120.1', fixpointTimeoutsReported: false }, { llmPack: false })).toBe(
+      `this Semgrep (1.120.1) ${FIXPOINT}`,
+    );
+  });
+
+  it('with the pack on an engine older than it was measured on: one note, the engine named once', () => {
+    const both = semgrepEngineNote({ version: '1.86.0', fixpointTimeoutsReported: false }, { llmPack: true }) ?? '';
+    expect(both.startsWith(`this Semgrep (1.86.0) ${FIXPOINT}; nor does it resolve`)).toBe(true);
+    expect(both).toMatch(/llm\.yml was measured on Semgrep 1\.176\.1, and its child_process coverage is reduced \(154 of 172/);
+    expect(both.match(/this Semgrep/g)).toHaveLength(1);
+    const llmOnly = semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true }, { llmPack: true }) ?? '';
+    expect(llmOnly).toMatch(/^this Semgrep \(1\.170\.1\) does not resolve `import … from 'node:child_process'` in taint mode — llm\.yml/);
+    expect(llmOnly).not.toMatch(/fixpoint/);
+  });
+
+  it('nothing to say: a current engine, an unknown one, or the pack not run on a new-enough engine', () => {
+    expect(semgrepEngineNote({ version: '1.176.1', fixpointTimeoutsReported: true }, { llmPack: true })).toBeNull();
+    expect(semgrepEngineNote({ version: '1.180.0', fixpointTimeoutsReported: true }, { llmPack: true })).toBeNull();
+    expect(semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true }, { llmPack: false })).toBeNull();
+    expect(semgrepEngineNote({}, { llmPack: true })).toBeNull();
+    // A version but no word on the field (nothing scanned): only the pack's half.
+    expect(semgrepEngineNote({ version: '1.86.0' }, { llmPack: false })).toBeNull();
   });
 });
 

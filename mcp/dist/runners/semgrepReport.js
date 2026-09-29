@@ -45,10 +45,42 @@
  * `ok` stays true only for the first, so a caller that reads nothing else
  * (`fixpr/apply.ts`, `compliance_check`) keeps treating a partial run as
  * not done.
+ *
+ * ---- Taint fixpoint timeouts --------------------------------------------
+ *
+ * One more way to look complete: a taint rule whose dataflow analysis of
+ * one function runs past its budget is given up on that function, and what
+ * it had not found yet is lost. Semgrep does not put that in `errors[]` —
+ * `errors` stays empty and `paths.scanned` full — but only under
+ * `time.fixpoint_timeouts` (`error_type: "Fixpoint timeout"`, the file and
+ * the function's line in `location`). Measured: present on 1.170.1 and
+ * 1.176.1 in every JSON report, with or without `--time` (an empty list on
+ * a clean run); absent on 1.86.0, 1.95.0, 1.99.0 and 1.120.1 even with it.
+ * `--time` is never needed, and never passed: it adds per-target profiling
+ * (LibreChat: 94 MB against 1.7 MB). 644 of them on LibreChat and 77 on this
+ * repo's own `mcp/src` under `p/default` + the plugin's packs, and a true
+ * positive of the LLM pack dropped out of 3 scans in 17, each with a
+ * fixpoint timeout on its function.
+ *
+ * A file named there was not fully analysed — the same class as a per-rule
+ * `Timeout` in `errors[]` — so it joins the per-file problems: an otherwise
+ * complete run is `partial`, one entry per file (type
+ * {@link FIXPOINT_TIMEOUT_TYPE}, its function count in `functions`), and the
+ * reason names a few files and counts the rest. A timeout marks the function
+ * incomplete rather than empty — a scan once reported the very finding its
+ * function timed out on — but the file's result cannot be trusted either
+ * way. An entry that names no file cannot be scoped to one, and makes the
+ * run `failed`, as an error naming no file does. An engine that does not
+ * emit the field cannot say: {@link semgrepEngineOf}, and the note callers
+ * add (`semgrepConfigs.ts#semgrepEngineNote`).
  */
-import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from './scannerParsers/index.js';
+import { asArray, getProp, getString, parseInputAsJson, toPosixPath, toRelativeIfPossible } from './scannerParsers/index.js';
 /** Longest error text carried into a reason. */
 const MAX_ERROR_TEXT = 300;
+/** The `error_type` of a `time.fixpoint_timeouts` entry, and the `PartialParse.type` its file is stored under. */
+export const FIXPOINT_TIMEOUT_TYPE = 'Fixpoint timeout';
+/** How many files a fixpoint-timeout reason names before "+N more". The stored list keeps every one. */
+export const FIXPOINT_FILES_NAMED = 5;
 /**
  * Error types that describe the rules or the configuration, never one target
  * file — fatal wherever they appear, even when the entry carries a path.
@@ -73,6 +105,10 @@ export function checkSemgrepReport(args) {
     const errorEntries = asArray(getProp(root, 'errors'));
     const errors = describeErrors(errorEntries);
     const exitClean = exitCode === 0 || exitCode === 1;
+    // Functions the taint analysis gave up on (the module comment): per file,
+    // project-relative, beside `errors[]` rather than in it.
+    const fixpoint = fixpointTimeoutsOf(root);
+    const fixpointFiles = relative(fixpoint.files);
     const problems = [];
     if (!exitClean)
         problems.push(`exit ${String(exitCode)}`);
@@ -81,43 +117,119 @@ export function checkSemgrepReport(args) {
     if (errors.length > 0) {
         problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join('; '))}`);
     }
+    if (fixpoint.functions > 0)
+        problems.push(describeFixpointTimeouts(fixpointFiles, fixpoint.unscoped));
     if (problems.length === 0)
         return { ok: true, verdict: 'ok', scanned, errors: 0 };
     const reason = problems.join('; ');
-    if (exitClean && scanned === 0 && errors.length === 0) {
+    if (exitClean && scanned === 0 && errors.length === 0 && fixpoint.functions === 0) {
         return { ok: false, verdict: 'scanned_nothing', scanned, errors: 0, reason };
     }
-    if (exitClean && scanned > 0 && errors.length > 0) {
-        const partial = perFileErrors(errorEntries);
+    if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
+        const partial = errors.length > 0 ? perFileErrors(errorEntries) : [];
         if (partial !== null) {
-            return { ok: false, verdict: 'partial', scanned, errors: errors.length, reason, partial: relative(partial) };
+            return { ok: false, verdict: 'partial', scanned, errors: errors.length, reason, partial: [...relative(partial), ...fixpointFiles] };
         }
     }
     const failed = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
     const configError = ruleConfigError(errorEntries);
     if (configError !== null)
         failed.rule_config_error = configError;
-    if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
+    if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0) && fixpoint.unscoped === 0) {
         const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
         if (ruleGap !== null) {
             const { rule_config_error: _whole, ...someRan } = failed;
+            const files = [...relative(ruleGap.files), ...fixpointFiles];
             return {
                 ...someRan,
                 rules_not_loaded: ruleGap.rules,
-                ...(ruleGap.files.length > 0 ? { partial: relative(ruleGap.files) } : {}),
+                ...(files.length > 0 ? { partial: files } : {}),
             };
         }
     }
     return failed;
 }
 /**
+ * The files `time.fixpoint_timeouts` names (the module comment), one entry
+ * per file in the order first reported, each with its function count; how
+ * many functions in all; and how many entries named no file.
+ */
+function fixpointTimeoutsOf(root) {
+    const entries = asArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts'));
+    const files = [];
+    let unscoped = 0;
+    for (const entry of entries) {
+        const path = getString(getProp(entry, 'location'), 'path');
+        if (path === undefined || path.length === 0) {
+            unscoped += 1;
+            continue;
+        }
+        const file = toPosixPath(path);
+        const known = files.find((f) => f.file === file);
+        if (known !== undefined) {
+            known.functions = (known.functions ?? 0) + 1;
+            known.message = fixpointMessage(known.functions);
+        }
+        else {
+            files.push({ file, type: FIXPOINT_TIMEOUT_TYPE, message: fixpointMessage(1), functions: 1 });
+        }
+    }
+    return { files, functions: entries.length, unscoped };
+}
+/** The one-line message a fixpoint file's entry carries — its own, never Semgrep's (which repeats the path and rule list per function). */
+function fixpointMessage(functions) {
+    return `taint analysis gave up on ${functions} function(s) here (Semgrep fixpoint timeout)`;
+}
+/**
+ * `taint analysis incomplete (Semgrep fixpoint timeout) in N function(s)
+ * across M file(s): a.py, b.ts, +K more` — at most
+ * {@link FIXPOINT_FILES_NAMED} files named; with `unscoped`, how many
+ * functions no file was named for.
+ */
+function describeFixpointTimeouts(files, unscoped = 0) {
+    const functions = files.reduce((n, f) => n + (f.functions ?? 1), 0) + unscoped;
+    const named = files.slice(0, FIXPOINT_FILES_NAMED).map((f) => f.file);
+    const more = files.length - named.length;
+    const list = [...named, ...(more > 0 ? [`+${more} more`] : [])].join(', ');
+    return (`taint analysis incomplete (Semgrep fixpoint timeout) in ${functions} function(s)` +
+        (unscoped > 0 ? `, ${unscoped} of them in no named file` : '') +
+        (files.length > 0 ? ` across ${files.length} file(s): ${list}` : ''));
+}
+export function semgrepEngineOf(raw) {
+    if (raw === null || raw === undefined)
+        return {};
+    const root = parseInputAsJson(raw);
+    if (root === null || typeof root !== 'object' || Array.isArray(root))
+        return {};
+    const version = getString(root, 'version');
+    if (version === undefined || version.length === 0)
+        return {};
+    if (Array.isArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts')))
+        return { version, fixpointTimeoutsReported: true };
+    const scanned = asArray(getProp(getProp(root, 'paths'), 'scanned')).length;
+    return scanned > 0 ? { version, fixpointTimeoutsReported: false } : { version };
+}
+/**
  * The reason a `partial` run carries: `partial: N file(s) only partly parsed
- * — <what may be missing> (PartialParsing: a.php; Syntax error: b.js)`.
+ * — <what may be missing> (PartialParsing: a.php; Syntax error: b.js)`, and
+ * for the files a taint analysis gave up on, `partial: taint analysis
+ * incomplete (Semgrep fixpoint timeout) in N function(s) across M file(s):
+ * a.py, +K more — taint findings in those functions may be missing` (a few
+ * named: there can be hundreds).
  */
 export function describePartialParse(partial, consequence) {
-    const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
-    const files = new Set(partial.map((p) => p.file)).size;
-    return `partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`;
+    const parsed = partial.filter((p) => p.type !== FIXPOINT_TIMEOUT_TYPE);
+    const fixpoint = partial.filter((p) => p.type === FIXPOINT_TIMEOUT_TYPE);
+    const parts = [];
+    if (parsed.length > 0) {
+        const listed = parsed.map((p) => `${p.type}: ${p.file}`).join('; ');
+        const files = new Set(parsed.map((p) => p.file)).size;
+        parts.push(`partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`);
+    }
+    if (fixpoint.length > 0) {
+        parts.push(`partial: ${describeFixpointTimeouts(fixpoint)} — taint findings in those functions may be missing`);
+    }
+    return parts.join('; ');
 }
 /**
  * The reason a run whose rules did not all load carries — every caller's

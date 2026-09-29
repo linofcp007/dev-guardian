@@ -31,6 +31,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspectCustomSemgrepConfigs, legacyRegistrationNote, legacyRegistrationsNotApplied, } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import { semgrepEngineOf } from './semgrepReport.js';
 import { pluginPacksDir } from './semgrepRuleIds.js';
 /** The plugin's LLM-application pack, by file name in `configs/semgrep/`. */
 export const LLM_RULES_FILE = 'llm.yml';
@@ -43,34 +44,69 @@ export const CONTAINER_PACKS_ROOT = '/guardian-packs';
 /**
  * The Semgrep the LLM pack was measured on. Older engines (1.86.0 through
  * 1.170.1, measured) do not resolve `import … from 'node:child_process'` in
- * taint mode, so the JS rule misses those sinks there.
+ * taint mode, so the JS rule misses those sinks there ({@link semgrepEngineNote}).
  */
 export const LLM_PACK_MEASURED_SEMGREP = '1.176.1';
-/**
- * The note a run carries when the Semgrep that ran (the report's `version`)
- * is older than {@link LLM_PACK_MEASURED_SEMGREP}; null when it is not, or
- * when the version is unknown.
- */
-export function llmPackVersionNote(version) {
-    if (version === undefined)
-        return null;
+/** Whether `version` is older than `than` (both `x.y.z`); false when either cannot be read. */
+function olderThan(version, than) {
     const parse = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
     const have = parse(version);
-    const need = parse(LLM_PACK_MEASURED_SEMGREP);
-    if (have.some((n) => Number.isNaN(n)))
-        return null;
+    const need = parse(than);
+    if (have.some((n) => Number.isNaN(n)) || need.some((n) => Number.isNaN(n)))
+        return false;
     for (let i = 0; i < 3; i += 1) {
         const a = have[i] ?? 0;
         const b = need[i] ?? 0;
-        if (a !== b) {
-            if (a > b)
-                return null;
-            return (`${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version}, which does not ` +
-                "resolve `import … from 'node:child_process'` in taint mode — the pack's child_process coverage is reduced " +
-                '(154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)');
-        }
+        if (a !== b)
+            return a < b;
     }
+    return false;
+}
+/**
+ * The one note a Semgrep run carries about the engine that ran it (its
+ * report's `version`, `semgrepReport.ts#semgrepEngineOf`), or null when there
+ * is nothing to say. Two things an older engine cannot do, said once, the
+ * engine named once:
+ *
+ *   - report taint fixpoint timeouts (`time.fixpoint_timeouts`, absent
+ *     before 1.170): a function its taint analysis gave up on is invisible,
+ *     so a complete-looking run may not be — a note, not a partial;
+ *   - with the plugin's LLM pack (`llmPack`), resolve `import … from
+ *     'node:child_process'` in taint mode: older than
+ *     {@link LLM_PACK_MEASURED_SEMGREP}, the pack's JS rule misses those sinks
+ *     (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1).
+ */
+export function semgrepEngineNote(engine, opts) {
+    const version = engine.version;
+    if (version === undefined)
+        return null;
+    const fixpoint = engine.fixpointTimeoutsReported === false;
+    const llm = opts.llmPack && olderThan(version, LLM_PACK_MEASURED_SEMGREP);
+    const childProcess = "resolve `import … from 'node:child_process'` in taint mode — " +
+        `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced ` +
+        '(154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)';
+    const fixpointNote = 'does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected';
+    if (fixpoint && llm)
+        return `this Semgrep (${version}) ${fixpointNote}; nor does it ${childProcess}`;
+    if (fixpoint)
+        return `this Semgrep (${version}) ${fixpointNote}`;
+    if (llm)
+        return `this Semgrep (${version}) does not ${childProcess}`;
     return null;
+}
+/**
+ * `run` with {@link semgrepEngineNote} for the engine that wrote `raw`
+ * appended to its reason — on a run that scanned (`ok`, full or with a
+ * narrower gap) only: a failed or skipped run's reason is about something
+ * else. For callers that never run the LLM pack (bug_hunt, scan_wordpress).
+ */
+export function withSemgrepEngineNote(run, raw) {
+    if (run.status !== 'ok')
+        return run;
+    const note = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: false });
+    if (note === null)
+        return run;
+    return { ...run, reason: [run.reason, note].filter((s) => s !== undefined).join('; ') };
 }
 export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const inspection = inspectProjectSemgrepConfigs(projectPath);
