@@ -228,6 +228,41 @@ describe('parseScan', () => {
       SemgrepFailure,
     );
   });
+
+  // The llm pack's review, round 2 (I-C): taint analysis that gives up on a
+  // function is reported ONLY in `time.fixpoint_timeouts` (Semgrep 1.170+,
+  // with or without --time), never in `errors[]`, and the findings in that
+  // function are silently gone. The file is not finished, exactly like a
+  // rule timeout — measured: langchain_experimental/sql/base.py:178 dropped
+  // out of 3 scans in 17, each with a fixpoint timeout on `_call`.
+  it('collects files where taint analysis hit a fixpoint timeout, from time.fixpoint_timeouts', () => {
+    const fixpoint = (path: string, line: number): unknown => ({
+      error_type: 'Fixpoint timeout',
+      severity: 'warn',
+      message: `Fixpoint timeout while performing taint analysis at ${path}:${String(line)}:4 [rules: 1, first: llm-x]`,
+      location: { path, start: { line, col: 5, offset: 0 }, end: { line, col: 9, offset: 4 } },
+    });
+    const parsed = parseScan(
+      doc({
+        errors: [],
+        time: { fixpoint_timeouts: [fixpoint('/corpus/sql/base.py', 136), fixpoint('/corpus/sql/base.py', 200), fixpoint('/corpus/gen.py', 9)] },
+      }),
+      '/corpus',
+      '/corpus',
+    );
+    expect(parsed.abortedFiles).toEqual(['gen.py', 'sql/base.py']);
+    expect(parsed.unscopedAborts).toBe(0);
+    expect(parsed.errors).toEqual([]);
+  });
+
+  it('counts a fixpoint timeout that names no file instead of silently ignoring it', () => {
+    const parsed = parseScan(
+      doc({ time: { fixpoint_timeouts: [{ error_type: 'Fixpoint timeout', severity: 'warn', message: 'x' }] } }),
+      '/corpus',
+      '/corpus',
+    );
+    expect(parsed.unscopedAborts).toBe(1);
+  });
 });
 
 /**

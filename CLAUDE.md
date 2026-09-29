@@ -328,6 +328,20 @@ actually makes.
   abandons rules without touching it. That count read 11 800 on both of the
   two `dotnet/runtime` runs that disagreed by five findings. What moved was in
   `errors`, which is why `ScanResult` now carries `abortedFiles`.
+  The **seventh** mode is quieter still, and is not in `errors` at all: the
+  **taint fixpoint timeout**. When a taint rule's dataflow analysis of one
+  function runs past its budget, Semgrep gives that function up and whatever
+  it had not yet found is lost; `errors` stays empty and `paths.scanned` full. It is
+  reported only under `time.fixpoint_timeouts` — present on Semgrep 1.170+
+  with or without `--time`, absent on 1.86 and 1.120 even with it (measured).
+  The `llm` pack's second review measured one true positive dropping out of 3
+  scans in 17, each with a fixpoint timeout on the function holding it; on
+  this repo's `mcp/src` with `p/default`, two consecutive scans reported 77
+  and 35 fixpoint timeouts and disagreed on one finding. A timeout marks the
+  function *incomplete* rather than empty — one corpus scan timed out on the
+  very function holding that true positive and still reported it — so it is
+  a file whose result cannot be trusted, not a proof of a loss. The harness
+  adds those files to `abortedFiles`; `scan_sast` does not read the field yet.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather
