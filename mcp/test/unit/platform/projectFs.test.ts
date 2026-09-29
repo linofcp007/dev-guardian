@@ -42,7 +42,7 @@ const fast = <T>(fn: () => T): T => {
 describe('readProjectText', () => {
   it('reads a regular file inside the project, stripping a byte-order mark', () => {
     const root = makeTempDir('pfs-');
-    writeFileSync(join(root, 'a.txt'), '﻿hello', 'utf8');
+    writeFileSync(join(root, 'a.txt'), '\uFEFFhello', 'utf8');
     expect(readProjectText(root, 'a.txt')).toEqual({ status: 'ok', text: 'hello' });
     expect(readProjectText(root, join(root, 'a.txt'))).toEqual({ status: 'ok', text: 'hello' });
   });
