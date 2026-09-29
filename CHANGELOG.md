@@ -90,6 +90,12 @@ version bump.
   `PYTHONUTF8` unset, a file named `日本.py` made Semgrep exit 2 without a report on Windows, and `bug_hunt` read
   "semgrep report is not valid JSON (exit 2)" (reproduced with Semgrep 1.176.1). Every Semgrep spawn now goes
   through one helper (`runners/semgrepRun.ts`), and a test fails on any that bypasses it.
+- `scan_sast` names the files Semgrep ignored for their size. Semgrep skips a target over `--max-target-bytes`
+  (1 000 000 by default) in silence — `paths.skipped` only under `--verbose`: a 1.16 MB `big.py` beside a small
+  one read coverage full, and alone read "nothing here is a language its rules cover". dev-guardian now stats the
+  files the scanners read (the same listing and ignores as the project-languages check, `.guardianignore`
+  included) and names those over the limit — `ok`, `semgrep` missing, coverage partial — and, when nothing else
+  was scanned, gives the size limit as the reason. Scoped scans too.
 
 ## [3.0.0] - 2026-09-29
 

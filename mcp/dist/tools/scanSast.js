@@ -103,6 +103,7 @@ import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConf
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, semgrepEngineOf, withPluginPackFixpoint, } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import { describeOversized, oversizedSourceFilesAsync } from '../frameworks/projectLanguages.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
 import { makeScanTool, } from './scanToolFactory.js';
@@ -226,7 +227,7 @@ async function runSemgrep(args) {
         });
         recordSemgrepRun({
             ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
-            packMissing: plan.packMissing, tools_run, missing_tools, parser_inputs,
+            packMissing: plan.packMissing, oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files, tools_run, missing_tools, parser_inputs,
         });
         return;
     }
@@ -279,7 +280,8 @@ async function runSemgrep(args) {
     });
     recordSemgrepRun({
         ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
-        packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir, tools_run, missing_tools, parser_inputs,
+        packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir, oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
+        tools_run, missing_tools, parser_inputs,
     });
 }
 function recordSemgrepRun(args) {
@@ -332,12 +334,17 @@ function judgeSemgrepRun(args) {
     // the pack's node: imports — said once (runners/semgrepConfigs.ts).
     const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
     const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(engineNote !== null ? [engineNote] : [])];
+    // Files Semgrep ignored for their size (review M1): a gap on any run that ran.
+    const sizeNote = args.oversized.length > 0 ? describeOversized(args.oversized) : null;
     if (check.verdict === 'ok') {
         const run = { name: 'semgrep', status: 'ok' };
-        if (reasons.length > 0)
-            run.reason = reasons.join('; ');
+        const all = [...reasons, ...(sizeNote !== null ? [sizeNote] : [])];
+        if (all.length > 0)
+            run.reason = all.join('; ');
         // The plugin's pack's own gap (round 3, N-1): noted, never the scan's.
         tools_run.push(withPluginPackFixpoint(run, packGap));
+        if (sizeNote !== null)
+            missing_tools.push('semgrep');
         return;
     }
     if (check.verdict === 'partial' && check.partial !== undefined) {
@@ -347,7 +354,11 @@ function judgeSemgrepRun(args) {
         tools_run.push(withPluginPackFixpoint({
             name: 'semgrep',
             status: 'ok',
-            reason: [...reasons, describePartialParse(check.partial, 'findings in the unparsed spans may be missing')].join('; '),
+            reason: [
+                ...reasons,
+                describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
+                ...(sizeNote !== null ? [sizeNote] : []),
+            ].join('; '),
             partially_parsed: check.partial,
         }, packGap));
         missing_tools.push('semgrep');
@@ -355,11 +366,17 @@ function judgeSemgrepRun(args) {
     }
     if (check.verdict === 'scanned_nothing') {
         // No file in the project is one any loaded rule applies to: a gap, not
-        // a clean result — and not a broken scanner either.
+        // a clean result — and not a broken scanner either. Unless the files it
+        // would have read were only too large: that is the reason, then.
         tools_run.push({
             name: 'semgrep',
             status: 'skipped',
-            reason: [...reasons, 'semgrep scanned 0 files — nothing here is a language its rules cover'].join('; '),
+            reason: [
+                ...reasons,
+                sizeNote !== null
+                    ? `semgrep scanned 0 files — ${sizeNote}`
+                    : 'semgrep scanned 0 files — nothing here is a language its rules cover',
+            ].join('; '),
         });
         missing_tools.push('semgrep');
         return;
@@ -392,6 +409,7 @@ function judgeSemgrepRun(args) {
                 ...reasons,
                 describeRulesNotLoaded(notLoaded, check.scanned),
                 ...(check.partial !== undefined ? [describePartialParse(check.partial, 'findings in the unparsed spans may be missing')] : []),
+                ...(sizeNote !== null ? [sizeNote] : []),
             ].join('; '),
             failed_rules: notLoaded,
         };
@@ -514,7 +532,12 @@ async function runSemgrepOnScope(args) {
     // No rule applied to any file in scope: a gap, not a clean result. Files
     // only partly parsed, rules that did not load, the plugin's pack missing
     // from disk: ran, with a narrower gap inside it (`ok` + missing).
-    const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
+    // Scoped files Semgrep ignores for their size (review M1): named, a gap.
+    const oversized = (await oversizedSourceFilesAsync(ctx.projectPath, { only: files })).files;
+    if (oversized.length > 0) {
+        entry.reason = [entry.reason, describeOversized(oversized)].filter((s) => s !== undefined).join('; ');
+    }
+    const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing || oversized.length > 0;
     if (run.nothingScanned || (entry.status === 'ok' && narrower))
         missing_tools.push('semgrep');
 }

@@ -80,7 +80,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { git, splitNul } from '../runners/git.js';
@@ -525,6 +525,94 @@ export async function languagesFromFilesAsync(root: string, opts: WalkOptions = 
   if (listed !== null) return fromFiles('git', listed, exclusions);
   const walked = await walkAsync(root, exclusions, opts);
   return fromFiles('walk', walked?.files ?? null, exclusions, walked?.incomplete);
+}
+
+// ---------------------------------------------------------------- files too large for Semgrep
+
+/** Semgrep's `--max-target-bytes` default (1.176.1: "Defaults to 1000000 bytes"): a larger target is ignored. */
+export const SEMGREP_MAX_TARGET_BYTES = 1_000_000;
+
+export interface OversizedFile {
+  /** Project-relative, `/`-separated. */
+  path: string;
+  bytes: number;
+}
+
+export interface OversizedFiles {
+  files: OversizedFile[];
+  /** Why the listing may have missed some. Absent: it did not. */
+  incomplete?: string;
+}
+
+/** Whether `rel` is a file the scanners read with a source language — see the module comment. */
+function isScannedSource(rel: string, exclusions: Exclusions): boolean {
+  if (languageOfFile(rel) === null && !/\.h$/i.test(rel)) return false;
+  const segments = rel.split('/');
+  for (let i = 1; i < segments.length; i++) {
+    if (exclusions.layer(segments.slice(0, i).join('/'), true) !== null) return false;
+  }
+  return exclusions.layer(rel) === null;
+}
+
+async function sizesOver(root: string, rels: readonly string[], limit: number): Promise<OversizedFile[]> {
+  const out: OversizedFile[] = [];
+  const BATCH = 64;
+  for (let i = 0; i < rels.length; i += BATCH) {
+    const batch = rels.slice(i, i + BATCH);
+    const sizes = await Promise.all(
+      batch.map(async (rel) => {
+        try {
+          const st = await lstat(join(root, ...rel.split('/')));
+          return st.isFile() ? st.size : -1;
+        } catch {
+          return -1;
+        }
+      }),
+    );
+    sizes.forEach((bytes, j) => {
+      const rel = batch[j];
+      if (rel !== undefined && bytes > limit) out.push({ path: rel, bytes });
+    });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * The files Semgrep would read here — the scanners' own listing and
+ * exclusions (the module comment), with a source language — that are over
+ * `limit` bytes, which Semgrep ignores without a word (review M1: its
+ * `paths.skipped` says so only under `--verbose`, and a 1.16 MB file of
+ * the project's only Python read as "no covered language"). `only`, when
+ * given, restricts the answer to those paths (a scoped scan's files).
+ */
+export async function oversizedSourceFilesAsync(
+  root: string,
+  opts: { limit?: number; only?: readonly string[] } = {},
+): Promise<OversizedFiles> {
+  const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  if (opts.only !== undefined) {
+    const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
+    return { files: await sizesOver(root, rels, limit) };
+  }
+  const listed = await gitListAsync(root);
+  const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
+  const files = listed ?? walked?.files ?? [];
+  const out: OversizedFiles = { files: await sizesOver(root, files.filter((rel) => isScannedSource(rel, exclusions)), limit) };
+  if (walked?.incomplete !== undefined) out.incomplete = walked.incomplete;
+  return out;
+}
+
+/** `src/big.py (1.2 MB)`, the first few, then "and N more". */
+export function describeOversized(files: readonly OversizedFile[], limit = SEMGREP_MAX_TARGET_BYTES): string {
+  const mb = (n: number): string => `${(n / 1_000_000).toFixed(1)} MB`;
+  const shown = files.slice(0, 5).map((f) => `${f.path} (${mb(f.bytes)})`);
+  const more = files.length > shown.length ? ` and ${files.length - shown.length} more` : '';
+  const n = files.length;
+  return (
+    `${n} file${n === 1 ? '' : 's'} over Semgrep's ${mb(limit).replace('.0 ', ' ')} target limit ` +
+    `${n === 1 ? 'was' : 'were'} not scanned: ${shown.join(', ')}${more}`
+  );
 }
 
 function snapshotLanguages(snapshot: unknown): SourceLanguage[] | null {

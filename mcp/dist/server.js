@@ -42799,7 +42799,7 @@ function coverageRunsOf(bookkeeping, scans) {
 }
 
 // src/frameworks/projectLanguages.ts
-import { readdir as readdir2, readFile as readFile2 } from "node:fs/promises";
+import { lstat, readdir as readdir2, readFile as readFile2 } from "node:fs/promises";
 import { join as join14 } from "node:path";
 
 // src/platform/guardianIgnore.ts
@@ -43548,6 +43548,58 @@ async function languagesFromFilesAsync(root, opts = {}) {
   if (listed !== null) return fromFiles("git", listed, exclusions);
   const walked = await walkAsync(root, exclusions, opts);
   return fromFiles("walk", walked?.files ?? null, exclusions, walked?.incomplete);
+}
+var SEMGREP_MAX_TARGET_BYTES = 1e6;
+function isScannedSource(rel2, exclusions) {
+  if (languageOfFile(rel2) === null && !/\.h$/i.test(rel2)) return false;
+  const segments = rel2.split("/");
+  for (let i2 = 1; i2 < segments.length; i2++) {
+    if (exclusions.layer(segments.slice(0, i2).join("/"), true) !== null) return false;
+  }
+  return exclusions.layer(rel2) === null;
+}
+async function sizesOver(root, rels, limit) {
+  const out = [];
+  const BATCH = 64;
+  for (let i2 = 0; i2 < rels.length; i2 += BATCH) {
+    const batch = rels.slice(i2, i2 + BATCH);
+    const sizes = await Promise.all(
+      batch.map(async (rel2) => {
+        try {
+          const st = await lstat(join14(root, ...rel2.split("/")));
+          return st.isFile() ? st.size : -1;
+        } catch {
+          return -1;
+        }
+      })
+    );
+    sizes.forEach((bytes, j) => {
+      const rel2 = batch[j];
+      if (rel2 !== void 0 && bytes > limit) out.push({ path: rel2, bytes });
+    });
+  }
+  return out.sort((a2, b) => a2.path.localeCompare(b.path));
+}
+async function oversizedSourceFilesAsync(root, opts = {}) {
+  const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  if (opts.only !== void 0) {
+    const rels = opts.only.map((p) => p.split("\\").join("/")).filter((rel2) => isScannedSource(rel2, exclusions));
+    return { files: await sizesOver(root, rels, limit) };
+  }
+  const listed = await gitListAsync(root);
+  const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
+  const files = listed ?? walked?.files ?? [];
+  const out = { files: await sizesOver(root, files.filter((rel2) => isScannedSource(rel2, exclusions)), limit) };
+  if (walked?.incomplete !== void 0) out.incomplete = walked.incomplete;
+  return out;
+}
+function describeOversized(files, limit = SEMGREP_MAX_TARGET_BYTES) {
+  const mb = (n3) => `${(n3 / 1e6).toFixed(1)} MB`;
+  const shown = files.slice(0, 5).map((f) => `${f.path} (${mb(f.bytes)})`);
+  const more = files.length > shown.length ? ` and ${files.length - shown.length} more` : "";
+  const n2 = files.length;
+  return `${n2} file${n2 === 1 ? "" : "s"} over Semgrep's ${mb(limit).replace(".0 ", " ")} target limit ${n2 === 1 ? "was" : "were"} not scanned: ${shown.join(", ")}${more}`;
 }
 function snapshotLanguages(snapshot) {
   if (snapshot === null || typeof snapshot !== "object") return null;
@@ -47233,6 +47285,7 @@ async function runSemgrep2(args) {
       configs: plan.rulePacks,
       loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing,
+      oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
       tools_run,
       missing_tools,
       parser_inputs
@@ -47288,6 +47341,7 @@ async function runSemgrep2(args) {
     loadedFrom,
     packMissing: plan.packMissing,
     packsHostDir: plan.pluginPacksDir,
+    oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
     tools_run,
     missing_tools,
     parser_inputs
@@ -47333,10 +47387,13 @@ function judgeSemgrepRun(args) {
   const packGap = check2.plugin_pack_fixpoint;
   const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
+  const sizeNote = args.oversized.length > 0 ? describeOversized(args.oversized) : null;
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
-    if (reasons.length > 0) run.reason = reasons.join("; ");
+    const all = [...reasons, ...sizeNote !== null ? [sizeNote] : []];
+    if (all.length > 0) run.reason = all.join("; ");
     tools_run.push(withPluginPackFixpoint(run, packGap));
+    if (sizeNote !== null) missing_tools.push("semgrep");
     return;
   }
   if (check2.verdict === "partial" && check2.partial !== void 0) {
@@ -47345,7 +47402,11 @@ function judgeSemgrepRun(args) {
         {
           name: "semgrep",
           status: "ok",
-          reason: [...reasons, describePartialParse(check2.partial, "findings in the unparsed spans may be missing")].join("; "),
+          reason: [
+            ...reasons,
+            describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
+            ...sizeNote !== null ? [sizeNote] : []
+          ].join("; "),
           partially_parsed: check2.partial
         },
         packGap
@@ -47358,7 +47419,10 @@ function judgeSemgrepRun(args) {
     tools_run.push({
       name: "semgrep",
       status: "skipped",
-      reason: [...reasons, "semgrep scanned 0 files \u2014 nothing here is a language its rules cover"].join("; ")
+      reason: [
+        ...reasons,
+        sizeNote !== null ? `semgrep scanned 0 files \u2014 ${sizeNote}` : "semgrep scanned 0 files \u2014 nothing here is a language its rules cover"
+      ].join("; ")
     });
     missing_tools.push("semgrep");
     return;
@@ -47383,7 +47447,8 @@ function judgeSemgrepRun(args) {
       reason: [
         ...reasons,
         describeRulesNotLoaded(notLoaded, check2.scanned),
-        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : []
+        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : [],
+        ...sizeNote !== null ? [sizeNote] : []
       ].join("; "),
       failed_rules: notLoaded
     };
@@ -47481,7 +47546,11 @@ async function runSemgrepOnScope(args) {
     entry.plugin_pack_only = true;
   }
   tools_run.push(entry);
-  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
+  const oversized = (await oversizedSourceFilesAsync(ctx.projectPath, { only: files })).files;
+  if (oversized.length > 0) {
+    entry.reason = [entry.reason, describeOversized(oversized)].filter((s) => s !== void 0).join("; ");
+  }
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing || oversized.length > 0;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
 }
 async function runBanditOnScope(args) {
