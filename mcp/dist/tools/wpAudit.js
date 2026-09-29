@@ -5,10 +5,30 @@
  * directory containing `wp-config.php`. All WP-CLI invocations are
  * read-only.
  *
- * Per-subsection retry: each WP-CLI call is retried up to 3 times with
- * exponential backoff (1s, 3s, 9s) before being skipped. A failing
- * subsection puts a warning in `warnings[]` but never fails the whole
+ * Per-subsection retry: each WP-CLI call that FAILED is retried up to 3
+ * times with exponential backoff (1s, 3s, 9s) before being skipped. A
+ * failing subsection puts a warning in `warnings[]` and is a named gap
+ * (`wp-cli` in `missing_tools`, coverage partial) but never fails the whole
  * audit — partial data is preferable to no data.
+ *
+ * ---- Checksums: exit 1 is the answer, not a failure (review I5) -----------
+ *
+ * `wp core verify-checksums --format=json` and `wp plugin verify-checksums`
+ * print their mismatches as JSON rows on stdout and THEN `Error: …` on
+ * stderr, exiting 1 (wp-cli/checksum-command: `Checksum_Core_Command`
+ * ends with `display_items( $this->errors )` then `WP_CLI::error(
+ * "WordPress installation doesn't verify against checksums." )`; the plugin
+ * command reports through `Utils\report_batch_operation_results`, which is a
+ * `WP_CLI::error` on any failure). The exit 1 used to read as a failed call:
+ * the rows were dropped (a tampered install showed NO mismatches, wp-cli
+ * ok, completed) and the call retried three times (~13 s). An exit 1 whose
+ * stdout parses as those rows is now the report, taken as is and never
+ * retried. A plugin WP-CLI skipped (no checksums for its version on
+ * wordpress.org, or no version: a warning, not an error) was not verified
+ * and is named in `checksums_not_checked.plugins`. There is no `wp theme
+ * verify-checksums` (checksum-command registers core and plugin only), so
+ * themes are never asked for and read "not checked", never "no
+ * mismatches".
  */
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -16,10 +36,13 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
+import { computeCoverage } from './scanCoverage.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { registerToolModule } from './index.js';
 const RETRY_DELAYS_MS = [1000, 3000, 9000];
 const DEFAULT_RISKY_LOGINS = ['admin', 'administrator', 'root', 'wpadmin'];
+/** What `checksums_not_checked.themes` says, always: WP-CLI cannot check them. */
+export const THEMES_NOT_CHECKED = 'not checked (WP-CLI has no theme checksums)';
 const inputSchema = {
     wp_install_path: z
         .string()
@@ -32,9 +55,9 @@ const inputSchema = {
 const tool = {
     name: 'wp_audit',
     title: 'Live WordPress install audit',
-    description: 'Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, ' +
-        'admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of ' +
-        'type wp_audit so guardian://scans/{id} returns the structured audit.',
+    description: 'Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none ' +
+        'for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update ' +
+        'on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -63,7 +86,8 @@ async function handler(input, ctx) {
     const riskyLogins = new Set((inp.risky_login_names ?? DEFAULT_RISKY_LOGINS).map((s) => s.toLowerCase()));
     const meta = {
         wp_version: null,
-        checksum_mismatches: { core: [], plugins: {}, themes: {} },
+        checksum_mismatches: { core: [], plugins: {} },
+        checksums_not_checked: { themes: THEMES_NOT_CHECKED, plugins: [] },
         config_flags: {
             DISALLOW_FILE_EDIT: null,
             WP_DEBUG: null,
@@ -74,17 +98,18 @@ async function handler(input, ctx) {
         plugins_with_auto_update: [],
         warnings: [],
     };
+    /** Subsections that did not answer: each a named gap. */
+    const gaps = [];
     // Parallelise the independent WP-CLI subcommands. Each call goes through
     // the same retry policy (3 attempts, exp. backoff). Worst case improves
     // from 9 × ~10s sequential to ~10s wall-clock when ALL of them retry.
     const configFlags = includeOptions
         ? ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']
         : [];
-    const [versionResult, coreVerify, pluginVerify, themeVerify, adminResult, pluginListResult, ...configResults] = await Promise.all([
+    const [versionResult, coreVerify, pluginVerify, adminResult, pluginListResult, ...configResults] = await Promise.all([
         retry(() => wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx)),
-        retry(() => wpCall(['core', 'verify-checksums', `--path=${installPath}`, '--format=json'], installPath, ctx)),
-        retry(() => wpCall(['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'], installPath, ctx)),
-        retry(() => wpCall(['theme', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'], installPath, ctx)),
+        retry(() => wpCall(['core', 'verify-checksums', `--path=${installPath}`, '--format=json'], installPath, ctx, { rowsOnExit1: true })),
+        retry(() => wpCall(['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'], installPath, ctx, { rowsOnExit1: true })),
         includeUsers
             ? retry(() => wpCall([
                 'user',
@@ -110,16 +135,28 @@ async function handler(input, ctx) {
     }
     else {
         meta.warnings.push(`core version: ${versionResult.reason}`);
+        gaps.push('core version not read');
     }
-    meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
-    if (!coreVerify.ok)
+    if (coreVerify.ok) {
+        meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
+    }
+    else {
         meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
-    meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
-    if (!pluginVerify.ok)
+        gaps.push('core checksums not verified');
+    }
+    if (pluginVerify.ok) {
+        meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
+        meta.checksums_not_checked.plugins = skippedPlugins(pluginVerify.stderr);
+        if (meta.checksums_not_checked.plugins.length > 0) {
+            gaps.push(`${meta.checksums_not_checked.plugins.length} plugin(s) not verified: ` +
+                meta.checksums_not_checked.plugins.map((p) => p.plugin).join(', '));
+        }
+    }
+    else {
         meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
-    meta.checksum_mismatches.themes = groupByComponent(themeVerify);
-    if (!themeVerify.ok)
-        meta.warnings.push(`theme verify-checksums: ${themeVerify.reason}`);
+        gaps.push('plugin checksums not verified');
+    }
+    meta.warnings.push(`theme checksums: ${THEMES_NOT_CHECKED} — theme files were not verified`);
     if (includeUsers) {
         if (adminResult.ok) {
             try {
@@ -132,10 +169,12 @@ async function handler(input, ctx) {
             }
             catch {
                 meta.warnings.push('user list: stdout not JSON');
+                gaps.push('admin users not read');
             }
         }
         else {
             meta.warnings.push(`user list: ${adminResult.reason}`);
+            gaps.push('admin users not read');
         }
     }
     if (pluginListResult.ok) {
@@ -147,10 +186,12 @@ async function handler(input, ctx) {
         }
         catch {
             meta.warnings.push('plugin list: stdout not JSON');
+            gaps.push('plugin list not read');
         }
     }
     else {
         meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
+        gaps.push('plugin list not read');
     }
     configFlags.forEach((flag, i) => {
         const r = configResults[i];
@@ -162,8 +203,17 @@ async function handler(input, ctx) {
         }
         else {
             meta.warnings.push(`config get ${flag}: ${r.reason}`);
+            gaps.push(`config ${flag} not read`);
         }
     });
+    // -------- Bookkeeping: what did not answer is named, never `ok` in silence.
+    const answered = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
+    const toolRun = gaps.length === 0
+        ? { name: 'wp-cli', status: 'ok' }
+        : { name: 'wp-cli', status: answered ? 'ok' : 'failed', reason: gaps.join('; ') };
+    const tools_run = [toolRun];
+    const missing_tools = gaps.length > 0 ? ['wp-cli'] : [];
+    const coverage = computeCoverage(tools_run, missing_tools);
     // -------- Persist scan row with meta
     const scanId = randomUUID();
     ctx.storage.scans.insert({
@@ -174,18 +224,27 @@ async function handler(input, ctx) {
     });
     ctx.storage.scans.finalize({
         scan_id: scanId,
-        status: 'completed',
-        tools_run: [{ name: 'wp-cli', status: 'ok' }],
-        missing_tools: [],
+        status: answered ? 'completed' : 'failed',
+        tools_run,
+        missing_tools,
         meta: meta,
     });
     return {
         ok: true,
         scan_id: scanId,
+        coverage,
+        tools_run,
+        missing_tools,
         ...meta,
     };
 }
-async function wpCall(args, cwd, ctx) {
+/**
+ * `rowsOnExit1`: the verify-checksums commands exit 1 AFTER printing their
+ * mismatch rows (see the module comment) — that exit with rows on stdout is
+ * the answer. Exit 1 without rows (checksums unavailable, no install) is
+ * still a failure.
+ */
+async function wpCall(args, cwd, ctx, opts = {}) {
     const r = await runProcess({
         command: 'wp',
         args,
@@ -193,7 +252,8 @@ async function wpCall(args, cwd, ctx) {
         env: process.env,
         timeoutMs: 60_000,
     });
-    const ok = r.outcome === 'completed';
+    const reported = opts.rowsOnExit1 === true && r.exitCode === 1 && checksumRows(r.stdout) !== null;
+    const ok = r.outcome === 'completed' || reported;
     return {
         ok,
         stdout: r.stdout,
@@ -210,55 +270,88 @@ async function retry(call) {
     }
     return last;
 }
-function parseChecksumOutput(r) {
-    if (!r.ok || r.stdout.trim().length === 0)
-        return [];
+/** The JSON rows a verify-checksums command printed — objects naming a `file` — or null. */
+function checksumRows(stdout) {
+    const text = stdout.trim();
+    if (!text.startsWith('['))
+        return null;
     try {
-        const arr = JSON.parse(r.stdout);
-        return arr.map((x) => ({
-            file: x.file ?? '(unknown)',
-            status: normaliseStatus(x.status ?? x.message),
-        }));
+        const arr = JSON.parse(text);
+        if (!Array.isArray(arr) || arr.length === 0)
+            return null;
+        const rows = arr.filter((x) => typeof x === 'object' && x !== null && !Array.isArray(x));
+        return rows.length === arr.length && rows.every((x) => typeof x['file'] === 'string') ? rows : null;
     }
     catch {
-        return [];
+        return null;
     }
 }
+const str = (v) => (typeof v === 'string' ? v : undefined);
+function parseChecksumOutput(r) {
+    const rows = checksumRows(r.stdout);
+    if (rows === null)
+        return [];
+    return rows.map((x) => ({
+        file: str(x['file']) ?? '(unknown)',
+        status: normaliseStatus(str(x['status']) ?? str(x['message'])),
+    }));
+}
 function groupByComponent(r) {
-    // WP-CLI emits one row per file with a `plugin_name` (or `theme_name`)
-    // field. Group by that to produce { slug: [files] }.
-    if (!r.ok || r.stdout.trim().length === 0)
+    // WP-CLI emits one row per file with a `plugin_name` field. Group by it
+    // to produce { slug: [files] }.
+    const rows = checksumRows(r.stdout);
+    if (rows === null)
         return {};
-    try {
-        const arr = JSON.parse(r.stdout);
-        const out = {};
-        for (const row of arr) {
-            const slug = row['plugin_name'] ?? row['theme_name'] ?? '(unknown)';
-            const f = {
-                file: row['file'] ?? '(unknown)',
-                status: normaliseStatus(row['status'] ?? row['message']),
-            };
-            let bucket = out[slug];
-            if (!bucket) {
-                bucket = [];
-                out[slug] = bucket;
-            }
-            bucket.push(f);
+    const out = {};
+    for (const row of rows) {
+        const slug = str(row['plugin_name']) ?? '(unknown)';
+        const f = {
+            file: str(row['file']) ?? '(unknown)',
+            status: normaliseStatus(str(row['status']) ?? str(row['message'])),
+        };
+        let bucket = out[slug];
+        if (!bucket) {
+            bucket = [];
+            out[slug] = bucket;
         }
-        return out;
+        bucket.push(f);
     }
-    catch {
-        return {};
+    return out;
+}
+/**
+ * The plugins `wp plugin verify-checksums` skipped, from its warnings
+ * (Checksum_Plugin_Command: "Could not retrieve the checksums for version
+ * {$version} of plugin {$name}, skipping.", "Could not retrieve the version
+ * for plugin {$name}, skipping.", and the must-use variants), sorted.
+ */
+export function skippedPlugins(stderr) {
+    const out = new Map();
+    for (const raw of stderr.split(/\r?\n/)) {
+        const line = raw.replace(/^Warning:\s*/, '').trim();
+        const skip = /^(Could not retrieve the (?:checksums for version \S+ of|version for) (?:must-use )?plugin) (.+?), skipping\.$/.exec(line);
+        if (skip?.[1] !== undefined && skip[2] !== undefined) {
+            out.set(skip[2], skip[1].replace(/^Could not retrieve/, 'WP-CLI could not retrieve'));
+            continue;
+        }
+        const mu = /^Must-use plugin '([^']+)' appears to be a custom file or loader plugin and cannot be verified\.$/.exec(line);
+        if (mu?.[1] !== undefined)
+            out.set(mu[1], 'a custom must-use file WP-CLI cannot verify');
     }
+    return [...out.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([plugin, reason]) => ({ plugin, reason }));
 }
 function normaliseStatus(raw) {
     const s = (raw ?? '').toLowerCase();
-    if (s.includes('modified') || s.includes('changed'))
+    // "File doesn't verify against checksum", "Checksum does not match".
+    if (s.includes('modified') || s.includes('changed') || s.includes('verify against') || s.includes('does not match')) {
         return 'modified';
-    if (s.includes('missing'))
+    }
+    // "File doesn't exist".
+    if (s.includes('missing') || s.includes("doesn't exist") || s.includes('does not exist'))
         return 'missing';
-    if (s.includes('added') || s.includes('extra') || s.includes('not in'))
+    // "File should not exist", "File was added".
+    if (s.includes('added') || s.includes('extra') || s.includes('not in') || s.includes('should not exist')) {
         return 'added';
+    }
     return 'unknown';
 }
 function failDomain(code, message) {

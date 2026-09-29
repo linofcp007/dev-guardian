@@ -68,6 +68,16 @@ version bump.
   `gitleaks` is listed missing — coverage partial — its reason `history truncated at <commit> — a shallow clone:
   the commits before it were not scanned (git fetch --unshallow, then re-run)`. Shared by `scan_secrets`,
   `scan_wordpress`, `review_pr`, `init_project` and the CI gate (`runners/gitleaksScan.ts`).
+- `wp_audit` reads WP-CLI's checksum report. `wp core verify-checksums --format=json` and `wp plugin
+  verify-checksums` print their mismatches as JSON on stdout, then `Error: …`, and exit 1 (wp-cli/checksum-command);
+  the exit 1 read as a failed call, so a tampered install showed no mismatches, `wp-cli` ok, completed — after
+  three retries (~13 s). An exit 1 whose stdout is those rows is now the answer, never retried, and WP-CLI's
+  messages map to modified / missing / added. Plugins WP-CLI skipped (no checksums for their version, no version)
+  are named in `checksums_not_checked.plugins`. There is no `wp theme verify-checksums`: the call is gone and
+  `checksums_not_checked.themes` says "not checked (WP-CLI has no theme checksums)" — `checksum_mismatches.themes`,
+  always empty, is removed. A subsection that did not answer (or a skipped plugin) is a named gap: `wp-cli` in
+  `missing_tools`, coverage partial, returned with `tools_run` and `coverage`; the description no longer claims
+  theme checksums.
 
 ## [3.0.0] - 2026-09-29
 

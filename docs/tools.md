@@ -641,7 +641,7 @@ Vet dependencies BEFORE installing them. Per package, against the public registr
 
 ### `wp_audit`
 
-Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, admin user list, dangerous config flags, plugins with auto\_update on. Persists a scan row of type wp\_audit so guardian://scans/{id} returns the structured audit.
+Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto\_update on. Persists a scan row of type wp\_audit so guardian://scans/{id} returns the structured audit.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

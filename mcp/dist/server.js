@@ -116,7 +116,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str6(strs, ...args) {
+    function str7(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i2 = 0;
       while (i2 < args.length) {
@@ -127,7 +127,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str6;
+    exports.str = str7;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -170,7 +170,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c22) {
-      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str6`${c1}${c22}`;
+      return c22.emptyStr() ? c1 : c1.emptyStr() ? c22 : str7`${c1}${c22}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -1132,22 +1132,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str6) {
-      return unescapeJsonPointer(decodeURIComponent(str6));
+    function unescapeFragment(str7) {
+      return unescapeJsonPointer(decodeURIComponent(str7));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str6) {
-      return encodeURIComponent(escapeJsonPointer(str6));
+    function escapeFragment(str7) {
+      return encodeURIComponent(escapeJsonPointer(str7));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str6) {
-      if (typeof str6 == "number")
-        return `${str6}`;
-      return str6.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str7) {
+      if (typeof str7 == "number")
+        return `${str7}`;
+      return str7.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str6) {
-      return str6.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str7) {
+      return str7.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -2172,8 +2172,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str6) {
-      return str6.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str7) {
+      return str7.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -3270,10 +3270,10 @@ var require_utils = __commonJS({
         isIPV6: true
       };
     }
-    function findToken(str6, token) {
+    function findToken(str7, token) {
       let ind = 0;
-      for (let i2 = 0; i2 < str6.length; i2++) {
-        if (str6[i2] === token) ind++;
+      for (let i2 = 0; i2 < str7.length; i2++) {
+        if (str7[i2] === token) ind++;
       }
       return ind;
     }
@@ -4287,7 +4287,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str6, flags) => new RegExp(str6, flags);
+    var defaultRegExp = (str7, flags) => new RegExp(str7, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -5082,16 +5082,16 @@ var require_ucs2length = __commonJS({
   "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str6) {
-      const len = str6.length;
+    function ucs2length(str7) {
+      const len = str7.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str6.charCodeAt(pos++);
+        value = str7.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str6.charCodeAt(pos);
+          value = str7.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -6974,8 +6974,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date4(str6) {
-      const matches3 = DATE.exec(str6);
+    function date4(str7) {
+      const matches3 = DATE.exec(str7);
       if (!matches3)
         return false;
       const year = +matches3[1];
@@ -6994,8 +6994,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str6) {
-        const matches3 = TIME.exec(str6);
+      return function time3(str7) {
+        const matches3 = TIME.exec(str7);
         if (!matches3)
           return false;
         const hr = +matches3[1];
@@ -7041,8 +7041,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str6) {
-        const dateTime = str6.split(DATE_TIME_SEPARATOR);
+      return function date_time(str7) {
+        const dateTime = str7.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date4(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -7067,13 +7067,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str6) {
-      return NOT_URI_FRAGMENT.test(str6) && URI.test(str6);
+    function uri(str7) {
+      return NOT_URI_FRAGMENT.test(str7) && URI.test(str7);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str6) {
+    function byte(str7) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str6);
+      return BYTE.test(str7);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -7087,11 +7087,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str6) {
-      if (Z_ANCHOR.test(str6))
+    function regex(str7) {
+      if (Z_ANCHOR.test(str7))
         return false;
       try {
-        new RegExp(str6);
+        new RegExp(str7);
         return true;
       } catch (e) {
         return false;
@@ -16430,13 +16430,13 @@ var require_Collection = __commonJS({
 var require_stringifyComment = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
-    var stringifyComment = (str6) => str6.replace(/^(?!$)(?: $)?/gm, "#");
+    var stringifyComment = (str7) => str7.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
       if (/^\n+$/.test(comment))
         return comment.substring(1);
       return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
     }
-    var lineComment = (str6, indent, comment) => str6.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str6.endsWith(" ") ? "" : " ") + comment;
+    var lineComment = (str7, indent, comment) => str7.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str7.endsWith(" ") ? "" : " ") + comment;
     exports.indentComment = indentComment;
     exports.lineComment = lineComment;
     exports.stringifyComment = stringifyComment;
@@ -16590,16 +16590,16 @@ var require_stringifyString = __commonJS({
       lineWidth: ctx.options.lineWidth,
       minContentWidth: ctx.options.minContentWidth
     });
-    var containsDocumentMarker = (str6) => /^(%|---|\.\.\.)/m.test(str6);
-    function lineLengthOverLimit(str6, lineWidth, indentLength) {
+    var containsDocumentMarker = (str7) => /^(%|---|\.\.\.)/m.test(str7);
+    function lineLengthOverLimit(str7, lineWidth, indentLength) {
       if (!lineWidth || lineWidth < 0)
         return false;
       const limit = lineWidth - indentLength;
-      const strLen = str6.length;
+      const strLen = str7.length;
       if (strLen <= limit)
         return false;
       for (let i2 = 0, start = 0; i2 < strLen; ++i2) {
-        if (str6[i2] === "\n") {
+        if (str7[i2] === "\n") {
           if (i2 - start > limit)
             return true;
           start = i2 + 1;
@@ -16616,11 +16616,11 @@ var require_stringifyString = __commonJS({
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
-      let str6 = "";
+      let str7 = "";
       let start = 0;
       for (let i2 = 0, ch = json[i2]; ch; ch = json[++i2]) {
         if (ch === " " && json[i2 + 1] === "\\" && json[i2 + 2] === "n") {
-          str6 += json.slice(start, i2) + "\\ ";
+          str7 += json.slice(start, i2) + "\\ ";
           i2 += 1;
           start = i2;
           ch = "\\";
@@ -16629,38 +16629,38 @@ var require_stringifyString = __commonJS({
           switch (json[i2 + 1]) {
             case "u":
               {
-                str6 += json.slice(start, i2);
+                str7 += json.slice(start, i2);
                 const code = json.substr(i2 + 2, 4);
                 switch (code) {
                   case "0000":
-                    str6 += "\\0";
+                    str7 += "\\0";
                     break;
                   case "0007":
-                    str6 += "\\a";
+                    str7 += "\\a";
                     break;
                   case "000b":
-                    str6 += "\\v";
+                    str7 += "\\v";
                     break;
                   case "001b":
-                    str6 += "\\e";
+                    str7 += "\\e";
                     break;
                   case "0085":
-                    str6 += "\\N";
+                    str7 += "\\N";
                     break;
                   case "00a0":
-                    str6 += "\\_";
+                    str7 += "\\_";
                     break;
                   case "2028":
-                    str6 += "\\L";
+                    str7 += "\\L";
                     break;
                   case "2029":
-                    str6 += "\\P";
+                    str7 += "\\P";
                     break;
                   default:
                     if (code.substr(0, 2) === "00")
-                      str6 += "\\x" + code.substr(2);
+                      str7 += "\\x" + code.substr(2);
                     else
-                      str6 += json.substr(i2, 6);
+                      str7 += json.substr(i2, 6);
                 }
                 i2 += 5;
                 start = i2 + 1;
@@ -16670,14 +16670,14 @@ var require_stringifyString = __commonJS({
               if (implicitKey || json[i2 + 2] === '"' || json.length < minMultiLineLength) {
                 i2 += 1;
               } else {
-                str6 += json.slice(start, i2) + "\n\n";
+                str7 += json.slice(start, i2) + "\n\n";
                 while (json[i2 + 2] === "\\" && json[i2 + 3] === "n" && json[i2 + 4] !== '"') {
-                  str6 += "\n";
+                  str7 += "\n";
                   i2 += 2;
                 }
-                str6 += indent;
+                str7 += indent;
                 if (json[i2 + 2] === " ")
-                  str6 += "\\";
+                  str7 += "\\";
                 i2 += 1;
                 start = i2 + 1;
               }
@@ -16686,8 +16686,8 @@ var require_stringifyString = __commonJS({
               i2 += 1;
           }
       }
-      str6 = start ? str6 + json.slice(start) : json;
-      return implicitKey ? str6 : foldFlowLines.foldFlowLines(str6, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
+      str7 = start ? str7 + json.slice(start) : json;
+      return implicitKey ? str7 : foldFlowLines.foldFlowLines(str7, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
       if (ctx.options.singleQuote === false || ctx.implicitKey && value.includes("\n") || /[ \t]\n|\n[ \t]/.test(value))
@@ -16815,15 +16815,15 @@ ${indent}${start}${value}${end}`;
           return quotedString(value, ctx);
         }
       }
-      const str6 = value.replace(/\n+/g, `$&
+      const str7 = value.replace(/\n+/g, `$&
 ${indent}`);
       if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str6);
+        const test = (tag) => tag.default && tag.tag !== "tag:yaml.org,2002:str" && tag.test?.test(str7);
         const { compat, tags } = ctx.doc.schema;
         if (tags.some(test) || compat?.some(test))
           return quotedString(value, ctx);
       }
-      return implicitKey ? str6 : foldFlowLines.foldFlowLines(str6, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
+      return implicitKey ? str7 : foldFlowLines.foldFlowLines(str7, indent, foldFlowLines.FOLD_FLOW, getFoldOptions(ctx, false));
     }
     function stringifyString(item, ctx, onComment, onChompKeep) {
       const { implicitKey, inFlow } = ctx;
@@ -16975,11 +16975,11 @@ var require_stringify = __commonJS({
       const props = stringifyProps(node, tagObj, ctx);
       if (props.length > 0)
         ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-      const str6 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
+      const str7 = typeof tagObj.stringify === "function" ? tagObj.stringify(node, ctx, onComment, onChompKeep) : identity3.isScalar(node) ? stringifyString.stringifyString(node, ctx, onComment, onChompKeep) : node.toString(ctx, onComment, onChompKeep);
       if (!props)
-        return str6;
-      return identity3.isScalar(node) || str6[0] === "{" || str6[0] === "[" ? `${props} ${str6}` : `${props}
-${ctx.indent}${str6}`;
+        return str7;
+      return identity3.isScalar(node) || str7[0] === "{" || str7[0] === "[" ? `${props} ${str7}` : `${props}
+${ctx.indent}${str7}`;
     }
     exports.createStringifyContext = createStringifyContext;
     exports.stringify = stringify;
@@ -17014,8 +17014,8 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str6 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
-      if (!explicitKey && !ctx.inFlow && str6.length > 1024) {
+      let str7 = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      if (!explicitKey && !ctx.inFlow && str7.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
         explicitKey = true;
@@ -17024,27 +17024,27 @@ var require_stringifyPair = __commonJS({
         if (allNullValues || value == null) {
           if (keyCommentDone && onComment)
             onComment();
-          return str6 === "" ? "?" : explicitKey ? `? ${str6}` : str6;
+          return str7 === "" ? "?" : explicitKey ? `? ${str7}` : str7;
         }
       } else if (allNullValues && !simpleKeys || value == null && explicitKey) {
-        str6 = `? ${str6}`;
+        str7 = `? ${str7}`;
         if (keyComment && !keyCommentDone) {
-          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
+          str7 += stringifyComment.lineComment(str7, ctx.indent, commentString(keyComment));
         } else if (chompKeep && onChompKeep)
           onChompKeep();
-        return str6;
+        return str7;
       }
       if (keyCommentDone)
         keyComment = null;
       if (explicitKey) {
         if (keyComment)
-          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
-        str6 = `? ${str6}
+          str7 += stringifyComment.lineComment(str7, ctx.indent, commentString(keyComment));
+        str7 = `? ${str7}
 ${indent}:`;
       } else {
-        str6 = `${str6}:`;
+        str7 = `${str7}:`;
         if (keyComment)
-          str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(keyComment));
+          str7 += stringifyComment.lineComment(str7, ctx.indent, commentString(keyComment));
       }
       let vsb, vcb, valueComment;
       if (identity3.isNode(value)) {
@@ -17060,7 +17060,7 @@ ${indent}:`;
       }
       ctx.implicitKey = false;
       if (!explicitKey && !keyComment && identity3.isScalar(value))
-        ctx.indentAtStart = str6.length + 1;
+        ctx.indentAtStart = str7.length + 1;
       chompKeep = false;
       if (!indentSeq && indentStep.length >= 2 && !ctx.inFlow && !explicitKey && identity3.isSeq(value) && !value.flow && !value.tag && !value.anchor) {
         ctx.indent = ctx.indent.substring(2);
@@ -17104,16 +17104,16 @@ ${ctx.indent}`;
       } else if (valueStr === "" || valueStr[0] === "\n") {
         ws = "";
       }
-      str6 += ws + valueStr;
+      str7 += ws + valueStr;
       if (ctx.inFlow) {
         if (valueCommentDone && onComment)
           onComment();
       } else if (valueComment && !valueCommentDone) {
-        str6 += stringifyComment.lineComment(str6, ctx.indent, commentString(valueComment));
+        str7 += stringifyComment.lineComment(str7, ctx.indent, commentString(valueComment));
       } else if (chompKeep && onChompKeep) {
         onChompKeep();
       }
-      return str6;
+      return str7;
     }
     exports.stringifyPair = stringifyPair;
   }
@@ -17340,31 +17340,31 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str7 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str8 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
-          str7 += stringifyComment.lineComment(str7, itemIndent, commentString(comment2));
+          str8 += stringifyComment.lineComment(str8, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str7);
+        lines.push(blockItemPrefix + str8);
       }
-      let str6;
+      let str7;
       if (lines.length === 0) {
-        str6 = flowChars.start + flowChars.end;
+        str7 = flowChars.start + flowChars.end;
       } else {
-        str6 = lines[0];
+        str7 = lines[0];
         for (let i2 = 1; i2 < lines.length; ++i2) {
           const line = lines[i2];
-          str6 += line ? `
+          str7 += line ? `
 ${indent}${line}` : "\n";
         }
       }
       if (comment) {
-        str6 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
+        str7 += "\n" + stringifyComment.indentComment(commentString(comment), indent);
         if (onComment)
           onComment();
       } else if (chompKeep && onChompKeep)
         onChompKeep();
-      return str6;
+      return str7;
     }
     function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
@@ -17407,21 +17407,21 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str6 = stringify.stringify(item, itemCtx, () => comment = null);
-        reqNewline || (reqNewline = lines.length > linesAtValue || str6.includes("\n"));
+        let str7 = stringify.stringify(item, itemCtx, () => comment = null);
+        reqNewline || (reqNewline = lines.length > linesAtValue || str7.includes("\n"));
         if (i2 < items.length - 1) {
-          str6 += ",";
+          str7 += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str6.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str7.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
-            str6 += ",";
+            str7 += ",";
           }
         }
         if (comment)
-          str6 += stringifyComment.lineComment(str6, itemIndent, commentString(comment));
-        lines.push(str6);
+          str7 += stringifyComment.lineComment(str7, itemIndent, commentString(comment));
+        lines.push(str7);
         linesAtValue = lines.length;
       }
       const { start, end } = flowChars;
@@ -17433,11 +17433,11 @@ ${indent}${line}` : "\n";
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
-          let str6 = start;
+          let str7 = start;
           for (const line of lines)
-            str6 += line ? `
+            str7 += line ? `
 ${indentStep}${indent}${line}` : "\n";
-          return `${str6}
+          return `${str7}
 ${indent}${end}`;
         } else {
           return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
@@ -17769,7 +17769,7 @@ var require_string = __commonJS({
       identify: (value) => typeof value === "string",
       default: true,
       tag: "tag:yaml.org,2002:str",
-      resolve: (str6) => str6,
+      resolve: (str7) => str7,
       stringify(item, ctx, onComment, onChompKeep) {
         ctx = Object.assign({ actualString: true }, ctx);
         return stringifyString.stringifyString(item, ctx, onComment, onChompKeep);
@@ -17807,7 +17807,7 @@ var require_bool = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:bool",
       test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-      resolve: (str6) => new Scalar.Scalar(str6[0] === "t" || str6[0] === "T"),
+      resolve: (str7) => new Scalar.Scalar(str7[0] === "t" || str7[0] === "T"),
       stringify({ source, value }, ctx) {
         if (source && boolTag.test.test(source)) {
           const sv = source[0] === "t" || source[0] === "T";
@@ -17859,7 +17859,7 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str6) => str6.slice(-3).toLowerCase() === "nan" ? NaN : str6[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str7) => str7.slice(-3).toLowerCase() === "nan" ? NaN : str7[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -17868,7 +17868,7 @@ var require_float = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-      resolve: (str6) => parseFloat(str6),
+      resolve: (str7) => parseFloat(str7),
       stringify(node) {
         const num3 = Number(node.value);
         return isFinite(num3) ? num3.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -17879,11 +17879,11 @@ var require_float = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-      resolve(str6) {
-        const node = new Scalar.Scalar(parseFloat(str6));
-        const dot = str6.indexOf(".");
-        if (dot !== -1 && str6[str6.length - 1] === "0")
-          node.minFractionDigits = str6.length - dot - 1;
+      resolve(str7) {
+        const node = new Scalar.Scalar(parseFloat(str7));
+        const dot = str7.indexOf(".");
+        if (dot !== -1 && str7[str7.length - 1] === "0")
+          node.minFractionDigits = str7.length - dot - 1;
         return node;
       },
       stringify: stringifyNumber.stringifyNumber
@@ -17900,7 +17900,7 @@ var require_int = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    var intResolve = (str6, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6.substring(offset), radix);
+    var intResolve = (str7, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str7) : parseInt(str7.substring(offset), radix);
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value) && value >= 0)
@@ -17913,7 +17913,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^0o[0-7]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 8, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 2, 8, opt),
       stringify: (node) => intStringify(node, 8, "0o")
     };
     var int2 = {
@@ -17921,7 +17921,7 @@ var require_int = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 0, 10, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -17930,7 +17930,7 @@ var require_int = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^0x[0-9a-fA-F]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 16, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -17983,7 +17983,7 @@ var require_schema2 = __commonJS({
         identify: (value) => typeof value === "string",
         default: true,
         tag: "tag:yaml.org,2002:str",
-        resolve: (str6) => str6,
+        resolve: (str7) => str7,
         stringify: stringifyJSON
       },
       {
@@ -18000,7 +18000,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:bool",
         test: /^true$|^false$/,
-        resolve: (str6) => str6 === "true",
+        resolve: (str7) => str7 === "true",
         stringify: stringifyJSON
       },
       {
@@ -18008,7 +18008,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:int",
         test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str6, _onError2, { intAsBigInt }) => intAsBigInt ? BigInt(str6) : parseInt(str6, 10),
+        resolve: (str7, _onError2, { intAsBigInt }) => intAsBigInt ? BigInt(str7) : parseInt(str7, 10),
         stringify: ({ value }) => intIdentify(value) ? value.toString() : JSON.stringify(value)
       },
       {
@@ -18016,7 +18016,7 @@ var require_schema2 = __commonJS({
         default: true,
         tag: "tag:yaml.org,2002:float",
         test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: (str6) => parseFloat(str6),
+        resolve: (str7) => parseFloat(str7),
         stringify: stringifyJSON
       }
     ];
@@ -18024,9 +18024,9 @@ var require_schema2 = __commonJS({
       default: true,
       tag: "",
       test: /^/,
-      resolve(str6, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str6)}`);
-        return str6;
+      resolve(str7, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str7)}`);
+        return str7;
       }
     };
     var schema = [map.map, seq.seq].concat(jsonScalars, jsonError);
@@ -18058,10 +18058,10 @@ var require_binary = __commonJS({
         if (typeof node_buffer.Buffer === "function") {
           return node_buffer.Buffer.from(src, "base64");
         } else if (typeof atob === "function") {
-          const str6 = atob(src.replace(/[\n\r]/g, ""));
-          const buffer = new Uint8Array(str6.length);
-          for (let i2 = 0; i2 < str6.length; ++i2)
-            buffer[i2] = str6.charCodeAt(i2);
+          const str7 = atob(src.replace(/[\n\r]/g, ""));
+          const buffer = new Uint8Array(str7.length);
+          for (let i2 = 0; i2 < str7.length; ++i2)
+            buffer[i2] = str7.charCodeAt(i2);
           return buffer;
         } else {
           onError("This environment does not support reading binary tags; either Buffer or atob is required");
@@ -18072,28 +18072,28 @@ var require_binary = __commonJS({
         if (!value)
           return "";
         const buf = value;
-        let str6;
+        let str7;
         if (typeof node_buffer.Buffer === "function") {
-          str6 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
+          str7 = buf instanceof node_buffer.Buffer ? buf.toString("base64") : node_buffer.Buffer.from(buf.buffer).toString("base64");
         } else if (typeof btoa === "function") {
           let s = "";
           for (let i2 = 0; i2 < buf.length; ++i2)
             s += String.fromCharCode(buf[i2]);
-          str6 = btoa(s);
+          str7 = btoa(s);
         } else {
           throw new Error("This environment does not support writing binary tags; either Buffer or btoa is required");
         }
         type ?? (type = Scalar.Scalar.BLOCK_LITERAL);
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-          const n2 = Math.ceil(str6.length / lineWidth);
+          const n2 = Math.ceil(str7.length / lineWidth);
           const lines = new Array(n2);
           for (let i2 = 0, o2 = 0; i2 < n2; ++i2, o2 += lineWidth) {
-            lines[i2] = str6.substr(o2, lineWidth);
+            lines[i2] = str7.substr(o2, lineWidth);
           }
-          str6 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str7 = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
-        return stringifyString.stringifyString({ comment, type, value: str6 }, ctx, onComment, onChompKeep);
+        return stringifyString.stringifyString({ comment, type, value: str7 }, ctx, onComment, onChompKeep);
       }
     };
     exports.binary = binary;
@@ -18299,7 +18299,7 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-      resolve: (str6) => str6.slice(-3).toLowerCase() === "nan" ? NaN : str6[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      resolve: (str7) => str7.slice(-3).toLowerCase() === "nan" ? NaN : str7[0] === "-" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
       stringify: stringifyNumber.stringifyNumber
     };
     var floatExp = {
@@ -18308,7 +18308,7 @@ var require_float2 = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "EXP",
       test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-      resolve: (str6) => parseFloat(str6.replace(/_/g, "")),
+      resolve: (str7) => parseFloat(str7.replace(/_/g, "")),
       stringify(node) {
         const num3 = Number(node.value);
         return isFinite(num3) ? num3.toExponential() : stringifyNumber.stringifyNumber(node);
@@ -18319,11 +18319,11 @@ var require_float2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:float",
       test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-      resolve(str6) {
-        const node = new Scalar.Scalar(parseFloat(str6.replace(/_/g, "")));
-        const dot = str6.indexOf(".");
+      resolve(str7) {
+        const node = new Scalar.Scalar(parseFloat(str7.replace(/_/g, "")));
+        const dot = str7.indexOf(".");
         if (dot !== -1) {
-          const f = str6.substring(dot + 1).replace(/_/g, "");
+          const f = str7.substring(dot + 1).replace(/_/g, "");
           if (f[f.length - 1] === "0")
             node.minFractionDigits = f.length;
         }
@@ -18343,34 +18343,34 @@ var require_int2 = __commonJS({
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
-    function intResolve(str6, offset, radix, { intAsBigInt }) {
-      const sign = str6[0];
+    function intResolve(str7, offset, radix, { intAsBigInt }) {
+      const sign = str7[0];
       if (sign === "-" || sign === "+")
         offset += 1;
-      str6 = str6.substring(offset).replace(/_/g, "");
+      str7 = str7.substring(offset).replace(/_/g, "");
       if (intAsBigInt) {
         switch (radix) {
           case 2:
-            str6 = `0b${str6}`;
+            str7 = `0b${str7}`;
             break;
           case 8:
-            str6 = `0o${str6}`;
+            str7 = `0o${str7}`;
             break;
           case 16:
-            str6 = `0x${str6}`;
+            str7 = `0x${str7}`;
             break;
         }
-        const n3 = BigInt(str6);
+        const n3 = BigInt(str7);
         return sign === "-" ? BigInt(-1) * n3 : n3;
       }
-      const n2 = parseInt(str6, radix);
+      const n2 = parseInt(str7, radix);
       return sign === "-" ? -1 * n2 : n2;
     }
     function intStringify(node, radix, prefix) {
       const { value } = node;
       if (intIdentify(value)) {
-        const str6 = value.toString(radix);
-        return value < 0 ? "-" + prefix + str6.substr(1) : prefix + str6;
+        const str7 = value.toString(radix);
+        return value < 0 ? "-" + prefix + str7.substr(1) : prefix + str7;
       }
       return stringifyNumber.stringifyNumber(node);
     }
@@ -18380,7 +18380,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "BIN",
       test: /^[-+]?0b[0-1_]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 2, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 2, 2, opt),
       stringify: (node) => intStringify(node, 2, "0b")
     };
     var intOct = {
@@ -18389,7 +18389,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "OCT",
       test: /^[-+]?0[0-7_]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 1, 8, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 1, 8, opt),
       stringify: (node) => intStringify(node, 8, "0")
     };
     var int2 = {
@@ -18397,7 +18397,7 @@ var require_int2 = __commonJS({
       default: true,
       tag: "tag:yaml.org,2002:int",
       test: /^[-+]?[0-9][0-9_]*$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 0, 10, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 0, 10, opt),
       stringify: stringifyNumber.stringifyNumber
     };
     var intHex = {
@@ -18406,7 +18406,7 @@ var require_int2 = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "HEX",
       test: /^[-+]?0x[0-9a-fA-F_]+$/,
-      resolve: (str6, _onError2, opt) => intResolve(str6, 2, 16, opt),
+      resolve: (str7, _onError2, opt) => intResolve(str7, 2, 16, opt),
       stringify: (node) => intStringify(node, 16, "0x")
     };
     exports.int = int2;
@@ -18510,9 +18510,9 @@ var require_timestamp = __commonJS({
   "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
-    function parseSexagesimal(str6, asBigInt) {
-      const sign = str6[0];
-      const parts = sign === "-" || sign === "+" ? str6.substring(1) : str6;
+    function parseSexagesimal(str7, asBigInt) {
+      const sign = str7[0];
+      const parts = sign === "-" || sign === "+" ? str7.substring(1) : str7;
       const num3 = (n2) => asBigInt ? BigInt(n2) : Number(n2);
       const res = parts.replace(/_/g, "").split(":").reduce((res2, p) => res2 * num3(60) + num3(p), num3(0));
       return sign === "-" ? num3(-1) * res : res;
@@ -18549,7 +18549,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:int",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-      resolve: (str6, _onError2, { intAsBigInt }) => parseSexagesimal(str6, intAsBigInt),
+      resolve: (str7, _onError2, { intAsBigInt }) => parseSexagesimal(str7, intAsBigInt),
       stringify: stringifySexagesimal
     };
     var floatTime = {
@@ -18558,7 +18558,7 @@ var require_timestamp = __commonJS({
       tag: "tag:yaml.org,2002:float",
       format: "TIME",
       test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-      resolve: (str6) => parseSexagesimal(str6, false),
+      resolve: (str7) => parseSexagesimal(str7, false),
       stringify: stringifySexagesimal
     };
     var timestamp = {
@@ -18569,8 +18569,8 @@ var require_timestamp = __commonJS({
       // may be omitted altogether, resulting in a date format. In such a case, the time part is
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
-      resolve(str6) {
-        const match = str6.match(timestamp.test);
+      resolve(str7) {
+        const match = str7.match(timestamp.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -22901,14 +22901,14 @@ var require_content_type = __commonJS({
       return header;
     }
     function qstring(val) {
-      var str6 = String(val);
-      if (TOKEN_REGEXP.test(str6)) {
-        return str6;
+      var str7 = String(val);
+      if (TOKEN_REGEXP.test(str7)) {
+        return str7;
       }
-      if (str6.length > 0 && !TEXT_REGEXP.test(str6)) {
+      if (str7.length > 0 && !TEXT_REGEXP.test(str7)) {
         throw new TypeError("invalid parameter value");
       }
-      return '"' + str6.replace(QUOTE_REGEXP, "\\$1") + '"';
+      return '"' + str7.replace(QUOTE_REGEXP, "\\$1") + '"';
     }
     function ContentType(type) {
       this.parameters = /* @__PURE__ */ Object.create(null);
@@ -27171,14 +27171,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str6 = "";
+  let str7 = "";
   for (let i2 = 0; i2 < length; i2++) {
-    str6 += chars[Math.floor(Math.random() * chars.length)];
+    str7 += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str6;
+  return str7;
 }
-function esc(str6) {
-  return JSON.stringify(str6);
+function esc(str7) {
+  return JSON.stringify(str7);
 }
 var captureStackTrace = Error.captureStackTrace ? Error.captureStackTrace : (..._args) => {
 };
@@ -27266,8 +27266,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str6) {
-  return str6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str7) {
+  return str7.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -36361,12 +36361,12 @@ var UriTemplate = class _UriTemplate {
    * A template expression is a sequence of characters enclosed in curly braces,
    * like {foo} or {?bar}.
    */
-  static isTemplate(str6) {
-    return /\{[^}\s]+\}/.test(str6);
+  static isTemplate(str7) {
+    return /\{[^}\s]+\}/.test(str7);
   }
-  static validateLength(str6, max, context) {
-    if (str6.length > max) {
-      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str6.length})`);
+  static validateLength(str7, max, context) {
+    if (str7.length > max) {
+      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str7.length})`);
     }
   }
   get variableNames() {
@@ -36495,8 +36495,8 @@ var UriTemplate = class _UriTemplate {
     }
     return result;
   }
-  escapeRegExp(str6) {
-    return str6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  escapeRegExp(str7) {
+    return str7.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
   partToRegExp(part) {
     const patterns = [];
@@ -64475,6 +64475,7 @@ import { randomUUID as randomUUID7 } from "node:crypto";
 import { join as join54 } from "node:path";
 var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
+var THEMES_NOT_CHECKED = "not checked (WP-CLI has no theme checksums)";
 var inputSchema15 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php."),
   include_users: external_exports.boolean().optional(),
@@ -64484,7 +64485,7 @@ var inputSchema15 = {
 var tool28 = {
   name: "wp_audit",
   title: "Live WordPress install audit",
-  description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
+  description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
   inputSchema: inputSchema15,
   handler: async (input, ctx) => handler25(input, ctx)
 };
@@ -64520,7 +64521,8 @@ async function handler25(input, ctx) {
   );
   const meta = {
     wp_version: null,
-    checksum_mismatches: { core: [], plugins: {}, themes: {} },
+    checksum_mismatches: { core: [], plugins: {} },
+    checksums_not_checked: { themes: THEMES_NOT_CHECKED, plugins: [] },
     config_flags: {
       DISALLOW_FILE_EDIT: null,
       WP_DEBUG: null,
@@ -64531,12 +64533,12 @@ async function handler25(input, ctx) {
     plugins_with_auto_update: [],
     warnings: []
   };
+  const gaps = [];
   const configFlags = includeOptions ? ["DISALLOW_FILE_EDIT", "WP_DEBUG", "WP_DEBUG_LOG", "FORCE_SSL_ADMIN"] : [];
   const [
     versionResult,
     coreVerify,
     pluginVerify,
-    themeVerify,
     adminResult,
     pluginListResult,
     ...configResults
@@ -64546,21 +64548,16 @@ async function handler25(input, ctx) {
       () => wpCall(
         ["core", "verify-checksums", `--path=${installPath}`, "--format=json"],
         installPath,
-        ctx
+        ctx,
+        { rowsOnExit1: true }
       )
     ),
     retry(
       () => wpCall(
         ["plugin", "verify-checksums", "--all", `--path=${installPath}`, "--format=json"],
         installPath,
-        ctx
-      )
-    ),
-    retry(
-      () => wpCall(
-        ["theme", "verify-checksums", "--all", `--path=${installPath}`, "--format=json"],
-        installPath,
-        ctx
+        ctx,
+        { rowsOnExit1: true }
       )
     ),
     includeUsers ? retry(
@@ -64598,13 +64595,27 @@ async function handler25(input, ctx) {
     meta.wp_version = versionResult.stdout.trim() || null;
   } else {
     meta.warnings.push(`core version: ${versionResult.reason}`);
+    gaps.push("core version not read");
   }
-  meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
-  if (!coreVerify.ok) meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
-  meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
-  if (!pluginVerify.ok) meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
-  meta.checksum_mismatches.themes = groupByComponent(themeVerify);
-  if (!themeVerify.ok) meta.warnings.push(`theme verify-checksums: ${themeVerify.reason}`);
+  if (coreVerify.ok) {
+    meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
+  } else {
+    meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
+    gaps.push("core checksums not verified");
+  }
+  if (pluginVerify.ok) {
+    meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
+    meta.checksums_not_checked.plugins = skippedPlugins(pluginVerify.stderr);
+    if (meta.checksums_not_checked.plugins.length > 0) {
+      gaps.push(
+        `${meta.checksums_not_checked.plugins.length} plugin(s) not verified: ` + meta.checksums_not_checked.plugins.map((p) => p.plugin).join(", ")
+      );
+    }
+  } else {
+    meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
+    gaps.push("plugin checksums not verified");
+  }
+  meta.warnings.push(`theme checksums: ${THEMES_NOT_CHECKED} \u2014 theme files were not verified`);
   if (includeUsers) {
     if (adminResult.ok) {
       try {
@@ -64616,9 +64627,11 @@ async function handler25(input, ctx) {
         }));
       } catch {
         meta.warnings.push("user list: stdout not JSON");
+        gaps.push("admin users not read");
       }
     } else {
       meta.warnings.push(`user list: ${adminResult.reason}`);
+      gaps.push("admin users not read");
     }
   }
   if (pluginListResult.ok) {
@@ -64627,9 +64640,11 @@ async function handler25(input, ctx) {
       meta.plugins_with_auto_update = arr.filter((p) => (p.auto_update ?? "").toLowerCase() === "on").map((p) => p.name);
     } catch {
       meta.warnings.push("plugin list: stdout not JSON");
+      gaps.push("plugin list not read");
     }
   } else {
     meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
+    gaps.push("plugin list not read");
   }
   configFlags.forEach((flag, i2) => {
     const r = configResults[i2];
@@ -64639,8 +64654,14 @@ async function handler25(input, ctx) {
       meta.config_flags[flag] = val === "true" || val === "1";
     } else {
       meta.warnings.push(`config get ${flag}: ${r.reason}`);
+      gaps.push(`config ${flag} not read`);
     }
   });
+  const answered = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
+  const toolRun = gaps.length === 0 ? { name: "wp-cli", status: "ok" } : { name: "wp-cli", status: answered ? "ok" : "failed", reason: gaps.join("; ") };
+  const tools_run = [toolRun];
+  const missing_tools = gaps.length > 0 ? ["wp-cli"] : [];
+  const coverage = computeCoverage(tools_run, missing_tools);
   const scanId = randomUUID7();
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -64650,18 +64671,21 @@ async function handler25(input, ctx) {
   });
   ctx.storage.scans.finalize({
     scan_id: scanId,
-    status: "completed",
-    tools_run: [{ name: "wp-cli", status: "ok" }],
-    missing_tools: [],
+    status: answered ? "completed" : "failed",
+    tools_run,
+    missing_tools,
     meta
   });
   return {
     ok: true,
     scan_id: scanId,
+    coverage,
+    tools_run,
+    missing_tools,
     ...meta
   };
 }
-async function wpCall(args, cwd, ctx) {
+async function wpCall(args, cwd, ctx, opts = {}) {
   const r = await runProcess({
     command: "wp",
     args,
@@ -64669,7 +64693,8 @@ async function wpCall(args, cwd, ctx) {
     env: process.env,
     timeoutMs: 6e4
   });
-  const ok = r.outcome === "completed";
+  const reported = opts.rowsOnExit1 === true && r.exitCode === 1 && checksumRows(r.stdout) !== null;
+  const ok = r.outcome === "completed" || reported;
   return {
     ok,
     stdout: r.stdout,
@@ -64686,46 +64711,69 @@ async function retry(call) {
   }
   return last;
 }
-function parseChecksumOutput(r) {
-  if (!r.ok || r.stdout.trim().length === 0) return [];
+function checksumRows(stdout) {
+  const text2 = stdout.trim();
+  if (!text2.startsWith("[")) return null;
   try {
-    const arr = JSON.parse(r.stdout);
-    return arr.map((x) => ({
-      file: x.file ?? "(unknown)",
-      status: normaliseStatus(x.status ?? x.message)
-    }));
+    const arr = JSON.parse(text2);
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const rows = arr.filter((x) => typeof x === "object" && x !== null && !Array.isArray(x));
+    return rows.length === arr.length && rows.every((x) => typeof x["file"] === "string") ? rows : null;
   } catch {
-    return [];
+    return null;
   }
 }
+var str3 = (v) => typeof v === "string" ? v : void 0;
+function parseChecksumOutput(r) {
+  const rows = checksumRows(r.stdout);
+  if (rows === null) return [];
+  return rows.map((x) => ({
+    file: str3(x["file"]) ?? "(unknown)",
+    status: normaliseStatus(str3(x["status"]) ?? str3(x["message"]))
+  }));
+}
 function groupByComponent(r) {
-  if (!r.ok || r.stdout.trim().length === 0) return {};
-  try {
-    const arr = JSON.parse(r.stdout);
-    const out = {};
-    for (const row of arr) {
-      const slug = row["plugin_name"] ?? row["theme_name"] ?? "(unknown)";
-      const f = {
-        file: row["file"] ?? "(unknown)",
-        status: normaliseStatus(row["status"] ?? row["message"])
-      };
-      let bucket = out[slug];
-      if (!bucket) {
-        bucket = [];
-        out[slug] = bucket;
-      }
-      bucket.push(f);
+  const rows = checksumRows(r.stdout);
+  if (rows === null) return {};
+  const out = {};
+  for (const row of rows) {
+    const slug = str3(row["plugin_name"]) ?? "(unknown)";
+    const f = {
+      file: str3(row["file"]) ?? "(unknown)",
+      status: normaliseStatus(str3(row["status"]) ?? str3(row["message"]))
+    };
+    let bucket = out[slug];
+    if (!bucket) {
+      bucket = [];
+      out[slug] = bucket;
     }
-    return out;
-  } catch {
-    return {};
+    bucket.push(f);
   }
+  return out;
+}
+function skippedPlugins(stderr) {
+  const out = /* @__PURE__ */ new Map();
+  for (const raw of stderr.split(/\r?\n/)) {
+    const line = raw.replace(/^Warning:\s*/, "").trim();
+    const skip2 = /^(Could not retrieve the (?:checksums for version \S+ of|version for) (?:must-use )?plugin) (.+?), skipping\.$/.exec(line);
+    if (skip2?.[1] !== void 0 && skip2[2] !== void 0) {
+      out.set(skip2[2], skip2[1].replace(/^Could not retrieve/, "WP-CLI could not retrieve"));
+      continue;
+    }
+    const mu = /^Must-use plugin '([^']+)' appears to be a custom file or loader plugin and cannot be verified\.$/.exec(line);
+    if (mu?.[1] !== void 0) out.set(mu[1], "a custom must-use file WP-CLI cannot verify");
+  }
+  return [...out.entries()].sort(([a2], [b]) => a2.localeCompare(b)).map(([plugin, reason]) => ({ plugin, reason }));
 }
 function normaliseStatus(raw) {
   const s = (raw ?? "").toLowerCase();
-  if (s.includes("modified") || s.includes("changed")) return "modified";
-  if (s.includes("missing")) return "missing";
-  if (s.includes("added") || s.includes("extra") || s.includes("not in")) return "added";
+  if (s.includes("modified") || s.includes("changed") || s.includes("verify against") || s.includes("does not match")) {
+    return "modified";
+  }
+  if (s.includes("missing") || s.includes("doesn't exist") || s.includes("does not exist")) return "missing";
+  if (s.includes("added") || s.includes("extra") || s.includes("not in") || s.includes("should not exist")) {
+    return "added";
+  }
   return "unknown";
 }
 function failDomain19(code, message3) {
@@ -69436,9 +69484,9 @@ function collectEnvVars(semgrepJson) {
   const out = [];
   for (const raw of results) {
     const extra = prop3(raw, "extra");
-    if (str3(prop3(extra, "metadata"), "guardian_kind") !== "env") continue;
-    const captured = str3(prop3(prop3(extra, "metavars"), "$NAME"), "abstract_content");
-    const file = str3(raw, "path");
+    if (str4(prop3(extra, "metadata"), "guardian_kind") !== "env") continue;
+    const captured = str4(prop3(prop3(extra, "metavars"), "$NAME"), "abstract_content");
+    const file = str4(raw, "path");
     if (captured === void 0 || file === void 0) continue;
     const name = captured.replace(/^['"`]|['"`]$/g, "");
     if (name.length === 0 || seen.has(name)) continue;
@@ -69452,7 +69500,7 @@ function prop3(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str3(value, key) {
+function str4(value, key) {
   const v = prop3(value, key);
   return typeof v === "string" ? v : void 0;
 }
@@ -69555,9 +69603,9 @@ function recoverMetavars(semgrepJson, sources) {
   const rebuilt = results.map((raw) => {
     const extra = prop4(raw, "extra");
     const metadata = prop4(extra, "metadata");
-    const kind = str4(metadata, "guardian_kind");
+    const kind = str5(metadata, "guardian_kind");
     if (kind === void 0 || !RECOVERABLE_KINDS.has(kind)) return raw;
-    if (str4(metadata, INHERITED_PATH_KEY) === INHERITED_PATH) {
+    if (str5(metadata, INHERITED_PATH_KEY) === INHERITED_PATH) {
       noCaptures += 1;
       return raw;
     }
@@ -69569,7 +69617,7 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
     if (metavars === void 0 || !isRecord7(raw)) {
       unrecoverable += 1;
-      const path8 = kind === "route" ? str4(raw, "path") : void 0;
+      const path8 = kind === "route" ? str5(raw, "path") : void 0;
       if (path8 !== void 0) unreadableRouteFiles.push(path8);
       return raw;
     }
@@ -69586,7 +69634,7 @@ function recoverMetavars(semgrepJson, sources) {
   };
 }
 function sliceSpan(raw, sources, buffers) {
-  const path8 = str4(raw, "path");
+  const path8 = str5(raw, "path");
   if (path8 === void 0) return void 0;
   const start = num2(prop4(raw, "start"), "offset");
   const end = num2(prop4(raw, "end"), "offset");
@@ -69621,12 +69669,12 @@ function synthesize(kind, span, metadata) {
 var FOCUS_METADATA_KEY = "guardian_focus";
 var FOCUS_PATH = "path";
 function synthesizeRoute(span, metadata) {
-  if (str4(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
+  if (str5(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
     return { $PATH: { abstract_content: span } };
   }
-  const framework = str4(metadata, "framework");
+  const framework = str5(metadata, "framework");
   if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
-  const declaredMethod = str4(metadata, "method");
+  const declaredMethod = str5(metadata, "method");
   const path8 = routePath(span);
   if (path8 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path8 } };
@@ -69699,7 +69747,7 @@ function synthesizeMount(span) {
   };
 }
 function synthesizeImport(span, metadata) {
-  switch (str4(metadata, "framework")) {
+  switch (str5(metadata, "framework")) {
     case "python":
       return synthesizePythonImport(span);
     case "go":
@@ -70041,7 +70089,7 @@ function prop4(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str4(value, key) {
+function str5(value, key) {
   const v = prop4(value, key);
   return typeof v === "string" ? v : void 0;
 }
@@ -70513,7 +70561,7 @@ function importSpec(file, text2) {
   const routes = [];
   let unresolvedRefs = 0;
   for (const [pathTemplate, pathItem] of pathEntries) {
-    if (str5(pathItem, "$ref") !== void 0) {
+    if (str6(pathItem, "$ref") !== void 0) {
       unresolvedRefs += 1;
       continue;
     }
@@ -70585,14 +70633,14 @@ function parseRoot(text2) {
   }
 }
 function detectFormat2(root) {
-  const openapi = str5(root, "openapi");
+  const openapi = str6(root, "openapi");
   if (openapi !== void 0 && openapi.startsWith("3.")) return "openapi-3";
-  if (str5(root, "swagger") === "2.0") return "swagger-2";
+  if (str6(root, "swagger") === "2.0") return "swagger-2";
   return "unknown";
 }
 function openapiBasePath(root) {
   const servers = asArray3(prop5(root, "servers"));
-  const url2 = str5(servers[0], "url");
+  const url2 = str6(servers[0], "url");
   if (url2 === void 0) return { base: "", partial: false };
   if (url2.includes("{")) return { base: "", partial: true };
   try {
@@ -70606,7 +70654,7 @@ function isAbsolutePathReference(url2) {
   return url2.startsWith("/") && !url2.startsWith("//");
 }
 function swaggerBasePath(root) {
-  const basePath = str5(root, "basePath") ?? "";
+  const basePath = str6(root, "basePath") ?? "";
   if (basePath === "") return { base: "", partial: false };
   if (basePath.includes("{")) return { base: "", partial: true };
   if (!isAbsolutePathReference(basePath)) return { base: "", partial: true };
@@ -70635,10 +70683,10 @@ function paramsFromTemplate(pathTemplate) {
 function paramNamesInPath(root, rawList) {
   const names = [];
   for (const entry of asArray3(rawList)) {
-    const ref = str5(entry, "$ref");
+    const ref = str6(entry, "$ref");
     const resolved = ref !== void 0 ? resolveRef(root, ref) : entry;
-    if (str5(resolved, "in") !== "path") continue;
-    const name = str5(resolved, "name");
+    if (str6(resolved, "in") !== "path") continue;
+    const name = str6(resolved, "name");
     if (name !== void 0) names.push(name);
   }
   return names;
@@ -70657,7 +70705,7 @@ function prop5(value, key) {
   if (value === null || typeof value !== "object") return void 0;
   return value[key];
 }
-function str5(value, key) {
+function str6(value, key) {
   const v = prop5(value, key);
   return typeof v === "string" ? v : void 0;
 }
@@ -74981,12 +75029,12 @@ function hashConfigValue(value) {
 
 // src/agentaudit/mcpServers.ts
 function remoteAddress(raw, sourceLabel) {
-  const str6 = (k) => typeof raw[k] === "string" ? raw[k] : void 0;
-  const type = str6("type")?.toLowerCase();
+  const str7 = (k) => typeof raw[k] === "string" ? raw[k] : void 0;
+  const type = str7("type")?.toLowerCase();
   const gemini = /(^|\/)\.gemini\/settings\.json$/.test(sourceLabel);
-  const httpUrl = str6("httpUrl");
-  const url2 = str6("url");
-  const serverUrl = str6("serverUrl");
+  const httpUrl = str7("httpUrl");
+  const url2 = str7("url");
+  const serverUrl = str7("serverUrl");
   const address = httpUrl ?? url2 ?? serverUrl;
   if (address === void 0) return void 0;
   let transport;
@@ -76629,12 +76677,12 @@ function normalizeListing(raw) {
     }
     return out;
   };
-  const str6 = (v) => typeof v === "string" ? v : void 0;
+  const str7 = (v) => typeof v === "string" ? v : void 0;
   const tools = pick2(raw.tools, (o2, name) => {
     const t = { name };
-    const title = str6(o2["title"]);
+    const title = str7(o2["title"]);
     if (title !== void 0) t.title = title;
-    const description = str6(o2["description"]);
+    const description = str7(o2["description"]);
     if (description !== void 0) t.description = description;
     if (o2["inputSchema"] !== void 0) t.inputSchema = o2["inputSchema"];
     if (o2["outputSchema"] !== void 0) t.outputSchema = o2["outputSchema"];
@@ -76643,30 +76691,30 @@ function normalizeListing(raw) {
   });
   const prompts = pick2(raw.prompts, (o2, name) => {
     const p = { name };
-    const title = str6(o2["title"]);
+    const title = str7(o2["title"]);
     if (title !== void 0) p.title = title;
-    const description = str6(o2["description"]);
+    const description = str7(o2["description"]);
     if (description !== void 0) p.description = description;
     if (o2["arguments"] !== void 0) p.arguments = o2["arguments"];
     return p;
   });
   const resources = pick2(raw.resources, (o2, name) => {
     const r = { name };
-    const title = str6(o2["title"]);
+    const title = str7(o2["title"]);
     if (title !== void 0) r.title = title;
-    const description = str6(o2["description"]);
+    const description = str7(o2["description"]);
     if (description !== void 0) r.description = description;
-    const uri = str6(o2["uri"]);
+    const uri = str7(o2["uri"]);
     if (uri !== void 0) r.uri = uri;
     return r;
   });
   const resourceTemplates = pick2(raw.resourceTemplates, (o2, name) => {
     const r = { name };
-    const title = str6(o2["title"]);
+    const title = str7(o2["title"]);
     if (title !== void 0) r.title = title;
-    const description = str6(o2["description"]);
+    const description = str7(o2["description"]);
     if (description !== void 0) r.description = description;
-    const uri = str6(o2["uriTemplate"]);
+    const uri = str7(o2["uriTemplate"]);
     if (uri !== void 0) r.uri = uri;
     return r;
   });
