@@ -452,6 +452,18 @@ version bump.
   published with `link()` (create) or `rename()` (replace), so it never writes through a link or into an inode a
   hard link shares. The `.gitignore` upkeep is `refused` for a link, a FIFO or a file over 4 MiB, and startup
   logs why.
+- The tools that write into the project had the same shape, and each was measured writing outside it:
+  `observability_setup` (through a `src/` junction or a dangling `src/logger.ts` link), `init_project`'s config
+  install (a dangling `.gitleaks.toml` link; its manifest through a `.dev-guardian` directory link), its refresh
+  (an "untouched" `.semgrep.yml` that was a link to a file outside was updated in place), and `mcp-config --write`
+  (a dangling `AGENTS.md`, a `.codex` or `.cursor` directory link). All of them now write through
+  `platform/projectFs.ts`; a refresh reports a link or non-regular target as the new `refused` action and never
+  adopts one. `precommit_install` refuses before running pre-commit when `.pre-commit-config.yaml` resolves
+  outside the project, when `.git`, the hooks directory or a hook file is a link, and when `.git` is a file that
+  names another repository's git directory rather than a worktree or submodule of it — pre-commit would have
+  installed hooks there. `.dev-guardian/configs.json`'s `source` and `target` are read contained in `configs/`
+  and the project: a committed manifest naming `/dev/zero` was read by every scan's drift check, and one naming
+  a file outside was hashed.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

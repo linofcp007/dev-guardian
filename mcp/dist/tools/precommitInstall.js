@@ -6,8 +6,8 @@
  * `.pre-commit-config.yaml`. Returns the hook stages that installed
  * (`stages_installed`) and those that did not (`stages_failed`).
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { hookInstallTarget } from '../platform/hookInstallTarget.js';
+import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
@@ -31,11 +31,20 @@ async function handler(input, _ctx) {
     catch (e) {
         return failDomain('not_a_git_repo', e.message);
     }
-    if (!existsSync(join(projectPath, '.pre-commit-config.yaml'))) {
+    // pre-commit reads the config and writes the hooks wherever the
+    // repository's metadata says; both are judged here first — a config that
+    // links out of the project, and a `.git`, hooks directory or hook file that
+    // would send the write elsewhere, are refused (`platform/hookInstallTarget.ts`).
+    const config = readProjectText(projectPath, '.pre-commit-config.yaml', 1024 * 1024);
+    if (config.status === 'absent') {
         return failDomain('scanner_failed', 'No .pre-commit-config.yaml in project. Run init_project first.');
     }
-    if (!existsSync(join(projectPath, '.git'))) {
-        return failDomain('not_a_git_repo', 'pre-commit needs a git repo to install hooks into.');
+    if (config.status === 'refused') {
+        return failDomain('scanner_failed', `.pre-commit-config.yaml was refused: ${describeReadRefusal(config.reason)}.`);
+    }
+    const target = hookInstallTarget(projectPath);
+    if (!target.ok) {
+        return failDomain('not_a_git_repo', target.reason);
     }
     const bin = await scannerAvailable('pre-commit');
     if (!bin) {

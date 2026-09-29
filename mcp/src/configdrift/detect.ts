@@ -26,8 +26,7 @@
  * check cannot reach.
  */
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { presentInProject } from '../platform/projectFs.js';
 import { hashConfigFile } from './hash.js';
 import { readManifest, type ConfigManifestEntry } from './manifest.js';
 
@@ -91,18 +90,19 @@ function classify(entry: ConfigManifestEntry, input: DetectDriftInput): DriftEnt
     current_plugin_version: input.currentVersion,
   };
 
-  const sourceHash = hashConfigFile(join(input.configsDir, entry.source));
+  // `source` and `target` come from the manifest — the repository's file —
+  // so each is read contained in its own root (`hashConfigFile`).
+  const sourceHash = hashConfigFile(input.configsDir, entry.source);
   if (sourceHash === null) return { ...base, state: 'source_missing' };
 
-  const targetPath = join(input.projectPath, entry.target);
-  const targetHash = hashConfigFile(targetPath);
+  const targetHash = hashConfigFile(input.projectPath, entry.target);
   if (targetHash === null) return { ...base, state: 'target_missing' };
 
   // A refresh that could not overwrite safely left the new baseline beside
   // the user's file. While that file is still there the merge is outstanding,
   // and that is the only thing worth saying — the hashes below would say
   // `in_sync`, because the manifest was updated to record the delivery.
-  if (entry.delivered_as !== undefined && existsSync(join(input.projectPath, entry.delivered_as))) {
+  if (entry.delivered_as !== undefined && presentInProject(input.projectPath, entry.delivered_as)) {
     return { ...base, state: 'pending_merge', delivered_as: entry.delivered_as };
   }
 

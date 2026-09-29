@@ -13,11 +13,12 @@
  * etc.) — actual install is left to the user / their package manager.
  */
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { describeWriteRefusal, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -69,19 +70,15 @@ async function handler(
   const failed: Array<Proposal & { error: string }> = [];
 
   if (apply) {
+    // Create-only, through `platform/projectFs.ts`: an existing file is the
+    // user's and is skipped; a link at the target (a dangling one included)
+    // or a directory on the way that links out of the project is refused,
+    // never written through.
     for (const p of proposals) {
-      const abs = join(projectPath, p.target);
-      if (existsSync(abs)) {
-        skipped.push({ ...p, reason_skipped: 'already_exists' });
-        continue;
-      }
-      try {
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, p.contents, 'utf8');
-        written.push(p);
-      } catch (e) {
-        failed.push({ ...p, error: (e as Error).message });
-      }
+      const w = writeProjectFile(projectPath, p.target, p.contents, { mode: 'create' });
+      if (w.ok) written.push(p);
+      else if (w.reason === 'exists') skipped.push({ ...p, reason_skipped: 'already_exists' });
+      else failed.push({ ...p, error: describeWriteRefusal(w.reason, w.detail) });
     }
   }
 

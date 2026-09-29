@@ -10,16 +10,16 @@
  * per-host shape table lives in `hostSpecs.ts`. This module only wires I/O.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  describeReadRefusal,
+  describeWriteRefusal,
+  isWithinDir,
+  readProjectBytes,
+  writeProjectFile,
+} from '../platform/projectFs.js';
 import {
   ALL_HOSTS,
   effectiveScope,
@@ -109,6 +109,9 @@ function loadKnownLegacyTemplates(): string[] {
  * whole file — frontmatter first, always.
  */
 const OWNED_WHOLE_FILE_HOSTS: ReadonlySet<HostName> = new Set(['cursor', 'windsurf']);
+
+/** The largest project rules or MCP config file read for a merge; a real one is a few KB. */
+const MAX_PROJECT_HOST_FILE_BYTES = 4 * 1024 * 1024;
 
 export type RulesStatus =
   | 'written'
@@ -323,13 +326,20 @@ function installRulesOne(
   if (!existsSync(src)) return { ...base, status: 'template_missing', reason: `${src} missing` };
 
   let templateText: string;
-  let existingText: string | null = null;
   try {
+    // The plugin's own `host-rules/` template.
     templateText = readFileSync(src, 'utf8');
-    if (existsSync(dst)) existingText = readFileSync(dst, 'utf8');
   } catch (e) {
     return { ...base, status: 'failed', reason: (e as Error).message };
   }
+  // The project's file: bounded, regular files only, never through a link out
+  // of the project (`platform/projectFs.ts`). Bytes, so a byte-order mark the
+  // file starts with survives the merge.
+  const existing = readProjectBytes(projectPath, rules.target_path, MAX_PROJECT_HOST_FILE_BYTES);
+  if (existing.status === 'refused') {
+    return { ...base, status: 'failed', reason: `${dst}: ${describeReadRefusal(existing.reason)}` };
+  }
+  const existingText: string | null = existing.status === 'ok' ? existing.bytes.toString('utf8') : null;
 
   const rendered = substituteCliPath(templateText, cliPath);
   const merged = OWNED_WHOLE_FILE_HOSTS.has(host)
@@ -373,13 +383,13 @@ function installRulesOne(
       bytes: Buffer.byteLength(content, 'utf8'),
     };
   }
-  try {
-    mkdirSync(dirname(dst), { recursive: true });
-    writeFileSync(dst, content, 'utf8');
-    return { ...base, status: merged.status, bytes: statSync(dst).size };
-  } catch (e) {
-    return { ...base, status: 'failed', reason: (e as Error).message };
-  }
+  // Never through a link — the file itself, or a directory on the way that
+  // leads out of the project — and replaced through a temp file.
+  const w = writeProjectFile(projectPath, rules.target_path, content, {
+    mode: existingText === null ? 'create' : 'replace',
+  });
+  if (!w.ok) return { ...base, status: 'failed', reason: `${dst}: ${describeWriteRefusal(w.reason, w.detail)}` };
+  return { ...base, status: merged.status, bytes: w.bytes };
 }
 
 function registerMcpOne(
@@ -406,11 +416,29 @@ function registerMcpOne(
     return { status: 'unsupported', scope, reason: `could not resolve config path (os=${env.os})` };
   }
 
+  // A project-scope config is the project's file, read and written through
+  // `platform/projectFs.ts`. A user-scope one is the user's own, in their
+  // home, where a link (a dotfiles checkout) is theirs to have.
+  const inProject = isWithinDir(env.projectPath, configPath);
   let existing: string | null = null;
-  try {
-    if (existsSync(configPath)) existing = readFileSync(configPath, 'utf8');
-  } catch (e) {
-    return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: (e as Error).message };
+  if (inProject) {
+    const r = readProjectBytes(env.projectPath, configPath, MAX_PROJECT_HOST_FILE_BYTES);
+    if (r.status === 'refused') {
+      return {
+        status: 'failed',
+        config_path: configPath,
+        key: m.serverKey,
+        scope,
+        reason: describeReadRefusal(r.reason),
+      };
+    }
+    if (r.status === 'ok') existing = r.bytes.toString('utf8');
+  } else {
+    try {
+      if (existsSync(configPath)) existing = readFileSync(configPath, 'utf8');
+    } catch (e) {
+      return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: (e as Error).message };
+    }
   }
 
   const entry = buildServerEntry(serverJsPath, m.format === 'json-servers');
@@ -464,6 +492,19 @@ function registerMcpOne(
       scope,
       reason: 'internal error: merge produced no content to write',
     };
+  }
+  if (inProject) {
+    const w = writeProjectFile(env.projectPath, configPath, content, { mode: existing === null ? 'create' : 'replace' });
+    if (!w.ok) {
+      return {
+        status: 'failed',
+        config_path: configPath,
+        key: m.serverKey,
+        scope,
+        reason: describeWriteRefusal(w.reason, w.detail),
+      };
+    }
+    return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
   }
   try {
     mkdirSync(dirname(configPath), { recursive: true });
