@@ -18,16 +18,39 @@
  * `GUARDIAN_PERF_STRICT=1` (a quiet machine; see `docs/env.md`).
  */
 
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { expect } from 'vitest';
 
 /** `GUARDIAN_PERF_STRICT=1`: the absolute time bounds run (a quiet machine). */
 export const PERF_STRICT = process.env['GUARDIAN_PERF_STRICT'] === '1';
+
+/**
+ * A full garbage collection, run before each timed call so that none lands
+ * inside it. A vitest worker carries the heap of every file it has run; in a
+ * loaded full run (Docker, review 3.0 R7) a collection of that heap landing
+ * in the larger input's timings — every one of them — read as 25x for 4x
+ * the input on a shape that is 4.7x standalone. `--expose-gc` is not on the
+ * workers' command line, so the flag is set here and `gc` taken from a new
+ * context, where V8 installs it; a no-op if that ever stops working.
+ */
+const collectGarbage: () => void = (() => {
+  try {
+    setFlagsFromString('--expose-gc');
+    const gc: unknown = runInNewContext('gc');
+    if (typeof gc === 'function') return () => void gc();
+  } catch {
+    /* no gc: timings keep whatever collections land in them */
+  }
+  return () => {};
+})();
 
 /** The best of `runs` timings after one warm-up run: a quadratic shape is slow every time, a busy scheduler once. */
 export function bestOf(runs: number, run: () => void): number {
   run();
   let best = Number.POSITIVE_INFINITY;
   for (let k = 0; k < runs; k += 1) {
+    collectGarbage();
     const t0 = performance.now();
     run();
     best = Math.min(best, performance.now() - t0);

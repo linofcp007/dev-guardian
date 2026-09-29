@@ -48,7 +48,7 @@ const bestOf5 = (run: () => void): number => bestOf(5, run);
  */
 function timeShape(label: string, run: (n: number) => void, n: number, strictMs: number): void {
   it(`${label}: four times the input costs well under twelve times as much`, () => {
-    expectLinear(label, run, n, { runs: 3 });
+    expectLinear(label, run, n, { runs: 5 });
   }, 120_000);
   it.runIf(PERF_STRICT)(`${label}: under ${String(strictMs)} ms on a quiet machine (GUARDIAN_PERF_STRICT=1)`, () => {
     run(n);
@@ -790,9 +790,12 @@ describe('assessBashCommand — task-1: text fed to a shell is executed (finding
 });
 
 describe('assessBashCommand — task-1: ReDoS caps (finding 9)', () => {
-  // Typical, idle, at 100 KB / 200 KB: 11 ms and 18 ms.
-  timeShape('a 100 KB unquoted command', (n) => assessBashCommand(`echo ${'a'.repeat(n)}`), 25_000, 500);
-  timeShape('a pathological JWT-shaped repeat', (n) => assessBashCommand(`echo ${'eyJ-'.repeat(n)}`), 12_500, 500);
+  // Measured 64 KB against 256 KB: both past the 16 KB statement cap, so the
+  // ratio compares one code path with itself (a pair straddling the cap
+  // compares two, and read 14x in Docker). Standalone, 64 KB -> 256 KB is
+  // 4.5x / 7.3x on Windows and 4.7x / 5.7x in Docker; 6-7 ms / 30-130 ms.
+  timeShape('a long unquoted command', (n) => assessBashCommand(`echo ${'a'.repeat(n)}`), 64_000, 500);
+  timeShape('a pathological JWT-shaped repeat', (n) => assessBashCommand(`echo ${'eyJ-'.repeat(n)}`), 16_000, 500);
 });
 
 // Fix round 2: inside each 16 KB statement the pattern rules were still

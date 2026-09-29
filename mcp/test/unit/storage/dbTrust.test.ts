@@ -16,7 +16,6 @@
  * (`tmpdir()/dev-guardian/<sha1(path)>`) and nothing checked who made it.
  */
 
-import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   copyFileSync,
@@ -46,6 +45,7 @@ import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
 import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations } from '../../../src/storage/migrations/runner.js';
+import { spawnSyncCapped, testTimeoutAbove } from '../../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir, rmDir } from '../../helpers/tempDir.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -53,8 +53,14 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof
 // Every open of an existing project database asks git (a process spawn, up
 // to 3 s by design) and most tests here make several; on a loaded machine
 // the 10 s unit default was measured too short (a Docker run beside the
-// full Windows suite).
-vi.setConfig({ testTimeout: 30_000 });
+// full Windows suite). Then 30 s was too (review 3.0, R7): in a Docker full
+// run, "every shape rounds 3 to 5 adopted stays foreign" (4.7 s alone: eight
+// git calls, three legacy databases, 334 planted scans) and "trusts, once
+// registered, a database 3.0.0 migrated file by file" both timed out at
+// 30 s. The bound is now above the cap on each git call the tests make
+// themselves, so a hung git is reported by that cap, naming the command.
+const GIT_TIMEOUT_MS = 60_000;
+vi.setConfig({ testTimeout: testTimeoutAbove(GIT_TIMEOUT_MS) });
 
 const undo: Array<() => void> = [];
 afterEach(() => {
@@ -99,7 +105,7 @@ function tamper(path: string, sql: string): void {
 }
 
 function git(cwd: string, ...args: string[]): void {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const r = spawnSyncCapped('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 }
 
@@ -644,9 +650,9 @@ describe('provenance: only a database registered for its own path is trusted', (
     git(dir, 'init', '-q');
     git(dir, 'config', 'core.ignorecase', 'true');
     const primary = legacyDatabase(dir);
-    const blob = spawnSync('git', ['hash-object', '-w', primary], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+    const blob = spawnSyncCapped('git', ['hash-object', '-w', primary], { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS }).stdout.trim();
     git(dir, 'update-index', '--add', '--cacheinfo', `100644,${blob},.Guardian/guardian.db`);
-    expect(spawnSync('git', ['ls-files', '--', '.guardian/guardian.db'], { cwd: dir, encoding: 'utf8' }).stdout).toBe('');
+    expect(spawnSyncCapped('git', ['ls-files', '--', '.guardian/guardian.db'], { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS }).stdout).toBe('');
     expectForeign(dir, /git tracks \.Guardian\/guardian\.db/);
   });
 
@@ -681,7 +687,7 @@ describe('provenance: only a database registered for its own path is trusted', (
     git(sub, 'init', '-q');
     git(sub, 'add', '-f', 'guardian.db');
     git(sub, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'db');
-    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: sub, encoding: 'utf8' }).stdout.trim();
+    const head = spawnSyncCapped('git', ['rev-parse', 'HEAD'], { cwd: sub, encoding: 'utf8', timeout: GIT_TIMEOUT_MS }).stdout.trim();
     git(dir, 'update-index', '--add', '--cacheinfo', `160000,${head},.guardian`);
     expectForeign(dir, /submodule/);
   });
