@@ -538,6 +538,26 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     expect(warning).toMatch(/delete it or move it aside/);
   });
 
+  it('scans filed under a network share are compared as text, never looked up: foreign, in well under a second', () => {
+    // Round 5: the spelling check stat'ed each stored path. Four scans under
+    // `\\192.0.2.x\share\proj` took 60 541 ms, and the MCP client timed out.
+    const dir = project();
+    git(dir, 'init', '-q');
+    const share = isWindows ? '\\\\192.0.2.10\\share\\proj' : '//192.0.2.10/share/proj';
+    legacyDatabase(dir, [1, 2, 3, 4].map((i) => scanOf(`${share}${i}`, `unc-${i}`)).join('\n'));
+    const started = performance.now();
+    const opened = openDatabase({ projectPath: dir });
+    const elapsed = performance.now() - started;
+    try {
+      expect(opened.path).toBe(resolveFallbackDbPath(dir));
+      expect(opened.warning).toMatch(/no completed scan of this project/);
+    } finally {
+      opened.db.close();
+    }
+    // One git process, a read-only probe and the fallback's migrations.
+    expect(elapsed).toBeLessThan(1000);
+  });
+
   it('a legacy database with no scans at all is foreign', () => {
     const dir = project();
     git(dir, 'init', '-q');

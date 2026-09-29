@@ -28,7 +28,11 @@
  *     database's real path lies inside the project;
  *   - it holds at least one completed scan filed under THIS project's
  *     canonical path, or a spelling of it (2.0.0's lower-case drive letter;
- *     never a path through a link — `platform/pathSpelling.ts`). Git state
+ *     never a path through a link — `platform/pathSpelling.ts`, which
+ *     derives the spellings from the project's own path and compares the
+ *     stored ones as strings: a path read from the database is never given
+ *     to the file system, where a `\\host\share` costs a network timeout
+ *     and the user's credentials). Git state
  *     cannot tell an attacker's `.git` from the user's — an archive can ship
  *     one whose index omits the database, or a gitfile naming another
  *     repository — but a database written on another machine carries that
@@ -44,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, lstatSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { isSpellingOf } from '../platform/pathSpelling.js';
+import { spellingMatcher } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { GuardianDbError } from './dbError.js';
 import { DB_ID_KEY, DB_ID_SHAPE } from './dbRegistry.js';
@@ -207,7 +211,9 @@ function scanProblem(projectPath, scanProjects) {
     catch {
         return 'the project path could not be resolved';
     }
-    if (scanProjects.some((p) => isSpellingOf(p, canonical)))
+    // Lexical: a path read from the database is never given to the file system.
+    const isThisProject = spellingMatcher(canonical);
+    if (scanProjects.some(isThisProject))
         return null;
     if (scanProjects.length === 0)
         return 'it holds no completed scan of this project (no completed scan at all)';

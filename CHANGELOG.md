@@ -39,7 +39,13 @@ version bump.
   `.guardian/guardian.db` on Windows and macOS), `.guardian` is not a submodule, neither
   `.guardian` nor the files are links or junctions, the database's real path is inside the
   project, it holds a completed scan filed under this project's canonical path or a spelling of it
-  (2.0.0's lower-case drive letter; never a path through a link) — git state cannot tell a
+  (2.0.0's lower-case drive letter, its separators, a trailing `\.`, the project's own 8.3 short
+  form; never a path through a link). The spellings are derived from the project's own path and
+  the stored ones compared as text: a path read from the database is never given to the file
+  system, and one naming a network share, a device or an NT namespace (`\\`, `//`, `\\?\`, `\\.\`,
+  `\??\`) is refused outright — the first cut stat'ed each one, and four scans under
+  `\\192.0.2.x\share\proj` held the server 60.5 s before it answered (the MCP client timed out;
+  a reachable host would have been sent the user's NTLM credentials). Git state cannot tell a
   crafted archive's own `.git` from the user's, but a database written elsewhere carries another
   machine's paths — and its schema is clean. A linked worktree's `.git` file counts when git
   resolves it. Anything else — a repository downloaded as an archive, a

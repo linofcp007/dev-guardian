@@ -8322,22 +8322,22 @@ var require_isexe = __commonJS({
 // node_modules/which/which.js
 var require_which = __commonJS({
   "node_modules/which/which.js"(exports, module) {
-    var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
+    var isWindows2 = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
     var path8 = __require("path");
-    var COLON = isWindows ? ";" : ":";
+    var COLON = isWindows2 ? ";" : ":";
     var isexe = require_isexe();
     var getNotFoundError = (cmd) => Object.assign(new Error(`not found: ${cmd}`), { code: "ENOENT" });
     var getPathInfo = (cmd, opt) => {
       const colon = opt.colon || COLON;
-      const pathEnv = cmd.match(/\//) || isWindows && cmd.match(/\\/) ? [""] : [
+      const pathEnv = cmd.match(/\//) || isWindows2 && cmd.match(/\\/) ? [""] : [
         // windows always checks the cwd first
-        ...isWindows ? [process.cwd()] : [],
+        ...isWindows2 ? [process.cwd()] : [],
         ...(opt.path || process.env.PATH || /* istanbul ignore next: very unusual */
         "").split(colon)
       ];
-      const pathExtExe = isWindows ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
-      const pathExt = isWindows ? pathExtExe.split(colon) : [""];
-      if (isWindows) {
+      const pathExtExe = isWindows2 ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
+      const pathExt = isWindows2 ? pathExtExe.split(colon) : [""];
+      if (isWindows2) {
         if (cmd.indexOf(".") !== -1 && pathExt[0] !== "")
           pathExt.unshift("");
       }
@@ -8674,7 +8674,7 @@ var require_cross_spawn = __commonJS({
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
-    function spawnSync3(command, args, options) {
+    function spawnSync4(command, args, options) {
       const parsed = parse9(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
@@ -8682,7 +8682,7 @@ var require_cross_spawn = __commonJS({
     }
     module.exports = spawn4;
     module.exports.spawn = spawn4;
-    module.exports.sync = spawnSync3;
+    module.exports.sync = spawnSync4;
     module.exports._parse = parse9;
     module.exports._enoent = enoent;
   }
@@ -37877,16 +37877,69 @@ var GuardianDbError = class extends Error {
 };
 
 // src/storage/dbProvenance.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
+import { spawnSync as spawnSync3 } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync as existsSync4, lstatSync as lstatSync3 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join6, relative } from "node:path";
 
 // src/platform/pathSpelling.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
 import { lstatSync, statSync as statSync3 } from "node:fs";
 import { isAbsolute, join as join3, parse as parse4, resolve as resolve3, sep } from "node:path";
+function isNetworkOrDevicePath(path8) {
+  return /^[\\/]{2}/.test(path8) || path8.startsWith("\\??\\");
+}
+var isWindows = () => process.platform === "win32";
+function lexicalComponents(path8, windows) {
+  if (path8.includes("\0") || isNetworkOrDevicePath(path8)) return null;
+  let root;
+  let rest;
+  if (windows) {
+    const drive = /^([A-Za-z]):[\\/]/.exec(path8);
+    if (drive === null || drive[1] === void 0) return null;
+    root = `${drive[1].toUpperCase()}:`;
+    rest = path8.slice(3);
+  } else {
+    if (!path8.startsWith("/")) return null;
+    root = "";
+    rest = path8.slice(1);
+  }
+  const names = rest.split(windows ? /[\\/]+/ : /\/+/).filter((s) => s !== "" && s !== ".");
+  if (names.includes("..")) return null;
+  return [root, ...names];
+}
+function shortComponents(canonical2) {
+  if (!isWindows() || /[%"]/.test(canonical2)) return null;
+  const cmd = join3(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe");
+  const r = spawnSync2(cmd, ["/d", "/v:off", "/s", "/c", `"for %I in ("${canonical2}") do @echo %~sI"`], {
+    encoding: "utf8",
+    timeout: 3e3,
+    windowsHide: true,
+    windowsVerbatimArguments: true
+  });
+  if (r.error !== void 0 || r.status !== 0 || typeof r.stdout !== "string") return null;
+  return lexicalComponents(r.stdout.trim(), true);
+}
+function spellingMatcher(canonicalProject) {
+  const windows = isWindows();
+  const fold = windows || process.platform === "darwin";
+  const same = (a2, b) => b !== void 0 && (fold ? a2.toLowerCase() === b.toLowerCase() : a2 === b);
+  const own = lexicalComponents(canonicalProject, windows);
+  let short2;
+  return (stored) => {
+    if (own === null) return false;
+    const parts = lexicalComponents(stored, windows);
+    if (parts === null || parts.length !== own.length) return false;
+    if (parts.every((p, i2) => same(p, own[i2]))) return true;
+    if (!windows || !parts.some((p) => p.includes("~"))) return false;
+    short2 ??= shortComponents(canonicalProject);
+    const shortForm = short2;
+    if (shortForm === null || shortForm.length !== own.length) return false;
+    return parts.every((p, i2) => same(p, own[i2]) || same(p, shortForm[i2]));
+  };
+}
 function spellingOnlyCanonical(path8) {
-  if (!isAbsolute(path8)) return null;
+  if (!isAbsolute(path8) || isNetworkOrDevicePath(path8)) return null;
   try {
     if (!statSync3(path8).isDirectory()) return null;
   } catch {
@@ -37906,9 +37959,6 @@ function spellingOnlyCanonical(path8) {
     }
   }
   return canonical2;
-}
-function isSpellingOf(stored, canonicalProject) {
-  return stored === canonicalProject || spellingOnlyCanonical(stored) === canonicalProject;
 }
 
 // src/storage/dbRegistry.ts
@@ -38070,7 +38120,7 @@ var GIT_TIMEOUT_MS = 3e3;
 var DATABASE_FILES = ["guardian.db", "guardian.db-wal", "guardian.db-shm", "guardian.db-journal"];
 var TRACKED_FILE = /^\.guardian\/guardian\.db(?:-wal|-shm|-journal)?$/i;
 function gitIndexAt(projectPath, opts = {}) {
-  const r = spawnSync2(
+  const r = spawnSync3(
     opts.git ?? "git",
     ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ":(icase).guardian"],
     {
@@ -38168,7 +38218,8 @@ function scanProblem(projectPath, scanProjects) {
   } catch {
     return "the project path could not be resolved";
   }
-  if (scanProjects.some((p) => isSpellingOf(p, canonical2))) return null;
+  const isThisProject = spellingMatcher(canonical2);
+  if (scanProjects.some(isThisProject)) return null;
   if (scanProjects.length === 0) return "it holds no completed scan of this project (no completed scan at all)";
   const shown = scanProjects.slice(0, 2).join("', '");
   return `it holds no completed scan of this project \u2014 its scans are filed under ${scanProjects.length} other path(s) ('${shown}'${scanProjects.length > 2 ? ", \u2026" : ""}): a database written elsewhere`;
