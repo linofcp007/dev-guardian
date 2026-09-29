@@ -397,6 +397,14 @@ version bump.
   (`runners/trivyRun.ts`) that a test holds every spawn to. The project's `.trivyignore` is honoured only
   explicitly (`--ignorefile`) and named in the run (`tools_run[].honoured_config` and its reason); `review_pr`
   warns when the diff edits it. `deps_audit` also passes `.guardianignore` to Trivy natively, as `scan_deps` did.
+- `deps_audit` names a requirements file whose index options steer pip-audit, as it names `.npmrc` for npm audit.
+  pip-audit installs `-r` requirements with pip, which honours `--index-url` / `-i`, `--extra-index-url`,
+  `--find-links` / `-f`, `--no-index` and `--trusted-host` written in the file — so the file decides which index the
+  audited versions come from, and a repository could point it at one of its own. Honoured (a private index is
+  legitimate), never silently: every requirements file pip-audit read — the ones it was handed and the ones they
+  include with `-r` / `-c` inside the project — that carries one is in `honoured_config`, and the reason says
+  "honoured the project's requirements.txt (its package-index options decide which index pip-audit's resolution
+  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.

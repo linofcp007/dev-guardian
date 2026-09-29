@@ -37,15 +37,15 @@
  *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
-import { honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
+import { honouredHandedFiles, honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
 import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -106,7 +106,8 @@ registerToolModule(makeScanTool({
     description: 'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
         'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
         'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
-        'from PyPI (network access; an sdist\'s build step runs there); and for any .sln/.csproj, ' +
+        'from PyPI, or from an index the requirements file names (named in tools_run) — network ' +
+        'access; an sdist\'s build step runs there; and for any .sln/.csproj, ' +
         '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
         '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
         'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
@@ -474,23 +475,80 @@ async function runPipAudit(opts) {
             anyFailed = true;
         }
     }
+    // The requirements files it read whose index options steered the
+    // resolution, named (`runners/repoConfig.ts`): honoured — a private index
+    // is legitimate — never silently.
+    const steering = honouredHandedFiles(ctx.projectPath, 'pip-audit', requirementsFilesRead(ctx.projectPath, requirementsFiles));
     if (anyOk) {
-        tools_run.push({
+        tools_run.push(withProjectConfig({
             name: 'pip-audit',
             status: 'ok',
             reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
-        });
+        }, steering));
         if (anyFailed)
             missing_tools.push('pip-audit');
     }
     else {
-        tools_run.push({
+        tools_run.push(withProjectConfig({
             name: 'pip-audit',
             status: 'failed',
             reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
-        });
+        }, steering));
         missing_tools.push('pip-audit');
     }
+}
+/** pip's includes: another requirements (`-r`) or constraints (`-c`) file, read with the same options. */
+const PIP_INCLUDE = /^[ \t]*(?:--requirement|--constraint|-r|-c)(?:[ \t]*=[ \t]*|[ \t]+|(?=[^\s=]))(\S+)/;
+/** Most requirements files {@link requirementsFilesRead} reads. */
+const MAX_REQUIREMENTS_FILES = 50;
+/** A requirements file is read up to this size. */
+const MAX_REQUIREMENTS_BYTES = 1024 * 1024;
+/**
+ * The requirements files pip reads when pip-audit is handed `handed`: those,
+ * and every file they include (`-r` / `-c`, relative to the including file,
+ * as pip resolves them), transitively and bounded — project-relative,
+ * `/`-separated. An include that is a URL, holds an environment variable or
+ * leaves the project is not read (the server reads within the project), so
+ * an index option there is not named.
+ */
+function requirementsFilesRead(projectPath, handed) {
+    const inProject = (abs) => {
+        const rel = relative(projectPath, abs);
+        if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`))
+            return null;
+        return rel.split(sep).join('/');
+    };
+    const seen = new Set();
+    const out = [];
+    const queue = [...handed];
+    while (queue.length > 0 && out.length < MAX_REQUIREMENTS_FILES) {
+        const abs = queue.shift();
+        if (abs === undefined)
+            break;
+        const rel = inProject(abs);
+        if (rel === null || seen.has(rel))
+            continue;
+        seen.add(rel);
+        let text;
+        try {
+            const st = statSync(abs);
+            if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES)
+                continue;
+            text = readFileSync(abs, 'utf8');
+        }
+        catch {
+            continue;
+        }
+        out.push(rel);
+        // pip joins a line that ends in a backslash with the next.
+        for (const line of text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+            const target = PIP_INCLUDE.exec(line)?.[1]?.replace(/^["']|["']$/g, '');
+            if (target === undefined || target === '' || /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes('$'))
+                continue;
+            queue.push(resolve(dirname(abs), target));
+        }
+    }
+    return out;
 }
 /**
  * Runs `dotnet list <target> package --vulnerable --include-transitive

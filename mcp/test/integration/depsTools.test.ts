@@ -972,6 +972,89 @@ describe('deps_audit', () => {
     expect([...filePaths].some((p) => p?.includes('dev.txt'))).toBe(true);
   });
 
+  // Review 3.0, wave 2 (b): a requirements file can carry pip's index
+  // options, and pip-audit installs `-r` requirements with pip, which honours
+  // them — so the file decides which index the audited versions come from,
+  // as `.npmrc` decides which registry answers npm audit. Honoured (a private
+  // index is legitimate), never silently.
+  describe('pip-audit: index options in a requirements file are named', () => {
+    async function pipAuditRun(project: string) {
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+      );
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'pip-audit') {
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      };
+      return r.tools_run.find((t) => t.name === 'pip-audit');
+    }
+
+    it('names every requirements file pip-audit read whose index options steer it — an included one too', async () => {
+      const project = tempProject();
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '--index-url https://ci:s3cret@pypi.example.internal/simple\ndjango==2.0.1\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(project, 'requirements-dev.txt'),
+        '# dev\n--extra-index-url https://extra.example/simple\n-r common/base.txt\nrequests==2.20.0\n',
+        'utf8',
+      );
+      mkdirSync(join(project, 'common'));
+      writeFileSync(join(project, 'common', 'base.txt'), '-i https://third.example/simple\nflask==1.0\n', 'utf8');
+      mkdirSync(join(project, 'requirements'));
+      writeFileSync(join(project, 'requirements', 'test.txt'), 'pytest==7.0.0\n', 'utf8');
+
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toEqual(['common/base.txt', 'requirements-dev.txt', 'requirements.txt']);
+      expect(run?.reason).toMatch(
+        /honoured the project's common\/base\.txt, requirements-dev\.txt, requirements\.txt \(its package-index options decide which index pip-audit's resolution installs from\)/,
+      );
+      expect(run?.reason).not.toContain('s3cret');
+    });
+
+    it.each([
+      ['--index-url=https://x.example/simple'],
+      ['  -i https://x.example/simple'],
+      ['-ihttps://x.example/simple'],
+      ['--extra-index-url https://x.example/simple'],
+      ['--find-links ./wheels'],
+      ['-f https://x.example/wheels/'],
+      ['--no-index'],
+      ['--trusted-host x.example'],
+    ])('names a requirements file holding `%s`', async (line) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), `${line}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it.each([
+      ['no option at all', 'django==2.0.1\n'],
+      ['an index option in a comment', '# --index-url https://x.example/simple\ndjango==2.0.1\n'],
+      ['a per-requirement hash', 'django==2.0.1 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n'],
+      ['an include with no index option', '-r base.txt\ndjango==2.0.1\n'],
+    ])('names nothing for %s', async (_label, text) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), text, 'utf8');
+      writeFileSync(join(project, 'base.txt'), 'flask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toBeUndefined();
+      expect(run?.reason ?? '').not.toMatch(/honoured/);
+    });
+  });
+
   it('runs dotnet SCA for a bare .csproj Trivy could not cover, restoring first', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
