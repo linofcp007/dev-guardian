@@ -3883,6 +3883,10 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
     for (const { key, kind } of saved) {
       downloads.set(key, { at: k, kind });
       verified.delete(key);
+      // Saved straight into a PATH directory, it runs by its bare name as a
+      // moved one does (review 3.0, wave 2: `curl -o /usr/local/bin/tool …`).
+      const bin = lastSegment(key);
+      if (PATH_DIRS.test(dirOf(key)) && bin !== '') pathBins.set(bin, key);
     }
     // A pipeline's status is its last member's: only a check there decides —
     // and only for the files it names (review round 3, item 3).

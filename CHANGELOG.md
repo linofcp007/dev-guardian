@@ -443,6 +443,10 @@ version bump.
   through a string (`$b = "$a"`), `irm … -OutVariable s`, `| Tee-Object -Variable s` and a read back through
   `iex (Get-Variable s -ValueOnly)` were all `ok` through the dispatcher. Each is denied now; a variable holding
   anything else (`Set-Variable -Name s -Value 5; iex $s`) is not.
+- **A download saved straight into a PATH directory ran by its bare name unseen.** `mv tool /usr/local/bin/ &&
+  tool` was denied, and `curl -o /usr/local/bin/tool URL && chmod +x /usr/local/bin/tool && tool` was `ok`. A
+  download saved into one of the PATH directories the guard knows (`wget -P`, `curl -O` after a `cd` there included)
+  now marks its name there as a moved one does.
 
 ## [3.0.0] - 2026-09-29
 
