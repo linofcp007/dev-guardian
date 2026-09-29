@@ -14,11 +14,14 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
+vi.mock('execa', () => ({ execa: vi.fn() }));
 
+import { execa } from 'execa';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import {
   honouredNote,
   NEUTRAL_TRIVY_CONFIG,
+  resetTrivyVersionCache,
   runTrivy,
   trivyArgv,
   withHonoured,
@@ -32,6 +35,10 @@ const mockedRun = vi.mocked(runProcess);
 beforeEach(() => {
   mockedRun.mockReset();
   mockedRun.mockResolvedValue({ outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false });
+  // No version known unless a test says so: the flags are then withheld.
+  vi.mocked(execa).mockReset();
+  vi.mocked(execa).mockRejectedValue(new Error('no trivy here'));
+  resetTrivyVersionCache();
 });
 
 describe('trivyArgv', () => {
@@ -126,6 +133,65 @@ describe('runTrivy', () => {
   });
 });
 
+// ---------------------------------------------------------------- no phoning home
+
+/**
+ * Every Trivy run contacted check.trivy.dev — its version check, which also
+ * carries anonymous usage data — `fs --scanners license` included (measured
+ * by the plugin-surface review with a logging proxy). Only BOTH
+ * TRIVY_SKIP_VERSION_CHECK=true and TRIVY_DISABLE_TELEMETRY=true stopped it.
+ * The flags came with the check itself, in Trivy 0.63.0 (`pkg/flag/
+ * scan_flags.go`: absent at v0.62.1, present at v0.63.0); an older Trivy
+ * refuses an unknown flag, so they are passed only to a Trivy known to be
+ * 0.63.0 or newer, and the environment variables always.
+ */
+describe('Trivy never phones home', () => {
+  it('passes --skip-version-check --disable-telemetry to a Trivy 0.63.0 or newer, before --config', () => {
+    expect(trivyArgv({ args: ['fs', '--quiet'], target: '/p' }, '/r/c.yaml', null, '0.69.3')).toEqual([
+      'fs',
+      '--quiet',
+      '--skip-version-check',
+      '--disable-telemetry',
+      '--config',
+      '/r/c.yaml',
+      '/p',
+    ]);
+    expect(trivyArgv({ args: ['fs'], target: '/p' }, '/r/c.yaml', null, '0.63.0')).toContain('--disable-telemetry');
+  });
+
+  it.each([['0.62.1'], ['0.40.0'], [null]])('does not pass the flags to Trivy %s (an unknown flag is fatal there)', (version) => {
+    const argv = trivyArgv({ args: ['fs'], target: '/p' }, '/r/c.yaml', null, version);
+    expect(argv).not.toContain('--skip-version-check');
+    expect(argv).not.toContain('--disable-telemetry');
+  });
+
+  it('always sets both environment variables, over whatever the caller passed', async () => {
+    const work = makeTempDir('trivy-run-work-');
+    await runTrivy({
+      args: ['fs'],
+      target: '/p',
+      workDir: work,
+      env: { PATH: '/bin', TRIVY_DISABLE_TELEMETRY: 'false' },
+    });
+    const env = mockedRun.mock.calls[0]?.[0].env ?? {};
+    expect(env['TRIVY_SKIP_VERSION_CHECK']).toBe('true');
+    expect(env['TRIVY_DISABLE_TELEMETRY']).toBe('true');
+    expect(env['PATH']).toBe('/bin');
+  });
+
+  it('asks the installed Trivy its version once, and passes the flags when it is new enough', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\nVulnerability DB:\n' } as never);
+    const work = makeTempDir('trivy-run-work-');
+    await runTrivy({ args: ['fs'], target: '/p', workDir: work });
+    await runTrivy({ args: ['config'], target: '/p', workDir: work });
+    expect(vi.mocked(execa)).toHaveBeenCalledTimes(1);
+    const probe = vi.mocked(execa).mock.calls[0];
+    expect(probe?.[0]).toBe('trivy');
+    expect(probe?.[1]).toEqual(['--version']);
+    for (const c of mockedRun.mock.calls) expect(c[0].args).toEqual(expect.arrayContaining(['--skip-version-check', '--disable-telemetry']));
+  });
+});
+
 // ---------------------------------------------------------------- the whole tree
 
 const SRC = fileURLToPath(new URL('../../../src/', import.meta.url));
@@ -146,7 +212,7 @@ const TRIVY_SPAWN = /command:\s*['"`]trivy['"`]|\b(?:execa|execaSync|spawn|spawn
  * (runners/installCatalog.ts), which reads no project — it runs in the
  * server's own directory, never a scanned one.
  */
-const PROBE_LINE = /probe:\s*\{\s*command:\s*'trivy',\s*args:\s*\['--version'\]\s*\}/;
+const PROBE_LINE = /probe:\s*\{\s*command:\s*'trivy',\s*args:\s*\['--version'\][^}]*\}/;
 
 describe('every Trivy spawn in src/ goes through runners/trivyRun.ts', () => {
   it('no file but the helper spawns Trivy', () => {

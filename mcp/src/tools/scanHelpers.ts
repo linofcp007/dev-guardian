@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
+import { resetTrivyVersionCache } from '../runners/trivyRun.js';
 
 /**
  * Cache of resolved scanner paths. `where`/`which` is cheap but
@@ -46,9 +47,10 @@ export async function scannerAvailable(name: string): Promise<string | null> {
   return resolved;
 }
 
-/** Forget every cached answer — after an install, and between test scenarios. */
+/** Forget every cached answer — after an install, and between test scenarios. Trivy's probed version too. */
 export function resetScannerCache(): void {
   scannerPathCache.clear();
+  resetTrivyVersionCache();
 }
 
 export function ensureReportDir(projectPath: string, scanId: string, prefix: string): string {

@@ -45843,9 +45843,9 @@ function failDomain(code, message3, retry_with) {
 }
 
 // src/tools/scanSast.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { basename as basename3, dirname as dirname12, join as join25, relative as relative8, resolve as resolve9, sep as sep7 } from "node:path";
+import { basename as basename3, dirname as dirname12, join as join26, relative as relative8, resolve as resolve9, sep as sep7 } from "node:path";
 
 // src/deps/dotnetRestore.ts
 import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync10, unlinkSync } from "node:fs";
@@ -46021,11 +46021,11 @@ function readPackageReferences(projects) {
 
 // src/runners/fileBatchScan.ts
 import { rmSync as rmSync3 } from "node:fs";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 
 // src/tools/scanHelpers.ts
-import { existsSync as existsSync15, mkdirSync as mkdirSync3, readFileSync as readFileSync17 } from "node:fs";
-import { join as join21 } from "node:path";
+import { existsSync as existsSync17, mkdirSync as mkdirSync4, readFileSync as readFileSync17 } from "node:fs";
+import { join as join23 } from "node:path";
 
 // src/platform/pkgManagerDetect.ts
 init_execa();
@@ -46054,64 +46054,37 @@ async function resolveBinary(name) {
   }
 }
 
-// src/tools/scanHelpers.ts
-var NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
-var scannerPathCache = /* @__PURE__ */ new Map();
-async function scannerAvailable(name) {
-  const hit = scannerPathCache.get(name);
-  if (hit && (hit.path !== null || Date.now() - hit.at < NEGATIVE_SCANNER_CACHE_TTL_MS)) {
-    return hit.path;
-  }
-  const resolved = await resolveBinary(name);
-  scannerPathCache.set(name, { path: resolved, at: Date.now() });
-  return resolved;
-}
-function resetScannerCache() {
-  scannerPathCache.clear();
-}
-function ensureReportDir(projectPath, scanId, prefix) {
-  const short2 = scanId.slice(0, 8);
-  const dir = join21(projectPath, ".guardian", "reports", `${prefix}-${short2}`);
-  if (!existsSync15(dir)) mkdirSync3(dir, { recursive: true });
-  return dir;
-}
-function readJsonSafe(path8) {
-  try {
-    if (!existsSync15(path8)) return null;
-    return readFileSync17(path8, "utf8");
-  } catch {
-    return null;
-  }
-}
+// src/runners/trivyRun.ts
+init_execa();
+import { existsSync as existsSync16, lstatSync as lstatSync2, mkdirSync as mkdirSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join22 } from "node:path";
 
-// src/runners/argBatches.ts
-var ARG_CHAR_BUDGET = 24e3;
-function argCost(arg) {
-  const quotes = (arg.match(/"/g) ?? []).length;
-  const needsQuoting = arg.length === 0 || /[\s"]/.test(arg);
-  return arg.length + 1 + (needsQuoting ? 2 : 0) + quotes;
+// src/platform/semverCompare.ts
+function compareSemver(a2, b) {
+  const pa = parse4(a2);
+  const pb = parse4(b);
+  if (!pa || !pb) return null;
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  return pa.patch - pb.patch;
 }
-function commandLineLength(command, args) {
-  return args.reduce((n2, a2) => n2 + argCost(a2), argCost(command));
+function meetsFloor(installed, floor) {
+  const cmp = compareSemver(installed, floor);
+  if (cmp === null) return null;
+  return cmp >= 0;
 }
-function batchArgs(items, options) {
-  const budget = options.maxChars ?? ARG_CHAR_BUDGET;
-  const base = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
-  const batches = [];
-  let current = [];
-  let used = base;
-  for (const item of items) {
-    const cost = argCost(item);
-    if (current.length > 0 && used + cost > budget) {
-      batches.push(current);
-      current = [];
-      used = base;
-    }
-    current.push(item);
-    used += cost;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
+function parse4(input) {
+  if (!input) return null;
+  const m = /v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(input);
+  if (!m) return null;
+  const majorStr = m[1];
+  const minorStr = m[2];
+  if (majorStr === void 0 || minorStr === void 0) return null;
+  const major = Number(majorStr);
+  const minor = Number(minorStr);
+  const patch = m[3] === void 0 ? 0 : Number(m[3]);
+  if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
+  return { major, minor, patch };
 }
 
 // src/runners/processRunner.ts
@@ -46122,8 +46095,8 @@ import { basename as basename2 } from "node:path";
 
 // src/runners/windowsTreeKill.ts
 init_execa();
-import { existsSync as existsSync16 } from "node:fs";
-import { dirname as dirname11, join as join22 } from "node:path";
+import { existsSync as existsSync15 } from "node:fs";
+import { dirname as dirname11, join as join21 } from "node:path";
 var PROC_TREE_ENV = "GUARDIAN_PROC_TREE_ID";
 var TASKKILL_TIMEOUT_MS = 1e4;
 var MSYS_PROBE_TIMEOUT_MS = 3e3;
@@ -46176,10 +46149,10 @@ function selectOwnMsysProcesses(snapshot, tokenPids, self) {
 function findMsysBin(command) {
   const candidates2 = [];
   const m = /^(.*)[\\/](?:usr[\\/])?bin[\\/]bash(?:\.exe)?$/i.exec(command);
-  if (m?.[1] !== void 0) candidates2.push(join22(m[1], "usr", "bin"));
+  if (m?.[1] !== void 0) candidates2.push(join21(m[1], "usr", "bin"));
   const programFiles = process.env["ProgramFiles"];
-  if (programFiles) candidates2.push(join22(programFiles, "Git", "usr", "bin"));
-  return candidates2.find((c3) => existsSync16(join22(c3, "ps.exe")) && existsSync16(join22(c3, "grep.exe"))) ?? null;
+  if (programFiles) candidates2.push(join21(programFiles, "Git", "usr", "bin"));
+  return candidates2.find((c3) => existsSync15(join21(c3, "ps.exe")) && existsSync15(join21(c3, "grep.exe"))) ?? null;
 }
 async function killWindowsTree(pid, command, token, fallback) {
   const own = await findOwnMsysProcesses(command, token);
@@ -46197,13 +46170,13 @@ async function findOwnMsysProcesses(command, token) {
   const self = { pid: process.pid, ppid: process.ppid };
   try {
     const opts = { reject: false, timeout: MSYS_PROBE_TIMEOUT_MS, cwd: dirname11(bin) };
-    const ps = await execa(join22(bin, "ps.exe"), [], opts);
+    const ps = await execa(join21(bin, "ps.exe"), [], opts);
     if (ps.exitCode !== 0) return none;
     const snapshot = parseMsysPs(ps.stdout);
     const roots = snapshot.filter((p) => p.ppid === 1).map((p) => `/proc/${p.pid}/environ`);
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
-    const grep = (files) => execa(join22(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
+    const grep = (files) => execa(join21(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
     let matches3;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
@@ -46407,6 +46380,243 @@ function signalGroup(pid, signal) {
   }
 }
 
+// src/runners/toolProbe.ts
+var PROBE_TIMEOUT_MS = 3e4;
+function extractVersion(text2) {
+  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text2);
+  if (line?.[1] !== void 0) return line[1];
+  const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text2);
+  return token?.[1] ?? null;
+}
+function highestDotnetSdk(text2) {
+  let best = null;
+  for (const line of text2.split(/\r?\n/)) {
+    const m = /^\s*(\d+\.\d+\.\d+)/.exec(line);
+    const v = m?.[1];
+    if (v === void 0) continue;
+    if (best === null || (compareSemver(v, best) ?? 0) > 0) best = v;
+  }
+  return best;
+}
+async function runVersionProbe(probe2, cwd) {
+  const r = await runProcess({
+    command: probe2.command,
+    args: probe2.args,
+    cwd,
+    timeoutMs: PROBE_TIMEOUT_MS,
+    stdoutCapBytes: 256 * 1024
+  });
+  if (r.outcome === "timed_out") {
+    return { installed: false, version: "", error: `version probe timed out after ${PROBE_TIMEOUT_MS / 1e3} s` };
+  }
+  if (r.outcome !== "completed") {
+    const onPath = await resolveBinary(probe2.command);
+    if (!onPath) return { installed: false, version: "" };
+    const why = firstLine3(r.stderr) ?? firstLine3(r.stdout) ?? r.outcome;
+    let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
+    if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
+      error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
+    }
+    return { installed: false, version: "", error: error2 };
+  }
+  const text2 = `${r.stdout}
+${r.stderr}`;
+  if (probe2.parse === "dotnet-sdks") {
+    const sdk = highestDotnetSdk(r.stdout);
+    return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
+  }
+  return { installed: true, version: extractVersion(text2) ?? (firstLine3(text2) ?? "").slice(0, 80) };
+}
+function firstLine3(text2) {
+  return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+}
+
+// src/runners/trivyRun.ts
+var PROJECT_TRIVYIGNORE = ".trivyignore";
+var NEUTRAL_TRIVY_CONFIG = "trivy-neutral-config.yaml";
+var NEUTRAL_CONFIG_TEXT = "# Written by dev-guardian: an empty Trivy configuration, passed as --config so that the\n# scanned repository's own trivy.yaml is never read.\n";
+function projectTrivyIgnore(projectPath) {
+  const path8 = join22(projectPath, PROJECT_TRIVYIGNORE);
+  try {
+    return existsSync16(path8) && lstatSync2(path8).isFile() ? path8 : null;
+  } catch {
+    return null;
+  }
+}
+function trivyArgv(inv, configPath, ignoreFile, version2 = null) {
+  return [
+    ...inv.args,
+    ...acceptsNoPhoneHomeFlags(version2) ? NO_PHONE_HOME_FLAGS : [],
+    "--config",
+    configPath,
+    ...ignoreFile !== null ? ["--ignorefile", ignoreFile] : [],
+    inv.target
+  ];
+}
+var TRIVY_NO_PHONE_HOME_ENV = {
+  TRIVY_SKIP_VERSION_CHECK: "true",
+  TRIVY_DISABLE_TELEMETRY: "true"
+};
+var NO_PHONE_HOME_FLAGS = ["--skip-version-check", "--disable-telemetry"];
+var NO_PHONE_HOME_FLAGS_SINCE = "0.63.0";
+function acceptsNoPhoneHomeFlags(version2) {
+  if (version2 === null) return false;
+  return (compareSemver(version2, NO_PHONE_HOME_FLAGS_SINCE) ?? -1) >= 0;
+}
+var versionProbe = null;
+async function installedTrivyVersion(cwd) {
+  versionProbe ??= (async () => {
+    try {
+      const r = await execa("trivy", ["--version"], {
+        cwd,
+        env: { ...process.env, ...TRIVY_NO_PHONE_HOME_ENV },
+        reject: false,
+        timeout: 3e4,
+        encoding: "utf8"
+      });
+      const out = typeof r.stdout === "string" ? r.stdout : "";
+      return r.exitCode === 0 ? extractVersion(out) : null;
+    } catch {
+      return null;
+    }
+  })();
+  return versionProbe;
+}
+function resetTrivyVersionCache() {
+  versionProbe = null;
+}
+async function runTrivy(inv) {
+  const configPath = join22(inv.workDir, NEUTRAL_TRIVY_CONFIG);
+  try {
+    mkdirSync3(inv.workDir, { recursive: true });
+    writeFileSync5(configPath, NEUTRAL_CONFIG_TEXT, "utf8");
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    return {
+      outcome: "failed",
+      exitCode: null,
+      stdout: "",
+      stderr: `could not write the neutral Trivy configuration ${configPath}: ${why}`,
+      truncated: false,
+      honoured: []
+    };
+  }
+  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFrom) : null;
+  const version2 = await installedTrivyVersion(inv.workDir);
+  const run = await runProcess({
+    command: "trivy",
+    args: trivyArgv(inv, configPath, ignoreFile, version2),
+    cwd: inv.workDir,
+    // Merged over the server's own environment by the runner.
+    env: { ...inv.env ?? {}, ...TRIVY_NO_PHONE_HOME_ENV },
+    ...inv.signal !== void 0 ? { signal: inv.signal } : {},
+    ...inv.onLog !== void 0 ? { onLog: inv.onLog } : {},
+    ...inv.timeoutMs !== void 0 ? { timeoutMs: inv.timeoutMs } : {}
+  });
+  return { ...run, honoured: ignoreFile !== null ? [PROJECT_TRIVYIGNORE] : [] };
+}
+function honouredNote(honoured) {
+  if (honoured.length === 0) return null;
+  return `honoured the project's ${honoured.join(", ")} (repository configuration: its entries are not reported)`;
+}
+function withHonoured(run, honoured) {
+  const note = honouredNote(honoured);
+  if (note === null) return run;
+  const reason = run.reason !== void 0 && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
+  return { ...run, reason, honoured_config: [...honoured] };
+}
+function judgeTrivyFs(args) {
+  const { projectPath, raw, run, exclusions } = args;
+  if (run.outcome !== "completed") {
+    return {
+      toolRun: withHonoured({ name: "trivy", status: "failed", reason: run.outcome }, run.honoured),
+      missing: [],
+      gaps: []
+    };
+  }
+  const coverage = assessManifestCoverage(projectPath, raw ?? "", {
+    ignores: exclusions === null ? null : (rel2, isDir) => exclusions.ignores(rel2, isDir)
+  });
+  const note = coverage.walkIncomplete !== void 0 ? `${coverage.walkIncomplete} \u2014 manifests below were not checked` : null;
+  const withNote2 = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== void 0 ? `${r.reason}; ${note}` : note }, run.honoured);
+  if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+    return {
+      toolRun: withNote2({ name: "trivy", status: "ok", reason: "no_supported_manifest" }),
+      missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
+      gaps: coverage.gaps
+    };
+  }
+  if (coverage.gaps.length > 0) {
+    return {
+      toolRun: withNote2({ name: "trivy", status: "skipped", reason: "no_supported_manifest" }),
+      missing: ["trivy"],
+      gaps: coverage.gaps
+    };
+  }
+  return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: [], gaps: [] };
+}
+
+// src/tools/scanHelpers.ts
+var NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
+var scannerPathCache = /* @__PURE__ */ new Map();
+async function scannerAvailable(name) {
+  const hit = scannerPathCache.get(name);
+  if (hit && (hit.path !== null || Date.now() - hit.at < NEGATIVE_SCANNER_CACHE_TTL_MS)) {
+    return hit.path;
+  }
+  const resolved = await resolveBinary(name);
+  scannerPathCache.set(name, { path: resolved, at: Date.now() });
+  return resolved;
+}
+function resetScannerCache() {
+  scannerPathCache.clear();
+  resetTrivyVersionCache();
+}
+function ensureReportDir(projectPath, scanId, prefix) {
+  const short2 = scanId.slice(0, 8);
+  const dir = join23(projectPath, ".guardian", "reports", `${prefix}-${short2}`);
+  if (!existsSync17(dir)) mkdirSync4(dir, { recursive: true });
+  return dir;
+}
+function readJsonSafe(path8) {
+  try {
+    if (!existsSync17(path8)) return null;
+    return readFileSync17(path8, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// src/runners/argBatches.ts
+var ARG_CHAR_BUDGET = 24e3;
+function argCost(arg) {
+  const quotes = (arg.match(/"/g) ?? []).length;
+  const needsQuoting = arg.length === 0 || /[\s"]/.test(arg);
+  return arg.length + 1 + (needsQuoting ? 2 : 0) + quotes;
+}
+function commandLineLength(command, args) {
+  return args.reduce((n2, a2) => n2 + argCost(a2), argCost(command));
+}
+function batchArgs(items, options) {
+  const budget = options.maxChars ?? ARG_CHAR_BUDGET;
+  const base = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
+  const batches = [];
+  let current = [];
+  let used = base;
+  for (const item of items) {
+    const cost = argCost(item);
+    if (current.length > 0 && used + cost > budget) {
+      batches.push(current);
+      current = [];
+      used = base;
+    }
+    current.push(item);
+    used += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
 // src/runners/semgrepRun.ts
 var SEMGREP_COMMAND = "semgrep";
 function semgrepSpawn(env) {
@@ -46418,7 +46628,7 @@ function runSemgrep(opts, run = runProcess) {
 
 // src/runners/fileBatchScan.ts
 async function scanFileBatches(opts) {
-  const probeReport = join23(opts.reportDir, `${opts.reportPrefix}-000.json`);
+  const probeReport = join24(opts.reportDir, `${opts.reportPrefix}-000.json`);
   const batches = batchArgs(opts.files, {
     command: opts.command,
     fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), "--"]
@@ -46438,7 +46648,7 @@ async function scanFileBatches(opts) {
       cancelled = true;
       break;
     }
-    const reportFile = join23(opts.reportDir, `${opts.reportPrefix}-${String(i2 + 1).padStart(3, "0")}.json`);
+    const reportFile = join24(opts.reportDir, `${opts.reportPrefix}-${String(i2 + 1).padStart(3, "0")}.json`);
     rmSync3(reportFile, { force: true });
     const run = await runProcess({
       command: opts.command,
@@ -46774,7 +46984,7 @@ function filePathOf(uri) {
 }
 
 // src/runners/dockerScanner.ts
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 var DEFAULT_SEMGREP_IMAGE = "semgrep/semgrep";
 var CONTAINER_PROJECT_ROOT = "/src";
 function buildSemgrepDockerArgs(opts) {
@@ -46806,7 +47016,7 @@ function fromContainerPath(projectPath, containerPath) {
   const prefix = `${CONTAINER_PROJECT_ROOT}/`;
   if (containerPath === CONTAINER_PROJECT_ROOT) return projectPath;
   if (!containerPath.startsWith(prefix)) return containerPath;
-  return join24(projectPath, ...containerPath.slice(prefix.length).split("/"));
+  return join25(projectPath, ...containerPath.slice(prefix.length).split("/"));
 }
 function toContainerPathImpl(projectPath, outFileHost) {
   const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -46991,7 +47201,7 @@ registerToolModule(
 );
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
-  const outFile = join25(reportDir, "sast.json");
+  const outFile = join26(reportDir, "sast.json");
   const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
   if (plan.nothingToRun) {
     tools_run.push({
@@ -47097,7 +47307,7 @@ function judgeSemgrepRun(args) {
   const readAt = (config2) => {
     if (via === null) return config2;
     if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
-      return join25(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
+      return join26(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
     }
     return fromContainerPath(ctx.projectPath, config2);
   };
@@ -47196,7 +47406,7 @@ function judgeSemgrepRun(args) {
 }
 async function runBandit(args) {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = args;
-  const looksPython = existsSync17(join25(ctx.projectPath, "pyproject.toml")) || existsSync17(join25(ctx.projectPath, "requirements.txt")) || existsSync17(join25(ctx.projectPath, "setup.py")) || hasFileWithExtension(ctx.projectPath, [".py"]);
+  const looksPython = existsSync18(join26(ctx.projectPath, "pyproject.toml")) || existsSync18(join26(ctx.projectPath, "requirements.txt")) || existsSync18(join26(ctx.projectPath, "setup.py")) || hasFileWithExtension(ctx.projectPath, [".py"]);
   if (!looksPython) return;
   const banditBin = await scannerAvailable("bandit");
   if (!banditBin) {
@@ -47204,7 +47414,7 @@ async function runBandit(args) {
     missing_tools.push("bandit");
     return;
   }
-  const outFile = join25(reportDir, "bandit.json");
+  const outFile = join26(reportDir, "bandit.json");
   const result = await runProcess({
     command: "bandit",
     args: ["-r", ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), "-f", "json", "-o", outFile, "-q"],
@@ -47315,11 +47525,11 @@ async function runDotnetAnalyzers(args) {
     missing_tools.push("dotnet-sdk");
     return;
   }
-  const work = mkdtempSync2(join25(tmpdir3(), "guardian-sast-dotnet-"));
-  const sarifDir = join25(work, "sarif");
-  mkdirSync4(sarifDir);
-  const targetsFile = join25(work, "dev-guardian-sarif.targets");
-  writeFileSync5(targetsFile, SARIF_TARGETS, "utf8");
+  const work = mkdtempSync2(join26(tmpdir3(), "guardian-sast-dotnet-"));
+  const sarifDir = join26(work, "sarif");
+  mkdirSync5(sarifDir);
+  const targetsFile = join26(work, "dev-guardian-sarif.targets");
+  writeFileSync6(targetsFile, SARIF_TARGETS, "utf8");
   const failures = [];
   const sarifs = [];
   let reports = 0;
@@ -47376,7 +47586,7 @@ async function runDotnetAnalyzers(args) {
       for (const name of listSarif(sarifDir).filter((n2) => !before.has(n2))) {
         let raw;
         try {
-          raw = readFileSync18(join25(sarifDir, name), "utf8");
+          raw = readFileSync18(join26(sarifDir, name), "utf8");
         } catch {
           failures.push(`${rel2}: SARIF ${name} unreadable`);
           continue;
@@ -47429,8 +47639,8 @@ function customAfterTargetsSetters(projectPath) {
     for (const project of projectsForTarget(target)) {
       check2(project);
       for (let dir = dirname12(resolve9(project)); ; dir = dirname12(dir)) {
-        check2(join25(dir, "Directory.Build.props"));
-        check2(join25(dir, "Directory.Build.targets"));
+        check2(join26(dir, "Directory.Build.props"));
+        check2(join26(dir, "Directory.Build.targets"));
         if (dir === root || dirname12(dir) === dir || relative8(root, dir).startsWith("..")) break;
       }
     }
@@ -47478,7 +47688,7 @@ function projectReferencesScs(projectPath) {
   }
   for (const file of files) {
     try {
-      if (/security[-_.]?code[-_.]?scan/i.test(readFileSync18(join25(projectPath, file), "utf8"))) return true;
+      if (/security[-_.]?code[-_.]?scan/i.test(readFileSync18(join26(projectPath, file), "utf8"))) return true;
     } catch {
     }
   }
@@ -47486,26 +47696,26 @@ function projectReferencesScs(projectPath) {
 }
 
 // src/runners/gitleaksScan.ts
-import { copyFileSync, existsSync as existsSync18, lstatSync as lstatSync3, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync4, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { copyFileSync, existsSync as existsSync19, lstatSync as lstatSync4, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync4, rmSync as rmSync6, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename4, dirname as dirname13, join as join27, relative as relative9, resolve as resolve10 } from "node:path";
+import { basename as basename4, dirname as dirname13, join as join28, relative as relative9, resolve as resolve10 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
-import { chmodSync, closeSync, lstatSync as lstatSync2, mkdtempSync as mkdtempSync3, openSync, readdirSync as readdirSync12, rmSync as rmSync5 } from "node:fs";
+import { chmodSync, closeSync, lstatSync as lstatSync3, mkdtempSync as mkdtempSync3, openSync, readdirSync as readdirSync12, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join26 } from "node:path";
+import { join as join27 } from "node:path";
 var REDACTED = "REDACTED";
 var STALE_AFTER_MS = 6 * 60 * 60 * 1e3;
 var PREFIX2 = "guardian-verify-";
 var POSIX = process.platform !== "win32";
 function openPrivateReportDir() {
   sweepStaleReportDirs();
-  const dir = mkdtempSync3(join26(tmpdir4(), PREFIX2));
+  const dir = mkdtempSync3(join27(tmpdir4(), PREFIX2));
   if (POSIX) chmodSync(dir, 448);
   return {
     dir,
     pathFor(name) {
-      const path8 = join26(dir, name);
+      const path8 = join27(dir, name);
       closeSync(openSync(path8, "w", 384));
       if (POSIX) chmodSync(path8, 384);
       return path8;
@@ -47533,8 +47743,8 @@ function sweepStaleReportDirs(root = tmpdir4(), now = Date.now()) {
   for (const name of names) {
     if (!name.startsWith(PREFIX2)) continue;
     try {
-      const path8 = join26(root, name);
-      const st = lstatSync2(path8);
+      const path8 = join27(root, name);
+      const st = lstatSync3(path8);
       if (st.isSymbolicLink() || !st.isDirectory()) continue;
       if (uid !== null && st.uid !== uid) continue;
       if (now - st.mtimeMs < STALE_AFTER_MS) continue;
@@ -47949,7 +48159,7 @@ async function countCommitsSince(cwd, logOpts) {
   return n2;
 }
 async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix) {
-  const outFile = join27(opts.reportDir, "secrets-history.json");
+  const outFile = join28(opts.reportDir, "secrets-history.json");
   rmSync6(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const args = [
@@ -48040,7 +48250,7 @@ async function filesPass(opts, result, files, labels = {
   const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
   let tmp;
   try {
-    tmp = mkdtempSync4(join27(tmpdir5(), "guardian-gitleaks-"));
+    tmp = mkdtempSync4(join28(tmpdir5(), "guardian-gitleaks-"));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `working tree: no temporary directory: ${message(e)}` });
     return;
@@ -48054,10 +48264,10 @@ async function filesPass(opts, result, files, labels = {
     let overTotal = 0;
     let total = 0;
     for (const rel2 of candidates2) {
-      const from = join27(opts.projectPath, rel2);
+      const from = join28(opts.projectPath, rel2);
       let size;
       try {
-        const st = lstatSync3(from);
+        const st = lstatSync4(from);
         if (!st.isFile()) continue;
         size = st.size;
       } catch {
@@ -48072,8 +48282,8 @@ async function filesPass(opts, result, files, labels = {
         continue;
       }
       try {
-        const to = join27(tmp, rel2);
-        mkdirSync5(dirname13(to), { recursive: true });
+        const to = join28(tmp, rel2);
+        mkdirSync6(dirname13(to), { recursive: true });
         copyFileSync(from, to);
         copied += 1;
         total += size;
@@ -48094,7 +48304,7 @@ async function filesPass(opts, result, files, labels = {
       });
       return;
     }
-    const outFile = join27(opts.reportDir, "secrets-working-tree.json");
+    const outFile = join28(opts.reportDir, "secrets-working-tree.json");
     rmSync6(outFile, { force: true });
     const target = reportTarget(opts, outFile);
     const args = [
@@ -48108,8 +48318,8 @@ async function filesPass(opts, result, files, labels = {
       ".",
       `--gitleaks-ignore-path=${opts.projectPath}`
     ];
-    const projectConfig = join27(opts.projectPath, ".gitleaks.toml");
-    if (existsSync18(projectConfig)) args.push(`--config=${projectConfig}`);
+    const projectConfig = join28(opts.projectPath, ".gitleaks.toml");
+    if (existsSync19(projectConfig)) args.push(`--config=${projectConfig}`);
     const run = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === "cancelled") result.cancelled = true;
     const report = takeReport(opts, target.path, outFile);
@@ -48128,13 +48338,13 @@ async function directoryPass(opts, result, name) {
   const prefix = "not a git repository \u2014 scanned the directory in place";
   let config2;
   try {
-    config2 = join27(opts.reportDir, "gitleaks-directory.toml");
-    writeFileSync6(config2, directoryConfig(opts.projectPath));
+    config2 = join28(opts.reportDir, "gitleaks-directory.toml");
+    writeFileSync7(config2, directoryConfig(opts.projectPath));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `${prefix}: could not write its config: ${message(e)}` });
     return;
   }
-  const outFile = join27(opts.reportDir, "secrets.json");
+  const outFile = join28(opts.reportDir, "secrets.json");
   rmSync6(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const run = await runProcess({
@@ -48168,13 +48378,13 @@ async function directoryPass(opts, result, name) {
   recordFilesRun(result, name, run, report, "directory", `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 function directoryConfig(projectPath) {
-  const own = join27(projectPath, ".gitleaks.toml");
+  const own = join28(projectPath, ".gitleaks.toml");
   const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   return [
     "# Generated by dev-guardian for one scan: the project's gitleaks config (or",
     "# gitleaks' defaults) plus the directories no scan of the project's own files reads.",
     "[extend]",
-    existsSync18(own) ? `path = '''${own}'''` : "useDefault = true",
+    existsSync19(own) ? `path = '''${own}'''` : "useDefault = true",
     "",
     "[allowlist]",
     'description = "dev-guardian: vendored, generated and tool directories"',
@@ -48209,7 +48419,7 @@ function takeReport(opts, written, outFile) {
   const clean = sanitizeGitleaksReport(rawText, opts.captureSecrets ?? (() => false));
   if (clean === null) return { text: WITHHELD_REPORT, secrets: null };
   try {
-    writeFileSync6(outFile, clean.text);
+    writeFileSync7(outFile, clean.text);
   } catch {
   }
   return { text: clean.text, secrets: clean.secrets };
@@ -49025,94 +49235,6 @@ registerToolModule(tool);
 
 // src/tools/scanDeps.ts
 import { join as join29 } from "node:path";
-
-// src/runners/trivyRun.ts
-import { existsSync as existsSync19, lstatSync as lstatSync4, mkdirSync as mkdirSync6, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join28 } from "node:path";
-var PROJECT_TRIVYIGNORE = ".trivyignore";
-var NEUTRAL_TRIVY_CONFIG = "trivy-neutral-config.yaml";
-var NEUTRAL_CONFIG_TEXT = "# Written by dev-guardian: an empty Trivy configuration, passed as --config so that the\n# scanned repository's own trivy.yaml is never read.\n";
-function projectTrivyIgnore(projectPath) {
-  const path8 = join28(projectPath, PROJECT_TRIVYIGNORE);
-  try {
-    return existsSync19(path8) && lstatSync4(path8).isFile() ? path8 : null;
-  } catch {
-    return null;
-  }
-}
-function trivyArgv(inv, configPath, ignoreFile) {
-  return [...inv.args, "--config", configPath, ...ignoreFile !== null ? ["--ignorefile", ignoreFile] : [], inv.target];
-}
-async function runTrivy(inv) {
-  const configPath = join28(inv.workDir, NEUTRAL_TRIVY_CONFIG);
-  try {
-    mkdirSync6(inv.workDir, { recursive: true });
-    writeFileSync7(configPath, NEUTRAL_CONFIG_TEXT, "utf8");
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
-    return {
-      outcome: "failed",
-      exitCode: null,
-      stdout: "",
-      stderr: `could not write the neutral Trivy configuration ${configPath}: ${why}`,
-      truncated: false,
-      honoured: []
-    };
-  }
-  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFrom) : null;
-  const run = await runProcess({
-    command: "trivy",
-    args: trivyArgv(inv, configPath, ignoreFile),
-    cwd: inv.workDir,
-    ...inv.env !== void 0 ? { env: inv.env } : {},
-    ...inv.signal !== void 0 ? { signal: inv.signal } : {},
-    ...inv.onLog !== void 0 ? { onLog: inv.onLog } : {},
-    ...inv.timeoutMs !== void 0 ? { timeoutMs: inv.timeoutMs } : {}
-  });
-  return { ...run, honoured: ignoreFile !== null ? [PROJECT_TRIVYIGNORE] : [] };
-}
-function honouredNote(honoured) {
-  if (honoured.length === 0) return null;
-  return `honoured the project's ${honoured.join(", ")} (repository configuration: its entries are not reported)`;
-}
-function withHonoured(run, honoured) {
-  const note = honouredNote(honoured);
-  if (note === null) return run;
-  const reason = run.reason !== void 0 && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
-  return { ...run, reason, honoured_config: [...honoured] };
-}
-function judgeTrivyFs(args) {
-  const { projectPath, raw, run, exclusions } = args;
-  if (run.outcome !== "completed") {
-    return {
-      toolRun: withHonoured({ name: "trivy", status: "failed", reason: run.outcome }, run.honoured),
-      missing: [],
-      gaps: []
-    };
-  }
-  const coverage = assessManifestCoverage(projectPath, raw ?? "", {
-    ignores: exclusions === null ? null : (rel2, isDir) => exclusions.ignores(rel2, isDir)
-  });
-  const note = coverage.walkIncomplete !== void 0 ? `${coverage.walkIncomplete} \u2014 manifests below were not checked` : null;
-  const withNote2 = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== void 0 ? `${r.reason}; ${note}` : note }, run.honoured);
-  if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-    return {
-      toolRun: withNote2({ name: "trivy", status: "ok", reason: "no_supported_manifest" }),
-      missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
-      gaps: coverage.gaps
-    };
-  }
-  if (coverage.gaps.length > 0) {
-    return {
-      toolRun: withNote2({ name: "trivy", status: "skipped", reason: "no_supported_manifest" }),
-      missing: ["trivy"],
-      gaps: coverage.gaps
-    };
-  }
-  return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: [], gaps: [] };
-}
-
-// src/tools/scanDeps.ts
 registerToolModule(
   makeScanTool({
     name: "scan_deps",
@@ -49944,85 +50066,6 @@ function finding(opts) {
     file_path: opts.filePath,
     fix_available: false
   });
-}
-
-// src/platform/semverCompare.ts
-function compareSemver(a2, b) {
-  const pa = parse4(a2);
-  const pb = parse4(b);
-  if (!pa || !pb) return null;
-  if (pa.major !== pb.major) return pa.major - pb.major;
-  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
-  return pa.patch - pb.patch;
-}
-function meetsFloor(installed, floor) {
-  const cmp = compareSemver(installed, floor);
-  if (cmp === null) return null;
-  return cmp >= 0;
-}
-function parse4(input) {
-  if (!input) return null;
-  const m = /v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(input);
-  if (!m) return null;
-  const majorStr = m[1];
-  const minorStr = m[2];
-  if (majorStr === void 0 || minorStr === void 0) return null;
-  const major = Number(majorStr);
-  const minor = Number(minorStr);
-  const patch = m[3] === void 0 ? 0 : Number(m[3]);
-  if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
-  return { major, minor, patch };
-}
-
-// src/runners/toolProbe.ts
-var PROBE_TIMEOUT_MS = 3e4;
-function extractVersion(text2) {
-  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text2);
-  if (line?.[1] !== void 0) return line[1];
-  const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text2);
-  return token?.[1] ?? null;
-}
-function highestDotnetSdk(text2) {
-  let best = null;
-  for (const line of text2.split(/\r?\n/)) {
-    const m = /^\s*(\d+\.\d+\.\d+)/.exec(line);
-    const v = m?.[1];
-    if (v === void 0) continue;
-    if (best === null || (compareSemver(v, best) ?? 0) > 0) best = v;
-  }
-  return best;
-}
-async function runVersionProbe(probe2, cwd) {
-  const r = await runProcess({
-    command: probe2.command,
-    args: probe2.args,
-    cwd,
-    timeoutMs: PROBE_TIMEOUT_MS,
-    stdoutCapBytes: 256 * 1024
-  });
-  if (r.outcome === "timed_out") {
-    return { installed: false, version: "", error: `version probe timed out after ${PROBE_TIMEOUT_MS / 1e3} s` };
-  }
-  if (r.outcome !== "completed") {
-    const onPath = await resolveBinary(probe2.command);
-    if (!onPath) return { installed: false, version: "" };
-    const why = firstLine3(r.stderr) ?? firstLine3(r.stdout) ?? r.outcome;
-    let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
-    if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
-      error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
-    }
-    return { installed: false, version: "", error: error2 };
-  }
-  const text2 = `${r.stdout}
-${r.stderr}`;
-  if (probe2.parse === "dotnet-sdks") {
-    const sdk = highestDotnetSdk(r.stdout);
-    return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
-  }
-  return { installed: true, version: extractVersion(text2) ?? (firstLine3(text2) ?? "").slice(0, 80) };
-}
-function firstLine3(text2) {
-  return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 
 // src/runners/cosignCheck.ts

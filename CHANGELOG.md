@@ -22,6 +22,14 @@ version bump.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
+- Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
+  anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
+  Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and
+  `TRIVY_DISABLE_TELEMETRY` stop it. Every run now gets both variables, and a Trivy 0.63.0 or newer (where the
+  check and the flags arrived; an older Trivy refuses an unknown flag) also `--skip-version-check
+  --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
+  Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
+  Semgrep with `PYTHONUTF8=1`.
 
 ### Fixed
 

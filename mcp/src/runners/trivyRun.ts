@@ -37,8 +37,11 @@
  * `src/` names Trivy outside this file.
  */
 
+import { execa } from 'execa';
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { compareSemver } from '../platform/semverCompare.js';
+import { extractVersion } from './toolProbe.js';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import type { ToolRun } from '../types.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
@@ -84,8 +87,81 @@ export function projectTrivyIgnore(projectPath: string): string | null {
 }
 
 /** The argv of one run — pure, for the tests. */
-export function trivyArgv(inv: Pick<TrivyInvocation, 'args' | 'target'>, configPath: string, ignoreFile: string | null): string[] {
-  return [...inv.args, '--config', configPath, ...(ignoreFile !== null ? ['--ignorefile', ignoreFile] : []), inv.target];
+export function trivyArgv(
+  inv: Pick<TrivyInvocation, 'args' | 'target'>,
+  configPath: string,
+  ignoreFile: string | null,
+  version: string | null = null,
+): string[] {
+  return [
+    ...inv.args,
+    ...(acceptsNoPhoneHomeFlags(version) ? NO_PHONE_HOME_FLAGS : []),
+    '--config',
+    configPath,
+    ...(ignoreFile !== null ? ['--ignorefile', ignoreFile] : []),
+    inv.target,
+  ];
+}
+
+// ---------------------------------------------------------------- no phoning home
+//
+// Every Trivy run contacted check.trivy.dev: its version check, which also
+// carries anonymous usage data (`Trivy-Identifier`, the command line, OS and
+// architecture — `pkg/notification/notice.go`), run in a goroutine with a
+// 3 s timeout. Measured through a refusing proxy on 0.69.3 with `trivy
+// config` (a sub-second `fs` scan can exit before the goroutine connects):
+// bare, `--quiet`, `--skip-version-check` alone and `--disable-telemetry`
+// alone all asked; both flags, or both environment variables, never did —
+// the request is skipped only when both are set. So both variables go into
+// every run's environment, and both flags onto every command line of a Trivy
+// that has them: they arrived with the check itself in 0.63.0
+// (`pkg/flag/scan_flags.go`: absent at v0.62.1, present at v0.63.0), and an
+// older Trivy refuses an unknown flag outright. A Trivy whose version
+// cannot be read gets the variables only.
+
+/** Both, always: each alone still sends the request. */
+export const TRIVY_NO_PHONE_HOME_ENV: Readonly<Record<string, string>> = {
+  TRIVY_SKIP_VERSION_CHECK: 'true',
+  TRIVY_DISABLE_TELEMETRY: 'true',
+};
+const NO_PHONE_HOME_FLAGS = ['--skip-version-check', '--disable-telemetry'] as const;
+/** The first Trivy with both flags (and with the check). */
+export const NO_PHONE_HOME_FLAGS_SINCE = '0.63.0';
+
+function acceptsNoPhoneHomeFlags(version: string | null): boolean {
+  if (version === null) return false;
+  return (compareSemver(version, NO_PHONE_HOME_FLAGS_SINCE) ?? -1) >= 0;
+}
+
+let versionProbe: Promise<string | null> | null = null;
+
+/**
+ * The installed Trivy's version (`Version: 0.69.3`), asked once per process —
+ * through execa, not the scan runner: a quick query, never a scan — or null
+ * when it cannot be read.
+ */
+async function installedTrivyVersion(cwd: string): Promise<string | null> {
+  versionProbe ??= (async () => {
+    try {
+      const r = await execa('trivy', ['--version'], {
+        cwd,
+        env: { ...process.env, ...TRIVY_NO_PHONE_HOME_ENV },
+        reject: false,
+        timeout: 30_000,
+        encoding: 'utf8',
+      });
+      const out = typeof r.stdout === 'string' ? r.stdout : '';
+      return r.exitCode === 0 ? extractVersion(out) : null;
+    } catch {
+      return null;
+    }
+  })();
+  return versionProbe;
+}
+
+/** Forget the probed version (tests, and after `install_toolchain`). */
+export function resetTrivyVersionCache(): void {
+  versionProbe = null;
 }
 
 /** Run Trivy — see the module comment. A config that cannot be written is a failed run, never one without it. */
@@ -106,11 +182,13 @@ export async function runTrivy(inv: TrivyInvocation): Promise<TrivyRunResult> {
     };
   }
   const ignoreFile = inv.ignoreFrom !== undefined ? projectTrivyIgnore(inv.ignoreFrom) : null;
+  const version = await installedTrivyVersion(inv.workDir);
   const run = await runProcess({
     command: 'trivy',
-    args: trivyArgv(inv, configPath, ignoreFile),
+    args: trivyArgv(inv, configPath, ignoreFile, version),
     cwd: inv.workDir,
-    ...(inv.env !== undefined ? { env: inv.env } : {}),
+    // Merged over the server's own environment by the runner.
+    env: { ...(inv.env ?? {}), ...TRIVY_NO_PHONE_HOME_ENV },
     ...(inv.signal !== undefined ? { signal: inv.signal } : {}),
     ...(inv.onLog !== undefined ? { onLog: inv.onLog } : {}),
     ...(inv.timeoutMs !== undefined ? { timeoutMs: inv.timeoutMs } : {}),
