@@ -38,10 +38,13 @@ export default defineConfig({
     // canonicalTmpdir.ts: os.tmpdir() in its canonical spelling — see the file.
     // userDataDir.ts: the per-user database fallback goes to a temp directory.
     setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts', './test/setup/userDataDir.ts'],
-    // Removes, before and after the run, the temp directories a test's
-    // cleanup could not (a timed-out test's process still held them) — see
-    // `LEFTOVERS_FILE` in test/helpers/tempDir.ts.
-    globalSetup: ['./test/setup/tempLeftovers.ts'],
+    // tempLeftovers: removes, before and after the run, the temp directories
+    // a test's cleanup could not (a timed-out test's process still held
+    // them) — see `LEFTOVERS_FILE` in test/helpers/tempDir.ts.
+    // semgrepHome: the run's own directory, Semgrep's log and version cache
+    // pointed into it (never the home directory), and a check at the end that
+    // nothing wrote the real ones — see the file.
+    globalSetup: ['./test/setup/tempLeftovers.ts', './test/setup/semgrepHome.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

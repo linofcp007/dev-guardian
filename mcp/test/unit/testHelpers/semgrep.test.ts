@@ -90,4 +90,14 @@ describe('runSemgrep — ordinary runs', () => {
     useFake();
     expect(semgrepAvailable()).toBe(true);
   });
+
+  // Review 3.0, R7: "on PATH but failing" read as absent, so the rule-pack
+  // files SKIPPED on a broken Semgrep and a single-pack run went green.
+  it('semgrepAvailable THROWS for a command that is there but fails --version: broken is not absent', () => {
+    const dir = makeTempDir('guardian-broken-semgrep-');
+    const script = join(dir, 'broken-semgrep.mjs');
+    writeFileSync(script, "process.stderr.write('ModuleNotFoundError: no module named semgrep\\n'); process.exit(1);\n");
+    vi.stubEnv('GUARDIAN_TEST_SEMGREP_CMD', JSON.stringify([process.execPath, script]));
+    expect(() => semgrepAvailable()).toThrow(/on PATH but `semgrep --version` exited 1[\s\S]*ModuleNotFoundError/);
+  });
 });

@@ -65,13 +65,24 @@ import { join } from 'node:path';
 import { threadId } from 'node:worker_threads';
 import { afterAll } from 'vitest';
 
+/** The run's own directory (`semgrepHome.ts`, a global setup), removed when
+ *  the run ends. A worker started without it — never under `vitest run` —
+ *  falls back to the temp directory and removes its directory after each file. */
+const runDir = process.env['GUARDIAN_TEST_RUN_DIR'];
+
 /** `pid` alone is not enough (one vitest process runs many workers) and
  *  `threadId` alone is not enough (concurrent runs, e.g. two agents, repeat
  *  low thread ids). Together they are unique across both, and BOUNDED — one
  *  directory per worker, reused for every test file that worker runs, rather
  *  than one per file. This suite has leaked tens of thousands of temp
- *  directories before; see `test/helpers/tempDir.ts`. */
-const settingsDir = join(tmpdir(), 'guardian-semgrep-settings', `${process.pid}-${threadId}`);
+ *  directories before; see `test/helpers/tempDir.ts`.
+ *
+ *  It lives in the run's directory rather than in an `afterAll`'s care:
+ *  vitest runs no `afterAll` in a file whose every test is skipped, so a
+ *  worker whose last file was one (a POSIX-only file on Windows, cosign
+ *  absent) kept its directory for ever — 63 were found in the real temp
+ *  directory (review 3.0, R7). */
+const settingsDir = join(runDir ?? join(tmpdir(), 'guardian-semgrep-settings'), `semgrep-${process.pid}-${threadId}`);
 
 mkdirSync(settingsDir, { recursive: true });
 const settingsFile = join(settingsDir, 'settings.yml');
@@ -81,14 +92,22 @@ writeFileSync(
     `anonymous_user_id: 00000000-0000-4000-8000-${String(process.pid).padStart(12, '0').slice(-12)}\n`,
 );
 process.env['SEMGREP_SETTINGS_FILE'] = settingsFile;
+// Semgrep's other two files under the home directory — its log, truncated by
+// every run, and its version-check cache — are per worker too. See
+// `semgrepHome.ts` for why, and for the guard that checks nothing wrote there.
+process.env['SEMGREP_LOG_FILE'] = join(settingsDir, 'semgrep.log');
+process.env['SEMGREP_VERSION_CACHE_PATH'] = join(settingsDir, 'semgrep_version');
+process.env['SEMGREP_ENABLE_VERSION_CHECK'] = '0';
 
-afterAll(() => {
-  try {
-    // `maxRetries`/`retryDelay` for the same Windows lock reasons
-    // `test/helpers/tempDir.ts` documents at length.
-    rmSync(settingsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  } catch {
-    // Cleanup must never turn a passing suite red. A directory a Semgrep
-    // subprocess still holds open is the OS's problem, not this file's.
-  }
-});
+if (runDir === undefined) {
+  afterAll(() => {
+    try {
+      // `maxRetries`/`retryDelay` for the same Windows lock reasons
+      // `test/helpers/tempDir.ts` documents at length.
+      rmSync(settingsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch {
+      // Cleanup must never turn a passing suite red. A directory a Semgrep
+      // subprocess still holds open is the OS's problem, not this file's.
+    }
+  });
+}

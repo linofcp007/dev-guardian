@@ -151,16 +151,29 @@ export function semgrepStdout(args: readonly string[], options: SemgrepOptions =
 }
 
 /**
- * Whether Semgrep answers `--version` — the gate every rule-pack test file
- * skips on. Absent (`ENOENT`) or failing is `false`; a probe that HANGS is not
- * "absent", so its {@link SemgrepTimeoutError} is rethrown and the file fails
- * loudly instead of skipping quietly.
+ * Whether Semgrep is installed — the gate every rule-pack test file skips on.
+ *
+ * Only ABSENT (`ENOENT`: nothing called `semgrep` on PATH) is `false`, a
+ * visible skip. A Semgrep that is on PATH but does not answer `--version`
+ * with exit 0 is a broken install, and a broken install is a failure, never
+ * a skip: it used to read `false` too, so a single-pack run (`GUARDIAN_
+ * REQUIRE_SEMGREP` unset) went green on a machine whose Semgrep could not run
+ * at all (review 3.0, R7). A probe that HANGS throws its
+ * {@link SemgrepTimeoutError} for the same reason.
  */
 export function semgrepAvailable(): boolean {
+  let run: SemgrepRun;
   try {
-    return runSemgrep(['--version'], { timeoutMs: SEMGREP_VERSION_TIMEOUT_MS }).status === 0;
+    run = runSemgrep(['--version'], { timeoutMs: SEMGREP_VERSION_TIMEOUT_MS });
   } catch (e) {
-    if (e instanceof SemgrepTimeoutError) throw e;
-    return false;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw e;
   }
+  if (run.status !== 0) {
+    throw new Error(
+      `semgrep is on PATH but \`semgrep --version\` exited ${String(run.status)} — a broken install fails ` +
+        `these tests rather than skipping them.\n${run.stderr.slice(-2000)}`,
+    );
+  }
+  return true;
 }
