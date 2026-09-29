@@ -492,6 +492,11 @@ version bump.
 - **`| pixi run python -` and `| uvx python -` ran the download.** `pixi run` joins the run wrappers the guard looks
   behind, and `uvx` / `uv tool run` are read the same way: an interpreter reading stdin as its program is denied;
   `uvx ruff check -` and `pixi run python script.py` are not.
+- **A download saved through a pipe, then run, only warned.** `curl -o /usr/local/bin/tool URL && … && tool` was
+  denied, and `curl URL | sudo tee /usr/local/bin/tool > /dev/null && … && tool` only warned (for the `sudo`). What a
+  download that writes to its stdout is piped into now saves the download — `tee` / `Tee-Object`, `sponge`,
+  `dd of=`, `Out-File`, `Set-Content`, a redirection of the reader (`| gunzip > tool`) — and running that file (by
+  path, by interpreter, or by its bare name in a PATH directory) is denied like `curl -o` then run.
 
 ## [3.0.0] - 2026-09-29
 

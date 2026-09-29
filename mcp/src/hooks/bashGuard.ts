@@ -3818,6 +3818,18 @@ function posixSaves(name: string, words: readonly ShellWord[], at: number): stri
   return saved;
 }
 
+/**
+ * The files a command saves from what it is piped: `tee` / `Tee-Object`,
+ * `sponge`, `dd of=`, `Set-Content`, `Add-Content`, `Out-File` — and its
+ * stdout redirected (`gunzip > tool`, `cat > i.sh`). Behind a download that
+ * writes to its stdout, these are the download saved under another name.
+ */
+function pipedSaves(name: string, words: readonly ShellWord[], at: number): string[] {
+  const out = redirectTargets(words.slice(at + 1));
+  pushAll(out, commandWriteDestinations(name, withoutRedirections(words.slice(at + 1))).filter((f) => !f.startsWith('-')));
+  return out;
+}
+
 /** The files a PowerShell web cmdlet saves: `-OutFile path`, BITS's `-Destination path`. */
 function powershellSaves(name: string, words: readonly ShellWord[], at: number): string[] {
   if (!SAVING_CMDLETS.has(name)) return [];
@@ -4134,12 +4146,25 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
     // Nothing downloaded yet: nothing a run could match, so runs are not read.
     const reading = downloads.size > 0;
     const piped = reading ? pipedIntoRunners(statement, heads) : [];
+    /** A download earlier in this pipeline writes to its stdout: what a later member saves is the download. */
+    let streaming: DownloadKind | undefined;
     statement.commands.forEach((words, c) => {
       const at = heads[c] ?? 0;
       const head = words[at]?.value ?? '';
       const name = commandName(head);
-      for (const dest of posixSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
-      for (const dest of powershellSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+      const posix = posixSaves(name, words, at);
+      const ps = powershellSaves(name, words, at);
+      for (const dest of posix) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
+      for (const dest of ps) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+      // `curl … | sudo tee /usr/local/bin/tool`, `| gunzip > tool`, `irm … |
+      // Out-File i.ps1` (review 3.0 wave 2, round 2).
+      if (streaming !== undefined) {
+        const kind = streaming;
+        for (const dest of pipedSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind });
+      }
+      if (DOWNLOADERS.has(name) && posix.length === 0 && ps.length === 0) {
+        streaming = name === 'curl' || name === 'wget' ? 'posix' : 'powershell';
+      }
       if (reading) {
         for (const file of commandRuns(statement, c, heads, piped[c] === true)) ran.push(runKey(resolveFrom(cwd, file)));
         // The command itself: a path runs that file. A bare name is looked up
