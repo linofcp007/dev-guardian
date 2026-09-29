@@ -8,8 +8,35 @@ version bump.
 
 ## [Unreleased]
 
+### Security
+
+- A `.guardian/guardian.db` git tracks is no longer opened. A committed database is the committer's
+  schema: `AFTER INSERT ON findings BEGIN DELETE FROM findings WHERE rowid = NEW.rowid; END` took a
+  project from risk 55 to 8 and from 7 open findings to 0, at coverage `full`, in risk_score, every
+  report, the open set and create_fix_pr. The check is `git ls-files` on the database and its
+  `-wal`/`-shm`/`-journal` files (a committed WAL delivers the same trigger), bounded to 3 s. When
+  git cannot answer, the repository's index is read: a v2/v3 index that does not list the database
+  lets it be used, with a warning; anything it cannot tell refuses it.
+- A database whose schema holds anything the migrations never create — a trigger, a view, an unknown
+  table or index, a known index redefined, or a CHECK / UNIQUE constraint added to a known table
+  (every insert is `INSERT OR IGNORE`, which obeys them silently) — is refused too, before the
+  migrations write to it.
+- A refused database gives way to the per-user fallback, and the warning naming why reaches
+  `health_status.storage_warning` and every scan's `warnings`. The CLI's `status` / `dashboard`
+  decide the same way, print the warning on stderr, and still create no database.
+- The fallback moved out of the shared temp directory, where its path (`tmpdir()/dev-guardian/
+  <sha1(path)>`) was predictable, nothing checked who made it, and the CLI opened it whenever it
+  existed. It is now `%LOCALAPPDATA%\dev-guardian` on Windows and `$XDG_DATA_HOME/dev-guardian` or
+  `~/.local/share/dev-guardian` elsewhere (`GUARDIAN_DATA_DIR` overrides), its directories created
+  0700 and, on POSIX, required to belong to the user. A database in the old location is not carried
+  over.
+- Every connection opens with `trusted_schema = OFF`, `cell_size_check = ON` and no memory map (it
+  was 64 MB).
+
 ### Fixed
 
+- A corrupt `guardian.db` stops the server with one line naming the file and saying to move it
+  aside, instead of `Error: file is not a database` and a stack trace.
 - A database a 3.0 development build left at schema version 14 no longer stops the server, and the
   CLI's `status` / `dashboard`, at startup (`no such table: mcp_tool_pins`, `table findings has no
   column named cwe`, `… vuln_aliases`). 012, 013 and 014 were written on parallel branches, and the

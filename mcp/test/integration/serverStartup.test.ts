@@ -159,6 +159,22 @@ describe('server startup against a 3.0 development database', () => {
     expect(err).toContain(`the database '${path}' is missing column findings.cwe`);
     expect(err).not.toMatch(/\n\s+at /);
   }, 60_000);
+
+  it('exits 1 with one line naming a corrupt database file and saying to move it aside', async () => {
+    // Was: `fatal: Error: file is not a database` and a stack trace, naming
+    // neither the file nor what to do.
+    const project = makeTempDir('guardian-server-corrupt-');
+    mkdirSync(join(project, '.guardian'));
+    const path = join(project, '.guardian', 'guardian.db');
+    writeFileSync(path, 'not a SQLite database, just bytes. '.repeat(300));
+
+    const server = startServer(project);
+    expect(await server.exited).toBe(1);
+    const err = server.stderr();
+    expect(err).toContain(`the database '${path}' cannot be read`);
+    expect(err).toMatch(/Move it aside/);
+    expect(err).not.toMatch(/\n\s+at /);
+  }, 60_000);
 });
 
 // Stands in for Node < 22.13, where `node:sqlite` is missing (or needs

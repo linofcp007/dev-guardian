@@ -2307,14 +2307,19 @@ async function loadDashboardModules() {
   }
 }
 
+/**
+ * The storage layer's `existingOnly` open makes every decision the server
+ * makes — a project database git tracks, or one holding schema objects the
+ * migrations never create, is refused; the per-user fallback (no longer the
+ * shared temp directory) must belong to this user — and never creates a
+ * file: an empty in-memory database when neither location has one. The
+ * existence checks this function used to make itself opened a predictable
+ * fallback path in the shared temp directory whenever it existed.
+ */
 function resolveDbHandle(mods, projectPath) {
-  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
-  if (existsSync(primaryPath)) return mods.openDatabase({ projectPath }).db;
-
-  const fallbackPath = mods.resolveFallbackDbPath(projectPath);
-  if (existsSync(fallbackPath)) return mods.openDatabaseAtPath(fallbackPath);
-
-  return mods.openDatabase({ projectPath, inMemory: true }).db;
+  const opened = mods.openDatabase({ projectPath, existingOnly: true });
+  if (opened.warning) process.stderr.write(`dev-guardian: ${opened.warning}\n`);
+  return opened.db;
 }
 
 function buildProjectSnapshot(mods, projectPath) {

@@ -772,3 +772,28 @@ describe('dev-guardian status / dashboard — the root/home guard every MCP tool
     }
   });
 });
+
+describe('dev-guardian status — a project database git tracks is never read', () => {
+  // The server refuses a committed `.guardian/guardian.db` (SQL inside it can
+  // hide findings); `status` must decide the same way, and stay read-only.
+  it('reports no scan, says why on stderr, and creates no fallback database', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-tracked-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: dir }).status).toBe(0);
+      seedCompletedScan(dir);
+      expect(spawnSync('git', ['add', '-f', '.guardian/guardian.db'], { cwd: dir }).status).toBe(0);
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/No scan yet|dev-guardian scan/);
+      expect(r.stdout).not.toMatch(/1 crit/);
+      expect(r.stderr).toMatch(/tracked by git/);
+      expect(existsSync(fallbackPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
+    }
+  });
+});

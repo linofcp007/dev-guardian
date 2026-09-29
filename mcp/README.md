@@ -64,7 +64,7 @@ npm run dev            # tsx src/server.ts, no build
 ## What happens at startup
 
 1. Refuse to start, with one line on stderr, on a Node without `node:sqlite`.
-2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL and a real write probe; if `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), it falls back to a user-level location and says so.
+2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL, `trusted_schema=OFF`, `cell_size_check=ON`, no memory map, and a real write probe. It is not used — the per-user fallback (`GUARDIAN_DATA_DIR`, default `%LOCALAPPDATA%\dev-guardian` or `~/.local/share/dev-guardian`) is, and `health_status` and every scan say why — when `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), when git tracks it (`git ls-files`, 3 s bound; without git the index is read, and "cannot tell" refuses it), or when its schema holds anything the migrations never create (a trigger, a view, an unknown table or index, a CHECK or UNIQUE constraint added to a known table). A file SQLite cannot read stops the server with one line naming it.
 3. Apply every SQL migration in `src/storage/migrations/` the database has not recorded in `schema_migrations`, each under the write lock, then check that every table, column and index the code needs is there. A database it cannot use stops the server with one line naming the file and what is missing.
 4. Reap scans left `running` by a process that is gone.
 5. Probe a bash — Git Bash, then WSL, then `bash` on `PATH` on Windows; `/bin/bash`, then `PATH` elsewhere — and cache the choice. Nothing but `install_toolchain`'s bundled install scripts and `init_project`'s first-pass status report uses it; without one those report `no_bash_shell` (or skip) and everything else works.
@@ -107,6 +107,7 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 ## What the server writes
 
 - `<project>/.guardian/` — the database, and raw scanner output and exported reports under `.guardian/reports/`.
+- The per-user data directory (`GUARDIAN_DATA_DIR`), only when the project's database cannot be used — see startup step 2.
 - `<project>/.gitignore` — the two `.guardian` lines above, once.
 - Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.

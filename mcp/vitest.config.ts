@@ -36,7 +36,8 @@ export default defineConfig({
     // the failure reads as a broken rule pack. See the file's own comment for
     // the mechanism and the measurements.
     // canonicalTmpdir.ts: os.tmpdir() in its canonical spelling — see the file.
-    setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts'],
+    // userDataDir.ts: the per-user database fallback goes to a temp directory.
+    setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts', './test/setup/userDataDir.ts'],
     // Removes, before and after the run, the temp directories a test's
     // cleanup could not (a timed-out test's process still held them) — see
     // `LEFTOVERS_FILE` in test/helpers/tempDir.ts.

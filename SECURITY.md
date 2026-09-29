@@ -42,6 +42,14 @@ their respective projects.
 - **dev-guardian sends no telemetry of its own.** Results persist to
   `.guardian/guardian.db` in the scanned project and never leave it. Reports and
   the dashboard are self-contained and load no external assets.
+- **A project's database is not trusted blindly.** A `.guardian/guardian.db`
+  that git tracks, or whose schema holds anything dev-guardian's migrations
+  never create (a trigger, a view, an unknown table or index, a constraint
+  added to a known table), is not opened: SQL stored in a database runs on
+  every write, and a trigger in a committed one hid every finding. The
+  per-user fallback (`%LOCALAPPDATA%\dev-guardian`, `~/.local/share/dev-guardian`,
+  or `GUARDIAN_DATA_DIR`) is used instead, and `health_status` says why. Every
+  connection runs with `trusted_schema = OFF` and `cell_size_check = ON`.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`
