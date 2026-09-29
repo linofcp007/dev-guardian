@@ -75,10 +75,15 @@ function exemptFlagOffsets(s) {
     return out;
 }
 /** `text` with every unsafe code point written as a visible `\u{XXXX}` — see the module doc. */
-export function untrustedText(text, options = {}) {
-    if (!UNSAFE_TEST.test(text))
-        return text;
+export function untrustedText(input, options = {}) {
+    if (!UNSAFE_TEST.test(input))
+        return input;
     const multiline = options.multiline !== false;
+    // A multi-line field from a Windows file ends every line in `\r\n`: that
+    // is a line break, not a hidden character, and is read as `\n` first —
+    // only a `\r` NOT followed by `\n` (which can rewrite a terminal line) is
+    // escaped below.
+    const text = multiline ? input.replace(/\r\n/g, '\n') : input;
     let flags = null;
     return text.replace(UNSAFE, (ch, offset) => {
         const code = ch.codePointAt(0) ?? 0;

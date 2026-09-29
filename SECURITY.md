@@ -233,9 +233,11 @@ their respective projects.
   as nothing or reorder what does (a right-to-left override, a zero-width
   space, ESC). Every string in every tool result and resource — keys included
   — is passed through `untrustedText` (`mcp/src/platform/untrustedText.ts`) at
-  the MCP response boundary: C0 and C1 controls (except `\n` and `\t` outside a
-  path, name or id), bidi controls and every other default-ignorable code
-  point are written as a visible `\u{XXXX}`. The emoji sequences, keycaps,
+  the MCP response boundary, and to every progress notification's message:
+  C0 and C1 controls (except `\n` and `\t` outside a path, name or id; a
+  Windows `\r\n` in a multi-line field is read as `\n`, a lone `\r` is
+  escaped), bidi controls and every other default-ignorable code point are
+  written as a visible `\u{XXXX}`. The emoji sequences, keycaps,
   CJK variation selectors and subdivision flags `audit_mcp_tools` already
   exempts pass unchanged, and so does every other character: a `日本.py` stays
   `日本.py`. Stored findings are unchanged; only what is shown is escaped. The

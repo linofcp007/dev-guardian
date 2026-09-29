@@ -41274,9 +41274,10 @@ function exemptFlagOffsets(s) {
   }
   return out;
 }
-function untrustedText(text2, options = {}) {
-  if (!UNSAFE_TEST.test(text2)) return text2;
+function untrustedText(input, options = {}) {
+  if (!UNSAFE_TEST.test(input)) return input;
   const multiline = options.multiline !== false;
+  const text2 = multiline ? input.replace(/\r\n/g, "\n") : input;
   let flags = null;
   return text2.replace(UNSAFE, (ch, offset) => {
     const code = ch.codePointAt(0) ?? 0;

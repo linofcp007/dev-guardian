@@ -495,7 +495,8 @@ version bump.
   nothing else, and only `dev-guardian status` stripped terminal escapes. A new `untrustedText`
   (`platform/untrustedText.ts`) is applied at the MCP response boundary to every string of every tool result —
   keys, the error message and content-only payloads included — and of every resource: C0 and C1 controls (`\n`
-  and `\t` kept, except in a path, name, id, title or URL), the bidi controls, zero-width and every other
+  and `\t` kept, except in a path, name, id, title or URL; a Windows `\r\n` in a multi-line field is read as `\n`
+  first, and only a lone `\r` is escaped), the bidi controls, zero-width and every other
   default-ignorable code point, U+2028/2029 and U+FFF9–FFFB are written as a visible `\u{XXXX}`. The emoji, keycap,
   CJK-variation and subdivision-flag sequences `audit_mcp_tools` already exempts pass unchanged (the rule now lives
   in `platform/invisibleChars.ts`, shared by both), and so does every other character — `日本.py` stays `日本.py`.

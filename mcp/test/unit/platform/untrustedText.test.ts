@@ -27,7 +27,14 @@ describe('untrustedText', () => {
   it('keeps \\n and \\t in a multi-line field, and escapes them in a single-line one', () => {
     expect(untrustedText('a\n\tb')).toBe('a\n\tb');
     expect(untrustedText('a\n\tb', { multiline: false })).toBe('a\\u{000A}\\u{0009}b');
-    expect(untrustedText('a\r\nb')).toBe('a\\u{000D}\nb');
+  });
+
+  it('reads a Windows line ending as a line break in a multi-line field, and escapes a lone \\r (round 2, item 3)', () => {
+    expect(untrustedText('line one\r\nline two\r\n')).toBe('line one\nline two\n');
+    expect(untrustedText('over\rwrite')).toBe('over\\u{000D}write');
+    expect(untrustedText('a\r\r\nb')).toBe('a\\u{000D}\nb');
+    // A single-line field keeps every character visible, CRLF included.
+    expect(untrustedText('a\r\nb', { multiline: false })).toBe('a\\u{000D}\\u{000A}b');
   });
 
   it('leaves legitimate non-ASCII alone: Japanese, accents, emoji', () => {
