@@ -825,11 +825,52 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
   it('the scan step writes the JSON report, and its exit code still gates the job (pipefail)', () => {
     const { doc } = renderGithub(['--attest']);
     const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan');
-    expect(scan?.run).toMatch(/^set -euo pipefail\n/);
+    expect(scan?.run).toMatch(/^set -uo pipefail\nset \+e\n/);
     expect(scan?.run).toMatch(/--format json/);
     expect(scan?.run).toMatch(/--sarif dev-guardian-results\.sarif/);
-    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\s*$/);
+    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\nstatus=\$\?\n/);
+    expect(scan?.run).toMatch(/exit "\$status"\s*$/);
   });
+
+  // Review of 3.0.0 (S6): the upload ran on `if: always()`, so an incomplete
+  // scan's SARIF (exit 2: a scanner did not run) reached code scanning, which
+  // closes as "fixed" every alert of a scanner the upload does not contain —
+  // `executionSuccessful: false` notwithstanding.
+  it.each([[[] as string[]], [['--attest']]])('SARIF is uploaded only after a scan that finished (exit 0 or 1) — argv %j', (argv) => {
+    const { doc } = renderGithub(argv);
+    const steps = (doc.jobs['scan']?.steps ?? []) as Array<{ name?: string; id?: string; run?: string; if?: string }>;
+    const scan = steps.find((s) => s.name === 'dev-guardian scan');
+    expect(scan?.id).toBe('scan');
+    expect(scan?.run).toMatch(/echo "exit-code=\$status" >> "\$GITHUB_OUTPUT"\nexit "\$status"\s*$/);
+    const upload = steps.find((s) => s.name === 'Upload SARIF to code scanning');
+    expect(upload?.if).toBe(
+      "${{ always() && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1') }}",
+    );
+  });
+
+  it.skipIf(PROBE_BASH === null)(`the scan step records the scan's own exit code, and exits with it${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    // Run as GitHub runs it (`bash -e`), with a stand-in `node` exiting 0, 1, 2
+    // or 3: the step's exit status and its `exit-code` output are the scan's.
+    for (const argv of [[], ['--attest']]) {
+      const { doc } = renderGithub(argv);
+      const script = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan')?.run ?? '';
+      for (const code of [0, 1, 2, 3]) {
+        const dir = makeProject();
+        const bin = join(dir, 'bin');
+        mkdirSync(bin);
+        writeFileSync(join(bin, 'node'), `#!/bin/sh\necho scanning\nexit ${code}\n`, { mode: 0o755 });
+        writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\n${script}`);
+        const r = spawnSync(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir },
+        });
+        expect(r.status, `${JSON.stringify(argv)} exit ${code}: ${r.stderr}`).toBe(code);
+        expect(readFileSync(join(dir, 'out.txt'), 'utf8')).toBe(`exit-code=${code}\n`);
+      }
+    }
+  }, 120_000);
 
   it('without --attest nothing of it is rendered', () => {
     const { body } = renderGithub();

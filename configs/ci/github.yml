@@ -74,10 +74,17 @@
 #      `dev-guardian baseline update`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
-#   9. Uploads the SARIF report to GitHub code scanning. `if: always()` so
-#      the upload still runs when step 8 fails the gate (the SARIF file was
-#      still written — dev-guardian's own `scan` command never skips
-#      writing it just because the gate failed); `continue-on-error: true`
+#   9. Uploads the SARIF report to GitHub code scanning — only when step 8
+#      exited 0 (gate passed) or 1 (gate failed): step 8 records its own exit
+#      code as the `exit-code` output for this. Exit 2 is an INCOMPLETE scan
+#      (a scanner did not run), and code scanning closes as "fixed" every
+#      open alert of a scanner an upload does not contain — the SARIF's
+#      `executionSuccessful: false` does not stop it — so uploading it would
+#      report the missing scanner's findings as resolved. Exit 3 (usage or
+#      configuration error) wrote no report worth uploading. The upload still
+#      runs when the gate fails (the SARIF file was still written —
+#      dev-guardian's own `scan` command never skips writing it just because
+#      the gate failed); `continue-on-error: true`
 #      because a repository without GitHub Advanced Security enabled must
 #      not fail the whole job over the upload alone — step 8's own gate is
 #      what decides pass/fail here, not this step. `actions: read` is in
@@ -87,7 +94,7 @@
 # {{#ATTEST}}
 #  10. (`ci-init --attest`) Step 8 writes the JSON report too — `--format
 #      json`, kept with `tee` so the log still shows it, under `pipefail`
-#      so the scan's own exit code still decides the step — and on a push
+#      so the scan's own exit code still decides the step (and step 9) — and on a push
 #      the scan job keeps both reports as the `dev-guardian-reports`
 #      artifact. Anyone verifying downloads them from there. On a PUBLIC
 #      repository that exposes them: the full JSON report (every new
@@ -227,26 +234,37 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: dev-guardian scan
+        id: scan
         run: |
           # {{^ATTEST}}
+          set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \
             --project . \
             --fail-on high \
             --format human \
             --sarif dev-guardian-results.sarif
+          status=$?
           # {{/ATTEST}}
           # {{#ATTEST}}
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \
             --project . \
             --fail-on high \
             --format json \
             --sarif dev-guardian-results.sarif \
             | tee dev-guardian-report.json
+          status=$?
           # {{/ATTEST}}
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
+      # Only the SARIF of a scan that finished: exit 0 (gate passed) or 1 (gate
+      # failed). Exit 2 is an incomplete scan — a scanner did not run — and
+      # code scanning closes as "fixed" every alert of a scanner that is
+      # absent from an upload, whatever `executionSuccessful: false` says.
       - name: Upload SARIF to code scanning
-        if: always()
+        if: ${{ always() && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1') }}
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@{{UPLOAD_SARIF_SHA}} # {{UPLOAD_SARIF_VERSION}}
         with:

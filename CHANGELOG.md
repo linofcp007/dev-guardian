@@ -49,6 +49,13 @@ version bump.
 
 ### Fixed
 
+- The GitHub workflow `ci-init` generates no longer uploads the SARIF of an incomplete scan. It
+  uploaded on `if: always()`, including after exit 2 (a scanner did not run), and GitHub code
+  scanning closes as fixed every open alert of a scanner an upload does not contain — the
+  SARIF's `executionSuccessful: false` notwithstanding. The scan step now records its exit code
+  (`steps.scan.outputs.exit-code`) and the upload runs only after 0 or 1. The GitLab and
+  Bitbucket templates keep SARIF as a plain artifact, which closes nothing, and are unchanged.
+  Regenerate an existing workflow with `ci-init github --write --force`.
 - Retention no longer evicts the last scan that measured anything. Fifty newer scans that measured
   nothing (failed, or coverage `none` — a broken Semgrep rule, `local_only` with no rules) pushed
   out the last usable one, and its findings left every reader: risk 18 (medium) → 8 (low), open
