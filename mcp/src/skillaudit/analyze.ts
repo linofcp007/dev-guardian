@@ -265,11 +265,12 @@ function whereFound(m: RuleMatch): string {
   const kind = CODE_SOURCE_TEXT[m.source];
   if (kind === undefined) return '';
   const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
-  const lowered = m.severity !== severityOfRule(m.rule);
-  return lowered
+  if (m.severity === severityOfRule(m.rule)) return where;
+  return m.rule.fetchesOrSends === true
     ? `${where} Scored one level below the rule: a placeholder (…, <url>, example.com) stands where its ` +
         'target would be, and nothing in it or in its block is a real target — the shape of documentation.'
-    : where;
+    : `${where} Scored one level below the rule: nothing in it or in its block is a fetch target, and such ` +
+        'code is as often a mention of the command as an instruction to run it.';
 }
 
 function emptyBreakdown(): Record<ThreatCategory, number> {

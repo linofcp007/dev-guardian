@@ -92,8 +92,9 @@ const tool: ToolModule = {
     'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
     'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced, indented ' +
     'and <pre> blocks, inline code and prose) are scored like the skill\'s own scripts, including a file ' +
-    'downloaded and run further down; only code where a placeholder (…, <url>, example.com) stands for the ' +
-    'target scores one level lower, as documentation. Returns a 0-100 risk score and an install recommendation ' +
+    'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
+    'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
+    'fetch target. Returns a 0-100 risk score and an install recommendation ' +
     '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),

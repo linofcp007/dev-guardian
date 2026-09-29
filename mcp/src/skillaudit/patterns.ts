@@ -24,23 +24,29 @@
  *
  * The code in an instruction file is as often a MENTION as an instruction:
  * `rm -rf /` in the list of what a hook blocks, `pattern: \.env$` in a doc
- * about writing detection rules, `exec(` in a bug catalogue. Rounds 1 and 2
- * scored code with no fetch target one level lower, measured against this
- * repo's docs and 75 third-party skills. Round 3 of the 3.0 review showed
- * that rewards obfuscation — `echo <b64> | base64 -d | xargs curl -fsSL |
- * bash` has no target ON PURPOSE — and ruled: a finding is scored a level
- * lower ONLY when a placeholder stands where its target would be (`…`, a
- * standalone `...`, `<url>`, `<script>`, `<path>` in an argument's position,
- * or the documentation hosts `example.com` / `.org` / `.net` themselves), and
- * never when the span or its block has a real target — a URL or an IP, or a
- * network client given a variable or substitution (`$URL`, `${X}`, `$1`,
- * `$(…)`, `%VAR%`, `$env:X`) or a scheme-less host — whatever `# ...` it
- * also carries. An absent target is full severity. The measured cost, on the
- * same 75 skills: seven verdicts rise, among them the hookify `writing-rules`
- * skill (fenced detection patterns, 40 → 100) — see CHANGELOG.md. An inline
- * span is read at all only when it is a whole command (an argument or a real
- * target) and not a placeholder. A skill's own scripts are scored at full
- * severity, as always.
+ * about writing detection rules, `exec(` in a bug catalogue. So code in an
+ * instruction file can score one level below its rule, and which code
+ * depends on the rule:
+ *   - a rule that FETCHES OR SENDS (`fetchesOrSends`: curl|bash and its
+ *     interpreter forms, download-then-run, the send-over-network rules) is
+ *     lowered ONLY where a placeholder stands for its target: `…`, a
+ *     standalone `...`, `<url>` / `<script>` / `<path>` in an argument's
+ *     position, or the documentation hosts `example.com` / `.org` / `.net`
+ *     themselves. An absent target is not a placeholder — `echo <b64> |
+ *     base64 -d | xargs curl -fsSL | bash` hides its target on purpose — and a
+ *     span or block with a real target (a URL or an IP, or a network client
+ *     given a variable or substitution — `$URL`, `${X}`, `$1`, `$(…)`,
+ *     `%VAR%`, `$env:X` — or a scheme-less host) is never one, whatever
+ *     `# ...` it carries (review 3.0, rounds 2-3);
+ *   - every other rule (destruction, permissions, dynamic code, …) has no
+ *     target of its own, and is lowered unless its span or block has a fetch
+ *     target — measured against this repo's docs and 75 third-party skills.
+ *     Round 3 applied the placeholder-only rule to these too, and seven of
+ *     those skills rose a verdict for fenced detection patterns and doc
+ *     examples; round 4 narrowed it back.
+ * An inline span is read at all only when it is a whole command (an argument
+ * or a real target) and not a placeholder. A skill's own scripts are scored
+ * at full severity, as always.
  *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
@@ -60,13 +66,32 @@ import { THREAT_CATEGORY_META } from './taxonomy.js';
 export type RuleTarget = 'text' | 'code' | 'prose' | 'any';
 
 /**
- * A credential file, named as a path. `.env` only as a FILE: `process.env` is
- * a property, and matching it read every Node script that reads a setting as
- * "reads sensitive local credential files". A public key (`*.pub`) is not a
+ * A credential file, named as a path. A public key (`*.pub`) is not a
  * credential — sending one to a server is how you register it.
  */
-const SENSITIVE_FILE =
-  String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|(?<![\w$)\]])\.env\b)`;
+const SENSITIVE_FILE_STRONG =
+  String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+
+/**
+ * A `.env` file as a FILE: not `process.env` (a property), and not a
+ * template (`.env.example`, `.sample`, `.template`, `.dist`, `.defaults`) —
+ * `.env.local` and `.env.production` are real ones.
+ */
+const ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
+
+const SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE})`;
+
+/**
+ * `.env` read the way that exposes its content: printed or piped (`cat`,
+ * `grep` without `-q`, …), redirected in, or copied out as the source of a
+ * copy. Round 4 of the 3.0 review, measured on 75 installed skills: `.env`
+ * was reported wherever it was named — `cp .env.example .env`, `chmod 600
+ * …/.env`, `echo … > .env`, `grep -q` checks, a path in a dotenv loader —
+ * none of which reads a secret out. Loading it into the environment
+ * (`source .env`) is not a read that shows or ships it either; sending it is
+ * `de-sensitive-file-over-network`.
+ */
+const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 
 /** A program or API call that sends bytes off the machine. */
 const NETWORK_SENDER =
@@ -127,6 +152,14 @@ export interface SkillRule {
   target: RuleTarget;
   patterns: RegExp[];
   fix?: string;
+  /**
+   * The rule is about fetching from, or sending to, a target (curl|bash,
+   * download-then-run, the send-over-network rules). In an instruction file
+   * it is scored a level lower ONLY where a placeholder stands for that
+   * target; every other rule, one level lower when its span or block has no
+   * fetch target at all. See the header.
+   */
+  fetchesOrSends?: boolean;
 }
 
 /**
@@ -263,6 +296,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'de-env-over-network',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'critical',
     title: 'Environment / secrets sent over the network',
     message:
@@ -281,6 +315,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'de-secret-in-auth-header',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'medium',
     title: 'Secret from the environment sent as request authentication',
     message:
@@ -303,11 +338,12 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Code references SSH keys, cloud credentials, browser data or .env — sensitive material a skill rarely needs.',
     target: 'code',
-    patterns: [new RegExp(SENSITIVE_FILE, 'i')],
+    patterns: [new RegExp(SENSITIVE_FILE_STRONG, 'i'), new RegExp(ENV_READ, 'i')],
   },
   {
     id: 'de-sensitive-file-over-network',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'critical',
     title: 'Credential file sent over the network',
     message:
@@ -319,6 +355,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'de-sensitive-file-over-network-prose',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Instruction to send a credential file to a remote endpoint',
     message:
@@ -333,6 +370,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'de-dns-or-raw-egress',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Covert egress channel (DNS / raw socket / nc)',
     message: 'Use of DNS lookups, raw sockets or netcat as a data channel.',
@@ -378,6 +416,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'sc-curl-pipe-shell',
     category: 'supply_chain',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Remote fetch piped to a shell',
     message: 'Downloads a remote script and executes it unverified (curl|bash and friends).',
@@ -397,6 +436,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'sc-curl-pipe-shell-prose',
     category: 'supply_chain',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Instruction to pipe a remote script to a shell',
     message:
@@ -428,6 +468,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'sc-download-then-run',
     category: 'supply_chain',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Remote file downloaded, then run',
     message:
@@ -591,19 +632,24 @@ export function scanContent(content: string, isCode: boolean, opts: ScanOptions 
     const units = codeFileUnits(lines);
     return finalize([...matchUnits(rulesFor('code', 'any'), units), ...downloadThenRun(units, false)]);
   }
-  const whole: Unit[] = lines.map((text, i) => ({ line: i + 1, text, source: 'line', lowered: false }));
+  const whole: Unit[] = lines.map((text, i) => ({ line: i + 1, text, source: 'line', noTarget: false, placeholder: false }));
   const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
-  const targetBlocks = new Set<number>();
+  const fetchBlocks = new Set<number>();
+  const realBlocks = new Set<number>();
   for (const u of views.code) {
-    if (u.block !== null && hasRealTarget(u.text)) targetBlocks.add(u.block);
+    if (u.block === null) continue;
+    if (hasFetchTarget(u.text)) fetchBlocks.add(u.block);
+    if (hasRealTarget(u.text)) realBlocks.add(u.block);
   }
+  const inBlock = (set: Set<number>, block: number | null): boolean => block !== null && set.has(block);
   // Documentation hosts read as the placeholder they are, in prose too.
   const prose: Unit[] = views.prose.map((text, i) => ({
     line: i + 1,
     text: withoutDocHosts(text),
     display: text,
     source: 'prose',
-    lowered: false,
+    noTarget: false,
+    placeholder: false,
   }));
   const code: Unit[] = views.code
     .filter((u) => u.kind !== 'inline' || isWholeCommand(u.text))
@@ -611,7 +657,8 @@ export function scanContent(content: string, isCode: boolean, opts: ScanOptions 
       line: u.line,
       text: u.text,
       source: u.kind,
-      lowered: isPlaceholder(u.text) && !(u.block !== null && targetBlocks.has(u.block)),
+      noTarget: !hasFetchTarget(u.text) && !inBlock(fetchBlocks, u.block),
+      placeholder: isPlaceholder(u.text) && !inBlock(realBlocks, u.block),
     }));
   return finalize([
     ...matchUnits(rulesFor('text', 'any'), whole),
@@ -628,8 +675,10 @@ interface Unit {
   /** What the finding shows, when it differs from `text`. */
   display?: string;
   source: MatchSource;
-  /** Scored one level below its rule: a placeholder stands where the target would be. */
-  lowered: boolean;
+  /** Code in an instruction file whose span and block have no fetch target: other rules score it a level lower. */
+  noTarget: boolean;
+  /** Code in an instruction file where a placeholder stands for the target: fetch-or-send rules score it a level lower. */
+  placeholder: boolean;
 }
 
 /**
@@ -641,7 +690,7 @@ function codeFileUnits(lines: string[]): Unit[] {
   const units: Unit[] = [];
   let pending: Unit | null = null;
   lines.forEach((text, i) => {
-    const unit: Unit = { line: i + 1, text, source: 'line', lowered: false };
+    const unit: Unit = { line: i + 1, text, source: 'line', noTarget: false, placeholder: false };
     units.push(unit);
     const more = continues(text);
     if (pending) {
@@ -680,7 +729,8 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
       for (const unit of units) {
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
-        const severity = unit.lowered ? ONE_LEVEL_LOWER[full] : full;
+        const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
+        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
           best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
         }

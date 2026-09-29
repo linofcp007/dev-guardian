@@ -65,11 +65,14 @@ As instruções de uma skill são o que o modelo executa, por isso os comandos d
 bloco de código (delimitado, indentado ou em `<pre>`) e cada trecho de código
 inline, incluindo um ficheiro descarregado e executado mais abaixo, e duas
 regras de prosa leem, escritos como frases, um script remoto entregue a uma
-shell e um ficheiro de credenciais enviado para um URL. Só pontua um nível
-abaixo o código em que um marcador de documentação (reticências, `<url>`,
-`example.com`) ocupa o lugar do alvo: uma skill que *documenta* um comando
-com um marcador não é uma skill que o executa. Código sem alvo nenhum não
-desce de nível — esconder o alvo é uma forma de ofuscação.
+shell e um ficheiro de credenciais enviado para um URL. Num ficheiro de
+instruções, um comando que descarrega ou envia algo só pontua um nível abaixo
+quando um marcador de documentação (reticências, `<url>`, `example.com`)
+ocupa o lugar do alvo — sem alvo nenhum não desce, porque esconder o alvo é
+uma forma de ofuscação. As outras regras (apagamentos, permissões, código
+dinâmico) pontuam um nível abaixo quando nada à volta é um alvo de rede: uma
+skill que *documenta* um comando destrutivo ou um padrão de deteção não é uma
+skill que o executa.
 
 ## Pontuação e veredicto
 

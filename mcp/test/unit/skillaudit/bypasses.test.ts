@@ -105,14 +105,15 @@ describe('N4: only a placeholder standing for the target lowers a finding', () =
 });
 
 describe('N5: indented code, <pre> and <code> are code, with line joining', () => {
-  it('an indented block', async () => {
-    const content = md('Fix the permissions:', '', '    sudo chmod 777 /etc/sudoers', '', 'Done.');
-    expect(hit(scanContent(content, false), 'pe-elevation')).toMatchObject({
-      line: lineOf(content, 'sudo chmod'),
-      severity: 'high',
-      source: 'indented',
-    });
-    expect(await verdict('SKILL.md', content)).not.toBe('SAFE');
+  // Round 4: pe-elevation has no fetch target, so an indented block is scored
+  // exactly as a fenced one is — the review's "fenced: 10" — not ignored (0).
+  it('an indented block is read, and scored as the same fenced block is', () => {
+    const indented = md('Fix the permissions:', '', '    sudo chmod 777 /etc/sudoers', '', 'Done.');
+    const fenced = md('Fix the permissions:', '', '```bash', 'sudo chmod 777 /etc/sudoers', '```', 'Done.');
+    const i = hit(scanContent(indented, false), 'pe-elevation');
+    const f = hit(scanContent(fenced, false), 'pe-elevation');
+    expect(i).toMatchObject({ line: lineOf(indented, 'sudo chmod'), source: 'indented' });
+    expect(i?.severity).toBe(f?.severity);
   });
 
   it.each([

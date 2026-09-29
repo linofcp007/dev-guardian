@@ -67805,7 +67805,10 @@ var SEVERITY_POINTS = {
 var EXECUTABLE_MULTIPLIER = 1.3;
 
 // src/skillaudit/patterns.ts
-var SENSITIVE_FILE = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|(?<![\w$)\]])\.env\b)`;
+var SENSITIVE_FILE_STRONG = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+var ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
+var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE})`;
+var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
 var SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
 var REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
@@ -67927,6 +67930,7 @@ var SKILL_RULES = [
   {
     id: "de-env-over-network",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "critical",
     title: "Environment / secrets sent over the network",
     message: "Code reads environment variables or credentials and ships them to a network destination.",
@@ -67944,6 +67948,7 @@ var SKILL_RULES = [
   {
     id: "de-secret-in-auth-header",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "medium",
     title: "Secret from the environment sent as request authentication",
     message: "A request authenticates with a token, key or password from the environment. That is how an API is called \u2014 and also how a stolen token reaches a server that is not its own. Confirm the endpoint is the service the secret belongs to.",
@@ -67962,11 +67967,12 @@ var SKILL_RULES = [
     title: "Reads sensitive local credential files",
     message: "Code references SSH keys, cloud credentials, browser data or .env \u2014 sensitive material a skill rarely needs.",
     target: "code",
-    patterns: [new RegExp(SENSITIVE_FILE, "i")]
+    patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")]
   },
   {
     id: "de-sensitive-file-over-network",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "critical",
     title: "Credential file sent over the network",
     message: "One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) and a network client \u2014 the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://\u2026`.",
@@ -67976,6 +67982,7 @@ var SKILL_RULES = [
   {
     id: "de-sensitive-file-over-network-prose",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "high",
     title: "Instruction to send a credential file to a remote endpoint",
     message: "The prose of an instruction file names a credential file, a way to send it and a concrete destination (a URL or an IP address) in one sentence. A description of the attack names no endpoint; an instruction to carry it out has to.",
@@ -67987,6 +67994,7 @@ var SKILL_RULES = [
   {
     id: "de-dns-or-raw-egress",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "high",
     title: "Covert egress channel (DNS / raw socket / nc)",
     message: "Use of DNS lookups, raw sockets or netcat as a data channel.",
@@ -68030,6 +68038,7 @@ var SKILL_RULES = [
   {
     id: "sc-curl-pipe-shell",
     category: "supply_chain",
+    fetchesOrSends: true,
     severity: "high",
     title: "Remote fetch piped to a shell",
     message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
@@ -68049,6 +68058,7 @@ var SKILL_RULES = [
   {
     id: "sc-curl-pipe-shell-prose",
     category: "supply_chain",
+    fetchesOrSends: true,
     severity: "high",
     title: "Instruction to pipe a remote script to a shell",
     message: 'The prose of an instruction file tells the reader to download a script from a concrete target \u2014 a URL, a host, or a variable set elsewhere \u2014 and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no target and is not reported.',
@@ -68077,6 +68087,7 @@ var SKILL_RULES = [
   {
     id: "sc-download-then-run",
     category: "supply_chain",
+    fetchesOrSends: true,
     severity: "high",
     title: "Remote file downloaded, then run",
     message: "A file is downloaded (curl -o / -O, wget, iwr -OutFile) and later run from a shell or an interpreter, on the same line or further down the same file \u2014 curl|bash in two steps.",
@@ -68216,24 +68227,30 @@ function scanContent(content, isCode, opts = {}) {
     const units = codeFileUnits(lines);
     return finalize([...matchUnits(rulesFor("code", "any"), units), ...downloadThenRun(units, false)]);
   }
-  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", lowered: false }));
+  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", noTarget: false, placeholder: false }));
   const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
-  const targetBlocks = /* @__PURE__ */ new Set();
+  const fetchBlocks = /* @__PURE__ */ new Set();
+  const realBlocks = /* @__PURE__ */ new Set();
   for (const u2 of views.code) {
-    if (u2.block !== null && hasRealTarget(u2.text)) targetBlocks.add(u2.block);
+    if (u2.block === null) continue;
+    if (hasFetchTarget(u2.text)) fetchBlocks.add(u2.block);
+    if (hasRealTarget(u2.text)) realBlocks.add(u2.block);
   }
+  const inBlock = (set2, block) => block !== null && set2.has(block);
   const prose = views.prose.map((text2, i2) => ({
     line: i2 + 1,
     text: withoutDocHosts(text2),
     display: text2,
     source: "prose",
-    lowered: false
+    noTarget: false,
+    placeholder: false
   }));
   const code = views.code.filter((u2) => u2.kind !== "inline" || isWholeCommand(u2.text)).map((u2) => ({
     line: u2.line,
     text: u2.text,
     source: u2.kind,
-    lowered: isPlaceholder(u2.text) && !(u2.block !== null && targetBlocks.has(u2.block))
+    noTarget: !hasFetchTarget(u2.text) && !inBlock(fetchBlocks, u2.block),
+    placeholder: isPlaceholder(u2.text) && !inBlock(realBlocks, u2.block)
   }));
   return finalize([
     ...matchUnits(rulesFor("text", "any"), whole),
@@ -68246,7 +68263,7 @@ function codeFileUnits(lines) {
   const units = [];
   let pending = null;
   lines.forEach((text2, i2) => {
-    const unit = { line: i2 + 1, text: text2, source: "line", lowered: false };
+    const unit = { line: i2 + 1, text: text2, source: "line", noTarget: false, placeholder: false };
     units.push(unit);
     const more = continues(text2);
     if (pending) {
@@ -68277,7 +68294,8 @@ function matchUnits(rules2, units) {
       for (const unit of units) {
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
-        const severity = unit.lowered ? ONE_LEVEL_LOWER[full] : full;
+        const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
+        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
           best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
         }
@@ -68749,8 +68767,8 @@ function whereFound(m) {
   const kind = CODE_SOURCE_TEXT[m.source];
   if (kind === void 0) return "";
   const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
-  const lowered = m.severity !== severityOfRule(m.rule);
-  return lowered ? `${where} Scored one level below the rule: a placeholder (\u2026, <url>, example.com) stands where its target would be, and nothing in it or in its block is a real target \u2014 the shape of documentation.` : where;
+  if (m.severity === severityOfRule(m.rule)) return where;
+  return m.rule.fetchesOrSends === true ? `${where} Scored one level below the rule: a placeholder (\u2026, <url>, example.com) stands where its target would be, and nothing in it or in its block is a real target \u2014 the shape of documentation.` : `${where} Scored one level below the rule: nothing in it or in its block is a fetch target, and such code is as often a mention of the command as an instruction to run it.`;
 }
 function emptyBreakdown() {
   const out = {};
@@ -69296,7 +69314,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down; only code where a placeholder (\u2026, <url>, example.com) stands for the target scores one level lower, as documentation. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };
