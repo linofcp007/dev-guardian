@@ -20,7 +20,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
@@ -99,6 +99,7 @@ registerToolModule(
       ]);
 
       const tasks: Array<Promise<void>> = [];
+      let manifestGaps: TrivyFsJudgement['gaps'] = [];
 
       if (semgrepBin) {
         tasks.push(
@@ -177,7 +178,12 @@ registerToolModule(
             });
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-            tools_run.push(withHonoured({ name: 'trivy', status: r.outcome === 'completed' ? 'ok' : 'failed' }, r.honoured));
+            // The same judgement as scan_deps (review I2): a composer.json
+            // with no composer.lock is a named gap, never `ok`, full.
+            const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: r, exclusions: ctx.exclusions });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
+            manifestGaps = judged.gaps;
           })(),
         );
       } else {
@@ -221,6 +227,7 @@ registerToolModule(
       await Promise.all(tasks);
 
       const extras: Record<string, unknown> = { wordpress_layout_detected: looksWp };
+      if (manifestGaps.length > 0) extras['manifest_coverage_gaps'] = manifestGaps;
       if (warnings.length > 0) extras['warnings_extra'] = warnings;
 
       return {

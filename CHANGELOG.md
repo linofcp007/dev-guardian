@@ -23,6 +23,25 @@ version bump.
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
 
+### Fixed
+
+- `scan_deps` / `deps_audit`: a dependency manifest Trivy did not read is a named gap wherever it sits, not only at
+  the project root. The check read the root only and called a buried manifest "Trivy's own concern" — but Trivy
+  skips one without a lock file in silence: `web/package.json` (lodash 4.17.4, no lock) and `api/pyproject.toml`
+  (django 2.2.0) read trivy ok, coverage full, 0 findings, where the same package.json at the root read none. The
+  project is walked now (bounded like detect_stack's walk: 20 000 directories; `node_modules`, `vendor`, build
+  output, hidden directories and `.guardianignore` entries are not entered), and each manifest's directory is
+  compared with the directories of its ecosystem's Results — never the Type alone, which a root lock file
+  already satisfied. A workspace member (npm / yarn `workspaces`, `pnpm-workspace.yaml`, Cargo `[workspace]`,
+  uv `[tool.uv.workspace]`, their exclusions honoured) is covered by its root's lock file. A `.sln` is no
+  longer a manifest of its own: each project it lists is judged in its own directory. `security_scan_full` and
+  the CI gate inherit this.
+- Go joins the manifest table (`trivy:go`): a `go.mod` Trivy cannot parse gets no Result, logs `num=0` and exits
+  0, and read full.
+- `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,
+  `runners/trivyRun.ts#judgeTrivyFs`): a plugin whose `composer.json` has no `composer.lock` read trivy ok, full.
+  It also passes `.guardianignore` to Trivy natively now.
+
 ## [3.0.0] - 2026-09-29
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

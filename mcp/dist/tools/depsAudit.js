@@ -43,9 +43,9 @@ import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCre
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
-import { assessManifestCoverage, TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
+import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -146,42 +146,14 @@ registerToolModule(makeScanTool({
             const raw = readJsonSafe(outFile);
             if (raw)
                 parser_inputs.push({ parser: trivyParser, input: raw });
-            if (result.outcome !== 'completed') {
-                tools_run.push(withHonoured({ name: 'trivy', status: 'failed' }, result.honoured));
-            }
-            else {
-                // See scanDeps.ts / trivy.ts's own module comment: a manifest
-                // Trivy recognises nothing for (e.g. a bare .csproj with no
-                // packages.lock.json) must never read as a clean scan.
-                const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
-                manifestCoverageGaps = coverage.gaps;
-                if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-                    // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
-                    // own tools_run status stays 'ok') but not this one. Fix round
-                    // 1, item 4: the gap is named `trivy:<ecosystem>`, never the
-                    // bare 'trivy' — `create_fix_pr`'s own verification
-                    // (`DEPS_AUDIT_MISSING_TOOLS_NAME`) treats a literal 'trivy' in
-                    // `missing_tools` as "trivy did not run at all, nothing it
-                    // found can be re-verified", which would block EVERY
-                    // trivy-sourced fix (e.g. an unrelated npm CVE) just because
-                    // one ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
-                    // matches no `tools_run` entry still forces coverage to
-                    // 'partial' (missing_tools.length > 0), without colliding with
-                    // the exact-string check downstream.
-                    tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }, result.honoured));
-                    missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-                }
-                else if (coverage.gaps.length > 0) {
-                    // FULL SKIP: trivy's own Results were entirely empty — nothing
-                    // it reports can be trusted as re-verified, so the bare 'trivy'
-                    // name is correct here (unchanged from before this fix round).
-                    tools_run.push(withHonoured({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' }, result.honoured));
-                    missing_tools.push('trivy');
-                }
-                else {
-                    tools_run.push(withHonoured({ name: 'trivy', status: 'ok' }, result.honoured));
-                }
-            }
+            // The one judgement scan_deps, deps_audit and scan_wordpress share
+            // (runners/trivyRun.ts#judgeTrivyFs): a manifest anywhere in the
+            // tree that Trivy read nothing for (e.g. a bare .csproj with no
+            // packages.lock.json) must never read as a clean scan.
+            const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
+            manifestCoverageGaps = judged.gaps;
         }
         else {
             tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });

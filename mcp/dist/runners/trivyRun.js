@@ -39,6 +39,7 @@
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess } from './processRunner.js';
+import { assessManifestCoverage } from './scannerParsers/trivy.js';
 /** The project's own Trivy suppression file, honoured explicitly. */
 export const PROJECT_TRIVYIGNORE = '.trivyignore';
 /** The empty configuration file written into the working directory. */
@@ -105,5 +106,54 @@ export function withHonoured(run, honoured) {
         return run;
     const reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
     return { ...run, reason, honoured_config: [...honoured] };
+}
+/**
+ * The `trivy` entry of a dependency pass (`trivy fs --scanners vuln[,license]`)
+ * — the ONE judgement scan_deps, deps_audit and scan_wordpress share (review
+ * I2: scan_wordpress had none, so a plugin whose composer.json has no lock
+ * read `ok`, full, where scan_deps on the same tree read none):
+ *
+ *   - the process did not complete → `failed`;
+ *   - every manifest the walk found was read → `ok`;
+ *   - some were not, and Trivy reported other Results → `ok`, reason
+ *     `no_supported_manifest`, each gap listed missing as `trivy:<ecosystem>`
+ *     — never the bare `trivy`: `create_fix_pr`'s verification reads a
+ *     literal `trivy` in `missing_tools` as "Trivy did not run", which would
+ *     block every Trivy-sourced fix over one uncovered ecosystem;
+ *   - none were, and Trivy reported nothing at all → `skipped`,
+ *     `no_supported_manifest`, `trivy` missing.
+ *
+ * `trivy.ts#assessManifestCoverage` walks the tree (review I1); a walk that
+ * stopped early says so in the reason.
+ */
+export function judgeTrivyFs(args) {
+    const { projectPath, raw, run, exclusions } = args;
+    if (run.outcome !== 'completed') {
+        return {
+            toolRun: withHonoured({ name: 'trivy', status: 'failed', reason: run.outcome }, run.honoured),
+            missing: [],
+            gaps: [],
+        };
+    }
+    const coverage = assessManifestCoverage(projectPath, raw ?? '', {
+        ignores: exclusions === null ? null : (rel, isDir) => exclusions.ignores(rel, isDir),
+    });
+    const note = coverage.walkIncomplete !== undefined ? `${coverage.walkIncomplete} — manifests below were not checked` : null;
+    const withNote = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run.honoured);
+    if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+        return {
+            toolRun: withNote({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }),
+            missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
+            gaps: coverage.gaps,
+        };
+    }
+    if (coverage.gaps.length > 0) {
+        return {
+            toolRun: withNote({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' }),
+            missing: ['trivy'],
+            gaps: coverage.gaps,
+        };
+    }
+    return { toolRun: withNote({ name: 'trivy', status: 'ok' }), missing: [], gaps: [] };
 }
 //# sourceMappingURL=trivyRun.js.map

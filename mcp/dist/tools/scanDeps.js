@@ -24,8 +24,8 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
-import { assessManifestCoverage, trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { trivyParser } from '../runners/scannerParsers/trivy.js';
+import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -90,40 +90,15 @@ registerToolModule(makeScanTool({
         const raw = readJsonSafe(outFile);
         if (raw)
             parser_inputs.push({ parser: trivyParser, input: raw });
+        // The one judgement scan_deps, deps_audit and scan_wordpress share
+        // (runners/trivyRun.ts#judgeTrivyFs): every manifest in the tree Trivy
+        // read nothing for is a named gap.
+        const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+        tools_run.push(judged.toolRun);
+        missing_tools.push(...judged.missing);
         const extras = {};
-        if (result.outcome !== 'completed') {
-            tools_run.push(withHonoured({ name: 'trivy', status: 'failed' }, result.honoured));
-        }
-        else {
-            const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
-            if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-                // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
-                // own tools_run status stays 'ok') but not this one. Fix round 1,
-                // item 4: the gap is named `trivy:<ecosystem>`, never the bare
-                // 'trivy' — `create_fix_pr`'s own verification treats a literal
-                // 'trivy' in `missing_tools` as "trivy did not run at all,
-                // nothing it found can be re-verified", which would block EVERY
-                // trivy-sourced fix (e.g. an unrelated npm CVE) just because one
-                // ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
-                // matches no `tools_run` entry still forces coverage to 'partial'
-                // (missing_tools.length > 0), without colliding with the
-                // exact-string check downstream.
-                tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }, result.honoured));
-                missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-                extras['manifest_coverage_gaps'] = coverage.gaps;
-            }
-            else if (coverage.gaps.length > 0) {
-                // FULL SKIP: trivy's own Results were entirely empty — nothing it
-                // reports can be trusted as re-verified, so the bare 'trivy' name
-                // is correct here (unchanged from before this fix round).
-                tools_run.push(withHonoured({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' }, result.honoured));
-                missing_tools.push('trivy');
-                extras['manifest_coverage_gaps'] = coverage.gaps;
-            }
-            else {
-                tools_run.push(withHonoured({ name: 'trivy', status: 'ok' }, result.honoured));
-            }
-        }
+        if (judged.gaps.length > 0)
+            extras['manifest_coverage_gaps'] = judged.gaps;
         return {
             outcome: result.outcome,
             tools_run,

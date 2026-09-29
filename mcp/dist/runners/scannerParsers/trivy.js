@@ -13,6 +13,8 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { PROJECT_WALK_EXCLUDE } from '../projectFiles.js';
 import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, SECRET_CWE, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
@@ -203,7 +205,11 @@ const ECOSYSTEM_MANIFESTS = [
     },
     {
         ecosystem: 'dotnet',
-        matches: (n) => /\.(csproj|sln)$/i.test(n),
+        // A project file, never a `.sln`: a solution only lists projects, and the
+        // walk judges each of them in its own directory — where its
+        // packages.lock.json is (review I1). Judged at the solution's directory,
+        // every solution with its projects below it would read as a gap.
+        matches: (n) => /\.(csproj|fsproj|vbproj)$/i.test(n),
         trivyTypes: ['nuget'],
         lockfiles: ['packages.lock.json', 'packages.config'],
         fix: 'set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json',
@@ -243,6 +249,17 @@ const ECOSYSTEM_MANIFESTS = [
         declaresNothing: pythonManifestDeclaresNothing,
         fix: 'commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), ' +
             'or pin every dependency (==) in requirements.txt',
+    },
+    {
+        // Trivy reads go.mod itself (measured on 0.69.3: a `gomod` Result for a
+        // go.mod with or without `require` lines). One it cannot parse gets no
+        // Result at all — `Number of language-specific files num=0`, exit 0 —
+        // which used to read full (review I1).
+        ecosystem: 'go',
+        matches: (n) => n === 'go.mod',
+        trivyTypes: ['gomod'],
+        lockfiles: ['go.mod', 'go.sum'],
+        fix: 'Trivy read nothing from it: make go.mod parse (go mod tidy reports why it does not) and re-run',
     },
 ];
 /** Every ecosystem the coverage check can report a gap for (`ManifestCoverageGap.ecosystem`). */
@@ -414,40 +431,284 @@ function pythonManifestDeclaresNothing(path) {
     }
     return true;
 }
+/** The ceiling detect_stack's manifest walk and the project-languages walk use. */
+const MAX_MANIFEST_WALK_DIRS = 20_000;
+/** The directory part of a `/`- or `\`-separated path, `/`-separated (`''` at the top). */
+function dirOf(path) {
+    const posix = path.replace(/\\/g, '/').replace(/^\.\//, '');
+    const i = posix.lastIndexOf('/');
+    return i < 0 ? '' : posix.slice(0, i);
+}
 /**
- * Assess whether Trivy's fs-scan output covers every dependency manifest
- * actually present at the project's top level. Only the project ROOT is
- * checked — same shallow scope as `license_compatibility`'s manifest
- * detection — because a manifest buried in a subdirectory (a monorepo
- * package) is Trivy's own concern to find or not; this only detects the
- * specific silent gap described above (manifest present, lockfile absent,
- * `Results` never mentions it).
+ * Every manifest of a {@link ECOSYSTEM_MANIFESTS} ecosystem under the
+ * project, bounded: the directories no scan of the project's own files
+ * reads (`node_modules`, `vendor`, build output, virtualenvs — the
+ * `PROJECT_WALK_EXCLUDE` every other walk uses), hidden directories and
+ * `.guardianignore` entries are not entered, symbolic links are not
+ * followed, and at most `maxDirs` directories are read.
  */
-export function assessManifestCoverage(projectPath, rawTrivyOutput) {
-    let entries;
-    try {
-        entries = readdirSync(projectPath);
+function walkManifests(projectPath, opts) {
+    const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
+    const ignores = opts.ignores ?? null;
+    const found = [];
+    const stack = [''];
+    let visited = 0;
+    let rootRead = false;
+    const unreadable = [];
+    while (stack.length > 0) {
+        const rel = stack.pop();
+        if (rel === undefined)
+            break;
+        if (visited >= maxDirs) {
+            return { found, incomplete: `the manifest walk stopped after ${maxDirs} directories` };
+        }
+        visited += 1;
+        const abs = rel === '' ? projectPath : join(projectPath, ...rel.split('/'));
+        let entries;
+        try {
+            entries = readdirSync(abs, { withFileTypes: true });
+        }
+        catch {
+            if (rel === '')
+                return null;
+            unreadable.push(`${rel}/`);
+            continue;
+        }
+        if (rel === '')
+            rootRead = true;
+        for (const e of entries) {
+            const child = rel === '' ? e.name : `${rel}/${e.name}`;
+            if (e.isDirectory()) {
+                if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith('.'))
+                    continue;
+                if (ignores !== null && ignores(child, true))
+                    continue;
+                stack.push(child);
+            }
+            else if (e.isFile()) {
+                const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
+                if (eco === undefined)
+                    continue;
+                if (ignores !== null && ignores(child, false))
+                    continue;
+                found.push({ rel: child, dir: rel, abs: join(abs, e.name), eco });
+            }
+        }
     }
-    catch {
+    if (!rootRead)
+        return null;
+    if (unreadable.length > 0) {
+        const shown = unreadable.slice(0, 3).join(', ');
+        return { found, incomplete: `could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ''}` };
+    }
+    return { found };
+}
+// ---------------------------------------------------------------- workspaces
+//
+// A workspace member has no lock file of its own: the workspace root's lock
+// file locks it, and Trivy reports that one file (`package-lock.json`,
+// `Cargo.lock`, `uv.lock`, measured on 0.69.3 for npm). So a member is
+// covered by a Result of its ecosystem at an ancestor that DECLARES it a
+// member — never by any ancestor's lock: a root lock file says nothing about
+// a separate project below it that has none (the reproduction). Only what
+// the root declares counts: npm / yarn `workspaces` (an array, or
+// `{ packages: [...] }`), `pnpm-workspace.yaml` `packages`, Cargo
+// `[workspace] members` / `exclude`, uv `[tool.uv.workspace] members` /
+// `exclude`. Gradle and .NET lock per project, so no workspace applies.
+/** A workspace glob, relative to its root: `*` one segment, `**` any depth. */
+function workspaceGlob(pattern) {
+    const p = pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (p === '' || p.startsWith('/') || p.split('/').includes('..'))
+        return null;
+    let re = '';
+    for (let i = 0; i < p.length; i++) {
+        const c = p.charAt(i);
+        if (c === '*') {
+            if (p.charAt(i + 1) === '*') {
+                re += '.*';
+                i += 1;
+            }
+            else {
+                re += '[^/]*';
+            }
+        }
+        else if (c === '?') {
+            re += '[^/]';
+        }
+        else {
+            re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+        }
+    }
+    return new RegExp(`^${re}$`);
+}
+/** The quoted strings of a TOML array `key = [ … ]` inside `table` (possibly multi-line). */
+function tomlArrayIn(text, table, key) {
+    const lines = text.split(/\r?\n/);
+    let inTable = false;
+    let collecting = false;
+    let buf = '';
+    for (const raw of lines) {
+        const line = raw.replace(/#.*$/, '').trim();
+        if (!collecting && line.startsWith('[')) {
+            const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
+            inTable = header?.[1]?.replace(/["'\s]/g, '') === table;
+            continue;
+        }
+        if (!inTable)
+            continue;
+        if (!collecting) {
+            const m = new RegExp(`^${key}\\s*=\\s*(\\[.*)$`).exec(line);
+            if (m?.[1] === undefined)
+                continue;
+            collecting = true;
+            buf = m[1];
+        }
+        else {
+            buf += ` ${line}`;
+        }
+        if (buf.includes(']')) {
+            const items = [...buf.matchAll(/"([^"]*)"|'([^']*)'/g)].map((x) => x[1] ?? x[2] ?? '');
+            return items;
+        }
+    }
+    return null;
+}
+function workspaceOf(rootAbs, ecosystem) {
+    const read = (name) => {
+        try {
+            return readFileSync(join(rootAbs, name), 'utf8').replace(/^﻿/, '');
+        }
+        catch {
+            return null;
+        }
+    };
+    if (ecosystem === 'npm') {
+        const include = [];
+        const exclude = [];
+        const add = (p) => {
+            if (p.startsWith('!'))
+                exclude.push(p.slice(1));
+            else
+                include.push(p);
+        };
+        const manifest = readJsonFile(join(rootAbs, 'package.json'));
+        if (typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)) {
+            const ws = manifest['workspaces'];
+            const list = Array.isArray(ws)
+                ? ws
+                : typeof ws === 'object' && ws !== null
+                    ? ws['packages']
+                    : undefined;
+            if (Array.isArray(list))
+                for (const p of list)
+                    if (typeof p === 'string')
+                        add(p);
+        }
+        const pnpm = read('pnpm-workspace.yaml');
+        if (pnpm !== null) {
+            try {
+                const doc = parseYaml(pnpm);
+                const pkgs = typeof doc === 'object' && doc !== null ? doc['packages'] : undefined;
+                if (Array.isArray(pkgs))
+                    for (const p of pkgs)
+                        if (typeof p === 'string')
+                            add(p);
+            }
+            catch {
+                /* not a workspace we can read: no member */
+            }
+        }
+        return include.length > 0 ? { include, exclude } : null;
+    }
+    if (ecosystem === 'cargo' || ecosystem === 'python') {
+        const text = read(ecosystem === 'cargo' ? 'Cargo.toml' : 'pyproject.toml');
+        if (text === null)
+            return null;
+        const table = ecosystem === 'cargo' ? 'workspace' : 'tool.uv.workspace';
+        const include = tomlArrayIn(text, table, 'members');
+        if (include === null || include.length === 0)
+            return null;
+        return { include, exclude: tomlArrayIn(text, table, 'exclude') ?? [] };
+    }
+    return null;
+}
+function declaredMember(decl, relFromRoot) {
+    const hit = (patterns) => patterns.some((p) => workspaceGlob(p)?.test(relFromRoot) ?? false);
+    return hit(decl.include) && !hit(decl.exclude);
+}
+/**
+ * Assess whether Trivy's fs-scan output covers every dependency manifest in
+ * the project (review I1). Every manifest the walk finds
+ * ({@link walkManifests}) is judged in its own DIRECTORY: covered when a
+ * Result of its ecosystem's Types has its `Target` in that directory, or in
+ * an ancestor whose workspace declares it a member (see "workspaces"
+ * above). Never by `Type` alone: a root `package-lock.json` said nothing
+ * about a `web/package.json` that has no lock of its own, and that is the
+ * gap this used to hide — Trivy 0.69.3 skips such a manifest in silence
+ * (no `Results` key, exit 0), and the check used to read the root only.
+ */
+export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
+    const walked = walkManifests(projectPath, opts);
+    if (walked === null)
         return { gaps: [], sawAnyResults: false };
-    }
     const root = parseInputAsJson(rawTrivyOutput);
     const results = asArray(getProp(root, 'Results'));
-    const coveredTypes = new Set();
+    /** Type → the directories its Results name. */
+    const dirsByType = new Map();
     for (const result of results) {
         const type = getString(result, 'Type');
-        if (type)
-            coveredTypes.add(type);
+        const target = getString(result, 'Target');
+        if (type === undefined || target === undefined)
+            continue;
+        const set = dirsByType.get(type) ?? new Set();
+        set.add(dirOf(target));
+        dirsByType.set(type, set);
+    }
+    const resultDirs = (eco) => {
+        const out = new Set();
+        for (const t of eco.trivyTypes)
+            for (const d of dirsByType.get(t) ?? [])
+                out.add(d);
+        return out;
+    };
+    const covered = (eco, dir, dirs) => {
+        if (dirs.has(dir))
+            return true;
+        // Ancestors, nearest first: a workspace root with a Result that declares this directory.
+        const segments = dir === '' ? [] : dir.split('/');
+        for (let n = segments.length - 1; n >= 0; n--) {
+            const ancestor = segments.slice(0, n).join('/');
+            if (!dirs.has(ancestor))
+                continue;
+            const decl = workspaceOf(ancestor === '' ? projectPath : join(projectPath, ...ancestor.split('/')), eco.ecosystem);
+            if (decl !== null && declaredMember(decl, segments.slice(n).join('/')))
+                return true;
+        }
+        return false;
+    };
+    const gapFiles = new Map();
+    const dirsOf = new Map();
+    for (const m of walked.found) {
+        if (m.eco.declaresNothing?.(m.abs) ?? false)
+            continue;
+        let dirs = dirsOf.get(m.eco.ecosystem);
+        if (dirs === undefined) {
+            dirs = resultDirs(m.eco);
+            dirsOf.set(m.eco.ecosystem, dirs);
+        }
+        if (covered(m.eco, m.dir, dirs))
+            continue;
+        gapFiles.set(m.eco.ecosystem, [...(gapFiles.get(m.eco.ecosystem) ?? []), m.rel]);
     }
     const gaps = [];
     for (const eco of ECOSYSTEM_MANIFESTS) {
-        const files = entries.filter((n) => eco.matches(n) && !(eco.declaresNothing?.(join(projectPath, n)) ?? false));
-        if (files.length === 0)
-            continue;
-        const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
-        if (!covered)
-            gaps.push({ ecosystem: eco.ecosystem, files });
+        const files = gapFiles.get(eco.ecosystem);
+        if (files !== undefined)
+            gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort() });
     }
-    return { gaps, sawAnyResults: results.length > 0 };
+    const out = { gaps, sawAnyResults: results.length > 0 };
+    if (walked.incomplete !== undefined)
+        out.walkIncomplete = walked.incomplete;
+    return out;
 }
 //# sourceMappingURL=trivy.js.map

@@ -124,8 +124,8 @@ function bookkeepingNames(): string[] {
   found.push(...quoted(collect(/const OTHER_CHILDREN\s*=\s*\[([^\]]+)\]/g)));
   // generate_sbom: `let producedBy: 'syft' | 'trivy' | null`.
   found.push(...quoted(collect(/let producedBy:\s*([^=;]+)/g)));
-  // scan_deps / deps_audit: `missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`))`,
-  // one per ecosystem of trivy.ts' manifest-coverage table.
+  // scan_deps / deps_audit / scan_wordpress, through runners/trivyRun.ts#judgeTrivyFs:
+  // `coverage.gaps.map((g) => `trivy:${g.ecosystem}`)`, one per ecosystem of trivy.ts' manifest-coverage table.
   for (const x of collect(/(`trivy:\$\{g\.ecosystem\}`)/g)) {
     found.push(...MANIFEST_ECOSYSTEMS.map((e) => ({ file: x.file, value: `trivy:${e}` })));
   }
@@ -165,8 +165,12 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     'never reaches a scans row: map_attack_surface returns its tools_run and caches the surface, writing no scan',
   'tools/reviewPr.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
   'tools/scanWordpress.ts:...secrets.missing_tools': "a copy of gitleaksScan's names",
-  'tools/scanDeps.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
-  'tools/depsAudit.ts:...coverage.gaps.map((g': '`trivy:${g.ecosystem}`, one per MANIFEST_ECOSYSTEMS entry',
+  'tools/scanDeps.ts:...judged.missing':
+    "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
+  'tools/depsAudit.ts:...judged.missing':
+    "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
+  'tools/scanWordpress.ts:...judged.missing':
+    "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'tools/scanIac.ts:spec.name': "runWorkflowScanner's own WorkflowScannerSpec.name — the caller only ever passes the literals 'zizmor' or 'actionlint'",
   'tools/scanIac.ts:run.toolRun.name': "the missing_tools push for a workflow scanner runWorkflowScanner reported missing — copies that same run's own toolRun.name ('zizmor'/'actionlint')",
   'tools/auditAgentConfig.ts:unreadName':
@@ -361,10 +365,12 @@ describe('runNames: a Trivy ecosystem gap (`trivy:<ecosystem>`) speaks for that 
   });
 
   it('anything else Trivy reports stays on its pass key', () => {
-    // An OS package in an image, a Go module Trivy reads without a lock file,
-    // a secret: none of them is what a manifest gap left unmeasured.
+    // An OS package in an image, a Maven pom, a secret: none of them is what
+    // a manifest gap left unmeasured. (A Go module is, since review I1: a
+    // go.mod Trivy could not parse is the `trivy:go` gap.)
     expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'alpine:3.18 (alpine 3.18.4)' })).toBe(TRIVY_FS);
-    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'go.mod' })).toBe(TRIVY_FS);
+    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'go.mod' })).toBe(trivyFsKey('go'));
+    expect(findingKey({ tool: 'trivy', subcategory: 'cve', file_path: 'pom.xml' })).toBe(TRIVY_FS);
     expect(findingKey({ tool: 'trivy', subcategory: 'secret', file_path: 'package-lock.json' })).toBe(TRIVY_FS);
     expect(findingKey({ tool: 'trivy', subcategory: 'misconfiguration', file_path: 'package-lock.json' })).toBe(
       TRIVY_CONFIG,

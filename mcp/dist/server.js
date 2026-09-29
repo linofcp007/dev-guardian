@@ -44610,6 +44610,7 @@ function firstLine2(text2) {
 }
 
 // src/runners/scannerParsers/trivy.ts
+var import_yaml4 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync13, readdirSync as readdirSync9, readFileSync as readFileSync14 } from "node:fs";
 import { dirname as dirname9, join as join19 } from "node:path";
 var TRIVY_TOOL_NAME = "trivy";
@@ -44769,7 +44770,11 @@ var ECOSYSTEM_MANIFESTS = [
   },
   {
     ecosystem: "dotnet",
-    matches: (n2) => /\.(csproj|sln)$/i.test(n2),
+    // A project file, never a `.sln`: a solution only lists projects, and the
+    // walk judges each of them in its own directory — where its
+    // packages.lock.json is (review I1). Judged at the solution's directory,
+    // every solution with its projects below it would read as a gap.
+    matches: (n2) => /\.(csproj|fsproj|vbproj)$/i.test(n2),
     trivyTypes: ["nuget"],
     lockfiles: ["packages.lock.json", "packages.config"],
     fix: "set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json"
@@ -44803,6 +44808,17 @@ var ECOSYSTEM_MANIFESTS = [
     lockfiles: ["requirements.txt", "Pipfile.lock", "poetry.lock", "uv.lock"],
     declaresNothing: pythonManifestDeclaresNothing,
     fix: "commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), or pin every dependency (==) in requirements.txt"
+  },
+  {
+    // Trivy reads go.mod itself (measured on 0.69.3: a `gomod` Result for a
+    // go.mod with or without `require` lines). One it cannot parse gets no
+    // Result at all — `Number of language-specific files num=0`, exit 0 —
+    // which used to read full (review I1).
+    ecosystem: "go",
+    matches: (n2) => n2 === "go.mod",
+    trivyTypes: ["gomod"],
+    lockfiles: ["go.mod", "go.sum"],
+    fix: "Trivy read nothing from it: make go.mod parse (go mod tidy reports why it does not) and re-run"
   }
 ];
 var MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
@@ -44906,28 +44922,207 @@ function pythonManifestDeclaresNothing(path8) {
   }
   return true;
 }
-function assessManifestCoverage(projectPath, rawTrivyOutput) {
-  let entries2;
-  try {
-    entries2 = readdirSync9(projectPath);
-  } catch {
-    return { gaps: [], sawAnyResults: false };
+var MAX_MANIFEST_WALK_DIRS = 2e4;
+function dirOf(path8) {
+  const posix2 = path8.replace(/\\/g, "/").replace(/^\.\//, "");
+  const i2 = posix2.lastIndexOf("/");
+  return i2 < 0 ? "" : posix2.slice(0, i2);
+}
+function walkManifests(projectPath, opts) {
+  const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
+  const ignores = opts.ignores ?? null;
+  const found = [];
+  const stack = [""];
+  let visited = 0;
+  let rootRead = false;
+  const unreadable = [];
+  while (stack.length > 0) {
+    const rel2 = stack.pop();
+    if (rel2 === void 0) break;
+    if (visited >= maxDirs) {
+      return { found, incomplete: `the manifest walk stopped after ${maxDirs} directories` };
+    }
+    visited += 1;
+    const abs = rel2 === "" ? projectPath : join19(projectPath, ...rel2.split("/"));
+    let entries2;
+    try {
+      entries2 = readdirSync9(abs, { withFileTypes: true });
+    } catch {
+      if (rel2 === "") return null;
+      unreadable.push(`${rel2}/`);
+      continue;
+    }
+    if (rel2 === "") rootRead = true;
+    for (const e of entries2) {
+      const child = rel2 === "" ? e.name : `${rel2}/${e.name}`;
+      if (e.isDirectory()) {
+        if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith(".")) continue;
+        if (ignores !== null && ignores(child, true)) continue;
+        stack.push(child);
+      } else if (e.isFile()) {
+        const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
+        if (eco === void 0) continue;
+        if (ignores !== null && ignores(child, false)) continue;
+        found.push({ rel: child, dir: rel2, abs: join19(abs, e.name), eco });
+      }
+    }
   }
+  if (!rootRead) return null;
+  if (unreadable.length > 0) {
+    const shown = unreadable.slice(0, 3).join(", ");
+    return { found, incomplete: `could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ""}` };
+  }
+  return { found };
+}
+function workspaceGlob(pattern) {
+  const p = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (p === "" || p.startsWith("/") || p.split("/").includes("..")) return null;
+  let re = "";
+  for (let i2 = 0; i2 < p.length; i2++) {
+    const c3 = p.charAt(i2);
+    if (c3 === "*") {
+      if (p.charAt(i2 + 1) === "*") {
+        re += ".*";
+        i2 += 1;
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c3 === "?") {
+      re += "[^/]";
+    } else {
+      re += c3.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+function tomlArrayIn(text2, table, key) {
+  const lines = text2.split(/\r?\n/);
+  let inTable = false;
+  let collecting = false;
+  let buf = "";
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (!collecting && line.startsWith("[")) {
+      const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
+      inTable = header?.[1]?.replace(/["'\s]/g, "") === table;
+      continue;
+    }
+    if (!inTable) continue;
+    if (!collecting) {
+      const m = new RegExp(`^${key}\\s*=\\s*(\\[.*)$`).exec(line);
+      if (m?.[1] === void 0) continue;
+      collecting = true;
+      buf = m[1];
+    } else {
+      buf += ` ${line}`;
+    }
+    if (buf.includes("]")) {
+      const items = [...buf.matchAll(/"([^"]*)"|'([^']*)'/g)].map((x) => x[1] ?? x[2] ?? "");
+      return items;
+    }
+  }
+  return null;
+}
+function workspaceOf(rootAbs, ecosystem) {
+  const read2 = (name) => {
+    try {
+      return readFileSync14(join19(rootAbs, name), "utf8").replace(/^﻿/, "");
+    } catch {
+      return null;
+    }
+  };
+  if (ecosystem === "npm") {
+    const include = [];
+    const exclude = [];
+    const add = (p) => {
+      if (p.startsWith("!")) exclude.push(p.slice(1));
+      else include.push(p);
+    };
+    const manifest = readJsonFile(join19(rootAbs, "package.json"));
+    if (typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)) {
+      const ws = manifest["workspaces"];
+      const list2 = Array.isArray(ws) ? ws : typeof ws === "object" && ws !== null ? ws["packages"] : void 0;
+      if (Array.isArray(list2)) {
+        for (const p of list2) if (typeof p === "string") add(p);
+      }
+    }
+    const pnpm = read2("pnpm-workspace.yaml");
+    if (pnpm !== null) {
+      try {
+        const doc = (0, import_yaml4.parse)(pnpm);
+        const pkgs = typeof doc === "object" && doc !== null ? doc["packages"] : void 0;
+        if (Array.isArray(pkgs)) {
+          for (const p of pkgs) if (typeof p === "string") add(p);
+        }
+      } catch {
+      }
+    }
+    return include.length > 0 ? { include, exclude } : null;
+  }
+  if (ecosystem === "cargo" || ecosystem === "python") {
+    const text2 = read2(ecosystem === "cargo" ? "Cargo.toml" : "pyproject.toml");
+    if (text2 === null) return null;
+    const table = ecosystem === "cargo" ? "workspace" : "tool.uv.workspace";
+    const include = tomlArrayIn(text2, table, "members");
+    if (include === null || include.length === 0) return null;
+    return { include, exclude: tomlArrayIn(text2, table, "exclude") ?? [] };
+  }
+  return null;
+}
+function declaredMember(decl, relFromRoot) {
+  const hit = (patterns) => patterns.some((p) => workspaceGlob(p)?.test(relFromRoot) ?? false);
+  return hit(decl.include) && !hit(decl.exclude);
+}
+function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
+  const walked = walkManifests(projectPath, opts);
+  if (walked === null) return { gaps: [], sawAnyResults: false };
   const root = parseInputAsJson(rawTrivyOutput);
   const results = asArray(getProp(root, "Results"));
-  const coveredTypes = /* @__PURE__ */ new Set();
+  const dirsByType = /* @__PURE__ */ new Map();
   for (const result of results) {
     const type = getString(result, "Type");
-    if (type) coveredTypes.add(type);
+    const target = getString(result, "Target");
+    if (type === void 0 || target === void 0) continue;
+    const set2 = dirsByType.get(type) ?? /* @__PURE__ */ new Set();
+    set2.add(dirOf(target));
+    dirsByType.set(type, set2);
+  }
+  const resultDirs = (eco) => {
+    const out2 = /* @__PURE__ */ new Set();
+    for (const t of eco.trivyTypes) for (const d of dirsByType.get(t) ?? []) out2.add(d);
+    return out2;
+  };
+  const covered = (eco, dir, dirs) => {
+    if (dirs.has(dir)) return true;
+    const segments = dir === "" ? [] : dir.split("/");
+    for (let n2 = segments.length - 1; n2 >= 0; n2--) {
+      const ancestor = segments.slice(0, n2).join("/");
+      if (!dirs.has(ancestor)) continue;
+      const decl = workspaceOf(ancestor === "" ? projectPath : join19(projectPath, ...ancestor.split("/")), eco.ecosystem);
+      if (decl !== null && declaredMember(decl, segments.slice(n2).join("/"))) return true;
+    }
+    return false;
+  };
+  const gapFiles = /* @__PURE__ */ new Map();
+  const dirsOf = /* @__PURE__ */ new Map();
+  for (const m of walked.found) {
+    if (m.eco.declaresNothing?.(m.abs) ?? false) continue;
+    let dirs = dirsOf.get(m.eco.ecosystem);
+    if (dirs === void 0) {
+      dirs = resultDirs(m.eco);
+      dirsOf.set(m.eco.ecosystem, dirs);
+    }
+    if (covered(m.eco, m.dir, dirs)) continue;
+    gapFiles.set(m.eco.ecosystem, [...gapFiles.get(m.eco.ecosystem) ?? [], m.rel]);
   }
   const gaps = [];
   for (const eco of ECOSYSTEM_MANIFESTS) {
-    const files = entries2.filter((n2) => eco.matches(n2) && !(eco.declaresNothing?.(join19(projectPath, n2)) ?? false));
-    if (files.length === 0) continue;
-    const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
-    if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });
+    const files = gapFiles.get(eco.ecosystem);
+    if (files !== void 0) gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort() });
   }
-  return { gaps, sawAnyResults: results.length > 0 };
+  const out = { gaps, sawAnyResults: results.length > 0 };
+  if (walked.incomplete !== void 0) out.walkIncomplete = walked.incomplete;
+  return out;
 }
 
 // src/tools/scanCoverage.ts
@@ -48847,6 +49042,36 @@ function withHonoured(run, honoured) {
   const reason = run.reason !== void 0 && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
   return { ...run, reason, honoured_config: [...honoured] };
 }
+function judgeTrivyFs(args) {
+  const { projectPath, raw, run, exclusions } = args;
+  if (run.outcome !== "completed") {
+    return {
+      toolRun: withHonoured({ name: "trivy", status: "failed", reason: run.outcome }, run.honoured),
+      missing: [],
+      gaps: []
+    };
+  }
+  const coverage = assessManifestCoverage(projectPath, raw ?? "", {
+    ignores: exclusions === null ? null : (rel2, isDir) => exclusions.ignores(rel2, isDir)
+  });
+  const note = coverage.walkIncomplete !== void 0 ? `${coverage.walkIncomplete} \u2014 manifests below were not checked` : null;
+  const withNote2 = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== void 0 ? `${r.reason}; ${note}` : note }, run.honoured);
+  if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
+    return {
+      toolRun: withNote2({ name: "trivy", status: "ok", reason: "no_supported_manifest" }),
+      missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
+      gaps: coverage.gaps
+    };
+  }
+  if (coverage.gaps.length > 0) {
+    return {
+      toolRun: withNote2({ name: "trivy", status: "skipped", reason: "no_supported_manifest" }),
+      missing: ["trivy"],
+      gaps: coverage.gaps
+    };
+  }
+  return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: [], gaps: [] };
+}
 
 // src/tools/scanDeps.ts
 registerToolModule(
@@ -48898,23 +49123,11 @@ registerToolModule(
       });
       const raw = readJsonSafe(outFile);
       if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
+      const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+      tools_run.push(judged.toolRun);
+      missing_tools.push(...judged.missing);
       const extras = {};
-      if (result.outcome !== "completed") {
-        tools_run.push(withHonoured({ name: "trivy", status: "failed" }, result.honoured));
-      } else {
-        const coverage = assessManifestCoverage(ctx.projectPath, raw ?? "");
-        if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-          tools_run.push(withHonoured({ name: "trivy", status: "ok", reason: "no_supported_manifest" }, result.honoured));
-          missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-          extras["manifest_coverage_gaps"] = coverage.gaps;
-        } else if (coverage.gaps.length > 0) {
-          tools_run.push(withHonoured({ name: "trivy", status: "skipped", reason: "no_supported_manifest" }, result.honoured));
-          missing_tools.push("trivy");
-          extras["manifest_coverage_gaps"] = coverage.gaps;
-        } else {
-          tools_run.push(withHonoured({ name: "trivy", status: "ok" }, result.honoured));
-        }
-      }
+      if (judged.gaps.length > 0) extras["manifest_coverage_gaps"] = judged.gaps;
       return {
         outcome: result.outcome,
         tools_run,
@@ -49413,13 +49626,13 @@ import { existsSync as existsSync20, readFileSync as readFileSync18, realpathSyn
 import { isAbsolute as isAbsolute6, join as join31, relative as relative11, resolve as resolve11, sep as sep9 } from "node:path";
 
 // src/runners/composeChecks.ts
-var import_yaml4 = __toESM(require_dist2(), 1);
+var import_yaml5 = __toESM(require_dist2(), 1);
 var COMPOSE_TOOL_NAME = "docker-compose";
 var CATEGORY = "security";
 function checkCompose(text2, filePath) {
   let doc;
   try {
-    doc = (0, import_yaml4.parse)(text2);
+    doc = (0, import_yaml5.parse)(text2);
   } catch {
     return [];
   }
@@ -51354,7 +51567,7 @@ import { existsSync as existsSync23, readFileSync as readFileSync20 } from "node
 import { dirname as dirname14, join as join34, relative as relative12 } from "node:path";
 
 // src/budgets/budgets.ts
-var import_yaml5 = __toESM(require_dist2(), 1);
+var import_yaml6 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync22, readFileSync as readFileSync19 } from "node:fs";
 import { join as join33 } from "node:path";
 var PERF_FIELDS = ["lcp_ms", "inp_ms", "cls", "tbt_ms", "bundle_size_kb"];
@@ -51370,7 +51583,7 @@ function loadBudgets(projectPath) {
   }
   let doc;
   try {
-    doc = (0, import_yaml5.parse)(text2);
+    doc = (0, import_yaml6.parse)(text2);
   } catch (e) {
     return { kind: "invalid", path: path8, error: `invalid YAML: ${message2(e)}` };
   }
@@ -52907,21 +53120,10 @@ registerToolModule(
         });
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        if (result.outcome !== "completed") {
-          tools_run.push(withHonoured({ name: "trivy", status: "failed" }, result.honoured));
-        } else {
-          const coverage = assessManifestCoverage(ctx.projectPath, raw ?? "");
-          manifestCoverageGaps = coverage.gaps;
-          if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-            tools_run.push(withHonoured({ name: "trivy", status: "ok", reason: "no_supported_manifest" }, result.honoured));
-            missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-          } else if (coverage.gaps.length > 0) {
-            tools_run.push(withHonoured({ name: "trivy", status: "skipped", reason: "no_supported_manifest" }, result.honoured));
-            missing_tools.push("trivy");
-          } else {
-            tools_run.push(withHonoured({ name: "trivy", status: "ok" }, result.honoured));
-          }
-        }
+        const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+        tools_run.push(judged.toolRun);
+        missing_tools.push(...judged.missing);
+        manifestCoverageGaps = judged.gaps;
       } else {
         tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
         missing_tools.push("trivy");
@@ -53206,7 +53408,7 @@ async function runDotnetSca(opts) {
 
 // src/tools/depsUpdatePlan.ts
 init_execa();
-var import_yaml6 = __toESM(require_dist2(), 1);
+var import_yaml7 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync25, readFileSync as readFileSync22, readdirSync as readdirSync15, statSync as statSync9 } from "node:fs";
 import { dirname as dirname15, join as join37, relative as relative14, sep as sep10 } from "node:path";
 
@@ -53256,8 +53458,8 @@ var RUN_NAMES = {
   "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
   "trivy-config": scanner(TRIVY_CONFIG),
   "trivy-dockerfile": scanner(TRIVY_CONFIG),
-  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
-  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+  // scan_deps / deps_audit / scan_wordpress: Trivy ran ok but produced no Result for a
+  // manifest of this ecosystem, anywhere in the tree (trivy.ts, `assessManifestCoverage`). Listed
   // missing, never ok, so each is a gap in exactly its own ecosystem's
   // dependency findings: an older scan's NuGet CVE is not re-measured when
   // packages.lock.json has gone, and an npm CVE beside it still resolves.
@@ -53271,6 +53473,7 @@ var RUN_NAMES = {
   "trivy:cargo": scanner(trivyFsKey("cargo")),
   "trivy:gradle": scanner(trivyFsKey("gradle")),
   "trivy:python": scanner(trivyFsKey("python")),
+  "trivy:go": scanner(trivyFsKey("go")),
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
   // `dotnet list package --vulnerable`, whose findings say
@@ -55004,7 +55207,7 @@ function workspaceIncludes(root, projectPath) {
   if (rel2 === "" || rel2.startsWith("..")) return false;
   const patterns = [];
   try {
-    const doc = (0, import_yaml6.parse)(readFileSync22(join37(root, "pnpm-workspace.yaml"), "utf8"));
+    const doc = (0, import_yaml7.parse)(readFileSync22(join37(root, "pnpm-workspace.yaml"), "utf8"));
     const packages = typeof doc === "object" && doc !== null ? doc["packages"] : void 0;
     if (Array.isArray(packages)) patterns.push(...packages.filter((p) => typeof p === "string"));
   } catch {
@@ -58044,7 +58247,7 @@ var JS_TS_SUFFIXES = [
 ];
 function resolveJsTs(importingFile, specifier, byPosixPath) {
   if (!specifier.startsWith(".")) return void 0;
-  const base = stripJsTsExtension(joinAndNormalize(dirOf(importingFile), specifier));
+  const base = stripJsTsExtension(joinAndNormalize(dirOf2(importingFile), specifier));
   return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
 }
 function stripJsTsExtension(path8) {
@@ -58065,7 +58268,7 @@ function resolveRust(importingFile, specifier, byPosixPath) {
     root = "src";
     tail = specifier.slice("crate::".length);
   } else if (specifier.startsWith("self::")) {
-    root = dirOf(importingFile);
+    root = dirOf2(importingFile);
     tail = specifier.slice("self::".length);
   } else {
     return void 0;
@@ -58097,7 +58300,7 @@ function buildResolutionIndex(projectFiles) {
     const posix2 = toPosix2(file);
     byPosixPath.set(posix2, file);
     if (!posix2.endsWith(".go")) continue;
-    const dir = dirOf(posix2);
+    const dir = dirOf2(posix2);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file]);
@@ -58115,7 +58318,7 @@ function lookupCandidates(byPosixPath, candidates2) {
 function toPosix2(path8) {
   return path8.replace(/\\/g, "/");
 }
-function dirOf(file) {
+function dirOf2(file) {
   const posix2 = toPosix2(file);
   const parts = posix2.split("/");
   parts.pop();
@@ -58405,7 +58608,7 @@ function assessDependency(subject, index) {
   if (index.external === void 0) return unknown2([PREDATES_GAP]);
   const matcher = matcherFor(subject);
   if ("gap" in matcher) return unknown2([matcher.gap]);
-  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf2(subject.manifest) : null;
+  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf3(subject.manifest) : null;
   const matching = index.external.entries.filter(
     (entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !outsideProjectCode(entry.file)
   );
@@ -58446,7 +58649,7 @@ function assessDependency(subject, index) {
         unverified.push(file);
         continue;
       }
-      const resolved = index.npmResolver?.(dirOf2(file), scopeDir ?? "", name) ?? {
+      const resolved = index.npmResolver?.(dirOf3(file), scopeDir ?? "", name) ?? {
         version: null,
         reason: "no lockfile or installed tree was read"
       };
@@ -58551,7 +58754,7 @@ function sample(files) {
 function unique2(values) {
   return [...new Set(values)].sort();
 }
-function dirOf2(path8) {
+function dirOf3(path8) {
   const posix2 = path8.replace(/\\/g, "/");
   const at = posix2.lastIndexOf("/");
   return at === -1 ? "" : posix2.slice(0, at);
@@ -63888,6 +64091,7 @@ registerToolModule(
         scannerAvailable("phpcs")
       ]);
       const tasks = [];
+      let manifestGaps = [];
       if (semgrepBin) {
         tasks.push(
           (async () => {
@@ -63957,7 +64161,10 @@ registerToolModule(
             });
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-            tools_run.push(withHonoured({ name: "trivy", status: r.outcome === "completed" ? "ok" : "failed" }, r.honoured));
+            const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: r, exclusions: ctx.exclusions });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
+            manifestGaps = judged.gaps;
           })()
         );
       } else {
@@ -63998,6 +64205,7 @@ registerToolModule(
       }
       await Promise.all(tasks);
       const extras = { wordpress_layout_detected: looksWp };
+      if (manifestGaps.length > 0) extras["manifest_coverage_gaps"] = manifestGaps;
       if (warnings.length > 0) extras["warnings_extra"] = warnings;
       return {
         outcome: "completed",
@@ -69943,7 +70151,7 @@ function diffSpecRoutes(codeRoutes, specRoutes, specsParsed) {
 }
 
 // src/surface/specImport.ts
-var import_yaml7 = __toESM(require_dist2(), 1);
+var import_yaml8 = __toESM(require_dist2(), 1);
 var OPERATION_KEYS = [
   "get",
   "put",
@@ -70050,16 +70258,16 @@ function parseRoot(text2) {
     return { kind: "ok", root: JSON.parse(text2), lineFor: () => 0 };
   } catch {
   }
-  const doc = (0, import_yaml7.parseDocument)(text2);
+  const doc = (0, import_yaml8.parseDocument)(text2);
   if (doc.errors.length > 0) {
     return { kind: "parse_error", reason: doc.errors[0]?.message ?? "YAML parse error" };
   }
   const lineByPath = /* @__PURE__ */ new Map();
   const pathsNode = doc.get("paths", true);
-  if ((0, import_yaml7.isMap)(pathsNode)) {
+  if ((0, import_yaml8.isMap)(pathsNode)) {
     for (const item of pathsNode.items) {
       const key = item.key;
-      if (!(0, import_yaml7.isScalar)(key) || typeof key.value !== "string") continue;
+      if (!(0, import_yaml8.isScalar)(key) || typeof key.value !== "string") continue;
       const range = key.range;
       if (range == null) continue;
       lineByPath.set(key.value, text2.slice(0, range[0]).split("\n").length);
@@ -73356,7 +73564,7 @@ function errorMessage2(e) {
 }
 
 // src/fixpr/semgrepFix.ts
-var import_yaml8 = __toESM(require_dist2(), 1);
+var import_yaml9 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync41, rmSync as rmSync9, statSync as statSync21, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { basename as basename8, dirname as dirname19, join as join74 } from "node:path";
@@ -73407,7 +73615,7 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
     const sub = join74(dir, `rules-${String(n2++).padStart(3, "0")}`);
     mkdirSync13(sub);
     const copy = join74(sub, basename8(file));
-    writeFileSync20(copy, (0, import_yaml8.stringify)({ rules: [...picked.values()] }), "utf8");
+    writeFileSync20(copy, (0, import_yaml9.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
     configLabels.push(`${[...picked.keys()].join(", ")} from ${basename8(file)}`);
   }
@@ -73435,7 +73643,7 @@ function loadLocalRules(configs) {
     for (const file of isDir ? yamlFilesUnder2(config2) : [config2]) {
       let doc;
       try {
-        doc = (0, import_yaml8.parse)(readFileSync41(file, "utf8"));
+        doc = (0, import_yaml9.parse)(readFileSync41(file, "utf8"));
       } catch {
         continue;
       }
