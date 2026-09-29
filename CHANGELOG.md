@@ -8,16 +8,38 @@ version bump.
 
 ## [Unreleased]
 
+### Upgrading from 3.0.0 — your project database needs one command
+
+A project's `.guardian/guardian.db` is now used only when it is registered as yours (see
+Security below), and one written by 3.0.0 or earlier is not — it is never trusted automatically.
+Until you register it, dev-guardian keeps working on a per-user fallback database, and
+`health_status`, every scan's `warnings` and the session briefing say so. If the database is
+yours, run once, yourself, in a terminal (the warning prints the exact command with your
+install's path):
+
+```bash
+node <plugin>/cli/dev-guardian.mjs db adopt --project <your project>          # see what it holds
+node <plugin>/cli/dev-guardian.mjs db adopt --project <your project> --yes    # register it
+```
+
+Add `--rehome` if its scans were recorded under another path that leads to the project (a link,
+macOS `/var`): they are moved to the project's canonical path so `status` and every reader see
+them again. Scans made on the fallback meanwhile are not merged back.
+
 ### Added
 
-- `dev-guardian db adopt [--project <path>] [--yes]` (CLI only, never an MCP tool): the way back
-  for a database of yours that the adoption rules cannot tell from a copy — scans filed under a
-  link (macOS `/var`, a symlinked home), only failed scans, a repository you moved or copied. It
-  prints what the database holds (its projects with scan counts and dates, the suppressions, and
-  how many of those have no project and so apply to every project) and registers it only with
-  `--yes`. A database git tracks, one reached through a link, or one whose schema holds what the
-  migrations never create is refused even then. The foreign-database warning names the command
-  with this install's path.
+- `dev-guardian db adopt [--project <path>] [--yes [--rehome]]` (CLI only, never an MCP tool): the
+  one way an existing project database comes to be trusted — one from before 3.0.1, a copy of a
+  registered one, another machine's. It prints what the database holds, flagging first what to
+  weigh — suppressions with no project (they apply to every project) and scans dated in the
+  future — then its projects with scan counts and dates, the suppressions and baselines, and every
+  project path its rows are filed under with where each leads now (links followed; network,
+  device and process-relative paths never looked at). It registers it only with `--yes`. A
+  database git tracks, one reached through a link, one whose schema holds what the migrations
+  never create, and one holding any scan dated more than 5 minutes in the future are refused
+  even then, with no override. `--rehome` rewrites this project's rows filed under another
+  spelling or a link to its canonical path, in every project-keyed table, and never moves a row to
+  another project.
 
 - CWE (and, through OWASP's own CWE lists, the Top 10:2025 category) on the findings 3.0.0 left
   without one, although its notes said "every finding": WPScan's vulnerable components are
@@ -45,44 +67,43 @@ version bump.
   it was registered for. The id travels with the file — a Docker `COPY . .`, a package, an
   archive of the project — so on its own it was a bearer token: a copy carrying a registered id,
   and seven suppressions with no project, read `storage_warning: null` and 0 open findings while
-  the registry named another directory. A copy, or a repository its owner moved, goes through the
-  adoption rules below at its new path, and the warning says where the database was registered.
-  Several processes creating or adopting one database at once leave exactly one registry entry:
-  under the write lock, a process that finds another's id already registered for that database
-  keeps it and deletes its own (four concurrent adopters used to leave three orphans).
-  A database from 3.0.0 or earlier (no id) is adopted once, with a one-line notice and
-  `health_status.storage_adoption` (which counts the suppressions it brought that have no project
-  and so apply to every project), only when: the project's `.git`, if it has one, is not a link,
-  git answers and tracks neither the database nor its `-wal`/`-shm`/`-journal`
-  under a case-insensitive pathspec (`.Guardian/guardian.db` committed is served as
-  `.guardian/guardian.db` on Windows and macOS), `.guardian` is not a submodule, neither
-  `.guardian` nor the files are links or junctions, the database's real path is inside the
-  project, and it holds a completed scan — finished after the project directory was created
-  (5 minutes of clock skew allowed) and not in the future — filed under this project's canonical
-  path or a spelling of it
-  (2.0.0's lower-case drive letter, its separators, a trailing `\.`, the project's own 8.3 short
-  form; never a path through a link). The spellings are derived from the project's own path and
-  the stored ones compared as text: a path read from the database is never given to the file
-  system, and one naming a network share, a device or an NT namespace (`\\`, `//`, `\\?\`, `\\.\`,
-  `\??\`) is refused outright — the first cut stat'ed each one, and four scans under
-  `\\192.0.2.x\share\proj` held the server 60.5 s before it answered (the MCP client timed out;
-  a reachable host would have been sent the user's NTLM credentials). Git state cannot tell a
-  crafted archive's own `.git` from the user's, but a database written elsewhere carries another
-  machine's paths; and where the path can be guessed (`/workspaces/<repo>`, `/app`, a CI runner's
-  path, a Windows 8.3 user name — 200 guesses per database, and a correct one was adopted), an
-  archive or a clone is still built before the victim extracts it, so its scans predate the
-  directory. The birth time is used where the file system records it (Windows, macOS; Linux when
-  `statx` returns one); elsewhere the condition is skipped for a git project and adoption refused
-  for any other. With it, a project that is not a git repository (a WordPress install directory)
-  is adoptable — it used to be refused outright, which stranded every such legacy database. The
-  schema must be clean too. A linked worktree's `.git` file counts when git resolves it. Anything
-  else — a repository downloaded as an archive, a
-  submodule, a link, an unregistered id, a registered database git tracks — is foreign: the
-  per-user fallback is used, the project file is left untouched (it is only read, read-only, for
-  its id), and the warning says why, that the scans made meanwhile stay in the fallback and are
-  not merged back, and how to recover (delete a database that came with the repository; `git rm
-  --cached` one committed by mistake; `dev-guardian db adopt`, printed with its full path, for one
-  that is yours). The CLI's `status` / `dashboard` decide the same way.
+  the registry named another directory. Several processes creating or registering one database at once leave
+  exactly one registry entry: under the write lock, a process that finds another's id already
+  registered for that database keeps it and deletes its own (four concurrent adopters used to
+  leave three orphans). Nothing else is trusted automatically — see "Upgrading from 3.0.0" above.
+  The review tried, over four rounds, to adopt a 3.0.0 database automatically and every rule was
+  defeated: the project's own untracking repository (an archive ships its own `.git`), a completed
+  scan filed under the project's path (predictable layouts — `/workspaces/<repo>`, `/app`, a CI
+  runner's path — can be guessed, 200 guesses per database), a scan finished after the project
+  directory was created (Windows' own `tar.exe` restores a directory's creation time with its
+  defaults, 7-Zip does for an archive built with `-mtc=on`), and a dense series of future-dated
+  scans always has one within any window around "now" — it was adopted, open 7 → 0. Nothing in a
+  file tells its owner from whoever wrote it, so the user decides, with `db adopt`. A database
+  that is not trusted — from before 3.0.1, a copy, another user's, one git tracks (under a
+  case-insensitive pathspec: `.Guardian/guardian.db` committed is served as
+  `.guardian/guardian.db` on Windows and macOS) or a submodule brings, one reached through a link
+  or junction — is foreign: the per-user fallback is used, the project file is left untouched (it
+  is only read, read-only, for its id, after the location and git checks), and a short warning
+  says why and what to do. Judging a database reads no path stored in it: the first cut of the
+  adoption stat'ed them, and four scans under `\\192.0.2.x\share\proj` held the server 60.5 s
+  before it answered (the MCP client timed out; a reachable host would have been sent the user's
+  NTLM credentials). The CLI's `status` / `dashboard` decide the same way.
+- A database SQLite cannot read never stops the server — 8 KB of random bytes or a 16-byte SQLite
+  header followed by zeros exited 1. Where it lives and whether git tracks it are asked before its
+  bytes are read (committed, or in a clone, it is foreign for that); one that is not the user's
+  registered database is foreign; the user's own — found by its path in the registry, since its id
+  cannot be read — gives way to an in-memory database for the session, with a warning naming the
+  file and saying to move it aside. So does a registered database the migrations cannot complete,
+  and a per-user fallback that cannot be used.
+- History readers ignore scans dated more than 5 minutes past this machine's clock, by their start
+  or their finish, and say so ("N scan(s) dated in the future were ignored" — `future_dated_note`
+  in the open set, `risk_score`, `findings/open` and `health_status`, which also counts them). A
+  future-dated scan sorts first until its date passes: the review's series (one scan every 9
+  minutes from now − 2 h to now + 2 days) became "latest" — risk 8 (low), coverage full, a source
+  finished two days ahead — and shadowed the victim's own scan, open 7 → 0. A clock that was wrong
+  where a shared database was written does the same by accident. The rule is one SQL predicate
+  (`storage/scanClock.ts`) in every reader's query — the latest scan, history, the open set's
+  sources, the scan cache, the latest identity of a fingerprint, a CVE's first and last sighting.
 - A per-user data directory that cannot be used is never fatal. The registry and the fallback
   live there, so the first cut exited 1 when it could not be created — in Docker `node:22` as
   uid 4242 with no passwd entry (`HOME=/`): `fatal: Error: EACCES: permission denied, mkdir

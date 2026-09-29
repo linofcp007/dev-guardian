@@ -13,7 +13,7 @@ Each hook has a 15 s timeout in `hooks.json`.
 
 | Event | Matcher | What it does | Default |
 | --- | --- | --- | --- |
-| `SessionStart` | — | Briefs the agent: plugin version, branch, uncommitted changes, whether the project has a `.guardian/` directory and when the database last changed — and, when the project's hook config asked to loosen a guardrail, that it was ignored. | on |
+| `SessionStart` | — | Briefs the agent: plugin version, branch, uncommitted changes, whether the project has a `.guardian/` directory and when the database last changed, whether that database is registered as the user's (one from 3.0.0 is not until `db adopt --yes` — read from the user's registry, never by opening the database) — and, when the project's hook config asked to loosen a guardrail, that it was ignored. | on |
 | `PostToolUse` | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | Scans the inserted text for hard-coded secrets (medium confidence and up) and adds a warning with a **redacted** preview. | warn |
 | `PreToolUse` | `Bash`, `PowerShell` | Assesses the command: **denies** catastrophic ones, warns on risky ones, then vets any package it would install. | deny catastrophic |
 | `PreToolUse` | `Write`, `Edit`, `MultiEdit` | **Denies** any edit of the guard's own configuration, and an edit of Claude Code's `.claude/settings*.json` that would switch the hooks off (below). | always — unless every hook is switched off at user level |
