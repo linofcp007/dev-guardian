@@ -45043,7 +45043,11 @@ function sendMonotonic(notifier, payload) {
     const oldest = perToken.keys().next();
     if (oldest.done !== true) perToken.delete(oldest.value);
   }
-  notifier.send({ ...payload, progress });
+  notifier.send({
+    ...payload,
+    progress,
+    ...payload.message !== void 0 ? { message: untrustedText(payload.message, { multiline: false }) } : {}
+  });
 }
 function makeProgressEmitter(options) {
   if (options.token === void 0 || options.token === null) return NOOP;

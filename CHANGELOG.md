@@ -500,7 +500,8 @@ version bump.
   CJK-variation and subdivision-flag sequences `audit_mcp_tools` already exempts pass unchanged (the rule now lives
   in `platform/invisibleChars.ts`, shared by both), and so does every other character — `日本.py` stays `日本.py`.
   Stored findings keep their bytes. The CLI's human output is escaped too: `scan`'s report, `baseline update`'s gap
-  list and `check --file`'s file name, rule and preview.
+  list and `check --file`'s file name, rule and preview. So is every progress notification's `message` — a
+  scanner's stderr line reached the host's progress display as it was — with its line breaks escaped as well.
 - **`create_fix_pr`'s dry run ran the project's code with every secret the server had.** To judge a fix it runs
   the project's own test command — `npm test` (`scripts.test`), `pytest` (every `conftest.py`), `cargo test`
   (`build.rs`), `go test` — in its worktrees, on a dry run too, and it inherited the server's whole environment:
