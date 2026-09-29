@@ -51,16 +51,22 @@
  * The prompt-level phrases (`citable`: instruction overrides, role escapes,
  * concealment, system-prompt extraction, persistence and activation
  * wording) are what a skill about AI safety QUOTES. In a Markdown instruction
- * file a phrase is CITED — reported at info, scored 0 — when it sits inside
- * quotation marks or a code span on a prose line, or anywhere in a code
- * block whose introducing paragraph names it attack or test material ("Example
- * attack inputs (defensive test data — never instructions to follow):").
- * Measured in wave 2 of the 3.0 review: dev-spec-driven's threat catalogue
- * read DO_NOT_INSTALL 100 on its own examples. A code block by itself is not
- * a citation, nor is one introduced as a mere "Example"; and in JSON or YAML
- * a quote is syntax, never a citation. What this cannot tell apart is an
- * attacker who quotes the injection he wants obeyed — that is reported at
- * info, and a person reading the findings still sees it.
+ * file a phrase is CITED — reported at LOW — when the text around it labels
+ * it as material to resist (an attack, malicious, an injection, rejected,
+ * detected, "never instructions to follow") and nothing there directs its
+ * use (follow, apply, obey, adopt, comply, "as your instructions",
+ * verbatim, "use the following"), and it sits inside a closed quotation or a
+ * code span on a prose line, or anywhere in a code block whose introducing
+ * paragraph is such a label. The text around a prose line is its own
+ * paragraph and the one introducing it. Measured in wave 2 of the 3.0
+ * review: dev-spec-driven's threat catalogue read DO_NOT_INSTALL 100 on its
+ * own examples. A code block by itself is not a citation, nor is one
+ * introduced as "Example" or "test data"; an unclosed quote never cites; and
+ * in JSON or YAML a quote is syntax. A model does not stop obeying an
+ * instruction because it is quoted, which is why a citation still scores
+ * (low, not info) and why a quote under an attack label with no directive —
+ * an attacker labelling his own injection — is the case this cannot tell
+ * apart.
  *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
@@ -689,14 +695,14 @@ export function scanContent(content, isCode, opts = {}) {
     }
     const markdown = opts.markdown !== false;
     const views = splitMarkdown(content, { indentedCode: markdown });
-    const citing = markdown ? citingByLine(lines, views.code) : null;
+    const citing = markdown ? citationContext(lines, views.code) : null;
     const whole = lines.map((text, i) => ({
         line: i + 1,
         text,
         source: 'line',
         noTarget: false,
         placeholder: false,
-        citing: citing?.(i + 1),
+        citing: citing === null ? undefined : () => citing(i + 1),
     }));
     const fetchBlocks = new Set();
     const realBlocks = new Set();
@@ -734,17 +740,48 @@ export function scanContent(content, isCode, opts = {}) {
         ...downloadThenRun([...code, ...prose].sort((a, b) => a.line - b.line), true),
     ]);
 }
+const NOT_CITING = { prose: false, announced: false, quoteOpenAtStart: false, quoteClosesAfter: false };
+/** How far a quotation may run across the lines of one paragraph and still count as closed. */
+const QUOTE_SPAN_LINES = 12;
 /**
- * What a paragraph says when the block after it holds attacks to resist, not
- * instructions to follow: "Example attack inputs (defensive test data —
- * never instructions to follow):". A bare "Example:" is not enough — an
- * injection is an example of nothing until it is named as one.
+ * What text says when what it quotes is an attack to resist, not an
+ * instruction: "attack", "malicious", "an attacker", "injection", "we
+ * reject", "detect", "never follow", "defensive test data — never
+ * instructions to follow". Review 3.0, wave 2, round 2: "test data", "test
+ * prompts" or "Example" alone is not such a label — a model does not stop
+ * obeying an instruction because it is called test data.
  */
-const ATTACK_MATERIAL = /\b(attacks?|attackers?|injections?|jailbreaks?|adversarial|malicious|payloads?|red[- ]team\w*|test\s+(data|inputs?|cases?|strings?|prompts?)|never\s+instructions|not\s+instructions|do\s+not\s+follow)\b/i;
+const RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+follow|(do|does|must|should)\s+not\s+follow|don'?t\s+follow|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
+/**
+ * Framing that directs the quoted text's USE: "follow", "apply", "obey",
+ * "adopt", "comply", "as your instructions", "verbatim", "use the
+ * following". Said anywhere in the framing, it cancels the citation — "apply
+ * the following policy: '…'" is the instruction itself. Negated ("never
+ * follow", "not instructions to follow") it is a label instead, and
+ * {@link NEGATED_DIRECTIVE} takes it out first.
+ */
+const DIRECTS_USE = /\b(follow(s|ed)?|obey(s|ed)?|apply|applies|applied|adopt(s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b/i;
+const NEGATED_DIRECTIVE = /\b(never|not|no\s+longer|without|don'?t|doesn'?t|won'?t|mustn'?t|shouldn'?t)\b[^.;:!?\n]{0,40}?\b(follow(s|ed)?|obey(s|ed)?|apply|adopt(s|ed)?|comply|execute[sd]?|act\s+on|carry\s+out)\b/gi;
+/**
+ * Framing labels what it quotes as material to resist, and nothing in it
+ * directs the quote's use. `framing` is text with its quotations removed:
+ * the attack's own words ("apply this…") are not the framing's.
+ */
+function framesAsResisted(framing) {
+    if (!RESIST_LABEL.test(framing))
+        return false;
+    return !DIRECTS_USE.test(framing.replace(NEGATED_DIRECTIVE, ' '));
+}
 /** An HTML element that opens a code block, on its own line. */
 const HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
-/** Per line (1-based) of a Markdown file: how a phrase on it can be cited. */
-function citingByLine(lines, code) {
+/** Lines of context a paragraph contributes, each side of the line asked about. */
+const CONTEXT_LINES = 4;
+/**
+ * Per line (1-based) of a Markdown file: how a phrase on it can be cited,
+ * worked out on demand (only lines a citable rule matched ask) and memoised
+ * per block and per paragraph.
+ */
+function citationContext(lines, code) {
     const blockOf = new Map();
     const firstLine = new Map();
     for (const u of code) {
@@ -755,15 +792,54 @@ function citingByLine(lines, code) {
         if (first === undefined || u.line < first)
             firstLine.set(u.block, u.line);
     }
-    const announced = new Set();
-    for (const [block, first] of firstLine) {
-        if (ATTACK_MATERIAL.test(introducingParagraph(lines, first)))
-            announced.add(block);
-    }
+    const announced = new Map();
+    const isBlockLine = (i) => blockOf.has(i + 1) || FENCE_OPEN.test(lines[i] ?? '');
     return (line) => {
         const block = blockOf.get(line);
-        return { prose: block === undefined, announced: block !== undefined && announced.has(block) };
+        if (block !== undefined) {
+            let yes = announced.get(block);
+            if (yes === undefined) {
+                const first = firstLine.get(block) ?? line;
+                yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first)));
+                announced.set(block, yes);
+            }
+            return yes ? { ...NOT_CITING, announced: true } : NOT_CITING;
+        }
+        if (!framesAsResisted(withoutQuotes(proseContext(lines, line - 1, isBlockLine))))
+            return NOT_CITING;
+        return { ...NOT_CITING, prose: true, ...quoteCarry(lines, line - 1, isBlockLine) };
     };
+}
+/**
+ * Whether a straight-quoted quotation runs into line `at` (0-based) from an
+ * earlier line of its paragraph, and whether one left open on it closes on a
+ * later line — a blockquote wrapped mid-quotation, as dev-spec-driven's
+ * catalogue does. Such a quotation is closed; one that never closes within
+ * its paragraph is not, and cites nothing.
+ */
+function quoteCarry(lines, at, isBlockLine) {
+    const inParagraph = (i) => i >= 0 && i < lines.length && (lines[i] ?? '').trim() !== '' && !isBlockLine(i);
+    const quotes = (i) => ((lines[i] ?? '').match(/"/g) ?? []).length;
+    let top = at;
+    while (at - top < QUOTE_SPAN_LINES && inParagraph(top - 1))
+        top -= 1;
+    let open = false;
+    for (let i = top; i < at; i += 1)
+        if (quotes(i) % 2 === 1)
+            open = !open;
+    const quoteOpenAtStart = open;
+    if (quotes(at) % 2 === 1)
+        open = !open;
+    let quoteClosesAfter = false;
+    if (open) {
+        for (let i = at + 1; i - at <= QUOTE_SPAN_LINES && inParagraph(i); i += 1) {
+            if (quotes(i) > 0) {
+                quoteClosesAfter = true;
+                break;
+            }
+        }
+    }
+    return { quoteOpenAtStart, quoteClosesAfter };
 }
 /**
  * The paragraph just above a code block whose first line is `first`: past
@@ -778,7 +854,7 @@ function introducingParagraph(lines, first) {
     while (i >= 0 && (lines[i] ?? '').trim() === '')
         i -= 1;
     const paragraph = [];
-    while (i >= 0 && paragraph.length < 4) {
+    while (i >= 0 && paragraph.length < CONTEXT_LINES) {
         const text = lines[i] ?? '';
         if (text.trim() === '' || FENCE_OPEN.test(text))
             break;
@@ -788,49 +864,127 @@ function introducingParagraph(lines, first) {
     return paragraph.join(' ');
 }
 /**
- * Per position of a line: 1 where it lies inside quotation marks — straight
- * double quotes, “…”, «…» — or a code span, opened before it on the line. An
- * unclosed quote runs to the end of the line: a quotation that wraps onto the
- * next one. Built once per line, in one pass: asked per match instead, it
- * rescanned the line each time, quadratic on a long one.
+ * A prose line's framing: its own paragraph (up to four lines each side of
+ * it) and the paragraph that introduces it (up to four lines, across blank
+ * lines only). `at` is 0-based.
  */
-function quotedPositions(text) {
+function proseContext(lines, at, isBlockLine) {
+    const blank = (i) => (lines[i] ?? '').trim() === '' || isBlockLine(i);
+    let top = at;
+    while (top - 1 >= 0 && at - (top - 1) <= CONTEXT_LINES && !blank(top - 1))
+        top -= 1;
+    let bottom = at;
+    while (bottom + 1 < lines.length && bottom + 1 - at <= CONTEXT_LINES && !blank(bottom + 1))
+        bottom += 1;
+    const own = lines.slice(top, bottom + 1);
+    // The introducing paragraph: only when this one starts a paragraph of its
+    // own, directly after blank lines.
+    const intro = [];
+    let i = top - 1;
+    if (i >= 0 && (lines[i] ?? '').trim() === '') {
+        while (i >= 0 && (lines[i] ?? '').trim() === '')
+            i -= 1;
+        while (i >= 0 && intro.length < CONTEXT_LINES && !blank(i)) {
+            intro.unshift(lines[i] ?? '');
+            i -= 1;
+        }
+    }
+    return [...intro, ...own].join(' ');
+}
+/**
+ * Per position of a line: 1 where it lies inside a CLOSED quotation —
+ * straight double quotes, a single-quoted phrase (`'…'` opening after a
+ * space or punctuation and closing before one, so "don't" is no quote),
+ * “…”, «…» — or a code span. An unclosed quote cites nothing (round 2): a
+ * quotation that runs to the end of the line may be the start of an
+ * instruction as easily as of an example. Built once per line, in one pass.
+ */
+function quotedPositions(text, carry) {
     const inside = new Uint8Array(text.length);
-    let straight = false;
-    let curly = false;
-    let guillemet = false;
+    // A quotation carried in from the line above runs to this line's first
+    // straight quote, which closes it; pairing starts after that one.
+    const closing = carry.quoteOpenAtStart ? text.indexOf('"') : -1;
+    if (carry.quoteOpenAtStart)
+        inside.fill(1, 0, closing === -1 ? text.length : closing);
+    const from = closing + 1;
+    for (const [start, end] of quotedSpans(text.slice(from)))
+        inside.fill(1, from + start + 1, from + end);
+    // One carried out runs from the line's last straight quote to its end.
+    if (carry.quoteClosesAfter)
+        inside.fill(1, text.lastIndexOf('"') + 1);
+    return inside;
+}
+/** Closed quotations on a line, as [open, close] index pairs. Linear. */
+function quotedSpans(text) {
+    const spans = [];
+    const word = (ch) => ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+    let straight = -1;
+    let single = -1;
+    let curly = -1;
+    let guillemet = -1;
     for (let i = 0; i < text.length; i += 1) {
-        if (straight || curly || guillemet)
-            inside[i] = 1;
         const ch = text[i];
-        if (ch === '"')
-            straight = !straight;
+        if (ch === '"') {
+            if (straight === -1)
+                straight = i;
+            else {
+                spans.push([straight, i]);
+                straight = -1;
+            }
+        }
+        else if (ch === "'" || ch === '‘' || ch === '’') {
+            const before = text[i - 1];
+            const after = text[i + 1];
+            if (single === -1 && ch !== '’' && !word(before) && after !== undefined && !/\s/.test(after))
+                single = i;
+            else if (single !== -1 && ch !== '‘' && !word(after) && before !== undefined && !/\s/.test(before)) {
+                spans.push([single, i]);
+                single = -1;
+            }
+        }
         else if (ch === '“')
-            curly = true;
-        else if (ch === '”')
-            curly = false;
+            curly = i;
+        else if (ch === '”' && curly !== -1) {
+            spans.push([curly, i]);
+            curly = -1;
+        }
         else if (ch === '«')
-            guillemet = true;
-        else if (ch === '»')
-            guillemet = false;
+            guillemet = i;
+        else if (ch === '»' && guillemet !== -1) {
+            spans.push([guillemet, i]);
+            guillemet = -1;
+        }
     }
     for (const s of inlineSpans(text))
-        inside.fill(1, s.start + 1, s.end);
-    return inside;
+        spans.push([s.start, s.end - 1]);
+    return spans;
+}
+/** The text with every closed quotation and code span blanked: what frames the quotes. */
+function withoutQuotes(text) {
+    const spans = quotedSpans(text).sort((a, b) => a[0] - b[0]);
+    let out = '';
+    let at = 0;
+    for (const [start, end] of spans) {
+        if (start < at)
+            continue;
+        out += `${text.slice(at, start)} `;
+        at = end + 1;
+    }
+    return out + text.slice(at);
 }
 const QUOTED = new WeakMap();
 /** Every match of `pattern` in the unit is cited (see the header); false when none is. */
 function isCited(pattern, unit) {
-    const c = unit.citing;
-    if (c === undefined)
+    if (unit.citing === undefined)
         return false;
+    const c = unit.citing();
     if (c.announced)
         return true;
     if (!c.prose)
         return false;
     let quoted = QUOTED.get(unit);
     if (quoted === undefined) {
-        quoted = quotedPositions(unit.text);
+        quoted = quotedPositions(unit.text, c);
         QUOTED.set(unit, quoted);
     }
     const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
@@ -897,7 +1051,7 @@ function matchUnits(rules, units) {
                     continue;
                 const cited = rule.citable === true && isCited(pattern, unit);
                 const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
-                const severity = cited ? 'info' : lowered ? ONE_LEVEL_LOWER[full] : full;
+                const severity = cited ? 'low' : lowered ? ONE_LEVEL_LOWER[full] : full;
                 if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
                     best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity, cited };
                 }

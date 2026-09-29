@@ -94,9 +94,9 @@ const tool: ToolModule = {
     'and <pre> blocks, inline code and prose) are scored like the skill\'s own scripts, including a file ' +
     'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
     'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
-    'fetch target. An injection or persistence phrase quoted in Markdown, or in a code block introduced as ' +
-    'attack or test data, is cited, not said: reported at info, scored 0. Returns a 0-100 risk score and an ' +
-    'install recommendation ' +
+    'fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack ' +
+    'to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 ' +
+    'risk score and an install recommendation ' +
     '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),

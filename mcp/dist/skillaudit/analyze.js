@@ -35,10 +35,16 @@ export async function analyzeSkill(files, opts = {}) {
     const signals = [];
     let executableFiles = 0;
     let hiddenUnicodeFiles = 0;
-    const push = (f, isExecutable) => {
+    const push = (f, isExecutable, scored = true) => {
         findings.push(f);
-        signals.push({ severity: f.severity, isExecutable });
+        signals.push({ severity: f.severity, isExecutable, scored });
     };
+    // A citation (see `patterns.ts`) is reported every time, at low, but a
+    // rule's citations score once per skill: a threat catalogue that quotes
+    // the same attack class ten times is one fact about it, not ten. Measured
+    // in round 2 of the wave: without this, dev-spec-driven's catalogue read
+    // CAUTION on its eight quoted examples alone.
+    const citedRules = new Set();
     // 0. Symlinks/junctions the ingester refused to follow. Reported here
     // (never as a raw ingested "file") so the pattern/YARA/taint passes below
     // never see a link's target string as if it were reviewable source — see
@@ -65,6 +71,9 @@ export async function analyzeSkill(files, opts = {}) {
             executableFiles += 1;
         // 1. Pattern rules.
         for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
+            const repeat = m.cited && citedRules.has(m.rule.id);
+            if (m.cited)
+                citedRules.add(m.rule.id);
             push(makeFinding({
                 tool: TOOL,
                 rule_id: m.rule.id,
@@ -77,7 +86,7 @@ export async function analyzeSkill(files, opts = {}) {
                 line_start: m.line,
                 line_end: m.line,
                 snippet: m.snippet,
-            }), file.isExecutable);
+            }), file.isExecutable, !repeat);
         }
         // 2. YARA signatures.
         for (const m of matchSignatures(file.content)) {
@@ -197,9 +206,10 @@ const CODE_SOURCE_TEXT = {
 };
 function whereFound(m) {
     if (m.cited) {
-        return (' Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced ' +
-            'as attack or test material — the shape of documentation that describes the attack. Reported at info ' +
-            'and scored 0; read it if the file is not about AI safety.');
+        return (' Cited, not said: the phrase is quoted — in quotation marks, a code span, or a code block — under text ' +
+            'that labels it an attack to resist and does not tell the reader to use it: the shape of documentation ' +
+            'that describes the attack. Reported at low, not dismissed: a model does not stop obeying an instruction ' +
+            'because it is quoted, so read it if the file is not about AI safety.');
     }
     const kind = CODE_SOURCE_TEXT[m.source];
     if (kind === undefined)

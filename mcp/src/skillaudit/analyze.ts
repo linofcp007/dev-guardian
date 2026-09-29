@@ -70,10 +70,16 @@ export async function analyzeSkill(
   let executableFiles = 0;
   let hiddenUnicodeFiles = 0;
 
-  const push = (f: Finding, isExecutable: boolean): void => {
+  const push = (f: Finding, isExecutable: boolean, scored = true): void => {
     findings.push(f);
-    signals.push({ severity: f.severity, isExecutable });
+    signals.push({ severity: f.severity, isExecutable, scored });
   };
+  // A citation (see `patterns.ts`) is reported every time, at low, but a
+  // rule's citations score once per skill: a threat catalogue that quotes
+  // the same attack class ten times is one fact about it, not ten. Measured
+  // in round 2 of the wave: without this, dev-spec-driven's catalogue read
+  // CAUTION on its eight quoted examples alone.
+  const citedRules = new Set<string>();
 
   // 0. Symlinks/junctions the ingester refused to follow. Reported here
   // (never as a raw ingested "file") so the pattern/YARA/taint passes below
@@ -105,6 +111,8 @@ export async function analyzeSkill(
 
     // 1. Pattern rules.
     for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
+      const repeat = m.cited && citedRules.has(m.rule.id);
+      if (m.cited) citedRules.add(m.rule.id);
       push(
         makeFinding({
           tool: TOOL,
@@ -120,6 +128,7 @@ export async function analyzeSkill(
           snippet: m.snippet,
         }),
         file.isExecutable,
+        !repeat,
       );
     }
 
@@ -264,9 +273,10 @@ const CODE_SOURCE_TEXT: Partial<Record<RuleMatch['source'], string>> = {
 function whereFound(m: RuleMatch): string {
   if (m.cited) {
     return (
-      ' Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced ' +
-      'as attack or test material — the shape of documentation that describes the attack. Reported at info ' +
-      'and scored 0; read it if the file is not about AI safety.'
+      ' Cited, not said: the phrase is quoted — in quotation marks, a code span, or a code block — under text ' +
+      'that labels it an attack to resist and does not tell the reader to use it: the shape of documentation ' +
+      'that describes the attack. Reported at low, not dismissed: a model does not stop obeying an instruction ' +
+      'because it is quoted, so read it if the file is not about AI safety.'
     );
   }
   const kind = CODE_SOURCE_TEXT[m.source];

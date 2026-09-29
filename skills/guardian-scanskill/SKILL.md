@@ -79,13 +79,17 @@ skill que o executa.
 As frases de prompt injection, de fuga ao papel, de esconder ações do
 utilizador, de revelar o prompt de sistema, de persistência e de ativação
 coerciva são o que uma skill sobre segurança de IA *cita*. Num ficheiro
-Markdown, uma dessas frases entre aspas ou num trecho de código de uma linha de
-prosa, ou num bloco de código cujo parágrafo de introdução o apresenta como
-material de ataque ou de teste, fica **citada**: aparece como `info` e não
-pontua. Um bloco de código, por si só, não é uma citação, nem um bloco
-apresentado apenas como "Exemplo"; em JSON ou YAML as aspas são sintaxe. Um
-atacante que ponha entre aspas a injeção que quer ver obedecida também desce a
-`info` — numa skill que não é sobre segurança de IA, lê esses findings.
+Markdown, uma dessas frases fica **citada** — aparece como `low` — quando está
+entre aspas fechadas ou num trecho de código de uma linha de prosa, ou num
+bloco de código, e o texto à volta (o parágrafo da frase e o que o introduz)
+a apresenta como material a que resistir (um ataque, malicioso, uma injeção,
+rejeitado, detetado, "nunca instruções a seguir") sem mandar usá-la (seguir,
+aplicar, obedecer, adotar, cumprir, "como as tuas instruções", "tal e qual",
+"usa o seguinte"). "Exemplo" ou "dados de teste", por si só, não chegam; umas
+aspas por fechar nunca citam; em JSON ou YAML as aspas são sintaxe. Todas as
+citações aparecem, mas as de uma mesma regra pontuam uma só vez por skill. Um
+modelo não deixa de obedecer a uma instrução por estar entre aspas: numa skill
+que não é sobre segurança de IA, lê esses findings.
 
 ## Pontuação e veredicto
 

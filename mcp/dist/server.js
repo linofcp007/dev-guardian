@@ -70128,14 +70128,14 @@ function scanContent(content, isCode, opts = {}) {
   }
   const markdown = opts.markdown !== false;
   const views = splitMarkdown(content, { indentedCode: markdown });
-  const citing = markdown ? citingByLine(lines, views.code) : null;
+  const citing = markdown ? citationContext(lines, views.code) : null;
   const whole2 = lines.map((text2, i2) => ({
     line: i2 + 1,
     text: text2,
     source: "line",
     noTarget: false,
     placeholder: false,
-    citing: citing?.(i2 + 1)
+    citing: citing === null ? void 0 : () => citing(i2 + 1)
   }));
   const fetchBlocks = /* @__PURE__ */ new Set();
   const realBlocks = /* @__PURE__ */ new Set();
@@ -70167,9 +70167,18 @@ function scanContent(content, isCode, opts = {}) {
     ...downloadThenRun([...code, ...prose].sort((a2, b) => a2.line - b.line), true)
   ]);
 }
-var ATTACK_MATERIAL = /\b(attacks?|attackers?|injections?|jailbreaks?|adversarial|malicious|payloads?|red[- ]team\w*|test\s+(data|inputs?|cases?|strings?|prompts?)|never\s+instructions|not\s+instructions|do\s+not\s+follow)\b/i;
+var NOT_CITING = { prose: false, announced: false, quoteOpenAtStart: false, quoteClosesAfter: false };
+var QUOTE_SPAN_LINES = 12;
+var RESIST_LABEL = /\b(attacks?|attackers?|attacked|malicious|adversarial|hostile|injections?|injected|jailbreaks?|exploits?|payloads?|red[- ]team\w*|reject(s|ed|ing)?|refuse[sd]?|detect(s|ed|ing|ion)?|resist(s|ed|ing)?|defen[cs]es?|defensive|defend(s|ed|ing)?|never\s+follow|(do|does|must|should)\s+not\s+follow|don'?t\s+follow|never\s+(an?\s+)?instructions?|not\s+(an?\s+)?instructions?)\b/i;
+var DIRECTS_USE = /\b(follow(s|ed)?|obey(s|ed)?|apply|applies|applied|adopt(s|ed)?|comply|complies|execute[sd]?|carry\s+out|act\s+on|verbatim|use\s+the\s+following|as\s+(your|the)\s+(new\s+)?(instructions?|rules?|system\s+prompt|policy|policies|guidelines))\b/i;
+var NEGATED_DIRECTIVE = /\b(never|not|no\s+longer|without|don'?t|doesn'?t|won'?t|mustn'?t|shouldn'?t)\b[^.;:!?\n]{0,40}?\b(follow(s|ed)?|obey(s|ed)?|apply|adopt(s|ed)?|comply|execute[sd]?|act\s+on|carry\s+out)\b/gi;
+function framesAsResisted(framing) {
+  if (!RESIST_LABEL.test(framing)) return false;
+  return !DIRECTS_USE.test(framing.replace(NEGATED_DIRECTIVE, " "));
+}
 var HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
-function citingByLine(lines, code) {
+var CONTEXT_LINES = 4;
+function citationContext(lines, code) {
   const blockOf = /* @__PURE__ */ new Map();
   const firstLine6 = /* @__PURE__ */ new Map();
   for (const u2 of code) {
@@ -70178,14 +70187,42 @@ function citingByLine(lines, code) {
     const first = firstLine6.get(u2.block);
     if (first === void 0 || u2.line < first) firstLine6.set(u2.block, u2.line);
   }
-  const announced = /* @__PURE__ */ new Set();
-  for (const [block, first] of firstLine6) {
-    if (ATTACK_MATERIAL.test(introducingParagraph(lines, first))) announced.add(block);
-  }
+  const announced = /* @__PURE__ */ new Map();
+  const isBlockLine = (i2) => blockOf.has(i2 + 1) || FENCE_OPEN.test(lines[i2] ?? "");
   return (line) => {
     const block = blockOf.get(line);
-    return { prose: block === void 0, announced: block !== void 0 && announced.has(block) };
+    if (block !== void 0) {
+      let yes = announced.get(block);
+      if (yes === void 0) {
+        const first = firstLine6.get(block) ?? line;
+        yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first)));
+        announced.set(block, yes);
+      }
+      return yes ? { ...NOT_CITING, announced: true } : NOT_CITING;
+    }
+    if (!framesAsResisted(withoutQuotes(proseContext(lines, line - 1, isBlockLine)))) return NOT_CITING;
+    return { ...NOT_CITING, prose: true, ...quoteCarry(lines, line - 1, isBlockLine) };
   };
+}
+function quoteCarry(lines, at, isBlockLine) {
+  const inParagraph = (i2) => i2 >= 0 && i2 < lines.length && (lines[i2] ?? "").trim() !== "" && !isBlockLine(i2);
+  const quotes = (i2) => ((lines[i2] ?? "").match(/"/g) ?? []).length;
+  let top = at;
+  while (at - top < QUOTE_SPAN_LINES && inParagraph(top - 1)) top -= 1;
+  let open = false;
+  for (let i2 = top; i2 < at; i2 += 1) if (quotes(i2) % 2 === 1) open = !open;
+  const quoteOpenAtStart = open;
+  if (quotes(at) % 2 === 1) open = !open;
+  let quoteClosesAfter = false;
+  if (open) {
+    for (let i2 = at + 1; i2 - at <= QUOTE_SPAN_LINES && inParagraph(i2); i2 += 1) {
+      if (quotes(i2) > 0) {
+        quoteClosesAfter = true;
+        break;
+      }
+    }
+  }
+  return { quoteOpenAtStart, quoteClosesAfter };
 }
 function introducingParagraph(lines, first) {
   let i2 = first - 2;
@@ -70193,7 +70230,7 @@ function introducingParagraph(lines, first) {
   if (opener !== void 0 && (FENCE_OPEN.test(opener) || HTML_BLOCK_OPENER.test(opener))) i2 -= 1;
   while (i2 >= 0 && (lines[i2] ?? "").trim() === "") i2 -= 1;
   const paragraph = [];
-  while (i2 >= 0 && paragraph.length < 4) {
+  while (i2 >= 0 && paragraph.length < CONTEXT_LINES) {
     const text2 = lines[i2] ?? "";
     if (text2.trim() === "" || FENCE_OPEN.test(text2)) break;
     paragraph.unshift(text2);
@@ -70201,32 +70238,89 @@ function introducingParagraph(lines, first) {
   }
   return paragraph.join(" ");
 }
-function quotedPositions(text2) {
-  const inside = new Uint8Array(text2.length);
-  let straight = false;
-  let curly = false;
-  let guillemet = false;
-  for (let i2 = 0; i2 < text2.length; i2 += 1) {
-    if (straight || curly || guillemet) inside[i2] = 1;
-    const ch = text2[i2];
-    if (ch === '"') straight = !straight;
-    else if (ch === "\u201C") curly = true;
-    else if (ch === "\u201D") curly = false;
-    else if (ch === "\xAB") guillemet = true;
-    else if (ch === "\xBB") guillemet = false;
+function proseContext(lines, at, isBlockLine) {
+  const blank = (i3) => (lines[i3] ?? "").trim() === "" || isBlockLine(i3);
+  let top = at;
+  while (top - 1 >= 0 && at - (top - 1) <= CONTEXT_LINES && !blank(top - 1)) top -= 1;
+  let bottom = at;
+  while (bottom + 1 < lines.length && bottom + 1 - at <= CONTEXT_LINES && !blank(bottom + 1)) bottom += 1;
+  const own = lines.slice(top, bottom + 1);
+  const intro = [];
+  let i2 = top - 1;
+  if (i2 >= 0 && (lines[i2] ?? "").trim() === "") {
+    while (i2 >= 0 && (lines[i2] ?? "").trim() === "") i2 -= 1;
+    while (i2 >= 0 && intro.length < CONTEXT_LINES && !blank(i2)) {
+      intro.unshift(lines[i2] ?? "");
+      i2 -= 1;
+    }
   }
-  for (const s of inlineSpans(text2)) inside.fill(1, s.start + 1, s.end);
+  return [...intro, ...own].join(" ");
+}
+function quotedPositions(text2, carry) {
+  const inside = new Uint8Array(text2.length);
+  const closing = carry.quoteOpenAtStart ? text2.indexOf('"') : -1;
+  if (carry.quoteOpenAtStart) inside.fill(1, 0, closing === -1 ? text2.length : closing);
+  const from = closing + 1;
+  for (const [start, end] of quotedSpans(text2.slice(from))) inside.fill(1, from + start + 1, from + end);
+  if (carry.quoteClosesAfter) inside.fill(1, text2.lastIndexOf('"') + 1);
   return inside;
+}
+function quotedSpans(text2) {
+  const spans = [];
+  const word = (ch) => ch !== void 0 && /[\p{L}\p{N}]/u.test(ch);
+  let straight = -1;
+  let single = -1;
+  let curly = -1;
+  let guillemet = -1;
+  for (let i2 = 0; i2 < text2.length; i2 += 1) {
+    const ch = text2[i2];
+    if (ch === '"') {
+      if (straight === -1) straight = i2;
+      else {
+        spans.push([straight, i2]);
+        straight = -1;
+      }
+    } else if (ch === "'" || ch === "\u2018" || ch === "\u2019") {
+      const before = text2[i2 - 1];
+      const after2 = text2[i2 + 1];
+      if (single === -1 && ch !== "\u2019" && !word(before) && after2 !== void 0 && !/\s/.test(after2)) single = i2;
+      else if (single !== -1 && ch !== "\u2018" && !word(after2) && before !== void 0 && !/\s/.test(before)) {
+        spans.push([single, i2]);
+        single = -1;
+      }
+    } else if (ch === "\u201C") curly = i2;
+    else if (ch === "\u201D" && curly !== -1) {
+      spans.push([curly, i2]);
+      curly = -1;
+    } else if (ch === "\xAB") guillemet = i2;
+    else if (ch === "\xBB" && guillemet !== -1) {
+      spans.push([guillemet, i2]);
+      guillemet = -1;
+    }
+  }
+  for (const s of inlineSpans(text2)) spans.push([s.start, s.end - 1]);
+  return spans;
+}
+function withoutQuotes(text2) {
+  const spans = quotedSpans(text2).sort((a2, b) => a2[0] - b[0]);
+  let out = "";
+  let at = 0;
+  for (const [start, end] of spans) {
+    if (start < at) continue;
+    out += `${text2.slice(at, start)} `;
+    at = end + 1;
+  }
+  return out + text2.slice(at);
 }
 var QUOTED = /* @__PURE__ */ new WeakMap();
 function isCited(pattern, unit) {
-  const c3 = unit.citing;
-  if (c3 === void 0) return false;
+  if (unit.citing === void 0) return false;
+  const c3 = unit.citing();
   if (c3.announced) return true;
   if (!c3.prose) return false;
   let quoted = QUOTED.get(unit);
   if (quoted === void 0) {
-    quoted = quotedPositions(unit.text);
+    quoted = quotedPositions(unit.text, c3);
     QUOTED.set(unit, quoted);
   }
   const global3 = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
@@ -70276,7 +70370,7 @@ function matchUnits(rules2, units) {
         if (!pattern.test(unit.text)) continue;
         const cited = rule.citable === true && isCited(pattern, unit);
         const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
-        const severity = cited ? "info" : lowered ? ONE_LEVEL_LOWER[full] : full;
+        const severity = cited ? "low" : lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
           best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity, cited };
         }
@@ -70402,7 +70496,7 @@ function scoreFindings(signals2) {
   let executableFindings = 0;
   for (const s of signals2) {
     by_severity[s.severity] += 1;
-    const base = SEVERITY_POINTS[s.severity];
+    const base = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
     raw += s.isExecutable ? base * EXECUTABLE_MULTIPLIER : base;
     if (s.isExecutable) executableFindings += 1;
   }
@@ -70590,10 +70684,11 @@ async function analyzeSkill(files, opts = {}) {
   const signals2 = [];
   let executableFiles = 0;
   let hiddenUnicodeFiles = 0;
-  const push = (f, isExecutable) => {
+  const push = (f, isExecutable, scored = true) => {
     findings.push(f);
-    signals2.push({ severity: f.severity, isExecutable });
+    signals2.push({ severity: f.severity, isExecutable, scored });
   };
+  const citedRules = /* @__PURE__ */ new Set();
   for (const link of opts.symlinks ?? []) {
     const escaped = link.kind === "escaped_directory";
     push(
@@ -70613,6 +70708,8 @@ async function analyzeSkill(files, opts = {}) {
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
     for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
+      const repeat = m.cited && citedRules.has(m.rule.id);
+      if (m.cited) citedRules.add(m.rule.id);
       push(
         makeFinding({
           tool: TOOL,
@@ -70627,7 +70724,8 @@ async function analyzeSkill(files, opts = {}) {
           line_end: m.line,
           snippet: m.snippet
         }),
-        file.isExecutable
+        file.isExecutable,
+        !repeat
       );
     }
     for (const m of matchSignatures(file.content)) {
@@ -70747,7 +70845,7 @@ var CODE_SOURCE_TEXT = {
 };
 function whereFound(m) {
   if (m.cited) {
-    return " Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced as attack or test material \u2014 the shape of documentation that describes the attack. Reported at info and scored 0; read it if the file is not about AI safety.";
+    return " Cited, not said: the phrase is quoted \u2014 in quotation marks, a code span, or a code block \u2014 under text that labels it an attack to resist and does not tell the reader to use it: the shape of documentation that describes the attack. Reported at low, not dismissed: a model does not stop obeying an instruction because it is quoted, so read it if the file is not about AI safety.";
   }
   const kind = CODE_SOURCE_TEXT[m.source];
   if (kind === void 0) return "";
@@ -71299,7 +71397,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown, or in a code block introduced as attack or test data, is cited, not said: reported at info, scored 0. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };

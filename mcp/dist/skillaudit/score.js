@@ -26,7 +26,7 @@ export function scoreFindings(signals) {
     let executableFindings = 0;
     for (const s of signals) {
         by_severity[s.severity] += 1;
-        const base = SEVERITY_POINTS[s.severity];
+        const base = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
         raw += s.isExecutable ? base * EXECUTABLE_MULTIPLIER : base;
         if (s.isExecutable)
             executableFindings += 1;

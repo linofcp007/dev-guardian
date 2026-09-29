@@ -33,7 +33,7 @@ describe('every rule stays linear on a 1 MB line', () => {
     ['PowerShell content cmdlets', 'Add-Content x y z '],
     ['env pipelines', 'env | x | env | y '],
     ['redirects', 'a > b >> c > d '],
-    ['download words and URLs', 'download get fetch https://x.io/a '],
+    ['download words and URLs', 'download get fetch https://x.invalid/a '],
   ])('%s', (_label, chunk) => {
     const text = line(chunk);
     for (const isCode of [true, false]) {

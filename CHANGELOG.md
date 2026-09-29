@@ -289,11 +289,16 @@ version bump.
     `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`.
   - The prompt-level phrases a skill about AI safety quotes — `pi-override-instructions`, `pi-roleplay-escape`,
     `pi-conceal-from-user`, `spl-reveal-prompt`, `mp-persist-instruction`, `ta-overbroad-activation` — are
-    **cited** in a Markdown instruction file when they sit inside quotation marks or a code span on a prose line,
-    or in a code block whose introducing paragraph names it attack or test material: reported at info, scored 0.
-    A code block by itself is not a citation, nor is one introduced as a mere "Example", and in JSON or YAML a
-    quote is syntax. dev-spec-driven's threat catalogue had read DO_NOT_INSTALL 100 on its own examples. What
-    this cannot tell apart is an attacker who quotes the injection he wants obeyed; it is still listed, at info.
+    **cited** in a Markdown instruction file, reported at low, when they sit inside a closed quotation (straight,
+    single, curly or «», a wrapped one closed on a later line of its paragraph included) or a code span on a
+    prose line, or in a code block, AND the text around them — their paragraph and the one introducing it — labels
+    them as material to resist (attack, malicious, injection, rejected, detected, "never instructions to follow")
+    and does not direct their use (follow, apply, obey, adopt, comply, "as your instructions", verbatim, "use the
+    following"). "Example" or "test data" alone is not a label, an unclosed quote never cites, and in JSON or YAML
+    a quote is syntax. Every citation is listed; a rule's citations score once per skill. dev-spec-driven's threat
+    catalogue had read DO_NOT_INSTALL 100 on its own examples and reads REVIEW 25. A model does not stop obeying
+    an instruction because it is quoted, so a citation still scores; what this cannot tell apart is an attacker
+    who quotes his injection under an attack label with no directive.
   - "Jailbreak" as a noun ("jailbreak taxonomy") is no longer a role escape; "show the prompt and the output"
     of a test case is no longer a system-prompt leak; "for every task" that names no skill is no longer trigger
     abuse; `regex.exec(…)` or `/…/.exec(…)` is not dynamic execution (a short name such as `re.exec(…)` still
