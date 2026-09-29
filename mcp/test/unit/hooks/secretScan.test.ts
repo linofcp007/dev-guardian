@@ -1,13 +1,13 @@
 /**
  * `hooks/secretScan.ts`.
  *
- * Timing (review round 3, item 8). Linearity is asserted as a RATIO of best-of-5
- * times — four times the input must cost well under twelve times as much
- * (linear is ~4×, quadratic ~16×) — which a loaded machine skews far less than
- * a clock. The absolute bounds are tight only with `GUARDIAN_PERF_STRICT=1` (a
- * quiet machine); by default each is a loose ceiling, at least ten times the
- * typical time measured on an idle one, so a slow container or a busy runner
- * does not fail a correct build and a quadratic shape still does.
+ * Timing (review round 3, item 8; review 3.0, R7-I2). Linearity is asserted as
+ * a RATIO of best-of times — four times the input must cost well under twelve
+ * times as much (linear is ~4×, quadratic ~16×) — which neither a loaded
+ * machine nor v8 coverage can skew: both scale the two timings alike. The
+ * absolute bounds used to be a "loose ceiling" by default and failed the
+ * coverage run; each is now its own test that runs only with
+ * `GUARDIAN_PERF_STRICT=1` (a quiet machine) and is a visible skip otherwise.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,22 +17,10 @@ import {
   scanForSecrets,
   shannonEntropy,
 } from '../../../src/hooks/secretScan.js';
-
-const PERF_STRICT = process.env['GUARDIAN_PERF_STRICT'] === '1';
-/** An absolute bound: `strict` under `GUARDIAN_PERF_STRICT=1`, else the loose ceiling. */
-const ceiling = (strict: number, loose: number): number => (PERF_STRICT ? strict : loose);
+import { bestOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 
 /** The best of five runs, after a warm-up: a quadratic shape is slow every time, a busy scheduler once. */
-function bestOf5(run: () => void): number {
-  run();
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 5; k += 1) {
-    const t0 = performance.now();
-    run();
-    best = Math.min(best, performance.now() - t0);
-  }
-  return best;
-}
+const bestOf5 = (run: () => void): number => bestOf(5, run);
 
 describe('scanForSecrets — high-confidence provider tokens', () => {
   it('detects an AWS access key id', () => {
@@ -209,11 +197,14 @@ describe('scanForSecrets — task-1: no double-report of an Anthropic key (findi
 
 /** task-1, finding 9: ReDoS caps — both inputs must resolve in bounded time (see the header on timing). */
 describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
-  it('a pathological JWT-shaped repeat resolves in bounded time (typical: under 20 ms)', () => {
-    const text = 'eyJ-'.repeat(50_000);
+  // Typical, idle, at 50 000 repeats: under 20 ms.
+  it('a pathological JWT-shaped repeat: four times as long costs well under twelve times as much', () => {
+    expectLinear('eyJ-', (n) => scanForSecrets('eyJ-'.repeat(n)), 12_500);
+  });
+  it.runIf(PERF_STRICT)('a pathological JWT-shaped repeat resolves in under 500 ms (GUARDIAN_PERF_STRICT=1)', () => {
     const start = performance.now();
-    scanForSecrets(text);
-    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
+    scanForSecrets('eyJ-'.repeat(50_000));
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it('a real JWT is still detected after the pattern was bounded', () => {
@@ -224,11 +215,14 @@ describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
     expect(hits.map((h) => h.ruleId)).toContain('jwt');
   });
 
-  it('a single 100 KB unquoted line resolves in bounded time (typical: under 5 ms)', () => {
-    const text = `password = "${'a'.repeat(100_000)}"`;
+  // Typical, idle, at 100 KB: under 5 ms.
+  it('a single long unquoted line: four times as long costs well under twelve times as much', () => {
+    expectLinear('password = "aaa…"', (n) => scanForSecrets(`password = "${'a'.repeat(n)}"`), 25_000);
+  });
+  it.runIf(PERF_STRICT)('a single 100 KB unquoted line resolves in under 500 ms (GUARDIAN_PERF_STRICT=1)', () => {
     const start = performance.now();
-    scanForSecrets(text);
-    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
+    scanForSecrets(`password = "${'a'.repeat(100_000)}"`);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 });
 
@@ -343,9 +337,10 @@ describe('scanForSecrets — a long line is read to its end (review I3)', () => 
     ];
     const best = (text: string): number => bestOf5(() => scanForSecrets(text));
 
-    // Typical, idle: 30-140 ms.
-    it.each(shapes)('a 1 MB line of %s is scanned in bounded time', (_label, make) => {
-      expect(best(make(1_000_000))).toBeLessThan(ceiling(1500, 3000));
+    // Typical, idle: 30-140 ms. The ratio below is what catches a quadratic
+    // shape; this bound only pins the absolute cost on a quiet machine.
+    it.runIf(PERF_STRICT).each(shapes)('a 1 MB line of %s is scanned in under 1500 ms (GUARDIAN_PERF_STRICT=1)', (_label, make) => {
+      expect(best(make(1_000_000))).toBeLessThan(1500);
     }, 60_000);
 
     it.each(shapes)('%s: four times the length costs well under twelve times as much', (_label, make) => {
