@@ -12,7 +12,7 @@
 
 import type { ShellChoice } from './platform/shellProbe.js';
 import type { ProgressEmitter, ProgressNotifier } from './progress/progressEmitter.js';
-import type { Storage, StorageAdoption } from './storage/index.js';
+import type { Storage } from './storage/index.js';
 
 export interface PluginContext {
   storage: Storage;
@@ -29,8 +29,6 @@ export interface PluginContext {
    * `warnings` carry it.
    */
   storageWarning?: string;
-  /** Set when this server start adopted the project's database; `health_status.storage_adoption`. */
-  storageAdoption?: StorageAdoption;
 }
 
 export interface ToolContext {

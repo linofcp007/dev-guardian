@@ -8322,22 +8322,22 @@ var require_isexe = __commonJS({
 // node_modules/which/which.js
 var require_which = __commonJS({
   "node_modules/which/which.js"(exports, module) {
-    var isWindows2 = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
+    var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
     var path8 = __require("path");
-    var COLON = isWindows2 ? ";" : ":";
+    var COLON = isWindows ? ";" : ":";
     var isexe = require_isexe();
     var getNotFoundError = (cmd) => Object.assign(new Error(`not found: ${cmd}`), { code: "ENOENT" });
     var getPathInfo = (cmd, opt) => {
       const colon = opt.colon || COLON;
-      const pathEnv = cmd.match(/\//) || isWindows2 && cmd.match(/\\/) ? [""] : [
+      const pathEnv = cmd.match(/\//) || isWindows && cmd.match(/\\/) ? [""] : [
         // windows always checks the cwd first
-        ...isWindows2 ? [process.cwd()] : [],
+        ...isWindows ? [process.cwd()] : [],
         ...(opt.path || process.env.PATH || /* istanbul ignore next: very unusual */
         "").split(colon)
       ];
-      const pathExtExe = isWindows2 ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
-      const pathExt = isWindows2 ? pathExtExe.split(colon) : [""];
-      if (isWindows2) {
+      const pathExtExe = isWindows ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
+      const pathExt = isWindows ? pathExtExe.split(colon) : [""];
+      if (isWindows) {
         if (cmd.indexOf(".") !== -1 && pathExt[0] !== "")
           pathExt.unshift("");
       }
@@ -8674,7 +8674,7 @@ var require_cross_spawn = __commonJS({
       enoent.hookChildProcess(spawned, parsed);
       return spawned;
     }
-    function spawnSync4(command, args, options) {
+    function spawnSync3(command, args, options) {
       const parsed = parse9(command, args, options);
       const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
@@ -8682,7 +8682,7 @@ var require_cross_spawn = __commonJS({
     }
     module.exports = spawn4;
     module.exports.spawn = spawn4;
-    module.exports.sync = spawnSync4;
+    module.exports.sync = spawnSync3;
     module.exports._parse = parse9;
     module.exports._enoent = enoent;
   }
@@ -37813,9 +37813,13 @@ function resolveVersion() {
 
 // src/storage/db.ts
 import { createHash as createHash3, randomBytes as randomBytes2 } from "node:crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync2, rmSync as rmSync2, statSync as statSync7, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname5, join as join9, resolve as resolve6 } from "node:path";
+
+// src/platform/pathSpelling.ts
+import { lstatSync, statSync as statSync3 } from "node:fs";
+import { isAbsolute, join as join3, parse as parse4, resolve as resolve3, sep } from "node:path";
 
 // src/platform/projectPath.ts
 import { existsSync as existsSync3, realpathSync, statSync as statSync2 } from "node:fs";
@@ -37864,82 +37868,15 @@ function isRootOrHome(p) {
   return p === home || p === canonicalPath(home);
 }
 
-// src/storage/dbError.ts
-var GuardianDbError = class extends Error {
-  constructor(kind, dbPath, message3) {
-    super(message3);
-    this.kind = kind;
-    this.dbPath = dbPath;
-    this.name = "GuardianDbError";
-  }
-  kind;
-  dbPath;
-};
-
-// src/storage/dbProvenance.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
-import { createRequire } from "node:module";
-import { existsSync as existsSync4, lstatSync as lstatSync3, statSync as statSync5 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join6, relative } from "node:path";
-
 // src/platform/pathSpelling.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
-import { lstatSync, statSync as statSync3 } from "node:fs";
-import { isAbsolute, join as join3, parse as parse4, resolve as resolve3, sep } from "node:path";
 function isNetworkOrDevicePath(path8) {
   return /^[\\/]{2}/.test(path8) || path8.startsWith("\\??\\");
 }
-var isWindows = () => process.platform === "win32";
-function lexicalComponents(path8, windows) {
-  if (path8.includes("\0") || isNetworkOrDevicePath(path8)) return null;
-  let root;
-  let rest;
-  if (windows) {
-    const drive = /^([A-Za-z]):[\\/]/.exec(path8);
-    if (drive === null || drive[1] === void 0) return null;
-    root = `${drive[1].toUpperCase()}:`;
-    rest = path8.slice(3);
-  } else {
-    if (!path8.startsWith("/")) return null;
-    root = "";
-    rest = path8.slice(1);
-  }
-  const names = rest.split(windows ? /[\\/]+/ : /\/+/).filter((s) => s !== "" && s !== ".");
-  if (names.includes("..")) return null;
-  return [root, ...names];
-}
-function shortComponents(canonical2) {
-  if (!isWindows() || /[%"]/.test(canonical2)) return null;
-  const cmd = join3(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe");
-  const r = spawnSync2(cmd, ["/d", "/v:off", "/s", "/c", `"for %I in ("${canonical2}") do @echo %~sI"`], {
-    encoding: "utf8",
-    timeout: 3e3,
-    windowsHide: true,
-    windowsVerbatimArguments: true
-  });
-  if (r.error !== void 0 || r.status !== 0 || typeof r.stdout !== "string") return null;
-  return lexicalComponents(r.stdout.trim(), true);
-}
-function spellingMatcher(canonicalProject) {
-  const windows = isWindows();
-  const fold = windows || process.platform === "darwin";
-  const same = (a2, b) => b !== void 0 && (fold ? a2.toLowerCase() === b.toLowerCase() : a2 === b);
-  const own = lexicalComponents(canonicalProject, windows);
-  let short2;
-  return (stored) => {
-    if (own === null) return false;
-    const parts = lexicalComponents(stored, windows);
-    if (parts === null || parts.length !== own.length) return false;
-    if (parts.every((p, i2) => same(p, own[i2]))) return true;
-    if (!windows || !parts.some((p) => p.includes("~"))) return false;
-    short2 ??= shortComponents(canonicalProject);
-    const shortForm = short2;
-    if (shortForm === null || shortForm.length !== own.length) return false;
-    return parts.every((p, i2) => same(p, own[i2]) || same(p, shortForm[i2]));
-  };
+function isUnresolvablePath(path8) {
+  return isNetworkOrDevicePath(path8) || /^\/(?:proc|dev\/fd|net)(?:\/|$)/.test(path8);
 }
 function spellingOnlyCanonical(path8) {
-  if (!isAbsolute(path8) || isNetworkOrDevicePath(path8)) return null;
+  if (!isAbsolute(path8) || isUnresolvablePath(path8)) return null;
   try {
     if (!statSync3(path8).isDirectory()) return null;
   } catch {
@@ -37961,9 +37898,38 @@ function spellingOnlyCanonical(path8) {
   return canonical2;
 }
 
+// src/storage/dbError.ts
+var GuardianDbError = class extends Error {
+  constructor(kind, dbPath, message3) {
+    super(message3);
+    this.kind = kind;
+    this.dbPath = dbPath;
+    this.name = "GuardianDbError";
+  }
+  kind;
+  dbPath;
+};
+
+// src/storage/dbProvenance.ts
+import { spawnSync as spawnSync2 } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync as existsSync4, lstatSync as lstatSync4 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join6, relative } from "node:path";
+
 // src/storage/dbRegistry.ts
 import { randomBytes } from "node:crypto";
-import { closeSync, constants as constants4, fstatSync, openSync, readSync, renameSync, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import {
+  closeSync,
+  constants as constants4,
+  fstatSync,
+  lstatSync as lstatSync3,
+  openSync,
+  readdirSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync as writeFileSync3
+} from "node:fs";
 import { join as join5 } from "node:path";
 
 // src/storage/userData.ts
@@ -38095,6 +38061,21 @@ function lookupDbId(id) {
     return null;
   }
 }
+function findEntryForDbPath(canonicalDbPath) {
+  let names;
+  try {
+    names = readdirSync(registryDir());
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!DB_ID_SHAPE.test(id)) continue;
+    const entry = lookupDbId(id);
+    if (entry !== null && entry.db_path === canonicalDbPath) return entry;
+  }
+  return null;
+}
 function registerDbId(entry) {
   if (!DB_ID_SHAPE.test(entry.db_id)) throw new Error(`not a database id: ${entry.db_id}`);
   const dir = ensurePrivateSubdir("registry");
@@ -38138,12 +38119,27 @@ function readBounded(path8, max) {
   }
 }
 
+// src/storage/scanClock.ts
+var FUTURE_SKEW_MINUTES = 5;
+function datedInFutureSql(alias = "") {
+  const col = (name) => alias === "" ? name : `${alias}.${name}`;
+  const limit = `julianday('now', '+${FUTURE_SKEW_MINUTES} minutes')`;
+  return `(COALESCE(julianday(${col("started_at")}) > ${limit}, 0) OR COALESCE(julianday(${col("finished_at")}) > ${limit}, 0))`;
+}
+function notInFutureSql(alias = "") {
+  return `NOT ${datedInFutureSql(alias)}`;
+}
+function futureDatedNote(count2) {
+  if (count2 <= 0) return null;
+  return `${count2} scan(s) dated in the future were ignored (more than ${FUTURE_SKEW_MINUTES} minutes past this machine's clock): a clock that was wrong where they ran, or rows written to outrank the real history.`;
+}
+
 // src/storage/dbProvenance.ts
 var GIT_TIMEOUT_MS = 3e3;
 var DATABASE_FILES = ["guardian.db", "guardian.db-wal", "guardian.db-shm", "guardian.db-journal"];
 var TRACKED_FILE = /^\.guardian\/guardian\.db(?:-wal|-shm|-journal)?$/i;
 function gitIndexAt(projectPath, opts = {}) {
-  const r = spawnSync3(
+  const r = spawnSync2(
     opts.git ?? "git",
     ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ":(icase).guardian"],
     {
@@ -38197,7 +38193,7 @@ function gitProblem(index) {
 }
 function lstatOrNull(path8) {
   try {
-    return lstatSync3(path8);
+    return lstatSync4(path8);
   } catch {
     return null;
   }
@@ -38223,57 +38219,6 @@ function locationProblem(projectPath, dbPath) {
   }
   return null;
 }
-var ADOPTION_CLOCK_SKEW_MS = 5 * 60 * 1e3;
-function directoryBirthMs(path8) {
-  let st;
-  try {
-    st = statSync5(path8);
-  } catch {
-    return null;
-  }
-  const birth = st.birthtimeMs;
-  if (!(birth > 0)) return null;
-  if (process.platform === "win32" || process.platform === "darwin") return birth;
-  return birth === st.ctimeMs ? null : birth;
-}
-function adoptionProblem(projectPath, dbPath, index, scans, options = {}) {
-  const git2 = lstatOrNull(join6(projectPath, ".git"));
-  if (git2 !== null && git2.isSymbolicLink()) return "the project's .git is a link";
-  const isGitProject = git2 !== null;
-  if (isGitProject && index.state !== "ok") {
-    return `git could not be asked whether it tracks the database (${index.detail})`;
-  }
-  const fromGit = gitProblem(index) ?? locationProblem(projectPath, dbPath);
-  if (fromGit !== null) return fromGit;
-  return scanProblem(projectPath, scans, isGitProject, options);
-}
-function scanProblem(projectPath, scans, isGitProject, options) {
-  let canonical2;
-  try {
-    canonical2 = canonicalPath(projectPath);
-  } catch {
-    return "the project path could not be resolved";
-  }
-  const isThisProject = spellingMatcher(canonical2);
-  const own = scans.filter((s) => isThisProject(s.path));
-  if (own.length === 0) {
-    if (scans.length === 0) return "it holds no completed scan of this project (no completed scan at all)";
-    const shown = scans.slice(0, 2).map((s) => s.path).join("', '");
-    return `it holds no completed scan of this project \u2014 its scans are filed under ${scans.length} other path(s) ('${shown}'${scans.length > 2 ? ", \u2026" : ""}): a database written elsewhere`;
-  }
-  const birth = (options.birthtimeOf ?? directoryBirthMs)(canonical2);
-  if (birth === null) {
-    if (isGitProject) return null;
-    return "the file system does not record when the project directory was created, and the project is not a git repository: nothing shows the database was written here rather than brought with the files";
-  }
-  const now = options.now ?? Date.now();
-  const fits = own.some((s) => {
-    const finished8 = s.latestFinished === null ? Number.NaN : Date.parse(s.latestFinished);
-    return finished8 >= birth - ADOPTION_CLOCK_SKEW_MS && finished8 <= now + ADOPTION_CLOCK_SKEW_MS;
-  });
-  if (fits) return null;
-  return `its scans of this project all finished before the project directory was created (${new Date(birth).toISOString()}), or in the future: a database made before this copy of the project existed \u2014 an archive or a clone brings one`;
-}
 var sqlite;
 function readOnly(dbPath, read2) {
   sqlite ??= createRequire(import.meta.url)("node:sqlite");
@@ -38292,7 +38237,7 @@ function readOnly(dbPath, read2) {
       throw new GuardianDbError(
         "corrupt",
         dbPath,
-        `the database '${dbPath}' cannot be read (${error2 instanceof Error ? error2.message : String(error2)}). Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is created in its place, and the old file stays available for recovery.`
+        `the database '${dbPath}' cannot be read (${error2 instanceof Error ? error2.message : String(error2)})`
       );
     }
     throw error2;
@@ -38303,22 +38248,16 @@ function readOnly(dbPath, read2) {
     }
   }
 }
-var MAX_SCAN_PROJECTS = 200;
-function probeDatabase(dbPath, now = Date.now()) {
+function probeDatabase(dbPath) {
   return readOnly(dbPath, (db, isTable) => {
     const count2 = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
-    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
+    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null };
     let id = null;
     if (isTable("schema_meta")) {
       const row = db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY);
       id = typeof row?.value === "string" && DB_ID_SHAPE.test(row.value) ? row.value : null;
     }
-    const scans = isTable("scans") ? db.prepare(
-      `SELECT project_path AS p,
-                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
-                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`
-    ).all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS).filter((r) => typeof r.p === "string").map((r) => ({ path: r.p, latestFinished: typeof r.f === "string" ? r.f : null })) : [];
-    return { empty: false, dbId: id, scans };
+    return { empty: false, dbId: id };
   });
 }
 function sqliteCode(error2) {
@@ -38363,7 +38302,7 @@ function sha256(s) {
 
 // src/fingerprint/findingIdentity.ts
 import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync6 } from "node:fs";
+import { readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync5 } from "node:fs";
 import { isAbsolute as isAbsolute4, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 var REDACTED_SNIPPET = "requires login";
 var IDENTITY_VERSION = 1;
@@ -38464,7 +38403,7 @@ function makeSourceReader(projectPath) {
     if (!isInside(root, lexical)) return null;
     try {
       const real = realpathSync2.native(lexical);
-      const stat3 = statSync6(real);
+      const stat3 = statSync5(real);
       if (!isInside(root, real) || !stat3.isFile() || stat3.size > MAX_SOURCE_BYTES) return null;
       return readFileSync5(real, "utf8");
     } catch {
@@ -38611,11 +38550,11 @@ function sha2562(text2) {
 
 // src/runners/semgrepRuleIds.ts
 var import_yaml = __toESM(require_dist2(), 1);
-import { readdirSync as readdirSync2, readFileSync as readFileSync6 } from "node:fs";
+import { readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
 import path6 from "node:path";
 
 // src/platform/configsDir.ts
-import { existsSync as existsSync5, readdirSync } from "node:fs";
+import { existsSync as existsSync5, readdirSync as readdirSync2 } from "node:fs";
 import { dirname as dirname3, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var MARKER_RULES = ["semgrep", "base.yml"];
@@ -38636,7 +38575,7 @@ function resolveBugfixRules() {
   const dir = join7(resolveConfigsDir(), "semgrep");
   let entries2;
   try {
-    entries2 = readdirSync(dir);
+    entries2 = readdirSync2(dir);
   } catch {
     return [];
   }
@@ -38786,7 +38725,7 @@ function yamlFilesUnder(dir, limit) {
     if (current === void 0) break;
     let entries2;
     try {
-      entries2 = readdirSync2(current, { withFileTypes: true });
+      entries2 = readdirSync3(current, { withFileTypes: true });
     } catch {
       return null;
     }
@@ -38805,7 +38744,7 @@ function ruleIdsInDir(dir) {
   const ids2 = /* @__PURE__ */ new Set();
   let names;
   try {
-    names = readdirSync2(dir);
+    names = readdirSync3(dir);
   } catch {
     return ids2;
   }
@@ -38881,6 +38820,7 @@ function parseJsonObject(raw, fallback) {
 }
 
 // src/storage/scansRepo.ts
+var READABLE = notInFutureSql();
 var WORKTREE_PATH_EXCLUSION = "%guardian-fixpr-wt-%";
 var UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1e3;
 var LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1e3;
@@ -38918,31 +38858,31 @@ var ScansRepo = class {
     this.getByIdStmt = db.prepare(`SELECT * FROM scans WHERE id = ?`);
     this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
     this.getLatestForProjectStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed' AND project_path = ?
+      WHERE status = 'completed' AND project_path = ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
     this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
     this.listHistoryForProjectStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE project_path = ?
+      WHERE project_path = ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
     this.findCacheStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -38951,7 +38891,7 @@ var ScansRepo = class {
       VALUES (?, ?, ?, ?)
     `);
     this.countForProjectStmt = db.prepare(
-      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`
+      `SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${READABLE}`
     );
   }
   db;
@@ -39102,11 +39042,11 @@ var ScansRepo = class {
     const names = this.db.prepare(
       `SELECT DISTINCT json_extract(je.value, '$.name') AS name
            FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
-          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed' AND ${notInFutureSql("s")}`
     ).all(projectPath, type).map((r) => r.name).filter((n2) => typeof n2 === "string");
     const empty = this.db.prepare(
       `SELECT COUNT(*) AS n FROM scans
-          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed' AND ${READABLE}
             AND (tools_run IS NULL OR tools_run IN ('', '[]'))
             AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`
     ).get(projectPath, type);
@@ -39156,9 +39096,16 @@ var ScansRepo = class {
       `SELECT id FROM scans WHERE id IN (${placeholders}) ORDER BY started_at DESC, rowid DESC`
     ).all(...scanIds).map((r) => r.id);
   }
-  /** How many scans (any status, any type) one project has recorded. */
+  /** How many scans (any status, any type) one project has recorded — the readable ones (`scanClock.ts`). */
   countForProject(projectPath) {
     return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+  }
+  /**
+   * How many of one project's scans every reader here ignores because they are
+   * dated in the future (`scanClock.ts`) — for the note a reader adds.
+   */
+  countFutureDated(projectPath) {
+    return this.db.prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${datedInFutureSql()}`).get(projectPath)?.n ?? 0;
   }
   completedOfTypesStmt(arity, shape) {
     const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
@@ -39170,7 +39117,7 @@ var ScansRepo = class {
     const parentClause = shape.noParents ? "AND (CASE WHEN json_valid(meta) THEN json_type(meta, '$.child_scans') END) IS NOT 'array'" : "";
     const stmt = this.db.prepare(`
       SELECT * FROM scans
-      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders}) AND ${READABLE}
         ${beforeClause} ${afterClause} ${parentClause}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ? OFFSET ?
@@ -39373,7 +39320,7 @@ function rekeyRows(db, rows, match, projectOf) {
 }
 
 // src/storage/migrations/runner.ts
-import { existsSync as existsSync6, readdirSync as readdirSync3, readFileSync as readFileSync7 } from "node:fs";
+import { existsSync as existsSync6, readdirSync as readdirSync4, readFileSync as readFileSync7 } from "node:fs";
 import { dirname as dirname4, join as join8 } from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 function resolveMigrationsDir() {
@@ -39381,7 +39328,7 @@ function resolveMigrationsDir() {
   const candidates2 = [here, join8(here, "storage", "migrations"), join8(here, "migrations")];
   for (const dir of candidates2) {
     try {
-      if (existsSync6(dir) && readdirSync3(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
+      if (existsSync6(dir) && readdirSync4(dir).some((f) => MIGRATION_FILE.test(f))) return dir;
     } catch {
     }
   }
@@ -39571,7 +39518,7 @@ function splitStatements(sql, source = "migration") {
 }
 function listMigrations(dir = MIGRATIONS_DIR) {
   const migrations = [];
-  for (const f of readdirSync3(dir)) {
+  for (const f of readdirSync4(dir)) {
     const match = MIGRATION_FILE.exec(f);
     if (!match) continue;
     const versionPart = match[1];
@@ -40047,11 +39994,7 @@ function asCorruptionError(error2, dbPath) {
   const code = sqliteErrorCode(error2);
   if (code !== 11 && code !== 26) return error2;
   const detail = error2 instanceof Error ? error2.message : String(error2);
-  return new GuardianDbError(
-    "corrupt",
-    dbPath,
-    `the database '${dbPath}' cannot be read (${detail}). Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is created in its place, and the old file stays available for recovery.`
-  );
+  return new GuardianDbError("corrupt", dbPath, `the database '${dbPath}' cannot be read (${detail})`);
 }
 function openDatabase(options) {
   if (options.inMemory) return openInMemory();
@@ -40063,8 +40006,11 @@ function openDatabase(options) {
     refusal = `Project path '${projectPath}' is not writable (it is not an existing directory)`;
   } else if (!existingOnly || existsSync7(preferredPath)) {
     const verdict = judgeProjectDatabase(projectPath, preferredPath);
+    if (verdict.kind === "own-unreadable") {
+      return inMemoryInstead(preferredPath, `the database '${preferredPath}' cannot be read (${verdict.detail}).${MOVE_ASIDE}`);
+    }
     if (verdict.kind === "foreign") {
-      refusal = foreignReason(projectPath, preferredPath, verdict);
+      refusal = foreignReason(projectPath, preferredPath, verdict.foreign);
     } else if (!(existingOnly && verdict.kind === "create")) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
@@ -40074,6 +40020,8 @@ function openDatabase(options) {
         }
         if (error2 instanceof GuardianDbError && error2.kind === "untrusted") {
           refusal = `${error2.message}. The file is left as it is; delete it or move it aside to have dev-guardian start a new one there`;
+        } else if (error2 instanceof GuardianDbError) {
+          return inMemoryInstead(preferredPath, `${error2.message}${error2.kind === "corrupt" ? `.${MOVE_ASIDE}` : ""}`);
         } else if (isNotWritableError(error2)) {
           const reason = error2 instanceof Error ? error2.message : String(error2);
           refusal = `Project path '${projectPath}' is not writable (${reason})`;
@@ -40093,13 +40041,27 @@ function openDatabase(options) {
     db = openFallback(chosenPath);
   } catch (error2) {
     if (isDataDirError(error2)) return unpersisted(error2.message, refusal);
+    if (error2 instanceof GuardianDbError) {
+      return inMemoryInstead(
+        chosenPath,
+        (refusal !== void 0 ? `${refusal}. ` : "") + `${error2.message}. It is dev-guardian's per-user database for this project: move it aside and restart.`
+      );
+    }
     throw error2;
   }
   if (refusal === void 0) return { db, path: chosenPath };
   return {
     db,
     path: chosenPath,
-    warning: `${refusal}. This project's scans are kept in '${chosenPath}' instead, and stay there: they are not merged back into the project file later.`
+    warning: `${refusal}. Meanwhile this project's scans are kept in '${chosenPath}' (not merged back later).`
+  };
+}
+var MOVE_ASIDE = " Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is created in its place, and the old file stays available for recovery";
+function inMemoryInstead(unusable, why) {
+  return {
+    ...openInMemory(),
+    unusable,
+    warning: `${why}. This session runs on an in-memory database: history will not persist until then.`
   };
 }
 function unpersisted(reason, refusal) {
@@ -40110,70 +40072,61 @@ function unpersisted(reason, refusal) {
 }
 function judgeProjectDatabase(projectPath, dbPath) {
   const location = locationProblem(projectPath, dbPath);
-  if (location !== null) return { kind: "foreign", why: location, tracked: false };
+  if (location !== null) return { kind: "foreign", foreign: { kind: "location", why: location } };
   if (!existsSync7(dbPath)) return { kind: "create" };
-  const probe2 = probeDatabase(dbPath);
   const index = gitIndexAt(projectPath);
   const fromGit = gitProblem(index);
-  if (fromGit !== null) return { kind: "foreign", why: fromGit, tracked: index.tracked.length > 0 };
+  if (fromGit !== null) {
+    return { kind: "foreign", foreign: { kind: "tracked", why: fromGit, tracked: index.tracked.length > 0 } };
+  }
+  let probe2;
+  try {
+    probe2 = probeDatabase(dbPath);
+  } catch (error2) {
+    const detail = error2 instanceof GuardianDbError ? error2.message : error2 instanceof Error ? error2.message : String(error2);
+    return findEntryForDbPath(safeCanonical(dbPath)) !== null ? { kind: "own-unreadable", detail } : { kind: "foreign", foreign: { kind: "unreadable", detail } };
+  }
   if (probe2.empty) return { kind: "create" };
   const entry = probe2.dbId !== null ? lookupDbId(probe2.dbId) : null;
   if (entry !== null && probe2.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
     return { kind: "trusted", dbId: probe2.dbId };
   }
-  const adoption = adoptionProblem(projectPath, dbPath, index, probe2.scans);
-  if (adoption === null) return { kind: "adopt", registeredAt: entry?.db_path ?? null };
-  return {
-    kind: "foreign",
-    why: entry !== null ? `this database was registered at '${entry.db_path}', not here \u2014 a copy of it (a repository moved or copied, or shipped with its .guardian: a Docker COPY, a package, an archive), and it cannot be adopted here: ${adoption}` : probe2.dbId === null ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})` : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
-    tracked: false
-  };
+  if (entry !== null) return { kind: "foreign", foreign: { kind: "registered-elsewhere", at: entry.db_path } };
+  if (probe2.dbId !== null) return { kind: "foreign", foreign: { kind: "unregistered-id" } };
+  return { kind: "foreign", foreign: { kind: "legacy" } };
 }
-function foreignReason(projectPath, dbPath, verdict) {
-  const recovery = verdict.tracked ? "One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)" : `If it is yours \u2014 one the checks cannot tell from a copy, such as scans filed under a link (macOS /var, a symlinked home) or only failed scans \u2014 \`${adoptCommand(projectPath)}\` shows what it holds (its projects, scans, dates and suppressions) and, with --yes, registers it as yours. Otherwise delete it or move it aside, and dev-guardian starts a new one there`;
-  return `'${dbPath}' is not used: ${verdict.why}. A database that is not this user's own is not trusted \u2014 SQL or data stored in it (a trigger, a constraint, a suppression that matches every project) can hide findings from every reader. The file is left as it is. ${recovery}`;
+function foreignReason(projectPath, dbPath, foreign) {
+  const adopt = adoptCommand(projectPath);
+  const yourself = "yourself, in a terminal (an assistant must not run it for you: it decides whose data dev-guardian trusts)";
+  switch (foreign.kind) {
+    case "legacy":
+      return `This project's database '${dbPath}' was created before dev-guardian 3.0.1 and is not trusted automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what the database holds first`;
+    case "unregistered-id":
+      return `'${dbPath}' carries a dev-guardian id this user never registered \u2014 another user's or another machine's database \u2014 and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ${yourself}; otherwise delete it`;
+    case "registered-elsewhere":
+      return `'${dbPath}' was registered at '${foreign.at}', not here: it is a copy (a moved or copied repository, or one shipped with its .guardian \u2014 a Docker COPY, a package, an archive) and is not trusted here. If it is yours, review it with \`${adopt}\` and register it here with --yes, ${yourself}`;
+    case "tracked":
+      return `'${dbPath}' is not used: ${foreign.why}. ` + (foreign.tracked ? "One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)" : "Remove the submodule, and dev-guardian starts a database of its own there");
+    case "location":
+      return `'${dbPath}' is not used: ${foreign.why}. The file is left as it is`;
+    case "unreadable":
+      return `'${dbPath}' cannot be read (${foreign.detail}) and is not a database this user registered: it is left as it is. Delete it or move it aside, and dev-guardian starts a new one there`;
+  }
 }
 function adoptCommand(projectPath) {
   const cli = join9(dirname5(resolveScriptsDir()), "cli", "dev-guardian.mjs");
   return `node "${cli}" db adopt --project "${projectPath}"`;
 }
 function openProjectDatabase(projectPath, dbPath, verdict) {
+  if (verdict.kind === "trusted") return { db: openWritable(dbPath), path: dbPath };
   const entryFor = (id) => ({
     db_id: id,
     db_path: safeCanonical(dbPath),
     project_path: safeCanonical(projectPath),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   });
-  if (verdict.kind !== "trusted") ensurePrivateSubdir("registry");
-  if (verdict.kind === "create") {
-    const db2 = openWritable(dbPath, (raw) => claimDbId(raw, entryFor));
-    return { db: db2, path: dbPath };
-  }
-  const db = openWritable(dbPath);
-  if (verdict.kind === "adopt") {
-    try {
-      claimDbId(db, entryFor);
-    } catch (error2) {
-      closeQuietly(db);
-      throw error2;
-    }
-    const adoption = {
-      db_path: dbPath,
-      adopted_at: (/* @__PURE__ */ new Date()).toISOString(),
-      previously_registered_at: verdict.registeredAt,
-      null_scoped_suppressions: nullScopedSuppressions(db)
-    };
-    return {
-      db,
-      path: dbPath,
-      notice: `adopted '${dbPath}', ` + (verdict.registeredAt === null ? "written by an earlier dev-guardian" : `registered at '${verdict.registeredAt}' before (a copy, or a repository moved)`) + " and holding scans this project ran after its directory was created: registered as this user's database" + (adoption.null_scoped_suppressions > 0 ? `; ${adoption.null_scoped_suppressions} suppression(s) in it have no project and apply to every project` : ""),
-      adoption
-    };
-  }
-  return { db, path: dbPath };
-}
-function nullScopedSuppressions(db) {
-  return db.prepare("SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL").get()?.n ?? 0;
+  ensurePrivateSubdir("registry");
+  return { db: openWritable(dbPath, (raw) => claimDbId(raw, entryFor)), path: dbPath };
 }
 function claimDbId(db, entryFor) {
   const mine = newDbId();
@@ -40325,7 +40278,7 @@ function ensureDir(dir) {
 }
 function isDirectory(path8) {
   try {
-    return statSync7(path8).isDirectory();
+    return statSync6(path8).isDirectory();
   } catch {
     return false;
   }
@@ -40511,7 +40464,7 @@ function seenIn(direction) {
       SELECT o.scan_id FROM scan_cves o JOIN scans os ON os.id = o.scan_id
       WHERE o.cve_id = sc.cve_id AND o.package_name = sc.package_name
         AND o.installed_version = sc.installed_version
-        AND os.project_path = s.project_path
+        AND os.project_path = s.project_path AND ${notInFutureSql("os")}
       ORDER BY os.started_at ${direction}, os.rowid ${direction}
       LIMIT 1
     ), sc.scan_id)`;
@@ -40697,7 +40650,7 @@ var FindingsRepo = class {
     this.identityForFingerprintStmt = db.prepare(`
       SELECT f.identity AS identity FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL
+      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql("s")}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);
@@ -40712,7 +40665,7 @@ var FindingsRepo = class {
     this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -40730,7 +40683,7 @@ var FindingsRepo = class {
     `);
     this.listOpenForProjectStmt = db.prepare(`
       WITH latest AS (
-        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ? AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -40749,7 +40702,7 @@ var FindingsRepo = class {
     this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION2}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -40765,7 +40718,7 @@ var FindingsRepo = class {
     this.findInProjectStmt = db.prepare(`
       SELECT f.* FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed' AND ${notInFutureSql("s")}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);
@@ -41715,7 +41668,7 @@ var Storage = class {
 };
 
 // src/runners/scannerParsers/trivy.ts
-import { existsSync as existsSync8, readdirSync as readdirSync4, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync8, readdirSync as readdirSync5, readFileSync as readFileSync8 } from "node:fs";
 import { dirname as dirname6, join as join10 } from "node:path";
 
 // src/frameworks/owaspTop10_2025.ts
@@ -42553,7 +42506,7 @@ function pythonManifestDeclaresNothing(path8) {
 function assessManifestCoverage(projectPath, rawTrivyOutput) {
   let entries2;
   try {
-    entries2 = readdirSync4(projectPath);
+    entries2 = readdirSync5(projectPath);
   } catch {
     return { gaps: [], sawAnyResults: false };
   }
@@ -42695,12 +42648,12 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
 import { join as join15 } from "node:path";
 
 // src/runners/semgrepConfigs.ts
-import { existsSync as existsSync10, readdirSync as readdirSync6 } from "node:fs";
+import { existsSync as existsSync10, readdirSync as readdirSync7 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/platform/customRules.ts
 var import_yaml2 = __toESM(require_dist2(), 1);
-import { readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync8 } from "node:fs";
+import { readdirSync as readdirSync6, readFileSync as readFileSync9, statSync as statSync7 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join11, relative as relative3, sep as sep3 } from "node:path";
 var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
 function customRulesMetaKey(projectPath) {
@@ -42777,7 +42730,7 @@ function yamlFilesUnder2(dir) {
     if (depth > 8) return;
     let names;
     try {
-      names = readdirSync5(d).sort();
+      names = readdirSync6(d).sort();
     } catch {
       return;
     }
@@ -42786,7 +42739,7 @@ function yamlFilesUnder2(dir) {
       const abs = join11(d, name);
       let isDir;
       try {
-        isDir = statSync8(abs).isDirectory();
+        isDir = statSync7(abs).isDirectory();
       } catch {
         continue;
       }
@@ -42809,7 +42762,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
   for (const entry of registeredEntries(ctx, projectPath)) {
     let isDir;
     try {
-      isDir = statSync8(entry).isDirectory();
+      isDir = statSync7(entry).isDirectory();
     } catch {
       continue;
     }
@@ -42832,7 +42785,7 @@ function legacyRegistrationNote(paths) {
 }
 function pathExists(p) {
   try {
-    statSync8(p);
+    statSync7(p);
     return true;
   } catch {
     return false;
@@ -43310,7 +43263,7 @@ function planSemgrepConfigs(projectPath, plugin, localOnly) {
 }
 function hasDotnetProject(projectPath) {
   try {
-    return readdirSync6(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
+    return readdirSync7(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
   } catch {
     return false;
   }
@@ -44660,15 +44613,21 @@ function openSetForProject(storage, projectPath, opts = {}) {
     // Named as a run: a child of an orchestrated security_full stands for
     // its parent (see `latestStateScan`). `picked` is newest first.
     newest: mapRun(storage, projectPath, scans[0]),
-    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
+    newestSource: mapRun(storage, projectPath, picked[0]?.scan),
+    ...futureNoteOf(storage, projectPath)
   };
+}
+function futureNoteOf(storage, projectPath) {
+  const note = futureDatedNote(storage.scans.countFutureDated(projectPath));
+  return note === null ? {} : { future_dated_note: note };
 }
 function describeOpenSet(set2) {
   return {
     project_path: set2.project_path,
     coverage: set2.coverage,
     sources: set2.sources,
-    skipped: set2.skipped
+    skipped: set2.skipped,
+    ...set2.future_dated_note !== void 0 ? { future_dated_note: set2.future_dated_note } : {}
   };
 }
 
@@ -45862,7 +45821,7 @@ import { existsSync as existsSync12, readFileSync as readFileSync12 } from "node
 import { dirname as dirname8, join as join19, resolve as resolve8, sep as sep5 } from "node:path";
 
 // src/runners/projectFiles.ts
-import { readdirSync as readdirSync7 } from "node:fs";
+import { readdirSync as readdirSync8 } from "node:fs";
 import { join as join18 } from "node:path";
 
 // src/treeHash/computeTreeHash.ts
@@ -45963,7 +45922,7 @@ async function walk(root, dir, out) {
 var PROJECT_WALK_EXCLUDE = /* @__PURE__ */ new Set([...FS_EXCLUDE, "vendor"]);
 function readDir(dir) {
   try {
-    return readdirSync7(dir, { withFileTypes: true });
+    return readdirSync8(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -46910,11 +46869,11 @@ function redactCredentialSnippets(findings) {
 
 // src/platform/scope.ts
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync14, lstatSync as lstatSync4, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync14, lstatSync as lstatSync5, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute6, join as join23, relative as relative6, resolve as resolve9 } from "node:path";
 
 // src/platform/glob.ts
-import { readdirSync as readdirSync8, statSync as statSync9 } from "node:fs";
+import { readdirSync as readdirSync9, statSync as statSync8 } from "node:fs";
 import { join as join22, relative as relative5, sep as sep6 } from "node:path";
 function hasGlobMagic(pattern) {
   return /[*?{[]/.test(pattern);
@@ -46980,7 +46939,7 @@ function expandGlob(root, pattern) {
   const walk4 = (dir) => {
     let names;
     try {
-      names = readdirSync8(dir);
+      names = readdirSync9(dir);
     } catch {
       return;
     }
@@ -46990,7 +46949,7 @@ function expandGlob(root, pattern) {
       const rel2 = relative5(root, abs).split(sep6).join("/");
       let isDir = false;
       try {
-        isDir = statSync9(abs).isDirectory();
+        isDir = statSync8(abs).isDirectory();
       } catch {
         continue;
       }
@@ -47188,7 +47147,7 @@ function staysInside(abs, root) {
 function entryKind(abs, root) {
   let st;
   try {
-    st = lstatSync4(abs);
+    st = lstatSync5(abs);
   } catch {
     return "missing";
   }
@@ -47243,7 +47202,7 @@ function onDisk(projectPath, rels, fromUntracked = false) {
   for (const rel2 of rels) {
     let isFile2 = false;
     try {
-      isFile2 = lstatSync4(join23(projectPath, ...rel2.split("/"))).isFile();
+      isFile2 = lstatSync5(join23(projectPath, ...rel2.split("/"))).isFile();
     } catch {
     }
     if (!isFile2) continue;
@@ -47544,7 +47503,7 @@ function filterFindings(items, min) {
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash9 } from "node:crypto";
-import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync10 } from "node:fs";
+import { readFileSync as readFileSync14, readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
 import { join as join24, relative as relative7, sep as sep7 } from "node:path";
 function sha2563(text2) {
   return createHash9("sha256").update(text2).digest("hex");
@@ -47568,7 +47527,7 @@ function listFilesRecursive(dir) {
   const walk4 = (current) => {
     let entries2;
     try {
-      entries2 = readdirSync9(current, { withFileTypes: true });
+      entries2 = readdirSync10(current, { withFileTypes: true });
     } catch {
       return;
     }
@@ -47585,7 +47544,7 @@ function describePack(entry) {
   let isDir = false;
   let isFile2 = false;
   try {
-    const s = statSync10(entry);
+    const s = statSync9(entry);
     isDir = s.isDirectory();
     isFile2 = s.isFile();
   } catch {
@@ -48261,12 +48220,12 @@ function failDomain(code, message3, retry_with) {
 }
 
 // src/tools/scanSast.ts
-import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, readFileSync as readFileSync17, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync12, readFileSync as readFileSync17, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { basename as basename3, dirname as dirname12, join as join30, relative as relative9, resolve as resolve11, sep as sep8 } from "node:path";
 
 // src/deps/dotnetRestore.ts
-import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync10, unlinkSync } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync11, unlinkSync } from "node:fs";
 import { basename, dirname as dirname10, extname, isAbsolute as isAbsolute7, join as join25, relative as relative8, resolve as resolve10 } from "node:path";
 var SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 var PROJECT_WALK_MAX_DEPTH = 8;
@@ -48274,7 +48233,7 @@ var PROJECT_EXTENSIONS = /* @__PURE__ */ new Set([".csproj", ".fsproj", ".vbproj
 function findDotnetTargets(projectPath) {
   let rootEntries;
   try {
-    rootEntries = readdirSync10(projectPath).sort();
+    rootEntries = readdirSync11(projectPath).sort();
   } catch {
     return [];
   }
@@ -48288,7 +48247,7 @@ function findProjectFiles(projectPath) {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
     let entries2;
     try {
-      entries2 = readdirSync10(dir, { withFileTypes: true }).sort((a2, b) => a2.name.localeCompare(b.name));
+      entries2 = readdirSync11(dir, { withFileTypes: true }).sort((a2, b) => a2.name.localeCompare(b.name));
     } catch {
       return;
     }
@@ -49859,7 +49818,7 @@ function onlyPluginPackRan(packFiles, failed) {
 }
 function listSarif(dir) {
   try {
-    return readdirSync11(dir).filter((n2) => n2.endsWith(".sarif"));
+    return readdirSync12(dir).filter((n2) => n2.endsWith(".sarif"));
   } catch {
     return [];
   }
@@ -49876,7 +49835,7 @@ ${result.stderr}`.split(/\r?\n/).map((l) => l.trim()).find((l) => /\berror\b/i.t
 }
 function hasRootDotnetSignal(projectPath) {
   try {
-    return readdirSync11(projectPath).some((n2) => /\.(csproj|fsproj|sln|slnx)$/i.test(n2));
+    return readdirSync12(projectPath).some((n2) => /\.(csproj|fsproj|sln|slnx)$/i.test(n2));
   } catch {
     return false;
   }
@@ -49884,7 +49843,7 @@ function hasRootDotnetSignal(projectPath) {
 function projectReferencesScs(projectPath) {
   let files;
   try {
-    files = readdirSync11(projectPath).filter((n2) => /\.(csproj|fsproj)$/i.test(n2) || n2 === "Directory.Build.props");
+    files = readdirSync12(projectPath).filter((n2) => /\.(csproj|fsproj)$/i.test(n2) || n2 === "Directory.Build.props");
   } catch {
     return false;
   }
@@ -49898,12 +49857,12 @@ function projectReferencesScs(projectPath) {
 }
 
 // src/runners/gitleaksScan.ts
-import { copyFileSync, existsSync as existsSync19, lstatSync as lstatSync6, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
+import { copyFileSync, existsSync as existsSync19, lstatSync as lstatSync7, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename4, dirname as dirname13, join as join32, relative as relative10, resolve as resolve12 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
-import { chmodSync as chmodSync2, closeSync as closeSync2, lstatSync as lstatSync5, mkdtempSync as mkdtempSync3, openSync as openSync2, readdirSync as readdirSync12, rmSync as rmSync6 } from "node:fs";
+import { chmodSync as chmodSync2, closeSync as closeSync2, lstatSync as lstatSync6, mkdtempSync as mkdtempSync3, openSync as openSync2, readdirSync as readdirSync13, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join31 } from "node:path";
 var REDACTED = "REDACTED";
@@ -49936,7 +49895,7 @@ function openPrivateReportDir() {
 function sweepStaleReportDirs(root = tmpdir3(), now = Date.now()) {
   let names;
   try {
-    names = readdirSync12(root);
+    names = readdirSync13(root);
   } catch {
     return 0;
   }
@@ -49946,7 +49905,7 @@ function sweepStaleReportDirs(root = tmpdir3(), now = Date.now()) {
     if (!name.startsWith(PREFIX2)) continue;
     try {
       const path8 = join31(root, name);
-      const st = lstatSync5(path8);
+      const st = lstatSync6(path8);
       if (st.isSymbolicLink() || !st.isDirectory()) continue;
       if (uid !== null && st.uid !== uid) continue;
       if (now - st.mtimeMs < STALE_AFTER_MS) continue;
@@ -50449,7 +50408,7 @@ async function filesPass(opts, result, files, labels = {
       const from = join32(opts.projectPath, rel2);
       let size;
       try {
-        const st = lstatSync6(from);
+        const st = lstatSync7(from);
         if (!st.isFile()) continue;
         size = st.size;
       } catch {
@@ -51543,7 +51502,7 @@ function packagesView(packages, findings, scanId) {
 }
 
 // src/tools/scanIac.ts
-import { readdirSync as readdirSync13, realpathSync as realpathSync4, statSync as statSync11, writeFileSync as writeFileSync8 } from "node:fs";
+import { readdirSync as readdirSync14, realpathSync as realpathSync4, statSync as statSync10, writeFileSync as writeFileSync8 } from "node:fs";
 import { isAbsolute as isAbsolute8, join as join34, relative as relative11, sep as sep9 } from "node:path";
 
 // src/runners/scannerParsers/actionlint.ts
@@ -51660,7 +51619,7 @@ function listWorkflowFiles(projectPath, exclusions) {
   if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
   try {
-    entries2 = readdirSync13(dir, { withFileTypes: true });
+    entries2 = readdirSync14(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -51687,7 +51646,7 @@ function realWithinProject(root, candidate, requireFile) {
   }
   if (requireFile) {
     try {
-      if (!statSync11(real).isFile()) return false;
+      if (!statSync10(real).isFile()) return false;
     } catch {
       return false;
     }
@@ -54797,7 +54756,7 @@ function qualityCategoriesView(categories, findings, scanId) {
 }
 
 // src/tools/reviewPr.ts
-import { lstatSync as lstatSync7 } from "node:fs";
+import { lstatSync as lstatSync8 } from "node:fs";
 import { basename as basename5, join as join39 } from "node:path";
 var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
 var reviewPr = makeScanTool({
@@ -54999,7 +54958,7 @@ async function runTrivy(ctx, out, args) {
 }
 function isFileOnDisk(path8) {
   try {
-    return lstatSync7(path8).isFile();
+    return lstatSync8(path8).isFile();
   } catch {
     return false;
   }
@@ -55065,7 +55024,7 @@ var tool3 = {
 registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
-import { existsSync as existsSync24, readdirSync as readdirSync14, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync24, readdirSync as readdirSync15, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join40, relative as relative14 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
@@ -55596,7 +55555,7 @@ function findRequirementsFiles(projectPath) {
   const out = [];
   let entries2 = [];
   try {
-    entries2 = readdirSync14(projectPath);
+    entries2 = readdirSync15(projectPath);
   } catch {
     return out;
   }
@@ -55606,7 +55565,7 @@ function findRequirementsFiles(projectPath) {
   const reqDir = join40(projectPath, "requirements");
   if (existsSync24(reqDir)) {
     try {
-      for (const name of readdirSync14(reqDir)) {
+      for (const name of readdirSync15(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) out.push(join40(reqDir, name));
       }
     } catch {
@@ -55757,7 +55716,7 @@ async function runDotnetSca(opts) {
 // src/tools/depsUpdatePlan.ts
 init_execa();
 var import_yaml6 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync25, readFileSync as readFileSync21, readdirSync as readdirSync15, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync25, readFileSync as readFileSync21, readdirSync as readdirSync16, statSync as statSync11 } from "node:fs";
 import { dirname as dirname15, join as join41, relative as relative15, sep as sep11 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
@@ -56403,7 +56362,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   const collect = (dir, topLevel) => {
     let entries2;
     try {
-      entries2 = readdirSync15(dir);
+      entries2 = readdirSync16(dir);
     } catch {
       return;
     }
@@ -56413,7 +56372,7 @@ function listNodeModulesPackages(nodeModulesDir) {
       if (name.startsWith("@")) {
         let scoped = [];
         try {
-          scoped = readdirSync15(join41(dir, name));
+          scoped = readdirSync16(join41(dir, name));
         } catch {
           continue;
         }
@@ -56425,7 +56384,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   };
   collect(nodeModulesDir, true);
   try {
-    for (const storeEntry of readdirSync15(join41(nodeModulesDir, ".pnpm"))) {
+    for (const storeEntry of readdirSync16(join41(nodeModulesDir, ".pnpm"))) {
       collect(join41(nodeModulesDir, ".pnpm", storeEntry, "node_modules"), false);
     }
   } catch {
@@ -56434,7 +56393,7 @@ function listNodeModulesPackages(nodeModulesDir) {
 }
 function safeIsDirectory(p) {
   try {
-    return statSync12(p).isDirectory();
+    return statSync11(p).isDirectory();
   } catch {
     return false;
   }
@@ -56541,7 +56500,7 @@ function findPipRequirementsFiles(projectPath) {
   };
   let rootEntries = [];
   try {
-    rootEntries = readdirSync15(projectPath);
+    rootEntries = readdirSync16(projectPath);
   } catch {
     return out;
   }
@@ -56551,7 +56510,7 @@ function findPipRequirementsFiles(projectPath) {
   const reqDir = join41(projectPath, "requirements");
   if (existsSync25(reqDir)) {
     try {
-      for (const name of readdirSync15(reqDir)) {
+      for (const name of readdirSync16(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) tryRead(join41("requirements", name));
       }
     } catch {
@@ -56997,7 +56956,7 @@ function failDomain2(code, message3) {
 }
 
 // src/tools/complianceCheck.ts
-import { existsSync as existsSync26, readdirSync as readdirSync16, statSync as statSync13 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync17, statSync as statSync12 } from "node:fs";
 import { join as join42 } from "node:path";
 function rgpdRulesPath() {
   return join42(resolveConfigsDir(), "semgrep", "rgpd.yml");
@@ -57139,7 +57098,7 @@ function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries2;
   try {
-    entries2 = readdirSync16(dir);
+    entries2 = readdirSync17(dir);
   } catch {
     return;
   }
@@ -57149,7 +57108,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join42(dir, entry);
     try {
-      const s = statSync13(abs);
+      const s = statSync12(abs);
       if (s.isDirectory()) {
         if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
@@ -57278,7 +57237,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync27, readFileSync as readFileSync22, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync27, readFileSync as readFileSync22, statSync as statSync13 } from "node:fs";
 import { join as join43 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -57402,7 +57361,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat3 = statSync14(outFile);
+  const stat3 = statSync13(outFile);
   const raw = readFileSync22(outFile, "utf8");
   const summary2 = summarize3(raw);
   ctx.storage.scans.insert({
@@ -57454,11 +57413,11 @@ function failDomain3(code, message3) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync29, readdirSync as readdirSync18 } from "node:fs";
+import { existsSync as existsSync29, readdirSync as readdirSync19 } from "node:fs";
 import { join as join45 } from "node:path";
 
 // src/runners/stackDetect.ts
-import { existsSync as existsSync28, readFileSync as readFileSync23, readdirSync as readdirSync17 } from "node:fs";
+import { existsSync as existsSync28, readFileSync as readFileSync23, readdirSync as readdirSync18 } from "node:fs";
 import { join as join44 } from "node:path";
 var MAX_MANIFEST_DEPTH = 3;
 var MAX_DIRS_VISITED = 2e4;
@@ -57593,7 +57552,7 @@ function walkManifestDirs(root) {
 }
 function readDirSafe(dir) {
   try {
-    return readdirSync17(dir, { withFileTypes: true });
+    return readdirSync18(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -57807,7 +57766,7 @@ function enrichDotnet(snap, projectPath) {
     try {
       const target = rel2 === "" ? projectPath : join45(projectPath, rel2);
       if (!existsSync29(target)) return false;
-      return readdirSync18(target).some((name) => name.endsWith(suffix));
+      return readdirSync19(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
     }
@@ -57848,7 +57807,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     if (depth > maxDepth) return false;
     let entries2;
     try {
-      entries2 = readdirSync18(dir);
+      entries2 = readdirSync19(dir);
     } catch {
       return false;
     }
@@ -57857,7 +57816,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join45(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync18(abs).length >= 0 && walk4(abs, depth + 1)) return true;
+        if (readdirSync19(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
@@ -58329,7 +58288,7 @@ function failDomain5(code, message3) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync32, mkdirSync as mkdirSync8, readdirSync as readdirSync19, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync8, readdirSync as readdirSync20, writeFileSync as writeFileSync11 } from "node:fs";
 import { dirname as dirname17, join as join48 } from "node:path";
 var tool8 = {
   name: "observability_setup",
@@ -58412,7 +58371,7 @@ function inferStack(projectPath, ctx) {
     return "java";
   if (existsSync32(join48(projectPath, "Gemfile"))) return "ruby";
   try {
-    const entries2 = readdirSync19(projectPath);
+    const entries2 = readdirSync20(projectPath);
     if (entries2.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
       return "dotnet";
   } catch {
@@ -62027,7 +61986,7 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync34, readFileSync as readFileSync26, readdirSync as readdirSync20 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync26, readdirSync as readdirSync21 } from "node:fs";
 import { join as join51 } from "node:path";
 var tool16 = {
   name: "license_compatibility",
@@ -62377,7 +62336,7 @@ function normaliseLicense(s) {
 }
 function findFirstCsproj(projectPath) {
   try {
-    const name = readdirSync20(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
+    const name = readdirSync21(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
     return name ? join51(projectPath, name) : null;
   } catch {
     return null;
@@ -62838,6 +62797,8 @@ async function handler14(input, ctx) {
     // Findings the scans hold that an active suppression takes out of the
     // score — a mass suppression shows here, never as a clean project.
     suppressed_count: open.suppressed,
+    // Scans dated in the future, which every reader ignored (storage/scanClock.ts).
+    ...open.future_dated_note !== void 0 ? { future_dated_note: open.future_dated_note } : {},
     coverage: {
       level: open.coverage,
       sources: open.sources,
@@ -63456,7 +63417,7 @@ function failDomain15(code, message3) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync38, statSync as statSync15 } from "node:fs";
+import { existsSync as existsSync38, statSync as statSync14 } from "node:fs";
 import { isAbsolute as isAbsolute10, join as join54, resolve as resolve14 } from "node:path";
 
 // src/runners/semgrepValidate.ts
@@ -63559,7 +63520,7 @@ async function handler20(input, ctx) {
 }
 function isDirectory2(path8) {
   try {
-    return statSync15(path8).isDirectory();
+    return statSync14(path8).isDirectory();
   } catch {
     return false;
   }
@@ -63607,7 +63568,7 @@ async function compileWithSemgrep(projectPath, registered, rejected) {
 function consider(path8, registered, rejected) {
   let isDir;
   try {
-    isDir = statSync15(path8).isDirectory();
+    isDir = statSync14(path8).isDirectory();
   } catch {
     rejected.push({ path: path8, reason: "does not exist" });
     return;
@@ -63639,7 +63600,7 @@ function collectExplicit(projectPath, paths) {
       }
       const matches3 = expandGlob(projectPath, raw).filter((p) => {
         try {
-          return statSync15(p).isFile();
+          return statSync14(p).isFile();
         } catch {
           return false;
         }
@@ -63670,7 +63631,7 @@ function failDomain16(code, message3) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync39, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync39, statSync as statSync15 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool24 = {
@@ -63699,7 +63660,7 @@ async function handler21(input, ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync39(dbPath)) {
     try {
-      dbSizeBytes = statSync16(dbPath).size;
+      dbSizeBytes = statSync15(dbPath).size;
     } catch {
     }
   }
@@ -63718,6 +63679,8 @@ async function handler21(input, ctx) {
       db_size_bytes: dbSizeBytes,
       // This project's scans, any status and type — never another project's.
       total_scans: ctx.storage.scans.countForProject(projectPath),
+      // Scans dated in the future: in no count, list or "latest" here, or anywhere.
+      future_dated_scans_ignored: ctx.storage.scans.countFutureDated(projectPath),
       ...ctx.storage.runtimeMeta.get("shell_choice") !== null ? { shell_label: ctx.shell?.label ?? "unknown" } : {}
     },
     last_scan: latest ? {
@@ -63736,10 +63699,7 @@ async function handler21(input, ctx) {
       resources: RESOURCES.length
     },
     storage_warning: ctx.storageWarning ?? null,
-    // A database this start adopted as the user's (an earlier version's, or
-    // a copy registered elsewhere), with the suppressions it brought that
-    // apply to every project — said here, not only in the server's stderr.
-    storage_adoption: ctx.storageAdoption ?? null,
+    ...futureNoteOf(ctx.storage, projectPath),
     suppressions: activeSuppressions(ctx, projectPath)
   };
 }
@@ -67504,7 +67464,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync46, readFileSync as readFileSync30, readdirSync as readdirSync21, statSync as statSync17 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync30, readdirSync as readdirSync22, statSync as statSync16 } from "node:fs";
 import { join as join63, relative as relative17 } from "node:path";
 var PATTERNS = [
   {
@@ -67678,7 +67638,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync21(dir);
+      entries2 = readdirSync22(dir);
     } catch {
       return;
     }
@@ -67687,7 +67647,7 @@ function collectConfigFiles(root, maxDepth) {
       const abs = join63(dir, name);
       let stat3;
       try {
-        stat3 = statSync17(abs);
+        stat3 = statSync16(abs);
       } catch {
         continue;
       }
@@ -67704,7 +67664,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync18 } from "node:fs";
+import { readFileSync as readFileSync31, readdirSync as readdirSync23, statSync as statSync17 } from "node:fs";
 import { join as join64, relative as relative18 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -67821,7 +67781,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync22(dir);
+      entries2 = readdirSync23(dir);
     } catch {
       return;
     }
@@ -67829,7 +67789,7 @@ function collectCsprojFiles(root, maxDepth) {
       if (SKIP_DIRS4.has(name)) continue;
       const abs = join64(dir, name);
       try {
-        const s = statSync18(abs);
+        const s = statSync17(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
@@ -67845,7 +67805,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync47, readFileSync as readFileSync32, readdirSync as readdirSync23, statSync as statSync19 } from "node:fs";
+import { existsSync as existsSync47, readFileSync as readFileSync32, readdirSync as readdirSync24, statSync as statSync18 } from "node:fs";
 import { join as join65, relative as relative19 } from "node:path";
 var RULES = [
   {
@@ -67904,7 +67864,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync23(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync24(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -67981,7 +67941,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries2;
     try {
-      entries2 = readdirSync23(dir);
+      entries2 = readdirSync24(dir);
     } catch {
       return;
     }
@@ -67990,7 +67950,7 @@ function findMigrationsDirs(root) {
       const abs = join65(dir, name);
       let s;
       try {
-        s = statSync19(abs);
+        s = statSync18(abs);
       } catch {
         continue;
       }
@@ -68198,7 +68158,7 @@ function missionWellbeingPoint(value) {
 }
 
 // src/validate/npmResolve.ts
-import { readFileSync as readFileSync33, statSync as statSync20 } from "node:fs";
+import { readFileSync as readFileSync33, statSync as statSync19 } from "node:fs";
 import { join as join66 } from "node:path";
 var MAX_LOCKFILE_BYTES = 64 * 1024 * 1024;
 var MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -68278,7 +68238,7 @@ function readInstalled(projectPath, dir, name) {
 }
 function readJson(path8, maxBytes) {
   try {
-    const stat3 = statSync20(path8);
+    const stat3 = statSync19(path8);
     if (!stat3.isFile()) return void 0;
     if (stat3.size > maxBytes) return null;
     return record6(JSON.parse(readFileSync33(path8, "utf8")));
@@ -68300,7 +68260,7 @@ function parentOf(dir) {
 }
 
 // src/validate/pypiPins.ts
-import { readFileSync as readFileSync34, statSync as statSync21 } from "node:fs";
+import { readFileSync as readFileSync34, statSync as statSync20 } from "node:fs";
 import { join as join67 } from "node:path";
 var MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 function isPypiPinFile(path8) {
@@ -68379,7 +68339,7 @@ function tomlPackagePins(text2) {
 }
 function readText2(path8) {
   try {
-    const stat3 = statSync21(path8);
+    const stat3 = statSync20(path8);
     if (!stat3.isFile() || stat3.size > MAX_MANIFEST_BYTES) return null;
     return readFileSync34(path8, "utf8");
   } catch {
@@ -69714,14 +69674,14 @@ function finding2(file, ruleId, severity, subcategory, title, message3) {
 init_execa();
 import {
   existsSync as existsSync48,
-  lstatSync as lstatSync8,
+  lstatSync as lstatSync9,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync35,
-  readdirSync as readdirSync24,
+  readdirSync as readdirSync25,
   readlinkSync,
   realpathSync as realpathSync6,
   rmSync as rmSync8,
-  statSync as statSync22,
+  statSync as statSync21,
   writeFileSync as writeFileSync16
 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
@@ -69846,7 +69806,7 @@ async function ingestTarget(targetRaw) {
   if (!existsSync48(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync22(target);
+  const st = statSync21(target);
   if (st.isDirectory()) {
     const collected = collectDir(target);
     return {
@@ -70012,7 +69972,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries2;
     try {
-      entries2 = readdirSync24(dir);
+      entries2 = readdirSync25(dir);
     } catch {
       continue;
     }
@@ -70024,7 +69984,7 @@ function collectDir(root) {
       const abs = join68(dir, entry);
       let s;
       try {
-        s = lstatSync8(abs);
+        s = lstatSync9(abs);
       } catch {
         continue;
       }
@@ -71000,7 +70960,7 @@ function resolveWordpressRoutes(routes) {
 }
 
 // src/surface/scanSemgrep.ts
-import { copyFileSync as copyFileSync3, existsSync as existsSync50, lstatSync as lstatSync9 } from "node:fs";
+import { copyFileSync as copyFileSync3, existsSync as existsSync50, lstatSync as lstatSync10 } from "node:fs";
 import { join as join71 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
@@ -71095,7 +71055,7 @@ function countListedRouteTargets(projectPath, files, ownIgnore) {
     if (segments.some((dir) => skipDirs.has(dir) || dir.startsWith("."))) continue;
     if (!ownIgnore && SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
     try {
-      if (!lstatSync9(join71(projectPath, file)).isFile()) continue;
+      if (!lstatSync10(join71(projectPath, file)).isFile()) continue;
     } catch {
       continue;
     }
@@ -71143,7 +71103,7 @@ function judgeSurfaceReport(args) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync37, readdirSync as readdirSync25, statSync as statSync23 } from "node:fs";
+import { readFileSync as readFileSync37, readdirSync as readdirSync26, statSync as statSync22 } from "node:fs";
 import { join as join72, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -71175,7 +71135,7 @@ function readCandidates(paths) {
   for (const path8 of paths) {
     let size;
     try {
-      size = statSync23(path8).size;
+      size = statSync22(path8).size;
     } catch {
       continue;
     }
@@ -71195,7 +71155,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries2;
   try {
-    entries2 = readdirSync25(dir, { withFileTypes: true });
+    entries2 = readdirSync26(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -74752,7 +74712,7 @@ function errorMessage2(e) {
 
 // src/fixpr/semgrepFix.ts
 var import_yaml8 = __toESM(require_dist2(), 1);
-import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync40, rmSync as rmSync10, statSync as statSync24, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync40, rmSync as rmSync10, statSync as statSync23, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { basename as basename8, dirname as dirname19, join as join78 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -74823,7 +74783,7 @@ function loadLocalRules(configs) {
   for (const config2 of configs) {
     let isDir;
     try {
-      isDir = statSync24(config2).isDirectory();
+      isDir = statSync23(config2).isDirectory();
     } catch {
       continue;
     }
@@ -76575,7 +76535,7 @@ import { homedir as homedir4 } from "node:os";
 import { dirname as dirname20, isAbsolute as isAbsolute17, join as join84, relative as relative25 } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync as closeSync3, constants as constants5, fstatSync as fstatSync2, lstatSync as lstatSync10, openSync as openSync3, readlinkSync as readlinkSync2, readSync as readSync2 } from "node:fs";
+import { closeSync as closeSync3, constants as constants5, fstatSync as fstatSync2, lstatSync as lstatSync11, openSync as openSync3, readlinkSync as readlinkSync2, readSync as readSync2 } from "node:fs";
 import { isAbsolute as isAbsolute16, join as join82, parse as parse6, relative as relative24, resolve as resolve20 } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants5.O_RDONLY | (constants5.O_NONBLOCK ?? 0);
@@ -76598,7 +76558,7 @@ function walkLinksUnder(under, path8) {
     const next = join82(current, part);
     let isLink;
     try {
-      isLink = lstatSync10(next).isSymbolicLink();
+      isLink = lstatSync11(next).isSymbolicLink();
     } catch {
       return { ok: true };
     }
@@ -82169,7 +82129,7 @@ function countBySeverity6(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync55, statSync as statSync25 } from "node:fs";
+import { existsSync as existsSync55, statSync as statSync24 } from "node:fs";
 import { resolve as resolve24 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -83216,7 +83176,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { lstatSync as lstatSync11, readdirSync as readdirSync26 } from "node:fs";
+import { lstatSync as lstatSync12, readdirSync as readdirSync27 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname21, isAbsolute as isAbsolute19, join as join86, parse as parse7, relative as relative26, resolve as resolve23 } from "node:path";
 var PUBLIC_HOSTS = {
@@ -83266,7 +83226,7 @@ function read(path8, ctx, under, what = "configuration") {
 }
 function present(path8) {
   try {
-    lstatSync11(path8);
+    lstatSync12(path8);
     return true;
   } catch {
     return false;
@@ -83279,7 +83239,7 @@ function listDir(dir, ctx) {
     return [];
   }
   try {
-    return readdirSync26(dir);
+    return readdirSync27(dir);
   } catch (e) {
     const code = e.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir, "directory");
@@ -83482,7 +83442,7 @@ function findManifest(root, file, match, ctx) {
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
-      entries2 = readdirSync26(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
+      entries2 = readdirSync27(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
     } catch {
       continue;
     }
@@ -84558,7 +84518,7 @@ async function handler45(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve24(inp.project_path);
-    if (!existsSync55(projectDir) || !statSync25(projectDir).isDirectory()) {
+    if (!existsSync55(projectDir) || !statSync24(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }
@@ -85078,7 +85038,8 @@ function respond(uri, ctx, keep) {
     scan_id: newest?.scan_id ?? null,
     coverage: set2.coverage,
     sources: set2.sources,
-    skipped: set2.skipped
+    skipped: set2.skipped,
+    ...set2.future_dated_note !== void 0 ? { future_dated_note: set2.future_dated_note } : {}
   };
 }
 function mcpInvalidParams2(message3) {
@@ -85394,16 +85355,9 @@ async function main() {
     process.exit(1);
   }
   const projectPath = resolve25(process.cwd());
-  const {
-    db,
-    path: dbPath,
-    warning: storageWarning,
-    notice: storageNotice,
-    adoption: storageAdoption
-  } = openDatabase({ projectPath });
+  const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
-  if (storageNotice) logErr(`db notice: ${storageNotice}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
   reapOrphanedScans(storage, logErr);
   canonicalizeProjectPathsAtStartup(storage, logErr);
@@ -85431,8 +85385,7 @@ async function main() {
     shell,
     scriptsDir: resolveScriptsDir(),
     progressNotifier,
-    ...storageWarning ? { storageWarning } : {},
-    ...storageAdoption ? { storageAdoption } : {}
+    ...storageWarning ? { storageWarning } : {}
   };
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
@@ -85478,10 +85431,6 @@ function logErr(line) {
 `);
 }
 main().catch((err) => {
-  if (err instanceof GuardianDbError) {
-    logErr(`fatal: ${err.message}`);
-    process.exit(1);
-  }
   logErr(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   process.exit(1);
 });

@@ -5,49 +5,36 @@
  * A database is the data of whoever wrote it. Its schema can carry SQL that
  * runs on every write (a trigger that deletes each finding as it lands), and
  * its DATA can carry a suppression with no project (`project_path` NULL
- * matches every project) that hides every finding with no schema object at
- * all. So the one database trusted without question is one THIS user's
- * dev-guardian created: it carries a random `db_id` registered in the
- * per-user registry (`dbRegistry.ts`). Anything else is FOREIGN — a clone, a
- * ZIP of a repository, a submodule, a link to somewhere else — and goes to the
+ * matches every project) or scans dated to outrank the user's own, with no
+ * schema object at all. So the one database trusted is one THIS user's
+ * dev-guardian created, or one this user registered by hand: it carries a
+ * random `db_id` registered in the per-user registry (`dbRegistry.ts`) for
+ * the very path it is opened at. Anything else is FOREIGN — a database from
+ * before 3.0.1 (no id), a clone, an archive of a repository, a copy of a
+ * registered one, a submodule, a link to somewhere else — and goes to the
  * per-user fallback, the project file left as it is.
  *
- * A database written by dev-guardian 3.0.0 or earlier has no id, and a copy
- * of a registered one that landed elsewhere has an id registered for another
- * location. Either is ADOPTED once, and only when every one of these holds
- * ({@link adoptionProblem}):
- *   - the project's `.git`, when it has one, is not a link, git answers, and
- *     tracks neither the database nor its `-wal`, `-shm` or `-journal` under a
- *     CASE-INSENSITIVE pathspec — `.Guardian/guardian.db` committed is served
- *     as `.guardian/guardian.db` by a case-insensitive file system, and `git
- *     ls-files` prints nothing for the exact spelling under
- *     `core.ignorecase`; `.guardian` is not a gitlink (a submodule brings its
- *     own files). A project with no `.git` (a WordPress install directory) is
- *     not refused for it — the two conditions on the scans below carry it;
+ * There is no automatic adoption. Rounds 3 to 5 of the 3.0 review built one
+ * — the project's own untracking repository, a scan filed under the
+ * project's path, a scan finished after the project directory was created —
+ * and round 6 broke the last of it twice: extractors restore a directory's
+ * creation time (Windows' own `tar.exe` restored a 2020 CreationTime with
+ * its defaults; 7-Zip does when the archive was built with `-mtc=on`), and a
+ * dense series of future-dated scans always has one inside any window around
+ * "now". Nothing in a file tells its owner from whoever wrote it. So the
+ * only way to trust an existing database is a person's decision after
+ * seeing what it holds: `dev-guardian db adopt` ({@link summarizeDatabase},
+ * `db.ts#registerProjectDatabase`).
+ *
+ * Asked of every existing project database, before its bytes are read:
  *   - `.guardian` and the database files are not links or junctions, and the
- *     database's real path lies inside the project;
- *   - it holds a completed scan filed under THIS project's canonical path, or
- *     a spelling of it (2.0.0's lower-case drive letter; never a path through
- *     a link — `platform/pathSpelling.ts`, which derives the spellings from
- *     the project's own path and compares the stored ones as strings: a path
- *     read from the database is never given to the file system, where a
- *     `\\host\share` costs a network timeout and the user's credentials). Git
- *     state cannot tell an attacker's `.git` from the user's — an archive can
- *     ship one whose index omits the database, or a gitfile naming another
- *     repository — but a database written on another machine carries that
- *     machine's paths, and an attacker has to guess this one's;
- *   - that scan FINISHED after the project directory was created (5 minutes
- *     of clock skew allowed) and not in the future (5 minutes again). The
- *     guess is feasible on predictable layouts — `/workspaces/<repo>`,
- *     `/app`, a CI runner's path, a Windows 8.3 user name — but an archive or
- *     a clone is built BEFORE the victim extracts it, so every scan in it
- *     predates the directory. Only where the file system records a birth
- *     time ({@link directoryBirthMs}): elsewhere the condition is skipped for
- *     a git project and adoption refused for any other;
- *   - its schema is clean (`schemaCheck.ts`, asked by `db.ts`).
- * Adoption then registers a fresh id, once. What it could not adopt, the
- * user can: `dev-guardian db adopt` shows what a database holds and, with
- * `--yes`, registers it ({@link summarizeDatabase}).
+ *     database's real path lies inside the project ({@link locationProblem});
+ *   - git tracks neither the database nor its `-wal`, `-shm` or `-journal`
+ *     under a CASE-INSENSITIVE pathspec — `.Guardian/guardian.db` committed
+ *     is served as `.guardian/guardian.db` by a case-insensitive file system,
+ *     and `git ls-files` prints nothing for the exact spelling under
+ *     `core.ignorecase` — and `.guardian` is not a gitlink ({@link gitProblem}).
+ * Then its id is read, read-only ({@link probeDatabase}).
  *
  * Git runs with a 3 s bound, `core.fsmonitor` off (a repository's own config
  * could name a program to run), GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE
@@ -56,12 +43,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, lstatSync, statSync, type Stats } from 'node:fs';
+import { existsSync, lstatSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import { spellingMatcher } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { GuardianDbError } from './dbError.js';
 import { DB_ID_KEY, DB_ID_SHAPE } from './dbRegistry.js';
+import { datedInFutureSql } from './scanClock.js';
 
 /** How long git may take to answer. */
 export const GIT_TIMEOUT_MS = 3000;
@@ -195,136 +182,6 @@ export function locationProblem(projectPath: string, dbPath: string): string | n
   return null;
 }
 
-/** Clock skew allowed either side of the birth-time window. */
-export const ADOPTION_CLOCK_SKEW_MS = 5 * 60 * 1000;
-
-/**
- * When the directory at `path` was created, in epoch ms, where the file
- * system records it reliably; null otherwise. Windows (NTFS, ReFS) and macOS
- * (APFS, HFS+) always do. On Linux Node reads `statx`: a file system that
- * keeps no birth time reports 0, and without `statx` libuv reports the
- * change time in its place — so a value equal to the change time is not
- * taken for one (a project directory changes after it is created, when its
- * files are). Asked only of the project's own path.
- */
-export function directoryBirthMs(path: string): number | null {
-  let st: Stats;
-  try {
-    st = statSync(path);
-  } catch {
-    return null;
-  }
-  const birth = st.birthtimeMs;
-  if (!(birth > 0)) return null;
-  if (process.platform === 'win32' || process.platform === 'darwin') return birth;
-  return birth === st.ctimeMs ? null : birth;
-}
-
-/** One project path a database's completed scans are filed under. */
-export interface ScanPath {
-  path: string;
-  /**
-   * The latest `finished_at` among its completed scans that is not in the
-   * future (beyond {@link ADOPTION_CLOCK_SKEW_MS} of the probe's clock), or
-   * null when none is.
-   */
-  latestFinished: string | null;
-}
-
-export interface AdoptionOptions {
-  /** The clock; default `Date.now()`. */
-  now?: number;
-  /** The project directory's birth time; default {@link directoryBirthMs}. Tests pass their own. */
-  birthtimeOf?: (path: string) => number | null;
-}
-
-/**
- * Why a database with no id registered for this location cannot be adopted
- * as this user's, or null when it can (see the module comment). The schema
- * check is asked by the caller, after this.
- */
-export function adoptionProblem(
-  projectPath: string,
-  dbPath: string,
-  index: GitIndexAnswer,
-  scans: readonly ScanPath[],
-  options: AdoptionOptions = {},
-): string | null {
-  // A `.git` DIRECTORY, or a gitfile (`gitdir: …`): a linked worktree's
-  // `.git` is a file, and a worktree is a legitimate layout (this repository
-  // is developed in them). What makes it count is that git answers below —
-  // `ls-files` fails when the gitdir does not resolve to a repository. Git
-  // state alone cannot tell an attacker's `.git` from the user's, though (an
-  // archive can ship either), which is what the scan checks at the end are
-  // for — and why a project with no `.git` at all is judged by them alone.
-  const git = lstatOrNull(join(projectPath, '.git'));
-  if (git !== null && git.isSymbolicLink()) return "the project's .git is a link";
-  const isGitProject = git !== null;
-  if (isGitProject && index.state !== 'ok') {
-    return `git could not be asked whether it tracks the database (${index.detail})`;
-  }
-  const fromGit = gitProblem(index) ?? locationProblem(projectPath, dbPath);
-  if (fromGit !== null) return fromGit;
-  return scanProblem(projectPath, scans, isGitProject, options);
-}
-
-/**
- * Why the database's own scans do not show it was written for THIS project,
- * here, or null: a completed scan filed under the project's canonical path or
- * a spelling of it (`platform/pathSpelling.ts` — 2.0.0's lower-case drive
- * letter among them, never a path through a link), which finished after the
- * project directory was created and not in the future.
- */
-function scanProblem(
-  projectPath: string,
-  scans: readonly ScanPath[],
-  isGitProject: boolean,
-  options: AdoptionOptions,
-): string | null {
-  let canonical: string;
-  try {
-    canonical = canonicalPath(projectPath);
-  } catch {
-    return 'the project path could not be resolved';
-  }
-  // Lexical: a path read from the database is never given to the file system.
-  const isThisProject = spellingMatcher(canonical);
-  const own = scans.filter((s) => isThisProject(s.path));
-  if (own.length === 0) {
-    if (scans.length === 0) return 'it holds no completed scan of this project (no completed scan at all)';
-    const shown = scans
-      .slice(0, 2)
-      .map((s) => s.path)
-      .join("', '");
-    return (
-      `it holds no completed scan of this project — its scans are filed under ${scans.length} other ` +
-      `path(s) ('${shown}'${scans.length > 2 ? ', …' : ''}): a database written elsewhere`
-    );
-  }
-
-  const birth = (options.birthtimeOf ?? directoryBirthMs)(canonical);
-  if (birth === null) {
-    // Nothing to compare the scans with. A git project keeps the other
-    // conditions; any other has nothing left that a copy could not satisfy.
-    if (isGitProject) return null;
-    return (
-      'the file system does not record when the project directory was created, and the project is not a git ' +
-      'repository: nothing shows the database was written here rather than brought with the files'
-    );
-  }
-  const now = options.now ?? Date.now();
-  const fits = own.some((s) => {
-    const finished = s.latestFinished === null ? Number.NaN : Date.parse(s.latestFinished);
-    return finished >= birth - ADOPTION_CLOCK_SKEW_MS && finished <= now + ADOPTION_CLOCK_SKEW_MS;
-  });
-  if (fits) return null;
-  return (
-    `its scans of this project all finished before the project directory was created ` +
-    `(${new Date(birth).toISOString()}), or in the future: a database made before this copy of the project ` +
-    'existed — an archive or a clone brings one'
-  );
-}
-
 // ---- Reading a database without changing it ---------------------------------
 
 type SqliteModule = typeof import('node:sqlite');
@@ -356,9 +213,7 @@ function readOnly<T>(dbPath: string, read: (db: RawDatabase, isTable: (name: str
       throw new GuardianDbError(
         'corrupt',
         dbPath,
-        `the database '${dbPath}' cannot be read (${error instanceof Error ? error.message : String(error)}). ` +
-          'Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is ' +
-          'created in its place, and the old file stays available for recovery.',
+        `the database '${dbPath}' cannot be read (${error instanceof Error ? error.message : String(error)})`,
       );
     }
     throw error;
@@ -376,23 +231,17 @@ export interface DatabaseProbe {
   empty: boolean;
   /** Its `schema_meta` db_id when it is a well-formed one, else null. */
   dbId: string | null;
-  /**
-   * The distinct project paths of its completed scans (at most
-   * {@link MAX_SCAN_PROJECTS}), each with its latest finish time, for the
-   * adoption's "written for this project, here" check. Empty when it has
-   * none, or no `scans` table.
-   */
-  scans: ScanPath[];
 }
 
-/** Project paths a probe reads; a database written for one project holds one or a few. */
-const MAX_SCAN_PROJECTS = 200;
-
-/** What {@link DatabaseProbe} names, read without changing the file ({@link readOnly}). */
-export function probeDatabase(dbPath: string, now: number = Date.now()): DatabaseProbe {
+/**
+ * What {@link DatabaseProbe} names, read without changing the file
+ * ({@link readOnly}). A file SQLite cannot read is a `GuardianDbError` of kind
+ * `corrupt`, whose message is the reason alone.
+ */
+export function probeDatabase(dbPath: string): DatabaseProbe {
   return readOnly(dbPath, (db, isTable) => {
     const count = db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get() as { n: number } | undefined;
-    if ((count?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
+    if ((count?.n ?? 0) === 0) return { empty: true, dbId: null };
     let id: string | null = null;
     if (isTable('schema_meta')) {
       const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY) as
@@ -400,25 +249,7 @@ export function probeDatabase(dbPath: string, now: number = Date.now()): Databas
         | undefined;
       id = typeof row?.value === 'string' && DB_ID_SHAPE.test(row.value) ? row.value : null;
     }
-    // julianday() bounds the finish time whatever its spelling; MAX over the
-    // ISO strings every build writes picks the latest.
-    const scans = isTable('scans')
-      ? (
-          db
-            .prepare(
-              `SELECT project_path AS p,
-                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
-                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`,
-            )
-            .all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS) as Array<{
-            p: unknown;
-            f: unknown;
-          }>
-        )
-          .filter((r): r is { p: string; f: unknown } => typeof r.p === 'string')
-          .map((r) => ({ path: r.p, latestFinished: typeof r.f === 'string' ? r.f : null }))
-      : [];
-    return { empty: false, dbId: id, scans };
+    return { empty: false, dbId: id };
   });
 }
 
@@ -432,10 +263,28 @@ export interface ProjectScans {
 }
 
 /**
+ * The tables that key rows by project, and so what `db adopt --rehome`
+ * rewrites (`db.ts#rehomeProjectRows`). A table added later with a
+ * `project_path` belongs here; `test/e2e/dbAdoptCli.test.ts` holds this list to the
+ * schema.
+ */
+export const PROJECT_KEYED_TABLES = [
+  'scans',
+  'suppressions',
+  'baselines',
+  'stack_snapshots',
+  'surface_snapshots',
+  'finding_validations',
+  'agent_config_hashes',
+  'mcp_tool_pins',
+  'mcp_server_pins',
+] as const;
+
+/**
  * What a database holds, for a person deciding whether it is theirs
- * (`dev-guardian db adopt`): whose scans, how many, over what dates, and the
+ * (`dev-guardian db adopt`): whose scans, how many, over what dates, the
  * suppressions — those with no project first, since they apply to every
- * project.
+ * project — and scans dated in the future, which outrank every real one.
  */
 export interface DatabaseContents {
   /** The projects with the most scans, at most {@link SHOWN_PROJECTS}. */
@@ -449,6 +298,13 @@ export interface DatabaseContents {
   suppressions: number;
   null_scoped_suppressions: number;
   baselines: number;
+  /**
+   * Scans dated beyond this machine's clock (`scanClock.ts`), and the
+   * furthest date among them — a database with any is not registered.
+   */
+  future_dated: { scans: number; latest: string | null };
+  /** Every distinct `project_path` in {@link PROJECT_KEYED_TABLES}, with its row count. */
+  paths: Array<{ project_path: string; rows: number }>;
 }
 
 const SHOWN_PROJECTS = 20;
@@ -457,6 +313,7 @@ const SHOWN_PROJECTS = 20;
 export function summarizeDatabase(dbPath: string): DatabaseContents {
   return readOnly(dbPath, (db, isTable) => {
     const count = (sql: string): number => (db.prepare(sql).get() as { n: number | null } | undefined)?.n ?? 0;
+    const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
     const contents: DatabaseContents = {
       projects: [],
       more_projects: 0,
@@ -467,7 +324,13 @@ export function summarizeDatabase(dbPath: string): DatabaseContents {
       suppressions: 0,
       null_scoped_suppressions: 0,
       baselines: 0,
+      future_dated: { scans: 0, latest: null },
+      paths: [],
     };
+    const columnsOf = (table: string): string[] =>
+      (db.prepare(`SELECT name FROM pragma_table_info(?)`).all(table) as Array<{ name: unknown }>)
+        .map((c) => c.name)
+        .filter((n): n is string => typeof n === 'string');
     if (isTable('scans')) {
       const all = db
         .prepare(
@@ -476,7 +339,6 @@ export function summarizeDatabase(dbPath: string): DatabaseContents {
              FROM scans GROUP BY project_path ORDER BY n DESC, p`,
         )
         .all() as Array<{ p: unknown; n: number; c: number | null; first: unknown; last: unknown }>;
-      const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
       for (const row of all) {
         contents.scans += row.n;
         contents.completed += row.c ?? 0;
@@ -497,16 +359,34 @@ export function summarizeDatabase(dbPath: string): DatabaseContents {
         last_finished: text(row.last),
       }));
       contents.more_projects = Math.max(0, all.length - SHOWN_PROJECTS);
+      const future = db
+        .prepare(
+          `SELECT COUNT(*) AS n, MAX(MAX(COALESCE(started_at, ''), COALESCE(finished_at, ''))) AS latest
+             FROM scans WHERE ${datedInFutureSql()}`,
+        )
+        .get() as { n: number; latest: unknown } | undefined;
+      contents.future_dated = { scans: future?.n ?? 0, latest: (future?.n ?? 0) > 0 ? text(future?.latest) : null };
     }
     if (isTable('suppressions')) {
       contents.suppressions = count('SELECT COUNT(*) AS n FROM suppressions');
-      const columns = db.prepare(`SELECT name FROM pragma_table_info('suppressions')`).all() as Array<{ name: unknown }>;
       // Before migration 011 no suppression had a project: every one applied everywhere.
-      contents.null_scoped_suppressions = columns.some((c) => c.name === 'project_path')
+      contents.null_scoped_suppressions = columnsOf('suppressions').includes('project_path')
         ? count('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL')
         : contents.suppressions;
     }
     if (isTable('baselines')) contents.baselines = count('SELECT COUNT(*) AS n FROM baselines');
+    const rows = new Map<string, number>();
+    for (const table of PROJECT_KEYED_TABLES) {
+      if (!isTable(table) || !columnsOf(table).includes('project_path')) continue;
+      for (const r of db
+        .prepare(`SELECT project_path AS p, COUNT(*) AS n FROM "${table}" WHERE project_path IS NOT NULL GROUP BY project_path`)
+        .all() as Array<{ p: unknown; n: number }>) {
+        if (typeof r.p === 'string') rows.set(r.p, (rows.get(r.p) ?? 0) + r.n);
+      }
+    }
+    contents.paths = [...rows.entries()]
+      .map(([project_path, n]) => ({ project_path, rows: n }))
+      .sort((a, b) => b.rows - a.rows || a.project_path.localeCompare(b.project_path));
     return contents;
   });
 }

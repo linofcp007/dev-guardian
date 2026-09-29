@@ -22,6 +22,7 @@ import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
+import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule, TOOLS } from './index.js';
 const startedAt = Date.now();
@@ -85,6 +86,8 @@ async function handler(input, ctx) {
             db_size_bytes: dbSizeBytes,
             // This project's scans, any status and type — never another project's.
             total_scans: ctx.storage.scans.countForProject(projectPath),
+            // Scans dated in the future: in no count, list or "latest" here, or anywhere.
+            future_dated_scans_ignored: ctx.storage.scans.countFutureDated(projectPath),
             ...(ctx.storage.runtimeMeta.get('shell_choice') !== null
                 ? { shell_label: ctx.shell?.label ?? 'unknown' }
                 : {}),
@@ -107,10 +110,7 @@ async function handler(input, ctx) {
             resources: RESOURCES.length,
         },
         storage_warning: ctx.storageWarning ?? null,
-        // A database this start adopted as the user's (an earlier version's, or
-        // a copy registered elsewhere), with the suppressions it brought that
-        // apply to every project — said here, not only in the server's stderr.
-        storage_adoption: ctx.storageAdoption ?? null,
+        ...futureNoteOf(ctx.storage, projectPath),
         suppressions: activeSuppressions(ctx, projectPath),
     };
 }

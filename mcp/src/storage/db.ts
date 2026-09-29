@@ -12,13 +12,15 @@
  * The DB lives at `<project_root>/.guardian/guardian.db`, and is used only
  * when it is THIS user's (`dbProvenance.ts`, `dbRegistry.ts`): one this
  * build creates gets a random `db_id`, registered in the per-user registry
- * before it is written; an existing one is trusted when its id is registered
- * for the very path it is opened at, or — a database from 3.0.0 or earlier,
- * or a copy of a registered one that landed elsewhere — when it passes the
- * one-time adoption. It is REFUSED otherwise, and the per-user
- * fallback used instead, with a warning the caller includes in tool
- * responses (`health_status`'s `storage_warning`, every scan's `warnings`)
- * saying why and where the history now goes. Refused, too, when:
+ * before it is written; an existing one is trusted only when its id is
+ * registered for the very path it is opened at. Nothing else is trusted
+ * automatically — a database from before 3.0.1, a copy of a registered one,
+ * another user's — until the user registers it with `dev-guardian db adopt
+ * --yes` ({@link registerProjectDatabase}), after seeing what it holds. It is
+ * REFUSED otherwise, and the per-user fallback used instead, with a warning
+ * the caller includes in tool responses (`health_status`'s
+ * `storage_warning`, every scan's `warnings`) saying why, what to do, and
+ * where the history now goes. Refused, too, when:
  *   - the location is not writable (read-only mounts, missing permissions, a
  *     database left behind by a `sudo` or Docker run). Writability is PROBED
  *     — a file is created in `.guardian/` and the database takes a real
@@ -44,8 +46,10 @@
  * names runs unless SQLite marks it innocuous), `cell_size_check = ON`
  * (malformed pages are caught as corruption rather than read) and no memory
  * map (a file read through `mmap` bypasses those checks). A file SQLite
- * cannot read at all is one {@link GuardianDbError} naming it and saying to
- * move it aside — the server prints it without a stack trace.
+ * cannot read never stops the server: one that is not the user's registered
+ * database is foreign (the fallback), the user's own gives way to an
+ * in-memory database for the session, with a warning naming it and saying
+ * to move it aside.
  *
  * The connection opens in WAL mode with foreign keys on; the resolver uses
  * `:memory:` when the caller asks for it, which the unit tests rely on.
@@ -56,20 +60,29 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type { StatementSync, SQLInputValue } from 'node:sqlite';
+import { storedPathTarget, type StoredPathTarget } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { GuardianDbError } from './dbError.js';
 import {
-  adoptionProblem,
   gitIndexAt,
   gitProblem,
   locationProblem,
   probeDatabase,
+  PROJECT_KEYED_TABLES,
   summarizeDatabase,
   type DatabaseContents,
   type GitIndexAnswer,
 } from './dbProvenance.js';
-import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId, type RegistryEntry } from './dbRegistry.js';
+import {
+  DB_ID_KEY,
+  findEntryForDbPath,
+  forgetDbId,
+  lookupDbId,
+  newDbId,
+  registerDbId,
+  type RegistryEntry,
+} from './dbRegistry.js';
 import { listMigrations, runMigrations } from './migrations/runner.js';
 import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, isDataDirError, userDataDir } from './userData.js';
 import {
@@ -385,13 +398,8 @@ function asCorruptionError(error: unknown, dbPath: string): unknown {
   const code = sqliteErrorCode(error);
   if (code !== 11 && code !== 26) return error;
   const detail = error instanceof Error ? error.message : String(error);
-  return new GuardianDbError(
-    'corrupt',
-    dbPath,
-    `the database '${dbPath}' cannot be read (${detail}). Move it aside (rename it, for example to ` +
-      'guardian.db.corrupt) and restart: a new, empty database is created in its place, and the old file ' +
-      'stays available for recovery.',
-  );
+  // The reason alone: `openDatabase` says what to do (MOVE_ASIDE).
+  return new GuardianDbError('corrupt', dbPath, `the database '${dbPath}' cannot be read (${detail})`);
 }
 
 export interface OpenOptions {
@@ -410,8 +418,7 @@ export interface OpenOptions {
    * project's is refused and no fallback exists yet), an empty in-memory
    * database. The CLI's read-only `status` / `dashboard` use it, so they
    * decide exactly as the server does — a foreign database is never read —
-   * without creating a database anywhere. (A legacy database it adopts gets
-   * its id written, as the server would.)
+   * without creating a database anywhere.
    */
   existingOnly?: boolean;
 }
@@ -422,47 +429,54 @@ export interface OpenedDatabase {
   path: string;
   /**
    * Set when the project's database was not used: it is foreign (not this
-   * user's), not writable, or holds objects the migrations never create.
-   * Says why, where the history goes instead, and how to get the project's
-   * own back; tools surface it (`health_status.storage_warning`, every
-   * scan's `warnings`).
+   * user's — a database from before 3.0.1 among them), not writable,
+   * unreadable, or holds objects the migrations never create. Says why,
+   * where the history goes instead, and how to get the project's own back;
+   * tools surface it (`health_status.storage_warning`, every scan's
+   * `warnings`).
    */
   warning?: string;
-  /** One line worth logging once: a database was adopted. */
-  notice?: string;
-  /** Set when this open adopted the project's database; `health_status` shows it. */
-  adoption?: StorageAdoption;
+  /**
+   * Set when the database that should have been used — the user's own, or
+   * the per-user fallback — exists but cannot be read or completed: its
+   * path. The server runs on in memory; the CLI's `status` / `dashboard`,
+   * whose one job is to show that database, refuse instead (exit 3).
+   */
+  unusable?: string;
 }
 
-/**
- * A database adopted as this user's by this open (`dbProvenance.ts`) — what
- * `health_status.storage_adoption` reports for the session.
- */
-export interface StorageAdoption {
-  db_path: string;
-  adopted_at: string;
-  /**
-   * Where it was registered before — a copy of a registered database, or a
-   * repository moved — or null: an earlier version's, which had no id.
-   */
-  previously_registered_at: string | null;
-  /**
-   * Suppressions in it with no project: they apply to every project, and are
-   * how findings disappear without a trace, so how many came with it is said.
-   */
-  null_scoped_suppressions: number;
-}
+/** Why `.guardian/guardian.db` is not this user's ({@link foreignReason}). */
+type Foreign =
+  /** Before 3.0.1: no id. The upgrade path — `db adopt --yes`. */
+  | { kind: 'legacy' }
+  /** An id this user never registered: another user's or another machine's. */
+  | { kind: 'unregistered-id' }
+  /** An id registered for another path: a copy of a registered database. */
+  | { kind: 'registered-elsewhere'; at: string }
+  /** Git tracks it, or `.guardian` is a submodule. */
+  | { kind: 'tracked'; why: string; tracked: boolean }
+  /** A link, a junction, or outside the project. */
+  | { kind: 'location'; why: string }
+  /** SQLite cannot read it, and no registry entry names it. */
+  | { kind: 'unreadable'; detail: string };
 
 /** What {@link judgeProjectDatabase} decided about `.guardian/guardian.db`. */
 type Verdict =
   | { kind: 'create' }
   | { kind: 'trusted'; dbId: string }
-  | { kind: 'adopt'; registeredAt: string | null }
-  | { kind: 'foreign'; why: string; tracked: boolean };
+  | { kind: 'foreign'; foreign: Foreign }
+  /** The user's own registered database, which cannot be read. */
+  | { kind: 'own-unreadable'; detail: string };
 
 /**
  * Open (and migrate) a guardian database. Idempotent — calling twice on the
  * same path returns two independent connections to the same file.
+ *
+ * Never throws for a database it cannot use (round 6: an unreadable or
+ * corrupt one used to stop the server): a foreign or unreadable project
+ * database gives way to the per-user fallback, and the user's OWN database
+ * that cannot be read — or a fallback that cannot — to an in-memory one for
+ * the session, each with a warning naming the file and what to do.
  */
 export function openDatabase(options: OpenOptions): OpenedDatabase {
   if (options.inMemory) return openInMemory();
@@ -478,22 +492,28 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
     refusal = `Project path '${projectPath}' is not writable (it is not an existing directory)`;
   } else if (!existingOnly || existsSync(preferredPath)) {
     const verdict = judgeProjectDatabase(projectPath, preferredPath);
+    if (verdict.kind === 'own-unreadable') {
+      return inMemoryInstead(preferredPath, `the database '${preferredPath}' cannot be read (${verdict.detail}).${MOVE_ASIDE}`);
+    }
     if (verdict.kind === 'foreign') {
-      refusal = foreignReason(projectPath, preferredPath, verdict);
+      refusal = foreignReason(projectPath, preferredPath, verdict.foreign);
     } else if (!(existingOnly && verdict.kind === 'create')) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
       } catch (error) {
         if (isDataDirError(error)) {
-          // Creating or adopting needs the registry. Without it the project's
-          // database is not used — never trusted unregistered — and neither is
-          // a fallback in the same unusable directory.
+          // Creating needs the registry. Without it the project's database is
+          // not used — never trusted unregistered — and neither is a fallback
+          // in the same unusable directory.
           return unpersisted(error.message);
         }
         if (error instanceof GuardianDbError && error.kind === 'untrusted') {
           refusal =
             `${error.message}. The file is left as it is; ` +
             'delete it or move it aside to have dev-guardian start a new one there';
+        } else if (error instanceof GuardianDbError) {
+          // The user's own database, unreadable or incomplete: never an exit.
+          return inMemoryInstead(preferredPath, `${error.message}${error.kind === 'corrupt' ? `.${MOVE_ASIDE}` : ''}`);
         } else if (isNotWritableError(error)) {
           const reason = error instanceof Error ? error.message : String(error);
           refusal = `Project path '${projectPath}' is not writable (${reason})`;
@@ -514,15 +534,33 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
     db = openFallback(chosenPath);
   } catch (error) {
     if (isDataDirError(error)) return unpersisted(error.message, refusal);
+    if (error instanceof GuardianDbError) {
+      return inMemoryInstead(
+        chosenPath,
+        (refusal !== undefined ? `${refusal}. ` : '') +
+          `${error.message}. It is dev-guardian's per-user database for this project: move it aside and restart.`,
+      );
+    }
     throw error;
   }
   if (refusal === undefined) return { db, path: chosenPath };
   return {
     db,
     path: chosenPath,
-    warning:
-      `${refusal}. This project's scans are kept in '${chosenPath}' instead, and stay there: they are not ` +
-      'merged back into the project file later.',
+    warning: `${refusal}. Meanwhile this project's scans are kept in '${chosenPath}' (not merged back later).`,
+  };
+}
+
+const MOVE_ASIDE =
+  ' Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is created ' +
+  'in its place, and the old file stays available for recovery';
+
+/** An in-memory database for the session instead of `unusable`, with `why` and that history will not persist. */
+function inMemoryInstead(unusable: string, why: string): OpenedDatabase {
+  return {
+    ...openInMemory(),
+    unusable,
+    warning: `${why}. This session runs on an in-memory database: history will not persist until then.`,
   };
 }
 
@@ -547,18 +585,33 @@ function unpersisted(reason: string, refusal?: string): OpenedDatabase {
 
 /**
  * Whether `.guardian/guardian.db` is this user's — see the module comment and
- * `dbProvenance.ts`. Reads it only through a read-only connection; asks git
- * once when the file exists.
+ * `dbProvenance.ts`. Where it lives and whether git tracks it are asked
+ * BEFORE its bytes are read (a tracked or linked file is foreign whatever it
+ * holds); then its id, through a read-only connection. A file that cannot be
+ * read is the user's own when a registry entry names its path — kept for
+ * them, in memory meanwhile — and foreign otherwise.
  */
 function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
   const location = locationProblem(projectPath, dbPath);
-  if (location !== null) return { kind: 'foreign', why: location, tracked: false };
+  if (location !== null) return { kind: 'foreign', foreign: { kind: 'location', why: location } };
   if (!existsSync(dbPath)) return { kind: 'create' };
 
-  const probe = probeDatabase(dbPath);
   const index: GitIndexAnswer = gitIndexAt(projectPath);
   const fromGit = gitProblem(index);
-  if (fromGit !== null) return { kind: 'foreign', why: fromGit, tracked: index.tracked.length > 0 };
+  if (fromGit !== null) {
+    return { kind: 'foreign', foreign: { kind: 'tracked', why: fromGit, tracked: index.tracked.length > 0 } };
+  }
+
+  let probe: ReturnType<typeof probeDatabase>;
+  try {
+    probe = probeDatabase(dbPath);
+  } catch (error) {
+    const detail =
+      error instanceof GuardianDbError ? error.message : error instanceof Error ? error.message : String(error);
+    return findEntryForDbPath(safeCanonical(dbPath)) !== null
+      ? { kind: 'own-unreadable', detail }
+      : { kind: 'foreign', foreign: { kind: 'unreadable', detail } };
+  }
   // Nothing in it yet: another process is creating it this very moment (or
   // the file is empty). Either way it holds nothing to trust or distrust.
   if (probe.empty) return { kind: 'create' };
@@ -570,37 +623,53 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
   if (entry !== null && probe.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
     return { kind: 'trusted', dbId: probe.dbId };
   }
-
-  const adoption = adoptionProblem(projectPath, dbPath, index, probe.scans);
-  if (adoption === null) return { kind: 'adopt', registeredAt: entry?.db_path ?? null };
-  return {
-    kind: 'foreign',
-    why:
-      entry !== null
-        ? `this database was registered at '${entry.db_path}', not here — a copy of it (a repository moved or ` +
-          `copied, or shipped with its .guardian: a Docker COPY, a package, an archive), and it cannot be ` +
-          `adopted here: ${adoption}`
-        : probe.dbId === null
-          ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})`
-          : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
-    tracked: false,
-  };
+  if (entry !== null) return { kind: 'foreign', foreign: { kind: 'registered-elsewhere', at: entry.db_path } };
+  if (probe.dbId !== null) return { kind: 'foreign', foreign: { kind: 'unregistered-id' } };
+  return { kind: 'foreign', foreign: { kind: 'legacy' } };
 }
 
-/** The refusal of a foreign database: why, that the file is untouched, and how to recover. */
-function foreignReason(projectPath: string, dbPath: string, verdict: Extract<Verdict, { kind: 'foreign' }>): string {
-  const recovery = verdict.tracked
-    ? 'One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. ' +
-      'One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)'
-    : 'If it is yours — one the checks cannot tell from a copy, such as scans filed under a link (macOS ' +
-      `/var, a symlinked home) or only failed scans — \`${adoptCommand(projectPath)}\` shows what it holds ` +
-      '(its projects, scans, dates and suppressions) and, with --yes, registers it as yours. Otherwise delete ' +
-      'it or move it aside, and dev-guardian starts a new one there';
-  return (
-    `'${dbPath}' is not used: ${verdict.why}. A database that is not this user's own is not trusted — SQL or ` +
-    'data stored in it (a trigger, a constraint, a suppression that matches every project) can hide findings ' +
-    `from every reader. The file is left as it is. ${recovery}`
-  );
+/**
+ * The warning for a foreign database: short, what it is, and what to do.
+ * For a database from before 3.0.1 this is the upgrade path.
+ */
+function foreignReason(projectPath: string, dbPath: string, foreign: Foreign): string {
+  const adopt = adoptCommand(projectPath);
+  const yourself = 'yourself, in a terminal (an assistant must not run it for you: it decides whose data dev-guardian trusts)';
+  switch (foreign.kind) {
+    case 'legacy':
+      return (
+        `This project's database '${dbPath}' was created before dev-guardian 3.0.1 and is not trusted ` +
+        `automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what ` +
+        'the database holds first'
+      );
+    case 'unregistered-id':
+      return (
+        `'${dbPath}' carries a dev-guardian id this user never registered — another user's or another machine's ` +
+        `database — and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ` +
+        `${yourself}; otherwise delete it`
+      );
+    case 'registered-elsewhere':
+      return (
+        `'${dbPath}' was registered at '${foreign.at}', not here: it is a copy (a moved or copied repository, or ` +
+        'one shipped with its .guardian — a Docker COPY, a package, an archive) and is not trusted here. If it is ' +
+        `yours, review it with \`${adopt}\` and register it here with --yes, ${yourself}`
+      );
+    case 'tracked':
+      return (
+        `'${dbPath}' is not used: ${foreign.why}. ` +
+        (foreign.tracked
+          ? 'One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. ' +
+            'One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)'
+          : 'Remove the submodule, and dev-guardian starts a database of its own there')
+      );
+    case 'location':
+      return `'${dbPath}' is not used: ${foreign.why}. The file is left as it is`;
+    case 'unreadable':
+      return (
+        `'${dbPath}' cannot be read (${foreign.detail}) and is not a database this user registered: it is left as ` +
+        'it is. Delete it or move it aside, and dev-guardian starts a new one there'
+      );
+  }
 }
 
 /** The CLI command that inspects, and with `--yes` registers, `projectPath`'s database. */
@@ -611,59 +680,121 @@ export function adoptCommand(projectPath: string): string {
 
 // ---- `dev-guardian db adopt` ------------------------------------------------
 
+/** A stored project path and where it leads (`platform/pathSpelling.ts#storedPathTarget`). */
+export interface StoredPath {
+  project_path: string;
+  rows: number;
+  target: StoredPathTarget;
+}
+
 /** What `dev-guardian db adopt` reports about a project's database. */
 export interface ProjectDatabaseReport {
   db_path: string;
+  /** The project's canonical path — what `--rehome` rewrites this project's rows to. */
+  canonical_project: string;
   exists: boolean;
   /**
-   * What the server does with it now: `trusted` (registered for this
-   * location), `adoptable` (its next start adopts it), `foreign` (not used —
-   * `why`), `none` (no database, or an empty file).
+   * What the server does with it now: `trusted` (registered for this path),
+   * `foreign` (not used — `why`), `none` (no database, or an empty file).
    */
-  status: 'none' | 'trusted' | 'adoptable' | 'foreign';
+  status: 'none' | 'trusted' | 'foreign';
   why: string | null;
   /**
-   * Why it cannot be registered even by hand — what every database, however
-   * it is trusted, must pass: not a link, not tracked by git, no schema
-   * object the migrations never create. Empty when it can be.
+   * Why it cannot be registered even by hand: a link, git tracking it, a
+   * schema holding what the migrations never create, a file SQLite cannot
+   * read, scans dated in the future. Empty when it can be. No override.
    */
   blockers: string[];
+  /** What the person must weigh, said first: suppressions for every project, future-dated scans. */
+  warnings: string[];
   contents: DatabaseContents | null;
+  /** Every project path its rows are filed under, and where each leads now. */
+  paths: StoredPath[];
+  /** What `--rehome` would move to {@link canonical_project}: the `this-project` paths. */
+  rehome: { paths: number; rows: number };
 }
 
 /**
  * Everything a person needs to decide whether `.guardian/guardian.db` is
- * theirs, read without changing it. Throws a `GuardianDbError` of kind
- * `corrupt` for a file SQLite cannot read.
+ * theirs, read without changing it. The stored paths are resolved on disk
+ * (links followed) to say where each leads — the command is the user's, on
+ * their own machine — except network, device and process-relative ones,
+ * which are never looked at (`platform/pathSpelling.ts#isUnresolvablePath`).
  */
 export function inspectProjectDatabase(projectPath: string): ProjectDatabaseReport {
   const project = resolve(projectPath);
   const dbPath = join(project, '.guardian', 'guardian.db');
-  const none: ProjectDatabaseReport = { db_path: dbPath, exists: false, status: 'none', why: null, blockers: [], contents: null };
-  if (!existsSync(dbPath)) return none;
-  const verdict = judgeProjectDatabase(project, dbPath);
-  const blockers: string[] = [];
-  const location = locationProblem(project, dbPath);
-  if (location !== null) blockers.push(location);
-  const fromGit = gitProblem(gitIndexAt(project));
-  if (fromGit !== null) blockers.push(fromGit);
-  const schema = location === null ? schemaProblem(dbPath) : null;
-  if (schema !== null) blockers.push(schema);
-  return {
+  const canonicalProject = safeCanonical(project);
+  const report: ProjectDatabaseReport = {
     db_path: dbPath,
-    exists: true,
-    status:
-      verdict.kind === 'create'
-        ? 'none'
-        : verdict.kind === 'trusted'
-          ? 'trusted'
-          : verdict.kind === 'adopt'
-            ? 'adoptable'
-            : 'foreign',
-    why: verdict.kind === 'foreign' ? verdict.why : null,
-    blockers,
-    contents: summarizeDatabase(dbPath),
+    canonical_project: canonicalProject,
+    exists: existsSync(dbPath),
+    status: 'none',
+    why: null,
+    blockers: [],
+    warnings: [],
+    contents: null,
+    paths: [],
+    rehome: { paths: 0, rows: 0 },
   };
+  if (!report.exists) return report;
+
+  const verdict = judgeProjectDatabase(project, dbPath);
+  report.status = verdict.kind === 'trusted' ? 'trusted' : verdict.kind === 'create' ? 'none' : 'foreign';
+  if (verdict.kind === 'foreign') report.why = shortReason(verdict.foreign);
+  if (verdict.kind === 'own-unreadable') report.why = `it cannot be read (${verdict.detail})`;
+
+  const location = locationProblem(project, dbPath);
+  if (location !== null) report.blockers.push(location);
+  const fromGit = gitProblem(gitIndexAt(project));
+  if (fromGit !== null) report.blockers.push(fromGit);
+  if (location !== null) return report;
+
+  try {
+    const schema = schemaProblem(dbPath);
+    if (schema !== null) report.blockers.push(schema);
+    report.contents = summarizeDatabase(dbPath);
+  } catch (error) {
+    report.blockers.push(`it cannot be read (${error instanceof Error ? error.message : String(error)})`);
+    return report;
+  }
+
+  const contents = report.contents;
+  if (contents.null_scoped_suppressions > 0) {
+    report.warnings.push(
+      `${contents.null_scoped_suppressions} suppression(s) have no project: they apply to EVERY project, and hide ` +
+        'the findings they match everywhere',
+    );
+  }
+  if (contents.future_dated.scans > 0) {
+    const why =
+      `${contents.future_dated.scans} scan(s) are dated in the future (the furthest: ` +
+      `${contents.future_dated.latest ?? 'unknown'}): a clock that was wrong where they ran, or rows written to ` +
+      'outrank your own scans. dev-guardian will not register a database that holds any';
+    report.warnings.push(why);
+    report.blockers.push(why);
+  }
+  report.paths = contents.paths.map((p) => ({ ...p, target: storedPathTarget(p.project_path, canonicalProject) }));
+  const moving = report.paths.filter((p) => p.target === 'this-project');
+  report.rehome = { paths: moving.length, rows: moving.reduce((n, p) => n + p.rows, 0) };
+  return report;
+}
+
+/** The one-line status of a foreign database, for `db adopt`'s report. */
+function shortReason(foreign: Foreign): string {
+  switch (foreign.kind) {
+    case 'legacy':
+      return 'created before dev-guardian 3.0.1 (it carries no id): not used until you register it';
+    case 'unregistered-id':
+      return 'it carries an id this user never registered (another user or another machine): not used';
+    case 'registered-elsewhere':
+      return `it was registered at '${foreign.at}', not here (a copy): not used here`;
+    case 'tracked':
+    case 'location':
+      return `${foreign.why}: not used`;
+    case 'unreadable':
+      return `it cannot be read (${foreign.detail})`;
+  }
 }
 
 /** What the schema check refuses in `dbPath`, read through a read-only connection; null when nothing. */
@@ -682,94 +813,102 @@ function schemaProblem(dbPath: string): string | null {
   }
 }
 
+export interface RegisterResult {
+  db_path: string;
+  db_id: string;
+  /** It was registered for this path already; only `--rehome` did anything. */
+  already: boolean;
+  /** What `--rehome` did: rows moved to the canonical path, rows left (a same-key row there already). */
+  rehomed?: { paths: number; moved: number; kept: number };
+}
+
 /**
- * Registers `projectPath`'s database as this user's — `dev-guardian db adopt
- * --yes`, after the person saw {@link inspectProjectDatabase}'s report. What
- * the adoption rules could not decide (scans under a link, only failed
- * scans, a copy the user made) the person can; the checks every trusted
- * database must pass still apply, and a blocker is refused. Migrates it
- * (as the server would) and writes a freshly registered id.
+ * `dev-guardian db adopt --yes`: registers `projectPath`'s database as this
+ * user's, after the person saw {@link inspectProjectDatabase}'s report — the
+ * ONLY way an existing database comes to be trusted (`dbProvenance.ts`). A
+ * blocker refuses it, with no override. Migrates it (as the server would)
+ * and writes a freshly registered id. With `rehome`, also moves the rows
+ * filed under another path that leads to this project to its canonical path
+ * ({@link rehomeProjectRows}) — on a database registered already, too.
  */
-export function registerProjectDatabase(projectPath: string): { db_path: string; db_id: string; already: boolean } {
+export function registerProjectDatabase(projectPath: string, opts: { rehome?: boolean } = {}): RegisterResult {
   const report = inspectProjectDatabase(projectPath);
   if (!report.exists) throw new Error(`there is no database at '${report.db_path}'`);
   if (report.blockers.length > 0) {
     throw new Error(`'${report.db_path}' cannot be registered: ${report.blockers.join('; ')}`);
   }
   const dbPath = report.db_path;
-  if (report.status === 'trusted') return { db_path: dbPath, db_id: probeDatabase(dbPath).dbId ?? '', already: true };
-  ensurePrivateSubdir('registry');
+  const already = report.status === 'trusted';
+  if (!already) ensurePrivateSubdir('registry');
   const db = openWritable(dbPath);
   try {
-    const id = claimDbId(db, (mine) => ({
-      db_id: mine,
-      db_path: safeCanonical(dbPath),
-      project_path: safeCanonical(resolve(projectPath)),
-      created_at: new Date().toISOString(),
-    }));
-    return { db_path: dbPath, db_id: id, already: false };
+    const dbId = already
+      ? (probeDatabase(dbPath).dbId ?? '')
+      : claimDbId(db, (mine) => ({
+          db_id: mine,
+          db_path: safeCanonical(dbPath),
+          project_path: report.canonical_project,
+          created_at: new Date().toISOString(),
+        }));
+    const result: RegisterResult = { db_path: dbPath, db_id: dbId, already };
+    if (opts.rehome === true) {
+      const moving = report.paths.filter((p) => p.target === 'this-project').map((p) => p.project_path);
+      result.rehomed = { paths: moving.length, ...rehomeProjectRows(db, report.canonical_project, moving) };
+    }
+    return result;
   } finally {
     closeQuietly(db);
   }
 }
 
 /**
- * Opens the project's database on the verdict's terms: a new one gets its id
- * registered and written before anything else, a legacy one is adopted (id
- * registered and written) only after its schema passed.
+ * Rewrites every row filed under one of `from` — paths that lead to this
+ * project (`storedPathTarget` === `this-project`) — to `canonical`, in every
+ * project-keyed table, in one transaction. Rows are never moved to another
+ * project: `from` holds only paths that resolve to this one. A row whose key
+ * already exists under `canonical` (a pin, a validation, a config hash) is
+ * left where it is: the canonical one, the newer, wins.
  */
-function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclude<Verdict, { kind: 'foreign' }>): OpenedDatabase {
+function rehomeProjectRows(db: GuardianDatabase, canonical: string, from: readonly string[]): { moved: number; kept: number } {
+  if (from.length === 0) return { moved: 0, kept: 0 };
+  return db.transaction((): { moved: number; kept: number } => {
+    let moved = 0;
+    let kept = 0;
+    for (const table of PROJECT_KEYED_TABLES) {
+      for (const path of from) {
+        moved += db
+          .prepare<[string, string]>(`UPDATE OR IGNORE "${table}" SET project_path = ? WHERE project_path = ?`)
+          .run(canonical, path).changes;
+        kept +=
+          db.prepare<[string], { n: number }>(`SELECT COUNT(*) AS n FROM "${table}" WHERE project_path = ?`).get(path)?.n ?? 0;
+      }
+    }
+    return { moved, kept };
+  })();
+}
+
+/**
+ * Opens the project's database on the verdict's terms: a new one gets its id
+ * registered and written before anything else; a registered one is opened.
+ */
+function openProjectDatabase(
+  projectPath: string,
+  dbPath: string,
+  verdict: Extract<Verdict, { kind: 'create' | 'trusted' }>,
+): OpenedDatabase {
+  if (verdict.kind === 'trusted') return { db: openWritable(dbPath), path: dbPath };
   const entryFor = (id: string): RegistryEntry => ({
     db_id: id,
     db_path: safeCanonical(dbPath),
     project_path: safeCanonical(projectPath),
     created_at: new Date().toISOString(),
   });
-  // Creating or adopting registers an id: the registry must be usable
-  // BEFORE anything is created in, or written to, the project's database.
-  if (verdict.kind !== 'trusted') ensurePrivateSubdir('registry');
-  if (verdict.kind === 'create') {
-    // Registered BEFORE it is written, so a process that reads the id from
-    // the file always finds it registered; written before the migrations, so
-    // no other process sees tables with no id.
-    const db = openWritable(dbPath, (raw) => claimDbId(raw, entryFor));
-    return { db, path: dbPath };
-  }
-  const db = openWritable(dbPath);
-  if (verdict.kind === 'adopt') {
-    try {
-      claimDbId(db, entryFor);
-    } catch (error) {
-      closeQuietly(db);
-      throw error;
-    }
-    const adoption: StorageAdoption = {
-      db_path: dbPath,
-      adopted_at: new Date().toISOString(),
-      previously_registered_at: verdict.registeredAt,
-      null_scoped_suppressions: nullScopedSuppressions(db),
-    };
-    return {
-      db,
-      path: dbPath,
-      notice:
-        `adopted '${dbPath}', ` +
-        (verdict.registeredAt === null
-          ? 'written by an earlier dev-guardian'
-          : `registered at '${verdict.registeredAt}' before (a copy, or a repository moved)`) +
-        ' and holding scans this project ran after its directory was created: registered as this user\'s database' +
-        (adoption.null_scoped_suppressions > 0
-          ? `; ${adoption.null_scoped_suppressions} suppression(s) in it have no project and apply to every project`
-          : ''),
-      adoption,
-    };
-  }
-  return { db, path: dbPath };
-}
-
-/** Suppressions with no project in `db` (a migrated database: the table exists). */
-function nullScopedSuppressions(db: GuardianDatabase): number {
-  return db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL').get()?.n ?? 0;
+  // Creating registers an id: the registry must be usable BEFORE anything is
+  // created in the project. Registered BEFORE the database is written, so a
+  // process that reads the id from the file always finds it registered;
+  // written before the migrations, so no other process sees tables with no id.
+  ensurePrivateSubdir('registry');
+  return { db: openWritable(dbPath, (raw) => claimDbId(raw, entryFor)), path: dbPath };
 }
 
 /**

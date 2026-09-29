@@ -6,8 +6,9 @@
  *   0. Refuse to start, with one line on stderr and exit 1, on a Node without
  *      `node:sqlite` (< 22.13) — not a stack trace from deep in module loading.
  *   1. Resolve project_path (defaults to process.cwd()).
- *   2. Open SQLite at `<project_root>/.guardian/guardian.db` (or temp
- *      fallback), apply migrations.
+ *   2. Open SQLite at `<project_root>/.guardian/guardian.db` when it is this
+ *      user's (else the per-user fallback, or an in-memory database when
+ *      neither can be used — never an exit), apply migrations.
  *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
  *      still starts so resources and pure-SQL tools can serve data.
  *   4. Reap scans whose owning process died (storage/maintenance.ts), and
@@ -40,7 +41,7 @@ import { probeShell } from './platform/shellProbe.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
-import { GuardianDbError, openDatabase, Storage } from './storage/index.js';
+import { openDatabase, Storage } from './storage/index.js';
 import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
@@ -67,16 +68,12 @@ async function main(): Promise<void> {
 
   const projectPath = resolve(process.cwd());
 
-  const {
-    db,
-    path: dbPath,
-    warning: storageWarning,
-    notice: storageNotice,
-    adoption: storageAdoption,
-  } = openDatabase({ projectPath });
+  // Never throws for a database it cannot use: a foreign or unreadable one
+  // gives way to the per-user fallback or an in-memory database, with a
+  // warning every tool surfaces (storage/db.ts#openDatabase).
+  const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
-  if (storageNotice) logErr(`db notice: ${storageNotice}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
@@ -121,7 +118,6 @@ async function main(): Promise<void> {
     scriptsDir: resolveScriptsDir(),
     progressNotifier,
     ...(storageWarning ? { storageWarning } : {}),
-    ...(storageAdoption ? { storageAdoption } : {}),
   };
 
   attachAllTools(mcp, ctx);
@@ -183,13 +179,9 @@ function logErr(line: string): void {
 }
 
 main().catch((err) => {
-  // A database the server cannot use (corrupt, incomplete, untrusted) is said
-  // in its own one line, which names the file and what to do — a stack trace
-  // from inside SQLite says neither.
-  if (err instanceof GuardianDbError) {
-    logErr(`fatal: ${err.message}`);
-    process.exit(1);
-  }
+  // A database the server cannot use is never fatal: openDatabase answers it
+  // with the per-user fallback or an in-memory database, and a warning. What
+  // reaches here is a real failure.
   logErr(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   process.exit(1);
 });

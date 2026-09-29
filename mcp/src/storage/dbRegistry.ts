@@ -1,13 +1,14 @@
 /**
- * The databases this user's dev-guardian created — the registry that makes a
- * project's `.guardian/guardian.db` trusted.
+ * The databases this user's dev-guardian created or the user registered —
+ * the registry that makes a project's `.guardian/guardian.db` trusted.
  *
  * Every database dev-guardian CREATES gets a random 128-bit `db_id` in its
- * `schema_meta`, registered here first. On open, a project database whose
- * `db_id` is registered is this user's own (`db.ts#openDatabase`); one with
- * no id, or an id this user never registered, came from somewhere else — a
- * clone, an archive, a submodule — and is FOREIGN, unless a legacy database
- * passes the one-time adoption (`dbProvenance.ts`).
+ * `schema_meta`, registered here first; `dev-guardian db adopt --yes`
+ * registers an existing one the user vouches for. On open, a project
+ * database whose `db_id` is registered for its path is this user's own
+ * (`db.ts#openDatabase`); one with no id (from before 3.0.1), or an id this
+ * user never registered, came from somewhere else — a clone, an archive, a
+ * submodule — or has not been registered yet, and is FOREIGN.
  *
  * The registry is a directory, `<userDataDir()>/registry/`, holding one file
  * per id, `<db_id>.json` — `{ db_id, db_path, project_path, created_at }`.
@@ -21,8 +22,7 @@
  * travels with the file — a Docker `COPY . .`, a package, an archive of the
  * project carry `.guardian/guardian.db` — so without that binding it was a
  * bearer token, trusted wherever a copy landed. A repository its owner moved
- * goes through the adoption rules at its new path, and the warning names
- * where it was registered.
+ * is foreign at its new path, and the warning names where it was registered.
  *
  * An id is 32 lower-case hex characters. One read from a database is
  * checked against that before it names a file — it is the database's word,
@@ -30,8 +30,20 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+import { canonicalPath } from '../platform/projectPath.js';
 import { assertOwnedRegularFileIfPresent, dataDirFailure, ensurePrivateSubdir, userDataDir } from './userData.js';
 
 export const DB_ID_SHAPE = /^[0-9a-f]{32}$/;
@@ -87,6 +99,58 @@ export function lookupDbId(id: string): RegistryEntry | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The entry registered for the database at `canonicalDbPath` (a
+ * `canonicalPath`), found by reading the registry — or null. For when the
+ * database itself cannot be read to learn its id: a corrupt file that is the
+ * user's own is kept for them, one that is not is foreign (`db.ts`), and the
+ * SessionStart hook says when a project's database is not registered. Never
+ * throws: a registry that cannot be read registers nothing.
+ */
+export function findEntryForDbPath(canonicalDbPath: string): RegistryEntry | null {
+  let names: string[];
+  try {
+    names = readdirSync(registryDir());
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    const id = name.endsWith('.json') ? name.slice(0, -'.json'.length) : '';
+    if (!DB_ID_SHAPE.test(id)) continue;
+    const entry = lookupDbId(id);
+    if (entry !== null && entry.db_path === canonicalDbPath) return entry;
+  }
+  return null;
+}
+
+/**
+ * Whether the regular file at `dbPath` (a project's `.guardian/guardian.db`)
+ * is registered as this user's, WITHOUT opening it — for the SessionStart
+ * hook, which reads no project database: `none` when no regular file is
+ * there, `unknown` when the registry exists but cannot be listed.
+ * `unregistered` includes a registry that does not exist yet (an upgrade
+ * from 3.0.0 has none). Never throws.
+ */
+export function databaseRegistration(dbPath: string): 'registered' | 'unregistered' | 'none' | 'unknown' {
+  try {
+    if (!lstatSync(dbPath).isFile()) return 'none';
+  } catch {
+    return 'none';
+  }
+  let canonical: string;
+  try {
+    canonical = canonicalPath(dbPath);
+  } catch {
+    return 'unknown';
+  }
+  try {
+    readdirSync(registryDir());
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'unregistered' : 'unknown';
+  }
+  return findEntryForDbPath(canonical) !== null ? 'registered' : 'unregistered';
 }
 
 /**

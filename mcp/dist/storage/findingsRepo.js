@@ -58,6 +58,7 @@
 import { sleepSync } from './db.js';
 import { SEVERITIES, SEVERITY_ORDER } from '../types.js';
 import { boolToInt, intToBool } from './repoUtil.js';
+import { notInFutureSql } from './scanClock.js';
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 /**
@@ -130,7 +131,7 @@ export class FindingsRepo {
         this.identityForFingerprintStmt = db.prepare(`
       SELECT f.identity AS identity FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL
+      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql('s')}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);
@@ -150,7 +151,7 @@ export class FindingsRepo {
         this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -171,7 +172,7 @@ export class FindingsRepo {
         // means latest FOR THIS PROJECT rather than latest in the whole table.
         this.listOpenForProjectStmt = db.prepare(`
       WITH latest AS (
-        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ? AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -192,7 +193,7 @@ export class FindingsRepo {
         this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -208,7 +209,7 @@ export class FindingsRepo {
         this.findInProjectStmt = db.prepare(`
       SELECT f.* FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed' AND ${notInFutureSql('s')}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);

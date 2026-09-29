@@ -19,6 +19,7 @@ import { lookupDbId, registryDir } from '../../src/storage/dbRegistry.js';
 import { canonicalPath } from '../../src/platform/projectPath.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { registerInPlace } from '../helpers/registerInPlace.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 
 afterAll(cleanupTempDirs);
@@ -54,27 +55,22 @@ function openInChild(projectPath: string, startAt: number): Promise<ChildOutcome
  * before they reach the migrations.)
  */
 function databaseAt2_0_0(project: string): void {
-  // In the project's own repository, untracked: adopted (and registered) as
-  // an earlier version's database by whichever opener gets there first — the
-  // other three find the id registered, or adopt it too; none falls back.
+  // In the project's own repository, untracked, and registered as this
+  // user's (`db adopt --yes` — nothing is adopted automatically since round
+  // 6) but not yet migrated: the upgrade a later build's migrations make.
   const init = spawnSync('git', ['init', '-q'], { cwd: project, encoding: 'utf8' });
   if (init.status !== 0) throw new Error(`git init: ${init.stderr}`);
   mkdirSync(join(project, '.guardian'));
-  const db = new GuardianDatabase(join(project, '.guardian', 'guardian.db'));
+  const dbPath = join(project, '.guardian', 'guardian.db');
+  const db = new GuardianDatabase(dbPath);
   db.pragma('journal_mode = WAL');
   for (const m of listMigrations()) {
     if (m.version > 3) break;
     db.exec(readFileSync(m.filePath, 'utf8'));
   }
   db.exec("INSERT INTO schema_meta (key, value) VALUES ('version', '3')");
-  // A real 2.0.0 database holds this project's scans, run in this directory
-  // after it was created — what adoption checks.
-  const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
-     VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
-  ).run(canonicalPath(project), now, now);
   db.close();
+  registerInPlace(dbPath, project);
 }
 
 /** The ids whose registry entry names `dbPath`. */

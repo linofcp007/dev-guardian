@@ -72,6 +72,7 @@
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
 import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
 import { admitLookup, ChainIndex, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
@@ -665,7 +666,13 @@ export function openSetForProject(storage, projectPath, opts = {}) {
         // its parent (see `latestStateScan`). `picked` is newest first.
         newest: mapRun(storage, projectPath, scans[0]),
         newestSource: mapRun(storage, projectPath, picked[0]?.scan),
+        ...futureNoteOf(storage, projectPath),
     };
+}
+/** `{ future_dated_note }` when `projectPath` holds scans every reader ignored as dated in the future. */
+export function futureNoteOf(storage, projectPath) {
+    const note = futureDatedNote(storage.scans.countFutureDated(projectPath));
+    return note === null ? {} : { future_dated_note: note };
 }
 /**
  * What a reader tells its caller about the set it answered from: which
@@ -677,6 +684,7 @@ export function describeOpenSet(set) {
         coverage: set.coverage,
         sources: set.sources,
         skipped: set.skipped,
+        ...(set.future_dated_note !== undefined ? { future_dated_note: set.future_dated_note } : {}),
     };
 }
 //# sourceMappingURL=openSet.js.map

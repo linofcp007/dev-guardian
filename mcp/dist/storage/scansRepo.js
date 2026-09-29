@@ -45,6 +45,9 @@
  */
 import { hostname } from 'node:os';
 import { nowIso, parseJsonArray } from './repoUtil.js';
+import { datedInFutureSql, notInFutureSql } from './scanClock.js';
+/** Every history reader's filter: never a scan dated in the future (`scanClock.ts`). */
+const READABLE = notInFutureSql();
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 /**
@@ -119,7 +122,7 @@ export class ScansRepo {
         // LIKE …`: see this file's own module comment (task-7-review.md I3).
         this.getLatestStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -128,7 +131,7 @@ export class ScansRepo {
         // getLatestForProject / listOpenForProject siblings.
         this.getLatestForProjectStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE status = 'completed' AND project_path = ?
+      WHERE status = 'completed' AND project_path = ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -141,7 +144,7 @@ export class ScansRepo {
         // finding C1 of the final review, 2026-08-16-create-fix-pr).
         this.listHistoryStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+      WHERE project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -155,7 +158,7 @@ export class ScansRepo {
         // same way listHistory's own callers already do.
         this.listHistoryForProjectStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE project_path = ?
+      WHERE project_path = ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -164,7 +167,7 @@ export class ScansRepo {
         // key (every row written before migration 006) never equals anything.
         this.findCacheStmt = db.prepare(`
       SELECT * FROM scans
-      WHERE cache_key = ? AND status = 'completed' AND started_at >= ?
+      WHERE cache_key = ? AND status = 'completed' AND started_at >= ? AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1
     `);
@@ -172,7 +175,7 @@ export class ScansRepo {
       INSERT OR REPLACE INTO tree_cache (tree_hash, scan_id, scan_type, computed_at)
       VALUES (?, ?, ?, ?)
     `);
-        this.countForProjectStmt = db.prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ?`);
+        this.countForProjectStmt = db.prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${READABLE}`);
     }
     insert(input) {
         const started = nowIso();
@@ -285,13 +288,13 @@ export class ScansRepo {
         const names = this.db
             .prepare(`SELECT DISTINCT json_extract(je.value, '$.name') AS name
            FROM scans s, json_each(CASE WHEN json_valid(s.tools_run) THEN s.tools_run ELSE '[]' END) je
-          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed'`)
+          WHERE s.project_path = ? AND s.scan_type = ? AND s.status = 'completed' AND ${notInFutureSql('s')}`)
             .all(projectPath, type)
             .map((r) => r.name)
             .filter((n) => typeof n === 'string');
         const empty = this.db
             .prepare(`SELECT COUNT(*) AS n FROM scans
-          WHERE project_path = ? AND scan_type = ? AND status = 'completed'
+          WHERE project_path = ? AND scan_type = ? AND status = 'completed' AND ${READABLE}
             AND (tools_run IS NULL OR tools_run IN ('', '[]'))
             AND (missing_tools IS NULL OR missing_tools IN ('', '[]'))`)
             .get(projectPath, type);
@@ -346,9 +349,18 @@ export class ScansRepo {
             .all(...scanIds)
             .map((r) => r.id);
     }
-    /** How many scans (any status, any type) one project has recorded. */
+    /** How many scans (any status, any type) one project has recorded — the readable ones (`scanClock.ts`). */
     countForProject(projectPath) {
         return this.countForProjectStmt.get(projectPath)?.n ?? 0;
+    }
+    /**
+     * How many of one project's scans every reader here ignores because they are
+     * dated in the future (`scanClock.ts`) — for the note a reader adds.
+     */
+    countFutureDated(projectPath) {
+        return (this.db
+            .prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${datedInFutureSql()}`)
+            .get(projectPath)?.n ?? 0);
     }
     completedOfTypesStmt(arity, shape) {
         const key = `${arity}:${shape.before ? 'b' : '-'}${shape.after ? 'a' : '-'}${shape.noParents ? 'p' : '-'}`;
@@ -371,7 +383,7 @@ export class ScansRepo {
             : '';
         const stmt = this.db.prepare(`
       SELECT * FROM scans
-      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders})
+      WHERE project_path = ? AND status = 'completed' AND scan_type IN (${placeholders}) AND ${READABLE}
         ${beforeClause} ${afterClause} ${parentClause}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ? OFFSET ?

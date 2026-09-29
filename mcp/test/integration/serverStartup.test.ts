@@ -6,13 +6,14 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { GuardianDatabase, openDatabase } from '../../src/storage/db.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
-import { canonicalPath } from '../../src/platform/projectPath.js';
+import { registerInPlace } from '../helpers/registerInPlace.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 import { holdWriteLock } from '../helpers/writeLockHolder.js';
@@ -132,10 +133,8 @@ describe('server startup against a 3.0 development database', () => {
   // A database a 3.0 development branch left at schema version 14 without
   // 012's tables: 3.0.0's runner skipped 012 for good, `new Storage()` died
   // on `no such table: mcp_tool_pins`, and the server exited 1 at startup.
-  it('applies the migrations the database never ran, and starts', async () => {
+  it('applies the migrations a registered database never ran, and starts', async () => {
     const project = makeTempDir('guardian-server-devdb-');
-    // Its own repository, not tracking the database: adopted as an earlier
-    // version's (a database with no dev-guardian id elsewhere is foreign).
     expect(spawnSync('git', ['init', '-q'], { cwd: project }).status).toBe(0);
     const dbPath = join(project, '.guardian', 'guardian.db');
     mkdirSync(join(project, '.guardian'));
@@ -144,32 +143,48 @@ describe('server startup against a 3.0 development database', () => {
       raw.exec(readFileSync(m.filePath, 'utf8'));
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
-    // The project's own scans, run in it, as a real development database holds them.
-    const now = new Date().toISOString();
-    raw.prepare(
-      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
-       VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
-    ).run(canonicalPath(project), now, now);
     raw.close();
+    // Registered as the user's (what `db adopt --yes` does; nothing is
+    // adopted automatically), not migrated.
+    registerInPlace(dbPath, project);
 
     const server = startServer(project);
     await server.waitFor(/listening on stdio/);
     expect(server.stderr()).not.toMatch(/fatal/);
     expect(server.stderr()).toContain(`db opened: ${dbPath}`);
-    expect(server.stderr()).toMatch(/db notice: adopted/);
+    expect(server.stderr()).not.toMatch(/db warning/);
   }, 60_000);
 
-  it('exits 1 with one line naming the file and the missing object when the schema cannot be repaired', async () => {
+  it('a database from 3.0.0 is not opened: the server starts on the fallback and names `db adopt --yes`', async () => {
+    const project = makeTempDir('guardian-server-legacy-');
+    expect(spawnSync('git', ['init', '-q'], { cwd: project }).status).toBe(0);
+    const dbPath = join(project, '.guardian', 'guardian.db');
+    mkdirSync(join(project, '.guardian'));
+    const raw = new GuardianDatabase(dbPath);
+    for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
+    raw.close();
+
+    const server = startServer(project);
+    await server.waitFor(/listening on stdio/);
+    const err = server.stderr();
+    expect(err).not.toContain(`db opened: ${dbPath}`);
+    expect(err).toMatch(/db warning: This project's database .* was created before dev-guardian 3\.0\.1/);
+    expect(err).toMatch(/db adopt --project ".+" --yes` once/);
+  }, 60_000);
+
+  it('a registered database the migrations cannot repair is never fatal: in memory, naming the file and what is missing', async () => {
     const project = makeTempDir('guardian-server-badschema-');
     const { db, path } = openDatabase({ projectPath: project });
     db.exec('ALTER TABLE findings DROP COLUMN cwe');
     db.close();
 
     const server = startServer(project);
-    expect(await server.exited).toBe(1);
+    await server.waitFor(/listening on stdio/);
     const err = server.stderr();
+    expect(err).not.toMatch(/fatal/);
+    expect(err).toContain('db opened: :memory:');
     expect(err).toContain(`the database '${path}' is missing column findings.cwe`);
-    expect(err).not.toMatch(/\n\s+at /);
+    expect(err).toMatch(/history will not persist/);
   }, 60_000);
 
   it('a database git tracks is not opened: the server starts on the per-user fallback and says why', async () => {
@@ -206,17 +221,42 @@ describe('server startup against a 3.0 development database', () => {
     expect(existsSync(join(project, '.guardian', 'guardian.db'))).toBe(false);
   }, 60_000);
 
-  it('exits 1 with one line naming a corrupt database file and saying to move it aside', async () => {
-    // Was: `fatal: Error: file is not a database` and a stack trace, naming
-    // neither the file nor what to do.
+  // Round 6: an unreadable database stopped the server (exit 1). It never
+  // does now — in a clone of a repository that committed one, git decides
+  // before the bytes are read; the user's own registered one gives way to an
+  // in-memory database with a warning saying to move it aside.
+  it('8 KB of random bytes committed, in a clone: the server starts on the fallback', async () => {
+    const origin = makeTempDir('guardian-server-origin-');
+    expect(spawnSync('git', ['init', '-q'], { cwd: origin }).status).toBe(0);
+    mkdirSync(join(origin, '.guardian'));
+    writeFileSync(join(origin, '.guardian', 'guardian.db'), randomBytes(8 * 1024));
+    expect(spawnSync('git', ['add', '-f', '.guardian/guardian.db'], { cwd: origin }).status).toBe(0);
+    expect(
+      spawnSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'db'], { cwd: origin })
+        .status,
+    ).toBe(0);
+    const clone = `${origin}-clone`;
+    expect(spawnSync('git', ['clone', '-q', origin, clone]).status).toBe(0);
+
+    const server = startServer(clone);
+    await server.waitFor(/listening on stdio/);
+    const err = server.stderr();
+    expect(err).not.toMatch(/fatal/);
+    expect(err).toMatch(/db warning: .*git tracks \.guardian\/guardian\.db/);
+  }, 60_000);
+
+  it("the user's own database, corrupted: the server starts in memory, and the warning names the file and says to move it aside", async () => {
     const project = makeTempDir('guardian-server-corrupt-');
-    mkdirSync(join(project, '.guardian'));
-    const path = join(project, '.guardian', 'guardian.db');
-    writeFileSync(path, 'not a SQLite database, just bytes. '.repeat(300));
+    const { db, path } = openDatabase({ projectPath: project });
+    db.close();
+    for (const side of ['-wal', '-shm']) rmSync(`${path}${side}`, { force: true });
+    writeFileSync(path, Buffer.concat([Buffer.from('SQLite format 3\0', 'latin1'), Buffer.alloc(8 * 1024 - 16)]));
 
     const server = startServer(project);
-    expect(await server.exited).toBe(1);
+    await server.waitFor(/listening on stdio/);
     const err = server.stderr();
+    expect(err).not.toMatch(/fatal/);
+    expect(err).toContain('db opened: :memory:');
     expect(err).toContain(`the database '${path}' cannot be read`);
     expect(err).toMatch(/Move it aside/);
     expect(err).not.toMatch(/\n\s+at /);

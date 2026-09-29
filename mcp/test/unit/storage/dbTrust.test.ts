@@ -17,7 +17,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -36,12 +36,13 @@ import {
   GuardianDbError,
   openDatabase,
   openDatabaseAtPath,
+  registerProjectDatabase,
   resolveFallbackDbPath,
   userDataDir,
 } from '../../../src/storage/db.js';
 import { openSetForProject } from '../../../src/history/openSet.js';
 import { canonicalPath } from '../../../src/platform/projectPath.js';
-import { adoptionProblem, directoryBirthMs, gitIndexAt, type ScanPath } from '../../../src/storage/dbProvenance.js';
+import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
 import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations } from '../../../src/storage/migrations/runner.js';
@@ -188,12 +189,11 @@ describe('a database holding objects the migrations never create', () => {
     }
   });
 
-  it('trusts a database 3.0.0 migrated, file by file, and a 2.0.0 one', () => {
+  it('trusts, once registered, a database 3.0.0 migrated file by file, and a 2.0.0 one', () => {
     // The definitions a legacy database holds were written by exec'ing each
     // file whole (comments inside CREATE TABLE included) and by ALTER TABLE
-    // appending columns in whatever order the migrations ran.
-    // A database from 3.0.0 or earlier has no id: it is adopted, once, in a
-    // project with its own .git that does not track it.
+    // appending columns in whatever order the migrations ran. It has no id:
+    // the user registers it (`db adopt --yes`), which migrates it.
     for (const upTo of [3, 14]) {
       const dir = project();
       git(dir, 'init', '-q');
@@ -202,11 +202,9 @@ describe('a database holding objects the migrations never create', () => {
       const raw = new DatabaseSync(primary);
       for (const m of listMigrations().filter((x) => x.version <= upTo)) raw.exec(readFileSync(m.filePath, 'utf8'));
       raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${upTo}')`);
-      raw.prepare(
-        `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
-      ).run(canonicalPath(dir), new Date().toISOString(), new Date().toISOString());
       raw.close();
 
+      registerProjectDatabase(dir);
       const opened = openDatabase({ projectPath: dir });
       try {
         expect(opened.path, `version ${upTo}`).toBe(primary);
@@ -217,7 +215,7 @@ describe('a database holding objects the migrations never create', () => {
     }
   });
 
-  it('trusts a 3.0 development database whose migrations ran out of order', () => {
+  it('trusts, once registered, a 3.0 development database whose migrations ran out of order', () => {
     // 014 before 013: findings' columns were appended in the other order.
     const dir = project();
     git(dir, 'init', '-q');
@@ -229,11 +227,9 @@ describe('a database holding objects the migrations never create', () => {
       raw.exec(readFileSync(m.filePath, 'utf8'));
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
-    raw.prepare(
-      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
-    ).run(canonicalPath(dir), new Date().toISOString(), new Date().toISOString());
     raw.close();
 
+    registerProjectDatabase(dir);
     const opened = openDatabase({ projectPath: dir });
     try {
       expect(opened.path).toBe(primary);
@@ -243,13 +239,20 @@ describe('a database holding objects the migrations never create', () => {
     }
   });
 
-  it('the per-user fallback itself is refused with an error naming it, not used', () => {
-    const dir = project();
+  it('the per-user fallback holding one is not used: an in-memory database, and a warning naming it', () => {
+    const dir = trackedProject();
     const fallback = resolveFallbackDbPath(dir);
     openDatabaseAtPath(ensureParent(fallback)).close();
     tamper(fallback, HIDE_FINDINGS);
-    expect(() => openDatabaseAtPath(fallback)).toThrow(GuardianDbError);
-    expect(() => openDatabaseAtPath(fallback)).toThrow(/trigger hide_findings/);
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toContain('trigger hide_findings');
+      expect(opened.warning).toContain(fallback);
+      expect(opened.warning).toMatch(/per-user database for this project: move it aside/);
+    } finally {
+      opened.db.close();
+    }
   });
 });
 
@@ -402,88 +405,62 @@ describe('a database git tracks', () => {
   });
 });
 
-describe('provenance: only a database this user created (or adopted) is trusted', () => {
+/** A database as 3.0.0 wrote it — every migration, no db_id — plus `extra`. */
+function legacyDatabase(dir: string, extra = ''): string {
+  const primary = primaryOf(dir);
+  mkdirSync(dirname(primary), { recursive: true });
+  const raw = new DatabaseSync(primary);
+  for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
+  raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${Math.max(...listMigrations().map((m) => m.version))}')`);
+  if (extra !== '') raw.exec(extra);
+  raw.close();
+  return primary;
+}
+
+/** SQL for one completed scan filed under `projectPath`, finished at `finishedAt` (default: now). */
+function scanOf(projectPath: string, id = 'legacy-1', finishedAt = new Date()): string {
+  const started = new Date(finishedAt.getTime() - 1000).toISOString();
+  return (
+    `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) ` +
+    `VALUES ('${id}', 'sast', '${projectPath.replace(/'/g, "''")}', 'h', '${started}', '${finishedAt.toISOString()}', 'completed');`
+  );
+}
+
+function dbIdOf(path: string): string | undefined {
+  const raw = new DatabaseSync(path, { readOnly: true });
+  try {
+    return (raw.prepare(`SELECT value FROM schema_meta WHERE key = 'db_id'`).get() as { value: string } | undefined)?.value;
+  } finally {
+    raw.close();
+  }
+}
+
+function sha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+/** Opens `dir`: the fallback, with a warning matching `why`, and a database that works. */
+function expectForeign(dir: string, why: RegExp): string {
+  const opened = openDatabase({ projectPath: dir });
+  try {
+    expect(opened.path).toBe(resolveFallbackDbPath(dir));
+    expect(opened.warning).toMatch(why);
+    expect(opened.warning).toMatch(/Meanwhile this project's scans are kept in '.+' \(not merged back later\)/);
+    expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+    return opened.warning ?? '';
+  } finally {
+    opened.db.close();
+  }
+}
+
+describe('provenance: only a database registered for its own path is trusted', () => {
   // The re-review of round 2 reproduced open_findings 7 -> 0 with
   // storage_warning null through four routes the tracked check called
   // untracked, and through DATA alone: seven suppressions with no project
   // (NULL matches every project) in a database whose schema is exactly the
-  // migrations'. The rule now: trusted only when THIS user's dev-guardian
-  // created it (a registered db_id), or adopted it once as an earlier
-  // version's; anything else is foreign.
-
-  /** A database as 3.0.0 wrote it — every migration, no db_id — plus `extra`. */
-  function legacyDatabase(dir: string, extra = ''): string {
-    const primary = primaryOf(dir);
-    mkdirSync(dirname(primary), { recursive: true });
-    const raw = new DatabaseSync(primary);
-    for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
-    raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${Math.max(...listMigrations().map((m) => m.version))}')`);
-    if (extra !== '') raw.exec(extra);
-    raw.close();
-    return primary;
-  }
-
-  /**
-   * SQL for one completed scan filed under `projectPath` — what a real earlier
-   * run left — finished at `finishedAt` (default: now, after the test's
-   * project directory was created, as a real run in it is).
-   */
-  function scanOf(projectPath: string, id = 'legacy-1', finishedAt = new Date()): string {
-    const started = new Date(finishedAt.getTime() - 1000).toISOString();
-    return (
-      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) ` +
-      `VALUES ('${id}', 'sast', '${projectPath.replace(/'/g, "''")}', 'h', '${started}', '${finishedAt.toISOString()}', 'completed');`
-    );
-  }
-
-  /**
-   * The project directory's birth time when this file system records one
-   * ({@link directoryBirthMs}). On Linux a birth time equal to the change
-   * time is not taken for one (it is what libuv reports without `statx`), and
-   * a directory nothing was added to since it was made — this test's, a
-   * moment ago, within one coarse timestamp tick — has exactly that. A real
-   * project's has had files added since; so has this one, a tick later.
-   */
-  function birthOrSkip(dir: string, skip: () => void): number {
-    const canonical = canonicalPath(dir);
-    mkdirSync(join(dir, '.guardian'), { recursive: true });
-    let birth = directoryBirthMs(canonical);
-    if (birth === null) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-      writeFileSync(join(dir, '.touched'), '');
-      rmDir(join(dir, '.touched'));
-      birth = directoryBirthMs(canonical);
-    }
-    if (birth === null) skip();
-    return birth ?? 0;
-  }
-
-  function dbIdOf(path: string): string | undefined {
-    const raw = new DatabaseSync(path, { readOnly: true });
-    try {
-      return (raw.prepare(`SELECT value FROM schema_meta WHERE key = 'db_id'`).get() as { value: string } | undefined)?.value;
-    } finally {
-      raw.close();
-    }
-  }
-
-  function sha256(path: string): string {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  }
-
-  function expectForeign(dir: string, why: RegExp): string {
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(resolveFallbackDbPath(dir));
-      expect(opened.warning).toMatch(why);
-      expect(opened.warning).toMatch(/is left as it is/);
-      expect(opened.warning).toMatch(/not merged back/);
-      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
-      return opened.warning ?? '';
-    } finally {
-      opened.db.close();
-    }
-  }
+  // migrations'. The rule: trusted only when THIS user's dev-guardian
+  // created it, or the user registered it (`db adopt --yes`), for the very
+  // path it is opened at; anything else is foreign.
 
   it('a database this build creates carries a registered id and is trusted, with or without git', () => {
     const dir = project();
@@ -539,7 +516,7 @@ describe('provenance: only a database this user created (or adopted) is trusted'
       primaryOf(copy),
       `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES ${suppressions}`,
     );
-    const warning = expectForeign(copy, /this database was registered at/);
+    const warning = expectForeign(copy, /was registered at '.+', not here: it is a copy/);
     expect(warning).toContain(`registered at '${registeredAt}'`);
     const opened = openDatabase({ projectPath: copy });
     try {
@@ -557,114 +534,35 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     renameSync(dir, moved);
     undo.push(() => rmDir(moved));
     undo.push(() => rmDir(dirname(resolveFallbackDbPath(moved))));
-    const warning = expectForeign(moved, /this database was registered at/);
+    const warning = expectForeign(moved, /was registered at/);
     expect(warning).toContain(`registered at '${registeredAt}'`);
+    expect(warning).toMatch(/db adopt --project/);
   });
 
-  it("a legacy database in the project's own, untracking repository is adopted once, and registered", () => {
+  // Round 6: automatic adoption cannot be made safe. Extractors restore a
+  // directory's creation time (Windows' own tar.exe with its defaults; 7-Zip
+  // for an archive built with -mtc=on), and a dense series of future-dated
+  // scans always has one near "now" — it was adopted, open 7 -> 0. So a
+  // database from before 3.0.1 is never trusted automatically; the warning
+  // is the upgrade path, and `db adopt --yes` the one way in.
+  it('a database from before 3.0.1 is never adopted automatically: the warning says what to run, once', () => {
     const dir = project();
     git(dir, 'init', '-q');
     const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
-    const first = openDatabase({ projectPath: dir });
-    try {
-      expect(first.path).toBe(primary);
-      expect(first.warning).toBeUndefined();
-      expect(first.notice).toMatch(/adopted/);
-    } finally {
-      first.db.close();
-    }
-    const id = dbIdOf(primary) ?? '';
-    expect(id).toMatch(/^[0-9a-f]{32}$/);
-    expect(existsSync(join(registryDir(), `${id}.json`))).toBe(true);
-    const second = openDatabase({ projectPath: dir });
-    try {
-      expect(second.path).toBe(primary);
-      expect(second.notice).toBeUndefined();
-    } finally {
-      second.db.close();
-    }
+    const before = sha256(primary);
+    const warning = expectForeign(dir, /was created before dev-guardian 3\.0\.1 and is not trusted automatically/);
+    expect(warning).toContain(primary);
+    expect(warning).toMatch(/If it is yours, run `node ".+" db adopt --project ".+" --yes` once, yourself, in a terminal/);
+    expect(warning).toMatch(/an assistant must not run it for you/);
+    expect(sha256(primary)).toBe(before);
+    expect(dbIdOf(primary)).toBeUndefined();
   });
 
-  // Round 4: git state cannot tell an attacker's `.git` from the user's — a
-  // crafted archive can ship one whose index omits the database, or a
-  // gitfile pointing at another repository. So adoption also needs a
-  // completed scan filed under THIS project's path (or a spelling of it): a
-  // database made elsewhere carries that machine's paths.
-  it("a crafted archive with its own .git, whose index omits the database, but scans filed under another path: foreign", () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    legacyDatabase(dir, scanOf(isWindows ? 'C:\\Users\\attacker\\app' : '/home/attacker/app'));
-    const warning = expectForeign(dir, /no completed scan of this project/);
-    expect(warning).toMatch(/delete it or move it aside/);
-  });
+  it('every shape rounds 3 to 5 adopted stays foreign: no git, a linked worktree, and the future-dated series', () => {
+    const plain = project();
+    legacyDatabase(plain, scanOf(canonicalPath(plain)));
+    expectForeign(plain, /created before dev-guardian 3\.0\.1/);
 
-  it('scans filed under a network share are compared as text, never looked up: foreign, in well under a second', () => {
-    // Round 5: the spelling check stat'ed each stored path. Four scans under
-    // `\\192.0.2.x\share\proj` took 60 541 ms, and the MCP client timed out.
-    const dir = project();
-    git(dir, 'init', '-q');
-    const share = isWindows ? '\\\\192.0.2.10\\share\\proj' : '//192.0.2.10/share/proj';
-    legacyDatabase(dir, [1, 2, 3, 4].map((i) => scanOf(`${share}${i}`, `unc-${i}`)).join('\n'));
-    const started = performance.now();
-    const opened = openDatabase({ projectPath: dir });
-    const elapsed = performance.now() - started;
-    try {
-      expect(opened.path).toBe(resolveFallbackDbPath(dir));
-      expect(opened.warning).toMatch(/no completed scan of this project/);
-    } finally {
-      opened.db.close();
-    }
-    // One git process, a read-only probe and the fallback's migrations.
-    expect(elapsed).toBeLessThan(1000);
-  });
-
-  it('a legacy database with no scans at all is foreign', () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    legacyDatabase(dir);
-    expectForeign(dir, /no completed scan of this project/);
-  });
-
-  it('scans filed under a LINK to the project are not its spelling: foreign', () => {
-    // A link can mean any directory (`/proc/self/cwd` is whichever one the
-    // reader runs in): never a spelling of the project's path.
-    const dir = project();
-    git(dir, 'init', '-q');
-    const link = `${dir}-link`;
-    symlinkSync(dir, link, isWindows ? 'junction' : 'dir');
-    undo.push(() => rmDir(link));
-    legacyDatabase(dir, scanOf(link));
-    expectForeign(dir, /no completed scan of this project/);
-  });
-
-  it.runIf(isWindows)("scans filed under 2.0.0's lower-case drive spelling: adopted", () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    const canonical = canonicalPath(dir);
-    const primary = legacyDatabase(dir, scanOf(canonical.charAt(0).toLowerCase() + canonical.slice(1)));
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(primary);
-      expect(opened.notice).toMatch(/adopted/);
-    } finally {
-      opened.db.close();
-    }
-  });
-
-  it.runIf(!isWindows)('scans filed under another spelling of the same directory entries: adopted', () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    const primary = legacyDatabase(dir, scanOf(`${canonicalPath(dir)}/.`));
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(primary);
-      expect(opened.notice).toMatch(/adopted/);
-    } finally {
-      opened.db.close();
-    }
-  });
-
-  it("a linked worktree (a .git gitfile) holding the user's legacy database, filed under its own path: adopted", () => {
     const base = makeTempDir('guardian-worktree-');
     const main = join(base, 'main');
     mkdirSync(main);
@@ -675,144 +573,37 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     const wt = join(base, 'wt');
     git(main, 'worktree', 'add', '-q', wt);
     undo.push(() => rmDir(dirname(resolveFallbackDbPath(wt))));
-    expect(lstatSync(join(wt, '.git')).isFile()).toBe(true);
-    const primary = legacyDatabase(wt, scanOf(canonicalPath(wt)));
-    const opened = openDatabase({ projectPath: wt });
-    try {
-      expect(opened.path).toBe(primary);
-      expect(opened.notice).toMatch(/adopted/);
-    } finally {
-      opened.db.close();
+    legacyDatabase(wt, scanOf(canonicalPath(wt)));
+    expectForeign(wt, /created before dev-guardian 3\.0\.1/);
+
+    // The reviewer's series: every 9 minutes from now - 2 h to now + 2 days.
+    const series = project();
+    git(series, 'init', '-q');
+    const now = Date.now();
+    const rows: string[] = [];
+    for (let t = now - 2 * 3600_000, i = 0; t <= now + 2 * 86_400_000; t += 9 * 60_000, i++) {
+      rows.push(scanOf(canonicalPath(series), `planted-${i}`, new Date(t)));
     }
+    legacyDatabase(series, rows.join('\n'));
+    expectForeign(series, /created before dev-guardian 3\.0\.1/);
   });
 
-  // Round 5: the path check alone could be passed by guessing — the
-  // layouts are predictable (/workspaces/<repo>, /app, a CI runner's path, a
-  // Windows 8.3 user name) and a correct guess was adopted. An archive or a
-  // clone is built BEFORE the victim extracts it: its scans predate the
-  // project directory.
-  it("scans filed under this project's path that all finished before its directory existed: foreign", (ctx) => {
-    const dir = project();
-    const birth = birthOrSkip(dir, () => ctx.skip());
-    git(dir, 'init', '-q');
-    legacyDatabase(dir, scanOf(canonicalPath(dir), 'guessed', new Date(birth - 60 * 60 * 1000)));
-    expectForeign(dir, /all finished before the project directory was created/);
-  });
-
-  it('a scan dated beyond five minutes in the future does not count: foreign', (ctx) => {
-    const dir = project();
-    birthOrSkip(dir, () => ctx.skip());
-    git(dir, 'init', '-q');
-    legacyDatabase(dir, scanOf(canonicalPath(dir), 'future', new Date(Date.now() + 60 * 60 * 1000)));
-    expectForeign(dir, /or in the future/);
-  });
-
-  it('a scan within the five minutes of clock skew counts: adopted', (ctx) => {
-    const dir = project();
-    const birth = birthOrSkip(dir, () => ctx.skip());
-    git(dir, 'init', '-q');
-    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir), 'skewed', new Date(birth - 2 * 60 * 1000)));
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(primary);
-      expect(opened.notice).toMatch(/adopted/);
-    } finally {
-      opened.db.close();
-    }
-  });
-
-  it('a project that is not a git repository (a WordPress install) is adopted on its own later scans', (ctx) => {
-    // It used to be refused for having no .git, which stranded every legacy
-    // database outside a repository.
-    const dir = project();
-    birthOrSkip(dir, () => ctx.skip());
-    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(primary);
-      expect(opened.warning).toBeUndefined();
-      expect(opened.notice).toMatch(/adopted/);
-    } finally {
-      opened.db.close();
-    }
-  });
-
-  it('a legacy database it would adopt, with no usable data directory to register it in: in memory, the file untouched', () => {
+  it('once the user registers it (`db adopt --yes`), it is trusted — and stays so', () => {
     const dir = project();
     git(dir, 'init', '-q');
     const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
-    const before = sha256(primary);
-    const blocker = join(makeTempDir('guardian-blocker-'), 'not-a-directory');
-    writeFileSync(blocker, 'x');
-    vi.stubEnv('GUARDIAN_DATA_DIR', join(blocker, 'dev-guardian'));
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.path).toBe(':memory:');
-      expect(opened.warning).toMatch(/history will not persist: .+; set GUARDIAN_DATA_DIR to a writable directory/);
-      expect(opened.adoption).toBeUndefined();
-    } finally {
-      opened.db.close();
+    const done = registerProjectDatabase(dir);
+    expect(done).toMatchObject({ db_path: primary, already: false });
+    expect(dbIdOf(primary)).toBe(done.db_id);
+    for (let i = 0; i < 2; i++) {
+      const opened = openDatabase({ projectPath: dir });
+      try {
+        expect(opened.path).toBe(primary);
+        expect(opened.warning).toBeUndefined();
+      } finally {
+        opened.db.close();
+      }
     }
-    expect(sha256(primary)).toBe(before);
-    expect(dbIdOf(primary)).toBeUndefined();
-  });
-
-  it("an adoption is reported with the suppressions it brought that apply to every project", () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    const canonical = canonicalPath(dir);
-    const primary = legacyDatabase(
-      dir,
-      `${scanOf(canonical)}
-       INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES
-         ('fp-a', 'accepted', '2026-01-01T00:00:00.000Z', NULL),
-         ('fp-b', 'accepted', '2026-01-01T00:00:00.000Z', NULL),
-         ('fp-c', 'accepted', '2026-01-01T00:00:00.000Z', '${canonical.replace(/'/g, "''")}');`,
-    );
-    const opened = openDatabase({ projectPath: dir });
-    try {
-      expect(opened.adoption).toMatchObject({
-        db_path: primary,
-        previously_registered_at: null,
-        null_scoped_suppressions: 2,
-      });
-      expect(opened.notice).toMatch(/2 suppression\(s\) in it have no project and apply to every project/);
-    } finally {
-      opened.db.close();
-    }
-    const again = openDatabase({ projectPath: dir });
-    try {
-      expect(again.adoption).toBeUndefined();
-    } finally {
-      again.db.close();
-    }
-  });
-
-  it('where the file system records no birth time: a git project is judged without it, any other is refused', () => {
-    const repo = project();
-    git(repo, 'init', '-q');
-    const plain = project();
-    const longAgo = (dir: string): ScanPath[] => [
-      { path: canonicalPath(dir), latestFinished: '2020-01-01T00:00:00.000Z' },
-    ];
-    const noBirth = { birthtimeOf: (): null => null };
-    expect(adoptionProblem(repo, primaryOf(repo), gitIndexAt(repo), longAgo(repo), noBirth)).toBeNull();
-    expect(adoptionProblem(plain, primaryOf(plain), gitIndexAt(plain), longAgo(plain), noBirth)).toMatch(
-      /does not record when the project directory was created, and the project is not a git repository/,
-    );
-    // Where it does, the same scans are too old for either.
-    const born = { birthtimeOf: (): number => Date.parse('2026-01-01T00:00:00.000Z') };
-    expect(adoptionProblem(repo, primaryOf(repo), gitIndexAt(repo), longAgo(repo), born)).toMatch(/before the project/);
-  });
-
-  it('a repository downloaded as an archive (no .git) brings a foreign database; the file is left untouched', () => {
-    const dir = project();
-    const primary = legacyDatabase(dir, scanOf(isWindows ? 'C:\\Users\\attacker\\app' : '/home/attacker/app'));
-    const before = sha256(primary);
-    const warning = expectForeign(dir, /no completed scan of this project/);
-    expect(warning).toMatch(/delete it or move it aside/);
-    expect(sha256(primary)).toBe(before);
-    expect(dbIdOf(primary)).toBeUndefined();
   });
 
   it('data alone: suppressions with no project, in an exact-schema database, are not trusted', () => {
@@ -840,7 +631,7 @@ describe('provenance: only a database this user created (or adopted) is trusted'
   it('an id this user never registered is foreign', () => {
     const dir = project();
     legacyDatabase(dir, `INSERT INTO schema_meta(key, value) VALUES('db_id', '${'ab'.repeat(16)}')`);
-    expectForeign(dir, /not one this user's dev-guardian registered/);
+    expectForeign(dir, /carries a dev-guardian id this user never registered/);
   });
 
   it('a committed database spelled .Guardian (case-insensitive index match) is tracked', () => {
@@ -892,14 +683,6 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: sub, encoding: 'utf8' }).stdout.trim();
     git(dir, 'update-index', '--add', '--cacheinfo', `160000,${head},.guardian`);
     expectForeign(dir, /submodule/);
-  });
-
-  it('a legacy database cannot be adopted when git cannot be asked', () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    legacyDatabase(dir);
-    vi.stubEnv('PATH', '');
-    expectForeign(dir, /git could not be asked/);
   });
 
   it("the ownership check runs before anything is created under GUARDIAN_DATA_DIR", () => {
@@ -1077,22 +860,70 @@ describe('a per-user data directory that cannot be used', () => {
   });
 });
 
-describe('a corrupt database file', () => {
-  it('fails with one line naming the file and telling the user to move it aside', () => {
-    const dir = project();
+// Round 6: a database SQLite cannot read never stops the server (it used to
+// exit 1). Where it lives and whether git tracks it are asked BEFORE its
+// bytes are read; one that is not the user's registered database is
+// foreign, the user's own gives way to an in-memory database.
+describe('a database SQLite cannot read', () => {
+  const shapes: Array<[string, () => Buffer]> = [
+    ['8 KB of random bytes', () => randomBytes(8 * 1024)],
+    [
+      'a 16-byte SQLite header, then zeros',
+      () => Buffer.concat([Buffer.from('SQLite format 3\0', 'latin1'), Buffer.alloc(8 * 1024 - 16)]),
+    ],
+  ];
+
+  function unreadable(dir: string, bytes: Buffer): string {
     const primary = primaryOf(dir);
     mkdirSync(dirname(primary), { recursive: true });
-    writeFileSync(primary, 'this is not a SQLite database, just some bytes '.repeat(200));
+    writeFileSync(primary, bytes);
+    return primary;
+  }
 
-    let caught: unknown;
+  it.each(shapes)('%s, not registered: foreign — the fallback, and the file left as it is', (_label, bytes) => {
+    const dir = project();
+    const primary = unreadable(dir, bytes());
+    const before = sha256(primary);
+    const warning = expectForeign(dir, /cannot be read \(.*\) and is not a database this user registered/);
+    expect(warning).toContain(primary);
+    expect(sha256(primary)).toBe(before);
+  });
+
+  it.each(shapes)('%s, committed: git decides before the file is read — foreign', (_label, bytes) => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    unreadable(dir, bytes());
+    git(dir, 'add', '-f', '.guardian/guardian.db');
+    expectForeign(dir, /git tracks \.guardian\/guardian\.db/);
+  });
+
+  it.each(shapes)('%s, in a clone of a repository that committed it: foreign', (_label, bytes) => {
+    const origin = project();
+    git(origin, 'init', '-q');
+    unreadable(origin, bytes());
+    git(origin, 'add', '-f', '.guardian/guardian.db');
+    git(origin, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'db');
+    const clone = `${origin}-clone`;
+    git(dirname(origin), 'clone', '-q', origin, clone);
+    undo.push(() => rmDir(clone));
+    undo.push(() => rmDir(dirname(resolveFallbackDbPath(clone))));
+    expectForeign(clone, /git tracks \.guardian\/guardian\.db/);
+  });
+
+  it.each(shapes)("%s, the user's own registered database: in memory, and the warning says to move it aside", (_label, bytes) => {
+    const dir = project();
+    const primary = existingDatabase(dir);
+    for (const side of ['-wal', '-shm']) rmDir(`${primary}${side}`);
+    writeFileSync(primary, bytes());
+    const opened = openDatabase({ projectPath: dir });
     try {
-      openDatabase({ projectPath: dir }).db.close();
-    } catch (error) {
-      caught = error;
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toContain(`the database '${primary}' cannot be read`);
+      expect(opened.warning).toMatch(/Move it aside .* and restart/);
+      expect(opened.warning).toMatch(/in-memory database: history will not persist/);
+      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+    } finally {
+      opened.db.close();
     }
-    expect(caught).toBeInstanceOf(GuardianDbError);
-    const message = caught instanceof Error ? caught.message : '';
-    expect(message).toContain(primary);
-    expect(message).toMatch(/move it aside/i);
   });
 });

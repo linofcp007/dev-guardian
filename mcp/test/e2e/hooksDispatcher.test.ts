@@ -893,3 +893,36 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     expect((r.stdout ?? '').trim()).toBe('');
   });
 });
+
+// Round 6: a project database is used only when it is registered as the
+// user's, and one from 3.0.0 is not, until the user adopts it. SessionStart
+// already reports the project's storage ("guardian-initialized", the last
+// scan activity), so it says that in one line — read from the user's
+// registry, never by opening the project's database.
+describe('SessionStart and a project database that is not registered', () => {
+  const context = (r: HookResult): string =>
+    (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
+      ?.additionalContext ?? '';
+
+  it('names `db adopt` for an unregistered database, and says nothing for a registered one', async () => {
+    const { openDatabase } = await import('../../src/storage/db.js');
+    const legacy = mkdtempSync(join(tmpdir(), 'guardian-hook-legacy-'));
+    const own = mkdtempSync(join(tmpdir(), 'guardian-hook-own-'));
+    try {
+      mkdirSync(join(legacy, '.guardian'));
+      writeFileSync(join(legacy, '.guardian', 'guardian.db'), 'a database from 3.0.0, never opened here');
+      const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: legacy }, { cwd: legacy }));
+      expect(ctx).toMatch(/not using \.guardian\/guardian\.db: it is not registered as the user's/);
+      expect(ctx).toMatch(/db adopt --project/);
+      expect(ctx).toMatch(/never run that for them/);
+
+      openDatabase({ projectPath: own }).db.close();
+      const mine = context(runHook({ hook_event_name: 'SessionStart', cwd: own }, { cwd: own }));
+      expect(mine).toMatch(/guardian-initialized/);
+      expect(mine).not.toMatch(/db adopt/);
+    } finally {
+      rmSync(legacy, { recursive: true, force: true });
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+});

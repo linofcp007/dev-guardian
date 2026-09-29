@@ -74,6 +74,7 @@
 
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import type { Storage } from '../storage/index.js';
+import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import {
   SEVERITY_ORDER,
@@ -218,6 +219,11 @@ export interface OpenSet {
    * scan the findings were read from uses `sources[0]` (newest first).
    */
   newestSource: ScanRecord | null;
+  /**
+   * Set when this project holds scans dated in the future, which every
+   * reader ignored (`storage/scanClock.ts`): how many, and why.
+   */
+  future_dated_note?: string;
 }
 
 export interface UsableScan {
@@ -902,7 +908,14 @@ export function openSetForProject(
     // its parent (see `latestStateScan`). `picked` is newest first.
     newest: mapRun(storage, projectPath, scans[0]),
     newestSource: mapRun(storage, projectPath, picked[0]?.scan),
+    ...futureNoteOf(storage, projectPath),
   };
+}
+
+/** `{ future_dated_note }` when `projectPath` holds scans every reader ignored as dated in the future. */
+export function futureNoteOf(storage: Storage, projectPath: string): { future_dated_note?: string } {
+  const note = futureDatedNote(storage.scans.countFutureDated(projectPath));
+  return note === null ? {} : { future_dated_note: note };
 }
 
 /**
@@ -914,11 +927,13 @@ export function describeOpenSet(set: OpenSet): {
   coverage: ScanCoverage;
   sources: OpenSetSource[];
   skipped: SkippedSummary;
+  future_dated_note?: string;
 } {
   return {
     project_path: set.project_path,
     coverage: set.coverage,
     sources: set.sources,
     skipped: set.skipped,
+    ...(set.future_dated_note !== undefined ? { future_dated_note: set.future_dated_note } : {}),
   };
 }
