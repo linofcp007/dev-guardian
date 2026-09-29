@@ -48,7 +48,8 @@ version bump.
   0, and read full.
 - `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,
   `runners/trivyRun.ts#judgeTrivyFs`): a plugin whose `composer.json` has no `composer.lock` read trivy ok, full.
-  It also passes `.guardianignore` to Trivy natively now.
+  It also passes `.guardianignore` to Trivy natively now. `review_pr`'s Trivy pass (run when a manifest changed)
+  uses the same judgement over the reviewed tree, with `manifest_coverage_gaps` on its result.
 - `scan_iac` and `scan_containers`: `trivy config` is judged by its log, not its exit code. Trivy drops a file it
   cannot parse with one ERROR line and exits 0, and `--quiet` hid even that: a .tf with an open security group
   and an unclosed `resource {` appended read 0 findings, full; a Dockerfile with `HEALTHCHECK --interval=bogus`

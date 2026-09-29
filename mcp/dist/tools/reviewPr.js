@@ -37,7 +37,7 @@ import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { changedFiles, git, gitlinksAmong, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
-import { PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured } from '../runners/trivyRun.js';
+import { judgeTrivyFs, PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured, } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -193,6 +193,7 @@ const reviewPr = makeScanTool({
                 local_only: input.local_only === true,
                 ...(projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {}),
                 ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
+                ...(out.manifestGaps !== undefined && out.manifestGaps.length > 0 ? { manifest_coverage_gaps: out.manifestGaps } : {}),
             },
         };
     },
@@ -330,7 +331,15 @@ async function runTrivy(ctx, out, args) {
         out.cancelled = true;
     if (run.outcome === 'completed' && raw !== null) {
         out.parser_inputs.push({ parser: trivyParser, input: raw });
-        out.tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'a dependency manifest changed' }, run.honoured));
+        // The judgement scan_deps, deps_audit and scan_wordpress share (round 2,
+        // item 1): a manifest in the reviewed tree Trivy read nothing for is a
+        // named gap. Why Trivy ran goes after its verdict: `no_supported_manifest`
+        // leads a reason the coverage warning reads.
+        const judged = judgeTrivyFs({ projectPath: args.scanRoot, raw, run, exclusions: ctx.exclusions });
+        const why = 'a dependency manifest changed';
+        out.tools_run.push({ ...judged.toolRun, reason: judged.toolRun.reason !== undefined ? `${judged.toolRun.reason}; ${why}` : why });
+        out.missing_tools.push(...judged.missing);
+        out.manifestGaps = judged.gaps;
     }
     else {
         out.tools_run.push(withHonoured({

@@ -52972,7 +52972,8 @@ var reviewPr = makeScanTool({
         // the row says `false`, as scan_sast's rows always have.
         local_only: input.local_only === true,
         ...projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {},
-        ...cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}
+        ...cleanupNote !== null ? { cleanup_warning: cleanupNote } : {},
+        ...out.manifestGaps !== void 0 && out.manifestGaps.length > 0 ? { manifest_coverage_gaps: out.manifestGaps } : {}
       }
     };
   }
@@ -53083,7 +53084,11 @@ async function runTrivy2(ctx, out, args) {
   if (run.outcome === "cancelled") out.cancelled = true;
   if (run.outcome === "completed" && raw !== null) {
     out.parser_inputs.push({ parser: trivyParser, input: raw });
-    out.tools_run.push(withHonoured({ name: "trivy", status: "ok", reason: "a dependency manifest changed" }, run.honoured));
+    const judged = judgeTrivyFs({ projectPath: args.scanRoot, raw, run, exclusions: ctx.exclusions });
+    const why = "a dependency manifest changed";
+    out.tools_run.push({ ...judged.toolRun, reason: judged.toolRun.reason !== void 0 ? `${judged.toolRun.reason}; ${why}` : why });
+    out.missing_tools.push(...judged.missing);
+    out.manifestGaps = judged.gaps;
   } else {
     out.tools_run.push(
       withHonoured(

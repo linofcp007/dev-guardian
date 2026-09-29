@@ -555,6 +555,35 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(res.tools_run.find((t) => t.name === 'trivy')?.status).toBe('ok');
   });
 
+  // Round 2, item 1: review_pr's Trivy pass is judged like scan_deps'
+  // (runners/trivyRun.ts#judgeTrivyFs) — a manifest Trivy read nothing for,
+  // anywhere in the reviewed tree, is a named gap, never `ok`, full.
+  it('names a manifest Trivy read nothing for, as scan_deps does', async () => {
+    const dir = await repo('main', { 'package.json': '{"dependencies":{"express":"4.0.0"}}\n', 'package-lock.json': '{}\n' });
+    write(dir, 'web/package.json', '{"dependencies":{"lodash":"4.17.4"}}\n');
+    await commitAll(dir);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') return fakeSemgrep(call);
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      if (opts.command === 'trivy') {
+        const out = call.args[call.args.indexOf('--output') + 1] ?? '';
+        writeFileSync(out, JSON.stringify({ Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }] }));
+        return ok(0);
+      }
+      return ok();
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult & { manifest_coverage_gaps?: Array<{ ecosystem: string; files: string[] }> };
+    const trivy = res.tools_run.find((t) => t.name === 'trivy');
+    expect(trivy?.status).toBe('ok');
+    expect(trivy?.reason).toMatch(/^no_supported_manifest/);
+    expect(res.missing_tools).toContain('trivy:npm');
+    expect(res.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['web/package.json'] }]);
+    expect(res.coverage).not.toBe('full');
+  });
+
   // OWASP coverage reads whether the registry ran from the scan row; a
   // review row that did not say claimed the registry's categories even
   // under local_only (frameworks/coverage.ts#registryRan).
