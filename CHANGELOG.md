@@ -24,12 +24,21 @@ version bump.
   dispatch guard that accepted any body or container, model text as a plain argv argument read as
   a shell, `searchAndReplace`/`research*` read as retrievals, and a torch.load rule blind to torch
   2.6's default; and added the structured-output, Anthropic-stream, Hugging Face and LangChain
-  `model` sources and the missing `child_process`/`subprocess` sinks.
+  `model` sources and the missing `child_process`/`subprocess` sinks. Its second review tied the
+  dispatch allowlist back to the checked name (a membership test on anything else no longer clears
+  it, and the guard's exit must be unconditional and its own), and inverted the process sinks: model
+  text anywhere in an argv fires unless the program is a fixed literal that is not an interpreter,
+  shell or wrapper and no shell is involved; `os.exec*`/`os.spawn*` and
+  `asyncio.create_subprocess_exec` are sinks.
 - `local_only` with no project rules is still reported as no scan, and a `local_only` run whose
   every project rule failed to load is still failed with `rule_config_error`: the LLM pack alone is
   not a SAST ruleset, whatever it found (its findings are recorded). The Docker fallback mounts the
   plugin's pack directory read-only and runs the pack; an install missing the pack runs without it,
-  partial, the gap named.
+  partial, the gap named. When no registry or project rule loaded, the coverage warning says only
+  the pack ran instead of "NOTHING was scanned"; a Semgrep older than 1.176.1 (the version the pack
+  was measured on) adds a note that its `child_process` coverage is reduced.
+- `npm run ablate` excludes files named in Semgrep's `time.fixpoint_timeouts` (taint analysis that
+  gave up on a function, never reported in `errors[]`) as it excludes rule timeouts.
 - `GUARDIAN_LLM_SRC`: the axis-3 corpus of `npm run ablate -- llm`.
 
 ## [3.0.0] - 2026-09-28

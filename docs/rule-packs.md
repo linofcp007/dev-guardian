@@ -153,13 +153,13 @@ dev-guardian ships **151 rules in 11 packs** under [`configs/semgrep/`](../confi
 
 | Rule | Severity | Languages | Ablatable clauses |
 | --- | --- | --- | --- |
-| `llm-output-to-interpreter-py` | WARNING | python | 59 |
-| `llm-tool-name-dispatch-py` | WARNING | python | 18 |
+| `llm-output-to-interpreter-py` | WARNING | python | 73 |
+| `llm-tool-name-dispatch-py` | WARNING | python | 23 |
 | `llm-trust-remote-code` | WARNING | python | 9 |
 | `llm-torch-load-weights-only-false` | WARNING | python | 0 (bare) |
 | `llm-torch-load-no-weights-only` | LOW | python | 1 |
 | `llm-openai-no-max-tokens-py` | LOW | python | 10 |
-| `llm-output-to-interpreter-js` | WARNING | javascript, typescript | 31 |
+| `llm-output-to-interpreter-js` | WARNING | javascript, typescript | 46 |
 | `llm-request-in-system-prompt-js` | LOW | javascript, typescript | 23 |
 | `llm-openai-no-max-tokens-js` | LOW | javascript, typescript | 10 |
 

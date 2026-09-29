@@ -223,7 +223,7 @@ precision evidence it does have). Measured with the corpora below:
 | `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
 | `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
-| `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 | 26, none a noise-adding clause |
+| `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and

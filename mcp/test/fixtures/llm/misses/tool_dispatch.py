@@ -37,6 +37,28 @@ class Ferramentas:
             getattr(self, nome)()
 
 
+    def despachar_elif(self, resp):
+        nome = resp.choices[0].message.tool_calls[0].function.name
+        if not nome:
+            raise ValueError("sem nome")
+        elif nome not in FERRAMENTAS:
+            raise ValueError(f"ferramenta desconhecida: {nome}")
+        return getattr(self, nome)()
+
+    def despachar_ate_parar(self, resp):
+        for chamada in resp.choices[0].message.tool_calls:
+            nome = chamada.function.name
+            if nome not in FERRAMENTAS:
+                break
+            getattr(self, nome)()
+
+    def despachar_sem_valor(self, resp):
+        nome = resp.choices[0].message.tool_calls[0].function.name
+        if nome not in FERRAMENTAS:
+            return
+        getattr(self, nome)()
+
+
 TABELA = {"meteorologia": lambda: "sol", "calendario": lambda: "segunda"}
 
 

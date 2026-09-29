@@ -121,18 +121,26 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // Hugging Face sources, a LangChain model held in `model`, and replaced
   // "any subprocess argument" by the positions that run something: shell=True,
   // argv[0], `sh -c`/`python -c`, shlex.split, getoutput, create_subprocess_exec.
-  'output_to_interpreter.py': { [INTERPRETER_PY]: 45 },
+  // Review round 2 (I-B): the model's text anywhere in the argv of an
+  // interpreter, shell or wrapper, or of any program with a shell; os.exec*,
+  // os.spawn*, create_subprocess_exec of bash.
+  'output_to_interpreter.py': { [INTERPRETER_PY]: 69 },
   // Four spellings of a model-chosen name, five lookups; and (review, I-1)
   // seven guards that are not allowlists: a warning, `pass`, dir(), a string,
   // a class __dict__, vars(), and the ELSE arm of a real one.
-  'tool_dispatch.py': { [DISPATCH_PY]: 12 },
+  // Review round 2 (I-A): fourteen more — a membership test on something
+  // else, the first name checked and the second dispatched, a rebinding, an
+  // exit that is conditional or belongs to a nested def or loop, two elif
+  // shapes, and three containers that are every attribute or a string.
+  'tool_dispatch.py': { [DISPATCH_PY]: 26 },
   // Two kwargs carriers of trust_remote_code (review); torch.load split by
   // what the call says about weights_only (review, I-3).
   'model_supply_chain.py': { [TRUST_REMOTE]: 7, [TORCH_UNSAFE]: 1, [TORCH_DEFAULT]: 2 },
   // max_tokens=None and the two .parse() calls (review).
   'no_max_tokens.py': { [NO_MAX_PY]: 6 },
   // Fifteen sources into eval (one each), thirteen sinks (one each).
-  'outputToInterpreter.ts': { [INTERPRETER_JS]: 28 },
+  // Review round 2 (I-B): eleven argv shapes of interpreters, wrappers and shells.
+  'outputToInterpreter.ts': { [INTERPRETER_JS]: 41 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —

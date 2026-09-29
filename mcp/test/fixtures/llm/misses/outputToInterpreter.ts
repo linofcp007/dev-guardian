@@ -7,6 +7,7 @@
 
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import OpenAI from 'openai';
 import vm from 'vm';
 import { exec as dbExec } from './db';
@@ -46,14 +47,28 @@ export function commitMessage(completion: OpenAI.Chat.ChatCompletion) {
   return execFile('git', ['commit', '-m', completion.choices[0].message.content ?? '']);
 }
 
-// Only `-c` makes sh run the next argument: here it is an argument of a fixed script.
-export function scriptArgument(completion: OpenAI.Chat.ChatCompletion) {
-  return spawn('sh', ['./notificar.sh', completion.choices[0].message.content ?? '']);
+const execFileAsync = promisify(execFile);
+
+// `shell: false` written out is no shell; a promisified or inline-required
+// execFile/spawn of a fixed program is the same call.
+export async function commitMessageNoShell(completion: OpenAI.Chat.ChatCompletion) {
+  const t = completion.choices[0].message.content ?? '';
+  spawn('git', ['commit', '-m', t], { shell: false });
+  await execFileAsync('git', ['log', '--grep', t]);
+  await execFileAsync('git', ['log', '--grep', t], { shell: false });
+  require('child_process').spawn('git', ['log', '--grep', t]);
+  require('child_process').execFile('git', ['log', '--grep', t], { shell: false });
 }
 
 // `-e` after a program that is not an interpreter is just an option value.
 export function grepPattern(completion: OpenAI.Chat.ChatCompletion) {
   return spawn('grep', ['-e', completion.choices[0].message.content ?? '', 'registo.txt']);
+}
+
+// The interpreter list matches the WHOLE program name: perltidy formats Perl
+// and runs none of it.
+export function programNamedLikeAnInterpreter(completion: OpenAI.Chat.ChatCompletion) {
+  return spawn('perltidy', ['-st', completion.choices[0].message.content ?? '']);
 }
 
 // A function called `exec` from any module but child_process runs nothing.

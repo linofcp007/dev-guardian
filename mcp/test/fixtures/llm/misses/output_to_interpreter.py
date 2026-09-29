@@ -8,6 +8,7 @@ message prescribes.
 import ast
 import asyncio
 import json
+import os
 import subprocess
 
 
@@ -70,15 +71,34 @@ async def commit_message_async(resp):
     await asyncio.create_subprocess_exec("git", "commit", "-m", resp.choices[0].message.content)
 
 
-def script_argument(resp):
-    # Only `-c`/`-e` make an interpreter run the NEXT argument; here the model's
-    # text is an argument of a fixed script.
-    subprocess.run(["bash", "./notificar.sh", resp.choices[0].message.content])
-
-
 def grep_pattern(resp):
     # `-e` after a program that is not an interpreter is just an option value.
     subprocess.run(["grep", "-e", resp.choices[0].message.content, "registo.txt"])
+
+
+def program_named_like_an_interpreter(resp):
+    # The interpreter list matches the WHOLE program name: `shasum` is not `sh`.
+    subprocess.run(["shasum", "-a", "256", resp.choices[0].message.content])
+
+
+def commit_message_no_shell(resp):
+    # `shell=False` written out is no shell.
+    subprocess.run(["git", "commit", "-m", resp.choices[0].message.content], shell=False)
+
+
+def commit_message_list_in_a_variable(resp):
+    # The fixed program is visible where the list is built.
+    args = ["git", "commit", "-m", resp.choices[0].message.content]
+    subprocess.run(args)
+    subprocess.run(args, shell=False)
+
+
+def commit_message_os(resp):
+    os.execv("/usr/bin/git", ["git", "log", "--grep", resp.choices[0].message.content])
+
+
+def commit_message_os_spawn(resp):
+    os.spawnv(os.P_WAIT, "/usr/bin/git", ["git", "log", "--grep", resp.choices[0].message.content])
 
 
 class Agente:

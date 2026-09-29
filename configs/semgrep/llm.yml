@@ -14,8 +14,9 @@
 #   | regra                              | OWASP LLM 2025 | como decide                     |
 #   | ---------------------------------- | -------------- | ------------------------------- |
 #   | llm-output-to-interpreter-py / -js | LLM05          | taint: saida do modelo ate      |
-#   |                                    |                | eval/exec, shell, programa,     |
-#   |                                    |                | script `-c`, SQL, vm            |
+#   |                                    |                | eval/exec, shell, um processo   |
+#   |                                    |                | que nao seja um programa fixo,  |
+#   |                                    |                | SQL, vm                         |
 #   | llm-tool-name-dispatch-py          | LLM06          | taint: nome da ferramenta ate   |
 #   |                                    |                | getattr/globals()/import        |
 #   | llm-trust-remote-code              | LLM03          | a chamada: trust_remote_code=   |
@@ -58,10 +59,12 @@
 # execução.
 #
 # VERSÃO DO SEMGREP. Medido com o 1.176.1 (o do PATH desta maquina). Nas
-# imagens 1.86.0 e 1.170.1 o pack da 114 dos 121 resultados de hits/: as sete
-# linhas cuja função vem de um `import ... from 'node:child_process'` ficam
-# mudas, porque essas versões nao resolvem o prefixo `node:` em modo taint
-# (ver a regra JS). Tudo o resto dispara nas tres.
+# imagens 1.86.0, 1.120.1 e 1.170.1 o pack da 153 dos 171 resultados de hits/
+# (revisao 2): as dezoito linhas cuja função vem de um `import ... from
+# 'node:child_process'` ficam mudas, porque essas versões nao resolvem o
+# prefixo `node:` em modo taint (ver a regra JS). Tudo o resto dispara nas
+# quatro. O `scan_sast` junta uma nota com o nome disto a qualquer corrida
+# num Semgrep anterior ao 1.176.1 (`llmPackVersionNote`).
 #
 # ---------------------------------------------------------------------------
 # POR QUE TAINT, E O QUE O TAINT DESTE SEMGREP NAO VE. As regras de fluxo usam
@@ -214,6 +217,19 @@
 # `research*`/`searchAndReplace`) tambem nao tinham instancia: a prova é a
 # sua linha em misses/ ou hits/.
 #
+# A SEGUNDA REVISAO (2026-09-29) apertou o despacho (o sanitizador limpa so
+# o nome verificado, e a saida do guarda tem de ser incondicional e da
+# propria função ou ciclo) e inverteu os sinks de processo (o texto do
+# modelo em qualquer posição dispara, menos atras de um programa fixo que
+# nao seja um interpretador, uma shell nem um invólucro). Re-medido no mesmo
+# corpus e nos mesmos commits, duas vezes (a inversão, e depois a lista de
+# interpretadores alargada): os mesmos 244 resultados do pack anterior,
+# iguais por ficheiro, linha e regra. O `getattr` do openai/swarm continua a
+# disparar, e nenhuma aplicação do corpus passa texto de um modelo a um
+# processo na mesma função, com programa fixo ou sem ele. A triagem acima
+# vale sem mudança; a prova das duas alterações é a sua linha em hits/ e em
+# misses/.
+#
 # O QUE O CORPUS TIROU DO PACK, com a razao:
 #
 #   - pickle.load / joblib.load / np.load(allow_pickle=True) de ficheiros de
@@ -260,6 +276,29 @@
 # o LibreChat inteiro (5 122 ficheiros) levou 39 s.
 #
 # ---------------------------------------------------------------------------
+# O TIMEOUT DO PONTO FIXO — o mecanismo da linha que cai (revisao 2, I-C).
+# Quando a analise de taint de UMA função nao converge dentro do seu
+# orçamento, o Semgrep desiste dessa função, e o que ela ainda nao tinha
+# encontrado nao aparece. Nao é um erro: `errors` fica vazio,
+# `paths.scanned` fica cheio, e o unico registo esta em
+# `time.fixpoint_timeouts` (`error_type: "Fixpoint timeout"`, severidade
+# `warn`, com o ficheiro e a linha da função) — presente no 1.170.1 e no
+# 1.176.1 mesmo sem `--time`, ausente no 1.86.0 e no 1.120.1 mesmo com ele
+# (medido). A revisao mediu a `langchain_experimental/sql/base.py:178` a cair
+# em 3 de 17 varreduras, cada uma com um timeout do ponto fixo no `_call` que
+# a contem; nesta ronda, uma das duas varreduras do corpus inteiro teve o
+# timeout nesse `_call` e a linha disparou na mesma — o timeout marca a
+# função como INCOMPLETA, nao apaga forçosamente o que ela tinha. As tres
+# varreduras do corpus inteiro desta ronda deram 557, 587 e 587 timeouts
+# destes (244, 263 e 251 so no LibreChat); entre as duas ultimas, cujos packs
+# diferem so no regex de uma exclusao, a contagem por aplicação muda nos
+# dois sentidos (o gpt-researcher 25 e 10, o AnythingLLM 36 e 45) — é da
+# carga da maquina, nao do pack. A ablação exclui estes
+# ficheiros como exclui os timeouts de regra (`mcp/test/ablate/semgrep.ts`).
+# O `scan_sast` ainda NAO os le: uma corrida com um timeout do ponto fixo
+# sai `ok`, e um resultado que caiu nao deixa rasto no relatorio.
+#
+# ---------------------------------------------------------------------------
 # A ABLAÇAO (`npm run ablate -- llm`).
 #
 # Primeira entrega (sha 9c145c79): 99 de 103 clauses em 8 de 8 regras, 99
@@ -289,7 +328,32 @@
 #      (`--filter=llm-output-to-interpreter`), mesmo sha e mesmo corpus: 90
 #      de 90 vivos, 0 DEAD, 0 INCONCLUSIVE, piso de ruido 0.
 #
-# Os SUPPRESSES-TP do eixo 2 (21 na corrida 1), lidos linha a linha, sao todos
+# Segunda revisao (2026-09-29), com a ablação a excluir tambem os ficheiros
+# de um timeout do ponto fixo (ver acima), na mesma arvore de 1 914
+# ficheiros:
+#
+#   3. Completa (sha ef294478): 186 de 196 clauses em 8 de 9 regras (6
+#      colapsados, 4 estruturais), 171 resultados de base em hits/ e 235 no
+#      corpus, 226 comparaveis — 60 ficheiros excluidos, quase todos por
+#      timeouts do ponto fixo (eram 2 so com os timeouts de regra) —, piso
+#      de ruido 0, 4 738 s. 9/9 regras disparam em hits/; 184 vivos e 2
+#      DEAD, os dois filtros do nome da função nas exclusoes do
+#      `os.exec*`/`os.spawn*` (o par deu INERT). Provados à mao: o `^exec`
+#      era inerte (o regex do programa exige um literal entre aspas, e o
+#      primeiro argumento de um spawn é o modo) e saiu; o `^spawn` nao era —
+#      faltava a fixture, e sem ele o `os.execl("/bin/bash", "relatorio",
+#      "-c", t)` fica mudo; entrou em hits/.
+#   4. As clauses do `os.exec*`/`os.spawn*` re-abladas com essa fixture
+#      (`--filter=spawn` e `--filter=os.$fn($prog`, sha 112758af): 5 de 5
+#      vivos, 0 DEAD, 0 INCONCLUSIVE, piso de ruido 0. A base do corpus deu
+#      235, 234 e 235 nas corridas 3 e 4 e os ficheiros excluidos 60, 58 e
+#      71: é o timeout do ponto fixo a variar com a carga, e a exclusao por
+#      ficheiro que o torna comparavel dentro de cada corrida.
+#
+# O ficheiro do repo difere destes sha so nos comentarios que registam esta
+# ablação.
+#
+# Os SUPPRESSES-TP do eixo 2 (21 na corrida 1, 21 na 3), lidos linha a linha, sao todos
 # dos tipos conhecidos: o vizinho `excluded:` anotado em hits/ (as chamadas
 # com limite de tokens que as regras de fluxo usam como fonte, a mensagem de
 # UTILIZADOR ao lado da de sistema, o `dict(...)` de kwargs antes da chamada
@@ -303,7 +367,7 @@
 # variavel), que tornam a propria chamada `subprocess...(...)` uma fonte à
 # volta do seu sink.
 #
-# Os RAISING do eixo 3 (26 na corrida 1, 11 na 2), lidos linha a linha: os
+# Os RAISING do eixo 3 (26 na corrida 1, 11 na 2, 14 na 3), lidos linha a linha: os
 # ramos POSITIVOS, que listam exatamente os verdadeiros da triagem; as
 # restrições de uma exclusao ou de um sanitizador (os guardas do despacho, o
 # regex de recuperação `$FN`, o sha em `revision`, o `undefined` do limite
@@ -315,8 +379,13 @@
 # incluindo clauses que nao a podem tocar (`$CUR.execute`,
 # `sqlalchemy.text`, `messages.create`, `create_subprocess_shell` — a linha
 # é um `database.run`). O piso de ruido, com duas varreduras, deu 0 e nao a
-# apanhou; a hipotese, nao provada, continua a ser o ponto fixo do taint numa
-# função longa cortado em silencio sob carga.
+# apanhou. O mecanismo ficou medido na revisao 2: é o timeout do ponto fixo
+# (ver acima), que nao entra em `errors`; a ablação passou a excluir esses
+# ficheiros como exclui os timeouts de regra, e nenhum dos 14 RAISING da
+# corrida 3 lista a linha 178 — todos sao ramos positivos ou restrições,
+# e listam so resultados ja triados acima (verdadeiros, o limiar do
+# PrivateGPT, e os falsos contados: o `test_openai_server.py` do h2oGPT e o
+# juiz do gpt-researcher).
 #
 # ---------------------------------------------------------------------------
 # PONTOS CEGOS CONHECIDOS, escritos para que ninguem os tome por cobertura:
@@ -330,15 +399,20 @@
 # - SQL: o `.execute*` so conta num recetor com nome de cursor, ligação,
 #   sessao, motor ou cliente (`c`, `cur`, `conn`, `db`, `session`,
 #   `engine`, `client`...); um cursor chamado `q` nao é visto.
-# - Processos: uma lista de argumentos numa VARIAVEL (`args = [...];
-#   subprocess.run(args)`) nao é vista em nenhuma posição — so a lista
-#   escrita na chamada, o `shlex.split(...)` e as formas de shell. Um texto do
-#   modelo que so é o programa num SO (`subprocess.run(texto)` sem shell, que
-#   no Windows é uma linha de comando) tambem nao.
+# - Processos (revisao 2): a lista dos programas que CORREM o que recebem
+#   (interpretadores, shells, invólucros — o regex de `$PROG`) é finita; um
+#   programa que nao esta nela e que executa o seu argumento conta como fixo
+#   e seguro. A regra tambem nao trata a injeção de ARGUMENTOS num programa
+#   fixo (CWE-88: o texto do modelo lido como uma opção do programa) — o
+#   texto nao corre como codigo, e é outra regra. A lista so conta como fixa
+#   quando é escrita na chamada ou atribuida a uma variavel na mesma função
+#   (`args = ["git", ...]`); montada de outra forma, dispara — erra para o
+#   lado do alarme.
 # - O despacho so reconhece os guardas descritos na regra; um guarda noutra
-#   função, ou `hasattr`, nao conta. Dentro do bloco ENTAO de um `if nome in
-#   PERMITIDAS:`, qualquer valor tem o seu taint limpo, e nao so o nome
-#   verificado.
+#   função, `hasattr`, ou um `if nome not in PERMITIDAS:` cuja saida nao seja
+#   a primeira ou a segunda instrução do bloco, nao conta — dispara. O
+#   sanitizador limpa SO o nome verificado (revisao 2, I-A): o resto do
+#   bloco ENTAO continua sujo.
 # - `trust_remote_code` com o `revision` numa constante (`revision=COMMIT`) nao
 #   é reconhecido como fixado: so o sha de 40 caracteres escrito na chamada.
 #   Os kwargs so contam quando o dicionario é montado na mesma função, e so
@@ -381,15 +455,28 @@ rules:
   # `http_agent`... Um `model` so conta com um metodo do LangChain: o
   # `model.predict(X)` do scikit-learn esta em misses/.
   #
-  # SINKS: `eval`/`exec`; a shell — `os.system`, `os.popen`, o `subprocess`
-  # com `shell=True` ou `getoutput`, `asyncio.create_subprocess_shell`; as
-  # posições de uma lista de argumentos que CORREM alguma coisa (revisao, I-2):
-  # o programa (`[texto, ...]`, `create_subprocess_exec(texto, ...)`), o
-  # argumento de um interpretador com `-c`/`-e` (`["bash", "-c", texto]`,
-  # `["python3", "-c", texto]`) e o `shlex.split(texto)`, que da ao modelo o
-  # programa e os argumentos. Um texto do modelo como ARGUMENTO de um
-  # programa fixo (`["git", "commit", "-m", texto]`, o caso das ferramentas de
-  # mensagens de commit) nao é passado a shell nenhuma e esta em misses/.
+  # SINKS: `eval`/`exec`; a shell — `os.system`, `os.popen`,
+  # `asyncio.create_subprocess_shell`; e os processos, com a regra INVERTIDA
+  # (revisao 2, I-B): o texto do modelo em QUALQUER posição da lista de
+  # argumentos do `subprocess`, do `asyncio.create_subprocess_exec`, do
+  # `os.exec*` e do `os.spawn*`, ou como o proprio comando (uma string, uma
+  # variavel, `shlex.split(texto)`, `getoutput`), dispara — MENOS quando o
+  # programa é FIXO: um literal que nao é um interpretador, uma shell nem um
+  # invólucro (sh, bash, cmd, powershell, python*, node, perl, ruby, php, awk,
+  # osascript, env, xargs, timeout, watch, nice, sudo, ssh...; a lista inteira
+  # esta no regex de `$PROG`; e `sys.executable` nao é um literal),
+  # sem `shell=` verdadeiro (um `shell=` com uma variavel conta como shell).
+  # So essa forma é segura: o texto é um ARGUMENTO de um programa que nao o
+  # executa — `["git", "commit", "-m", texto]`, o caso das ferramentas de
+  # mensagens de commit, e esta em misses/, tambem com a lista montada numa
+  # variavel antes da chamada. A primeira versao desta regra fazia o
+  # contrario — so disparava em posições que conhecia (o `argv[0]`, o
+  # argumento de `-c`) — e deixava mudos `["sh", "-lc", t]`,
+  # `["bash", "-e", "-c", t]`, `["env", t]`, `["timeout", "10", t]`,
+  # `["powershell", "-Command", t]` e outros, todos em hits/. O argumento de
+  # um interpretador dispara sempre, mesmo quando é o de um script
+  # (`["bash", "./notificar.sh", t]`): a regra nao distingue um script de uma
+  # opção que corre codigo.
   # Depois, um `.run(...)` num recetor de REPL, shell ou bash (o `PythonREPL`
   # do LangChain, o `BashProcess`), e SQL: um `.execute*` num recetor com nome
   # de cursor, ligação, sessao ou motor (revisao, M-4: o `tool.execute(...)`
@@ -487,24 +574,76 @@ rules:
               - pattern: exec($X, ...)
               - pattern: os.system($X)
               - pattern: os.popen($X, ...)
-              - pattern: subprocess.$F($X, ..., shell=True, ...)
-              - pattern: subprocess.$F([$X, ...], ...)
               - patterns:
-                  - pattern: subprocess.$F([$SH, $FLAG, $X, ...], ...)
-                  - metavariable-regex:
-                      metavariable: $SH
-                      regex: ^['"](?:[^'"]*/)?(?:sh|bash|zsh|dash|ksh|python\d*(?:\.\d+)?|node|perl|ruby)['"]$
-                  - metavariable-regex:
-                      metavariable: $FLAG
-                      regex: ^['"]-[ce]['"]$
-              - pattern: subprocess.$F(shlex.split($X, ...), ...)
-              - patterns:
-                  - pattern: subprocess.$F($X, ...)
-                  - metavariable-regex:
-                      metavariable: $F
-                      regex: ^get(?:status)?output$
+                  - pattern-either:
+                      - pattern: subprocess.$F([..., $X, ...], ...)
+                      - patterns:
+                          - pattern: subprocess.$F($X, ...)
+                          - pattern-not: subprocess.$F([...], ...)
+                  - pattern-not:
+                      patterns:
+                        - pattern: subprocess.$F([$PROG, ...], ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"](?!(?:[^'"]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"])[^'"]+['"]$
+                        - pattern-not:
+                            patterns:
+                              - pattern: subprocess.$F(..., shell=$SHELL, ...)
+                              - metavariable-regex:
+                                  metavariable: $SHELL
+                                  regex: ^(?!False$)
+                  - pattern-not:
+                      patterns:
+                        - pattern-inside: |
+                            $ARGV = [$PROG, ...]
+                            ...
+                        - pattern: subprocess.$F($ARGV, ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"](?!(?:[^'"]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"])[^'"]+['"]$
+                        - pattern-not:
+                            patterns:
+                              - pattern: subprocess.$F(..., shell=$SHELL, ...)
+                              - metavariable-regex:
+                                  metavariable: $SHELL
+                                  regex: ^(?!False$)
               - pattern: asyncio.create_subprocess_shell($X, ...)
-              - pattern: asyncio.create_subprocess_exec($X, ...)
+              - patterns:
+                  - pattern: asyncio.create_subprocess_exec(..., $X, ...)
+                  - pattern-not:
+                      patterns:
+                        - pattern: asyncio.create_subprocess_exec($PROG, ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"](?!(?:[^'"]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"])[^'"]+['"]$
+              - patterns:
+                  - pattern: os.$FN(..., $X, ...)
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(?:exec|spawn)[lv]p?e?$
+                  # O `os.exec*` recebe o programa no primeiro argumento e o
+                  # `os.spawn*` no segundo, depois do modo (`os.P_WAIT`), que
+                  # nunca é um literal entre aspas. Por isso a primeira
+                  # exclusao nao filtra o nome da função (um filtro `^exec`
+                  # saiu DEAD na ablação: o regex do programa ja o faz), e a
+                  # segunda filtra: sem o `^spawn`, o `argv[0]` de um exec —
+                  # so o nome que o processo mostra — passaria por programa
+                  # (`os.execl("/bin/bash", "relatorio", "-c", t)`, em hits/).
+                  - pattern-not:
+                      patterns:
+                        - pattern: os.$FN($PROG, ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"](?!(?:[^'"]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"])[^'"]+['"]$
+                  - pattern-not:
+                      patterns:
+                        - pattern: os.$FN($MODE, $PROG, ...)
+                        - metavariable-regex:
+                            metavariable: $FN
+                            regex: ^spawn
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"](?!(?:[^'"]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"])[^'"]+['"]$
               - patterns:
                   - pattern: $R.run($X, ...)
                   - metavariable-regex:
@@ -538,24 +677,37 @@ rules:
   # function_call, como atributo e como dicionario) e a mensagem da Anthropic,
   # cujos blocos `tool_use` trazem o nome em `.name`.
   #
-  # OS SANITIZADORES sao as listas de permitidos que o Semgrep consegue ver na
-  # mesma função (revisao, I-1 — a primeira versao aceitava QUALQUER corpo e
-  # qualquer contentor):
+  # OS SANITIZADORES limpam SO a expressao verificada — o `pattern: $N` de
+  # fora —, e so onde a verificação a protege. A primeira versao aceitava
+  # qualquer corpo e qualquer contentor (revisao, I-1); a segunda desligou o
+  # sanitizador do nome e qualquer teste de pertença na função limpava todos
+  # os valores (revisao 2, I-A: `if modo not in MODOS: raise`,
+  # `if self.provider in FORNECEDORES:`, `if "tool_calls" in payload:`). Os
+  # sitios onde protege:
   #
-  #   - o bloco ENTAO de um `if nome in PERMITIDAS:`, e so ele: o
-  #     `focus-metavariable` no corpo deixa o ramo SENAO de fora. Um
-  #     `pattern-inside` do `if` inteiro limpava tambem o `else:`, onde o nome
-  #     NAO esta na lista (medido; esta em hits/);
-  #   - o resto da função depois de um `if nome not in PERMITIDAS:` que SAI —
-  #     `raise`, `return` ou `continue`. Um guarda que so avisa
-  #     (`logger.warning(...)`) ou nao faz nada (`pass`) nao guarda, e a
-  #     procura corre na mesma (em hits/);
-  #   - e so quando `PERMITIDAS` é uma lista de facto: `dir(...)`, `vars(...)`,
-  #     `globals()`, `locals()`, um `__dict__` (todos os atributos) e uma
-  #     STRING (`nome in "a b"` é um teste de substring) nao sao (em hits/).
+  #   - o bloco ENTAO de um `if nome in PERMITIDAS:`, e so ele. O bloco é
+  #     um `patterns` aninhado com `focus-metavariable` no corpo, e o
+  #     `pattern: $N` de fora so casa as ocorrencias do nome DENTRO dele
+  #     (medido). Um `pattern-inside` do `if` inteiro limpava tambem o
+  #     `else:`, onde o nome NAO esta na lista;
+  #   - o resto do bloco depois de um `if nome not in PERMITIDAS:` cujo corpo
+  #     SAI de forma incondicional — a saida (`raise`, `return`, `continue`,
+  #     `break`) é uma instrução do PROPRIO corpo, a primeira ou a segunda, e
+  #     nao uma dentro de um `if`, de uma função aninhada ou de outro ciclo
+  #     (o `...` do Semgrep casa instruções aninhadas, por isso a forma é
+  #     escrita instrução a instrução). Um guarda que so avisa ou nao faz
+  #     nada nao guarda;
+  #   - o mesmo guarda num `elif`, quando o ramo anterior tambem sai;
+  #   - e nunca depois de o nome ser REATRIBUIDO a seguir ao guarda.
+  #
+  # `PERMITIDAS` tem de ser uma lista de facto: `dir(...)`, `vars(...)`,
+  # `globals()`, `locals()` e um `__dict__` em QUALQUER sitio da expressao
+  # (`set(dir(self))`, `self.__dict__.keys()`), e uma string ou f-string
+  # (`nome in "a b"` é um teste de substring), nao sao. Cada forma que nao
+  # guarda esta em hits/; as que guardam, em misses/.
   #
   # O despacho por dicionario (`TABELA[nome]()`), que a mensagem receita, nem é
-  # um sink. Os guardas que contam estao em misses/.
+  # um sink.
   - id: llm-tool-name-dispatch-py
     mode: taint
     languages: [python]
@@ -567,7 +719,8 @@ rules:
       modulo, nao so as ferramentas que lhe foram oferecidas (OWASP LLM06:2025).
       Despache por um dicionario fechado {nome: função}, ou verifique
       `if nome in PERMITIDAS` (um conjunto fixo de nomes, nao dir() nem uma string)
-      antes de procurar o nome, e saia (raise/return) quando nao estiver.
+      antes de procurar o nome, e saia (raise/return) quando nao estiver, antes de
+      qualquer outra coisa.
     metadata:
       category: security
       subcategory: llm-excessive-agency
@@ -585,30 +738,49 @@ rules:
           - pattern: $C.messages.create(..., max_tokens=$M, ...)
     pattern-sanitizers:
       - patterns:
+          - pattern: $N
           - pattern-either:
               - patterns:
                   - pattern: |
                       if $N in $ALLOWED:
                         $...BODY
                   - focus-metavariable: $...BODY
-              - pattern-inside: |
-                  if $N not in $ALLOWED:
-                    ...
-                    raise ...
-                  ...
-              - pattern-inside: |
-                  if $N not in $ALLOWED:
-                    ...
-                    return ...
-                  ...
-              - pattern-inside: |
-                  if $N not in $ALLOWED:
-                    ...
-                    continue
-                  ...
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          if $N not in $ALLOWED:
+                            $EXIT
+                          ...
+                      - pattern-inside: |
+                          if $N not in $ALLOWED:
+                            $PRE
+                            $EXIT
+                          ...
+                  - metavariable-regex:
+                      metavariable: $EXIT
+                      regex: ^(?:raise|return|continue|break)\b
+                  - pattern-not-inside: |
+                      if $N not in $ALLOWED:
+                        ...
+                      ...
+                      $N = $REBOUND
+                      ...
+              - patterns:
+                  - pattern-inside: |
+                      if $COND:
+                        $EXIT0
+                      elif $N not in $ALLOWED:
+                        $EXIT
+                      ...
+                  - metavariable-regex:
+                      metavariable: $EXIT0
+                      regex: ^(?:raise|return|continue|break)\b
+                  - metavariable-regex:
+                      metavariable: $EXIT
+                      regex: ^(?:raise|return|continue|break)\b
           - metavariable-regex:
               metavariable: $ALLOWED
-              regex: ^(?!(?:dir|vars|globals|locals)\(|.*\.__dict__$|[rbuRBU]*['"])
+              regex: ^(?![rbufRBUF]*['"])(?![\s\S]*(?:\b(?:dir|vars|globals|locals)\s*\(|__dict__))
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -780,18 +952,24 @@ rules:
   #
   # Os sinks do `child_process` sao qualificados pelo modulo, e o metodo nao
   # tem lista: TODAS as funções do modulo correm o primeiro argumento (o
-  # comando, o ficheiro, o modulo do `fork`). O primeiro argumento é a posição
-  # que conta — em `spawn('git', ['commit', '-m', texto])` o texto é um
-  # argumento de um programa fixo, e esta em misses/ —, mais o argumento de um
-  # interpretador com `-c`/`-e` (`spawn('sh', ['-c', texto])`), o `require`
-  # escrito na propria chamada, e o `exec` embrulhado pelo `util.promisify`.
+  # comando, o ficheiro, o modulo do `fork`). Como na regra Python, a regra é
+  # INVERTIDA (revisao 2, I-B): o texto do modelo no primeiro argumento ou em
+  # QUALQUER posição do array de argumentos dispara, menos quando o programa é
+  # um literal FIXO que nao é um interpretador, uma shell nem um invólucro, sem
+  # `shell:` verdadeiro nas opções — `spawn('git', ['commit', '-m', texto])`
+  # esta em misses/; `spawn('git', [...], { shell: true })` junta o array numa
+  # linha de comando e esta em hits/, como `sh -lc`, `bash -x -c`, o
+  # `process.execPath` com `-e` (uma variavel nao é um programa fixo) e o
+  # `env`. O mesmo vale para o `require` escrito na propria chamada e para as
+  # funções embrulhadas pelo `util.promisify`, incluindo o `execFile`.
   # A qualificação deixa de fora o `RegExp.prototype.exec` e um `exec`
   # importado de outro modulo. O `vm` nao é um sandbox.
   #
   # VERSÃO DO SEMGREP (revisao, medido): os `import` de `'node:child_process'`
   # so sao resolvidos a partir do Semgrep 1.176.1 (a versão medida); o 1.86.0,
-  # o 1.99.0, o 1.120.1 e o 1.170.1 nao os resolvem, e as sete linhas de hits/
-  # com um import `node:` ficam mudas neles (114 de 121) (o `'child_process'` sem prefixo,
+  # o 1.99.0, o 1.120.1 e o 1.170.1 nao os resolvem, e as dezoito linhas de
+  # hits/ com um import `node:` ficam mudas neles (153 de 171, revisao 2) (o
+  # `'child_process'` sem prefixo,
   # o `require` e os namespaces resolvem em todos). Tentou-se uma forma
   # alternativa (`$CP = require($MOD)` com o `$MOD` num regex): casa esses
   # imports em modo de pesquisa, mas nao em modo taint, nas mesmas versões.
@@ -856,25 +1034,60 @@ rules:
               - pattern: vm.runInNewContext($X, ...)
               - pattern: vm.runInThisContext($X, ...)
               - pattern: new vm.Script($X, ...)
-              - pattern: child_process.$F($X, ...)
               - patterns:
-                  - pattern: child_process.$F($SH, [$FLAG, $X, ...], ...)
-                  - metavariable-regex:
-                      metavariable: $SH
-                      regex: ^['"`](?:[^'"`]*/)?(?:sh|bash|zsh|dash|ksh|python\d*(?:\.\d+)?|node|perl|ruby)['"`]$
-                  - metavariable-regex:
-                      metavariable: $FLAG
-                      regex: ^['"`]-[ce]['"`]$
+                  - pattern-either:
+                      - pattern: child_process.$F($X, ...)
+                      - pattern: child_process.$F($PROG, [..., $X, ...], ...)
+                  - pattern-not:
+                      patterns:
+                        - pattern: child_process.$F($PROG, [...], ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"`])[^'"`]+['"`]$
+                        - pattern-not:
+                            patterns:
+                              - pattern: 'child_process.$F($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
+                              - metavariable-regex:
+                                  metavariable: $SHELL
+                                  regex: ^(?!false$)
               - patterns:
-                  - pattern: require($MOD).$F($X, ...)
+                  - pattern-either:
+                      - pattern: require($MOD).$F($X, ...)
+                      - pattern: require($MOD).$F($PROG, [..., $X, ...], ...)
                   - metavariable-regex:
                       metavariable: $MOD
                       regex: ^['"`](?:node:)?child_process['"`]$
+                  - pattern-not:
+                      patterns:
+                        - pattern: require($MOD).$F($PROG, [...], ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"`])[^'"`]+['"`]$
+                        - pattern-not:
+                            patterns:
+                              - pattern: 'require($MOD).$F($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
+                              - metavariable-regex:
+                                  metavariable: $SHELL
+                                  regex: ^(?!false$)
               - patterns:
                   - pattern-inside: |
                       $E = util.promisify(child_process.$F);
                       ...
-                  - pattern: $E($X, ...)
+                  - pattern-either:
+                      - pattern: $E($X, ...)
+                      - pattern: $E($PROG, [..., $X, ...], ...)
+                  - pattern-not:
+                      patterns:
+                        - pattern: $E($PROG, [...], ...)
+                        - metavariable-regex:
+                            metavariable: $PROG
+                            regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta)(?:\.exe)?['"`])[^'"`]+['"`]$
+                        - pattern-not:
+                            patterns:
+                              - pattern: '$E($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
+                              - metavariable-regex:
+                                  metavariable: $SHELL
+                                  regex: ^(?!false$)
           - focus-metavariable: $X
 
   # ---------------------------------------------------------------------------

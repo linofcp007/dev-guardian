@@ -8,7 +8,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { generateObject, generateText, streamText } from 'ai';
-import { exec, execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
+import { exec, execFile, execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import OpenAI from 'openai';
 import vm from 'vm';
@@ -145,7 +145,27 @@ export function toInlineRequire(completion: OpenAI.Chat.ChatCompletion) {
 }
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export async function toPromisified(completion: OpenAI.Chat.ChatCompletion) {
   return execAsync(completion.choices[0].message.content ?? ''); // BUG: exec through util.promisify
+}
+
+// Review of the pack, round 2 (I-B): the model's text anywhere in the argv of an
+// interpreter, a shell or a wrapper, or of any program run through a shell.
+export async function interpretersAndWrappers(completion: OpenAI.Chat.ChatCompletion) {
+  const t = completion.choices[0].message.content ?? '';
+  spawn('git', ['commit', '-m', t], { shell: true }); // BUG: shell: true joins the argv into a command line
+  spawn('sh', ['-lc', t]); // BUG: sh -lc
+  spawn('bash', ['-x', '-c', t]); // BUG: an option before -c
+  spawn(process.execPath, ['-e', t]); // BUG: the running Node, by variable
+  spawn('env', [t]); // BUG: env runs its argument
+  spawn('node', ['relatorio.js', t]); // BUG: an interpreter's argument may be code
+  spawn('sh', ['./notificar.sh', t]); // BUG: the same, a shell script's argument
+  await execFileAsync('bash', ['-c', t]); // BUG: a promisified execFile of bash
+  await execFileAsync('git', ['log', t], { shell: true }); // BUG: a promisified execFile through a shell
+  require('child_process').spawn('bash', ['-c', t]); // BUG: an inline require of bash
+  require('child_process').execFile('git', ['log', t], { shell: true }); // BUG: an inline require through a shell
+  spawn('osascript', ['-e', t]); // BUG: AppleScript runs its -e argument
+  spawn('/usr/bin/gawk', [t]); // BUG: an awk program, by path
 }

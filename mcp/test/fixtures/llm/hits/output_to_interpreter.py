@@ -12,6 +12,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 
 import litellm
 import openai
@@ -192,6 +193,61 @@ async def to_asyncio_shell(resp):
 
 async def to_asyncio_exec(resp):
     await asyncio.create_subprocess_exec(resp.choices[0].message.content, "--help")  # BUG: the model picks the program
+
+
+async def to_asyncio_exec_bash(resp):
+    await asyncio.create_subprocess_exec("bash", "-c", resp.choices[0].message.content)  # BUG: bash runs its argument
+
+
+def interpreters_and_wrappers(resp):
+    # Review of the pack, round 2 (I-B): the model's text anywhere in the argv of
+    # an interpreter, a shell or a wrapper — whatever the options in between.
+    t = resp.choices[0].message.content
+    subprocess.run(["sh", "-lc", t])  # BUG: sh -lc
+    subprocess.run(["bash", "-e", "-c", t])  # BUG: an option before -c
+    subprocess.run(["bash", "--norc", "-c", t])  # BUG: a long option before -c
+    subprocess.run([sys.executable, "-c", t])  # BUG: the running interpreter, by variable
+    subprocess.run(["python3", "-m", t])  # BUG: python -m runs the module the model names
+    subprocess.run(["env", t])  # BUG: env runs its argument
+    subprocess.run(["/usr/bin/env", "bash", "-c", t])  # BUG: env, then bash
+    subprocess.run(["timeout", "10", t])  # BUG: timeout runs its argument
+    subprocess.run(["xargs", t])  # BUG: xargs runs its argument
+    subprocess.run(["powershell", "-Command", t])  # BUG: PowerShell
+    subprocess.run(["cmd", "/c", t])  # BUG: cmd /c
+    subprocess.run(["bash", "./notificar.sh", t])  # BUG: an interpreter's argument may be code: the rule cannot tell a script from an option
+    subprocess.run(["awk", t])  # BUG: an awk program is code (its system() runs a shell)
+    subprocess.run(["watch", "-n", "5", t])  # BUG: watch hands its command to sh -c
+    subprocess.run(["pythonw", "-c", t])  # BUG: the windowless Python
+
+
+def fixed_program_with_a_shell(resp, usar_shell):
+    t = resp.choices[0].message.content
+    subprocess.run(["git", "commit", "-m", t], shell=True)  # BUG: with a shell the list is a command line
+    subprocess.run(["git", "commit", "-m", t], shell=usar_shell)  # BUG: a shell the rule cannot rule out
+    args = ["git", "commit", "-m", t]
+    subprocess.run(args, shell=True)  # BUG: the same, the list in a variable
+
+
+def interpreter_list_in_a_variable(resp):
+    cmd = ["bash", "-c", resp.choices[0].message.content]
+    subprocess.run(cmd)  # BUG: an interpreter's argv, built first
+
+
+def to_os_exec(resp):
+    os.execl("/bin/sh", "sh", "-c", resp.choices[0].message.content)  # BUG: os.exec* of a shell
+
+
+def to_os_exec_named(resp):
+    # argv[0] is only the name the process shows; the program is the first argument.
+    os.execl("/bin/bash", "relatorio", "-c", resp.choices[0].message.content)  # BUG: os.exec* of bash, whatever argv[0] says
+
+
+def to_os_exec_program(resp):
+    os.execv(resp.choices[0].message.content, ["--help"])  # BUG: os.exec* of the model's program
+
+
+def to_os_spawn(resp):
+    os.spawnlp(os.P_WAIT, "bash", "bash", "-c", resp.choices[0].message.content)  # BUG: os.spawn* of a shell
 
 
 def to_repl(resp):
