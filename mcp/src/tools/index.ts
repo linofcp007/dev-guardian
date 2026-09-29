@@ -7,15 +7,16 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ZodRawShape } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { ToolResult } from '../types.js';
 import { boundResponsePayload } from './responseBounds.js';
 
 /**
  * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
- * object literal of zod fields), NOT a `ZodObject` — the SDK derives both
- * the JSON schema for the client and the validated TS type from it.
+ * object literal of zod fields), NOT a `ZodObject`; `attachAllTools` wraps it
+ * in a strict `z.object` (`strictInputSchema`), from which the SDK derives
+ * both the JSON schema for the client and the validation.
  */
 /**
  * Per-call metadata the registry extracts from the MCP request and forwards
@@ -94,7 +95,19 @@ export function registerToolModule(tool: ToolModule): void {
   TOOLS.push(tool);
 }
 
-/** Wire every registered tool into an active McpServer. */
+/**
+ * Wire every registered tool into an active McpServer.
+ *
+ * Each input schema is registered STRICT. Handed a raw shape, the SDK wraps
+ * it in a stripping `z.object`: a key the tool does not take was removed
+ * without a word, while `tools/list` advertised `additionalProperties:
+ * false`. A misnamed parameter therefore became the default instead of an
+ * error — `scan_skill { project_path }` (it takes `target`) audited the
+ * server's working directory and answered SAFE. Strict, the SDK answers
+ * -32602 naming the key, before the handler runs. (A tool with no
+ * parameters used to get no validation at all: the SDK skips an empty
+ * shape.)
+ */
 export function attachAllTools(server: McpServer, ctx: PluginContext): void {
   for (const tool of TOOLS) {
     server.registerTool(
@@ -102,7 +115,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
       {
         ...(tool.title ? { title: tool.title } : {}),
         description: tool.description,
-        inputSchema: tool.inputSchema,
+        inputSchema: strictInputSchema(tool),
       },
       async (input, extra) => {
         const callMeta: ToolCallMeta = {};
@@ -121,6 +134,11 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
       },
     );
   }
+}
+
+/** The schema a tool is registered with: its shape, rejecting any other key. */
+export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): z.ZodObject<ZodRawShape, 'strict'> {
+  return z.object(tool.inputSchema).strict();
 }
 
 /**

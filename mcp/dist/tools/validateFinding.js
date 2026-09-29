@@ -67,6 +67,15 @@ const Fingerprint = z
     .describe('Validate exactly this finding. Omitted (the default) validates EVERY open finding — batch ' +
     'is the point, since validating one finding at a time saves nobody any triage effort. A ' +
     'fingerprint that matches no open finding is an error, never an empty result.');
+// Review 3.0 I1: suppress_finding and suggest_fix name the same thing
+// `finding_fingerprint`. Passed here before the schemas were strict, the key
+// was stripped and EVERY open finding was validated instead of the one named.
+const FindingFingerprint = z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Same as fingerprint — the name suppress_finding and suggest_fix use. Pass either; both with ' +
+    'different values is an error.');
 const Providers = z
     // `.min(1)`: an empty array would mean "run no providers", whose only
     // possible output is the empty batch every refusal here exists to avoid.
@@ -107,6 +116,7 @@ const tool = {
     inputSchema: {
         project_path: ProjectPath,
         fingerprint: Fingerprint,
+        finding_fingerprint: FindingFingerprint,
         providers: Providers,
     },
     handler: async (input, ctx) => handler(input, ctx),
@@ -126,6 +136,13 @@ async function handler(input, ctx) {
     // `summary.providers_run` reports what actually ran, in the fixed order of
     // IMPLEMENTED_PROVIDERS — never the argument echoed back.
     const inp = input;
+    if (inp.fingerprint !== undefined &&
+        inp.finding_fingerprint !== undefined &&
+        inp.fingerprint !== inp.finding_fingerprint) {
+        return fail('unsupported_target', `fingerprint ('${inp.fingerprint}') and finding_fingerprint ('${inp.finding_fingerprint}') are ` +
+            'the same parameter and name different findings. Pass one of them.');
+    }
+    const fingerprint = inp.fingerprint ?? inp.finding_fingerprint;
     const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
     const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
     let projectPath;
@@ -165,9 +182,9 @@ async function handler(input, ctx) {
     // the SAST findings the caller meant (`history/openSet.ts`).
     const openSet = openSetForProject(ctx.storage, projectPath);
     const open = openSet.findings;
-    const selected = inp.fingerprint === undefined ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
-    if (inp.fingerprint !== undefined && selected.length === 0) {
-        return fail('target_not_found', `No OPEN finding carries the fingerprint '${inp.fingerprint}'. It may never have existed, ` +
+    const selected = fingerprint === undefined ? open : open.filter((f) => f.fingerprint === fingerprint);
+    if (fingerprint !== undefined && selected.length === 0) {
+        return fail('target_not_found', `No OPEN finding carries the fingerprint '${fingerprint}'. It may never have existed, ` +
             'it may belong to an older scan, or it may be suppressed — this tool only reads the open ' +
             'list and cannot tell those apart. Read guardian://findings/open for the fingerprints ' +
             'that are actually validatable, or omit the argument to validate all of them.');

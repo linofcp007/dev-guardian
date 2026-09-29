@@ -57,7 +57,7 @@ The dev-guardian MCP server registers **59 tools** and **18 resources**. This pa
 | [`suggest_fix`](#suggest_fix) | Gather fix context for the model | `project_path`, `finding_fingerprint`, `context_lines` |
 | [`suppress_finding`](#suppress_finding) | Suppress finding | `project_path`, `finding_fingerprint`, `reason`, `expires_at`, `vex_status`, `justification`, `impact_statement` |
 | [`triage_findings`](#triage_findings) | Heuristic triage of findings | `project_path` |
-| [`validate_finding`](#validate_finding) | Qualify findings by reachability | `project_path`, `fingerprint`, `providers` |
+| [`validate_finding`](#validate_finding) | Qualify findings by reachability | `project_path`, `fingerprint`, `finding_fingerprint`, `providers` |
 | [`vet_packages`](#vet_packages) | Vet packages before installing | `ecosystem`, `packages`, `project_path` |
 | [`wp_audit`](#wp_audit) | Live WordPress install audit | `wp_install_path`, `include_users`, `include_options`, `risky_login_names` |
 | [`wp_cron_audit`](#wp_cron_audit) | WordPress cron audit (suspicious scheduled events) | `wp_install_path` |
@@ -627,6 +627,7 @@ Answers, per finding, whether anything outside the process can reach the FILE th
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `fingerprint` | string | no | — | Validate exactly this finding. Omitted (the default) validates EVERY open finding — batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result. |
+| `finding_fingerprint` | string | no | — | Same as fingerprint — the name suppress\_finding and suggest\_fix use. Pass either; both with different values is an error. |
 | `providers` | array of one of "static", "dependency" | no | — | Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied. |
 
 ### `vet_packages`

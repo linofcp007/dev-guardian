@@ -8,6 +8,24 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **An argument a tool does not take is now an error, not a wrong answer.**
+  Every tool's input schema was handed to the SDK as a raw shape, which it
+  wraps in a *stripping* object: a misspelt or misnamed key was removed
+  without a word — while `tools/list` advertised `additionalProperties:
+  false` — and the call ran with the default instead. `scan_skill {
+  project_path: "<skill>" }` (it takes `target`) audited the server's working
+  directory and answered SAFE; `validate_finding { finding_fingerprint }`
+  validated every open finding instead of the one named. Every schema is now
+  registered strict: such a call fails with MCP error -32602 naming the key,
+  and nothing runs. A caller that relied on extra keys being ignored gets an
+  error it can read. `check_toolchain` and the other parameterless tools,
+  which the SDK did not validate at all, now reject any argument too.
+- `validate_finding` accepts `finding_fingerprint`, the name `suppress_finding`
+  and `suggest_fix` use, as an alias of `fingerprint`; both with different
+  values is an error.
+
 ### Security
 
 - **`scan_skill` read the commands in a SKILL.md as nothing.** Every

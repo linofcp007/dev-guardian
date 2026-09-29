@@ -40876,7 +40876,7 @@ function attachAllTools(server, ctx) {
       {
         ...tool50.title ? { title: tool50.title } : {},
         description: tool50.description,
-        inputSchema: tool50.inputSchema
+        inputSchema: strictInputSchema(tool50)
       },
       async (input, extra) => {
         const callMeta = {};
@@ -40893,6 +40893,9 @@ function attachAllTools(server, ctx) {
       }
     );
   }
+}
+function strictInputSchema(tool50) {
+  return external_exports.object(tool50.inputSchema).strict();
 }
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
@@ -72786,6 +72789,9 @@ var ANONYMOUS_EXPOSURE = "anonymous_exposure";
 var Fingerprint = external_exports.string().min(1).optional().describe(
   "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
 );
+var FindingFingerprint = external_exports.string().min(1).optional().describe(
+  "Same as fingerprint \u2014 the name suppress_finding and suggest_fix use. Pass either; both with different values is an error."
+);
 var Providers = external_exports.array(external_exports.enum(IMPLEMENTED_PROVIDERS)).min(1).optional().describe(
   "Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied."
 );
@@ -72804,6 +72810,7 @@ var tool44 = {
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
+    finding_fingerprint: FindingFingerprint,
     providers: Providers
   },
   handler: async (input, ctx) => handler41(input, ctx)
@@ -72818,6 +72825,13 @@ function fail2(code, message3, retryWith) {
 var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means no usable scan of this project's finding-producing types left an unsuppressed finding open. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
 async function handler41(input, ctx) {
   const inp = input;
+  if (inp.fingerprint !== void 0 && inp.finding_fingerprint !== void 0 && inp.fingerprint !== inp.finding_fingerprint) {
+    return fail2(
+      "unsupported_target",
+      `fingerprint ('${inp.fingerprint}') and finding_fingerprint ('${inp.finding_fingerprint}') are the same parameter and name different findings. Pass one of them.`
+    );
+  }
+  const fingerprint = inp.fingerprint ?? inp.finding_fingerprint;
   const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
   const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
   let projectPath;
@@ -72836,11 +72850,11 @@ async function handler41(input, ctx) {
   }
   const openSet = openSetForProject(ctx.storage, projectPath);
   const open = openSet.findings;
-  const selected = inp.fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
-  if (inp.fingerprint !== void 0 && selected.length === 0) {
+  const selected = fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === fingerprint);
+  if (fingerprint !== void 0 && selected.length === 0) {
     return fail2(
       "target_not_found",
-      `No OPEN finding carries the fingerprint '${inp.fingerprint}'. It may never have existed, it may belong to an older scan, or it may be suppressed \u2014 this tool only reads the open list and cannot tell those apart. Read guardian://findings/open for the fingerprints that are actually validatable, or omit the argument to validate all of them.`
+      `No OPEN finding carries the fingerprint '${fingerprint}'. It may never have existed, it may belong to an older scan, or it may be suppressed \u2014 this tool only reads the open list and cannot tell those apart. Read guardian://findings/open for the fingerprints that are actually validatable, or omit the argument to validate all of them.`
     );
   }
   const workingTreeHash = await computeTreeHash(projectPath);
