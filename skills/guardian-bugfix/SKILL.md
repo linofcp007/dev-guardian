@@ -5,7 +5,7 @@ description: Find and fix implementation bugs — race conditions, null safety, 
 
 # Guardian Bugfix
 
-Detecção e correção de bugs de implementação. Foca em problemas que SAST genérico tende a não apanhar e que dependem de raciocínio sobre comportamento dinâmico.
+Deteção e correção de bugs de implementação. Foca em problemas que SAST genérico tende a não apanhar e que dependem de raciocínio sobre comportamento dinâmico.
 
 ## Tipos de bug que esta skill caça
 

@@ -5,7 +5,9 @@
  * and produces canonical `Finding`s plus the rolled-up risk score and
  * per-category breakdown:
  *
- *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals
+ *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals,
+ *                                            the code rules also over the fenced
+ *                                            and inline code of an instruction file
  *   2. YARA signatures   (yaraSignatures.ts)— known-bad artifacts
  *   3. Taint-light       (taint.ts)         — source→sink within a file
  *   4. Hidden Unicode    (here)             — invisible instruction smuggling
@@ -62,16 +64,15 @@ export async function analyzeSkill(files, opts = {}) {
         if (file.isExecutable)
             executableFiles += 1;
         // 1. Pattern rules.
-        for (const m of scanContent(file.content, file.isCode)) {
-            const sev = severityOfRule(m.rule);
+        for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
             push(makeFinding({
                 tool: TOOL,
                 rule_id: m.rule.id,
-                severity: sev,
+                severity: m.severity,
                 category: 'security',
                 subcategory: m.rule.category,
                 title: m.rule.title,
-                message: m.rule.message,
+                message: m.rule.message + whereFound(m),
                 file_path: file.relPath,
                 line_start: m.line,
                 line_end: m.line,
@@ -181,6 +182,31 @@ export async function analyzeSkill(files, opts = {}) {
         executable_files: executableFiles,
         hidden_unicode_files: hiddenUnicodeFiles,
     };
+}
+/** Markdown or plain text, where an indented block is code: `.md`, `.txt`, `.rst`, `.adoc`, or no extension. */
+function isMarkdownLike(relPath) {
+    const name = relPath.split('/').pop() ?? '';
+    return /\.(md|markdown|mdx|txt|rst|adoc)$/i.test(name) || !name.includes('.');
+}
+/** Says which part of an instruction file a code rule read, and why a hit scores below its rule. */
+const CODE_SOURCE_TEXT = {
+    fenced: 'a fenced code block',
+    indented: 'an indented code block',
+    pre: 'an HTML <pre> / <code> block',
+    inline: 'inline code',
+};
+function whereFound(m) {
+    const kind = CODE_SOURCE_TEXT[m.source];
+    if (kind === undefined)
+        return '';
+    const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
+    if (m.severity === severityOfRule(m.rule))
+        return where;
+    return m.rule.fetchesOrSends === true
+        ? `${where} Scored one level below the rule: a placeholder (…, <url>, example.com) stands where its ` +
+            'target would be, and nothing in it or in its block is a real target — the shape of documentation.'
+        : `${where} Scored one level below the rule: nothing in it or in its block is a fetch target, and such ` +
+            'code is as often a mention of the command as an instruction to run it.';
 }
 function emptyBreakdown() {
     const out = {};

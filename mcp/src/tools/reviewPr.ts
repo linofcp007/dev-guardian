@@ -87,7 +87,8 @@ const reviewPr = makeScanTool<ReviewPrInput>({
     'manifest changed. Files are read at head: from the working tree when head is checked out, else ' +
     'from a temporary checkout of head. base_ref defaults to ' +
     'origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never ' +
-    '"no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry).',
+    '"no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it ' +
+    'runs, may still download its database.',
   scan_type: 'review_pr',
   category: 'security',
   supportsAutoFix: false,
@@ -104,8 +105,9 @@ const reviewPr = makeScanTool<ReviewPrInput>({
       .boolean()
       .optional()
       .describe(
-        "Semgrep runs only the project's own rules and registered custom rules, with --metrics=off. " +
-          'Default: false.',
+        "Semgrep runs only rules on disk — the project's own, registered custom rules and the plugin's " +
+          'LLM-application pack — with --metrics=off. Trivy (run when a manifest changed) may still download ' +
+          'its database. Default: false.',
       ),
     severity_min: SeverityMin,
     force: Force,

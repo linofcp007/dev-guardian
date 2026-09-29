@@ -33,7 +33,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Codex CLI | `.codex/config.toml` / `~/.codex/config.toml` | `AGENTS.md` |
 | Gemini CLI | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
 | Cline | manual — the CLI prints the snippet to paste into Cline's MCP settings | `.clinerules` |
-| Claude Desktop | `claude_desktop_config.json` (global only; `%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/Claude/`) | none — paste `host-rules/AGENTS.md` into a Project's instructions |
+| Claude Desktop | `claude_desktop_config.json` (global only; `%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/Claude/`) | none, and `mcp-config` writes none for it — paste `host-rules/AGENTS.md` into a Project's instructions after replacing every `{{DEV_GUARDIAN_CLI}}` in it (see below) |
 
 | Flag | Meaning |
 | --- | --- |
@@ -76,7 +76,14 @@ args = ['/abs/path/to/dev-guardian/mcp/dist/server.js']
 enabled = true
 ```
 
-The rules templates are in [`host-rules/`](../host-rules/); replace `{{DEV_GUARDIAN_CLI}}` in them with the absolute path of `cli/dev-guardian.mjs`.
+The rules templates are in [`host-rules/`](../host-rules/); replace `{{DEV_GUARDIAN_CLI}}` in them with the absolute path of `cli/dev-guardian.mjs`. `mcp-config --write` does that for every host it writes a rules file for; for one you copy by hand — Claude Desktop's Project instructions are the case `mcp-config` cannot write — print the substituted text from your clone and paste that:
+
+```text
+sed "s#{{DEV_GUARDIAN_CLI}}#$HOME/tools/dev-guardian/cli/dev-guardian.mjs#g" ~/tools/dev-guardian/host-rules/AGENTS.md
+(Get-Content ~\tools\dev-guardian\host-rules\AGENTS.md -Raw) -replace '\{\{DEV_GUARDIAN_CLI\}\}', "$HOME\tools\dev-guardian\cli\dev-guardian.mjs"
+```
+
+The first line is for a POSIX shell, the second for PowerShell; a path with spaces needs quotes around it in the commands the rules show.
 
 ## The server's working directory
 

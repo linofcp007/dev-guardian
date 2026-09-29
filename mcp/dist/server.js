@@ -10540,7 +10540,7 @@ var getStreamContents, appendFinalChunk, appendChunk, addNewChunk, getChunkType,
 var init_contents = __esm({
   "node_modules/get-stream/source/contents.js"() {
     init_stream();
-    getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
+    getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize: finalize2 }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
       const asyncIterable = getAsyncIterable(stream);
       const state = init();
       state.length = 0;
@@ -10566,10 +10566,10 @@ var init_contents = __esm({
           getFinalChunk,
           maxBuffer
         });
-        return finalize(state);
+        return finalize2(state);
       } catch (error2) {
         const normalizedError = typeof error2 === "object" && error2 !== null ? error2 : new Error(error2);
-        normalizedError.bufferedData = finalize(state);
+        normalizedError.bufferedData = finalize2(state);
         throw normalizedError;
       }
     };
@@ -40876,7 +40876,7 @@ function attachAllTools(server, ctx) {
       {
         ...tool50.title ? { title: tool50.title } : {},
         description: tool50.description,
-        inputSchema: tool50.inputSchema
+        inputSchema: strictInputSchema(tool50)
       },
       async (input, extra) => {
         const callMeta = {};
@@ -40893,6 +40893,12 @@ function attachAllTools(server, ctx) {
       }
     );
   }
+}
+function strictInputSchema(tool50) {
+  const schema = external_exports.object(tool50.inputSchema).strict();
+  const parse8 = schema.safeParseAsync.bind(schema);
+  schema.safeParseAsync = (data, params) => parse8(data ?? {}, params);
+  return schema;
 }
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
@@ -45408,14 +45414,14 @@ async function runScanBody(args) {
     plugin.storage.cves.bulkUpsert(cves.map((c3) => ({ ...c3, scan_id: scanId })));
   }
   const status = invocation.outcome === "completed" ? "completed" : invocation.outcome === "cancelled" ? "cancelled" : "failed";
-  const finalize = {
+  const finalize2 = {
     scan_id: scanId,
     status,
     tools_run: invocation.tools_run,
     missing_tools: invocation.missing_tools
   };
-  if (invocation.report_paths[0] !== void 0) finalize.report_dir = invocation.report_paths[0];
-  if (invocation.error !== void 0) finalize.error = invocation.error;
+  if (invocation.report_paths[0] !== void 0) finalize2.report_dir = invocation.report_paths[0];
+  if (invocation.error !== void 0) finalize2.error = invocation.error;
   const meta = { ...invocation.extras ?? {} };
   if (input.severity_min !== void 0) meta["severity_min"] = input.severity_min;
   if (args.parentScanId !== void 0) meta["parent_scan_id"] = args.parentScanId;
@@ -45434,8 +45440,8 @@ async function runScanBody(args) {
   if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === void 0) {
     meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
   }
-  if (Object.keys(meta).length > 0) finalize.meta = meta;
-  const finishedAt = plugin.storage.scans.finalize(finalize);
+  if (Object.keys(meta).length > 0) finalize2.meta = meta;
+  const finishedAt = plugin.storage.scans.finalize(finalize2);
   if (status === "cancelled") {
     return failDomain("cancelled", "Scan was cancelled by the host.");
   }
@@ -49223,7 +49229,7 @@ registerToolModule(
   makeScanTool({
     name: "security_scan_full",
     title: "Full security scan",
-    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off.",
+    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
     scan_type: "security_full",
     category: "security",
     orchestrator: true,
@@ -49237,7 +49243,7 @@ registerToolModule(
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep runs only rules already on disk (the project's .semgrep.yml and registered custom rules) with --metrics=off; no registry, no telemetry. Default: false."
+        "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false."
       ),
       force: Force
     },
@@ -50490,7 +50496,7 @@ var cosignParser = {
   }
 };
 var IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
-var SignerValue = external_exports.string().min(1).max(1024);
+var signerValue = () => external_exports.string().min(1).max(1024);
 var scanContainers = makeScanTool({
   name: "scan_containers",
   title: "Container scan (Dockerfile + image + compose)",
@@ -50503,16 +50509,16 @@ var scanContainers = makeScanTool({
     severity_min: SeverityMin,
     dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
     image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
-    signer_identity: SignerValue.optional().describe(
+    signer_identity: signerValue().optional().describe(
       "The identity `image` must be signed by: the signing certificate's subject \u2014 a workflow URL such as https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs signer_issuer (or signer_issuer_regexp); runs cosign verify."
     ),
-    signer_identity_regexp: SignerValue.optional().describe(
+    signer_identity_regexp: signerValue().optional().describe(
       "signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every release workflow of one repository. Not with signer_identity."
     ),
-    signer_issuer: SignerValue.optional().describe(
+    signer_issuer: signerValue().optional().describe(
       "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) or https://accounts.google.com."
     ),
-    signer_issuer_regexp: SignerValue.optional().describe(
+    signer_issuer_regexp: signerValue().optional().describe(
       "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
     ),
     force: Force
@@ -52165,7 +52171,7 @@ var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\
 var reviewPr = makeScanTool({
   name: "review_pr",
   title: "Pre-PR diff review",
-  description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry).',
+  description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database.',
   scan_type: "review_pr",
   category: "security",
   supportsAutoFix: false,
@@ -52175,7 +52181,7 @@ var reviewPr = makeScanTool({
     base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
     head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
     local_only: external_exports.boolean().optional().describe(
-      "Semgrep runs only the project's own rules and registered custom rules, with --metrics=off. Default: false."
+      "Semgrep runs only rules on disk \u2014 the project's own, registered custom rules and the plugin's LLM-application pack \u2014 with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false."
     ),
     severity_min: SeverityMin,
     force: Force
@@ -56828,7 +56834,9 @@ var tool7 = {
   description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is not an alias of standard: its gitleaks config drops every content-based allowlist entry (fixtures, known placeholders, stopwords \u2014 only generated/vendored trees stay excluded, for noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not just major ones, waits for a human) with a 7-day minimum release age versus standard's 3. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
   inputSchema: {
     project_path: ProjectPath,
-    profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional(),
+    profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional().describe(
+      "Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and pre-commit; paranoid: standard's files with a gitleaks config that has no content-based allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard."
+    ),
     apply: external_exports.boolean().optional().describe("When false, return only the proposed file list without writing. Default: true."),
     refresh: external_exports.boolean().optional().describe(
       "Opt-in re-sync of already-installed configs against the shipped baselines. Reports the per-file action; only writes when apply is also true, and never over a file you edited (that one is delivered as <name>.new instead). Default: false."
@@ -59207,10 +59215,14 @@ var ToEnum = external_exports.enum(["latest"]);
 var inputSchema6 = {
   project_path: ProjectPath,
   scan_type: external_exports.enum(SCAN_TYPES).optional().describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
-  from_scan_id: external_exports.string().uuid().optional(),
-  from: FromEnum.optional(),
-  to_scan_id: external_exports.string().uuid().optional(),
-  to: ToEnum.optional()
+  from_scan_id: external_exports.string().uuid().optional().describe("The older side: this exact scan. Takes precedence over from. Default: see from."),
+  from: FromEnum.optional().describe(
+    "The older side, when from_scan_id is not given: 'previous' \u2014 this project's usable scan of the same type just before the to scan \u2014 or 'baseline' \u2014 the baseline set_baseline recorded for that type. Default: 'previous'."
+  ),
+  to_scan_id: external_exports.string().uuid().optional().describe("The newer side: this exact scan. Takes precedence over to. Default: see to."),
+  to: ToEnum.optional().describe(
+    "The newer side, when to_scan_id is not given: 'latest' \u2014 this project's newest usable scan (of scan_type, when given). Default: 'latest'."
+  )
 };
 var tool12 = {
   name: "diff_scans",
@@ -59355,16 +59367,20 @@ var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_ch
 var tool13 = {
   name: "audit_executive",
   title: "Executive audit (security + quality + deps + compliance)",
-  description: "Run security_scan_full, quality_check, deps_audit, and compliance_check in sequence, producing one aggregated report with severity counts, top-10 findings, and a delta vs the previous executive audit (when present).",
+  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database, its version check (check.trivy.dev) and Maven Central for a pom.xml; npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
   inputSchema: {
     project_path: ProjectPath,
-    severity_min: SeverityMin
+    severity_min: SeverityMin,
+    local_only: external_exports.boolean().optional().describe(
+      "Passed to every child that takes it (security_scan_full: Semgrep rules on disk only, --metrics=off). scan_wordpress, which has no local-only mode, is skipped. Trivy, deps_audit and a .NET restore still reach the network; local_only_gaps in the result says what did. Default: false."
+    )
   },
   handler: async (input, ctx, callMeta) => handler10(input, ctx, callMeta)
 };
 registerToolModule(tool13);
 async function handler10(input, ctx, callMeta) {
   const inp = input;
+  const localOnly = inp.local_only === true;
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -59387,6 +59403,10 @@ async function handler10(input, ctx, callMeta) {
   const subTools = buildSubToolsForStack(ctx, projectPath);
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
+      const skipped2 = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : void 0;
+      if (skipped2 !== void 0) {
+        return [toolName, { tool: toolName, ok: false, skipped: skipped2 }];
+      }
       const subTool = TOOLS.find((t) => t.name === toolName);
       if (!subTool) {
         return [
@@ -59398,7 +59418,8 @@ async function handler10(input, ctx, callMeta) {
           }
         ];
       }
-      const result = await subTool.handler(subInput, ctx, callMeta);
+      const childInput2 = localOnly && "local_only" in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
+      const result = await subTool.handler(childInput2, ctx, callMeta);
       if (result.ok) {
         const r = result;
         const summary2 = { tool: toolName, ok: true };
@@ -59430,7 +59451,7 @@ async function handler10(input, ctx, callMeta) {
       status: "cancelled",
       tools_run: subToolRuns(subTools, subResults),
       missing_tools: [],
-      meta: { sub_scan_ids: subScanIds }
+      meta: { sub_scan_ids: subScanIds, ...localOnly ? { local_only: true } : {} }
     });
     return failDomain11(
       "cancelled",
@@ -59472,6 +59493,11 @@ async function handler10(input, ctx, callMeta) {
   const coverageList = [];
   const coverage_warnings = [];
   for (const summary2 of Object.values(subResults)) {
+    if (summary2.skipped !== void 0) {
+      coverageList.push("partial");
+      coverage_warnings.push(`${summary2.tool}: skipped \u2014 ${summary2.skipped}`);
+      continue;
+    }
     if (!summary2.ok) {
       coverageList.push("none");
       coverage_warnings.push(
@@ -59487,6 +59513,7 @@ async function handler10(input, ctx, callMeta) {
     }
   }
   const overallCoverage = worstCoverage(coverageList);
+  const local_only_gaps = localOnly ? localOnlyGaps(subTools) : [];
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: "completed",
@@ -59501,7 +59528,8 @@ async function handler10(input, ctx, callMeta) {
     // into it.
     meta: {
       sub_scan_ids: subScanIds,
-      ...inp.severity_min !== void 0 ? { severity_min: inp.severity_min } : {}
+      ...inp.severity_min !== void 0 ? { severity_min: inp.severity_min } : {},
+      ...localOnly ? { local_only: true } : {}
     }
   });
   return {
@@ -59512,13 +59540,44 @@ async function handler10(input, ctx, callMeta) {
     aggregate_counts,
     coverage: overallCoverage,
     ...coverage_warnings.length > 0 ? { coverage_warnings } : {},
+    ...localOnly ? { local_only_gaps } : {},
     top_findings,
     ...deltas ? { deltas } : {}
   };
 }
+var NO_LOCAL_ONLY_MODE = {
+  scan_wordpress: "it has no local-only mode: its Semgrep packs (p/php, p/wordpress) come from the Semgrep registry, with usage metrics. Run it without local_only to cover WordPress."
+};
+function localOnlyGaps(subTools) {
+  const gaps = [];
+  const ran = new Set(subTools);
+  if (ran.has("security_scan_full")) {
+    gaps.push(
+      "security_scan_full: its scan_deps and scan_iac run Trivy, which downloads its vulnerability database and checks bundle when its cache is stale; on a .NET project its scan_sast runs dotnet restore (the project's NuGet feeds) and dotnet build, which execute the project's MSBuild targets."
+    );
+  }
+  if (ran.has("deps_audit")) {
+    gaps.push(
+      "deps_audit: npm audit queries the npm registry; pip-audit installs the requirements from PyPI into a temporary virtualenv (an sdist's build step runs); for .NET, dotnet restore contacts the NuGet feeds and executes the project's MSBuild; Trivy may download its database."
+    );
+  }
+  if (ran.has("compliance_check")) {
+    gaps.push(
+      "compliance_check: its Trivy license scan downloads no vulnerability database, but resolves a pom.xml's dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off)."
+    );
+  }
+  gaps.push(
+    "Trivy, in every child above that runs it, contacts check.trivy.dev on every run \u2014 its version check, which also carries anonymous usage data; only TRIVY_SKIP_VERSION_CHECK=true and TRIVY_DISABLE_TELEMETRY=true, both, in the server's environment stop it."
+  );
+  gaps.push(
+    "Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off."
+  );
+  return gaps;
+}
 function subToolRuns(subTools, subResults) {
   return subTools.map((name) => {
     const sub = subResults[name];
+    if (sub?.skipped !== void 0) return { name, status: "skipped", reason: sub.skipped };
     const reason = sub?.error?.code;
     return {
       name,
@@ -61453,12 +61512,14 @@ import { existsSync as existsSync34, readFileSync as readFileSync27 } from "node
 var RESPONSE_CAP = 50;
 var inputSchema8 = {
   project_path: ProjectPath,
-  from_scan_id: external_exports.string().uuid().optional(),
-  to_scan_id: external_exports.string().uuid().optional(),
+  from_scan_id: external_exports.string().uuid().optional().describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
+  to_scan_id: external_exports.string().uuid().optional().describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
   /** No longer changes behaviour — full-file comparison always happens now
    *  when the SBOM file is still on disk. Kept so an existing caller that
    *  passes it does not break. */
-  use_full_file: external_exports.boolean().optional()
+  use_full_file: external_exports.boolean().optional().describe(
+    "Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is still on disk, and the capped summary stored with the scan only when it is not (component_source says which)."
+  )
 };
 var tool18 = {
   name: "sbom_diff",
@@ -63445,8 +63506,12 @@ var inputSchema14 = {
   max_issues: external_exports.number().int().min(1).max(50).optional().describe(
     "Cap on issues filed in one run, highest severity first. Default: 10 \u2014 findings beyond the cap are counted in `filtered`, never silently dropped."
   ),
-  labels: external_exports.array(external_exports.string()).optional(),
-  dry_run: external_exports.boolean().optional()
+  labels: external_exports.array(external_exports.string()).optional().describe(
+    'Labels for every issue. Missing ones are created; one that cannot be is left off (labels_omitted). Default: ["dev-guardian", "security"].'
+  ),
+  dry_run: external_exports.boolean().optional().describe(
+    "true: list the issues that would be created and call nothing. Default: false \u2014 the call FILES REAL ISSUES on GitHub through the local gh CLI."
+  )
 };
 var tool27 = {
   name: "create_github_issues",
@@ -63995,9 +64060,13 @@ var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
 var inputSchema15 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php."),
-  include_users: external_exports.boolean().optional(),
-  include_options: external_exports.boolean().optional(),
-  risky_login_names: external_exports.array(external_exports.string()).optional()
+  include_users: external_exports.boolean().optional().describe(
+    "List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging risky login names. Default: true."
+  ),
+  include_options: external_exports.boolean().optional().describe("Read the config flags DISALLOW_FILE_EDIT, WP_DEBUG, WP_DEBUG_LOG and FORCE_SSL_ADMIN. Default: true."),
+  risky_login_names: external_exports.array(external_exports.string()).optional().describe(
+    'Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: ["admin", "administrator", "root", "wpadmin"].'
+  )
 };
 var tool28 = {
   name: "wp_audit",
@@ -65648,9 +65717,11 @@ import { randomUUID as randomUUID11 } from "node:crypto";
 var inputSchema18 = {
   slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
   wp_install_path: external_exports.string().optional().describe(
-    "Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine."
+    "Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and active state from it; it also keys the CVE lookup when project_path is omitted. Absolute, or existing on this machine."
   ),
-  target_url: external_exports.string().url().optional().describe("Optional live URL for fresh WPScan lookup (skipped without API token)."),
+  target_url: external_exports.string().url().optional().describe(
+    "Site URL a wp_vuln_check was recorded under: its CVEs are read too. Nothing is sent to the site \u2014 for a live WPScan lookup run wp_vuln_check."
+  ),
   project_path: ProjectPath.describe(
     "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
   )
@@ -65658,7 +65729,7 @@ var inputSchema18 = {
 var tool32 = {
   name: "wp_plugin_check",
   title: "WordPress plugin check (1 plugin)",
-  description: "Focused check on one plugin: installed version (when wp_install_path given), latest known, active CVEs from the dev-guardian cves table. Pass target_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.",
+  description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check and newest wp_vuln_check_source. It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check_source (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
   inputSchema: inputSchema18,
   handler: async (input, ctx) => handler29(input, ctx)
 };
@@ -65670,10 +65741,13 @@ async function handler29(input, ctx) {
   const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
   if (installProblem !== null && !hasProject) return failDomain22("unsupported_target", installProblem);
   const warnings = [];
+  const toolsRun = [{ name: "wp_plugin_check", status: "ok" }];
+  const missingTools = [];
   if (installProblem !== null) {
     warnings.push(
       `${installProblem} The installed version was not detected (the WP-CLI probe was skipped); the CVE lookup used project_path.`
     );
+    toolsRun.push({ name: "wp-cli", status: "skipped", reason: "wp_install_path names no install on this machine" });
   }
   const probePath = installProblem === null ? inp.wp_install_path : void 0;
   let projectPath;
@@ -65689,37 +65763,19 @@ async function handler29(input, ctx) {
   } else {
     projectPath = serverProjectPath();
   }
+  let installed = null;
   let installedVersion = null;
   let active = null;
   if (probePath !== void 0 && probePath.length > 0) {
-    const wpBin = await scannerAvailable("wp");
-    if (wpBin) {
-      const r = await runProcess({
-        command: "wp",
-        args: [
-          "plugin",
-          "list",
-          `--path=${probePath}`,
-          `--name=${inp.slug}`,
-          "--fields=name,status,version",
-          "--format=json"
-        ],
-        cwd: probePath,
-        timeoutMs: 3e4
-      });
-      if (r.outcome === "completed") {
-        try {
-          const arr = JSON.parse(r.stdout);
-          const match = arr.find((p) => p.name === inp.slug);
-          if (match) {
-            installedVersion = match.version;
-            active = (match.status ?? "").toLowerCase() === "active";
-          }
-        } catch {
-        }
-      }
-    }
+    const probe2 = await probeInstalled(probePath, inp.slug);
+    toolsRun.push(probe2.run);
+    if (probe2.run.status === "skipped") missingTools.push("wp-cli");
+    if (probe2.warning !== null) warnings.push(probe2.warning);
+    installed = probe2.installed;
+    installedVersion = probe2.version;
+    active = probe2.active;
   }
+  const coverage = computeCoverage(toolsRun, missingTools);
   const slugLower = inp.slug.toLowerCase();
   const allActive = cveSources(ctx, wpInstallKeys(projectPath, rawProject), inp.target_url).flatMap((s) => ctx.storage.cves.listActive(s.scan_id)).filter((c3) => c3.package_name.toLowerCase() === slugLower);
   const cveMap = /* @__PURE__ */ new Map();
@@ -65738,11 +65794,12 @@ async function handler29(input, ctx) {
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: "completed",
-    tools_run: [{ name: "wp_plugin_check", status: "ok" }],
-    missing_tools: [],
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     meta: {
       scope: { kind: "plugin", slug: inp.slug },
       slug: inp.slug,
+      installed,
       installed_version: installedVersion,
       active,
       known_cves: knownCves
@@ -65753,12 +65810,64 @@ async function handler29(input, ctx) {
     project_path: projectPath,
     scan_id: scanId,
     slug: inp.slug,
+    installed,
     installed_version: installedVersion,
     active,
     known_cves: knownCves,
     cve_count: knownCves.length,
+    coverage,
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     warnings,
     hint: knownCves.length > 0 ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.` : "No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup."
+  };
+}
+async function probeInstalled(probePath, slug) {
+  const unknown4 = (run, warning) => ({
+    run,
+    installed: null,
+    version: null,
+    active: null,
+    warning: `${warning} The installed version and active state of ${slug} are unknown, not absent.`
+  });
+  if (!await scannerAvailable("wp")) {
+    return unknown4(
+      { name: "wp-cli", status: "skipped", reason: "WP-CLI (wp) is not installed" },
+      'WP-CLI (`wp`) is not installed, so the install was not probed (install_toolchain with tools=["wp-cli"]).'
+    );
+  }
+  const r = await runProcess({
+    command: "wp",
+    args: ["plugin", "list", `--path=${probePath}`, `--name=${slug}`, "--fields=name,status,version", "--format=json"],
+    cwd: probePath,
+    timeoutMs: 3e4
+  });
+  const failed = (reason) => unknown4(
+    { name: "wp-cli", status: "failed", reason },
+    `The WP-CLI probe of ${probePath} failed: ${reason}${/[.!?]$/.test(reason) ? "" : "."}`
+  );
+  if (r.outcome !== "completed") {
+    const stderr = r.stderr.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
+    return failed(`${r.outcome}, exit ${r.exitCode ?? "?"}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ""}`);
+  }
+  if (r.stdout.trim() === "") return failed("WP-CLI printed nothing");
+  let rows;
+  try {
+    rows = JSON.parse(r.stdout);
+  } catch {
+    return failed(`WP-CLI output is not JSON: ${r.stdout.trim().slice(0, 120)}`);
+  }
+  if (!Array.isArray(rows)) return failed("WP-CLI output is not a JSON list");
+  const match = rows.find(
+    (p) => p?.name === slug
+  );
+  if (!match) return { run: { name: "wp-cli", status: "ok" }, installed: false, version: null, active: null, warning: null };
+  return {
+    run: { name: "wp-cli", status: "ok" },
+    installed: true,
+    version: typeof match.version === "string" ? match.version : null,
+    active: typeof match.status === "string" ? match.status.toLowerCase() === "active" : null,
+    warning: null
   };
 }
 function cveSources(ctx, installKeys, targetUrl) {
@@ -65781,7 +65890,7 @@ function failDomain22(code, message3) {
 import { randomUUID as randomUUID12 } from "node:crypto";
 var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
-  timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
+  timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional().describe("Per-request timeout in milliseconds, 1000-60000. Default: 15000.")
 };
 var tool33 = {
   name: "wp_rest_audit",
@@ -67317,6 +67426,239 @@ function dedupe(queries) {
   return out;
 }
 
+// src/skillaudit/markdownCode.ts
+var FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
+var INDENTED = /^(?: {4,}|\t)(?=\S)/;
+var HTML_CODE_TAG = /<\/?(?:pre|code|kbd|samp|tt)\b[^>]*>/gi;
+var HTML_CODE_INLINE = /<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+var PRE_OPEN = /<pre\b[^>]*>/i;
+var CODE_BLOCK_OPEN = /^[ \t>]{0,3}<code\b[^>]*>/i;
+var BACKSLASH_CONTINUATION = /\\[ \t]*$/;
+var PIPE_CONTINUATION = /(?<!\|)\|[ \t]*$/;
+function continues(text2) {
+  return BACKSLASH_CONTINUATION.test(text2) || PIPE_CONTINUATION.test(text2);
+}
+function joinContinued(first, next) {
+  return `${first.replace(BACKSLASH_CONTINUATION, "")} ${next.trim()}`;
+}
+var NAMED_ENTITIES = {
+  lt: "<",
+  gt: ">",
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  verbar: "|",
+  vert: "|",
+  VerticalLine: "|",
+  dollar: "$",
+  lpar: "(",
+  rpar: ")",
+  sol: "/"
+};
+function decodeEntities(text2) {
+  return text2.replace(/&(#x[0-9a-f]+|#\d+|[A-Za-z]+);/gi, (whole, ref) => {
+    if (ref.startsWith("#x") || ref.startsWith("#X")) return safeCodePoint(Number.parseInt(ref.slice(2), 16), whole);
+    if (ref.startsWith("#")) return safeCodePoint(Number.parseInt(ref.slice(1), 10), whole);
+    return NAMED_ENTITIES[ref] ?? whole;
+  });
+}
+function safeCodePoint(code, fallback) {
+  return Number.isInteger(code) && code > 0 && code <= 1114111 ? String.fromCodePoint(code) : fallback;
+}
+var BlockLines = class {
+  constructor(out) {
+    this.out = out;
+  }
+  out;
+  pending = null;
+  add(unit) {
+    this.out.push(unit);
+    const more = continues(unit.text);
+    if (this.pending) {
+      const joined = { ...this.pending, text: joinContinued(this.pending.text, unit.text) };
+      if (more) {
+        this.pending = joined;
+      } else {
+        this.out.push(joined);
+        this.pending = null;
+      }
+    } else if (more) {
+      this.pending = unit;
+    }
+  }
+  end() {
+    if (this.pending) this.out.push(this.pending);
+    this.pending = null;
+  }
+};
+function splitMarkdown(content, opts = {}) {
+  const indentedCode = opts.indentedCode !== false;
+  const lines = content.split(/\r?\n/);
+  const code = [];
+  const prose = [];
+  const block = new BlockLines(code);
+  let state = null;
+  let blocks = 0;
+  let previousBlank = true;
+  for (let i2 = 0; i2 < lines.length; i2 += 1) {
+    const line = lines[i2] ?? "";
+    const lineNo = i2 + 1;
+    const current = blocks - 1;
+    if (state?.kind === "fenced") {
+      if (isClosingFence(line, state)) {
+        block.end();
+        state = null;
+        prose.push("");
+      } else {
+        block.add({ line: lineNo, text: line, kind: "fenced", block: current });
+        prose.push(line);
+      }
+      previousBlank = line.trim() === "";
+      continue;
+    }
+    if (state?.kind === "pre" && state.endsAtBlank && line.trim() === "") {
+      block.end();
+      state = null;
+    }
+    if (state?.kind === "pre") {
+      const close = state.close.exec(line);
+      const inside = decodeEntities((close ? line.slice(0, close.index) : line).replace(HTML_CODE_TAG, ""));
+      if (inside.trim() !== "") block.add({ line: lineNo, text: inside, kind: "pre", block: current });
+      prose.push(inside);
+      if (close) {
+        block.end();
+        state = null;
+      }
+      previousBlank = line.trim() === "";
+      continue;
+    }
+    if (state?.kind === "indented") {
+      if (INDENTED.test(line)) {
+        block.add({ line: lineNo, text: line.replace(/^(?: {4}|\t)/, ""), kind: "indented", block: current });
+        prose.push(line.trim());
+        previousBlank = false;
+        continue;
+      }
+      if (line.trim() === "") {
+        prose.push("");
+        previousBlank = true;
+        continue;
+      }
+      block.end();
+      state = null;
+    }
+    const open = FENCE_OPEN.exec(line);
+    const run = open?.[1];
+    if (open && run && !(run.startsWith("`") && (open[2] ?? "").includes("`"))) {
+      state = { kind: "fenced", char: run.charAt(0), length: run.length };
+      blocks += 1;
+      prose.push("");
+      previousBlank = false;
+      continue;
+    }
+    const spans = inlineSpans(line);
+    const outside = blankSpans(line, spans);
+    const opener = htmlBlockOpener(outside);
+    if (opener) {
+      state = { kind: "pre", close: opener.close, endsAtBlank: opener.endsAtBlank };
+      blocks += 1;
+      const after2 = decodeEntities(line.slice(opener.end).replace(HTML_CODE_TAG, ""));
+      if (after2.trim() !== "") block.add({ line: lineNo, text: after2, kind: "pre", block: blocks - 1 });
+      prose.push(decodeEntities(line.replace(HTML_CODE_TAG, "")));
+      previousBlank = false;
+      continue;
+    }
+    if (indentedCode && previousBlank && INDENTED.test(line)) {
+      state = { kind: "indented" };
+      blocks += 1;
+      block.add({ line: lineNo, text: line.replace(/^(?: {4}|\t)/, ""), kind: "indented", block: blocks - 1 });
+      prose.push(line.trim());
+      previousBlank = false;
+      continue;
+    }
+    for (const s of spans) code.push({ line: lineNo, text: s.text, kind: "inline", block: null });
+    for (const m of outside.matchAll(HTML_CODE_INLINE)) {
+      const text2 = decodeEntities((m[2] ?? "").replace(HTML_CODE_TAG, ""));
+      if (text2.trim() !== "") code.push({ line: lineNo, text: text2, kind: "inline", block: null });
+    }
+    prose.push(decodeEntities(keepSpanText(line, spans).replace(HTML_CODE_TAG, "")));
+    previousBlank = line.trim() === "";
+  }
+  block.end();
+  return { code, prose };
+}
+function htmlBlockOpener(outside) {
+  const pre = PRE_OPEN.exec(outside);
+  if (pre && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
+    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: pre.index + pre[0].length };
+  }
+  const codeOpen = CODE_BLOCK_OPEN.exec(outside);
+  if (codeOpen && !/<\/code\s*>/i.test(outside)) {
+    return { close: /<\/code\s*>/i, endsAtBlank: true, end: codeOpen.index + codeOpen[0].length };
+  }
+  return null;
+}
+function blankSpans(line, spans) {
+  let out = line;
+  for (const s of spans) out = out.slice(0, s.start) + " ".repeat(s.end - s.start) + out.slice(s.end);
+  return out;
+}
+function isClosingFence(line, fence) {
+  const m = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const run = m?.[1];
+  return run !== void 0 && run.charAt(0) === fence.char && run.length >= fence.length;
+}
+function inlineSpans(line) {
+  const out = [];
+  let i2 = 0;
+  while (i2 < line.length) {
+    if (line[i2] !== "`") {
+      i2 += 1;
+      continue;
+    }
+    let n2 = 0;
+    while (line[i2 + n2] === "`") n2 += 1;
+    const openEnd = i2 + n2;
+    let j = openEnd;
+    let close = -1;
+    while (j < line.length) {
+      if (line[j] !== "`") {
+        j += 1;
+        continue;
+      }
+      let m = 0;
+      while (line[j + m] === "`") m += 1;
+      if (m === n2) {
+        close = j;
+        break;
+      }
+      j += m;
+    }
+    if (close === -1) {
+      i2 = openEnd;
+      continue;
+    }
+    let text2 = line.slice(openEnd, close);
+    if (text2.length >= 2 && text2.startsWith(" ") && text2.endsWith(" ") && text2.trim() !== "") {
+      text2 = text2.slice(1, -1);
+    }
+    out.push({ start: i2, end: close + n2, text: text2 });
+    i2 = close + n2;
+  }
+  return out;
+}
+function keepSpanText(line, spans) {
+  if (spans.length === 0) return line;
+  let out = "";
+  let at = 0;
+  for (const s of spans) {
+    out += line.slice(at, s.start) + s.text;
+    at = s.end;
+  }
+  return out + line.slice(at);
+}
+
 // src/skillaudit/taxonomy.ts
 var THREAT_CATEGORIES = [
   "prompt_injection",
@@ -67463,6 +67805,27 @@ var SEVERITY_POINTS = {
 var EXECUTABLE_MULTIPLIER = 1.3;
 
 // src/skillaudit/patterns.ts
+var SENSITIVE_FILE_STRONG = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+var ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
+var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE})`;
+var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
+var SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
+var REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
+var REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, "i");
+var SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\(|` + "`[^`\\n]+`" + String.raw`|%[A-Za-z_]\w*%)`;
+var BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
+var SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+var NET_COMMAND_WITH_TARGET_RE = new RegExp(
+  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
+  "i"
+);
+function hasFetchTarget(text2) {
+  return REMOTE_DESTINATION_RE.test(text2) || NET_COMMAND_WITH_TARGET_RE.test(text2);
+}
+var INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
+var PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
+var AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 var SKILL_RULES = [
   // ───────────────────────────── prompt_injection ─────────────────────────
   {
@@ -67567,6 +67930,7 @@ var SKILL_RULES = [
   {
     id: "de-env-over-network",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "critical",
     title: "Environment / secrets sent over the network",
     message: "Code reads environment variables or credentials and ships them to a network destination.",
@@ -67574,7 +67938,26 @@ var SKILL_RULES = [
     patterns: [
       /(fetch|axios|requests?\.(post|get|put)|http[s]?\.request|urllib|httpx)[^\n]{0,120}(process\.env|os\.environ|getenv|ENV\[)/i,
       /(process\.env|os\.environ|getenv)[^\n]{0,120}(fetch|axios|requests?\.|\.post\(|upload|send\()/i,
-      /\b(curl|wget)\b[^\n]{0,200}(\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))/i
+      // Not when the secret authenticates the request — that is the next
+      // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
+      // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
+      // reference doc, read critical and took its skill to DO_NOT_INSTALL.
+      new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i")
+    ]
+  },
+  {
+    id: "de-secret-in-auth-header",
+    category: "data_exfiltration",
+    fetchesOrSends: true,
+    severity: "medium",
+    title: "Secret from the environment sent as request authentication",
+    message: "A request authenticates with a token, key or password from the environment. That is how an API is called \u2014 and also how a stolen token reaches a server that is not its own. Confirm the endpoint is the service the secret belongs to.",
+    target: "code",
+    patterns: [
+      new RegExp(
+        `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+        "i"
+      )
     ]
   },
   {
@@ -67584,13 +67967,34 @@ var SKILL_RULES = [
     title: "Reads sensitive local credential files",
     message: "Code references SSH keys, cloud credentials, browser data or .env \u2014 sensitive material a skill rarely needs.",
     target: "code",
+    patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")]
+  },
+  {
+    id: "de-sensitive-file-over-network",
+    category: "data_exfiltration",
+    fetchesOrSends: true,
+    severity: "critical",
+    title: "Credential file sent over the network",
+    message: "One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) and a network client \u2014 the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://\u2026`.",
+    target: "code",
+    patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")]
+  },
+  {
+    id: "de-sensitive-file-over-network-prose",
+    category: "data_exfiltration",
+    fetchesOrSends: true,
+    severity: "high",
+    title: "Instruction to send a credential file to a remote endpoint",
+    message: "The prose of an instruction file names a credential file, a way to send it and a concrete destination (a URL or an IP address) in one sentence. A description of the attack names no endpoint; an instruction to carry it out has to.",
+    target: "prose",
     patterns: [
-      /(id_rsa|\.ssh\/|\.aws\/credentials|\.npmrc|\.netrc|\.env\b|cookies\.sqlite|Login\s+Data)/i
+      new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, "i")
     ]
   },
   {
     id: "de-dns-or-raw-egress",
     category: "data_exfiltration",
+    fetchesOrSends: true,
     severity: "high",
     title: "Covert egress channel (DNS / raw socket / nc)",
     message: "Use of DNS lookups, raw sockets or netcat as a data channel.",
@@ -67634,15 +68038,62 @@ var SKILL_RULES = [
   {
     id: "sc-curl-pipe-shell",
     category: "supply_chain",
+    fetchesOrSends: true,
     severity: "high",
     title: "Remote fetch piped to a shell",
     message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
     target: "code",
     patterns: [
-      /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+)?(bash|sh|zsh|python[23]?|node)\b/i,
+      new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
       /\beval\s+"\$\(\s*(curl|wget)\b/i,
-      /(iwr|invoke-webrequest|invoke-restmethod)[^\n|]{0,200}\|\s*(iex|invoke-expression)/i
+      /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+      // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
+      // interpreter (`python3 -c "$(curl …)"`, `node -e`, `perl -e`, `php -r`,
+      // `pwsh -Command`): an interpreter reading a program it just downloaded.
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b`, "i"),
+      new RegExp(String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b`, "i"),
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b/i
     ]
+  },
+  {
+    id: "sc-curl-pipe-shell-prose",
+    category: "supply_chain",
+    fetchesOrSends: true,
+    severity: "high",
+    title: "Instruction to pipe a remote script to a shell",
+    message: 'The prose of an instruction file tells the reader to download a script from a concrete target \u2014 a URL, a host, or a variable set elsewhere \u2014 and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no target and is not reported.',
+    target: "prose",
+    patterns: [
+      // A URL, a host with no scheme (`curl -fsSL get.example.io | sh`, the
+      // get.docker.com shape), or a variable (`URL=https://…`, then
+      // `curl -s $URL | bash`) as the target.
+      new RegExp(
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
+        "i"
+      ),
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
+      new RegExp(
+        String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`,
+        "i"
+      ),
+      new RegExp(String.raw`\beval\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
+      new RegExp(
+        String.raw`\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(iex|invoke-expression)\b`,
+        "i"
+      ),
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b.{0,300}\bhttps?:\/\//i
+    ]
+  },
+  {
+    id: "sc-download-then-run",
+    category: "supply_chain",
+    fetchesOrSends: true,
+    severity: "high",
+    title: "Remote file downloaded, then run",
+    message: "A file is downloaded (curl -o / -O, wget, iwr -OutFile) and later run from a shell or an interpreter, on the same line or further down the same file \u2014 curl|bash in two steps.",
+    target: "code",
+    // Read by `downloadThenRun` over the whole file, not line by line.
+    patterns: []
   },
   {
     id: "sc-untrusted-install",
@@ -67752,7 +68203,9 @@ var SKILL_RULES = [
     title: "Shell/network access from a non-execution helper",
     message: "A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.",
     target: "code",
-    patterns: [/(spawn|spawnSync|popen|system)\s*\(/i]
+    // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
+    // task, not a process.
+    patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i]
   },
   // ──────────────────────────── mcp_tool_poisoning ────────────────────────
   {
@@ -67768,39 +68221,187 @@ var SKILL_RULES = [
     ]
   }
 ];
-function scanContent(content, isCode) {
-  const matches3 = [];
+function scanContent(content, isCode, opts = {}) {
   const lines = content.split(/\r?\n/);
-  for (const rule of SKILL_RULES) {
-    if (rule.target === "code" && !isCode) continue;
-    if (rule.target === "text" && isCode) continue;
-    for (const pattern of rule.patterns) {
-      for (let i2 = 0; i2 < lines.length; i2 += 1) {
-        const line = lines[i2] ?? "";
-        pattern.lastIndex = 0;
-        if (pattern.test(line)) {
-          matches3.push({
-            rule,
-            line: i2 + 1,
-            snippet: line.trim().slice(0, 240)
-          });
-          break;
-        }
+  if (isCode) {
+    const units = codeFileUnits(lines);
+    return finalize([...matchUnits(rulesFor("code", "any"), units), ...downloadThenRun(units, false)]);
+  }
+  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", noTarget: false, placeholder: false }));
+  const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
+  const fetchBlocks = /* @__PURE__ */ new Set();
+  const realBlocks = /* @__PURE__ */ new Set();
+  for (const u2 of views.code) {
+    if (u2.block === null) continue;
+    if (hasFetchTarget(u2.text)) fetchBlocks.add(u2.block);
+    if (hasRealTarget(u2.text)) realBlocks.add(u2.block);
+  }
+  const inBlock = (set2, block) => block !== null && set2.has(block);
+  const prose = views.prose.map((text2, i2) => ({
+    line: i2 + 1,
+    text: withoutDocHosts(text2),
+    display: text2,
+    source: "prose",
+    noTarget: false,
+    placeholder: false
+  }));
+  const code = views.code.filter((u2) => u2.kind !== "inline" || isWholeCommand(u2.text)).map((u2) => ({
+    line: u2.line,
+    text: u2.text,
+    source: u2.kind,
+    noTarget: !hasFetchTarget(u2.text) && !inBlock(fetchBlocks, u2.block),
+    placeholder: isPlaceholder(u2.text) && !inBlock(realBlocks, u2.block)
+  }));
+  return finalize([
+    ...matchUnits(rulesFor("text", "any"), whole),
+    ...matchUnits(rulesFor("prose"), prose),
+    ...matchUnits(rulesFor("code"), code),
+    ...downloadThenRun([...code, ...prose].sort((a2, b) => a2.line - b.line), true)
+  ]);
+}
+function codeFileUnits(lines) {
+  const units = [];
+  let pending = null;
+  lines.forEach((text2, i2) => {
+    const unit = { line: i2 + 1, text: text2, source: "line", noTarget: false, placeholder: false };
+    units.push(unit);
+    const more = continues(text2);
+    if (pending) {
+      const joined = { ...pending, text: joinContinued(pending.text, text2) };
+      if (more) {
+        pending = joined;
+      } else {
+        units.push(joined);
+        pending = null;
       }
+    } else if (more) {
+      pending = unit;
+    }
+  });
+  if (pending) units.push(pending);
+  return units;
+}
+function rulesFor(...targets) {
+  return SKILL_RULES.filter((r) => targets.includes(r.target));
+}
+var SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+function matchUnits(rules2, units) {
+  const matches3 = [];
+  for (const rule of rules2) {
+    const full = severityOfRule(rule);
+    for (const pattern of rule.patterns) {
+      let best = null;
+      for (const unit of units) {
+        pattern.lastIndex = 0;
+        if (!pattern.test(unit.text)) continue;
+        const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
+        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
+        if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
+          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
+        }
+        if (severity === full) break;
+      }
+      if (best) matches3.push(best);
     }
   }
-  return dedupeByRuleLine(matches3);
+  return matches3;
 }
-function dedupeByRuleLine(matches3) {
-  const seen = /* @__PURE__ */ new Set();
+function snippetOf(unit) {
+  return (unit.display ?? unit.text).trim().slice(0, 240);
+}
+var PLACEHOLDER_TOKEN_RE = /…|(?<![\w.])\.\.\.(?![\w.])|(?<=^|[\s=:'"(\[])<[A-Za-z][\w-]*>(?=$|[\s|;&)'"\/\]])/;
+var DOC_HOST_RE = /(?:\b(?:https?|s?ftp):\/\/)?(?<![\w.@-])(?:www\.)?example\.(?:com|org|net)(?![\w.-])(?:[:/][^\s'"<>|;&)]*)?/gi;
+function withoutDocHosts(text2) {
+  return text2.replace(DOC_HOST_RE, "<url>");
+}
+function hasRealTarget(text2) {
+  return hasFetchTarget(withoutDocHosts(text2));
+}
+function isPlaceholder(text2) {
+  if (hasRealTarget(text2)) return false;
+  DOC_HOST_RE.lastIndex = 0;
+  const docHost = DOC_HOST_RE.test(text2);
+  DOC_HOST_RE.lastIndex = 0;
+  return PLACEHOLDER_TOKEN_RE.test(text2) || docHost;
+}
+function isWholeCommand(span) {
+  const t = span.trim();
+  return (/\s/.test(t) || hasRealTarget(t)) && !isPlaceholder(t);
+}
+var ONE_LEVEL_LOWER = {
+  critical: "high",
+  high: "medium",
+  medium: "low",
+  low: "info",
+  info: "info"
+};
+var CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+var CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
+var CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
+var WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+var WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
+var PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+var URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
+function downloadsIn(unit) {
   const out = [];
-  for (const m of matches3) {
-    const key = `${m.rule.id}:${m.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(m);
+  const add = (m, file) => {
+    const base = basenameOf(file ?? "");
+    if (base !== "") out.push({ unit, end: m.index + m[0].length, file: base });
+  };
+  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
+    for (const m of unit.text.matchAll(re)) add(m, m[1]);
+  }
+  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
+    for (const m of unit.text.matchAll(re)) {
+      const url2 = URL_IN.exec(m[0]);
+      if (url2) add(m, url2[0].replace(/[?#].*$/, ""));
+    }
   }
   return out;
+}
+function basenameOf(path8) {
+  const base = path8.split(/[/\\]/).pop() ?? "";
+  return /[A-Za-z0-9]/.test(base) ? base : "";
+}
+var RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
+function runsFile(text2, file) {
+  const f = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const end = String.raw`(?=$|[\s"'|;&)])`;
+  const viaRunner = String.raw`(?:^|[\s;&|(])(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\s+(?:-\S+\s+)*["']?(?:[^\s"'|;&]*[\/\\])?${f}${end}`;
+  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&]*[\/\\]${f}${end}`;
+  return new RegExp(`${viaRunner}|${direct}`).test(text2);
+}
+var DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === "sc-download-then-run");
+function downloadThenRun(units, instructionFile) {
+  if (!DOWNLOAD_THEN_RUN) return [];
+  const full = severityOfRule(DOWNLOAD_THEN_RUN);
+  for (const dl of units.flatMap(downloadsIn)) {
+    const rest = dl.unit.text.slice(dl.end);
+    const run = runsFile(rest, dl.file) ? dl.unit : units.find((u2) => u2.line > dl.unit.line && runsFile(u2.text, dl.file));
+    if (!run) continue;
+    const lowered = instructionFile && isPlaceholder(dl.unit.text);
+    return [
+      {
+        rule: DOWNLOAD_THEN_RUN,
+        line: run.line,
+        snippet: `${snippetOf(run)} (downloaded at line ${dl.unit.line})`.slice(0, 240),
+        source: run.source,
+        severity: lowered ? ONE_LEVEL_LOWER[full] : full
+      }
+    ];
+  }
+  return [];
+}
+function finalize(matches3) {
+  const best = /* @__PURE__ */ new Map();
+  for (const m of matches3) {
+    const key = `${m.rule.id.replace(/-prose$/, "")}:${m.line}`;
+    const seen = best.get(key);
+    if (seen === void 0 || SEVERITY_RANK[m.severity] > SEVERITY_RANK[seen.severity] || m.severity === seen.severity && seen.source === "prose" && m.source !== "prose") {
+      best.set(key, m);
+    }
+  }
+  return [...best.values()];
 }
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
@@ -68029,17 +68630,16 @@ async function analyzeSkill(files, opts = {}) {
   }
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
-    for (const m of scanContent(file.content, file.isCode)) {
-      const sev = severityOfRule(m.rule);
+    for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
       push(
         makeFinding({
           tool: TOOL,
           rule_id: m.rule.id,
-          severity: sev,
+          severity: m.severity,
           category: "security",
           subcategory: m.rule.category,
           title: m.rule.title,
-          message: m.rule.message,
+          message: m.rule.message + whereFound(m),
           file_path: file.relPath,
           line_start: m.line,
           line_end: m.line,
@@ -68152,6 +68752,23 @@ async function analyzeSkill(files, opts = {}) {
     executable_files: executableFiles,
     hidden_unicode_files: hiddenUnicodeFiles
   };
+}
+function isMarkdownLike(relPath) {
+  const name = relPath.split("/").pop() ?? "";
+  return /\.(md|markdown|mdx|txt|rst|adoc)$/i.test(name) || !name.includes(".");
+}
+var CODE_SOURCE_TEXT = {
+  fenced: "a fenced code block",
+  indented: "an indented code block",
+  pre: "an HTML <pre> / <code> block",
+  inline: "inline code"
+};
+function whereFound(m) {
+  const kind = CODE_SOURCE_TEXT[m.source];
+  if (kind === void 0) return "";
+  const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
+  if (m.severity === severityOfRule(m.rule)) return where;
+  return m.rule.fetchesOrSends === true ? `${where} Scored one level below the rule: a placeholder (\u2026, <url>, example.com) stands where its target would be, and nothing in it or in its block is a real target \u2014 the shape of documentation.` : `${where} Scored one level below the rule: nothing in it or in its block is a fetch target, and such code is as often a mention of the command as an instruction to run it.`;
 }
 function emptyBreakdown() {
   const out = {};
@@ -68697,7 +69314,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };
@@ -72564,6 +73181,9 @@ var ANONYMOUS_EXPOSURE = "anonymous_exposure";
 var Fingerprint = external_exports.string().min(1).optional().describe(
   "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
 );
+var FindingFingerprint = external_exports.string().min(1).optional().describe(
+  "Same as fingerprint \u2014 the name suppress_finding and suggest_fix use. Pass either; both with different values is an error."
+);
 var Providers = external_exports.array(external_exports.enum(IMPLEMENTED_PROVIDERS)).min(1).optional().describe(
   "Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied."
 );
@@ -72582,6 +73202,7 @@ var tool44 = {
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
+    finding_fingerprint: FindingFingerprint,
     providers: Providers
   },
   handler: async (input, ctx) => handler41(input, ctx)
@@ -72596,6 +73217,13 @@ function fail2(code, message3, retryWith) {
 var NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means no usable scan of this project's finding-producing types left an unsuppressed finding open. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
 async function handler41(input, ctx) {
   const inp = input;
+  if (inp.fingerprint !== void 0 && inp.finding_fingerprint !== void 0 && inp.fingerprint !== inp.finding_fingerprint) {
+    return fail2(
+      "unsupported_target",
+      `fingerprint ('${inp.fingerprint}') and finding_fingerprint ('${inp.finding_fingerprint}') are the same parameter and name different findings. Pass one of them.`
+    );
+  }
+  const fingerprint = inp.fingerprint ?? inp.finding_fingerprint;
   const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
   const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
   let projectPath;
@@ -72614,11 +73242,11 @@ async function handler41(input, ctx) {
   }
   const openSet = openSetForProject(ctx.storage, projectPath);
   const open = openSet.findings;
-  const selected = inp.fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === inp.fingerprint);
-  if (inp.fingerprint !== void 0 && selected.length === 0) {
+  const selected = fingerprint === void 0 ? open : open.filter((f) => f.fingerprint === fingerprint);
+  if (fingerprint !== void 0 && selected.length === 0) {
     return fail2(
       "target_not_found",
-      `No OPEN finding carries the fingerprint '${inp.fingerprint}'. It may never have existed, it may belong to an older scan, or it may be suppressed \u2014 this tool only reads the open list and cannot tell those apart. Read guardian://findings/open for the fingerprints that are actually validatable, or omit the argument to validate all of them.`
+      `No OPEN finding carries the fingerprint '${fingerprint}'. It may never have existed, it may belong to an older scan, or it may be suppressed \u2014 this tool only reads the open list and cannot tell those apart. Read guardian://findings/open for the fingerprints that are actually validatable, or omit the argument to validate all of them.`
     );
   }
   const workingTreeHash = await computeTreeHash(projectPath);

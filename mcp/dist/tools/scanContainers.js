@@ -91,8 +91,14 @@ const cosignParser = {
  * cosign's reasons, notes and findings.
  */
 const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
-/** A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character. */
-const SignerValue = z.string().min(1).max(1024);
+/**
+ * A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character.
+ * A FACTORY, not one shared instance: the JSON-schema converter emits a reused
+ * zod instance as `$ref` to its first use, and draft-07 ignores every keyword
+ * beside a `$ref` — the other three parameters' descriptions were invisible
+ * (review 3.0 M2).
+ */
+const signerValue = () => z.string().min(1).max(1024);
 const scanContainers = makeScanTool({
     name: 'scan_containers',
     title: 'Container scan (Dockerfile + image + compose)',
@@ -124,14 +130,14 @@ const scanContainers = makeScanTool({
             .regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"')
             .optional()
             .describe('Container image reference to scan with `trivy image`.'),
-        signer_identity: SignerValue.optional().describe("The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as " +
+        signer_identity: signerValue().optional().describe("The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as " +
             'https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs ' +
             'signer_issuer (or signer_issuer_regexp); runs cosign verify.'),
-        signer_identity_regexp: SignerValue.optional().describe('signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every ' +
+        signer_identity_regexp: signerValue().optional().describe('signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every ' +
             'release workflow of one repository. Not with signer_identity.'),
-        signer_issuer: SignerValue.optional().describe('The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) ' +
+        signer_issuer: signerValue().optional().describe('The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) ' +
             'or https://accounts.google.com.'),
-        signer_issuer_regexp: SignerValue.optional().describe('signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.'),
+        signer_issuer_regexp: signerValue().optional().describe('signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.'),
         force: Force,
     },
     invoke: async (input, ctx) => {

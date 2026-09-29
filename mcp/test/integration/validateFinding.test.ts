@@ -410,6 +410,32 @@ describe('validate_finding selection', () => {
     expect(r.validations.map((v) => v.fingerprint)).toEqual(['fp2']);
     expect(r.summary.findings_selected).toBe(1);
   });
+
+  // Review 3.0 I1: suppress_finding and suggest_fix call it
+  // `finding_fingerprint`. Passed here, the SDK stripped the unknown key and
+  // this tool validated EVERY open finding — the opposite of what was asked.
+  it('accepts finding_fingerprint, the name suppress_finding and suggest_fix use, as the same selector', async () => {
+    seedSnapshot();
+    seedScan([finding({ fingerprint: 'fp1' }), finding({ fingerprint: 'fp2' })]);
+
+    const r = expectOk(await run({ finding_fingerprint: 'fp2' }));
+
+    expect(r.validations.map((v) => v.fingerprint)).toEqual(['fp2']);
+    expect(r.summary.findings_selected).toBe(1);
+    expect(expectErr(await run({ finding_fingerprint: 'nope' })).error.code).toBe('target_not_found');
+  });
+
+  it('refuses fingerprint and finding_fingerprint naming different findings, and accepts them agreeing', async () => {
+    seedSnapshot();
+    seedScan([finding({ fingerprint: 'fp1' }), finding({ fingerprint: 'fp2' })]);
+
+    const conflict = expectErr(await run({ fingerprint: 'fp1', finding_fingerprint: 'fp2' }));
+    expect(conflict.error.code).toBe('unsupported_target');
+    expect(conflict.error.message).toMatch(/fingerprint.*finding_fingerprint/);
+
+    const agree = expectOk(await run({ fingerprint: 'fp1', finding_fingerprint: 'fp1' }));
+    expect(agree.validations.map((v) => v.fingerprint)).toEqual(['fp1']);
+  });
 });
 
 /* ------------------------------------------------------------------ */

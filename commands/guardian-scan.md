@@ -30,7 +30,7 @@ Resolve the refs before calling anything:
 
 ## 2. Whole project (no argument)
 
-Call `security_scan_full { project_path: "<project>" }`. It runs `scan_sast`, `scan_secrets` (git history and uncommitted files), `scan_deps` and `scan_iac` as child scans and returns their merged findings. Add `local_only: true` when nothing may leave the machine (the Semgrep registry sends usage metrics otherwise), and `severity_min: "high"` only to shorten the response — every finding is still recorded.
+Call `security_scan_full { project_path: "<project>" }`. It runs `scan_sast`, `scan_secrets` (git history and uncommitted files), `scan_deps` and `scan_iac` as child scans and returns their merged findings. Add `local_only: true` to keep Semgrep off its registry and its metrics endpoint (only rules on disk run, the plugin's LLM pack included) — it does not stop Trivy downloading its vulnerability database, nor a .NET project's restore contacting its NuGet feeds (SECURITY.md lists every request), and `severity_min: "high"` only to shorten the response — every finding is still recorded.
 
 ## 3. A scoped scan (any flag or path)
 

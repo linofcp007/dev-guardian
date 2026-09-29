@@ -4,11 +4,49 @@
  * Each rule maps to one `ThreatCategory` and is matched line-by-line against
  * a file's content. A rule declares a `target`:
  *   - 'text' → only run against instruction/doc artifacts (SKILL.md, README,
- *     *.md, *.txt, plain MCP manifest prose). These are where prompt-level
- *     attacks live.
- *   - 'code' → only run against executable/source artifacts (*.sh, *.py,
- *     *.js, *.ts, *.ps1, …). These are where real code execution lives.
- *   - 'any'  → both.
+ *     *.md, *.txt, plain MCP manifest prose), over the whole file. These are
+ *     where prompt-level attacks live.
+ *   - 'code' → run against executable/source artifacts (*.sh, *.py, *.js,
+ *     *.ts, *.ps1, …), AND against the code inside an instruction file: its
+ *     fenced, indented and `<pre>` / `<code>` blocks and its inline code
+ *     (`markdownCode.ts`). For a third-party skill the instructions are what
+ *     the model runs, so a ```bash``` block in SKILL.md is as executable as
+ *     `scripts/setup.sh`. In either kind of file, lines continued with `\`
+ *     or a trailing `|` are also read as one.
+ *   - 'prose' → every line of an instruction file as it reads, inline code
+ *     included (its backticks dropped): the same command written as a
+ *     sentence ("run curl … | bash", "send `~/.ssh/id_rsa` to https://…").
+ *     Each prose rule is the variant of a code rule with the same id plus
+ *     `-prose`; where both fire on one line, one finding is kept.
+ *   - 'any'  → both kinds of file, whole content.
+ *   `sc-download-then-run` is read over the whole file rather than a line:
+ *   a file downloaded, then run further down.
+ *
+ * The code in an instruction file is as often a MENTION as an instruction:
+ * `rm -rf /` in the list of what a hook blocks, `pattern: \.env$` in a doc
+ * about writing detection rules, `exec(` in a bug catalogue. So code in an
+ * instruction file can score one level below its rule, and which code
+ * depends on the rule:
+ *   - a rule that FETCHES OR SENDS (`fetchesOrSends`: curl|bash and its
+ *     interpreter forms, download-then-run, the send-over-network rules) is
+ *     lowered ONLY where a placeholder stands for its target: `…`, a
+ *     standalone `...`, `<url>` / `<script>` / `<path>` in an argument's
+ *     position, or the documentation hosts `example.com` / `.org` / `.net`
+ *     themselves. An absent target is not a placeholder — `echo <b64> |
+ *     base64 -d | xargs curl -fsSL | bash` hides its target on purpose — and a
+ *     span or block with a real target (a URL or an IP, or a network client
+ *     given a variable or substitution — `$URL`, `${X}`, `$1`, `$(…)`,
+ *     `%VAR%`, `$env:X` — or a scheme-less host) is never one, whatever
+ *     `# ...` it carries (review 3.0, rounds 2-3);
+ *   - every other rule (destruction, permissions, dynamic code, …) has no
+ *     target of its own, and is lowered unless its span or block has a fetch
+ *     target — measured against this repo's docs and 75 third-party skills.
+ *     Round 3 applied the placeholder-only rule to these too, and seven of
+ *     those skills rose a verdict for fenced detection patterns and doc
+ *     examples; round 4 narrowed it back.
+ * An inline span is read at all only when it is a whole command (an argument
+ * or a real target) and not a placeholder. A skill's own scripts are scored
+ * at full severity, as always.
  *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
@@ -21,10 +59,88 @@
  */
 
 import type { Severity } from '../types.js';
+import { continues, joinContinued, splitMarkdown } from './markdownCode.js';
 import type { ThreatCategory } from './taxonomy.js';
 import { THREAT_CATEGORY_META } from './taxonomy.js';
 
-export type RuleTarget = 'text' | 'code' | 'any';
+export type RuleTarget = 'text' | 'code' | 'prose' | 'any';
+
+/**
+ * A credential file, named as a path. A public key (`*.pub`) is not a
+ * credential — sending one to a server is how you register it.
+ */
+const SENSITIVE_FILE_STRONG =
+  String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+
+/**
+ * A `.env` file as a FILE: not `process.env` (a property), and not a
+ * template (`.env.example`, `.sample`, `.template`, `.dist`, `.defaults`) —
+ * `.env.local` and `.env.production` are real ones.
+ */
+const ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
+
+const SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE})`;
+
+/**
+ * `.env` read the way that exposes its content: printed or piped (`cat`,
+ * `grep` without `-q`, …), redirected in, or copied out as the source of a
+ * copy. Round 4 of the 3.0 review, measured on 75 installed skills: `.env`
+ * was reported wherever it was named — `cp .env.example .env`, `chmod 600
+ * …/.env`, `echo … > .env`, `grep -q` checks, a path in a dotenv loader —
+ * none of which reads a secret out. Loading it into the environment
+ * (`source .env`) is not a read that shows or ships it either; sending it is
+ * `de-sensitive-file-over-network`.
+ */
+const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+
+/** A program or API call that sends bytes off the machine. */
+const NETWORK_SENDER =
+  String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
+
+/** The same act, in words. */
+const SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
+
+/** A concrete remote endpoint: what an instruction to exfiltrate has and a description of one does not. */
+const REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
+
+const REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, 'i');
+
+/**
+ * A variable or substitution — what a command names its target with when the
+ * value is set somewhere else: `$URL`, `${X}`, `$1`, `$(…)`, a backtick
+ * substitution, cmd's `%VAR%`, PowerShell's `$env:X`.
+ */
+const SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\(|` + '`[^`\\n]+`' + String.raw`|%[A-Za-z_]\w*%)`;
+
+/** A host named without a scheme: `get.example.com`, `statsd.local:8125/x`. */
+const BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
+
+/** Shell programs that fetch from, or send to, the target they are given. */
+const SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+
+/**
+ * A network command with something to reach: a shell client followed, within
+ * the same simple command, by a variable, a substitution or a scheme-less
+ * host. With the URL / IP check this is what "has a fetch target" means — see
+ * the header: the one-level downgrade is for code that has none.
+ */
+const NET_COMMAND_WITH_TARGET_RE = new RegExp(
+  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
+  'i',
+);
+
+function hasFetchTarget(text: string): boolean {
+  return REMOTE_DESTINATION_RE.test(text) || NET_COMMAND_WITH_TARGET_RE.test(text);
+}
+
+/** Programs that run the program text they are handed. */
+const INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
+
+/** What a prose command fetches from: a URL, a host with no scheme, or a variable. */
+const PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
+
+/** What precedes a secret that AUTHENTICATES a request rather than being its payload. */
+const AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 
 export interface SkillRule {
   id: string;
@@ -36,12 +152,33 @@ export interface SkillRule {
   target: RuleTarget;
   patterns: RegExp[];
   fix?: string;
+  /**
+   * The rule is about fetching from, or sending to, a target (curl|bash,
+   * download-then-run, the send-over-network rules). In an instruction file
+   * it is scored a level lower ONLY where a placeholder stands for that
+   * target; every other rule, one level lower when its span or block has no
+   * fetch target at all. See the header.
+   */
+  fetchesOrSends?: boolean;
 }
+
+/**
+ * Where in the file a match was found: `line` is a whole line of a code file
+ * or a `text`/`any` rule over the whole of an instruction file; the other
+ * three are the views `markdownCode.ts` splits an instruction file into.
+ */
+export type MatchSource = 'line' | 'fenced' | 'indented' | 'pre' | 'inline' | 'prose';
 
 export interface RuleMatch {
   rule: SkillRule;
   line: number;
   snippet: string;
+  source: MatchSource;
+  /**
+   * The rule's severity, or one level lower for code in an instruction file
+   * that names no remote destination (see the header).
+   */
+  severity: Severity;
 }
 
 export const SKILL_RULES: SkillRule[] = [
@@ -159,6 +296,7 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'de-env-over-network',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'critical',
     title: 'Environment / secrets sent over the network',
     message:
@@ -167,7 +305,29 @@ export const SKILL_RULES: SkillRule[] = [
     patterns: [
       /(fetch|axios|requests?\.(post|get|put)|http[s]?\.request|urllib|httpx)[^\n]{0,120}(process\.env|os\.environ|getenv|ENV\[)/i,
       /(process\.env|os\.environ|getenv)[^\n]{0,120}(fetch|axios|requests?\.|\.post\(|upload|send\()/i,
-      /\b(curl|wget)\b[^\n]{0,200}(\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))/i,
+      // Not when the secret authenticates the request — that is the next
+      // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
+      // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
+      // reference doc, read critical and took its skill to DO_NOT_INSTALL.
+      new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, 'i'),
+    ],
+  },
+  {
+    id: 'de-secret-in-auth-header',
+    category: 'data_exfiltration',
+    fetchesOrSends: true,
+    severity: 'medium',
+    title: 'Secret from the environment sent as request authentication',
+    message:
+      'A request authenticates with a token, key or password from the environment. That is how an API is called — ' +
+      'and also how a stolen token reaches a server that is not its own. Confirm the endpoint is the service the ' +
+      'secret belongs to.',
+    target: 'code',
+    patterns: [
+      new RegExp(
+        `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+        'i',
+      ),
     ],
   },
   {
@@ -178,13 +338,39 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Code references SSH keys, cloud credentials, browser data or .env — sensitive material a skill rarely needs.',
     target: 'code',
+    patterns: [new RegExp(SENSITIVE_FILE_STRONG, 'i'), new RegExp(ENV_READ, 'i')],
+  },
+  {
+    id: 'de-sensitive-file-over-network',
+    category: 'data_exfiltration',
+    fetchesOrSends: true,
+    severity: 'critical',
+    title: 'Credential file sent over the network',
+    message:
+      'One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) ' +
+      'and a network client — the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://…`.',
+    target: 'code',
+    patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, 'i')],
+  },
+  {
+    id: 'de-sensitive-file-over-network-prose',
+    category: 'data_exfiltration',
+    fetchesOrSends: true,
+    severity: 'high',
+    title: 'Instruction to send a credential file to a remote endpoint',
+    message:
+      'The prose of an instruction file names a credential file, a way to send it and a concrete destination ' +
+      '(a URL or an IP address) in one sentence. A description of the attack names no endpoint; ' +
+      'an instruction to carry it out has to.',
+    target: 'prose',
     patterns: [
-      /(id_rsa|\.ssh\/|\.aws\/credentials|\.npmrc|\.netrc|\.env\b|cookies\.sqlite|Login\s+Data)/i,
+      new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, 'i'),
     ],
   },
   {
     id: 'de-dns-or-raw-egress',
     category: 'data_exfiltration',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Covert egress channel (DNS / raw socket / nc)',
     message: 'Use of DNS lookups, raw sockets or netcat as a data channel.',
@@ -230,15 +416,67 @@ export const SKILL_RULES: SkillRule[] = [
   {
     id: 'sc-curl-pipe-shell',
     category: 'supply_chain',
+    fetchesOrSends: true,
     severity: 'high',
     title: 'Remote fetch piped to a shell',
     message: 'Downloads a remote script and executes it unverified (curl|bash and friends).',
     target: 'code',
     patterns: [
-      /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+)?(bash|sh|zsh|python[23]?|node)\b/i,
+      new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
       /\beval\s+"\$\(\s*(curl|wget)\b/i,
-      /(iwr|invoke-webrequest|invoke-restmethod)[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+      /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+      // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
+      // interpreter (`python3 -c "$(curl …)"`, `node -e`, `perl -e`, `php -r`,
+      // `pwsh -Command`): an interpreter reading a program it just downloaded.
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b`, 'i'),
+      new RegExp(String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b`, 'i'),
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b/i,
     ],
+  },
+  {
+    id: 'sc-curl-pipe-shell-prose',
+    category: 'supply_chain',
+    fetchesOrSends: true,
+    severity: 'high',
+    title: 'Instruction to pipe a remote script to a shell',
+    message:
+      'The prose of an instruction file tells the reader to download a script from a concrete target — a URL, a ' +
+      'host, or a variable set elsewhere — and run it unverified. The documentation shape (`curl … | sh`, ' +
+      '"curl|bash") names no target and is not reported.',
+    target: 'prose',
+    patterns: [
+      // A URL, a host with no scheme (`curl -fsSL get.example.io | sh`, the
+      // get.docker.com shape), or a variable (`URL=https://…`, then
+      // `curl -s $URL | bash`) as the target.
+      new RegExp(
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
+        'i',
+      ),
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, 'i'),
+      new RegExp(
+        String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`,
+        'i',
+      ),
+      new RegExp(String.raw`\beval\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, 'i'),
+      new RegExp(
+        String.raw`\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(iex|invoke-expression)\b`,
+        'i',
+      ),
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b.{0,300}\bhttps?:\/\//i,
+    ],
+  },
+  {
+    id: 'sc-download-then-run',
+    category: 'supply_chain',
+    fetchesOrSends: true,
+    severity: 'high',
+    title: 'Remote file downloaded, then run',
+    message:
+      'A file is downloaded (curl -o / -O, wget, iwr -OutFile) and later run from a shell or an interpreter, ' +
+      'on the same line or further down the same file — curl|bash in two steps.',
+    target: 'code',
+    // Read by `downloadThenRun` over the whole file, not line by line.
+    patterns: [],
   },
   {
     id: 'sc-untrusted-install',
@@ -353,7 +591,9 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.',
     target: 'code',
-    patterns: [/(spawn|spawnSync|popen|system)\s*\(/i],
+    // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
+    // task, not a process.
+    patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i],
   },
 
   // ──────────────────────────── mcp_tool_poisoning ────────────────────────
@@ -377,41 +617,299 @@ export const SKILL_RULES: SkillRule[] = [
  * returning one match per (rule, line) hit. `isCode` selects which rule
  * targets apply.
  */
-export function scanContent(content: string, isCode: boolean): RuleMatch[] {
-  const matches: RuleMatch[] = [];
-  const lines = content.split(/\r?\n/);
-  for (const rule of SKILL_RULES) {
-    if (rule.target === 'code' && !isCode) continue;
-    if (rule.target === 'text' && isCode) continue;
-    for (const pattern of rule.patterns) {
-      for (let i = 0; i < lines.length; i += 1) {
-        const line = lines[i] ?? '';
-        pattern.lastIndex = 0;
-        if (pattern.test(line)) {
-          matches.push({
-            rule,
-            line: i + 1,
-            snippet: line.trim().slice(0, 240),
-          });
-          break; // one hit per (rule, pattern) is enough signal
-        }
-      }
-    }
-  }
-  return dedupeByRuleLine(matches);
+export interface ScanOptions {
+  /**
+   * The file is Markdown or plain text (`.md`, `.txt`, no extension): its
+   * indented lines can be a code block. Default true; false for other text
+   * files — HTML, JSON, YAML — where indentation is layout.
+   */
+  markdown?: boolean;
 }
 
-/** Collapse multiple patterns of the same rule hitting the same line. */
-function dedupeByRuleLine(matches: RuleMatch[]): RuleMatch[] {
-  const seen = new Set<string>();
-  const out: RuleMatch[] = [];
-  for (const m of matches) {
-    const key = `${m.rule.id}:${m.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(m);
+export function scanContent(content: string, isCode: boolean, opts: ScanOptions = {}): RuleMatch[] {
+  const lines = content.split(/\r?\n/);
+  if (isCode) {
+    const units = codeFileUnits(lines);
+    return finalize([...matchUnits(rulesFor('code', 'any'), units), ...downloadThenRun(units, false)]);
+  }
+  const whole: Unit[] = lines.map((text, i) => ({ line: i + 1, text, source: 'line', noTarget: false, placeholder: false }));
+  const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
+  const fetchBlocks = new Set<number>();
+  const realBlocks = new Set<number>();
+  for (const u of views.code) {
+    if (u.block === null) continue;
+    if (hasFetchTarget(u.text)) fetchBlocks.add(u.block);
+    if (hasRealTarget(u.text)) realBlocks.add(u.block);
+  }
+  const inBlock = (set: Set<number>, block: number | null): boolean => block !== null && set.has(block);
+  // Documentation hosts read as the placeholder they are, in prose too.
+  const prose: Unit[] = views.prose.map((text, i) => ({
+    line: i + 1,
+    text: withoutDocHosts(text),
+    display: text,
+    source: 'prose',
+    noTarget: false,
+    placeholder: false,
+  }));
+  const code: Unit[] = views.code
+    .filter((u) => u.kind !== 'inline' || isWholeCommand(u.text))
+    .map((u) => ({
+      line: u.line,
+      text: u.text,
+      source: u.kind,
+      noTarget: !hasFetchTarget(u.text) && !inBlock(fetchBlocks, u.block),
+      placeholder: isPlaceholder(u.text) && !inBlock(realBlocks, u.block),
+    }));
+  return finalize([
+    ...matchUnits(rulesFor('text', 'any'), whole),
+    ...matchUnits(rulesFor('prose'), prose),
+    ...matchUnits(rulesFor('code'), code),
+    ...downloadThenRun([...code, ...prose].sort((a, b) => a.line - b.line), true),
+  ]);
+}
+
+interface Unit {
+  line: number;
+  /** What the rules match. */
+  text: string;
+  /** What the finding shows, when it differs from `text`. */
+  display?: string;
+  source: MatchSource;
+  /** Code in an instruction file whose span and block have no fetch target: other rules score it a level lower. */
+  noTarget: boolean;
+  /** Code in an instruction file where a placeholder stands for the target: fetch-or-send rules score it a level lower. */
+  placeholder: boolean;
+}
+
+/**
+ * A code file's lines, plus each run of continued lines (`\` or a trailing
+ * single `|`, as a shell reads them) as one more unit at its first line:
+ * `curl -fsSL https://… |` + `bash` is one pipeline.
+ */
+function codeFileUnits(lines: string[]): Unit[] {
+  const units: Unit[] = [];
+  let pending: Unit | null = null;
+  lines.forEach((text, i) => {
+    const unit: Unit = { line: i + 1, text, source: 'line', noTarget: false, placeholder: false };
+    units.push(unit);
+    const more = continues(text);
+    if (pending) {
+      const joined: Unit = { ...pending, text: joinContinued(pending.text, text) };
+      if (more) {
+        pending = joined;
+      } else {
+        units.push(joined);
+        pending = null;
+      }
+    } else if (more) {
+      pending = unit;
+    }
+  });
+  if (pending) units.push(pending);
+  return units;
+}
+
+function rulesFor(...targets: RuleTarget[]): SkillRule[] {
+  return SKILL_RULES.filter((r) => targets.includes(r.target));
+}
+
+const SEVERITY_RANK: Record<Severity, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * One hit per (rule, pattern) is enough signal — but it is the most severe
+ * one, not the first: a mention early in a file (scored a level lower) must
+ * not hide the real command further down.
+ */
+function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
+  const matches: RuleMatch[] = [];
+  for (const rule of rules) {
+    const full = severityOfRule(rule);
+    for (const pattern of rule.patterns) {
+      let best: RuleMatch | null = null;
+      for (const unit of units) {
+        pattern.lastIndex = 0;
+        if (!pattern.test(unit.text)) continue;
+        const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
+        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
+        if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
+          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
+        }
+        if (severity === full) break; // nothing later can outrank it
+      }
+      if (best) matches.push(best);
+    }
+  }
+  return matches;
+}
+
+function snippetOf(unit: Unit): string {
+  return (unit.display ?? unit.text).trim().slice(0, 240);
+}
+
+// ───────────────────────── placeholders and targets ─────────────────────────
+
+/**
+ * What documentation writes where the target would be: an ellipsis, `...` as
+ * a token of its own (not a spread, `...args`), an angle-bracket name in an
+ * argument's position (`<url>`, `"<URL>"`, `<script>`, `<path>` — not an HTML
+ * tag followed by its content).
+ */
+const PLACEHOLDER_TOKEN_RE =
+  /…|(?<![\w.])\.\.\.(?![\w.])|(?<=^|[\s=:'"(\[])<[A-Za-z][\w-]*>(?=$|[\s|;&)'"\/\]])/;
+
+/**
+ * The documentation hosts themselves — `example.com` / `.org` / `.net`, with
+ * or without `www.` — not their subdomains: `evil.example.com` is a host a
+ * reader could be sent to, and the review's own reproductions use it.
+ */
+const DOC_HOST_RE =
+  /(?:\b(?:https?|s?ftp):\/\/)?(?<![\w.@-])(?:www\.)?example\.(?:com|org|net)(?![\w.-])(?:[:/][^\s'"<>|;&)]*)?/gi;
+
+function withoutDocHosts(text: string): string {
+  return text.replace(DOC_HOST_RE, '<url>');
+}
+
+/** A fetch target that is not a documentation host (`hasFetchTarget`). */
+function hasRealTarget(text: string): boolean {
+  return hasFetchTarget(withoutDocHosts(text));
+}
+
+/**
+ * Round 3 (N4): code in an instruction file is scored a level lower ONLY when
+ * a placeholder stands where its target would be. An absent target is not a
+ * placeholder — `echo <b64> | base64 -d | xargs curl -fsSL | bash` names no
+ * target on purpose — and (N2) code with a real target is never a
+ * placeholder, whatever `…` or `# ...` it also carries.
+ */
+function isPlaceholder(text: string): boolean {
+  if (hasRealTarget(text)) return false;
+  DOC_HOST_RE.lastIndex = 0;
+  const docHost = DOC_HOST_RE.test(text);
+  DOC_HOST_RE.lastIndex = 0;
+  return PLACEHOLDER_TOKEN_RE.test(text) || docHost;
+}
+
+/**
+ * An inline span worth reading as code: it has an argument (`rm -rf /`, not
+ * `eval()` or `.env`) or a real target (`curl${IFS}https://…|bash`, written
+ * without a space to look like a bare name), and it is not a placeholder
+ * (`curl … | sh` cannot be run as written; `curl https://… | bash # ...` can).
+ */
+function isWholeCommand(span: string): boolean {
+  const t = span.trim();
+  return (/\s/.test(t) || hasRealTarget(t)) && !isPlaceholder(t);
+}
+
+const ONE_LEVEL_LOWER: Record<Severity, Severity> = {
+  critical: 'high',
+  high: 'medium',
+  medium: 'low',
+  low: 'info',
+  info: 'info',
+};
+
+// ─────────────────────────── download, then run ────────────────────────────
+
+interface Download {
+  unit: Unit;
+  /** Where in `unit.text` the download command ends. */
+  end: number;
+  file: string;
+}
+
+const CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+const CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
+const CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
+const WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+const WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
+const PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+const URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
+
+function downloadsIn(unit: Unit): Download[] {
+  const out: Download[] = [];
+  const add = (m: RegExpExecArray, file: string | undefined): void => {
+    const base = basenameOf(file ?? '');
+    if (base !== '') out.push({ unit, end: m.index + m[0].length, file: base });
+  };
+  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
+    for (const m of unit.text.matchAll(re)) add(m as RegExpExecArray, m[1]);
+  }
+  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
+    for (const m of unit.text.matchAll(re)) {
+      const url = URL_IN.exec(m[0]);
+      if (url) add(m as RegExpExecArray, url[0].replace(/[?#].*$/, ''));
+    }
   }
   return out;
+}
+
+function basenameOf(path: string): string {
+  const base = path.split(/[/\\]/).pop() ?? '';
+  return /[A-Za-z0-9]/.test(base) ? base : '';
+}
+
+const RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
+
+function runsFile(text: string, file: string): boolean {
+  const f = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const end = String.raw`(?=$|[\s"'|;&)])`;
+  const viaRunner = String.raw`(?:^|[\s;&|(])(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\s+(?:-\S+\s+)*["']?(?:[^\s"'|;&]*[\/\\])?${f}${end}`;
+  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&]*[\/\\]${f}${end}`;
+  return new RegExp(`${viaRunner}|${direct}`).test(text);
+}
+
+const DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === 'sc-download-then-run');
+
+/**
+ * A file downloaded and later run — on the same line or anywhere further down
+ * the same file (round 3, N6: the hook's shell guard follows the same policy
+ * for one command line). `units` must be in file order. One finding per file.
+ */
+function downloadThenRun(units: Unit[], instructionFile: boolean): RuleMatch[] {
+  if (!DOWNLOAD_THEN_RUN) return [];
+  const full = severityOfRule(DOWNLOAD_THEN_RUN);
+  for (const dl of units.flatMap(downloadsIn)) {
+    const rest = dl.unit.text.slice(dl.end);
+    const run = runsFile(rest, dl.file)
+      ? dl.unit
+      : units.find((u) => u.line > dl.unit.line && runsFile(u.text, dl.file));
+    if (!run) continue;
+    const lowered = instructionFile && isPlaceholder(dl.unit.text);
+    return [
+      {
+        rule: DOWNLOAD_THEN_RUN,
+        line: run.line,
+        snippet: `${snippetOf(run)} (downloaded at line ${dl.unit.line})`.slice(0, 240),
+        source: run.source,
+        severity: lowered ? ONE_LEVEL_LOWER[full] : full,
+      },
+    ];
+  }
+  return [];
+}
+
+// ────────────────────────────────── dedupe ──────────────────────────────────
+
+/**
+ * One finding per (rule, line). A prose rule and the code rule for the same
+ * shape (`x-prose` and `x`) on the same line are one finding too — the
+ * prose view now reads inline code as well, and a command is scored once:
+ * the more severe of the two, the code rule on a tie.
+ */
+function finalize(matches: RuleMatch[]): RuleMatch[] {
+  const best = new Map<string, RuleMatch>();
+  for (const m of matches) {
+    const key = `${m.rule.id.replace(/-prose$/, '')}:${m.line}`;
+    const seen = best.get(key);
+    if (
+      seen === undefined ||
+      SEVERITY_RANK[m.severity] > SEVERITY_RANK[seen.severity] ||
+      (m.severity === seen.severity && seen.source === 'prose' && m.source !== 'prose')
+    ) {
+      best.set(key, m);
+    }
+  }
+  return [...best.values()];
 }
 
 export function severityOfRule(rule: SkillRule): Severity {

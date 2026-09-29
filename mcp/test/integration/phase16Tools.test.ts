@@ -156,6 +156,107 @@ describe('wp_plugin_check', () => {
 });
 
 /**
+ * Review 3.0 I2. The description promised the "latest known" version and "a
+ * fresh WPScan lookup" with target_url; the handler does neither. And a
+ * WP-CLI probe that was missing, failed or printed nothing answered
+ * `installed_version: null, active: null, warnings: []` with the lookup's
+ * tools_run entry `ok` — "not installed" and "could not tell" read the same.
+ */
+describe('wp_plugin_check — what it says it does, and a probe that did not answer', () => {
+  type Ok = {
+    ok: true;
+    scan_id: string;
+    installed: boolean | null;
+    installed_version: string | null;
+    active: boolean | null;
+    coverage: string;
+    warnings: string[];
+    tools_run: Array<{ name: string; status: string; reason?: string }>;
+  };
+  const completed = (stdout: string) => ({ outcome: 'completed' as const, exitCode: 0, stdout, stderr: '', truncated: false });
+
+  async function probe(plugin: PluginContext): Promise<Ok> {
+    const r = await getTool('wp_plugin_check').handler(
+      { slug: 'akismet', project_path: projectPath(), wp_install_path: tempProject() },
+      plugin,
+    );
+    if (!r.ok) throw new Error(r.error.message);
+    return r as unknown as Ok;
+  }
+  const wpCli = (plugin: PluginContext, r: Ok) =>
+    plugin.storage.scans.getById(r.scan_id)?.tools_run.find((t) => t.name === 'wp-cli');
+
+  it('the description and target_url claim no WPScan call and no latest version', () => {
+    const t = getTool('wp_plugin_check');
+    expect(t.description).not.toMatch(/latest known|fresh WPScan/i);
+    expect(t.description).toMatch(/no network/i);
+    const targetUrl = t.inputSchema['target_url']?.description ?? '';
+    expect(targetUrl).not.toMatch(/fresh WPScan/i);
+    expect(targetUrl).toMatch(/recorded/i);
+  });
+
+  it('WP-CLI not installed: a warning, coverage partial, wp-cli skipped with the reason and missing', async () => {
+    const plugin = makePlugin();
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const r = await probe(plugin);
+    expect(r.installed_version).toBeNull();
+    expect(r.installed).toBeNull();
+    expect(r.coverage).toBe('partial');
+    expect(r.warnings).toEqual([expect.stringMatching(/WP-CLI.*not installed/)]);
+    expect(wpCli(plugin, r)).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/not installed/) });
+    expect(plugin.storage.scans.getById(r.scan_id)?.missing_tools).toEqual(['wp-cli']);
+  });
+
+  it.each([
+    ['fails', { outcome: 'failed' as const, exitCode: 1, stdout: '', stderr: 'Error: This does not seem to be a WordPress installation.', truncated: false }, /does not seem to be a WordPress/],
+    ['prints nothing', completed(''), /printed nothing/],
+    ['prints something that is not JSON', completed('PHP Warning: something'), /not.*JSON/],
+    ['times out', { outcome: 'timed_out' as const, exitCode: null, stdout: '', stderr: '', truncated: false }, /timed_out/],
+  ])('a WP-CLI run that %s: a warning, coverage partial, wp-cli failed with the reason', async (_label, result, reason) => {
+    const plugin = makePlugin();
+    vi.mocked(scannerAvailable).mockResolvedValue('/usr/bin/wp');
+    vi.mocked(runProcess).mockResolvedValue(result);
+    const r = await probe(plugin);
+    expect(r.installed_version).toBeNull();
+    expect(r.installed).toBeNull();
+    expect(r.active).toBeNull();
+    expect(r.coverage).toBe('partial');
+    expect(r.warnings).toEqual([expect.stringMatching(reason)]);
+    // Round 3 (N8): WP-CLI's own message ends in a full stop, and the warning
+    // added another — "installation.. The installed version…".
+    expect(r.warnings[0]).not.toMatch(/\.\.\s/);
+    expect(wpCli(plugin, r)).toMatchObject({ status: 'failed', reason: expect.stringMatching(reason) });
+    expect(r.tools_run).toContainEqual(expect.objectContaining({ name: 'wp-cli', status: 'failed' }));
+  });
+
+  it('a plugin that is not installed there is an answer, not a gap', async () => {
+    const plugin = makePlugin();
+    vi.mocked(scannerAvailable).mockResolvedValue('/usr/bin/wp');
+    vi.mocked(runProcess).mockResolvedValue(completed('[]'));
+    const r = await probe(plugin);
+    expect(r).toMatchObject({ installed: false, installed_version: null, active: null, coverage: 'full', warnings: [] });
+    expect(wpCli(plugin, r)).toMatchObject({ status: 'ok' });
+  });
+
+  it('an installed plugin reports its version and state', async () => {
+    const plugin = makePlugin();
+    vi.mocked(scannerAvailable).mockResolvedValue('/usr/bin/wp');
+    vi.mocked(runProcess).mockResolvedValue(completed(JSON.stringify([{ name: 'akismet', status: 'active', version: '5.3.1' }])));
+    const r = await probe(plugin);
+    expect(r).toMatchObject({ installed: true, installed_version: '5.3.1', active: true, coverage: 'full', warnings: [] });
+  });
+
+  it('with no wp_install_path nothing is probed, and the lookup alone is full coverage', async () => {
+    const plugin = makePlugin();
+    const r = (await getTool('wp_plugin_check').handler({ slug: 'akismet', project_path: projectPath() }, plugin)) as unknown as Ok;
+    expect(r.coverage).toBe('full');
+    expect(r.installed).toBeNull();
+    expect(wpCli(plugin, r)).toBeUndefined();
+    expect(vi.mocked(scannerAvailable)).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Fix round 1, M4: `wp_plugin_check { slug }` is a lookup, not a scan of a
  * directory — it must answer when the server runs in a home directory, and
  * when `wp_install_path` names an install that is not on this machine.

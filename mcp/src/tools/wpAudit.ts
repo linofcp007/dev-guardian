@@ -30,9 +30,24 @@ const inputSchema = {
     .string()
     .min(1)
     .describe('Path to the directory containing wp-config.php.'),
-  include_users: z.boolean().optional(),
-  include_options: z.boolean().optional(),
-  risky_login_names: z.array(z.string()).optional(),
+  include_users: z
+    .boolean()
+    .optional()
+    .describe(
+      'List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging ' +
+        'risky login names. Default: true.',
+    ),
+  include_options: z
+    .boolean()
+    .optional()
+    .describe('Read the config flags DISALLOW_FILE_EDIT, WP_DEBUG, WP_DEBUG_LOG and FORCE_SSL_ADMIN. Default: true.'),
+  risky_login_names: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: ' +
+        '["admin", "administrator", "root", "wpadmin"].',
+    ),
 };
 
 interface ChecksumFile {

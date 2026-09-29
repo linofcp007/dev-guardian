@@ -77,7 +77,7 @@ Para cada PR, valida explicitamente:
 
 #### Features de AI / LLM (se o diff chama um modelo)
 
-Nenhuma tool verifica isto — é leitura do diff:
+O `review_pr` corre o pack LLM do plugin (Python e JS/TS) e apanha parte disto: saída do modelo a chegar a `eval`/`exec`, à shell ou a SQL, dados do pedido HTTP no prompt de sistema, chamadas à OpenAI sem limite de tokens (a lista completa está no `guardian-security`). O resto é leitura do diff:
 
 - [ ] **Prompt injection**: input do utilizador (ou de documentos, páginas web, resultados de tools) não chega ao prompt misturado com as instruções — há separação clara entre instruções do sistema e conteúdo não confiável, e os argumentos de tool calls vindos do modelo são validados
 - [ ] **Output do modelo com efeitos**: nada do que o modelo devolve é executado, escrito na DB, enviado a uma API externa ou renderizado como HTML sem validação — e cada ação com efeitos tem um limite ou uma confirmação humana proporcional ao estrago possível

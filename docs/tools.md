@@ -9,7 +9,7 @@ The dev-guardian MCP server registers **59 tools** and **18 resources**. This pa
 | Tool | Title | Parameters |
 | --- | --- | --- |
 | [`audit_agent_config`](#audit_agent_config) | Audit the AI-agent workspace configuration (MCP servers, permissions, hooks) | `project_path`, `include_user_config`, `severity_min` |
-| [`audit_executive`](#audit_executive) | Executive audit (security + quality + deps + compliance) | `project_path`, `severity_min` |
+| [`audit_executive`](#audit_executive) | Executive audit (security + quality + deps + compliance) | `project_path`, `severity_min`, `local_only` |
 | [`audit_mcp_tools`](#audit_mcp_tools) | Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls) | `project_path`, `servers`, `include_user_config`, `allow_remote`, `timeout_ms` |
 | [`bug_hunt`](#bug_hunt) | Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by default; other languages still registry-only) | `project_path`, `severity_min`, `auto_fix`, `allow_dirty`, `categories`, `include_language_packs`, `force`, `scope` |
 | [`bulk_audit_wordpress_sites`](#bulk_audit_wordpress_sites) | Bulk wp\_audit across many sites | `wp_install_paths`, `concurrency` |
@@ -57,7 +57,7 @@ The dev-guardian MCP server registers **59 tools** and **18 resources**. This pa
 | [`suggest_fix`](#suggest_fix) | Gather fix context for the model | `project_path`, `finding_fingerprint`, `context_lines` |
 | [`suppress_finding`](#suppress_finding) | Suppress finding | `project_path`, `finding_fingerprint`, `reason`, `expires_at`, `vex_status`, `justification`, `impact_statement` |
 | [`triage_findings`](#triage_findings) | Heuristic triage of findings | `project_path` |
-| [`validate_finding`](#validate_finding) | Qualify findings by reachability | `project_path`, `fingerprint`, `providers` |
+| [`validate_finding`](#validate_finding) | Qualify findings by reachability | `project_path`, `fingerprint`, `finding_fingerprint`, `providers` |
 | [`vet_packages`](#vet_packages) | Vet packages before installing | `ecosystem`, `packages`, `project_path` |
 | [`wp_audit`](#wp_audit) | Live WordPress install audit | `wp_install_path`, `include_users`, `include_options`, `risky_login_names` |
 | [`wp_cron_audit`](#wp_cron_audit) | WordPress cron audit (suspicious scheduled events) | `wp_install_path` |
@@ -82,12 +82,13 @@ Audit the AI-agent workspace configuration in this project (and, opt-in, the use
 
 ### `audit_executive`
 
-Run security\_scan\_full, quality\_check, deps\_audit, and compliance\_check in sequence, producing one aggregated report with severity counts, top-10 findings, and a delta vs the previous executive audit (when present).
+Executive roll-up: runs security\_scan\_full, quality\_check, deps\_audit and compliance\_check CONCURRENTLY, plus scan\_wordpress for a WordPress project and scan\_dotnet\_secrets + dotnet\_target\_framework\_check for .NET, per this project's latest detect\_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security\_scan\_full, scan\_wordpress); Trivy's vulnerability database, its version check (check.trivy.dev) and Maven Central for a pom.xml; npm audit and PyPI (deps\_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality\_check runs the project's ESLint config. local\_only=true passes local\_only to security\_scan\_full (Semgrep: rules on disk, --metrics=off) and skips scan\_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps\_audit's registry calls or a .NET restore — the result lists those in local\_only\_gaps.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
+| `local_only` | boolean | no | — | Passed to every child that takes it (security\_scan\_full: Semgrep rules on disk only, --metrics=off). scan\_wordpress, which has no local-only mode, is skipped. Trivy, deps\_audit and a .NET restore still reach the network; local\_only\_gaps in the result says what did. Default: false. |
 
 ### `audit_mcp_tools`
 
@@ -177,8 +178,8 @@ Use the local `gh` CLI to open one issue per top open finding of project\_path (
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Minimum severity a finding must have to be filed. Default: high — what this drops is reported in `filtered`, never silently. |
 | `max_issues` | number | no | — | Cap on issues filed in one run, highest severity first. Default: 10 — findings beyond the cap are counted in `filtered`, never silently dropped. |
-| `labels` | array of string | no | — | — |
-| `dry_run` | boolean | no | — | — |
+| `labels` | array of string | no | — | Labels for every issue. Missing ones are created; one that cannot be is left off (labels\_omitted). Default: \["dev-guardian", "security"\]. |
+| `dry_run` | boolean | no | — | true: list the issues that would be created and call nothing. Default: false — the call FILES REAL ISSUES on GitHub through the local gh CLI. |
 
 ### `deps_audit`
 
@@ -215,10 +216,10 @@ Compare findings between two scans of one project (same scan\_type). Returns new
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit" | no | — | With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type. |
-| `from_scan_id` | string | no | — | — |
-| `from` | one of "baseline", "previous" | no | — | — |
-| `to_scan_id` | string | no | — | — |
-| `to` | one of "latest" | no | — | — |
+| `from_scan_id` | string | no | — | The older side: this exact scan. Takes precedence over from. Default: see from. |
+| `from` | one of "baseline", "previous" | no | — | The older side, when from\_scan\_id is not given: 'previous' — this project's usable scan of the same type just before the to scan — or 'baseline' — the baseline set\_baseline recorded for that type. Default: 'previous'. |
+| `to_scan_id` | string | no | — | The newer side: this exact scan. Takes precedence over to. Default: see to. |
+| `to` | one of "latest" | no | — | The newer side, when to\_scan\_id is not given: 'latest' — this project's newest usable scan (of scan\_type, when given). Default: 'latest'. |
 
 ### `dotnet_describe_setup`
 
@@ -279,7 +280,7 @@ Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempoten
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `profile` | one of "minimal", "standard", "paranoid" | no | — | — |
+| `profile` | one of "minimal", "standard", "paranoid" | no | — | Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and pre-commit; paranoid: standard's files with a gitleaks config that has no content-based allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard. |
 | `apply` | boolean | no | — | When false, return only the proposed file list without writing. Default: true. |
 | `refresh` | boolean | no | — | Opt-in re-sync of already-installed configs against the shipped baselines. Reports the per-file action; only writes when apply is also true, and never over a file you edited (that one is delivered as &lt;name&gt;.new instead). Default: false. |
 
@@ -404,14 +405,14 @@ Write a report in one of four formats: markdown (default — handover doc), html
 
 ### `review_pr`
 
-Scan what a pull request changes: Semgrep (same rules as scan\_sast) over every added/modified/renamed file between base\_ref and head\_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base\_ref defaults to origin/HEAD, then main, then master; head\_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local\_only=true to skip the Semgrep registry (no telemetry).
+Scan what a pull request changes: Semgrep (same rules as scan\_sast) over every added/modified/renamed file between base\_ref and head\_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base\_ref defaults to origin/HEAD, then main, then master; head\_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local\_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `base_ref` | string | no | — | Base ref for the diff. Defaults to origin/HEAD, then main, then master. |
 | `head_ref` | string | no | — | Head ref. Defaults to HEAD. |
-| `local_only` | boolean | no | — | Semgrep runs only the project's own rules and registered custom rules, with --metrics=off. Default: false. |
+| `local_only` | boolean | no | — | Semgrep runs only rules on disk — the project's own, registered custom rules and the plugin's LLM-application pack — with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache and force a fresh scan. |
 
@@ -430,9 +431,9 @@ Compare two generate\_sbom scans, full component list, keyed by (ecosystem, name
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `from_scan_id` | string | no | — | — |
-| `to_scan_id` | string | no | — | — |
-| `use_full_file` | boolean | no | — | — |
+| `from_scan_id` | string | no | — | The older generate\_sbom scan. Default: this project's second-newest completed SBOM scan. |
+| `to_scan_id` | string | no | — | The newer generate\_sbom scan. Default: this project's newest completed SBOM scan. |
+| `use_full_file` | boolean | no | — | Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is still on disk, and the capped summary stored with the scan only when it is not (component\_source says which). |
 
 ### `scan_containers`
 
@@ -540,7 +541,7 @@ Detect secrets / API keys / tokens with gitleaks: in git history AND in files no
 
 ### `scan_skill`
 
-Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO\_NOT\_INSTALL).
+Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and &lt;pre&gt; blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (…, &lt;url&gt;, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO\_NOT\_INSTALL).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -565,7 +566,7 @@ Aggregated source-side scan for a WordPress plugin / theme / site project: Semgr
 
 ### `security_scan_full`
 
-Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan\_secrets (gitleaks over git history AND uncommitted files), scan\_deps (Trivy vuln + license) and scan\_iac (Trivy config). Each runs as its own scan (meta.parent\_scan\_id); this scan holds the merged, de-duplicated findings and lists them in child\_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto\_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local\_only=true uses only rules on disk with --metrics=off.
+Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan\_secrets (gitleaks over git history AND uncommitted files), scan\_deps (Trivy vuln + license) and scan\_iac (Trivy config). Each runs as its own scan (meta.parent\_scan\_id); this scan holds the merged, de-duplicated findings and lists them in child\_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto\_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local\_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan\_deps, scan\_iac) nor, on a .NET project, scan\_sast's dotnet restore (the NuGet feeds).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -573,7 +574,7 @@ Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, t
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 | `auto_fix` | boolean | no | `false` | Apply scanner auto-fixes where supported (Semgrep --autofix, Trivy where applicable). |
 | `allow_dirty` | boolean | no | `false` | Allow auto-fix to run even when the working tree has uncommitted changes. |
-| `local_only` | boolean | no | — | Semgrep runs only rules already on disk (the project's .semgrep.yml and registered custom rules) with --metrics=off; no registry, no telemetry. Default: false. |
+| `local_only` | boolean | no | — | Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan\_deps, scan\_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache and force a fresh scan. |
 
 ### `set_baseline`
@@ -627,6 +628,7 @@ Answers, per finding, whether anything outside the process can reach the FILE th
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `fingerprint` | string | no | — | Validate exactly this finding. Omitted (the default) validates EVERY open finding — batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result. |
+| `finding_fingerprint` | string | no | — | Same as fingerprint — the name suppress\_finding and suggest\_fix use. Pass either; both with different values is an error. |
 | `providers` | array of one of "static", "dependency" | no | — | Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied. |
 
 ### `vet_packages`
@@ -646,9 +648,9 @@ Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `wp_install_path` | string | yes | — | Path to the directory containing wp-config.php. |
-| `include_users` | boolean | no | — | — |
-| `include_options` | boolean | no | — | — |
-| `risky_login_names` | array of string | no | — | — |
+| `include_users` | boolean | no | — | List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging risky login names. Default: true. |
+| `include_options` | boolean | no | — | Read the config flags DISALLOW\_FILE\_EDIT, WP\_DEBUG, WP\_DEBUG\_LOG and FORCE\_SSL\_ADMIN. Default: true. |
+| `risky_login_names` | array of string | no | — | Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: \["admin", "administrator", "root", "wpadmin"\]. |
 
 ### `wp_cron_audit`
 
@@ -669,13 +671,13 @@ Aggregate read of one WordPress project's accumulated state (project\_path = the
 
 ### `wp_plugin_check`
 
-Focused check on one plugin: installed version (when wp\_install\_path given), latest known, active CVEs from the dev-guardian cves table. Pass target\_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.
+What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp\_vuln\_check and newest wp\_vuln\_check\_source. It makes no network call — no WPScan query, no latest-version lookup; for fresh data run wp\_vuln\_check (live site) or wp\_vuln\_check\_source (plugin sources) first. With a local wp\_install\_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target\_url sends nothing to the site: it adds the wp\_vuln\_check recorded under that URL. Writes one scoped scan row, no findings.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `slug` | string | yes | — | Plugin slug as known by wp.org (e.g. "contact-form-7"). |
-| `wp_install_path` | string | no | — | Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine. |
-| `target_url` | string | no | — | Optional live URL for fresh WPScan lookup (skipped without API token). |
+| `wp_install_path` | string | no | — | Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and active state from it; it also keys the CVE lookup when project\_path is omitted. Absolute, or existing on this machine. |
+| `target_url` | string | no | — | Site URL a wp\_vuln\_check was recorded under: its CVEs are read too. Nothing is sent to the site — for a live WPScan lookup run wp\_vuln\_check. |
 | `project_path` | string | no | — | The WordPress project whose recorded CVEs are searched. Default: wp\_install\_path when given, else the server's working directory. |
 
 ### `wp_recommend_hardening`
@@ -693,7 +695,7 @@ Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `target_url` | string | yes | — | Base URL of the WordPress site (e.g. `https://example.com`). |
-| `timeout_ms` | number | no | — | — |
+| `timeout_ms` | number | no | — | Per-request timeout in milliseconds, 1000-60000. Default: 15000. |
 
 ### `wp_vuln_check`
 
