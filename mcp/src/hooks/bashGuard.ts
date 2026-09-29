@@ -98,6 +98,7 @@
  */
 
 import { homedir } from 'node:os';
+import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 
 export type BashRiskLevel = 'ok' | 'warn' | 'block';
@@ -2385,7 +2386,7 @@ function codeLiterals(code: string, lang: CodeLang): string[] {
 
 /** Literals as paths: trimmed, every run of backslashes read as `/`. */
 function literalPaths(literals: readonly string[]): string[] {
-  return literals.map((l) => tail(l.trim()).replace(/\\+/g, '/'));
+  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, '/')));
 }
 
 /**
@@ -2395,6 +2396,22 @@ function literalPaths(literals: readonly string[]): string[] {
  */
 function tail(path: string): string {
   return path.length > 1024 ? path.slice(-1024) : path;
+}
+
+/**
+ * Each path, and — when it differs — the name Windows opens for it: without
+ * an NTFS stream suffix or trailing dots and spaces (review M1:
+ * `hooks.config.json::$DATA` writes the file itself). Both are judged, so the
+ * second can only add a match; elsewhere a colon is part of a name, and
+ * refusing that odd name there costs nothing.
+ */
+function asWindowsOpens(paths: readonly string[]): string[] {
+  const out = [...paths];
+  for (const p of paths) {
+    const named = windowsName(p);
+    if (named !== p) out.push(named);
+  }
+  return out;
 }
 
 /**
@@ -2582,11 +2599,11 @@ const RULE_SETTINGS: MatchedRule = {
  */
 function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   const e: Effects = {
-    writes: effects.writes.map(tail),
-    removes: effects.removes.map(tail),
-    dirs: effects.dirs.map(tail),
-    special: effects.special.map(tail),
-    links: effects.links.map(tail),
+    writes: asWindowsOpens(effects.writes.map(tail)),
+    removes: asWindowsOpens(effects.removes.map(tail)),
+    dirs: asWindowsOpens(effects.dirs.map(tail)),
+    special: asWindowsOpens(effects.special.map(tail)),
+    links: asWindowsOpens(effects.links.map(tail)),
   };
   const out: MatchedRule[] = [];
   if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {

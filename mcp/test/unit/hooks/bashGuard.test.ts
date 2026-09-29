@@ -2239,3 +2239,26 @@ describe('assessBashCommand — the home directory and the drive root in every s
     });
   });
 });
+
+// Review of 3.0.0, M1: Windows writes `hooks.config.json::$DATA`,
+// `hooks.config.json.` and `.guardian.\hooks.config.json` into the hook
+// configuration itself; the shell guard, like the Write/Edit guards, compared
+// the path as written.
+describe('assessBashCommand — a shell write of the hook configuration in its Windows spellings (review M1)', () => {
+  it.each([
+    ["echo '{}' > .guardian/hooks.config.json::$DATA", 'bash'],
+    ["echo '{}' > '.guardian/hooks.config.json:x:$DATA'", 'bash'],
+    ["echo '{}' > .guardian/hooks-allowlist.json.", 'bash'],
+    ["Set-Content -Path '.guardian\\hooks.config.json::$DATA' -Value '{}'", 'powershell'],
+    ["Set-Content -Path '.guardian.\\hooks.config.json' -Value '{}'", 'powershell'],
+    ["'{}' | Out-File \"$HOME\\.config\\dev-guardian\\hooks.json::`$DATA\"", 'powershell'],
+    ['node -e "require(\'fs\').writeFileSync(\'.guardian/hooks.config.json::$DATA\', \'{}\')"', 'bash'],
+  ] as const)('%s', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+  });
+
+  it("Claude Code's settings through a stream suffix, with a loosening key, too", () => {
+    expect(assessBashCommand(`echo '{"disableAllHooks": true}' > .claude/settings.json::$DATA`).level).toBe('block');
+  });
+});

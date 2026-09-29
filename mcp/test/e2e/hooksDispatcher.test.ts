@@ -993,7 +993,9 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       [
         'CLAUDE_PROJECT_DIR unset, the root found by its .guardian',
         (): string => '',
-        (): void => mkdirSync(join(projectDir, '.guardian'), { recursive: true }),
+        (): void => {
+          mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+        },
       ],
     ])('%s', (_label, projectEnv, mark) => {
       beforeEach(() => mark());
@@ -1018,6 +1020,67 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       it('an ordinary file in the subdirectory is not denied', () => {
         expect(decision(write(join(sub, 'src', 'index.ts'), 'export {};', projectEnv()))).toBeUndefined();
       });
+    });
+  });
+
+  // Review of 3.0.0, M1: on Windows, `c.json::$DATA` IS c.json — Node writes
+  // the file itself — and it got past all three Write/Edit guards; so did a
+  // trailing dot or space, which Windows strips, and an 8.3 short name.
+  describe('every spelling Windows reads as the guarded file (review M1)', () => {
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const write = (filePath: string, content = '{}'): HookResult =>
+      runHook(preToolUse('Write', { file_path: filePath, content }, projectDir), { cwd: projectDir, homeDir });
+
+    describe.runIf(process.platform === 'win32')('Windows', () => {
+      const config = (): string => join(projectDir, '.guardian', 'hooks.config.json');
+      it.each([
+        ['::$DATA', (): string => `${config()}::$DATA`],
+        [':$DATA, upper case', (): string => `${config()}::$data`.toUpperCase()],
+        [':name', (): string => `${config()}:hidden`],
+        [':name:$DATA', (): string => `${config()}:hidden:$DATA`],
+        ['a trailing dot', (): string => `${config()}.`],
+        ['trailing spaces and dots', (): string => `${config()} . `],
+        ['a trailing dot on the directory', (): string => join(projectDir, '.guardian.', 'hooks.config.json')],
+        ['a stream on the directory', (): string => join(projectDir, '.guardian::$INDEX_ALLOCATION', 'hooks-allowlist.json')],
+      ])('the project hook configuration with %s is denied', (_label, path) => {
+        expect(decision(write(path()))).toBe('deny');
+      });
+
+      it('the user-level configuration with ::$DATA is denied', () => {
+        expect(decision(write(`${join(homeDir, '.config', 'dev-guardian', 'hooks.json')}::$DATA`))).toBe('deny');
+      });
+
+      it("Claude Code's settings with ::$DATA and disableAllHooks is denied", () => {
+        const path = `${join(projectDir, '.claude', 'settings.json')}::$DATA`;
+        expect(decision(write(path, JSON.stringify({ disableAllHooks: true })))).toBe('deny');
+      });
+
+      it('an 8.3 short name of the hook configuration is denied', () => {
+        mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+        writeFileSync(config(), '{}');
+        const r = spawnSync('cmd.exe', ['/d', '/s', '/c', `"for %I in ("${config()}") do @echo %~sI"`], {
+          encoding: 'utf8',
+          windowsVerbatimArguments: true,
+        });
+        const short = (r.stdout ?? '').trim();
+        // 8.3 names can be switched off per volume; then there is nothing to test.
+        if (short === '' || short.toLowerCase() === config().toLowerCase()) return;
+        expect(short).toMatch(/~\d/);
+        expect(decision(write(short))).toBe('deny');
+      });
+    });
+
+    it.runIf(CAN_SYMLINK)('a link to the hook configuration is denied', () => {
+      mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+      writeFileSync(join(projectDir, '.guardian', 'hooks.config.json'), '{}');
+      symlinkSync(join(projectDir, '.guardian', 'hooks.config.json'), join(projectDir, 'innocent.json'));
+      expect(decision(write(join(projectDir, 'innocent.json')))).toBe('deny');
+    });
+
+    it.runIf(process.platform !== 'win32')('elsewhere a colon is part of the name: `hooks.config.json::$DATA` is another file', () => {
+      expect(decision(write(`${join(projectDir, '.guardian', 'hooks.config.json')}::$DATA`))).toBeUndefined();
     });
   });
 

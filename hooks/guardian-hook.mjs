@@ -135,6 +135,13 @@ let readSmallJsonFile = () => ({ status: 'absent' });
 let walkLinksUnder = () => ({ ok: true });
 /** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
 let readSmallTextFile = () => undefined;
+/**
+ * `guardedPath` from `mcp/dist/hooks/guardedPath.js`: the file a write really
+ * reaches — on Windows without an NTFS stream suffix or trailing dots and
+ * spaces, and everywhere resolved through 8.3 names and links (review M1).
+ * Until it is loaded, a path is taken as written.
+ */
+let guardedPath = (p) => p;
 
 async function loadConfigReader() {
   try {
@@ -142,6 +149,8 @@ async function loadConfigReader() {
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
     if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
     if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
+    const paths = await import(pathToFileURL(join(DIST_HOOKS, 'guardedPath.js')).href);
+    if (typeof paths.guardedPath === 'function') guardedPath = paths.guardedPath;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -436,10 +445,13 @@ function samePath(a, b) {
  */
 function isGuardianOwnConfigFile(filePath, cwd, root) {
   if (!filePath) return false;
-  const abs = resolve(cwd, filePath);
-  if (samePath(abs, userConfigPath())) return true;
+  // Both sides as the filesystem spells them: a stream suffix, trailing dots
+  // or an 8.3 name on the written path (review M1), and a link or a short name
+  // in the home or project path, must not make the same file compare unequal.
+  const abs = guardedPath(resolve(cwd, filePath));
+  if (samePath(abs, guardedPath(userConfigPath()))) return true;
   if (!/(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs))) return false;
-  return isBelow(root, abs) || isBelow(cwd, abs);
+  return isBelow(guardedPath(resolve(root)), abs) || isBelow(guardedPath(resolve(cwd)), abs);
 }
 
 /** `path` lies strictly below `dir`. */
@@ -710,12 +722,15 @@ function walkRootFor(abs, cwd, root) {
  */
 async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   const rawPath = extractFilePath(toolName, input);
-  // Cheap pre-check, so an ordinary edit never pays for the module import.
-  if (!rawPath || !/settings(?:\.local)?\.json$/i.test(rawPath)) return;
+  if (!rawPath) return;
+  // The file the write reaches (review M1: `settings.json::$DATA` IS
+  // settings.json on Windows). Then a cheap pre-check, so an ordinary edit
+  // never pays for the module import.
+  const abs = guardedPath(resolve(cwd, rawPath));
+  if (!/settings(?:\.local)?\.json$/i.test(abs)) return;
   let added = [];
   try {
     const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
-    const abs = resolve(cwd, rawPath);
     if (!guard.isClaudeSettingsPath(abs)) return;
     const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd, root));
     if (toolName === 'Write') {
