@@ -99,6 +99,8 @@ function bookkeepingNames(): string[] {
     ...collect(/\b(?:notInstalled|record)\(\s*out,\s*'([^']+)'/g, (f) => f === 'tools/qualityCheck.ts'),
     // deps_audit's native auditors are recorded by command.
     ...collect(/tryNativeAudit\(\{\s*command:\s*'([^']+)'/g),
+    // scan_iac's and scan_containers' Trivy config passes: `judgeTrivyConfig({ name: 'trivy-config', … })`.
+    ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -171,6 +173,9 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'tools/scanWordpress.ts:...judged.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
+  'runners/trivyConfig.ts:name': "judgeTrivyConfig's `name: '…'` ('trivy-config', 'trivy-dockerfile')",
+  'tools/scanIac.ts:...judged.missing': "judgeTrivyConfig's `missing`: its own `name: '…'`",
+  'tools/scanContainers.ts:...judged.missing': "judgeTrivyConfig's `missing`: its own `name: '…'`",
   'tools/scanIac.ts:spec.name': "runWorkflowScanner's own WorkflowScannerSpec.name — the caller only ever passes the literals 'zizmor' or 'actionlint'",
   'tools/scanIac.ts:run.toolRun.name': "the missing_tools push for a workflow scanner runWorkflowScanner reported missing — copies that same run's own toolRun.name ('zizmor'/'actionlint')",
   'tools/auditAgentConfig.ts:unreadName':

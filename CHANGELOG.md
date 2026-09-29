@@ -41,6 +41,16 @@ version bump.
 - `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,
   `runners/trivyRun.ts#judgeTrivyFs`): a plugin whose `composer.json` has no `composer.lock` read trivy ok, full.
   It also passes `.guardianignore` to Trivy natively now.
+- `scan_iac` and `scan_containers`: `trivy config` is judged by its log, not its exit code. Trivy drops a file it
+  cannot parse with one ERROR line and exits 0, and `--quiet` hid even that: a .tf with an open security group
+  and an unclosed `resource {` appended read 0 findings, full; a Dockerfile with `HEALTHCHECK --interval=bogus`
+  read trivy-dockerfile ok. The passes run without `--quiet`; a parse error makes the pass partial (`ok`, and
+  `trivy-config` / `trivy-dockerfile` in `missing_tools`), the file and Trivy's error named. A run that detected
+  no config file (`num=0`, no error — a templated Kubernetes manifest) while files that look like IaC are present
+  is partial too, "no config file recognised", naming them. What looks like IaC is narrow on purpose (`.tf`,
+  `.tf.json`, Dockerfiles by Trivy's names, a Helm `Chart.yaml`, YAML/JSON with top-level `apiVersion` and `kind`,
+  CloudFormation): plain YAML never trips it. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is
+  unchanged.
 
 ## [3.0.0] - 2026-09-29
 

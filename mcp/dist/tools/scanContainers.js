@@ -62,6 +62,7 @@ import { UNSAFE_CHARS, UNSAFE_CHAR_CLASS, cosignReadiness, escapeUnsafe, detectI
 import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { judgeTrivyConfig } from '../runners/trivyConfig.js';
 import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -168,8 +169,10 @@ const scanContainers = makeScanTool({
                 if (dockerfile !== undefined) {
                     const outFile = join(reportDir, 'dockerfile.json');
                     // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+                    // No --quiet: a Dockerfile Trivy cannot parse is one ERROR line
+                    // in its log, and --quiet hides it (runners/trivyConfig.ts).
                     const result = await runTrivy({
-                        args: ['config', '--format', 'json', '--output', outFile, '--quiet'],
+                        args: ['config', '--format', 'json', '--output', outFile],
                         target: dockerfile,
                         workDir: reportDir,
                         ignoreFrom: ctx.projectPath,
@@ -180,7 +183,15 @@ const scanContainers = makeScanTool({
                     const raw = readJsonSafe(outFile);
                     if (raw)
                         parser_inputs.push({ parser: trivyParser, input: raw });
-                    tools_run.push(withHonoured({ name: 'trivy-dockerfile', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured));
+                    // The file it was given is the one that must be recognised.
+                    const judged = judgeTrivyConfig({
+                        name: 'trivy-dockerfile',
+                        run: result,
+                        raw,
+                        iacFiles: [relative(ctx.projectPath, dockerfile).split(sep).join('/')],
+                    });
+                    tools_run.push(judged.toolRun);
+                    missing_tools.push(...judged.missing);
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }

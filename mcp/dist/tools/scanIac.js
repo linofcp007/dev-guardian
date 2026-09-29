@@ -88,7 +88,9 @@ import { actionlintParser } from '../runners/scannerParsers/actionlint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { zizmorParser } from '../runners/scannerParsers/zizmor.js';
 import { runProcess } from '../runners/processRunner.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { iacLookingFiles, judgeTrivyConfig } from '../runners/trivyConfig.js';
+import { runTrivy } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { toPosixPath } from '../runners/scannerParsers/index.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -292,8 +294,10 @@ registerToolModule(makeScanTool({
         else {
             const outFile = join(reportDir, 'iac.json');
             // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+            // No --quiet: a file Trivy cannot parse is one ERROR line in its log,
+            // and --quiet hides it (runners/trivyConfig.ts, review I3).
             const result = await runTrivy({
-                args: ['config', '--format', 'json', '--output', outFile, '--quiet'],
+                args: ['config', '--format', 'json', '--output', outFile, ...trivySkipArgs(ctx.exclusions)],
                 target: ctx.projectPath,
                 workDir: reportDir,
                 ignoreFrom: ctx.projectPath,
@@ -304,7 +308,14 @@ registerToolModule(makeScanTool({
             const raw = readJsonSafe(outFile);
             if (raw)
                 parser_inputs.push({ parser: trivyParser, input: raw });
-            tools_run.push(withHonoured({ name: 'trivy-config', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured));
+            const judged = judgeTrivyConfig({
+                name: 'trivy-config',
+                run: result,
+                raw,
+                iacFiles: result.outcome === 'completed' ? iacLookingFiles(ctx.projectPath, ctx.exclusions).files : [],
+            });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
             absorbOutcome(result.outcome);
         }
         const workflowFiles = listWorkflowFiles(ctx.projectPath, ctx.exclusions);
