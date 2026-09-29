@@ -123,11 +123,20 @@ describe('E2E — a finding keeps its identity when a line is inserted above it 
           .filter((f) => (f.rule_id ?? '').endsWith('identity-e2e-eval')),
       ).toEqual([]);
 
-      // diff_scans: unchanged, not new + resolved.
+      // diff_scans: not new + resolved. The finding is suppressed, so it is
+      // listed apart (Unreleased: diff_scans honours suppressions) — once:
+      // both scans' copies are one finding by identity.
       const diff = okResult<{ summary: { new: number; resolved: number; unchanged: number } }>(
         await getTool('diff_scans').handler({ from_scan_id: s1.scan_id, to_scan_id: s2.scan_id }, plugin),
       );
-      expect(diff.summary).toEqual({ new: 0, resolved: 0, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
+      expect(diff.summary).toEqual({
+        new: 0,
+        resolved: 0,
+        unchanged: 0,
+        not_remeasured: 0,
+        not_previously_measured: 0,
+        suppressed: 1,
+      });
 
       // The unfixed target is still present to the fix verification.
       expect(judgeScan([before.fingerprint], s1, s2)).toMatchObject({

@@ -36,6 +36,12 @@ import { cleanupTempDirs, makeTempDir, rmDir } from '../../helpers/tempDir.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
+// Every open of an existing project database asks git (a process spawn, up
+// to 3 s by design) and most tests here make several; on a loaded machine
+// the 10 s unit default was measured too short (a Docker run beside the
+// full Windows suite).
+vi.setConfig({ testTimeout: 30_000 });
+
 const undo: Array<() => void> = [];
 afterEach(() => {
   vi.unstubAllEnvs();

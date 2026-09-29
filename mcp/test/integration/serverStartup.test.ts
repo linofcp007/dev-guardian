@@ -160,6 +160,20 @@ describe('server startup against a 3.0 development database', () => {
     expect(err).not.toMatch(/\n\s+at /);
   }, 60_000);
 
+  it('a database git tracks is not opened: the server starts on the per-user fallback and says why', async () => {
+    const project = makeTempDir('guardian-server-tracked-');
+    expect(spawnSync('git', ['init', '-q'], { cwd: project }).status).toBe(0);
+    const { db, path } = openDatabase({ projectPath: project });
+    db.close();
+    expect(spawnSync('git', ['add', '-f', '.guardian/guardian.db'], { cwd: project }).status).toBe(0);
+
+    const server = startServer(project);
+    await server.waitFor(/listening on stdio/);
+    const err = server.stderr();
+    expect(err).not.toContain(`db opened: ${path}`);
+    expect(err).toMatch(/db warning: .*is tracked by git/);
+  }, 60_000);
+
   it('exits 1 with one line naming a corrupt database file and saying to move it aside', async () => {
     // Was: `fatal: Error: file is not a database` and a stack trace, naming
     // neither the file nor what to do.

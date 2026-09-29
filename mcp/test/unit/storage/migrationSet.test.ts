@@ -16,13 +16,17 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { GuardianDatabase as Database, GuardianDbError, openDatabaseAtPath } from '../../../src/storage/db.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations, objectsOf, runMigrations, splitStatements } from '../../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+
+// Two tests build file-backed databases and migrate them twice; one timed
+// out at the 10 s unit default in a Docker run beside the full Windows suite.
+vi.setConfig({ testTimeout: 30_000 });
 
 const LATEST = String(Math.max(...listMigrations().map((m) => m.version)));
 const ALL_VERSIONS = listMigrations().map((m) => m.version);
