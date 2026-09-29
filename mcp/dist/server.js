@@ -59364,7 +59364,7 @@ var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_ch
 var tool13 = {
   name: "audit_executive",
   title: "Executive audit (security + quality + deps + compliance)",
-  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database; npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's database download, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
+  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database, its version check (check.trivy.dev) and Maven Central for a pom.xml; npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
   inputSchema: {
     project_path: ProjectPath,
     severity_min: SeverityMin,
@@ -59558,6 +59558,14 @@ function localOnlyGaps(subTools) {
       "deps_audit: npm audit queries the npm registry; pip-audit installs the requirements from PyPI into a temporary virtualenv (an sdist's build step runs); for .NET, dotnet restore contacts the NuGet feeds and executes the project's MSBuild; Trivy may download its database."
     );
   }
+  if (ran.has("compliance_check")) {
+    gaps.push(
+      "compliance_check: its Trivy license scan downloads no vulnerability database, but resolves a pom.xml's dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off)."
+    );
+  }
+  gaps.push(
+    "Trivy, in every child above that runs it, contacts check.trivy.dev on every run \u2014 its version check, which also carries anonymous usage data; only TRIVY_SKIP_VERSION_CHECK=true and TRIVY_DISABLE_TELEMETRY=true, both, in the server's environment stop it."
+  );
   gaps.push(
     "Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off."
   );

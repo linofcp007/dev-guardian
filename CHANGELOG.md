@@ -38,6 +38,17 @@ version bump.
   audit row, and the result's `local_only_gaps` names what it does not stop:
   Trivy, `deps_audit`'s registry calls, a .NET restore, Semgrep's version
   check.
+  - `compliance_check` is in `local_only_gaps` too, measured rather than
+    assumed: Trivy 0.69.3 running its exact `fs --scanners license --quiet`
+    against an empty cache, with every proxy variable on a logging proxy (a
+    vulnerability scan through the same proxy was the positive control),
+    downloaded no database but connected to `check.trivy.dev` — Trivy's
+    version check, which also carries anonymous usage data — and, for a
+    `pom.xml`, to Maven Central. Every Trivy run makes the first request;
+    only `TRIVY_SKIP_VERSION_CHECK=true` and `TRIVY_DISABLE_TELEMETRY=true`
+    together stop it, and `--offline-scan` stops the second. SECURITY.md did
+    not list `check.trivy.dev` at all: it now has a row for it, and
+    `compliance_check` in the Maven Central row.
 
 ### Fixed
 

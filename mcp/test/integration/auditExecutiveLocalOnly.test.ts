@@ -131,6 +131,23 @@ describe('audit_executive local_only', () => {
     expect(plugin.storage.scans.getById(r.scan_id)?.meta?.['local_only']).toBe(true);
   });
 
+  // Round 2: measured, not assumed. Trivy 0.69.3, `fs --scanners license
+  // --quiet` (compliance_check's exact arguments), an empty cache, every
+  // proxy variable on a logging proxy: no vulnerability-DB download, but
+  // CONNECT check.trivy.dev:443 (the version check, on every run; only
+  // TRIVY_SKIP_VERSION_CHECK=true AND TRIVY_DISABLE_TELEMETRY=true together
+  // stop it) and CONNECT repo.maven.apache.org:443 for a pom.xml.
+  it('lists compliance_check, whose license scan still reaches check.trivy.dev and Maven Central', async () => {
+    const { plugin, project } = wordpressAndDotnet();
+    recordInputs();
+    const r = await audit({ project_path: project, local_only: true }, plugin);
+    const gaps = r.local_only_gaps ?? [];
+    const compliance = gaps.find((g) => g.startsWith('compliance_check'));
+    expect(compliance).toMatch(/Maven Central/);
+    expect(gaps.join('\n')).toMatch(/check\.trivy\.dev/);
+    expect(gaps.join('\n')).toMatch(/TRIVY_SKIP_VERSION_CHECK=true.*TRIVY_DISABLE_TELEMETRY=true/s);
+  });
+
   it('without it nothing changes: no child is handed local_only, scan_wordpress runs, no gaps listed', async () => {
     const { plugin, project } = wordpressAndDotnet();
     const seen = recordInputs();
