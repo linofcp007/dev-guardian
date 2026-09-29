@@ -94,7 +94,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, noRuleLoaded, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import {
   buildSemgrepDockerArgs,
   CONTAINER_PROJECT_ROOT,
@@ -111,7 +111,14 @@ import {
 } from '../schemas.js';
 import type { ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
-import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import {
+  CONTAINER_PACKS_ROOT,
+  hasDotnetProject,
+  llmPackVersionNote,
+  LLM_RULES_FILE,
+  planSemgrepConfigs,
+} from '../runners/semgrepConfigs.js';
+import { getString, parseInputAsJson } from '../runners/scannerParsers/index.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
@@ -381,7 +388,10 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
     // A rule that did not load is named as its findings are stored.
     ruleIdOf: localRuleIdNormalizer(configs, rules),
   });
-  const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes];
+  // The pack ran on an engine older than the one it was measured on: say
+  // what that engine misses (runners/semgrepConfigs.ts).
+  const versionNote = configs.length > loadedFrom.length ? llmPackVersionNote(semgrepVersionOf(raw)) : null;
+  const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(versionNote !== null ? [versionNote] : [])];
 
   if (check.verdict === 'ok') {
     const run: ToolRun = { name: 'semgrep', status: 'ok' };
@@ -428,13 +438,16 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
     // nothing was scanned for (M-1) — failed, the rules named, never
     // "install semgrep". The plugin's LLM pack does not count: it alone is
     // not a SAST scan, and its findings are recorded above either way.
-    tools_run.push({
+    const run: ToolRun = {
       name: 'semgrep',
       status: 'failed',
       reason: [...reasons, describeNoRuleLoaded(notLoaded)].join('; '),
       failed_rules: notLoaded,
       rule_config_error: true,
-    });
+    };
+    const packConfigs = configs.filter((c) => !loadedFrom.includes(c)).map(readAt);
+    if (onlyPluginPackRan(packConfigs, notLoaded)) run.plugin_pack_only = true;
+    tools_run.push(run);
     return;
   }
   if (notLoaded !== undefined && notLoaded.length > 0) {
@@ -566,7 +579,12 @@ async function runSemgrepOnScope(args: Collect & {
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
-  if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
+  const versionNote = plan.pluginPacks.length > 0 ? llmPackVersionNote(semgrepVersionOf(run.reports[0] ?? null)) : null;
+  const scopeNotes = [...plan.notes, ...(versionNote !== null ? [versionNote] : [])];
+  if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== undefined).join('; ');
+  if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
+    entry.plugin_pack_only = true;
+  }
   tools_run.push(entry);
   // No rule applied to any file in scope: a gap, not a clean result. Files
   // only partly parsed, rules that did not load, the plugin's pack missing
@@ -815,6 +833,26 @@ function customAfterTargetsSetters(projectPath: string): string[] {
     }
   }
   return [...out].sort();
+}
+
+/** The `version` a Semgrep JSON report carries, or undefined. */
+function semgrepVersionOf(raw: unknown): string | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  return getString(parseInputAsJson(raw), 'version');
+}
+
+/**
+ * In a run where no rule of the scan's own configs loaded: whether the
+ * plugin's pack (`packFiles`, read on the host) ran — it was passed and none
+ * of its rules is among the failed ones (a pack rule's stored id is its own).
+ */
+function onlyPluginPackRan(packFiles: readonly string[], failed: ReadonlyArray<{ rule_id: string }>): boolean {
+  if (packFiles.length === 0) return false;
+  const failedIds = new Set(failed.map((f) => f.rule_id));
+  return packFiles.every((file) => {
+    const ids = ruleIdsInFile(file);
+    return ids.length > 0 && !ids.some((id) => failedIds.has(id));
+  });
 }
 
 function listSarif(dir: string): string[] {

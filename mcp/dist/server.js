@@ -40786,6 +40786,23 @@ function llmRulesPath() {
   return join10(pluginPacksDir(), LLM_RULES_FILE);
 }
 var CONTAINER_PACKS_ROOT = "/guardian-packs";
+var LLM_PACK_MEASURED_SEMGREP = "1.176.1";
+function llmPackVersionNote(version2) {
+  if (version2 === void 0) return null;
+  const parse8 = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
+  const have = parse8(version2);
+  const need = parse8(LLM_PACK_MEASURED_SEMGREP);
+  if (have.some((n2) => Number.isNaN(n2))) return null;
+  for (let i2 = 0; i2 < 3; i2 += 1) {
+    const a2 = have[i2] ?? 0;
+    const b = need[i2] ?? 0;
+    if (a2 !== b) {
+      if (a2 > b) return null;
+      return `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version2}, which does not resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 the pack's child_process coverage is reduced (153 of 171 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
+    }
+  }
+  return null;
+}
 function planSemgrepConfigs(projectPath, plugin, localOnly) {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom3 = inspectCustomSemgrepConfigs(plugin, projectPath);
@@ -42708,6 +42725,15 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     (name) => toolsRun.some((t) => t.name === name && t.status === "skipped" && t.reason === NO_SUPPORTED_MANIFEST)
   );
   if (coverage === "none") {
+    const packOnly = ruleErrors.filter(
+      (name) => toolsRun.some((t) => t.name === name && t.status === "failed" && t.plugin_pack_only === true)
+    );
+    if (packOnly.length > 0 && packOnly.length === ruleErrors.length) {
+      return {
+        coverage,
+        warning: `\u26A0\uFE0F ${scanType}: ${packOnly.join(", ")} ran, but no registry or project rule loaded; only the plugin's LLM pack ran \u2014 its findings are reported, and nothing else looked at this code (a rule configuration error \u2014 see its tools_run reason); fix or remove the rules and re-run.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + " A result without them is NOT a clean bill of health."
+      };
+    }
     if (ruleClause !== null) {
       return {
         coverage,
@@ -44742,7 +44768,8 @@ function judgeSemgrepRun(args) {
     // A rule that did not load is named as its findings are stored.
     ruleIdOf: localRuleIdNormalizer(configs, rules)
   });
-  const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes];
+  const versionNote = configs.length > loadedFrom.length ? llmPackVersionNote(semgrepVersionOf(raw)) : null;
+  const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...versionNote !== null ? [versionNote] : []];
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
     if (reasons.length > 0) run.reason = reasons.join("; ");
@@ -44777,13 +44804,16 @@ function judgeSemgrepRun(args) {
     return fromContainerPath(ctx.projectPath, config2);
   };
   if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(loadedFrom, notLoaded, rules, readAt)) {
-    tools_run.push({
+    const run = {
       name: "semgrep",
       status: "failed",
       reason: [...reasons, describeNoRuleLoaded(notLoaded)].join("; "),
       failed_rules: notLoaded,
       rule_config_error: true
-    });
+    };
+    const packConfigs = configs.filter((c3) => !loadedFrom.includes(c3)).map(readAt);
+    if (onlyPluginPackRan(packConfigs, notLoaded)) run.plugin_pack_only = true;
+    tools_run.push(run);
     return;
   }
   if (notLoaded !== void 0 && notLoaded.length > 0) {
@@ -44882,7 +44912,12 @@ async function runSemgrepOnScope(args) {
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry = { ...run.toolRun };
-  if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== void 0).join("; ");
+  const versionNote = plan.pluginPacks.length > 0 ? llmPackVersionNote(semgrepVersionOf(run.reports[0] ?? null)) : null;
+  const scopeNotes = [...plan.notes, ...versionNote !== null ? [versionNote] : []];
+  if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== void 0).join("; ");
+  if (entry.status === "failed" && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
+    entry.plugin_pack_only = true;
+  }
   tools_run.push(entry);
   const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
@@ -45049,6 +45084,18 @@ function customAfterTargetsSetters(projectPath) {
     }
   }
   return [...out].sort();
+}
+function semgrepVersionOf(raw) {
+  if (raw === null || raw === void 0) return void 0;
+  return getString(parseInputAsJson(raw), "version");
+}
+function onlyPluginPackRan(packFiles, failed) {
+  if (packFiles.length === 0) return false;
+  const failedIds = new Set(failed.map((f) => f.rule_id));
+  return packFiles.every((file) => {
+    const ids2 = ruleIdsInFile(file);
+    return ids2.length > 0 && !ids2.some((id) => failedIds.has(id));
+  });
 }
 function listSarif(dir) {
   try {

@@ -142,6 +142,14 @@ export interface ToolRun {
    * scanner" (`tools/scanCoverage.ts`).
    */
   rule_config_error?: true;
+  /**
+   * With `rule_config_error` on a scan_sast Semgrep run: no registry or
+   * project rule loaded, but the plugin's own LLM-application pack did, and
+   * its findings are recorded. The run stays `failed` (the pack alone is not
+   * a SAST scan); the coverage warning says what ran instead of "NOTHING was
+   * scanned" (`tools/scanCoverage.ts`).
+   */
+  plugin_pack_only?: true;
 }
 
 /** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */

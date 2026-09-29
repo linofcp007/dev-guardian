@@ -404,10 +404,26 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 1 rule\(s\) failed to load \(x — Invalid pattern\)/);
     expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
     expect(run?.rule_config_error).toBe(true);
-    const out = r as unknown as { coverage: string; findings_count_by_severity: Record<string, number> };
+    const out = r as unknown as { coverage: string; findings_count_by_severity: Record<string, number>; warnings: string[] };
     expect(out.coverage).toBe('none');
     // The pack's finding is real and kept, under its bare id.
     expect(out.findings_count_by_severity['medium']).toBe(1);
+    // Review round 2: "NOTHING was scanned" is false beside a recorded
+    // finding — say what did and did not run.
+    expect((run as { plugin_pack_only?: boolean } | undefined)?.plugin_pack_only).toBe(true);
+    const warning = out.warnings.join(' ');
+    expect(warning).toMatch(/no registry or project rule loaded; only the plugin's LLM pack ran/);
+    expect(warning).not.toMatch(/NOTHING was scanned/);
+  });
+
+  it('every rule of every config failed, the LLM pack included: nothing ran — the warning says so', async () => {
+    const project = makeTempDir('sast-rules-none-all-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, everyRuleFailed(['x'], 'a.py'));
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { plugin_pack_only?: boolean } | undefined;
+    expect(run?.plugin_pack_only).toBeUndefined();
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).toMatch(/NOTHING was scanned/);
   });
 
   it('the same failure with the registry ruleset in the run: the registry rules ran — partial stays', async () => {
@@ -453,7 +469,10 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 2 rule\(s\) failed to load/);
     expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', 'y']);
     expect(run?.rule_config_error).toBe(true);
-    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+    const warning = (r as unknown as { warnings: string[] }).warnings.join(' ');
+    expect(warning).not.toMatch(/install semgrep/i);
+    // The pack ran from its mount (none of its rules failed): say so.
+    expect(warning).toMatch(/no registry or project rule loaded; only the plugin's LLM pack ran/);
   });
 
   it('a scoped (batched) local_only run in which no project rule loaded is failed too, the LLM pack notwithstanding', async () => {
@@ -772,6 +791,19 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     expect((r as unknown as { coverage: string }).coverage).toBe('full');
     const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
     expect(set.findings.map((f) => [f.rule_id, f.file_path])).toEqual([['llm-trust-remote-code', 'a.py']]);
+  });
+
+  // Review round 2: the pack was measured on Semgrep 1.176.1; older engines
+  // do not resolve `node:child_process` imports in taint mode.
+  it('a Semgrep older than the pack was measured on: a named note that its child_process coverage is reduced', async () => {
+    const project = makeTempDir('sast-llm-oldsemgrep-');
+    for (const [version, noted] of [['1.170.1', true], ['1.86.0', true], ['1.176.1', false], ['1.180.0', false]] as const) {
+      captured.length = 0;
+      mockSemgrepOnPath(0, { ...CLEAN_REPORT, version });
+      const r = await runSast(project, makePlugin(project));
+      const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+      expect([version, /llm\.yml.*measured on Semgrep 1\.176\.1.*child_process/.test(reason)]).toEqual([version, noted]);
+    }
   });
 
   it('local_only in the Docker fallback with no project rules is still no scan — the pack alone is not a SAST ruleset', async () => {

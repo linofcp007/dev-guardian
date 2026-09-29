@@ -100,6 +100,20 @@ export function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     // A scanner that ran and read no manifest it supports — installed, working.
     const unreadable = gaps.filter((name) => toolsRun.some((t) => t.name === name && t.status === 'skipped' && t.reason === NO_SUPPORTED_MANIFEST));
     if (coverage === 'none') {
+        // scan_sast: no registry or project rule loaded, but the plugin's LLM
+        // pack did and its findings are recorded — "NOTHING was scanned" would
+        // contradict the findings beside it (`ToolRun.plugin_pack_only`).
+        const packOnly = ruleErrors.filter((name) => toolsRun.some((t) => t.name === name && t.status === 'failed' && t.plugin_pack_only === true));
+        if (packOnly.length > 0 && packOnly.length === ruleErrors.length) {
+            return {
+                coverage,
+                warning: `⚠️ ${scanType}: ${packOnly.join(', ')} ran, but no registry or project rule loaded; only the plugin's LLM ` +
+                    'pack ran — its findings are reported, and nothing else looked at this code (a rule configuration ' +
+                    'error — see its tools_run reason); fix or remove the rules and re-run.' +
+                    (gaps.length > 0 ? ` Also unavailable or failed: ${list} — install or fix it (or use the Docker fallback).` : '') +
+                    ' A result without them is NOT a clean bill of health.',
+            };
+        }
         if (ruleClause !== null) {
             return {
                 coverage,
