@@ -428,4 +428,49 @@ export function findEncodedBlob(text) {
  * payload hides below the part anyone reads.
  */
 export const OVERSIZED_DESCRIPTION_CHARS = 2048;
+/**
+ * The weakness a finding of `rule` is, where one is defensible — the CWE
+ * only: the OWASP Top 10:2025 category is derived from OWASP's own CWE lists
+ * (`frameworks/taxonomy.ts`), never assigned here. Undefined leaves the
+ * finding unmapped, which every renderer reads as unknown.
+ *
+ *   - CWE-1427 (Improper Neutralization of Input Used for LLM Prompting):
+ *     every rule that finds an INSTRUCTION to the model in text the server
+ *     controls — poisoning, credential reads, concealment, exfiltration,
+ *     parameter smuggling, cross-server shadowing. The definitions are fed
+ *     into the model's context unneutralised, and the rule has found text
+ *     written to steer it. OWASP 2025 lists 1427 under no category, so these
+ *     carry no OWASP id.
+ *   - CWE-451 (User Interface Misrepresentation of Critical Information):
+ *     hidden Unicode — invisible or reordering code points — shows the person
+ *     who approves a tool one text while the model reads another. 1007 is
+ *     narrower (homoglyphs) and is used for exactly that below. OWASP 2025
+ *     files 451 under A06 (Insecure Design).
+ *   - CWE-1007 (Insufficient Visual Distinction of Homoglyphs Presented to
+ *     User): look-alike letters from another script. No OWASP 2025 category.
+ *
+ * Unmapped on purpose: an encoded blob, an oversized description and the
+ * analysis bounds (a string too long, a schema too deep) are signals to go
+ * and read the text, not weaknesses of their own; a changed or removed
+ * definition (`pins.ts`, the rug pull) may be a legitimate release, and its
+ * new text is judged by the rules above; the "N more findings" summary
+ * (`output.ts`) stands for findings of several rules at once.
+ */
+export function mcpRuleTaxonomy(rule) {
+    switch (rule) {
+        case 'mcp-tool-poisoning':
+        case 'mcp-tool-sensitive-file-access':
+        case 'mcp-tool-conceal-from-user':
+        case 'mcp-tool-exfiltration':
+        case 'mcp-tool-parameter-smuggling':
+        case 'mcp-tool-cross-server-shadowing':
+            return { cwe: ['CWE-1427'] };
+        case 'mcp-tool-hidden-unicode':
+            return { cwe: ['CWE-451'] };
+        case 'mcp-tool-homoglyph':
+            return { cwe: ['CWE-1007'] };
+        default:
+            return undefined;
+    }
+}
 //# sourceMappingURL=rules.js.map

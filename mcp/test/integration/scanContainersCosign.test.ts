@@ -268,7 +268,7 @@ interface Scan {
   tools_run: Run[];
   missing_tools: string[];
   warnings: string[];
-  top_findings: { tool: string; rule_id?: string; severity: string; title: string; message?: string; file_path?: string }[];
+  top_findings: { tool: string; rule_id?: string; severity: string; title: string; message?: string; file_path?: string; cwe?: string[]; owasp?: string[] }[];
   image_signature?: Summary;
 }
 type Refused = { ok: false; error: { code: string; message: string } };
@@ -398,6 +398,11 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
       ['cosign-referrers', 'image-unsigned', 'low'],
     ]);
     expect(cosignFindings(r).every((f) => f.file_path === IMAGE)).toBe(true);
+    // Unreleased (review of 3.0.0, S11): CWE-345, which OWASP 2025 files under A08.
+    expect(cosignFindings(r).map((f) => [f.rule_id, f.cwe, f.owasp]).sort()).toEqual([
+      ['image-no-provenance', ['CWE-345'], ['A08:2025']],
+      ['image-unsigned', ['CWE-345'], ['A08:2025']],
+    ]);
     expect(r.image_signature).toMatchObject({ check: 'detect', signature: 'absent', provenance: 'absent' });
     // Round 4, I4: `cosign tree` is never run — every download that decides an absence runs with -d.
     expect(cosignCalls().map((c) => c.slice(0, 3).join(' '))).toEqual([
@@ -620,6 +625,8 @@ describe('scan_containers + cosign: with a signer (real verification)', () => {
     const f = cosignFindings(r);
     expect(f).toHaveLength(1);
     expect(f[0]).toMatchObject({ tool: 'cosign-verify', rule_id: 'image-signature-not-verified', severity: 'high', file_path: IMAGE });
+    // CWE-347, which OWASP 2025 files under A04.
+    expect(f[0]).toMatchObject({ cwe: ['CWE-347'], owasp: ['A04:2025'] });
     expect(f[0]?.message).toContain('evil/fork');
     expect(r.image_signature?.signature).toBe('rejected');
   });

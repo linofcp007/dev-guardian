@@ -142,6 +142,24 @@ import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { makeFinding } from './scannerParsers/index.js';
 import { extractVersion } from './toolProbe.js';
 
+/**
+ * The weaknesses of the three findings, as annotations — the OWASP 2025
+ * category follows from OWASP's own CWE lists (`frameworks/taxonomy.ts`):
+ *
+ *   - `image-signature-not-verified`: CWE-347, Improper Verification of
+ *     Cryptographic Signature — there is a signature, and it does not verify
+ *     for the expected signer. OWASP 2025: A04.
+ *   - `image-unsigned`, `image-no-provenance`: CWE-345, Insufficient
+ *     Verification of Data Authenticity — nothing signed ties the image to
+ *     whoever built it, so whoever deploys it cannot verify where it came
+ *     from. OWASP 2025: A08 (Software or Data Integrity Failures). Not
+ *     CWE-1357 (Reliance on Insufficiently Trustworthy Component, A03): that
+ *     is a judgement of the image itself, and an absent signature shows only
+ *     that its authenticity cannot be checked, not that it is untrustworthy.
+ */
+const SIGNATURE_NOT_VERIFIED_CWE = 'CWE-347';
+const AUTHENTICITY_NOT_VERIFIABLE_CWE = 'CWE-345';
+
 /** Findings of a real `cosign verify`. */
 export const COSIGN_VERIFY_TOOL_NAME = 'cosign-verify';
 /** Findings of the existence check: what is attached as OCI referrers (and the legacy tags). */
@@ -1352,6 +1370,11 @@ export async function verifyImage(image: string, policy: SignerPolicy, ctx: Cosi
     // signer is another finding, never this one unchanged.
     snippet: `${image} signer=${signer}`,
     fix_available: false,
+    // CWE-347, Improper Verification of Cryptographic Signature: the image's
+    // signature does not verify for the signer the project expects. OWASP
+    // 2025 files 347 under A04. An annotation: fingerprint and identity are
+    // unchanged.
+    taxonomy: { cwe: [SIGNATURE_NOT_VERIFIED_CWE] },
   });
   return {
     run: result('ok', `NOT verified for ${who} — ${v.detail}`),
@@ -1497,6 +1520,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         file_path: image,
         snippet: image,
         fix_available: false,
+        taxonomy: { cwe: [AUTHENTICITY_NOT_VERIFIABLE_CWE] },
       }),
     );
   }
@@ -1517,6 +1541,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         file_path: image,
         snippet: image,
         fix_available: false,
+        taxonomy: { cwe: [AUTHENTICITY_NOT_VERIFIABLE_CWE] },
       }),
     );
   }

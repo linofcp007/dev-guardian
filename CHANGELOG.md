@@ -8,6 +8,20 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- CWE (and, through OWASP's own CWE lists, the Top 10:2025 category) on the findings 3.0.0 left
+  without one, although its notes said "every finding": WPScan's vulnerable components are
+  dependencies like the others (CWE-1395, A03 only); cosign's `image-signature-not-verified` is
+  CWE-347 (A04), `image-unsigned` and `image-no-provenance` CWE-345 (A08 — not CWE-1357, which
+  would judge the image untrustworthy where the finding only says its authenticity cannot be
+  checked); `audit_mcp_tools`' instruction rules (poisoning, credential reads, concealment,
+  exfiltration, parameter smuggling, cross-server shadowing) CWE-1427, which OWASP 2025 lists
+  under no category, hidden Unicode CWE-451 (A06), look-alike letters CWE-1007. An encoded blob, an
+  oversized description, the analysis bounds, a changed definition and the "N more findings"
+  summary stay unmapped: none is a weakness of its own. Annotations only — no fingerprint or
+  identity changes.
+
 ### Security
 
 - A `.guardian/guardian.db` git tracks is no longer opened. A committed database is the committer's
@@ -111,7 +125,9 @@ history reader answers for one project**.
 
 It also adds six capabilities, each reviewed round by round before release:
 `audit_mcp_tools` (MCP tool poisoning and rug pulls, pinned by hash); CWE, OWASP
-Top 10:2025 and NIST CSF 2.0 on every finding, with coverage judged per language;
+Top 10:2025 and NIST CSF 2.0 on findings whose weakness has a defensible CWE (the
+rest read as unknown — cosign, `audit_mcp_tools` and WPScan findings had none until
+the release after this one), with coverage judged per language;
 CISA SSVC decisions and `export_vex` (OpenVEX / CycloneDX VEX); a Semgrep pack for
 LLM applications; Sigstore signature and provenance checks in `scan_containers`
 plus `ci-init github --attest`; and a plugin-surface check that holds the host

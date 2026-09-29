@@ -50294,6 +50294,8 @@ function firstLine3(text2) {
 }
 
 // src/runners/cosignCheck.ts
+var SIGNATURE_NOT_VERIFIED_CWE = "CWE-347";
+var AUTHENTICITY_NOT_VERIFIABLE_CWE = "CWE-345";
 var COSIGN_VERIFY_TOOL_NAME = "cosign-verify";
 var COSIGN_REFERRERS_TOOL_NAME = "cosign-referrers";
 var COSIGN_TIMEOUT_MS = 18e4;
@@ -51021,7 +51023,12 @@ async function verifyImage(image, policy, ctx) {
     // The signer is part of what this finding says: a rejection for another
     // signer is another finding, never this one unchanged.
     snippet: `${image} signer=${signer}`,
-    fix_available: false
+    fix_available: false,
+    // CWE-347, Improper Verification of Cryptographic Signature: the image's
+    // signature does not verify for the signer the project expects. OWASP
+    // 2025 files 347 under A04. An annotation: fingerprint and identity are
+    // unchanged.
+    taxonomy: { cwe: [SIGNATURE_NOT_VERIFIED_CWE] }
   });
   return {
     run: result("ok", `NOT verified for ${who} \u2014 ${v.detail}`),
@@ -51111,7 +51118,8 @@ async function detectImageSupplyChain(image, ctx) {
         message: `cosign found no signature for ${pinned.checked ?? image} \u2014 no .sig tag, and no signing or signed attestation bundle attached as an OCI referrer, which is everything \`cosign verify\` accepts.${listed}${legacyProvenance} On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
         file_path: image,
         snippet: image,
-        fix_available: false
+        fix_available: false,
+        taxonomy: { cwe: [AUTHENTICITY_NOT_VERIFIABLE_CWE] }
       })
     );
   }
@@ -51127,7 +51135,8 @@ async function detectImageSupplyChain(image, ctx) {
         message: `No signed SLSA provenance attestation (https://slsa.dev/provenance/v0.2 or v1) was found for ${pinned.checked ?? image}, as a legacy .att tag or a Sigstore bundle attached as an OCI referrer, so there is no signed record of the source and build that produced it. BuildKit's unsigned provenance inside an image index is not counted. Generate one where the image is built (actions/attest-build-provenance with push-to-registry, or cosign attest).`,
         file_path: image,
         snippet: image,
-        fix_available: false
+        fix_available: false,
+        taxonomy: { cwe: [AUTHENTICITY_NOT_VERIFIABLE_CWE] }
       })
     );
   }
@@ -65212,7 +65221,10 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
     file_path: componentLabel,
     snippet: `component:${componentLabel}`,
     // Every CVE of the vulnerability is its own id; the first is the rule id.
-    vuln_aliases: cveList
+    vuln_aliases: cveList,
+    // A known-vulnerable plugin, theme or core is a vulnerable dependency,
+    // classified as every other one: CWE-1395, A03:2025 only.
+    taxonomy: dependencyTaxonomy()
   });
   findings.push(finding4);
   for (const cveId of cveList) {
@@ -76929,6 +76941,23 @@ function findEncodedBlob(text2) {
   return null;
 }
 var OVERSIZED_DESCRIPTION_CHARS = 2048;
+function mcpRuleTaxonomy(rule) {
+  switch (rule) {
+    case "mcp-tool-poisoning":
+    case "mcp-tool-sensitive-file-access":
+    case "mcp-tool-conceal-from-user":
+    case "mcp-tool-exfiltration":
+    case "mcp-tool-parameter-smuggling":
+    case "mcp-tool-cross-server-shadowing":
+      return { cwe: ["CWE-1427"] };
+    case "mcp-tool-hidden-unicode":
+      return { cwe: ["CWE-451"] };
+    case "mcp-tool-homoglyph":
+      return { cwe: ["CWE-1007"] };
+    default:
+      return void 0;
+  }
+}
 
 // src/mcpaudit/analyze.ts
 var MCP_AUDIT_TOOL_NAME = "mcp-tool-audit";
@@ -77384,9 +77413,14 @@ function shadowingFromMentions(target, mentions, others) {
       ),
       file_path: target.sourceLabel,
       snippet: escapeInvisible(`${server} > ${ref.item} > ${ref.path}: names '${name}'`),
-      fix_available: false
+      fix_available: false,
+      ...taxonomyOf(meta.rule)
     })
   );
+}
+function taxonomyOf(rule) {
+  const taxonomy = mcpRuleTaxonomy(rule);
+  return taxonomy === void 0 ? {} : { taxonomy };
 }
 function itemKey(hit) {
   return `${hit.rule}\0${hit.field.item}`;
@@ -77527,7 +77561,8 @@ function finishRun(run, others) {
         snippet: escapeInvisible(
           `${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`
         ),
-        fix_available: false
+        fix_available: false,
+        ...taxonomyOf(first.rule)
       }))
     );
   }
