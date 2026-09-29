@@ -24,7 +24,7 @@ import { mkdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { canonicalPath } from '../../src/platform/projectPath.js';
 import { expectedSchema, openDatabase, resolveFallbackDbPath } from '../../src/storage/db.js';
 import { PROJECT_KEYED_TABLES } from '../../src/storage/dbProvenance.js';
@@ -32,6 +32,10 @@ import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir, rmDir } from '../helpers/tempDir.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+
+// Each case runs the CLI (and git) as real processes, several times: the
+// 10 s default was measured too short in Docker (12-18 s per case).
+vi.setConfig({ testTimeout: 90_000 });
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
