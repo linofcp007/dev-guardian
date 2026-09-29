@@ -411,6 +411,11 @@ them again. Scans made on the fallback meanwhile are not merged back.
 - A database whose schema is still incomplete after its migrations ran stops the server with one
   line naming the file and the missing object (`is missing column findings.cwe`), not a stack
   trace from inside `new Storage()`.
+- The CLI's last-resort handler printed a database the storage layer refuses as
+  `dev-guardian: unexpected error: <message>` — a crash, to anyone reading it, where the message
+  names the file and what to do. A `GuardianDbError` that reaches it is now printed alone, with
+  exit 3: what `status` and `dashboard` exit with when they refuse an unusable database
+  themselves. `db adopt` already printed its own the same way (exit 1, as documented).
 
 ### Security
 

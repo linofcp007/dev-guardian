@@ -2617,19 +2617,43 @@ async function cmdDashboard(argv) {
 
 /**
  * Last-resort safety net for `cmdScan`/`cmdBaseline`/`cmdStatus`/
- * `cmdDashboard`: each already wraps (or, for the latter two, delegates to
- * `buildProjectSnapshot`'s own try/finally for) its own storage/pipeline
- * work and converts every usage problem to `usageError` (exit 3), so nothing
- * inside them SHOULD reject. This exists so that if one somehow does anyway
- * — an unreadable database file, an --out write failure, anything not
+ * `cmdDashboard`/`cmdDb`: each already wraps (or, for status/dashboard,
+ * delegates to `buildProjectSnapshot`'s own try/finally for) its own
+ * storage/pipeline work and converts every usage problem to `usageError`
+ * (exit 3), so nothing inside them SHOULD reject. This exists so that if one
+ * somehow does anyway — a database the storage layer refuses (printed as
+ * its own message, see `fatalOutcome`), an --out write failure, anything not
  * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
  * exactly the kind of stray noise the pristine-output requirement (the
  * design of record, and this task's e2e) exists to keep out of a CI log.
  */
 function fatal(e) {
-  process.stderr.write(`dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(USAGE_ERROR_EXIT);
+  const out = fatalOutcome(e);
+  process.stderr.write(out.text);
+  process.exit(out.exitCode);
+}
+
+/**
+ * What `fatal` prints for `e`, and its exit code — pure, for the tests.
+ *
+ * A `GuardianDbError` (`mcp/src/storage/dbError.ts`) is not an unexpected
+ * error: it is a database dev-guardian cannot use, and its message already
+ * names the file and what to do. Printed after "unexpected error:" it read as
+ * a crash in dev-guardian, so it is printed alone — with exit 3, what
+ * `status`/`dashboard` exit with when they refuse an unusable database
+ * themselves. Recognised by name: the storage layer is loaded lazily from
+ * `mcp/dist`, so this file holds no class to test `instanceof` against.
+ * Anything else is still unexpected, exit 3.
+ */
+export function fatalOutcome(e) {
+  if (e instanceof Error && e.name === 'GuardianDbError') {
+    return { text: `dev-guardian: ${e.message}\n`, exitCode: USAGE_ERROR_EXIT };
+  }
+  return {
+    text: `dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`,
+    exitCode: USAGE_ERROR_EXIT,
+  };
 }
 
 // --- db adopt ---------------------------------------------------------------
