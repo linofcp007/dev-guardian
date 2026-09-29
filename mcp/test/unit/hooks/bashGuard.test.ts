@@ -823,10 +823,14 @@ describe('assessBashCommand — the pattern rules are linear (ReDoS, fix round 2
     expect(a.level).not.toBe('ok');
   });
 
+  // The budget is pinned: the subject is the cap and the time, and under load
+  // the real 2.5 s budget can stop short of the `rm -rf /` (review 3.0 wave 2).
   it('thirty of them, under the whole-command cap, still block the rm -rf / at the end', () => {
     const [, chmod] = worst[0] ?? ['', ''];
     const t0 = performance.now();
-    expect(assessBashCommand(`${Array.from({ length: 30 }, () => chmod).join('; ')}; rm -rf /`).level).toBe('block');
+    expect(assessBashCommand(`${Array.from({ length: 30 }, () => chmod).join('; ')}; rm -rf /`, { budgetMs: 600_000 }).level).toBe(
+      'block',
+    );
     expect(performance.now() - t0).toBeLessThan(ceiling(3000, 6000));
   });
 
@@ -903,22 +907,27 @@ describe('assessBashCommand — the 16 KB cap applies per statement, never silen
     expect(a.level).toBe('ok');
   });
 
-  // Typical, idle: 230 ms.
+  // Typical, idle: 230 ms. The time budget is pinned out of the way: under
+  // load the real 2.5 s budget can end the assessment before the `rm -rf /`,
+  // which is the budget working, not this test's subject — the ceiling below
+  // bounds the time instead.
   it('a 500 KB command of short statements is assessed in bounded time, to its end', () => {
     const command = Array.from({ length: 19_000 }, (_, i) => `echo ${i} > out${i}.txt`).join('; ');
     expect(command.length).toBeLessThan(512 * 1024);
     const t0 = performance.now();
-    expect(assessBashCommand(`${command}; rm -rf /`).level).toBe('block');
+    expect(assessBashCommand(`${command}; rm -rf /`, { budgetMs: 600_000 }).level).toBe('block');
     expect(performance.now() - t0).toBeLessThan(ceiling(5000, 10_000));
   }, 30_000);
 
   // Fix round 2: the whole command is read to 512 KB (the corpus's longest
-  // real command is 58 KB), and the warning names the cap that cut it.
+  // real command is 58 KB), and the warning names the cap that cut it. The
+  // budget is pinned: under load the real one ran out too, and its note
+  // replaced this one (seen in Docker, review 3.0 wave 2).
   it('a command over 512 KB is read to 512 KB, and the warning says so', () => {
-    const a = assessBashCommand(`${'echo x; '.repeat(70_000)}rm -rf /`);
+    const a = assessBashCommand(`${'echo x; '.repeat(70_000)}rm -rf /`, { budgetMs: 600_000 });
     expect(a.level).toBe('warn');
     expect(a.reasons).toContain('part of this command was not assessed (over 512 KB)');
-  });
+  }, 30_000);
 
   it('within the cap, a statement over 16 KB still says 16 KB', () => {
     expect(assessBashCommand(`echo ${'a'.repeat(20_000)}`).reasons).toContain(
