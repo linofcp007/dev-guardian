@@ -70656,7 +70656,7 @@ function looksLikeGitHost(url2) {
 async function ingestGit(url2) {
   const dir = mkdtempSync5(join67(tmpdir6(), "guardian-scanskill-git-"));
   try {
-    await execa("git", ["clone", "--depth", "1", "--quiet", url2, dir], { timeout: 12e4 });
+    await execa("git", ["clone", "--depth", "1", "--quiet", "--", url2, dir], { timeout: 12e4 });
   } catch (e) {
     safeRm(dir);
     const msg = e instanceof Error ? e.message : "git clone failed";

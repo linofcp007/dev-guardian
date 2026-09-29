@@ -107,7 +107,9 @@ function looksLikeGitHost(url) {
 async function ingestGit(url) {
     const dir = mkdtempSync(join(tmpdir(), 'guardian-scanskill-git-'));
     try {
-        await execa('git', ['clone', '--depth', '1', '--quiet', url, dir], { timeout: 120000 });
+        // `--`: a target that merely ends in `.git` may start with `-`
+        // (`--upload-pack=<command>;.git`), and git would run it as an option.
+        await execa('git', ['clone', '--depth', '1', '--quiet', '--', url, dir], { timeout: 120000 });
     }
     catch (e) {
         safeRm(dir);

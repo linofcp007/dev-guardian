@@ -438,6 +438,9 @@ version bump.
   --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
   Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
   Semgrep with `PYTHONUTF8=1`.
+- `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
+  ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
+  became the repository, and git ran the command to fetch from it. The URL now follows `--`.
 
 ## [3.0.0] - 2026-09-29
 
