@@ -521,7 +521,10 @@ describe('dev-guardian status — a migrated-but-missing-table database is refus
 
       expect(r.status).toBe(3);
       expect(r.stdout).toBe('');
-      expect(r.stderr).toMatch(/no such table/i);
+      // Since the migration set (Unreleased): the storage layer names the
+      // file and the missing table itself, before `new Storage(db)` runs.
+      expect(r.stderr).toMatch(/is missing table scans/i);
+      expect(r.stderr).toContain(join(dir, '.guardian', 'guardian.db'));
 
       const dbPath = join(dir, '.guardian', 'guardian.db');
       expect(existsSync(dbPath)).toBe(true);
@@ -766,6 +769,31 @@ describe('dev-guardian status / dashboard — the root/home guard every MCP tool
       expect(r.stderr).toBe('');
     } finally {
       rmSync(sub, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('dev-guardian status — a project database git tracks is never read', () => {
+  // The server refuses a committed `.guardian/guardian.db` (SQL inside it can
+  // hide findings); `status` must decide the same way, and stay read-only.
+  it('reports no scan, says why on stderr, and creates no fallback database', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-tracked-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: dir }).status).toBe(0);
+      seedCompletedScan(dir);
+      expect(spawnSync('git', ['add', '-f', '.guardian/guardian.db'], { cwd: dir }).status).toBe(0);
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/No scan yet|dev-guardian scan/);
+      expect(r.stdout).not.toMatch(/1 crit/);
+      expect(r.stderr).toMatch(/git tracks \.guardian\/guardian\.db/);
+      expect(existsSync(fallbackPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
     }
   });
 });

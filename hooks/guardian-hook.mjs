@@ -159,6 +159,23 @@ async function loadConfigReader() {
   }
 }
 
+/**
+ * `databaseRegistration` from `mcp/dist/storage/dbRegistry.js`: whether a
+ * project's `.guardian/guardian.db` is registered as the user's, read from
+ * the user's own registry — the database itself is never opened here. Loaded
+ * for SessionStart only; until then, and if it cannot be, `unknown` (no line).
+ */
+let databaseRegistration = () => 'unknown';
+
+async function loadRegistryReader() {
+  try {
+    const mod = await import(pathToFileURL(join(PLUGIN_ROOT, 'mcp', 'dist', 'storage', 'dbRegistry.js')).href);
+    if (typeof mod.databaseRegistration === 'function') databaseRegistration = mod.databaseRegistration;
+  } catch (err) {
+    debug(`registry reader unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 const UNREAD_REASON = {
   'not-a-regular-file': 'not a regular file',
   'too-large': 'larger than 64 KiB',
@@ -635,6 +652,16 @@ async function handleSessionStart(root, cfg) {
       /* ignore */
     }
     lines.push(`Project is guardian-initialized.${scanNote} Use /guardian-status for the dashboard, /guardian-scan before pushing.`);
+    // Since 3.0.1 a project database is used only when it is registered as
+    // the user's; one from 3.0.0 is not, until the user adopts it.
+    if (reachable && databaseRegistration(dbPath) === 'unregistered') {
+      const cli = join(PLUGIN_ROOT, 'cli', 'dev-guardian.mjs');
+      lines.push(
+        '⚠️ dev-guardian is not using .guardian/guardian.db: it is not registered as the user\'s (a database from ' +
+          `before 3.0.1, or one that came with the files). The user can review it with \`node "${cli}" db adopt ` +
+          `--project "${root}"\` in a terminal and register it with --yes if it is theirs — never run that for them.`,
+      );
+    }
   } else {
     lines.push('Not yet guardian-initialized — run /guardian-init to set up security & quality scanning.');
   }
@@ -905,6 +932,7 @@ async function main() {
 
   switch (event) {
     case 'SessionStart':
+      await loadRegistryReader();
       return handleSessionStart(root, cfg);
     case 'PostToolUse':
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {

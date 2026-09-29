@@ -45,11 +45,11 @@ describe('diff_scans', () => {
       truncated: { new: boolean; resolved: boolean; unchanged: boolean; not_remeasured: boolean; not_previously_measured: boolean };
     }>(await tool('diff_scans').handler({ from_scan_id: from, to_scan_id: to, project_path: p }, s.plugin));
 
-    expect(r.summary).toEqual({ new: 3, resolved: 60, unchanged: 70, not_remeasured: 0, not_previously_measured: 0 });
+    expect(r.summary).toEqual({ new: 3, resolved: 60, unchanged: 70, not_remeasured: 0, not_previously_measured: 0, suppressed: 0 });
     expect(r.new_findings).toHaveLength(3);
     expect(r.resolved_findings).toHaveLength(50);
     expect(r.unchanged_findings).toHaveLength(50);
-    expect(r.truncated).toEqual({ new: false, resolved: true, unchanged: true, not_remeasured: false, not_previously_measured: false });
+    expect(r.truncated).toEqual({ new: false, resolved: true, unchanged: true, not_remeasured: false, not_previously_measured: false, suppressed: false });
   });
 });
 

@@ -1,0 +1,152 @@
+/**
+ * dev-guardian's per-user data directory, and the checks that keep what is
+ * in it private: the per-project fallback databases (`db.ts`) and the
+ * registry of databases this user's dev-guardian created (`dbRegistry.ts`).
+ *
+ * Every directory is created 0700 and, on POSIX, checked BEFORE anything is
+ * created inside it: owned by this user, a real directory (the data
+ * directory itself may be a link — the user chose it — nothing under it
+ * may), and narrowed to 0700 when it is wider. Windows keeps
+ * `%LOCALAPPDATA%` per-user by its ACL and has no uid to compare.
+ *
+ * Every failure here is a {@link GuardianDbError} of kind `data-dir` whose
+ * message is the reason alone — a directory that cannot be created (a
+ * container user with no home: `HOME=/`), one another user owns, a file
+ * where a directory should be. `db.ts#openDatabase` never exits for one: it
+ * runs the session on an in-memory database and says history will not
+ * persist, and to set `GUARDIAN_DATA_DIR`.
+ */
+import { chmodSync, lstatSync, mkdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
+import { GuardianDbError } from './dbError.js';
+/**
+ * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
+ * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
+ * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts, as
+ * the XDG spec says) or `~/.local/share/dev-guardian` elsewhere. Read at call
+ * time. Pure path arithmetic, no I/O.
+ */
+export function userDataDir() {
+    const override = process.env['GUARDIAN_DATA_DIR']?.trim();
+    if (override !== undefined && override !== '')
+        return resolve(override);
+    if (process.platform === 'win32') {
+        const local = process.env['LOCALAPPDATA']?.trim();
+        return join(local !== undefined && isAbsolute(local) ? local : join(homedir(), 'AppData', 'Local'), 'dev-guardian');
+    }
+    const xdg = process.env['XDG_DATA_HOME']?.trim();
+    return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), '.local', 'share'), 'dev-guardian');
+}
+/** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */
+export function notPrivate(path, why) {
+    return new GuardianDbError('data-dir', path, `'${path}' ${why}`);
+}
+/** A {@link GuardianDbError} of kind `data-dir` for a file-system failure on `path`. */
+export function dataDirFailure(path, doing, error) {
+    if (error instanceof GuardianDbError)
+        return error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return new GuardianDbError('data-dir', path, `'${path}' cannot be ${doing} (${detail})`);
+}
+/** Whether `error` says the per-user data directory cannot be used. */
+export function isDataDirError(error) {
+    return error instanceof GuardianDbError && error.kind === 'data-dir';
+}
+function currentUid() {
+    return typeof process.getuid === 'function' ? process.getuid() : undefined;
+}
+/** Throws unless `st` is a directory of this user's; narrows it to 0700. */
+function assertPrivateDir(path, st) {
+    if (st.isSymbolicLink())
+        throw notPrivate(path, 'is a symbolic link');
+    if (!st.isDirectory())
+        throw notPrivate(path, 'is not a directory');
+    if (process.platform === 'win32')
+        return;
+    const uid = currentUid();
+    if (uid !== undefined && st.uid !== uid)
+        throw notPrivate(path, `belongs to uid ${st.uid}, not to this user (${uid})`);
+    if ((st.mode & 0o077) !== 0) {
+        try {
+            chmodSync(path, 0o700);
+        }
+        catch (error) {
+            throw dataDirFailure(path, 'made private (chmod 0700)', error);
+        }
+    }
+}
+function statOrNull(path, follow) {
+    try {
+        return follow ? statSync(path) : lstatSync(path);
+    }
+    catch (error) {
+        // ENOTDIR: a component on the way is a file — the path does not exist
+        // either, and creating it is what fails, and says so.
+        const code = error.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR')
+            return null;
+        throw dataDirFailure(path, 'read', error);
+    }
+}
+/**
+ * The data directory, created 0700 when it does not exist, and checked —
+ * before anything is created in it — when it does. Returns its path.
+ */
+export function ensurePrivateDataDir() {
+    const dir = userDataDir();
+    const existing = statOrNull(dir, true);
+    if (existing === null) {
+        try {
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+        }
+        catch (error) {
+            throw dataDirFailure(dir, 'created', error);
+        }
+        const created = statOrNull(dir, true);
+        if (created === null)
+            throw notPrivate(dir, 'vanished as it was created');
+        assertPrivateDir(dir, created);
+    }
+    else {
+        assertPrivateDir(dir, existing);
+    }
+    return dir;
+}
+/**
+ * `name` directly under the (checked) data directory, created 0700 when it
+ * does not exist and checked when it does — never a link.
+ */
+export function ensurePrivateSubdir(name) {
+    const parent = ensurePrivateDataDir();
+    const dir = join(parent, name);
+    const existing = statOrNull(dir, false);
+    if (existing === null) {
+        try {
+            mkdirSync(dir, { mode: 0o700 });
+        }
+        catch (error) {
+            if (error.code !== 'EEXIST')
+                throw dataDirFailure(dir, 'created', error);
+        }
+    }
+    const st = statOrNull(dir, false);
+    if (st === null)
+        throw notPrivate(dir, 'vanished as it was created');
+    assertPrivateDir(dir, st);
+    return dir;
+}
+/** On POSIX, an existing file here must be a regular file of this user's (never a link). */
+export function assertOwnedRegularFileIfPresent(path) {
+    const st = statOrNull(path, false);
+    if (st === null)
+        return;
+    if (!st.isFile())
+        throw notPrivate(path, st.isSymbolicLink() ? 'is a symbolic link' : 'is not a regular file');
+    if (process.platform === 'win32')
+        return;
+    const uid = currentUid();
+    if (uid !== undefined && st.uid !== uid)
+        throw notPrivate(path, `belongs to uid ${st.uid}, not to this user (${uid})`);
+}
+//# sourceMappingURL=userData.js.map

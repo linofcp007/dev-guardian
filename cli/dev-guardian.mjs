@@ -62,6 +62,18 @@
  *                             --project <path>        default: cwd
  *                             --out <path>             default: <project>/.guardian/dashboard.html
  *                             --no-open                never launch a browser
+ *   db adopt                Show what the project's .guardian/guardian.db
+ *                           holds (projects, scans, dates, suppressions,
+ *                           paths) and, with --yes, register it as this
+ *                           user's database — the only way an existing one
+ *                           (from before 3.0.1, a copy) comes to be trusted.
+ *                           CLI only, never an MCP tool.
+ *                             --project <path>        default: cwd
+ *                             --yes                    register it
+ *                             --rehome                 with --yes: move this
+ *                                                      project's rows filed under
+ *                                                      a path that leads to it
+ *                                                      to its canonical path
  *
  *   node cli/dev-guardian.mjs mcp-config <host|all> [--write] [--scope …]
  *   node cli/dev-guardian.mjs check --file path/to/file
@@ -70,6 +82,7 @@
  *   node cli/dev-guardian.mjs baseline update --project .
  *   node cli/dev-guardian.mjs status --project .
  *   node cli/dev-guardian.mjs dashboard --project .
+ *   node cli/dev-guardian.mjs db adopt --project . --yes
  *
  * `--start-command`, and why it may only come from argv:
  *   scan_dast's own MCP tool deliberately has no way to start the app it
@@ -209,6 +222,7 @@ Usage:
   node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [options]
   node cli/dev-guardian.mjs status [--project <path>]
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
+  node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
 
 mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
@@ -395,6 +409,24 @@ dashboard — writes a self-contained HTML report and prints its path
   a multi-week trend. Regenerate it (re-run this command) to see a new scan.
   Exit codes: 0 always, except 3 on a usage error.
 
+db adopt — decide yourself whether the project's .guardian/guardian.db is yours
+  --project <path>      Target project directory (default: current directory)
+  --yes                  Register it as this user's database
+  --rehome               With --yes: move this project's rows filed under
+                         another path that leads to it (a link, macOS /var)
+                         to its canonical path, so their history reads again
+  dev-guardian uses a project's database only when it is yours: created here,
+  or registered here by you. Nothing else is trusted automatically — upgrading
+  from 3.0.0, run this once. It prints what the database holds — first what to
+  weigh (suppressions with no project apply to EVERY project; scans dated in
+  the future), then projects, scans, dates, and every path its rows are filed
+  under with where each leads now — and registers it only with --yes. Run it
+  yourself: it decides whose data dev-guardian trusts. Never one git tracks,
+  one reached through a link, one whose schema holds what dev-guardian's
+  migrations never create, or one holding scans dated in the future.
+  Exit codes: 0 report printed (registered with --yes, or already yours),
+              1 no database, or it cannot be registered, 3 usage error.
+
 Examples:
   node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
   node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
@@ -405,6 +437,7 @@ Examples:
   node cli/dev-guardian.mjs ci-init github --project ../my-app --write
   node cli/dev-guardian.mjs status --project .
   node cli/dev-guardian.mjs dashboard --project . --no-open
+  node cli/dev-guardian.mjs db adopt --project .          # show; add --yes to register
 `);
 }
 
@@ -2349,14 +2382,29 @@ async function loadDashboardModules() {
   }
 }
 
+/**
+ * The storage layer's `existingOnly` open makes every decision the server
+ * makes — a project database that is not this user's own (no id registered
+ * for its path: one from before 3.0.1 until `db adopt --yes`), one git
+ * tracks or one holding schema objects the migrations never create is
+ * refused; the per-user fallback (no longer the shared temp directory) must
+ * belong to this user — and never creates a database: an empty in-memory one
+ * when neither location has one. The existence checks this function used to
+ * make itself opened a predictable fallback path in the shared temp
+ * directory whenever it existed.
+ */
 function resolveDbHandle(mods, projectPath) {
-  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
-  if (existsSync(primaryPath)) return mods.openDatabase({ projectPath }).db;
-
-  const fallbackPath = mods.resolveFallbackDbPath(projectPath);
-  if (existsSync(fallbackPath)) return mods.openDatabaseAtPath(fallbackPath);
-
-  return mods.openDatabase({ projectPath, inMemory: true }).db;
+  const opened = mods.openDatabase({ projectPath, existingOnly: true });
+  if (opened.unusable) {
+    // The database this command exists to show cannot be read or completed.
+    // The server runs on in memory; a report of an empty in-memory database
+    // would read as "no scan yet", so this refuses with the storage layer's
+    // own line (the file, and what to do) — exit 3, as before.
+    opened.db.close();
+    return usageError(opened.warning ?? `the database '${opened.unusable}' cannot be used`);
+  }
+  if (opened.warning) process.stderr.write(`dev-guardian: ${opened.warning}\n`);
+  return opened.db;
 }
 
 function buildProjectSnapshot(mods, projectPath) {
@@ -2584,6 +2632,200 @@ function fatal(e) {
   process.exit(USAGE_ERROR_EXIT);
 }
 
+// --- db adopt ---------------------------------------------------------------
+//
+// A project's `.guardian/guardian.db` is used only when it is this user's own
+// (mcp/src/storage/dbProvenance.ts): created here, or registered here by the
+// user. Nothing else is trusted automatically — not a database from before
+// 3.0.1, not a copy of a registered one — because nothing in a file tells its
+// owner from whoever wrote it (round 6 of the 3.0 review defeated every rule
+// that tried). `db adopt` lets the PERSON decide: it prints what the database
+// holds — what to weigh first (suppressions with no project, which apply to
+// every project; scans dated in the future), then its projects, scan counts,
+// dates, and every project path its rows are filed under with where each
+// leads now — and registers it only with --yes. --rehome also moves the rows
+// filed under another path that leads to this project (a link, macOS /var)
+// to the project's canonical path, so its history reads again. A CLI command
+// and never an MCP tool: a model whose context includes the repository must
+// not be the one that vouches for the repository's database.
+
+/** Lazily loads the storage layer (node:sqlite) — see loadDashboardModules. */
+async function loadDbModules() {
+  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'db.js');
+  if (!existsSync(marker)) {
+    process.stderr.write(
+      `dev-guardian: MCP server not built (missing ${marker}).\n` +
+        'Run once:  cd mcp && npm install && npm run build\n',
+    );
+    process.exit(USAGE_ERROR_EXIT);
+  }
+  try {
+    return await import('../mcp/dist/storage/db.js');
+  } catch (e) {
+    if (isNodeSqliteUnavailable(e)) {
+      process.stderr.write(
+        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
+          `Current: ${process.version}.\n`,
+      );
+      process.exit(USAGE_ERROR_EXIT);
+    }
+    throw e;
+  }
+}
+
+function parseDbAdoptArgs(argv) {
+  const out = { project: process.cwd(), yes: false, rehome: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a, true);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) {
+      const value = a.slice('--project='.length);
+      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
+      out.project = value;
+    } else if (a === '--yes') out.yes = true;
+    else if (a === '--rehome') out.rehome = true;
+    else return { error: `Unknown flag: ${a}` };
+  }
+  return { value: out };
+}
+
+const PATH_TARGET = {
+  canonical: "this project's canonical path",
+  'this-project': 'leads to this project: --rehome moves these rows to its canonical path',
+  elsewhere: 'another directory: never touched',
+  missing: 'does not exist: never touched',
+  unresolved: 'not looked at (a network, device or process-relative path): never touched',
+};
+
+/** The human-readable report `db adopt` prints (stdout). */
+function renderDbReport(report) {
+  const lines = [];
+  for (const w of report.warnings) lines.push(`!! ${w}`);
+  if (report.warnings.length > 0) lines.push('');
+  lines.push(`Database      ${report.db_path}`);
+  const status = {
+    trusted: "this user's database (registered for this location)",
+    foreign: `not used: ${report.why ?? ''}`,
+    none: 'empty: nothing to adopt',
+  }[report.status];
+  lines.push(`Status        ${status}`);
+  const c = report.contents;
+  if (c !== null) {
+    const range = c.first_started !== null ? `, from ${c.first_started} to ${c.last_finished ?? '(unfinished)'}` : '';
+    lines.push(`Scans         ${c.scans} (${c.completed} completed)${range}`);
+    lines.push(`Projects      ${c.projects.length + c.more_projects}`);
+    for (const p of c.projects) {
+      lines.push(`  ${p.project_path}`);
+      lines.push(
+        `    ${p.scans} scan(s), ${p.completed} completed` +
+          (p.first_started !== null ? `, ${p.first_started} .. ${p.last_finished ?? '(unfinished)'}` : ''),
+      );
+    }
+    if (c.more_projects > 0) lines.push(`  … and ${c.more_projects} more`);
+    lines.push(
+      `Suppressions  ${c.suppressions}` +
+        (c.null_scoped_suppressions > 0
+          ? `, of which ${c.null_scoped_suppressions} have no project and apply to EVERY project`
+          : ''),
+    );
+    lines.push(`Baselines     ${c.baselines}`);
+  }
+  if (report.paths.length > 0) {
+    lines.push(`Paths         rows are filed under ${report.paths.length} project path(s); this project is ${report.canonical_project}`);
+    for (const p of report.paths) {
+      lines.push(`  ${p.project_path}`);
+      lines.push(`    ${p.rows} row(s): ${PATH_TARGET[p.target] ?? p.target}`);
+    }
+    lines.push(
+      report.rehome.rows > 0
+        ? `--rehome would move ${report.rehome.rows} row(s) under ${report.rehome.paths} path(s) to ${report.canonical_project}, and nothing else.`
+        : '--rehome would change nothing: no row is filed under another path that leads to this project.',
+    );
+  }
+  if (report.blockers.length > 0) {
+    lines.push('', 'It cannot be registered:');
+    for (const b of report.blockers) lines.push(`  - ${b}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+async function cmdDb(argv) {
+  const [sub, ...rest] = argv;
+  if (sub !== 'adopt') {
+    return usageError(`Unknown db subcommand: '${sub ?? '(none)'}' (only 'adopt' is supported)`);
+  }
+  const parsed = parseDbAdoptArgs(rest);
+  if (parsed.error) return usageError(parsed.error);
+  const opts = parsed.value;
+  const projectPath = resolve(opts.project);
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return usageError(`--project does not exist or is not a directory: ${projectPath}`);
+  }
+  const mods = await loadDbModules();
+
+  let report;
+  try {
+    report = mods.inspectProjectDatabase(projectPath);
+  } catch (e) {
+    process.stderr.write(`dev-guardian: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!report.exists) {
+    process.stderr.write(`dev-guardian: there is no database at '${report.db_path}': nothing to adopt.\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(renderDbReport(report));
+  if (report.blockers.length > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  const trusted = report.status === 'trusted';
+  if (!opts.yes) {
+    process.stdout.write(
+      trusted
+        ? `\nAlready registered.${opts.rehome && report.rehome.rows > 0 ? ' Nothing changed: add --yes to --rehome.' : ''}\n`
+        : '\nNot registered. If this is your database, run the same command with --yes yourself: dev-guardian ' +
+            'then uses it and trusts what it holds' +
+            ((report.contents?.null_scoped_suppressions ?? 0) > 0
+              ? ` — the ${report.contents?.null_scoped_suppressions} suppression(s) that apply to every project included`
+              : '') +
+            '.\n',
+    );
+    process.exitCode = 0;
+    return;
+  }
+  if (trusted && !opts.rehome) {
+    process.stdout.write('\nAlready registered: nothing to do.\n');
+    process.exitCode = 0;
+    return;
+  }
+  try {
+    const done = mods.registerProjectDatabase(projectPath, { rehome: opts.rehome });
+    const lines = [];
+    if (!done.already) {
+      lines.push(`Registered '${done.db_path}' as this user's database (id ${done.db_id}). The server uses it from its next start.`);
+    }
+    if (done.rehomed !== undefined) {
+      lines.push(
+        `Rehomed ${done.rehomed.moved} row(s) from ${done.rehomed.paths} path(s) to ${report.canonical_project}` +
+          (done.rehomed.kept > 0 ? `; ${done.rehomed.kept} row(s) left where they were (the same key exists there already)` : '') +
+          '.',
+      );
+    }
+    process.stdout.write(`\n${lines.join('\n')}\n`);
+    process.exitCode = 0;
+  } catch (e) {
+    process.stderr.write(`dev-guardian: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+  }
+}
+
 const HELP_FLAGS = new Set(['-h', '--help', 'help']);
 
 /**
@@ -2632,6 +2874,7 @@ function main() {
   }
   if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
+  if (cmd === 'db') return void cmdDb(argv.slice(1)).catch(fatal);
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();

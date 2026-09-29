@@ -55,8 +55,10 @@
  * ever changes, this must change with it — there is no compiler check tying
  * the two together.
  */
+import { sleepSync } from './db.js';
 import { SEVERITIES, SEVERITY_ORDER } from '../types.js';
 import { boolToInt, intToBool } from './repoUtil.js';
+import { notInFutureSql } from './scanClock.js';
 /** See the module comment. Wraps `fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`. */
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 /**
@@ -81,6 +83,26 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
  */
 const SUPPRESSION_MATCHES_F = '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) ' +
     'AND (s.project_path IS NULL OR s.project_path = l.project_path)';
+/** Findings per write transaction in {@link FindingsRepo.bulkInsert}. */
+export const FINDINGS_INSERT_CHUNK = 2000;
+/**
+ * The longest pause between two of {@link FindingsRepo.bulkInsert}'s
+ * transactions: longer than the longest poll interval of SQLite's default
+ * busy handler (100 ms).
+ */
+export const FINDINGS_INSERT_GAP_MS = 120;
+/**
+ * The pause after a transaction that held the write lock `heldMs`: half of
+ * it, 20–{@link FINDINGS_INSERT_GAP_MS} ms. SQLite's busy handler sleeps
+ * 1, 2, 5, 10, 15, 20, 25 … ms, then 100 ms, so a process that began waiting
+ * during that transaction polls at most about half as long as it has waited
+ * — the pause is where its next poll lands. Proportional, so the price is a
+ * third of the insert's time at most, and nothing for fast chunks' tiny
+ * waits beyond the 20 ms floor (Windows sleeps in ~16 ms steps).
+ */
+export function insertGapMs(heldMs) {
+    return Math.min(FINDINGS_INSERT_GAP_MS, Math.max(20, Math.ceil(heldMs / 2) + 5));
+}
 export class FindingsRepo {
     db;
     insertStmt;
@@ -109,7 +131,7 @@ export class FindingsRepo {
         this.identityForFingerprintStmt = db.prepare(`
       SELECT f.identity AS identity FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL
+      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql('s')}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);
@@ -129,7 +151,7 @@ export class FindingsRepo {
         this.listOpenLatestScanStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -150,7 +172,7 @@ export class FindingsRepo {
         // means latest FOR THIS PROJECT rather than latest in the whole table.
         this.listOpenForProjectStmt = db.prepare(`
       WITH latest AS (
-        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ?
+        SELECT id, project_path FROM scans WHERE status = 'completed' AND project_path = ? AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -171,7 +193,7 @@ export class FindingsRepo {
         this.listBySeverityLatestStmt = db.prepare(`
       WITH latest AS (
         SELECT id, project_path FROM scans
-        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}'
+        WHERE status = 'completed' AND project_path NOT LIKE '${WORKTREE_PATH_EXCLUSION}' AND ${notInFutureSql()}
         ORDER BY started_at DESC, rowid DESC LIMIT 1
       )
       SELECT f.* FROM findings f
@@ -187,7 +209,7 @@ export class FindingsRepo {
         this.findInProjectStmt = db.prepare(`
       SELECT f.* FROM findings f
       JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed'
+      WHERE f.fingerprint = ? AND s.project_path = ? AND s.status = 'completed' AND ${notInFutureSql('s')}
       ORDER BY s.started_at DESC, s.rowid DESC
       LIMIT 1
     `);
@@ -197,9 +219,47 @@ export class FindingsRepo {
       GROUP BY severity
     `);
     }
-    bulkInsert(findings) {
+    /**
+     * Inserts a scan's findings, {@link FINDINGS_INSERT_CHUNK} rows per write
+     * transaction, pausing between transactions ({@link insertGapMs}).
+     *
+     * It was ONE transaction: 30,000 findings on a 300 MB database held the
+     * write lock for 8.8 s, and another process's `scans.insert` failed with
+     * `database is locked` after its 5 s busy timeout. A commit alone does not
+     * let a waiter in — SQLite's busy handler polls (1, 2, 5 … then every
+     * 100 ms), and a writer that begins its next transaction at once almost
+     * always wins the race — so each chunk after the first waits for about
+     * half as long as the last one held the lock, which is where a waiter's
+     * next poll lands. A scan of up to one chunk pays nothing.
+     *
+     * Safe to split because every caller inserts while the scan row is still
+     * `running`, and no reader shows a running scan's findings: the open set
+     * and every "latest"/"previous" lookup read completed scans only;
+     * `diff_scans` and `report_export` refuse a running scan named by id; and
+     * `guardian://scans/{id}` lists none for one. A process that dies between
+     * chunks leaves a `running` row the reaper fails at the next start.
+     */
+    bulkInsert(findings, opts = {}) {
         if (findings.length === 0)
             return 0;
+        const size = Math.max(1, opts.chunkSize ?? FINDINGS_INSERT_CHUNK);
+        let inserted = 0;
+        let lastHeldMs = 0;
+        for (let i = 0; i < findings.length; i += size) {
+            if (i > 0) {
+                const gap = opts.gapMs ?? insertGapMs(lastHeldMs);
+                if (gap > 0)
+                    sleepSync(gap);
+            }
+            const t0 = performance.now();
+            inserted += this.insertChunk(findings.slice(i, i + size));
+            lastHeldMs = performance.now() - t0;
+            opts.afterChunk?.(inserted);
+        }
+        return inserted;
+    }
+    /** One chunk of {@link bulkInsert}, in one write transaction. */
+    insertChunk(chunk) {
         const tx = this.db.transaction((rows) => {
             let inserted = 0;
             for (const f of rows) {
@@ -208,7 +268,7 @@ export class FindingsRepo {
             }
             return inserted;
         });
-        return tx(findings);
+        return tx(chunk);
     }
     /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
     identityForFingerprint(fingerprint) {

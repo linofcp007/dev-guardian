@@ -10,13 +10,16 @@
  * `duplicate column name: owner_pid` — a second process re-running 004.
  */
 
-import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase } from '../../src/storage/db.js';
+import { lookupDbId, registryDir } from '../../src/storage/dbRegistry.js';
+import { canonicalPath } from '../../src/platform/projectPath.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { registerInPlace } from '../helpers/registerInPlace.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 
 afterAll(cleanupTempDirs);
@@ -52,8 +55,14 @@ function openInChild(projectPath: string, startAt: number): Promise<ChildOutcome
  * before they reach the migrations.)
  */
 function databaseAt2_0_0(project: string): void {
+  // In the project's own repository, untracked, and registered as this
+  // user's (`db adopt --yes` — nothing is adopted automatically since round
+  // 6) but not yet migrated: the upgrade a later build's migrations make.
+  const init = spawnSync('git', ['init', '-q'], { cwd: project, encoding: 'utf8' });
+  if (init.status !== 0) throw new Error(`git init: ${init.stderr}`);
   mkdirSync(join(project, '.guardian'));
-  const db = new GuardianDatabase(join(project, '.guardian', 'guardian.db'));
+  const dbPath = join(project, '.guardian', 'guardian.db');
+  const db = new GuardianDatabase(dbPath);
   db.pragma('journal_mode = WAL');
   for (const m of listMigrations()) {
     if (m.version > 3) break;
@@ -61,6 +70,19 @@ function databaseAt2_0_0(project: string): void {
   }
   db.exec("INSERT INTO schema_meta (key, value) VALUES ('version', '3')");
   db.close();
+  registerInPlace(dbPath, project);
+}
+
+/** The ids whose registry entry names `dbPath`. */
+function registeredFor(dbPath: string): string[] {
+  const target = canonicalPath(dbPath);
+  return readdirSync(registryDir())
+    .filter((name) => name.endsWith('.json'))
+    .filter((name) => {
+      const entry = JSON.parse(readFileSync(join(registryDir(), name), 'utf8')) as { db_path?: unknown };
+      return entry.db_path === target;
+    })
+    .map((name) => name.slice(0, -'.json'.length));
 }
 
 describe.each([
@@ -88,7 +110,16 @@ describe.each([
         .prepare<[], { value: string }>("SELECT value FROM schema_meta WHERE key = 'version'")
         .get();
       expect(version?.value).toBe(String(latest));
+      // Every opener used the project's database, and it ended up with ONE
+      // id that is registered (the creators' race registers before writing).
+      const id = db.prepare<[], { value: string }>("SELECT value FROM schema_meta WHERE key = 'db_id'").get()?.value;
+      expect(id).toMatch(/^[0-9a-f]{32}$/);
+      expect(lookupDbId(id ?? '')).not.toBeNull();
       db.close();
+      // And ONE registry entry names this database: every opener that lost
+      // the race removed the id it had registered (round 5: four concurrent
+      // adopters left three orphans).
+      expect(registeredFor(join(project, '.guardian', 'guardian.db'))).toEqual([id]);
     }
 
     expect(failures).toEqual([]);

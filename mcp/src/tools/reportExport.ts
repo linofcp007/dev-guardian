@@ -30,7 +30,7 @@ import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
-import { isOrchestratedFullScan } from '../history/scanRoles.js';
+import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import {
@@ -172,6 +172,28 @@ async function handler(
   }
   const scan = ctx.storage.scans.getById(scanId);
   if (!scan) return failDomain('unknown_scan_id', `Scan '${scanId}' not found.`);
+  // An explicit scan_id must be a scan of THIS project: the report is written
+  // into this project's `.guardian/reports`, and it used to take any scan in
+  // the database — another project's findings filed under this one. A scan of
+  // an audit target (a third-party skill, a site) belongs to no project, and
+  // is exported wherever it is asked for.
+  if (scan.project_path !== projectPath && !TARGET_SCAN_TYPES.has(scan.scan_type)) {
+    return {
+      ok: false,
+      error: {
+        code: 'unknown_scan_id',
+        message:
+          `Scan '${scanId}' is a scan of ${scan.project_path}, not of ${projectPath}; its report would be ` +
+          `written into ${projectPath}'s .guardian/reports. Pass project_path: '${scan.project_path}' to export it there.`,
+        retry_with: { project_path: scan.project_path, scan_id: scanId },
+      },
+    };
+  }
+  // Its findings are inserted in chunks while the row is `running`: a report
+  // now would hold whichever chunks happened to be in.
+  if (scan.status === 'running') {
+    return failDomain('unknown_scan_id', `Scan '${scanId}' is still running: its findings are not all stored yet.`);
+  }
 
   // Redacted here too, not only at persistence time: this reads whatever is
   // stored, and `json` dumps a finding's every field — a row written before

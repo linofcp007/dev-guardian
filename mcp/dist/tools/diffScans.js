@@ -23,13 +23,21 @@
  *
  * Findings are matched by their line-independent `identity`, with the
  * fingerprint as the fallback where either scan predates identities
- * (`fingerprint/findingIdentity.ts#indexFindings`).
+ * (`fingerprint/findingIdentity.ts#indexFindings`). The project's active
+ * suppressions apply first, as in the open set: suppressed findings are
+ * listed apart (`suppressed_findings`), never as new, resolved or unchanged.
+ *
+ * Explicit ids are held to one project and one type: a `to_scan_id` of
+ * another project than `project_path` (when given), a `from_scan_id` of
+ * another project or scan type than the `to` scan, or a scan that has not
+ * completed (a running one has not stored all its findings) is refused, with
+ * the reason. They were taken as given.
  *
  * Response size: `summary` carries the true counts; each list carries at
  * most {@link ITEMS_PER_BUCKET} findings and `truncated` says which were cut.
  */
 import { z } from 'zod';
-import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
+import { latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -94,14 +102,17 @@ async function handler(input, ctx) {
     const fromScan = ctx.storage.scans.getById(fromId.value);
     if (!fromScan)
         return failDomain('unknown_scan_id', `from scan '${fromId.value}' not found`);
-    const fromFindings = ctx.storage.findings.listByScan(fromId.value);
-    const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
+    // The project's active suppressions apply first, as in the open set: a
+    // suppressed finding is listed apart, never new, resolved or unchanged.
+    const fromSplit = partitionSuppressed(ctx.storage, toScan.value.project_path, ctx.storage.findings.listByScan(fromId.value));
+    const toSplit = partitionSuppressed(ctx.storage, toScan.value.project_path, ctx.storage.findings.listByScan(toScan.value.scan_id));
+    const suppressed = suppressedOfEither(toSplit.suppressed, fromSplit.suppressed);
     // Per scanner (`history/runCompare.ts`): a `from` finding whose scanner `to`
     // did not measure is not resolved, and a `to` finding whose scanner `from`
     // named and did not run ok is not new. A scanner `from` did not run at all
     // (not applicable, or not requested, then) leaves its findings new.
     const check = compareScansFor(ctx.storage, fromScan, toScan.value);
-    const d = classifyDiff(check, fromFindings, toFindings);
+    const d = classifyDiff(check, fromSplit.visible, toSplit.visible);
     const gaps = measurementGaps(check, d);
     const note = describeMeasurementGaps(fromScan, toScan.value, gaps);
     const cap = (list) => list.slice(0, ITEMS_PER_BUCKET);
@@ -118,18 +129,21 @@ async function handler(input, ctx) {
             unchanged: d.unchanged.length,
             not_remeasured: d.notRemeasured.length,
             not_previously_measured: d.notPreviouslyMeasured.length,
+            suppressed: suppressed.length,
         },
         new_findings: cap(d.new),
         resolved_findings: cap(d.resolved),
         unchanged_findings: cap(d.unchanged),
         not_remeasured_findings: cap(d.notRemeasured),
         not_previously_measured_findings: cap(d.notPreviouslyMeasured),
+        suppressed_findings: cap(suppressed),
         truncated: {
             new: cut(d.new),
             resolved: cut(d.resolved),
             unchanged: cut(d.unchanged),
             not_remeasured: cut(d.notRemeasured),
             not_previously_measured: cut(d.notPreviouslyMeasured),
+            suppressed: cut(suppressed),
         },
         ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
         ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
@@ -142,6 +156,28 @@ function resolveTo(inp, ctx, skipHits) {
         const scan = ctx.storage.scans.getById(inp.to_scan_id);
         if (!scan)
             return { ok: false, err: failDomain('unknown_scan_id', `to scan '${inp.to_scan_id}' not found`) };
+        // Without project_path the project is the scan's own (documented); with
+        // it, the scan must belong to it — every history reader answers for one
+        // project.
+        if (inp.project_path !== undefined) {
+            let projectPath;
+            try {
+                projectPath = resolveProjectPath(inp.project_path).path;
+            }
+            catch (e) {
+                return { ok: false, err: failDomain('not_a_git_repo', e.message) };
+            }
+            if (scan.project_path !== projectPath) {
+                return {
+                    ok: false,
+                    err: failDomain('unknown_scan_id', `to scan '${scan.scan_id}' is a scan of ${scan.project_path}, not of ${projectPath}; ` +
+                        'a diff compares scans of one project.'),
+                };
+            }
+        }
+        const incomplete = incompleteReason(scan, 'to');
+        if (incomplete !== null)
+            return { ok: false, err: failDomain('unknown_scan_id', incomplete) };
         return { ok: true, value: scan };
     }
     let projectPath;
@@ -171,6 +207,16 @@ function resolveFrom(inp, toScan, ctx, skipHits) {
                 ok: false,
                 err: failDomain('unknown_scan_id', `from scan '${inp.from_scan_id}' not found`),
             };
+        const refusal = scan.project_path !== toScan.project_path
+            ? `from scan '${scan.scan_id}' belongs to another project (${scan.project_path}) than to scan ` +
+                `'${toScan.scan_id}' (${toScan.project_path}); a diff compares scans of one project.`
+            : scan.scan_type !== toScan.scan_type
+                ? `from scan '${scan.scan_id}' is a '${scan.scan_type}' scan and to scan '${toScan.scan_id}' is ` +
+                    `'${toScan.scan_type}': findings of different scan types come from different rule families, ` +
+                    'so a diff compares scans of one type.'
+                : incompleteReason(scan, 'from');
+        if (refusal !== null)
+            return { ok: false, err: failDomain('unknown_scan_id', refusal) };
         return { ok: true, value: inp.from_scan_id };
     }
     const mode = inp.from ?? 'previous';
@@ -196,6 +242,20 @@ function resolveFrom(inp, toScan, ctx, skipHits) {
                 `${toScan.scan_id}.${describeSkipped(previous.skipped)}`),
         };
     return { ok: true, value: previous.scan.scan_id };
+}
+/**
+ * Why an explicitly named scan cannot be diffed, or null. A scan still
+ * running has not stored all its findings (they are inserted in chunks while
+ * the row is `running`); a failed or cancelled one measured only part of
+ * what it names.
+ */
+function incompleteReason(scan, side) {
+    if (scan.status === 'completed')
+        return null;
+    if (scan.status === 'running') {
+        return `${side} scan '${scan.scan_id}' is still running: its findings are not all stored yet.`;
+    }
+    return `${side} scan '${scan.scan_id}' did not complete (status ${scan.status}); a diff compares completed scans.`;
 }
 function describeSkipped(skipped) {
     if (skipped.count === 0)

@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import { openSetForProject } from '../../../src/history/openSet.js';
 import { GuardianDatabase } from '../../../src/storage/db.js';
 import { Storage } from '../../../src/storage/index.js';
 import {
   DEFAULT_RETENTION_SCANS,
   PRUNE_BATCH,
+  PRUNE_BATCH_ROWS,
   RETENTION_START_DELAY_MS,
   deletePrunableScans,
   deleteScans,
   listPrunableScans,
   pruneScans,
+  pruneScansFor,
   reapOrphanedScans,
   resolveRetentionLimit,
   scheduleRetention,
   type Defer,
 } from '../../../src/storage/maintenance.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
-import type { ScanType } from '../../../src/types.js';
+import type { ScanType, ToolRun } from '../../../src/types.js';
 
 function fresh(): { db: GuardianDatabase; storage: Storage } {
   const db = new GuardianDatabase(':memory:');
@@ -258,6 +261,247 @@ describe('scoped and whole-project scans are ranked apart (I1)', () => {
 
     expect(deletePrunableScans(db, listed, 1)).toBe(0);
     expect(scanIds(db)).toEqual(['w1']);
+  });
+});
+
+/**
+ * A scan that measured nothing: `failed`, or `completed` with coverage
+ * `none` (every scanner failed or missing — fifty Semgrep-broken runs, a
+ * `local_only` run with no rules).
+ */
+function seedUnusable(storage: Storage, id: string, project: string, kind: 'failed' | 'coverage_none'): void {
+  storage.scans.insert({ scan_id: id, scan_type: 'sast', project_path: project, tree_hash: `h-${id}` });
+  storage.scans.finalize({
+    scan_id: id,
+    status: kind === 'failed' ? 'failed' : 'completed',
+    tools_run: [{ name: 'semgrep', status: 'failed', reason: 'rule_parse_error' }],
+    missing_tools: kind === 'coverage_none' ? ['semgrep'] : [],
+  });
+  clock += 1;
+  storage
+    .rawHandle()
+    .prepare('UPDATE scans SET started_at = ? WHERE id = ?')
+    .run(new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(), id);
+}
+
+/** One scan of `type` with the given bookkeeping and findings, stamped after the last. */
+function seedRun(
+  storage: Storage,
+  id: string,
+  type: ScanType,
+  project: string,
+  run: { tools_run: ToolRun[]; missing_tools?: string[]; meta?: Record<string, unknown> },
+  findings: Array<{ fp: string; tool: string; subcategory?: string; file?: string }> = [],
+): void {
+  storage.scans.insert({ scan_id: id, scan_type: type, project_path: project, tree_hash: `h-${id}`, ...(run.meta !== undefined ? { meta: run.meta } : {}) });
+  if (findings.length > 0) {
+    storage.findings.bulkInsert(
+      findings.map((f) => ({
+        scan_id: id,
+        fingerprint: f.fp,
+        tool: f.tool,
+        rule_id: `rule-${f.fp}`,
+        severity: 'high',
+        category: 'security',
+        title: f.fp,
+        ...(f.subcategory !== undefined ? { subcategory: f.subcategory } : {}),
+        ...(f.file !== undefined ? { file_path: f.file } : {}),
+        fix_available: false,
+      })),
+    );
+  }
+  storage.scans.finalize({
+    scan_id: id,
+    status: 'completed',
+    tools_run: run.tools_run,
+    missing_tools: run.missing_tools ?? [],
+    ...(run.meta !== undefined ? { meta: run.meta } : {}),
+  });
+  clock += 1;
+  storage
+    .rawHandle()
+    .prepare('UPDATE scans SET started_at = ? WHERE id = ?')
+    .run(new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(), id);
+}
+
+describe('retention never deletes a scan the open set reads from (I-1)', () => {
+  // A newer scan that ran PARTLY (coverage partial — Semgrep failed beside an
+  // ok Bandit) is usable, so it ranked in the usable partition; the open set
+  // still CARRIES the older Semgrep findings forward, because Semgrep did not
+  // measure them again. Fifty such runs evicted the only scan holding them:
+  // risk 18 -> 8, open 1 -> 0, dashboard 1 -> 0.
+  const openFps = (storage: Storage, project: string): string[] =>
+    openSetForProject(storage, project).findings.map((f) => f.fingerprint).sort();
+
+  it('fifty partial sast runs (Semgrep failed, Bandit ok) keep the scan whose Semgrep finding they carry', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'full', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-semgrep', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 50; i++) {
+      seedRun(storage, `partial${i}`, 'sast', '/p1', {
+        tools_run: [
+          { name: 'semgrep', status: 'failed', reason: 'exit 2' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      });
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-semgrep']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toContain('full');
+    expect(openFps(storage, '/p1')).toEqual(['fp-semgrep']);
+  });
+
+  it('fifty deps runs with Trivy broken and npm audit ok keep the scan whose Trivy CVE they carry', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'trivy-ok', 'deps', '/p1', { tools_run: [{ name: 'trivy', status: 'ok' }] }, [
+      { fp: 'fp-cve', tool: 'trivy', subcategory: 'cve', file: 'package-lock.json' },
+    ]);
+    for (let i = 0; i < 50; i++) {
+      seedRun(storage, `deps${i}`, 'deps', '/p1', {
+        tools_run: [
+          { name: 'trivy', status: 'failed', reason: 'db download' },
+          { name: 'npm', status: 'ok' },
+        ],
+        missing_tools: ['trivy'],
+      });
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-cve']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toContain('trivy-ok');
+    expect(openFps(storage, '/p1')).toEqual(['fp-cve']);
+  });
+
+  it("fifty security_scan_full runs whose sast child is partial keep the old run's sast child (and its parent)", () => {
+    const { db, storage } = fresh();
+    const run = (id: string, sast: { tools_run: ToolRun[]; missing_tools?: string[] }, findings: Parameters<typeof seedRun>[5]): void => {
+      seedRun(storage, id, 'security_full', '/p1', {
+        tools_run: sast.tools_run,
+        ...(sast.missing_tools !== undefined ? { missing_tools: sast.missing_tools } : {}),
+        meta: { child_scans: [{ tool: 'scan_sast', scan_id: `${id}-sast`, status: 'completed' }] },
+      });
+      seedRun(storage, `${id}-sast`, 'sast', '/p1', { ...sast, meta: { parent_scan_id: id } }, findings);
+    };
+    run('old', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [{ fp: 'fp-old', tool: 'semgrep', file: 'a.js' }]);
+    for (let i = 0; i < 50; i++) {
+      run(`r${i}`, {
+        tools_run: [
+          { name: 'semgrep', status: 'failed', reason: 'exit 2' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      }, []);
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-old']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toEqual(expect.arrayContaining(['old-sast', 'old']));
+    expect(openFps(storage, '/p1')).toEqual(['fp-old']);
+  });
+
+  it('control: once a newer scan re-measured the finding, the old scan is pruned as before', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'old', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-gone', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 3; i++) seedRun(storage, `new${i}`, 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] });
+    pruneScansFor(storage, 2);
+    expect(scanIds(db)).toEqual(['new1', 'new2']);
+  });
+
+  it('scheduleRetention protects them too', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'full', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-semgrep', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 3; i++) {
+      seedRun(storage, `partial${i}`, 'sast', '/p1', {
+        tools_run: [
+          { name: 'semgrep', status: 'failed' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      });
+    }
+    const timers = manualTimers();
+    scheduleRetention(storage, () => {}, { env: { GUARDIAN_RETENTION_SCANS: '2' }, defer: timers.defer });
+    while (timers.runNext()) {
+      /* drain */
+    }
+    expect(scanIds(db)).toEqual(['full', 'partial1', 'partial2']);
+  });
+});
+
+describe('unusable scans are ranked apart from usable ones', () => {
+  // Retention ranked every row of (project, type, scoped) together. Fifty
+  // newer scans that measured nothing pushed out the last scan that did, and
+  // its findings vanished from every reader: risk_score went from 18
+  // (medium) to 8 (low) and the open set from 1 finding to 0 — the open set
+  // skips a coverage-none scan and a failed one, and found nothing behind
+  // them any more.
+  for (const kind of ['failed', 'coverage_none'] as const) {
+    it(`fifty newer ${kind} scans never push out the last usable scan (keep 50)`, () => {
+      const { db, storage } = fresh();
+      seedScan(storage, 'usable', '/p1', 'sast');
+      for (let i = 0; i < 50; i++) seedUnusable(storage, `bad${i}`, '/p1', kind);
+      expect(openSetForProject(storage, '/p1').findings.map((f) => f.fingerprint)).toEqual(['fp-usable']);
+
+      pruneScans(db, 50);
+
+      expect(scanIds(db)).toContain('usable');
+      expect(openSetForProject(storage, '/p1').findings.map((f) => f.fingerprint)).toEqual(['fp-usable']);
+    });
+  }
+
+  it('keeps the newest N of each: old usable and old unusable scans are both still pruned', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'u1', '/p1');
+    seedUnusable(storage, 'x1', '/p1', 'failed');
+    seedScan(storage, 'u2', '/p1');
+    seedUnusable(storage, 'x2', '/p1', 'coverage_none');
+    seedUnusable(storage, 'x3', '/p1', 'failed');
+    seedScan(storage, 'u3', '/p1');
+
+    expect(pruneScans(db, 2)).toEqual({ deleted: 2, remaining: 0, complete: true });
+    expect(scanIds(db)).toEqual(['u2', 'x2', 'x3', 'u3']);
+  });
+
+  it('a completed scan whose scanner partly ran is usable (coverage partial)', () => {
+    const { db, storage } = fresh();
+    storage.scans.insert({ scan_id: 'partial', scan_type: 'sast', project_path: '/p1', tree_hash: 'h' });
+    storage.scans.finalize({
+      scan_id: 'partial',
+      status: 'completed',
+      tools_run: [
+        { name: 'semgrep', status: 'ok' },
+        { name: 'bandit', status: 'failed' },
+      ],
+      missing_tools: [],
+    });
+    clock += 1;
+    db.prepare('UPDATE scans SET started_at = ? WHERE id = ?').run(
+      new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(),
+      'partial',
+    );
+    for (let i = 0; i < 3; i++) seedUnusable(storage, `bad${i}`, '/p1', 'failed');
+    pruneScans(db, 1);
+    expect(scanIds(db)).toEqual(['partial', 'bad2']);
+  });
+
+  it('malformed tools_run / missing_tools read as no gaps, as the JS reader parses them', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'a', '/p1');
+    seedScan(storage, 'b', '/p1');
+    db.prepare(`UPDATE scans SET tools_run = '{oops', missing_tools = '"x"' WHERE id = 'b'`).run();
+    db.prepare(`UPDATE scans SET tools_run = '["semgrep", 3, null]' WHERE id = 'a'`).run();
+    expect(pruneScans(db, 1).deleted).toBe(1);
+    expect(scanIds(db)).toEqual(['b']);
   });
 });
 
@@ -625,5 +869,73 @@ describe('reapOrphanedScans', () => {
     };
     expect(() => reapOrphanedScans(failing, (l) => lines.push(l))).not.toThrow();
     expect(lines.join('\n')).toMatch(/reaper failed \(continuing\): database is locked/);
+  });
+});
+
+// Round 5 (retention review): the first delete batch took 1.7–2.6 s — 50
+// scans, ~18k finding rows in one write transaction, beyond the 1 s budget
+// and on the way to another process's 5 s busy timeout with bigger scans.
+// A batch is now bounded by the rows it deletes as well as by its scans.
+describe('retention batches are sized by the rows they delete', () => {
+  /** `n` scans of '/p1', oldest first, each holding `perScan` findings (plus seedScan's one CVE row). */
+  function seedHeavy(storage: Storage, n: number, perScan: number): string[] {
+    const ids = Array.from({ length: n }, (_, i) => `h${i}`);
+    for (const id of ids) {
+      seedScan(storage, id, '/p1');
+      storage.findings.bulkInsert(
+        Array.from({ length: perScan - 1 }, (_, k) => ({
+          fingerprint: `fp-${id}-${k}`,
+          scan_id: id,
+          tool: 'semgrep',
+          severity: 'high' as const,
+          category: 'security' as const,
+          title: 'x',
+          fix_available: false,
+        })),
+      );
+    }
+    return ids;
+  }
+
+  const rowsOf = (db: GuardianDatabase): number => count(db, 'findings') + count(db, 'scan_cves');
+
+  it(`one transaction deletes at most ${PRUNE_BATCH_ROWS} finding and CVE rows`, () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 51, 360);
+    const before = rowsOf(db);
+
+    const first = pruneScans(db, 1, { maxBatches: 1 });
+
+    expect(before - rowsOf(db)).toBeLessThanOrEqual(PRUNE_BATCH_ROWS);
+    expect(first.deleted).toBe(Math.floor(PRUNE_BATCH_ROWS / 361));
+    expect(first.remaining).toBe(50 - first.deleted);
+    // And the whole backlog still goes, batch by batch.
+    expect(pruneScans(db, 1)).toMatchObject({ remaining: 0, complete: true });
+    expect(scanIds(db)).toEqual(['h50']);
+  });
+
+  it('a scan larger than the cap is deleted alone, in a transaction of its own', () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 1, PRUNE_BATCH_ROWS + 1000);
+    seedMany(storage, 3);
+    const first = pruneScans(db, 1, { maxBatches: 1 });
+    expect(first.deleted).toBe(1);
+    expect(scanIds(db)).toEqual(['s0', 's1', 's2']);
+  });
+
+  it('the background schedule deletes at most the cap per tick', () => {
+    const { db, storage } = fresh();
+    seedHeavy(storage, 51, 360);
+    const timers = manualTimers();
+    scheduleRetention(storage, () => {}, { env: { GUARDIAN_RETENTION_SCANS: '1' }, defer: timers.defer });
+    let before = rowsOf(db);
+    const perTick: number[] = [];
+    while (timers.runNext()) {
+      const after = rowsOf(db);
+      if (after !== before) perTick.push(before - after);
+      before = after;
+    }
+    expect(Math.max(...perTick)).toBeLessThanOrEqual(PRUNE_BATCH_ROWS);
+    expect(scanIds(db)).toEqual(['h50']);
   });
 });

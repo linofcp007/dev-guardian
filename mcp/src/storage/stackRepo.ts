@@ -30,16 +30,34 @@ export interface PersistedStackSnapshot {
   snapshot: StackSnapshot;
 }
 
+/**
+ * Snapshots kept per project — every reader asks for the newest one of ONE
+ * project (`getLatestForProject`). The table grew with every `detect_stack`
+ * run; a few are kept so "the stack changed on date X" stays answerable.
+ * Pruned on insert, as `surface_snapshots` is, and a backlog written before
+ * this existed by `maintenance.ts#pruneStackSnapshots` in the background.
+ */
+export const STACK_SNAPSHOTS_KEPT = 10;
+
 export class StackRepo {
   private readonly insertStmt: Statement<[string, string, string]>;
   private readonly getLatestStmt: Statement<[], StackRow>;
   private readonly listRecentStmt: Statement<[number], StackRow>;
   private readonly getLatestForProjectStmt: Statement<[string], StackRow>;
+  private readonly pruneStmt: Statement<[string, string, number]>;
 
-  constructor(db: DB) {
+  constructor(private readonly db: DB) {
     this.insertStmt = db.prepare(`
       INSERT INTO stack_snapshots (project_path, captured_at, json)
       VALUES (?, ?, ?)
+    `);
+    this.pruneStmt = db.prepare<[string, string, number]>(`
+      DELETE FROM stack_snapshots
+      WHERE project_path = ?
+        AND id NOT IN (
+          SELECT id FROM stack_snapshots WHERE project_path = ?
+          ORDER BY captured_at DESC, id DESC LIMIT ?
+        )
     `);
     this.getLatestStmt = db.prepare<[], StackRow>(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT 1
@@ -55,7 +73,13 @@ export class StackRepo {
   insert(input: InsertStackSnapshotInput): PersistedStackSnapshot {
     const capturedAt = nowIso();
     const json = JSON.stringify(input.snapshot);
-    const info = this.insertStmt.run(input.project_path, capturedAt, json);
+    // One transaction: the new row and its project's prune (after the
+    // insert, so the new row always survives its own prune).
+    const info = this.db.transaction(() => {
+      const inserted = this.insertStmt.run(input.project_path, capturedAt, json);
+      this.pruneStmt.run(input.project_path, input.project_path, STACK_SNAPSHOTS_KEPT);
+      return inserted;
+    })();
     return {
       id: Number(info.lastInsertRowid),
       project_path: input.project_path,

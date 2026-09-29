@@ -8,6 +8,51 @@ version bump.
 
 ## [Unreleased]
 
+### Upgrading from 3.0.0 — your project database needs one command
+
+A project's `.guardian/guardian.db` is now used only when it is registered as yours (see
+Security below), and one written by 3.0.0 or earlier is not — it is never trusted automatically.
+Until you register it, dev-guardian keeps working on a per-user fallback database, and
+`health_status`, every scan's `warnings` and the session briefing say so. If the database is
+yours, run once, yourself, in a terminal (the warning prints the exact command with your
+install's path):
+
+```bash
+node <plugin>/cli/dev-guardian.mjs db adopt --project <your project>          # see what it holds
+node <plugin>/cli/dev-guardian.mjs db adopt --project <your project> --yes    # register it
+```
+
+Add `--rehome` if its scans were recorded under another path that leads to the project (a link,
+macOS `/var`): they are moved to the project's canonical path so `status` and every reader see
+them again. Scans made on the fallback meanwhile are not merged back.
+
+### Added
+
+- `dev-guardian db adopt [--project <path>] [--yes [--rehome]]` (CLI only, never an MCP tool): the
+  one way an existing project database comes to be trusted — one from before 3.0.1, a copy of a
+  registered one, another machine's. It prints what the database holds, flagging first what to
+  weigh — suppressions with no project (they apply to every project) and scans dated in the
+  future — then its projects with scan counts and dates, the suppressions and baselines, and every
+  project path its rows are filed under with where each leads now (links followed; network,
+  device and process-relative paths never looked at). It registers it only with `--yes`. A
+  database git tracks, one reached through a link, one whose schema holds what the migrations
+  never create, and one holding any scan dated more than 5 minutes in the future are refused
+  even then, with no override. `--rehome` rewrites this project's rows filed under another
+  spelling or a link to its canonical path, in every project-keyed table, and never moves a row to
+  another project.
+
+- CWE (and, through OWASP's own CWE lists, the Top 10:2025 category) on the findings 3.0.0 left
+  without one, although its notes said "every finding": WPScan's vulnerable components are
+  dependencies like the others (CWE-1395, A03 only); cosign's `image-signature-not-verified` is
+  CWE-347 (A04), `image-unsigned` and `image-no-provenance` CWE-345 (A08 — not CWE-1357, which
+  would judge the image untrustworthy where the finding only says its authenticity cannot be
+  checked); `audit_mcp_tools`' instruction rules (poisoning, credential reads, concealment,
+  exfiltration, parameter smuggling, cross-server shadowing) CWE-1427, which OWASP 2025 lists
+  under no category, hidden Unicode CWE-451 (A06), look-alike letters CWE-1007. An encoded blob, an
+  oversized description, the analysis bounds, a changed definition and the "N more findings"
+  summary stay unmapped: none is a weakness of its own. Annotations only — no fingerprint or
+  identity changes.
+
 ### Changed
 
 - **An argument a tool does not take is now an error, not a wrong answer.**
@@ -277,6 +322,95 @@ version bump.
   applies — a pnpm-workspace.yaml without `packages` fails before 10.5 (measured on 9.15.9 and 10.4.1), so no
   single place works everywhere. The e2e runs pnpm 10.4.1 and 12.8.1 through corepack in a private cache,
   applies each named fix and checks it works.
+- The GitHub workflow `ci-init` generates no longer uploads the SARIF of an incomplete scan. It
+  uploaded on `if: always()`, including after exit 2 (a scanner did not run), and GitHub code
+  scanning closes as fixed every open alert of a scanner an upload does not contain — the
+  SARIF's `executionSuccessful: false` notwithstanding — and after exit 1, which a blocking
+  finding produces even while a scanner failed. The scan step now decides: it uploads after exit
+  0, or after exit 1 only when every SARIF run's `executionSuccessful` is true (coverage full), and
+  records that as `steps.scan.outputs.upload-sarif` (the exit code as `exit-code`). The GitLab and
+  Bitbucket templates keep SARIF as a plain artifact, which closes nothing, and are unchanged.
+  Regenerate an existing workflow with `ci-init github --write --force`.
+- Retention no longer evicts a scan the project's open set still reads from. Fifty newer scans
+  that measured nothing (failed, or coverage `none` — a broken Semgrep rule, `local_only` with no
+  rules) pushed out the last usable one, and its findings left every reader: risk 18 (medium) → 8
+  (low), open 1 → 0. Usable and unusable scans are now ranked apart, as scoped ones already were.
+  And fifty PARTIAL runs did the same — Semgrep failed beside an ok Bandit, Trivy broken beside an
+  ok npm audit, a security_scan_full whose sast child did — because they rank as usable while the
+  open set still carries the older scan's findings forward. Retention now never deletes a scan the
+  current open set of its project reads from (its sources and the scans it carries from, and
+  their orchestrated parents), computed once per start for the projects with something to prune:
+  20 ms on 10,000 findings, 126 ms on 120,000 (20 projects, 26 MB), 363 ms on 480,000 (60
+  projects, 104 MB), inside retention's 1 s background budget.
+- A retention batch is bounded by the rows it deletes, not only by its 50 scans: at most 5,000
+  finding and CVE rows per write transaction (a single larger scan is deleted alone — splitting
+  one scan over transactions would let a reader or a baseline set in between see it half gone).
+  Fifty scans of ~360 findings held the write lock 1.7–2.6 s in review, beyond the 1 s budget and
+  on the way to another process's 5 s busy timeout; the same backlog now goes 13 scans (4,693
+  rows) at a time — measured here 53–125 ms for the first, cold transaction and 13–20 ms for the
+  rest, where the one 50-scan transaction took 109–148 ms on the same machine.
+- Suppressions and baselines from 2.0.0 apply again. 2.0.0 stored a project as typed (`c:\Users\…`),
+  migration 011 scoped legacy suppressions to that spelling, and 3.0.0 stores scans under the
+  canonical `C:\Users\…`; every reader compares exactly, so they lapsed (reproduced by seeding the
+  database with the v2.0.0 tag's own storage code). At startup, `suppressions.project_path` and
+  `baselines.project_path` are rewritten to the canonical spelling when they name an existing
+  directory and differ only in spelling; a path through a link or junction, which may point at
+  another project by now, is left alone. Moving or renaming a repository still starts its history,
+  suppressions and baselines afresh; the READMEs say so.
+- The LLM pack's own taint timeouts (`Fixpoint timeout (plugin pack)` in the Semgrep run's
+  `partially_parsed`) are the pack's gap, not the scan's, for every reader — only the CI gate
+  treated them so. Hit on essentially every `scan_sast` of a TypeScript codebase (19 in 18 files
+  on this repo's `mcp/src`): OWASP coverage dropped every category the registry reached from
+  tested to partial ("some files were only partly parsed") in `report_export`, the dashboard's
+  `coverage.owasp` and `compliance_evidence`; and history read a registry finding fixed in one of
+  those files as not re-measured, keeping it open. History now leaves a file under that type
+  unmeasured only for findings of the pack's own rules (named `semgrep (LLM pack partly measured:
+  …)`); every other reader ignores it.
+- `suppress_finding` judges `vex.exportable` and the other open copies over exactly what
+  `export_vex` reads — the project's latest usable dependency scan. A container image's CVE
+  (`scan_containers`' trivy-image) was promised `exportable: true` and never exported; it now says
+  "container images are not in export_vex's scope". A dependency copy suppressed beside an image's
+  copy no longer gets a "copies" warning about it, and a finding the latest dependency scan no
+  longer reports is not promised to be exported.
+- `regression_alert` and `diff_scans` honour suppressions the way the open set does (per project,
+  unexpired, by fingerprint or identity). After `suppress_finding`, `regression_alert` still said
+  `regressed: true, score_delta: 10` for the suppressed critical while the dashboard and
+  `risk_score` said 0. A suppressed finding is now listed apart — `suppressed_by_severity`;
+  `diff_scans`' `summary.suppressed` and `suppressed_findings` — and never counted as new,
+  resolved or a regression.
+- `diff_scans` refuses, with the reason, a `to_scan_id` of another project than `project_path`, a
+  `from_scan_id` of another project or scan type than the `to` scan, and a scan that has not
+  completed (one still running has not stored all its findings). `report_export` refuses a
+  `scan_id` of another project — it wrote that scan's report into this project's
+  `.guardian/reports` — pointing at the right `project_path`, and a scan still running. A scan
+  of an audit target rather than a project (`scan_skill`'s skill, `wp_rest_audit`'s site) is
+  still exported wherever it is asked for.
+- The dashboard's coverage follows `risk_score`'s rule: `none` when no scan measured anything. It
+  read `partial` whenever any scan existed, skipped ones included.
+- A large scan no longer locks other processes out of the database. Its findings were inserted in
+  one transaction — 30,000 on a 300 MB database held the write lock for 8.8 s, and another
+  process's `scans.insert` failed with `database is locked` after its 5 s busy timeout. They are
+  now inserted 2,000 per transaction while the scan row is still `running`, with a pause of half
+  the last transaction's lock time (20–120 ms) between two, so a process waiting on the lock
+  gets it; a scan of up to 2,000 findings pays nothing. No reader shows a running scan's findings:
+  `guardian://scans/{id}` lists none for one and says why.
+- `stack_snapshots` is kept to the newest 10 per project (on insert, and a backlog in the
+  background after startup, 500 rows per start) and indexed by project (migration 015); it grew
+  with every `detect_stack` run, and every reader's per-project lookup scanned and sorted all of it.
+- A corrupt `guardian.db` stops the server with one line naming the file and saying to move it
+  aside, instead of `Error: file is not a database` and a stack trace.
+- A database a 3.0 development build left at schema version 14 no longer stops the server, and the
+  CLI's `status` / `dashboard`, at startup (`no such table: mcp_tool_pins`, `table findings has no
+  column named cwe`, `… vuln_aliases`). 012, 013 and 014 were written on parallel branches, and the
+  runner applied only the numbers above the stored version. Applied migrations are now recorded as
+  a set (`schema_migrations`: version, name, applied_at). An older database is converted once:
+  migrations up to its stored version count as applied, except 012–014, whose tables, indexes and
+  columns are looked for instead. Every missing migration is then applied, statement by statement:
+  a column that already exists is skipped, so a half-applied 014 completes. A 2.0.0 database
+  (version 3) and a new one upgrade as before.
+- A database whose schema is still incomplete after its migrations ran stops the server with one
+  line naming the file and the missing object (`is missing column findings.cwe`), not a stack
+  trace from inside `new Storage()`.
 
 ### Security
 
@@ -438,6 +572,100 @@ version bump.
   --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
   Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
   Semgrep with `PYTHONUTF8=1`.
+- A project's `.guardian/guardian.db` is used only when it is the user's own. A database is its
+  writer's data: `AFTER INSERT ON findings BEGIN DELETE FROM findings WHERE rowid = NEW.rowid; END`
+  in a committed one took a project from risk 55 to 8 and from 7 open findings to 0 at coverage
+  `full`, in risk_score, every report, the open set and create_fix_pr — and seven suppressions
+  with no project (which match every project), in a database whose schema is exactly the
+  migrations', did the same with no schema object at all. A database dev-guardian creates now
+  carries a random 128-bit `db_id`, registered in a per-user registry (`registry/<db_id>.json`
+  under the data directory, 0700, owner-checked, written by temporary file and rename) before
+  it is written; on open, a registered id is trusted only for the database at the canonical path
+  it was registered for. The id travels with the file — a Docker `COPY . .`, a package, an
+  archive of the project — so on its own it was a bearer token: a copy carrying a registered id,
+  and seven suppressions with no project, read `storage_warning: null` and 0 open findings while
+  the registry named another directory. Several processes creating or registering one database at once leave
+  exactly one registry entry: under the write lock, a process that finds another's id already
+  registered for that database keeps it and deletes its own (four concurrent adopters used to
+  leave three orphans). Nothing else is trusted automatically — see "Upgrading from 3.0.0" above.
+  The review tried, over four rounds, to adopt a 3.0.0 database automatically and every rule was
+  defeated: the project's own untracking repository (an archive ships its own `.git`), a completed
+  scan filed under the project's path (predictable layouts — `/workspaces/<repo>`, `/app`, a CI
+  runner's path — can be guessed, 200 guesses per database), a scan finished after the project
+  directory was created (Windows' own `tar.exe` restores a directory's creation time with its
+  defaults, 7-Zip does for an archive built with `-mtc=on`), and a dense series of future-dated
+  scans always has one within any window around "now" — it was adopted, open 7 → 0. Nothing in a
+  file tells its owner from whoever wrote it, so the user decides, with `db adopt`. A database
+  that is not trusted — from before 3.0.1, a copy, another user's, one git tracks (under a
+  case-insensitive pathspec: `.Guardian/guardian.db` committed is served as
+  `.guardian/guardian.db` on Windows and macOS) or a submodule brings, one reached through a link
+  or junction — is foreign: the per-user fallback is used, the project file is left untouched (it
+  is only read, read-only, for its id, after the location and git checks), and a short warning
+  says why and what to do. Judging a database reads no path stored in it: the first cut of the
+  adoption stat'ed them, and four scans under `\\192.0.2.x\share\proj` held the server 60.5 s
+  before it answered (the MCP client timed out; a reachable host would have been sent the user's
+  NTLM credentials). The CLI's `status` / `dashboard` decide the same way.
+- A database SQLite cannot read never stops the server — 8 KB of random bytes or a 16-byte SQLite
+  header followed by zeros exited 1. Where it lives and whether git tracks it are asked before its
+  bytes are read (committed, or in a clone, it is foreign for that); one that is not the user's
+  registered database is foreign; the user's own — found by its path in the registry, since its id
+  cannot be read — gives way to an in-memory database for the session, with a warning naming the
+  file and saying to move it aside. So does a registered database the migrations cannot complete,
+  and a per-user fallback that cannot be used. A project on a file system SQLite's WAL cannot
+  use — a mapped network drive — no longer exits on its first start with `disk I/O error` (3.0.0
+  did too): SQLITE_IOERR and SQLITE_CANTOPEN on creating, opening or reading the project database
+  send it to the per-user fallback with "the project's .guardian is on a file system SQLite's WAL
+  can't use (network drive?) …; history is kept in" the fallback's path, and `db adopt` says the
+  same instead of "cannot be read (disk I/O error)". An unreadable database's warning names the
+  file once — it read "cannot be read (the database '…' cannot be read (…))".
+- History readers ignore scans dated more than 5 minutes past this machine's clock, by their start
+  or their finish, and say so ("N scan(s) dated in the future were ignored" — `future_dated_note`
+  in the open set, `risk_score`, `findings/open` and `health_status`, which also counts them). A
+  future-dated scan sorts first until its date passes: the review's series (one scan every 9
+  minutes from now − 2 h to now + 2 days) became "latest" — risk 8 (low), coverage full, a source
+  finished two days ahead — and shadowed the victim's own scan, open 7 → 0. A clock that was wrong
+  where a shared database was written does the same by accident. The rule is one SQL predicate
+  (`storage/scanClock.ts`) in every reader's query — the latest scan, history, the open set's
+  sources, the scan cache, the latest identity of a fingerprint, a CVE's first and last sighting.
+- A per-user data directory that cannot be used is never fatal. The registry and the fallback
+  live there, so the first cut exited 1 when it could not be created — in Docker `node:22` as
+  uid 4242 with no passwd entry (`HOME=/`): `fatal: Error: EACCES: permission denied, mkdir
+  '/.local/share/dev-guardian'`, where 3.0.0 had opened the project's database. The session now
+  runs on an in-memory database, and `health_status` and every scan say `history will not
+  persist: <reason>; set GUARDIAN_DATA_DIR to a writable directory`. The project's database is
+  not trusted unregistered in its place, and nothing is created or written in the project. A
+  registry or data directory another user owns, a link, or a file where the directory should be
+  is said the same way, naming that directory — it used to end "…and restart.. The file is left
+  as it is; delete it or move it aside…", telling the user to delete their project's database.
+- A database whose schema holds anything the migrations never create — a trigger, a view, an unknown
+  table or index, a known index redefined, or a CHECK / UNIQUE constraint added to a known table
+  (every insert is `INSERT OR IGNORE`, which obeys them silently) — is refused too, before the
+  migrations write to it. A database a NEWER build migrated (it records migrations this build does
+  not ship) still opens after a downgrade, as it did with 3.0.0: what a later additive migration
+  can create without hiding a row — new tables, new non-UNIQUE indexes, new columns every insert
+  satisfies — is accepted. A trigger or a view (no migration creates either; a test holds every
+  migration to it), a UNIQUE index or constraint on a table this build writes, and any changed
+  definition are refused whatever the file records; a future migration that adds one costs an older
+  build a fallback, with a warning naming it. Extra columns are judged on what SQLite recorded
+  (`pragma_table_xinfo`: NOT NULL only with a non-NULL literal default, no primary-key or
+  generated column) and every table's UNIQUE keys on `pragma_index_list`, with the text check as
+  a second layer — a quoted type name (`gate 'default 1' NOT NULL`) read like a default and hid
+  every finding.
+- `health_status` reports the active suppressions that apply to the project (`suppressions.active`,
+  `this_project`, `all_projects` — the last match every project), and `risk_score` how many
+  findings they take out (`suppressed_count`), so a mass suppression is visible.
+- The data directory is checked (owner, a real directory) before anything is created in it.
+- A refused database gives way to the per-user fallback, and the warning naming why reaches
+  `health_status.storage_warning` and every scan's `warnings`. The CLI's `status` / `dashboard`
+  decide the same way, print the warning on stderr, and still create no database.
+- The fallback moved out of the shared temp directory, where its path (`tmpdir()/dev-guardian/
+  <sha1(path)>`) was predictable, nothing checked who made it, and the CLI opened it whenever it
+  existed. It is now `%LOCALAPPDATA%\dev-guardian` on Windows and `$XDG_DATA_HOME/dev-guardian` or
+  `~/.local/share/dev-guardian` elsewhere (`GUARDIAN_DATA_DIR` overrides), its directories created
+  0700 and, on POSIX, required to belong to the user. A database in the old location is not carried
+  over.
+- Every connection opens with `trusted_schema = OFF`, `cell_size_check = ON` and no memory map (it
+  was 64 MB).
 
 ## [3.0.0] - 2026-09-29
 
@@ -449,7 +677,9 @@ history reader answers for one project**.
 
 It also adds six capabilities, each reviewed round by round before release:
 `audit_mcp_tools` (MCP tool poisoning and rug pulls, pinned by hash); CWE, OWASP
-Top 10:2025 and NIST CSF 2.0 on every finding, with coverage judged per language;
+Top 10:2025 and NIST CSF 2.0 on findings whose weakness has a defensible CWE (the
+rest read as unknown — cosign, `audit_mcp_tools` and WPScan findings had none until
+the release after this one), with coverage judged per language;
 CISA SSVC decisions and `export_vex` (OpenVEX / CycloneDX VEX); a Semgrep pack for
 LLM applications; Sigstore signature and provenance checks in `scan_containers`
 plus `ci-init github --attest`; and a plugin-surface check that holds the host

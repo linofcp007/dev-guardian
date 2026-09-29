@@ -24,6 +24,7 @@ import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
+import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, TOOLS, type ToolModule } from './index.js';
@@ -95,6 +96,8 @@ async function handler(
       db_size_bytes: dbSizeBytes,
       // This project's scans, any status and type — never another project's.
       total_scans: ctx.storage.scans.countForProject(projectPath),
+      // Scans dated in the future: in no count, list or "latest" here, or anywhere.
+      future_dated_scans_ignored: ctx.storage.scans.countFutureDated(projectPath),
       ...(ctx.storage.runtimeMeta.get('shell_choice') !== null
         ? { shell_label: ctx.shell?.label ?? 'unknown' }
         : {}),
@@ -117,5 +120,27 @@ async function handler(
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,
+    ...futureNoteOf(ctx.storage, projectPath),
+    suppressions: activeSuppressions(ctx, projectPath),
   };
+}
+
+/**
+ * The suppressions active now that apply to `projectPath`: its own, and
+ * those with no project, which match EVERY project (rows written before
+ * migration 011, and whatever an older build still inserts). A database a
+ * user trusts is theirs, so those are legitimate — but a mass suppression is
+ * how findings disappear without a trace, so how many apply is said here.
+ */
+function activeSuppressions(
+  ctx: PluginContext,
+  projectPath: string,
+): { active: number; this_project: number; all_projects: number } {
+  let own = 0;
+  let global = 0;
+  for (const s of ctx.storage.suppressions.listActive()) {
+    if (s.project_path === undefined) global += 1;
+    else if (s.project_path === projectPath) own += 1;
+  }
+  return { active: own + global, this_project: own, all_projects: global };
 }

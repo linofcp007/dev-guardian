@@ -114,7 +114,7 @@ describe('a newer run whose scan_sast child failed', () => {
       not_measured: string[];
     }>(await tool('diff_scans').handler({ project_path: p }, s.plugin));
     expect([r.from_scan_id, r.to_scan_id]).toEqual(['run1', 'run2']);
-    expect(r.summary).toEqual({ new: 1, resolved: 0, unchanged: 0, not_remeasured: 1, not_previously_measured: 0 });
+    expect(r.summary).toEqual({ new: 1, resolved: 0, unchanged: 0, not_remeasured: 1, not_previously_measured: 0, suppressed: 0 });
     expect(r.resolved_findings).toEqual([]);
     expect(r.not_remeasured_findings.map((f) => f.fingerprint)).toEqual([S]);
     expect(r.not_measured).toEqual(['sast']);

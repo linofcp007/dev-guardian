@@ -42,6 +42,32 @@ their respective projects.
 - **dev-guardian sends no telemetry of its own.** Results persist to
   `.guardian/guardian.db` in the scanned project and never leave it. Reports and
   the dashboard are self-contained and load no external assets.
+- **A project's database is used only when it is yours.** A database is its
+  writer's data: a trigger in a committed `.guardian/guardian.db` hid every
+  finding, and so did suppressions with no project in one whose schema was
+  exactly dev-guardian's, and scans dated in the future that outranked the
+  user's own. A database dev-guardian creates carries a random id registered
+  in a per-user registry, and is trusted only at the path it was registered
+  for (the id travels with a copy). Nothing else is trusted automatically —
+  not one from 3.0.0 or earlier, not a copy: nothing in a file tells its
+  owner from whoever wrote it. You register one yourself with `dev-guardian
+  db adopt` (CLI only, never an MCP tool — an assistant must not run it for
+  you): it shows what the database holds, flagging suppressions that apply to
+  every project and scans dated in the future, and registers it with `--yes`.
+  Refused even then: a database git tracks (in any case), a submodule, a link
+  or junction, a schema holding what the migrations never create (a trigger,
+  a view, an unknown table or index, a constraint added to a known table), or
+  any scan dated in the future. A foreign database is not opened for writing
+  and not modified: the per-user fallback (`%LOCALAPPDATA%\dev-guardian`,
+  `~/.local/share/dev-guardian`, or `GUARDIAN_DATA_DIR`) is used instead, and
+  `health_status` says why and what to do. No path stored in a database is
+  looked up to judge it (a `\\host\share` would reach the network). A file
+  SQLite cannot read, or a per-user directory that cannot be used, never
+  stops the server: it runs on the fallback or an in-memory database and
+  says history will not persist. History readers ignore scans dated in the
+  future, and say how many. `health_status` and `risk_score` also say how
+  many findings suppressions take out. Every connection runs with
+  `trusted_schema = OFF` and `cell_size_check = ON`.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`

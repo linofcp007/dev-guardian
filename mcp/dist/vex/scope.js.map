@@ -1,0 +1,1 @@
+{"version":3,"file":"scope.js","sourceRoot":"","sources":["../../src/vex/scope.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;GAYG;AAEH,OAAO,EAAE,gBAAgB,EAAmB,MAAM,uBAAuB,CAAC;AAE1E,OAAO,EAAE,qBAAqB,EAAE,MAAM,aAAa,CAAC;AAEpD,MAAM,UAAU,aAAa,CAAC,OAAgB,EAAE,WAAmB;IACjE,OAAO,gBAAgB,CAAC,OAAO,EAAE,WAAW,EAAE,qBAAqB,EAAE,EAAE,IAAI,EAAE,MAAM,EAAE,CAAC,CAAC;AACzF,CAAC"}

@@ -12,6 +12,7 @@
  * NULL-version rows never deduplicated. See `migrations/005_scan_cves.sql`;
  * that table is no longer written or read here.
  */
+import { notInFutureSql } from './scanClock.js';
 /**
  * The first or last scan OF THE SAME PROJECT that saw the same CVE in the same
  * package version — never another project's scan, which is what made the old
@@ -22,7 +23,7 @@ function seenIn(direction) {
       SELECT o.scan_id FROM scan_cves o JOIN scans os ON os.id = o.scan_id
       WHERE o.cve_id = sc.cve_id AND o.package_name = sc.package_name
         AND o.installed_version = sc.installed_version
-        AND os.project_path = s.project_path
+        AND os.project_path = s.project_path AND ${notInFutureSql('os')}
       ORDER BY os.started_at ${direction}, os.rowid ${direction}
       LIMIT 1
     ), sc.scan_id)`;

@@ -15,7 +15,7 @@
  * Severity is derived from the CVSS score when present, otherwise we map
  * the WPScan severity label (when present), otherwise default to medium.
  */
-import { asArray, getNumber, getProp, getString, makeFinding, parseInputAsJson, } from './index.js';
+import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, parseInputAsJson, } from './index.js';
 export const WPSCAN_TOOL_NAME = 'wpscan';
 export const wpscanParser = {
     name: WPSCAN_TOOL_NAME,
@@ -82,6 +82,9 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
         snippet: `component:${componentLabel}`,
         // Every CVE of the vulnerability is its own id; the first is the rule id.
         vuln_aliases: cveList,
+        // A known-vulnerable plugin, theme or core is a vulnerable dependency,
+        // classified as every other one: CWE-1395, A03:2025 only.
+        taxonomy: dependencyTaxonomy(),
     });
     findings.push(finding);
     for (const cveId of cveList) {

@@ -830,11 +830,72 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
   it('the scan step writes the JSON report, and its exit code still gates the job (pipefail)', () => {
     const { doc } = renderGithub(['--attest']);
     const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan');
-    expect(scan?.run).toMatch(/^set -euo pipefail\n/);
+    expect(scan?.run).toMatch(/^set -uo pipefail\nset \+e\n/);
     expect(scan?.run).toMatch(/--format json/);
     expect(scan?.run).toMatch(/--sarif dev-guardian-results\.sarif/);
-    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\s*$/);
+    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\nstatus=\$\?\n/);
+    expect(scan?.run).toMatch(/exit "\$status"\s*$/);
   });
+
+  // Review of 3.0.0 (S6): the upload ran on `if: always()`, so an incomplete
+  // scan's SARIF (exit 2: a scanner did not run) reached code scanning, which
+  // closes as "fixed" every alert of a scanner the upload does not contain —
+  // `executionSuccessful: false` notwithstanding. Re-review (M-1): an exit 1
+  // can be incomplete too — a blocking finding outranks a missing scanner —
+  // so the step uploads only exit 0, or exit 1 with coverage full.
+  it.each([[[] as string[]], [['--attest']]])('SARIF is uploaded only for a complete run — argv %j', (argv) => {
+    const { doc } = renderGithub(argv);
+    const steps = (doc.jobs['scan']?.steps ?? []) as Array<{ name?: string; id?: string; run?: string; if?: string }>;
+    const scan = steps.find((s) => s.name === 'dev-guardian scan');
+    expect(scan?.id).toBe('scan');
+    expect(scan?.run).toMatch(
+      /echo "exit-code=\$status" >> "\$GITHUB_OUTPUT"\necho "upload-sarif=\$upload" >> "\$GITHUB_OUTPUT"\nexit "\$status"\s*$/,
+    );
+    const upload = steps.find((s) => s.name === 'Upload SARIF to code scanning');
+    expect(upload?.if).toBe("${{ always() && steps.scan.outputs.upload-sarif == 'true' }}");
+  });
+
+  it.skipIf(PROBE_BASH === null)(`the scan step keeps the scan's exit code and uploads only a complete run's SARIF${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    // Run as GitHub runs it (`bash -e`), with a stand-in `node` for the scan
+    // (exiting 0 to 3) that hands the step's own SARIF check to the real node,
+    // over a SARIF that says the run was, or was not, complete.
+    const sarif = (complete: boolean): string =>
+      JSON.stringify({ version: '2.1.0', runs: [{ invocations: [{ executionSuccessful: complete }], results: [] }] });
+    const cases: Array<[number, boolean, boolean]> = [
+      [0, true, true],
+      [0, false, true],
+      [1, true, true],
+      [1, false, false],
+      [2, true, false],
+      [2, false, false],
+      [3, false, false],
+    ];
+    for (const argv of [[], ['--attest']]) {
+      const { doc } = renderGithub(argv);
+      const script = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan')?.run ?? '';
+      for (const [code, complete, uploads] of cases) {
+        const dir = makeProject();
+        const bin = join(dir, 'bin');
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, 'node'),
+          `#!/bin/sh\nif [ "$1" = "-e" ]; then exec "$REAL_NODE" "$@"; fi\necho scanning\nexit ${code}\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(join(dir, 'dev-guardian-results.sarif'), sarif(complete));
+        writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\n${script}`);
+        const r = spawnSync(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir, REAL_NODE: process.execPath },
+        });
+        const label = `${JSON.stringify(argv)} exit ${code}, complete ${complete}`;
+        expect(r.status, `${label}: ${r.stderr}`).toBe(code);
+        expect(readFileSync(join(dir, 'out.txt'), 'utf8'), label).toBe(`exit-code=${code}\nupload-sarif=${uploads}\n`);
+      }
+    }
+  }, 240_000);
 
   it('without --attest nothing of it is rendered', () => {
     const { body } = renderGithub();

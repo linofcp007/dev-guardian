@@ -13,7 +13,7 @@
  */
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js';
-import { escapeInvisible, findEncodedBlob, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, PASS_TO_DESTINATION, PASS_TO_WORD, readAs, SENSITIVE_PATH_ANYWHERE, scanInvisible, TEXT_RULES, } from './rules.js';
+import { escapeInvisible, findEncodedBlob, mcpRuleTaxonomy, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, PASS_TO_DESTINATION, PASS_TO_WORD, readAs, SENSITIVE_PATH_ANYWHERE, scanInvisible, TEXT_RULES, } from './rules.js';
 /**
  * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
  * per-server `tools_run` names (`mcp-tool-audit:<source>::<server>`).
@@ -607,7 +607,13 @@ export function shadowingFromMentions(target, mentions, others) {
         file_path: target.sourceLabel,
         snippet: escapeInvisible(`${server} > ${ref.item} > ${ref.path}: names '${name}'`),
         fix_available: false,
+        ...taxonomyOf(meta.rule),
     }));
+}
+/** `makeFinding`'s taxonomy for a rule (`rules.ts#mcpRuleTaxonomy`), or nothing: unmapped. */
+function taxonomyOf(rule) {
+    const taxonomy = mcpRuleTaxonomy(rule);
+    return taxonomy === undefined ? {} : { taxonomy };
 }
 function itemKey(hit) {
     return `${hit.rule}\u0000${hit.field.item}`;
@@ -767,6 +773,7 @@ function finishRun(run, others) {
             file_path: listing.sourceLabel,
             snippet: escapeInvisible(`${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`),
             fix_available: false,
+            ...taxonomyOf(first.rule),
         })));
     }
     return { findings, cuts: run.cuts.map(escapeInvisible), mentions: run.mentions };

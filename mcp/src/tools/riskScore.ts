@@ -136,6 +136,11 @@ async function handler(
     recommended_next_action: result.next_action,
     coverage_caveat: result.coverage_caveat,
     project_path: projectPath,
+    // Findings the scans hold that an active suppression takes out of the
+    // score — a mass suppression shows here, never as a clean project.
+    suppressed_count: open.suppressed,
+    // Scans dated in the future, which every reader ignored (storage/scanClock.ts).
+    ...(open.future_dated_note !== undefined ? { future_dated_note: open.future_dated_note } : {}),
     coverage: {
       level: open.coverage,
       sources: open.sources,

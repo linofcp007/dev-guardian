@@ -22,7 +22,12 @@ export interface PluginContext {
   scriptsDir: string;
   /** Sends `notifications/progress` over the active transport. */
   progressNotifier: ProgressNotifier;
-  /** Warning surfaced when the DB had to fall back to a temp location. */
+  /**
+   * Set when the project's database was not used (foreign, not writable,
+   * untrusted schema, or no usable per-user data directory): why, and where
+   * the history goes. `health_status.storage_warning` and every scan's
+   * `warnings` carry it.
+   */
   storageWarning?: string;
 }
 

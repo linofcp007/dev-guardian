@@ -90,7 +90,7 @@ A versão 2.0.0 tinha 48; o `CHANGELOG.md` indica, para cada nome antigo, o que 
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Os recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) servem os resultados guardados em JSON. Tudo fica em `.guardian/guardian.db`; o servidor mantém `.guardian/` fora do git, exceto `.guardian/baseline.json`, que a CI precisa de ter no repositório.
+Os recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) servem os resultados guardados em JSON. Tudo fica em `.guardian/guardian.db`; o servidor mantém `.guardian/` fora do git, exceto `.guardian/baseline.json`, que a CI precisa de ter no repositório. O histórico, as supressões e as baselines ficam associados ao caminho do projeto: mover ou mudar o nome do repositório recomeça-os do zero (as linhas antigas ficam no caminho antigo). Um `guardian.db` que o seu dev-guardian não criou (vindo de um clone ou de um ficheiro compactado — zip ou tar —, ou que esteja no repositório) nunca é aberto. **Ao atualizar a partir da 3.0.0:** o `guardian.db` que já tem também não é considerado fiável automaticamente — até o registar, as análises vão para uma base de dados de recurso do utilizador e o `health_status` indica-o. Se for seu, execute pessoalmente, uma vez, `node <plugin>/cli/dev-guardian.mjs db adopt --project . --yes` (sem `--yes` mostra primeiro o que contém; `--rehome` move também as análises registadas através de uma ligação para o projeto). Ver [SECURITY.md](SECURITY.md).
 
 ## O que cada stack recebe
 
@@ -173,7 +173,7 @@ O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à red
 commands/         os 10 comandos slash
 skills/           as 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt)
 mcp/              o servidor MCP: src/, test/, dist/ (no repositório)
 configs/          packs Semgrep, modelos de CI, configurações gitleaks/Renovate/pre-commit, modelos de compliance
 host-rules/       modelos de regras para outros hosts
