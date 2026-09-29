@@ -102,6 +102,11 @@ version bump.
   `scan_secrets` read coverage full. An initialised submodule with content is now a named gap — "submodule
   contents not scanned: vendor/lib", the pass `ok` and listed missing, coverage partial — and still not scanned
   (scan it as its own project). `scan_sast`'s Docker fallback, which walks its mount, is left out.
+- `scan_dotnet_secrets` reports a JWT signing key in JSON: the `dotnet-jwt-secret` pattern refused the quote
+  between `"JwtSecret"` and its colon, so no appsettings.json key was ever found. A config file over 2 MB (now
+  judged by its size, before reading it) or one that cannot be read is no longer counted in `files_scanned`: it is
+  named in `files_not_scanned` with the reason, and the scan is partial (`tools_run`, `missing_tools` and
+  `coverage` are in the response).
 
 ## [3.0.0] - 2026-09-29
 

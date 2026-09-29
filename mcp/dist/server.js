@@ -66859,7 +66859,10 @@ var PATTERNS = [
     id: "dotnet-jwt-secret",
     description: "JWT signing key in plain text",
     severity: "high",
-    regex: /(JwtSecret|JWT_SECRET|SigningKey)\s*[:=]\s*["'][^"']{16,}["']/i
+    // The key may be quoted itself: appsettings.json writes `"JwtSecret": "…"`,
+    // with a quote between the key and the colon, which the pattern used to
+    // refuse — every JSON signing key went unreported (review M4).
+    regex: /(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i
   },
   {
     id: "dotnet-nuget-feed-cred",
@@ -66924,14 +66927,24 @@ async function handler33(input, ctx) {
   }
   const files = collectConfigFiles(projectPath, 6);
   const findings = [];
+  const notScanned = [];
+  let scanned = 0;
+  const rel2 = (file) => relative16(projectPath, file).replace(/\\/g, "/");
   for (const file of files) {
     let content;
     try {
+      const size = statSync14(file).size;
+      if (size > MAX_FILE_BYTES2) {
+        notScanned.push({ file: rel2(file), reason: `over 2 MB (${size} bytes)` });
+        continue;
+      }
       content = readFileSync32(file, "utf8");
-    } catch {
+    } catch (e) {
+      const code = e.code;
+      notScanned.push({ file: rel2(file), reason: `could not be read (${code ?? e.message})` });
       continue;
     }
-    if (content.length > 2e6) continue;
+    scanned += 1;
     const lines = content.split(/\r?\n/);
     for (let i2 = 0; i2 < lines.length; i2 += 1) {
       const line = lines[i2];
@@ -66946,7 +66959,7 @@ async function handler33(input, ctx) {
               category: "security",
               subcategory: "secret",
               title: rule.description,
-              file_path: relative16(projectPath, file).replace(/\\/g, "/"),
+              file_path: rel2(file),
               line_start: i2 + 1,
               line_end: i2 + 1,
               snippet: line.length > 200 ? `${line.slice(0, 200)}\u2026` : line,
@@ -66968,22 +66981,35 @@ async function handler33(input, ctx) {
   if (redacted.length > 0) {
     ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
   }
+  notScanned.sort((a2, b) => a2.file < b.file ? -1 : a2.file > b.file ? 1 : 0);
+  const toolRun = notScanned.length === 0 ? { name: "scan_dotnet_secrets", status: "ok" } : {
+    name: "scan_dotnet_secrets",
+    status: scanned > 0 ? "ok" : "failed",
+    reason: `${notScanned.length} file(s) not scanned: ${notScanned.slice(0, 5).map((n2) => `${n2.file} (${n2.reason})`).join(", ")}${notScanned.length > 5 ? ` and ${notScanned.length - 5} more` : ""}`
+  };
+  const tools_run = [toolRun];
+  const missing_tools = notScanned.length > 0 ? ["scan_dotnet_secrets"] : [];
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: "completed",
-    tools_run: [{ name: "scan_dotnet_secrets", status: "ok" }],
-    missing_tools: [],
-    meta: { files_scanned: files.length, findings_count: findings.length }
+    tools_run,
+    missing_tools,
+    meta: { files_scanned: scanned, files_not_scanned: notScanned, findings_count: findings.length }
   });
   const parserOutput = { findings: redacted, cves: [] };
   return {
     ok: true,
     scan_id: scanId,
-    files_scanned: files.length,
+    files_scanned: scanned,
+    files_not_scanned: notScanned,
+    coverage: computeCoverage(tools_run, missing_tools),
+    tools_run,
+    missing_tools,
     findings_count: findings.length,
     findings: parserOutput.findings
   };
 }
+var MAX_FILE_BYTES2 = 2e6;
 function collectConfigFiles(root, maxDepth) {
   const out = [];
   function walk4(dir, depth) {
@@ -69040,7 +69066,7 @@ import { tmpdir as tmpdir6 } from "node:os";
 import { basename as basename6, isAbsolute as isAbsolute10, join as join65, relative as relative19 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
-var MAX_FILE_BYTES2 = 2 * 1024 * 1024;
+var MAX_FILE_BYTES3 = 2 * 1024 * 1024;
 var CODE_EXT = /* @__PURE__ */ new Set([
   ".sh",
   ".bash",
@@ -69366,7 +69392,7 @@ function collectDir(root) {
         skipped2 += 1;
         continue;
       }
-      if (s.size > MAX_FILE_BYTES2) {
+      if (s.size > MAX_FILE_BYTES3) {
         skipped2 += 1;
         warnings.push(`skipped large file: ${rel(root, abs)} (${Math.round(s.size / 1024)} KB)`);
         continue;
