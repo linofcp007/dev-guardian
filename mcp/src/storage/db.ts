@@ -12,9 +12,10 @@
  * The DB lives at `<project_root>/.guardian/guardian.db`, and is used only
  * when it is THIS user's (`dbProvenance.ts`, `dbRegistry.ts`): one this
  * build creates gets a random `db_id`, registered in the per-user registry
- * before it is written; an existing one is trusted when its id is registered,
- * or — a database from 3.0.0 or earlier, with no id — when it passes the
- * one-time legacy adoption. It is REFUSED otherwise, and the per-user
+ * before it is written; an existing one is trusted when its id is registered
+ * for the very path it is opened at, or — a database from 3.0.0 or earlier,
+ * or a copy of a registered one that landed elsewhere — when it passes the
+ * one-time adoption. It is REFUSED otherwise, and the per-user
  * fallback used instead, with a warning the caller includes in tool
  * responses (`health_status`'s `storage_warning`, every scan's `warnings`)
  * saying why and where the history now goes. Refused, too, when:
@@ -65,7 +66,7 @@ import {
   probeDatabase,
   type GitIndexAnswer,
 } from './dbProvenance.js';
-import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId } from './dbRegistry.js';
+import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId, type RegistryEntry } from './dbRegistry.js';
 import { listMigrations, runMigrations } from './migrations/runner.js';
 import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, userDataDir } from './userData.js';
 import {
@@ -506,16 +507,27 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
   // Nothing in it yet: another process is creating it this very moment (or
   // the file is empty). Either way it holds nothing to trust or distrust.
   if (probe.empty) return { kind: 'create' };
-  if (probe.dbId !== null && lookupDbId(probe.dbId) !== null) return { kind: 'trusted', dbId: probe.dbId };
+  // A registered id is trusted only WHERE it was registered. The id travels
+  // with the file — a Docker `COPY . .`, a package, an archive of the
+  // project all carry `.guardian/guardian.db` — so on its own it is a bearer
+  // token: a copy anywhere would read as this user's.
+  const entry = probe.dbId !== null ? lookupDbId(probe.dbId) : null;
+  if (entry !== null && probe.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
+    return { kind: 'trusted', dbId: probe.dbId };
+  }
 
   const adoption = adoptionProblem(projectPath, dbPath, index, probe.scanProjects);
   if (adoption === null) return { kind: 'adopt' };
   return {
     kind: 'foreign',
     why:
-      probe.dbId === null
-        ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})`
-        : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
+      entry !== null
+        ? `this database was registered at '${entry.db_path}', not here — a copy of it (a repository moved or ` +
+          `copied, or shipped with its .guardian: a Docker COPY, a package, an archive), and it cannot be ` +
+          `adopted here: ${adoption}`
+        : probe.dbId === null
+          ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})`
+          : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
     tracked: false,
   };
 }
@@ -540,7 +552,7 @@ function foreignReason(dbPath: string, verdict: Extract<Verdict, { kind: 'foreig
  * registered and written) only after its schema passed.
  */
 function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclude<Verdict, { kind: 'foreign' }>): OpenedDatabase {
-  const entryFor = (id: string): { db_id: string; db_path: string; project_path: string; created_at: string } => ({
+  const entryFor = (id: string): RegistryEntry => ({
     db_id: id,
     db_path: safeCanonical(dbPath),
     project_path: safeCanonical(projectPath),
@@ -550,13 +562,13 @@ function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclu
     // Registered BEFORE it is written, so a process that reads the id from
     // the file always finds it registered; written before the migrations, so
     // no other process sees tables with no id.
-    const db = openWritable(dbPath, (raw) => claimDbId(raw, entryFor, 'keep'));
+    const db = openWritable(dbPath, (raw) => claimDbId(raw, entryFor));
     return { db, path: dbPath };
   }
   const db = openWritable(dbPath);
   if (verdict.kind === 'adopt') {
     try {
-      claimDbId(db, entryFor, 'replace');
+      claimDbId(db, entryFor);
     } catch (error) {
       closeQuietly(db);
       throw error;
@@ -574,26 +586,36 @@ function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclu
 
 /**
  * Writes a freshly registered id into `schema_meta` and returns the id the
- * database ends up with. `keep`: an id another process wrote first wins (it
- * registered it before writing) and ours is forgotten; `replace`: ours
- * overwrites an unregistered one (adoption).
+ * database ends up with. Under the write lock: an id another process wrote
+ * first, registered for THIS database, wins (it registered it before
+ * writing) and ours is forgotten — so of several processes creating or
+ * adopting one database at once, exactly one registry entry is left; any
+ * other id (none, a legacy database's unregistered one, one registered for
+ * another location) is replaced by ours.
  */
-function claimDbId(
-  db: GuardianDatabase,
-  entryFor: (id: string) => { db_id: string; db_path: string; project_path: string; created_at: string },
-  mode: 'keep' | 'replace',
-): string {
+function claimDbId(db: GuardianDatabase, entryFor: (id: string) => RegistryEntry): string {
   const mine = newDbId();
-  registerDbId(entryFor(mine));
-  const kept = db.transaction((): string => {
-    db.exec('CREATE TABLE IF NOT EXISTS schema_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n)');
-    const sql =
-      mode === 'keep'
-        ? 'INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, ?)'
-        : 'INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
-    db.prepare<[string, string]>(sql).run(DB_ID_KEY, mine);
-    return db.prepare<[string], { value: string }>('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY)?.value ?? mine;
-  })();
+  const entry = entryFor(mine);
+  registerDbId(entry);
+  let kept = mine;
+  try {
+    kept = db.transaction((): string => {
+      db.exec('CREATE TABLE IF NOT EXISTS schema_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n)');
+      const current = db
+        .prepare<[string], { value: unknown }>('SELECT value FROM schema_meta WHERE key = ?')
+        .get(DB_ID_KEY)?.value;
+      if (typeof current === 'string' && current !== mine && lookupDbId(current)?.db_path === entry.db_path) {
+        return current;
+      }
+      db.prepare<[string, string]>(
+        'INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      ).run(DB_ID_KEY, mine);
+      return mine;
+    })();
+  } catch (error) {
+    forgetDbId(mine);
+    throw error;
+  }
   if (kept !== mine) forgetDbId(mine);
   return kept;
 }

@@ -18,7 +18,16 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -485,20 +494,44 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     }
   });
 
-  it('a registered database stays trusted after its repository is moved', () => {
+  // Round 5: a registered id is trusted only where it was registered. The id
+  // travels with the file, so on its own it is a bearer token: a ZIP layout
+  // of a project carrying its registered database read storage_warning null
+  // and 0 open findings, while the registry named another directory.
+  it('a registered database copied elsewhere (an archive, a Docker COPY) is foreign, and says where it was registered', () => {
+    const original = project();
+    const registeredAt = canonicalPath(existingDatabase(original));
+    const copy = project();
+    mkdirSync(join(copy, '.guardian'));
+    copyFileSync(primaryOf(original), primaryOf(copy));
+    const suppressions = Array.from(
+      { length: 7 },
+      (_, i) => `('fp-${i}', 'hidden', '2026-01-01T00:00:00.000Z', NULL)`,
+    ).join(', ');
+    tamper(
+      primaryOf(copy),
+      `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES ${suppressions}`,
+    );
+    const warning = expectForeign(copy, /this database was registered at/);
+    expect(warning).toContain(`registered at '${registeredAt}'`);
+    const opened = openDatabase({ projectPath: copy });
+    try {
+      const storage = new Storage(opened.db);
+      expect(openSetForProject(storage, copy).findings.map((f) => f.fingerprint)).toEqual(['fp-1']);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it('a registered database whose repository was moved is not trusted at the new path; the warning names the old one', () => {
     const dir = project();
-    existingDatabase(dir);
+    const registeredAt = canonicalPath(existingDatabase(dir));
     const moved = `${dir}-moved`;
     renameSync(dir, moved);
     undo.push(() => rmDir(moved));
     undo.push(() => rmDir(dirname(resolveFallbackDbPath(moved))));
-    const opened = openDatabase({ projectPath: moved });
-    try {
-      expect(opened.path).toBe(primaryOf(moved));
-      expect(opened.warning).toBeUndefined();
-    } finally {
-      opened.db.close();
-    }
+    const warning = expectForeign(moved, /this database was registered at/);
+    expect(warning).toContain(`registered at '${registeredAt}'`);
   });
 
   it("a legacy database in the project's own, untracking repository is adopted once, and registered", () => {

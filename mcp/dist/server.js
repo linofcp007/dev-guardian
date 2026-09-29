@@ -40042,12 +40042,15 @@ function judgeProjectDatabase(projectPath, dbPath) {
   const fromGit = gitProblem(index);
   if (fromGit !== null) return { kind: "foreign", why: fromGit, tracked: index.tracked.length > 0 };
   if (probe2.empty) return { kind: "create" };
-  if (probe2.dbId !== null && lookupDbId(probe2.dbId) !== null) return { kind: "trusted", dbId: probe2.dbId };
+  const entry = probe2.dbId !== null ? lookupDbId(probe2.dbId) : null;
+  if (entry !== null && probe2.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
+    return { kind: "trusted", dbId: probe2.dbId };
+  }
   const adoption = adoptionProblem(projectPath, dbPath, index, probe2.scanProjects);
   if (adoption === null) return { kind: "adopt" };
   return {
     kind: "foreign",
-    why: probe2.dbId === null ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})` : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
+    why: entry !== null ? `this database was registered at '${entry.db_path}', not here \u2014 a copy of it (a repository moved or copied, or shipped with its .guardian: a Docker COPY, a package, an archive), and it cannot be adopted here: ${adoption}` : probe2.dbId === null ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})` : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
     tracked: false
   };
 }
@@ -40063,13 +40066,13 @@ function openProjectDatabase(projectPath, dbPath, verdict) {
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   });
   if (verdict.kind === "create") {
-    const db2 = openWritable(dbPath, (raw) => claimDbId(raw, entryFor, "keep"));
+    const db2 = openWritable(dbPath, (raw) => claimDbId(raw, entryFor));
     return { db: db2, path: dbPath };
   }
   const db = openWritable(dbPath);
   if (verdict.kind === "adopt") {
     try {
-      claimDbId(db, entryFor, "replace");
+      claimDbId(db, entryFor);
     } catch (error2) {
       closeQuietly(db);
       throw error2;
@@ -40082,15 +40085,27 @@ function openProjectDatabase(projectPath, dbPath, verdict) {
   }
   return { db, path: dbPath };
 }
-function claimDbId(db, entryFor, mode) {
+function claimDbId(db, entryFor) {
   const mine = newDbId();
-  registerDbId(entryFor(mine));
-  const kept = db.transaction(() => {
-    db.exec("CREATE TABLE IF NOT EXISTS schema_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n)");
-    const sql = mode === "keep" ? "INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, ?)" : "INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-    db.prepare(sql).run(DB_ID_KEY, mine);
-    return db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY)?.value ?? mine;
-  })();
+  const entry = entryFor(mine);
+  registerDbId(entry);
+  let kept = mine;
+  try {
+    kept = db.transaction(() => {
+      db.exec("CREATE TABLE IF NOT EXISTS schema_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n)");
+      const current = db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY)?.value;
+      if (typeof current === "string" && current !== mine && lookupDbId(current)?.db_path === entry.db_path) {
+        return current;
+      }
+      db.prepare(
+        "INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+      ).run(DB_ID_KEY, mine);
+      return mine;
+    })();
+  } catch (error2) {
+    forgetDbId(mine);
+    throw error2;
+  }
   if (kept !== mine) forgetDbId(mine);
   return kept;
 }

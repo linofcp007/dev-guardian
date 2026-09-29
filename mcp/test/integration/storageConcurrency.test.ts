@@ -11,11 +11,11 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase } from '../../src/storage/db.js';
-import { lookupDbId } from '../../src/storage/dbRegistry.js';
+import { lookupDbId, registryDir } from '../../src/storage/dbRegistry.js';
 import { canonicalPath } from '../../src/platform/projectPath.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
@@ -75,6 +75,18 @@ function databaseAt2_0_0(project: string): void {
   db.close();
 }
 
+/** The ids whose registry entry names `dbPath`. */
+function registeredFor(dbPath: string): string[] {
+  const target = canonicalPath(dbPath);
+  return readdirSync(registryDir())
+    .filter((name) => name.endsWith('.json'))
+    .filter((name) => {
+      const entry = JSON.parse(readFileSync(join(registryDir(), name), 'utf8')) as { db_path?: unknown };
+      return entry.db_path === target;
+    })
+    .map((name) => name.slice(0, -'.json'.length));
+}
+
 describe.each([
   ['a fresh project database', (_project: string): void => {}],
   ['a 2.0.0 project database being upgraded', databaseAt2_0_0],
@@ -106,6 +118,10 @@ describe.each([
       expect(id).toMatch(/^[0-9a-f]{32}$/);
       expect(lookupDbId(id ?? '')).not.toBeNull();
       db.close();
+      // And ONE registry entry names this database: every opener that lost
+      // the race removed the id it had registered (round 5: four concurrent
+      // adopters left three orphans).
+      expect(registeredFor(join(project, '.guardian', 'guardian.db'))).toEqual([id]);
     }
 
     expect(failures).toEqual([]);

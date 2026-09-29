@@ -15,10 +15,14 @@
  * two processes registering at once never lose each other's entry the way a
  * shared file rewritten by both would. The directory is created 0700 and
  * checked for ownership (`userData.ts`); an entry must be a regular file of
- * this user's, never a link, and must name its own id. The paths it records
- * are informational: a repository moved or copied by its owner keeps its
- * database trusted (its history, keyed by the old path, simply does not
- * match the new one).
+ * this user's, never a link, and must name its own id. The `db_path` it
+ * records binds the id to one location: an id is trusted only for the
+ * database at the canonical path it was registered for (`db.ts`). The id
+ * travels with the file — a Docker `COPY . .`, a package, an archive of the
+ * project carry `.guardian/guardian.db` — so without that binding it was a
+ * bearer token, trusted wherever a copy landed. A repository its owner moved
+ * goes through the adoption rules at its new path, and the warning names
+ * where it was registered.
  *
  * An id is 32 lower-case hex characters. One read from a database is
  * checked against that before it names a file — it is the database's word,

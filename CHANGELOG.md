@@ -32,7 +32,15 @@ version bump.
   migrations', did the same with no schema object at all. A database dev-guardian creates now
   carries a random 128-bit `db_id`, registered in a per-user registry (`registry/<db_id>.json`
   under the data directory, 0700, owner-checked, written by temporary file and rename) before
-  it is written; on open, a registered id is trusted, whether or not the repository has moved.
+  it is written; on open, a registered id is trusted only for the database at the canonical path
+  it was registered for. The id travels with the file — a Docker `COPY . .`, a package, an
+  archive of the project — so on its own it was a bearer token: a copy carrying a registered id,
+  and seven suppressions with no project, read `storage_warning: null` and 0 open findings while
+  the registry named another directory. A copy, or a repository its owner moved, goes through the
+  adoption rules below at its new path, and the warning says where the database was registered.
+  Several processes creating or adopting one database at once leave exactly one registry entry:
+  under the write lock, a process that finds another's id already registered for that database
+  keeps it and deletes its own (four concurrent adopters used to leave three orphans).
   A database from 3.0.0 or earlier (no id) is adopted once, with a one-line notice, only when the
   project has its own `.git`, git tracks neither the database nor its `-wal`/`-shm`/`-journal`
   under a case-insensitive pathspec (`.Guardian/guardian.db` committed is served as
