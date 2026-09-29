@@ -440,6 +440,42 @@ export function suppressionMatcher(
   return (f) => fingerprints.has(f.fingerprint) || (f.identity !== undefined && identities.has(f.identity));
 }
 
+/**
+ * `findings` split by `projectPath`'s suppressions active at `now`, exactly
+ * as the open set applies them ({@link suppressionMatcher}) — for a reader
+ * that compares scans rather than reading the open set (`regression_alert`,
+ * `diff_scans`). A suppressed finding is never new, resolved or a regression
+ * there; it is listed apart. They used to compare every stored finding, so a
+ * suppressed critical still raised `regressed: true, score_delta: 10` while
+ * the dashboard and risk_score said 0.
+ */
+export function partitionSuppressed<F extends Pick<Finding, 'fingerprint' | 'identity'>>(
+  storage: Storage,
+  projectPath: string,
+  findings: readonly F[],
+  now: number = Date.now(),
+): { visible: F[]; suppressed: F[] } {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
+  const visible: F[] = [];
+  const suppressed: F[] = [];
+  for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
+  return { visible, suppressed };
+}
+
+/**
+ * The suppressed findings of two compared scans, once each: all of
+ * `current`'s, then those of `reference` whose identity (the fingerprint
+ * where there is none) `current` does not hold.
+ */
+export function suppressedOfEither<F extends Pick<Finding, 'fingerprint' | 'identity'>>(
+  current: readonly F[],
+  reference: readonly F[],
+): F[] {
+  const key = (f: F): string => (f.identity !== undefined ? `i:${f.identity}` : `f:${f.fingerprint}`);
+  const seen = new Set(current.map(key));
+  return [...current, ...reference.filter((f) => !seen.has(key(f)))];
+}
+
 interface SlotPick {
   scan: ScanRecord;
   coverage: ScanCoverage;

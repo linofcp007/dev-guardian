@@ -259,6 +259,33 @@ export function suppressionMatcher(suppressions, now, projectPath) {
     return (f) => fingerprints.has(f.fingerprint) || (f.identity !== undefined && identities.has(f.identity));
 }
 /**
+ * `findings` split by `projectPath`'s suppressions active at `now`, exactly
+ * as the open set applies them ({@link suppressionMatcher}) — for a reader
+ * that compares scans rather than reading the open set (`regression_alert`,
+ * `diff_scans`). A suppressed finding is never new, resolved or a regression
+ * there; it is listed apart. They used to compare every stored finding, so a
+ * suppressed critical still raised `regressed: true, score_delta: 10` while
+ * the dashboard and risk_score said 0.
+ */
+export function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
+    const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
+    const visible = [];
+    const suppressed = [];
+    for (const f of findings)
+        (isSuppressed(f) ? suppressed : visible).push(f);
+    return { visible, suppressed };
+}
+/**
+ * The suppressed findings of two compared scans, once each: all of
+ * `current`'s, then those of `reference` whose identity (the fingerprint
+ * where there is none) `current` does not hold.
+ */
+export function suppressedOfEither(current, reference) {
+    const key = (f) => (f.identity !== undefined ? `i:${f.identity}` : `f:${f.fingerprint}`);
+    const seen = new Set(current.map(key));
+    return [...current, ...reference.filter((f) => !seen.has(key(f)))];
+}
+/**
  * The source(s) of one slot, and the scans passed over for it. See the
  * module comment for the script-era rule this encodes.
  */

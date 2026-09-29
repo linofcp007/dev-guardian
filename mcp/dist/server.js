@@ -54888,6 +54888,18 @@ function suppressionMatcher(suppressions, now, projectPath) {
   }
   return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
 }
+function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
+  const visible = [];
+  const suppressed = [];
+  for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
+  return { visible, suppressed };
+}
+function suppressedOfEither(current, reference) {
+  const key = (f) => f.identity !== void 0 ? `i:${f.identity}` : `f:${f.fingerprint}`;
+  const seen = new Set(current.map(key));
+  return [...current, ...reference.filter((f) => !seen.has(key(f)))];
+}
 function slotSources(storage, projectPath, slot) {
   const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
   const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
@@ -59977,10 +59989,15 @@ async function handler9(input, ctx) {
   }
   const fromScan = ctx.storage.scans.getById(fromId.value);
   if (!fromScan) return failDomain10("unknown_scan_id", `from scan '${fromId.value}' not found`);
-  const fromFindings = ctx.storage.findings.listByScan(fromId.value);
-  const toFindings = ctx.storage.findings.listByScan(toScan.value.scan_id);
+  const fromSplit = partitionSuppressed(ctx.storage, toScan.value.project_path, ctx.storage.findings.listByScan(fromId.value));
+  const toSplit = partitionSuppressed(
+    ctx.storage,
+    toScan.value.project_path,
+    ctx.storage.findings.listByScan(toScan.value.scan_id)
+  );
+  const suppressed = suppressedOfEither(toSplit.suppressed, fromSplit.suppressed);
   const check2 = compareScansFor(ctx.storage, fromScan, toScan.value);
-  const d = classifyDiff(check2, fromFindings, toFindings);
+  const d = classifyDiff(check2, fromSplit.visible, toSplit.visible);
   const gaps = measurementGaps(check2, d);
   const note = describeMeasurementGaps(fromScan, toScan.value, gaps);
   const cap = (list2) => list2.slice(0, ITEMS_PER_BUCKET);
@@ -59996,19 +60013,22 @@ async function handler9(input, ctx) {
       resolved: d.resolved.length,
       unchanged: d.unchanged.length,
       not_remeasured: d.notRemeasured.length,
-      not_previously_measured: d.notPreviouslyMeasured.length
+      not_previously_measured: d.notPreviouslyMeasured.length,
+      suppressed: suppressed.length
     },
     new_findings: cap(d.new),
     resolved_findings: cap(d.resolved),
     unchanged_findings: cap(d.unchanged),
     not_remeasured_findings: cap(d.notRemeasured),
     not_previously_measured_findings: cap(d.notPreviouslyMeasured),
+    suppressed_findings: cap(suppressed),
     truncated: {
       new: cut(d.new),
       resolved: cut(d.resolved),
       unchanged: cut(d.unchanged),
       not_remeasured: cut(d.notRemeasured),
-      not_previously_measured: cut(d.notPreviouslyMeasured)
+      not_previously_measured: cut(d.notPreviouslyMeasured),
+      suppressed: cut(suppressed)
     },
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
@@ -60021,6 +60041,25 @@ function resolveTo(inp, ctx, skipHits) {
     const scan2 = ctx.storage.scans.getById(inp.to_scan_id);
     if (!scan2)
       return { ok: false, err: failDomain10("unknown_scan_id", `to scan '${inp.to_scan_id}' not found`) };
+    if (inp.project_path !== void 0) {
+      let projectPath2;
+      try {
+        projectPath2 = resolveProjectPath(inp.project_path).path;
+      } catch (e) {
+        return { ok: false, err: failDomain10("not_a_git_repo", e.message) };
+      }
+      if (scan2.project_path !== projectPath2) {
+        return {
+          ok: false,
+          err: failDomain10(
+            "unknown_scan_id",
+            `to scan '${scan2.scan_id}' is a scan of ${scan2.project_path}, not of ${projectPath2}; a diff compares scans of one project.`
+          )
+        };
+      }
+    }
+    const incomplete = incompleteReason2(scan2, "to");
+    if (incomplete !== null) return { ok: false, err: failDomain10("unknown_scan_id", incomplete) };
     return { ok: true, value: scan2 };
   }
   let projectPath;
@@ -60050,6 +60089,8 @@ function resolveFrom(inp, toScan, ctx, skipHits) {
         ok: false,
         err: failDomain10("unknown_scan_id", `from scan '${inp.from_scan_id}' not found`)
       };
+    const refusal = scan2.project_path !== toScan.project_path ? `from scan '${scan2.scan_id}' belongs to another project (${scan2.project_path}) than to scan '${toScan.scan_id}' (${toScan.project_path}); a diff compares scans of one project.` : scan2.scan_type !== toScan.scan_type ? `from scan '${scan2.scan_id}' is a '${scan2.scan_type}' scan and to scan '${toScan.scan_id}' is '${toScan.scan_type}': findings of different scan types come from different rule families, so a diff compares scans of one type.` : incompleteReason2(scan2, "from");
+    if (refusal !== null) return { ok: false, err: failDomain10("unknown_scan_id", refusal) };
     return { ok: true, value: inp.from_scan_id };
   }
   const mode = inp.from ?? "previous";
@@ -60078,6 +60119,13 @@ function resolveFrom(inp, toScan, ctx, skipHits) {
       )
     };
   return { ok: true, value: previous.scan.scan_id };
+}
+function incompleteReason2(scan2, side) {
+  if (scan2.status === "completed") return null;
+  if (scan2.status === "running") {
+    return `${side} scan '${scan2.scan_id}' is still running: its findings are not all stored yet.`;
+  }
+  return `${side} scan '${scan2.scan_id}' did not complete (status ${scan2.status}); a diff compares completed scans.`;
 }
 function describeSkipped(skipped2) {
   if (skipped2.count === 0) return "";
@@ -62428,12 +62476,12 @@ async function handler16(input, ctx) {
     baselineId = baseline.scan_id;
     reference = "baseline";
   } else {
-    const prev = latestStateScan(ctx.storage, projectPath, latest.scan_type, {
+    const prev2 = latestStateScan(ctx.storage, projectPath, latest.scan_type, {
       beforeScanId: latest.scan_id
     });
-    skipHits.push(...prev.hits);
-    if (prev.scan) {
-      baselineId = prev.scan.scan_id;
+    skipHits.push(...prev2.hits);
+    if (prev2.scan) {
+      baselineId = prev2.scan.scan_id;
       reference = "previous";
     }
   }
@@ -62455,7 +62503,10 @@ async function handler16(input, ctx) {
   const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
   const baselineScan = ctx.storage.scans.getById(baselineId);
   const check2 = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
-  const d = classifyDiff(check2, prevFindings, curFindings);
+  const prev = partitionSuppressed(ctx.storage, projectPath, prevFindings);
+  const cur = partitionSuppressed(ctx.storage, projectPath, curFindings);
+  const d = classifyDiff(check2, prev.visible, cur.visible);
+  const suppressed = suppressedOfEither(cur.suppressed, prev.suppressed);
   const gaps = measurementGaps(check2, d);
   const newFindings = d.new;
   const resolvedFindings = d.resolved;
@@ -62476,6 +62527,7 @@ async function handler16(input, ctx) {
     resolved_findings_by_severity: countBySeverity3(resolvedFindings),
     not_remeasured_by_severity: countBySeverity3(d.notRemeasured),
     not_previously_measured_by_severity: countBySeverity3(d.notPreviouslyMeasured),
+    suppressed_by_severity: countBySeverity3(suppressed),
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
     hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
@@ -63586,6 +63638,19 @@ async function handler22(input, ctx) {
   }
   const scan2 = ctx.storage.scans.getById(scanId);
   if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
+  if (scan2.project_path !== projectPath) {
+    return {
+      ok: false,
+      error: {
+        code: "unknown_scan_id",
+        message: `Scan '${scanId}' is a scan of ${scan2.project_path}, not of ${projectPath}; its report would be written into ${projectPath}'s .guardian/reports. Pass project_path: '${scan2.project_path}' to export it there.`,
+        retry_with: { project_path: scan2.project_path, scan_id: scanId }
+      }
+    };
+  }
+  if (scan2.status === "running") {
+    return failDomain17("unknown_scan_id", `Scan '${scanId}' is still running: its findings are not all stored yet.`);
+  }
   const findings = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
   const runs = coverageRunsOfScan(ctx, scan2);

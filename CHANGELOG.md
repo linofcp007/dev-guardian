@@ -48,6 +48,19 @@ version bump.
   directory and differ only in spelling; a path through a link or junction, which may point at
   another project by now, is left alone. Moving or renaming a repository still starts its history,
   suppressions and baselines afresh; the READMEs say so.
+- `regression_alert` and `diff_scans` honour suppressions the way the open set does (per project,
+  unexpired, by fingerprint or identity). After `suppress_finding`, `regression_alert` still said
+  `regressed: true, score_delta: 10` for the suppressed critical while the dashboard and
+  `risk_score` said 0. A suppressed finding is now listed apart — `suppressed_by_severity`;
+  `diff_scans`' `summary.suppressed` and `suppressed_findings` — and never counted as new,
+  resolved or a regression.
+- `diff_scans` refuses, with the reason, a `to_scan_id` of another project than `project_path`, a
+  `from_scan_id` of another project or scan type than the `to` scan, and a scan that has not
+  completed (one still running has not stored all its findings). `report_export` refuses a
+  `scan_id` of another project — it wrote that scan's report into this project's
+  `.guardian/reports` — pointing at the right `project_path`, and a scan still running.
+- The dashboard's coverage follows `risk_score`'s rule: `none` when no scan measured anything. It
+  read `partial` whenever any scan existed, skipped ones included.
 - A large scan no longer locks other processes out of the database. Its findings were inserted in
   one transaction — 30,000 on a 300 MB database held the write lock for 8.8 s, and another
   process's `scans.insert` failed with `database is locked` after its 5 s busy timeout. They are

@@ -234,8 +234,16 @@ function buildCoverage(open: OpenSet, cveGap: boolean, owasp: OwaspCoverage): Co
     for (const t of view.missing_tools) if (okToolNames.has(t)) addOnce(partialTools, t);
   }
   const omittedCategories = omittedCategoriesFor(missingTools, cveGap);
+  // The open set's own coverage, as risk_score reports it: `none` when no
+  // state scan was usable. It read `open.scans.length === 0`, and `scans`
+  // also lists the scans SKIPPED for measuring nothing — so a project whose
+  // every scan measured nothing read `partial` here and `none` in risk_score.
   const level: CoverageState['level'] =
-    open.scans.length === 0 ? 'none' : omittedCategories.length > 0 ? 'partial' : 'full';
+    open.coverage === 'none'
+      ? 'none'
+      : open.coverage === 'partial' || omittedCategories.length > 0
+        ? 'partial'
+        : 'full';
   return {
     level,
     tools_run: toolsRun,

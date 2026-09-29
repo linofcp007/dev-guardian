@@ -328,7 +328,7 @@ describe('diff_scans', () => {
       resolved_findings: Array<{ fingerprint: string }>;
     };
     expect(r.ok).toBe(true);
-    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
+    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0, suppressed: 0 });
     expect(r.new_findings[0]?.fingerprint).toBe(fNew.fingerprint);
     expect(r.resolved_findings[0]?.fingerprint).toBe(fOld.fingerprint);
   });
