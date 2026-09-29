@@ -60,7 +60,9 @@ if command -v trivy >/dev/null; then
     trivy fs --config "$TMP/trivy-config.yaml" --scanners vuln --severity HIGH,CRITICAL --quiet --format json --output "$TMP/trivy.json" . >/dev/null 2>&1
   resultado "$?" "0" "$TMP/trivy.json" '"VulnerabilityID"' "HIGH/CRITICAL"
   # O .trivyignore do projeto continua a valer (riscos aceites), mas nunca em silêncio.
-  [ -f .trivyignore ] && echo "    (honra o .trivyignore do projeto: os ids listados lá não são contados)"
+  # Aqui não se conta o que suprimiu (a contagem acima veria também os achados
+  # suprimidos); o scan_deps conta-os e nomeia-os.
+  [ -f .trivyignore ] && echo "    (honra o .trivyignore do projeto: os ids listados lá não são contados; o scan_deps diz quantos achados suprimiu, e quais)"
 fi
 
 if command -v semgrep >/dev/null; then

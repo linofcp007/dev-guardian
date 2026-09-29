@@ -30,7 +30,7 @@ version bump.
   — not reported, not counted"), the CI gate's human output, its JSON (`suppressed_by_repo_config`) and its SARIF
   (each as a result with `suppressions: [{kind: "external", justification: "suppressed by the repository's
   .trivyignore"}]`). Not a coverage gap. A config pass, or an older Trivy, says it cannot list them instead of a
-  count.
+  count. `init_project`'s status report does not count them, and now says `scan_deps` does.
 - A scanned repository no longer configures Syft, and Syft no longer phones home. `generate_sbom` ran `syft
   <project>` in the project with no `-c`, so Syft read the project's `.syft.yaml`: reproduced on Syft 1.51.1, a
   committed `select-catalogers: ['-javascript']` took a project pinning lodash 4.17.15 from 2 components to 0 (the

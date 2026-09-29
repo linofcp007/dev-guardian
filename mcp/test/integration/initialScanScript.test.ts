@@ -138,5 +138,7 @@ describe.skipIf(SHELL === null)('initial-scan.sh', () => {
     expect([trivy[2], trivy[3]]).toEqual(['true', 'true']);
     expect(fields('semgrep')[4]).toBe('1');
     expect(r.stdout).toMatch(/honra o \.trivyignore/);
+    // Round 5, item 3: what it suppressed is not counted here; the line says where it is.
+    expect(r.stdout).toMatch(/honra o \.trivyignore do projeto.*o scan_deps diz quantos achados suprimiu, e quais/);
   }, 60_000);
 });
