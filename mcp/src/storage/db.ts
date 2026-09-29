@@ -63,7 +63,7 @@ import type { StatementSync, SQLInputValue } from 'node:sqlite';
 import { storedPathTarget, type StoredPathTarget } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
-import { GuardianDbError } from './dbError.js';
+import { GuardianDbError, reasonOf } from './dbError.js';
 import {
   gitIndexAt,
   gitProblem,
@@ -399,7 +399,7 @@ function asCorruptionError(error: unknown, dbPath: string): unknown {
   if (code !== 11 && code !== 26) return error;
   const detail = error instanceof Error ? error.message : String(error);
   // The reason alone: `openDatabase` says what to do (MOVE_ASIDE).
-  return new GuardianDbError('corrupt', dbPath, `the database '${dbPath}' cannot be read (${detail})`);
+  return new GuardianDbError('corrupt', dbPath, `the database '${dbPath}' cannot be read (${detail})`, detail);
 }
 
 export interface OpenOptions {
@@ -458,7 +458,9 @@ type Foreign =
   /** A link, a junction, or outside the project. */
   | { kind: 'location'; why: string }
   /** SQLite cannot read it, and no registry entry names it. */
-  | { kind: 'unreadable'; detail: string };
+  | { kind: 'unreadable'; detail: string }
+  /** It lies on a file system SQLite cannot use here (a network drive): {@link fileSystemProblem}. */
+  | { kind: 'file-system'; why: string };
 
 /** What {@link judgeProjectDatabase} decided about `.guardian/guardian.db`. */
 type Verdict =
@@ -486,6 +488,9 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
   const existingOnly = options.existingOnly === true;
 
   let refusal: string | undefined;
+  // How the warning ends: where the history goes meanwhile.
+  let keptIn = (at: string): string => `. Meanwhile this project's scans are kept in '${at}' (not merged back later).`;
+  const keptInFallback = (at: string): string => `; history is kept in '${at}'.`;
   if (!isDirectory(projectPath)) {
     // Caller's responsibility to have a real project dir; if it doesn't
     // exist, we can't write there.
@@ -497,10 +502,12 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
     }
     if (verdict.kind === 'foreign') {
       refusal = foreignReason(projectPath, preferredPath, verdict.foreign);
+      if (verdict.foreign.kind === 'file-system') keptIn = keptInFallback;
     } else if (!(existingOnly && verdict.kind === 'create')) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
       } catch (error) {
+        const unfit = fileSystemProblem(error);
         if (isDataDirError(error)) {
           // Creating needs the registry. Without it the project's database is
           // not used — never trusted unregistered — and neither is a fallback
@@ -514,6 +521,13 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
         } else if (error instanceof GuardianDbError) {
           // The user's own database, unreadable or incomplete: never an exit.
           return inMemoryInstead(preferredPath, `${error.message}${error.kind === 'corrupt' ? `.${MOVE_ASIDE}` : ''}`);
+        } else if (unfit !== null) {
+          // Round 7: a NEW project on a mapped network drive exited with
+          // "disk I/O error" on its first start (3.0.0 did too): WAL needs
+          // shared memory a network file system does not give. Later starts
+          // find the file it left and fall back the same way (the probe).
+          refusal = `'${preferredPath}' is not used: ${unfit}`;
+          keptIn = keptInFallback;
         } else if (isNotWritableError(error)) {
           const reason = error instanceof Error ? error.message : String(error);
           refusal = `Project path '${projectPath}' is not writable (${reason})`;
@@ -544,11 +558,7 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
     throw error;
   }
   if (refusal === undefined) return { db, path: chosenPath };
-  return {
-    db,
-    path: chosenPath,
-    warning: `${refusal}. Meanwhile this project's scans are kept in '${chosenPath}' (not merged back later).`,
-  };
+  return { db, path: chosenPath, warning: `${refusal}${keptIn(chosenPath)}` };
 }
 
 const MOVE_ASIDE =
@@ -606,8 +616,9 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
   try {
     probe = probeDatabase(dbPath);
   } catch (error) {
-    const detail =
-      error instanceof GuardianDbError ? error.message : error instanceof Error ? error.message : String(error);
+    const unfit = fileSystemProblem(error);
+    if (unfit !== null) return { kind: 'foreign', foreign: { kind: 'file-system', why: unfit } };
+    const detail = reasonOf(error);
     return findEntryForDbPath(safeCanonical(dbPath)) !== null
       ? { kind: 'own-unreadable', detail }
       : { kind: 'foreign', foreign: { kind: 'unreadable', detail } };
@@ -669,6 +680,8 @@ function foreignReason(projectPath: string, dbPath: string, foreign: Foreign): s
         `'${dbPath}' cannot be read (${foreign.detail}) and is not a database this user registered: it is left as ` +
         'it is. Delete it or move it aside, and dev-guardian starts a new one there'
       );
+    case 'file-system':
+      return `'${dbPath}' is not used: ${foreign.why}`;
   }
 }
 
@@ -755,7 +768,7 @@ export function inspectProjectDatabase(projectPath: string): ProjectDatabaseRepo
     if (schema !== null) report.blockers.push(schema);
     report.contents = summarizeDatabase(dbPath);
   } catch (error) {
-    report.blockers.push(`it cannot be read (${error instanceof Error ? error.message : String(error)})`);
+    report.blockers.push(fileSystemProblem(error) ?? `it cannot be read (${reasonOf(error)})`);
     return report;
   }
 
@@ -794,6 +807,8 @@ function shortReason(foreign: Foreign): string {
       return `${foreign.why}: not used`;
     case 'unreadable':
       return `it cannot be read (${foreign.detail})`;
+    case 'file-system':
+      return `${foreign.why}: not used`;
   }
 }
 
@@ -1054,6 +1069,23 @@ function probeDatabaseWritable(db: GuardianDatabase): void {
   } finally {
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
+}
+
+/**
+ * Why SQLite cannot use the project's database where it lies — null when
+ * `error` is not that. SQLITE_IOERR (any extended code: the shared-memory
+ * ones a network file system gives WAL among them) and SQLITE_CANTOPEN from
+ * SQLite itself, after the directory took a probe file: on a mapped network
+ * drive (SMB) a new project's first start failed with "disk I/O error" and
+ * the server exited. Said so the user knows why, and where history goes.
+ */
+function fileSystemProblem(error: unknown): string | null {
+  const code = sqliteErrorCode(error);
+  if (code !== 10 && code !== 14) return null;
+  return (
+    `the project's .guardian is on a file system SQLite's WAL can't use (network drive?) — SQLite said ` +
+    `"${reasonOf(error)}"${code === 14 ? ', which a directory that is not writable also causes' : ''}`
+  );
 }
 
 /**

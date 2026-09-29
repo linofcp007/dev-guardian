@@ -37900,15 +37900,21 @@ function spellingOnlyCanonical(path8) {
 
 // src/storage/dbError.ts
 var GuardianDbError = class extends Error {
-  constructor(kind, dbPath, message3) {
+  constructor(kind, dbPath, message3, reason) {
     super(message3);
     this.kind = kind;
     this.dbPath = dbPath;
+    this.reason = reason;
     this.name = "GuardianDbError";
   }
   kind;
   dbPath;
+  reason;
 };
+function reasonOf(error2) {
+  if (error2 instanceof GuardianDbError) return error2.reason ?? error2.message;
+  return error2 instanceof Error ? error2.message : String(error2);
+}
 
 // src/storage/dbProvenance.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
@@ -38234,11 +38240,8 @@ function readOnly(dbPath, read2) {
   } catch (error2) {
     const code = sqliteCode(error2);
     if (code === 11 || code === 26) {
-      throw new GuardianDbError(
-        "corrupt",
-        dbPath,
-        `the database '${dbPath}' cannot be read (${error2 instanceof Error ? error2.message : String(error2)})`
-      );
+      const reason = error2 instanceof Error ? error2.message : String(error2);
+      throw new GuardianDbError("corrupt", dbPath, `the database '${dbPath}' cannot be read (${reason})`, reason);
     }
     throw error2;
   } finally {
@@ -39994,7 +39997,7 @@ function asCorruptionError(error2, dbPath) {
   const code = sqliteErrorCode(error2);
   if (code !== 11 && code !== 26) return error2;
   const detail = error2 instanceof Error ? error2.message : String(error2);
-  return new GuardianDbError("corrupt", dbPath, `the database '${dbPath}' cannot be read (${detail})`);
+  return new GuardianDbError("corrupt", dbPath, `the database '${dbPath}' cannot be read (${detail})`, detail);
 }
 function openDatabase(options) {
   if (options.inMemory) return openInMemory();
@@ -40002,6 +40005,8 @@ function openDatabase(options) {
   const preferredPath = join9(projectPath, ".guardian", "guardian.db");
   const existingOnly = options.existingOnly === true;
   let refusal;
+  let keptIn = (at) => `. Meanwhile this project's scans are kept in '${at}' (not merged back later).`;
+  const keptInFallback = (at) => `; history is kept in '${at}'.`;
   if (!isDirectory(projectPath)) {
     refusal = `Project path '${projectPath}' is not writable (it is not an existing directory)`;
   } else if (!existingOnly || existsSync7(preferredPath)) {
@@ -40011,10 +40016,12 @@ function openDatabase(options) {
     }
     if (verdict.kind === "foreign") {
       refusal = foreignReason(projectPath, preferredPath, verdict.foreign);
+      if (verdict.foreign.kind === "file-system") keptIn = keptInFallback;
     } else if (!(existingOnly && verdict.kind === "create")) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
       } catch (error2) {
+        const unfit = fileSystemProblem(error2);
         if (isDataDirError(error2)) {
           return unpersisted(error2.message);
         }
@@ -40022,6 +40029,9 @@ function openDatabase(options) {
           refusal = `${error2.message}. The file is left as it is; delete it or move it aside to have dev-guardian start a new one there`;
         } else if (error2 instanceof GuardianDbError) {
           return inMemoryInstead(preferredPath, `${error2.message}${error2.kind === "corrupt" ? `.${MOVE_ASIDE}` : ""}`);
+        } else if (unfit !== null) {
+          refusal = `'${preferredPath}' is not used: ${unfit}`;
+          keptIn = keptInFallback;
         } else if (isNotWritableError(error2)) {
           const reason = error2 instanceof Error ? error2.message : String(error2);
           refusal = `Project path '${projectPath}' is not writable (${reason})`;
@@ -40050,11 +40060,7 @@ function openDatabase(options) {
     throw error2;
   }
   if (refusal === void 0) return { db, path: chosenPath };
-  return {
-    db,
-    path: chosenPath,
-    warning: `${refusal}. Meanwhile this project's scans are kept in '${chosenPath}' (not merged back later).`
-  };
+  return { db, path: chosenPath, warning: `${refusal}${keptIn(chosenPath)}` };
 }
 var MOVE_ASIDE = " Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is created in its place, and the old file stays available for recovery";
 function inMemoryInstead(unusable, why) {
@@ -40083,7 +40089,9 @@ function judgeProjectDatabase(projectPath, dbPath) {
   try {
     probe2 = probeDatabase(dbPath);
   } catch (error2) {
-    const detail = error2 instanceof GuardianDbError ? error2.message : error2 instanceof Error ? error2.message : String(error2);
+    const unfit = fileSystemProblem(error2);
+    if (unfit !== null) return { kind: "foreign", foreign: { kind: "file-system", why: unfit } };
+    const detail = reasonOf(error2);
     return findEntryForDbPath(safeCanonical(dbPath)) !== null ? { kind: "own-unreadable", detail } : { kind: "foreign", foreign: { kind: "unreadable", detail } };
   }
   if (probe2.empty) return { kind: "create" };
@@ -40111,6 +40119,8 @@ function foreignReason(projectPath, dbPath, foreign) {
       return `'${dbPath}' is not used: ${foreign.why}. The file is left as it is`;
     case "unreadable":
       return `'${dbPath}' cannot be read (${foreign.detail}) and is not a database this user registered: it is left as it is. Delete it or move it aside, and dev-guardian starts a new one there`;
+    case "file-system":
+      return `'${dbPath}' is not used: ${foreign.why}`;
   }
 }
 function adoptCommand(projectPath) {
@@ -40227,6 +40237,11 @@ function probeDatabaseWritable(db) {
   } finally {
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
+}
+function fileSystemProblem(error2) {
+  const code = sqliteErrorCode(error2);
+  if (code !== 10 && code !== 14) return null;
+  return `the project's .guardian is on a file system SQLite's WAL can't use (network drive?) \u2014 SQLite said "${reasonOf(error2)}"${code === 14 ? ", which a directory that is not writable also causes" : ""}`;
 }
 function isNotWritableError(error2) {
   if (error2 instanceof Error && "code" in error2) {

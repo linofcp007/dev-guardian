@@ -189,7 +189,8 @@ function readOnly(dbPath, read) {
     catch (error) {
         const code = sqliteCode(error);
         if (code === 11 || code === 26) {
-            throw new GuardianDbError('corrupt', dbPath, `the database '${dbPath}' cannot be read (${error instanceof Error ? error.message : String(error)})`);
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new GuardianDbError('corrupt', dbPath, `the database '${dbPath}' cannot be read (${reason})`, reason);
         }
         throw error;
     }

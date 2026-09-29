@@ -94,7 +94,13 @@ them again. Scans made on the fallback meanwhile are not merged back.
   registered database is foreign; the user's own — found by its path in the registry, since its id
   cannot be read — gives way to an in-memory database for the session, with a warning naming the
   file and saying to move it aside. So does a registered database the migrations cannot complete,
-  and a per-user fallback that cannot be used.
+  and a per-user fallback that cannot be used. A project on a file system SQLite's WAL cannot
+  use — a mapped network drive — no longer exits on its first start with `disk I/O error` (3.0.0
+  did too): SQLITE_IOERR and SQLITE_CANTOPEN on creating, opening or reading the project database
+  send it to the per-user fallback with "the project's .guardian is on a file system SQLite's WAL
+  can't use (network drive?) …; history is kept in" the fallback's path, and `db adopt` says the
+  same instead of "cannot be read (disk I/O error)". An unreadable database's warning names the
+  file once — it read "cannot be read (the database '…' cannot be read (…))".
 - History readers ignore scans dated more than 5 minutes past this machine's clock, by their start
   or their finish, and say so ("N scan(s) dated in the future were ignored" — `future_dated_note`
   in the open set, `risk_score`, `findings/open` and `health_status`, which also counts them). A

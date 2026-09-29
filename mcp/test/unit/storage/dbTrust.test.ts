@@ -887,6 +887,7 @@ describe('a database SQLite cannot read', () => {
     const before = sha256(primary);
     const warning = expectForeign(dir, /cannot be read \(.*\) and is not a database this user registered/);
     expect(warning).toContain(primary);
+    expect(warning).not.toMatch(/cannot be read \([^)]*cannot be read/);
     expect(sha256(primary)).toBe(before);
   });
 
@@ -920,6 +921,8 @@ describe('a database SQLite cannot read', () => {
     try {
       expect(opened.path).toBe(':memory:');
       expect(opened.warning).toContain(`the database '${primary}' cannot be read`);
+      // Built once: it read "cannot be read (the database '…' cannot be read (…))".
+      expect(opened.warning).not.toMatch(/cannot be read \([^)]*cannot be read/);
       expect(opened.warning).toMatch(/Move it aside .* and restart/);
       expect(opened.warning).toMatch(/in-memory database: history will not persist/);
       expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
