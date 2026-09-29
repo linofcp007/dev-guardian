@@ -34,7 +34,10 @@
  * could serve `[fetch rewritten, fetch original]` and read unchanged (0
  * findings, coverage full; the same across pages). A key's pin now covers
  * EVERY definition under it (their hashes, sorted), and a duplicate tool
- * name is itself a high finding, `mcp-tool-duplicate-name`.
+ * name is itself a high finding, `mcp-tool-duplicate-name`. Names are
+ * compared as a reader sees them — NFKC, case-folded, trimmed (fix round
+ * 5): `Fetch`, `ｆｅｔｃｈ` and `fetch ` beside `fetch` are duplicates too,
+ * though each keeps its own exact-name pin.
  *
  * ## Tombstones
  *
@@ -149,8 +152,28 @@ function pinnedItems(listing) {
         label,
         // One definition: its own hash. Several: every one of them, order-free.
         hash: hashes.length === 1 ? (hashes[0] ?? '') : versioned({ definitions: [...hashes].sort() }),
-        count: hashes.length,
     }));
+}
+/**
+ * A tool name as a reader sees it (fix round 5, minor 5): NFKC, case-folded
+ * (upper then lower, so `ß` and `SS` meet as full folding has them), and
+ * trimmed — `Fetch`, `ｆｅｔｃｈ` and `fetch ` all read `fetch`.
+ */
+export function readableName(name) {
+    return name.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC').trim();
+}
+/** The tool names served more than once as a reader sees them: each group in listing order. */
+function duplicateToolNames(tools) {
+    const groups = new Map();
+    for (const t of tools) {
+        const key = readableName(t.name);
+        const group = groups.get(key);
+        if (group === undefined)
+            groups.set(key, [t.name]);
+        else
+            group.push(t.name);
+    }
+    return [...groups.values()].filter((g) => g.length > 1);
 }
 const KIND_WORD = {
     tool: 'tool',
@@ -192,12 +215,20 @@ export function comparePins(listing, previous, auditedBefore, options = {}) {
     });
     // A duplicate tool name is a finding on every audit, the first included.
     const findings = [];
-    for (const item of items.values()) {
-        if (item.kind !== 'tool' || item.count < 2)
-            continue;
-        findings.push(finding('mcp-tool-duplicate-name', 'high', `tool '${item.label}'`, `MCP server '${server}' serves ${item.count} tools named '${item.label}'`, `Server '${server}' (${listing.sourceLabel}) lists ${item.count} definitions under the tool name ` +
-            `'${item.label}'. Clients resolve a duplicate name ambiguously, so the definition that was reviewed ` +
-            'need not be the one that is called — and the model reads all of them.'));
+    for (const names of duplicateToolNames(listing.tools)) {
+        const first = names[0] ?? '';
+        const distinct = [...new Set(names)];
+        const shown = distinct.slice(0, 5).map((n) => `'${n.length > 80 ? `${n.slice(0, 80)}…` : n}'`);
+        const alike = distinct.length > 1;
+        findings.push(finding('mcp-tool-duplicate-name', 'high', `tool '${first}'`, alike
+            ? `MCP server '${server}' serves ${names.length} tools whose names read the same: ${shown.join(', ')}`
+            : `MCP server '${server}' serves ${names.length} tools named ${shown.join(', ')}`, `Server '${server}' (${listing.sourceLabel}) lists ${names.length} definitions under ` +
+            (alike
+                ? `names that read the same once case, width and surrounding space are set aside: ${shown.join(', ')}` +
+                    (distinct.length > shown.length ? `, and ${distinct.length - shown.length} more` : '')
+                : `the tool name ${shown.join(', ')}`) +
+            '. Clients resolve a duplicate name ambiguously, and a model reads look-alike names as one tool, so ' +
+            'the definition that was reviewed need not be the one that is called — and the model reads all of them.'));
     }
     const pins = [...items.values()].map((i) => ({ key: i.key, hash: i.hash }));
     const firstAudit = !auditedBefore && previous.size === 0;

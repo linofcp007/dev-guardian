@@ -72001,9 +72001,21 @@ function pinnedItems(listing) {
     kind,
     label,
     // One definition: its own hash. Several: every one of them, order-free.
-    hash: hashes.length === 1 ? hashes[0] ?? "" : versioned({ definitions: [...hashes].sort() }),
-    count: hashes.length
+    hash: hashes.length === 1 ? hashes[0] ?? "" : versioned({ definitions: [...hashes].sort() })
   }));
+}
+function readableName(name) {
+  return name.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC").trim();
+}
+function duplicateToolNames(tools) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const t of tools) {
+    const key = readableName(t.name);
+    const group = groups.get(key);
+    if (group === void 0) groups.set(key, [t.name]);
+    else group.push(t.name);
+  }
+  return [...groups.values()].filter((g) => g.length > 1);
 }
 var KIND_WORD = {
   tool: "tool",
@@ -72037,15 +72049,18 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     fix_available: false
   });
   const findings = [];
-  for (const item of items.values()) {
-    if (item.kind !== "tool" || item.count < 2) continue;
+  for (const names of duplicateToolNames(listing.tools)) {
+    const first = names[0] ?? "";
+    const distinct = [...new Set(names)];
+    const shown = distinct.slice(0, 5).map((n2) => `'${n2.length > 80 ? `${n2.slice(0, 80)}\u2026` : n2}'`);
+    const alike = distinct.length > 1;
     findings.push(
       finding4(
         "mcp-tool-duplicate-name",
         "high",
-        `tool '${item.label}'`,
-        `MCP server '${server}' serves ${item.count} tools named '${item.label}'`,
-        `Server '${server}' (${listing.sourceLabel}) lists ${item.count} definitions under the tool name '${item.label}'. Clients resolve a duplicate name ambiguously, so the definition that was reviewed need not be the one that is called \u2014 and the model reads all of them.`
+        `tool '${first}'`,
+        alike ? `MCP server '${server}' serves ${names.length} tools whose names read the same: ${shown.join(", ")}` : `MCP server '${server}' serves ${names.length} tools named ${shown.join(", ")}`,
+        `Server '${server}' (${listing.sourceLabel}) lists ${names.length} definitions under ` + (alike ? `names that read the same once case, width and surrounding space are set aside: ${shown.join(", ")}` + (distinct.length > shown.length ? `, and ${distinct.length - shown.length} more` : "") : `the tool name ${shown.join(", ")}`) + ". Clients resolve a duplicate name ambiguously, and a model reads look-alike names as one tool, so the definition that was reviewed need not be the one that is called \u2014 and the model reads all of them."
       )
     );
   }

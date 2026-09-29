@@ -157,6 +157,26 @@ describe('comparePins: duplicate names', () => {
     expect(hit?.severity).toBe('high');
     expect(hit?.title).toContain("'fetch'");
   });
+
+  // Fix round 5, minor 5: exact-match only — `Fetch`, full-width `ｆｅｔｃｈ`
+  // and `fetch ` beside `fetch` gave nothing. Names are compared after NFKC,
+  // case folding and trimming.
+  it.each([
+    ['a different case', 'Fetch'],
+    ['full-width letters', 'ｆｅｔｃｈ'],
+    ['trailing whitespace', 'fetch '],
+    ['upper case and a no-break space', 'FETCH '],
+  ])('reports two names that read the same: %s', (_what, other) => {
+    const r = comparePins(listing([FETCH, { ...FETCH, name: other }]), new Map(), false);
+    const hit = r.findings.find((f) => f.rule_id === 'mcp-tool-duplicate-name');
+    expect(hit?.severity).toBe('high');
+    expect(hit?.message).toContain('read the same');
+  });
+
+  it('leaves names that only look related alone', () => {
+    const r = comparePins(listing([FETCH, { ...FETCH, name: 'fetch_url' }, { ...FETCH, name: 'fetch2' }]), new Map(), false);
+    expect(r.findings.some((f) => f.rule_id === 'mcp-tool-duplicate-name')).toBe(false);
+  });
 });
 
 describe('comparePins: prompts, resources and resource templates', () => {

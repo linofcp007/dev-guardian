@@ -56,9 +56,10 @@ version bump.
   URL); `ssh`; `docker`/`podman` against another engine. It is a textual gate on configuration
   shapes, not a sandbox — SECURITY.md says so.
 - Pins cover every definition served under a name (reproduced: `[fetch rewritten, fetch original]`
-  read unchanged), and a duplicate tool name is a high `mcp-tool-duplicate-name`; pin lists and
-  everything stored in the scan are escaped (a tool name carrying tag characters came back raw); a
-  qualified and a bare name reaching the same launch start it once.
+  read unchanged), and a duplicate tool name is a high `mcp-tool-duplicate-name` — compared after
+  NFKC, case folding and trimming, so `Fetch`, `ｆｅｔｃｈ` or a trailing space beside `fetch` count; pin
+  lists and everything stored in the scan are escaped (a tool name carrying tag characters came back
+  raw); a qualified and a bare name reaching the same launch start it once.
 - A value nested some thousands of levels deep (6000 arrays, ~12 KB) overflowed the stack in the
   recursive hash and took the whole audit down, another server's results with it. The canonical
   serialiser behind every pin (and `agent_config_hashes`) is iterative and byte-identical to the old
