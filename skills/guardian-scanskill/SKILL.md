@@ -63,9 +63,11 @@ seria, com razão, apanhada pelas próprias regras que descreve.
 As instruções de uma skill são o que o modelo executa, por isso os comandos do
 `SKILL.md` contam tanto como os scripts: as regras de código também leem cada
 bloco de código (delimitado, indentado ou em `<pre>`) e cada trecho de código
-inline, incluindo um ficheiro descarregado e executado mais abaixo, e duas
+inline, incluindo um ficheiro descarregado e executado mais abaixo, e as
 regras de prosa leem, escritos como frases, um script remoto entregue a uma
-shell e um ficheiro de credenciais enviado para um URL. Num ficheiro de
+shell, um programa descarregado e depois executado (ou colado num terminal a
+partir de uma página), um ficheiro ou uma pasta de credenciais enviados para
+um URL e o ambiente inteiro enviado para um URL. Num ficheiro de
 instruções, um comando que descarrega ou envia algo só pontua um nível abaixo
 quando um marcador de documentação (reticências, `<url>`, `example.com`)
 ocupa o lugar do alvo — sem alvo nenhum não desce, porque esconder o alvo é
