@@ -924,6 +924,49 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review of 3.0.0, I3: a token at column ~16.4K of one long line passed the
+  // opt-in block, the PostToolUse warning and `check --file`.
+  describe('a token past the first 16 KB of a line (review I3)', () => {
+    const token = `ghp_${'A1b2C3d4E5'.repeat(3)}xY9zQ8`;
+    const oneLine = `{"bundle":"${'a'.repeat(16_400)}","auth":"${token}"}`;
+
+    it('is denied by a project-enabled secret block', () => {
+      mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+      writeFileSync(join(projectDir, '.guardian', 'hooks.config.json'), JSON.stringify({ secrets: { block: true } }));
+      const r = runHook(preToolUse('Write', { file_path: join(projectDir, 'data.json'), content: oneLine }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+      });
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+
+    it('is warned about after the write', () => {
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'data.json'), content: oneLine },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+      expect(JSON.stringify(r.stdout)).toMatch(/GitHub token/);
+    });
+
+    it('is reported by check --file (exit 1)', () => {
+      const file = join(projectDir, 'bundle.min.js');
+      writeFileSync(file, oneLine);
+      const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
+      const r = spawnSync(process.execPath, [cli, 'check', '--file', file, '--min', 'high'], {
+        cwd: projectDir,
+        encoding: 'utf8',
+        timeout: TIMEOUT_MS,
+      });
+      expect(r.stdout).toMatch(/GitHub token/);
+      expect(r.status).toBe(1);
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

@@ -74491,8 +74491,16 @@ var SECRET_RULES = [
   // `'eyJ-'.repeat(50000)` (no dot anywhere in it) into ~27s of backtracking.
   // Bounding caps the work per candidate start at a constant instead of
   // letting it grow with input size — the other half of the fix is the 16KB
-  // per-line cap below, which bounds input size itself.
-  { id: "jwt", title: "JSON Web Token (JWT)", confidence: "medium", pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/ },
+  // window below, which bounds input size itself. Even so, every `eyJ` of a
+  // 16 KB run rescanned up to 2000 characters (~90 ms a window), so the
+  // scanner uses `findJwt`, which reads each run once (review I3).
+  {
+    id: "jwt",
+    title: "JSON Web Token (JWT)",
+    confidence: "medium",
+    pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/,
+    find: (text2, from) => findJwt(text2, from)
+  },
   {
     id: "generic-assignment",
     title: "Hard-coded credential",
@@ -74533,16 +74541,90 @@ var SECRET_RULES = [
     // excludes `$`, `{`, `}`, `<`, `>`, `(`, `)` and whitespace, which is what
     // keeps `${VAR}`, `<your-key>` and `password = getPassword()` unmatched
     // without needing a placeholder check to catch them.
-    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i
+    //
+    // The value's run is rescanned from every key inside it when it does not
+    // end at whitespace (`token=token=…"`: ~250 ms a window), so the scanner
+    // uses `findEnvAssignment`, which reads each run once (review I3).
+    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i,
+    find: (text2, from) => findEnvAssignment(text2, from)
   },
   {
     id: "uri-credentials",
     title: "Credentials embedded in a URI",
     confidence: "medium",
     // scheme://user:password@host — postgres://user:pass@host/db and the like.
-    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
+    // The scheme is at most 32 characters (`mongodb+srv` is 11): unbounded,
+    // every word start of a long `a-a-a-…` run rescanned the rest of it — up
+    // to 0.5 s a window (review I3).
+    pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
   }
 ];
+function isB64url(c3) {
+  return c3 >= 48 && c3 <= 57 || c3 >= 65 && c3 <= 90 || c3 >= 97 && c3 <= 122 || c3 === 95 || c3 === 45;
+}
+function isWordChar(c3) {
+  return c3 >= 48 && c3 <= 57 || c3 >= 65 && c3 <= 90 || c3 >= 97 && c3 <= 122 || c3 === 95;
+}
+function isBoundary(text2, at) {
+  const before = at > 0 && isWordChar(text2.charCodeAt(at - 1));
+  const after2 = at < text2.length && isWordChar(text2.charCodeAt(at));
+  return before !== after2;
+}
+function runEnds(text2, inClass) {
+  const ends = new Int32Array(text2.length + 1);
+  ends[text2.length] = text2.length;
+  for (let i2 = text2.length - 1; i2 >= 0; i2 -= 1) ends[i2] = inClass(text2.charCodeAt(i2)) ? ends[i2 + 1] ?? i2 : i2;
+  return (i2) => i2 >= text2.length ? text2.length : ends[i2] ?? i2;
+}
+function findJwt(text2, from) {
+  if (!text2.includes(".eyJ", from)) return null;
+  const end = runEnds(text2, isB64url);
+  let lastThird = -1;
+  let lastThirdEnd = -1;
+  for (let p = text2.indexOf("eyJ", from); p >= 0; p = text2.indexOf("eyJ", p + 1)) {
+    if (p > 0 && isWordChar(text2.charCodeAt(p - 1))) continue;
+    const e1 = end(p + 3);
+    const l1 = e1 - (p + 3);
+    if (l1 < 8 || l1 > 2e3 || !text2.startsWith(".eyJ", e1)) continue;
+    const q = e1 + 4;
+    const e2 = end(q);
+    const l2 = e2 - q;
+    if (l2 < 8 || l2 > 2e3 || text2.charCodeAt(e2) !== 46) continue;
+    const r = e2 + 1;
+    if (r !== lastThird) {
+      lastThird = r;
+      lastThirdEnd = -1;
+      const longest = Math.min(end(r) - r, 2e3);
+      for (let x = r + longest; x >= r + 8; x -= 1) {
+        if (isBoundary(text2, x)) {
+          lastThirdEnd = x;
+          break;
+        }
+      }
+    }
+    if (lastThirdEnd >= 0) return { index: p, text: text2.slice(p, lastThirdEnd) };
+  }
+  return null;
+}
+var ENV_KEY = /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*/gi;
+function isEnvValueChar(c3) {
+  return !(c3 === 32 || c3 >= 9 && c3 <= 13 || c3 === 160 || c3 === 5760 || c3 >= 8192 && c3 <= 8202 || c3 === 8232 || c3 === 8233 || c3 === 8239 || c3 === 8287 || c3 === 12288 || c3 === 65279 || c3 === 34 || c3 === 39 || c3 === 96 || c3 === 36 || c3 === 123 || c3 === 125 || c3 === 60 || c3 === 62 || c3 === 40 || c3 === 41);
+}
+function findEnvAssignment(text2, from) {
+  if (!text2.includes("=", from)) return null;
+  const end = runEnds(text2, isEnvValueChar);
+  const key = new RegExp(ENV_KEY.source, ENV_KEY.flags);
+  key.lastIndex = from;
+  for (let m = key.exec(text2); m !== null; m = key.exec(text2)) {
+    const v = m.index + m[0].length;
+    const e = end(v);
+    if (e - v >= 8 && (e === text2.length || /\s/.test(text2.charAt(e)))) {
+      return { index: m.index, text: text2.slice(m.index, e), value: text2.slice(v, e) };
+    }
+    key.lastIndex = m.index + 1;
+  }
+  return null;
+}
 var VALUE_CAPTURE_RULES = /* @__PURE__ */ new Set([
   "generic-assignment",
   "generic-assignment-camel",
@@ -74595,44 +74677,85 @@ function redact(secret) {
   const tail = trimmed.length >= 16 ? trimmed.slice(-2) : "";
   return `${head}\u2026${tail} (${trimmed.length})`;
 }
-var MAX_LINE_LENGTH = 16 * 1024;
+var WINDOW = 16 * 1024;
+var OVERLAP = 2 * 1024;
+var STEP = WINDOW - OVERLAP;
+function lineWindows(line) {
+  if (line.length <= WINDOW) return [{ text: line, cutLeft: false, cutRight: false }];
+  const out = [];
+  for (let s = 0; ; s += STEP) {
+    const e = Math.min(line.length, s + WINDOW);
+    const from = Math.max(0, s - 1);
+    const to = Math.min(line.length, e + 1);
+    out.push({ text: line.slice(from, to), cutLeft: from > 0, cutRight: to < line.length });
+    if (e >= line.length) return out;
+  }
+}
+function firstMatch2(rule, re, w) {
+  let from = 0;
+  for (let tries = 0; tries < 2; tries += 1) {
+    let m;
+    if (rule.find !== void 0) m = rule.find(w.text, from);
+    else {
+      re.lastIndex = from;
+      const r = re.exec(w.text);
+      m = r === null ? null : { index: r.index, text: r[0], ...r[1] !== void 0 ? { value: r[1] } : {} };
+    }
+    if (m === null) return null;
+    if (w.cutRight && m.index + m.text.length >= w.text.length) return null;
+    if (w.cutLeft && m.index === 0) {
+      from = 1;
+      continue;
+    }
+    return m;
+  }
+  return null;
+}
 function scanForSecrets(text2, options = {}) {
   if (!text2) return [];
   const minRank = CONFIDENCE_RANK[options.minConfidence ?? "medium"];
   const allow = (options.allowlist ?? []).map((a2) => a2.toLowerCase()).filter(Boolean);
+  const rules2 = SECRET_RULES.filter((rule) => CONFIDENCE_RANK[rule.confidence] >= minRank).map((rule) => ({
+    rule,
+    re: new RegExp(rule.pattern.source, `${rule.pattern.flags.replace(/[gy]/g, "")}g`)
+  }));
   const lines = text2.split(/\r?\n/);
   const hits = [];
-  const seen = /* @__PURE__ */ new Set();
   for (let i2 = 0; i2 < lines.length; i2++) {
     const rawLine = lines[i2];
     if (rawLine === void 0 || rawLine.length === 0) continue;
-    const line = rawLine.length > MAX_LINE_LENGTH ? rawLine.slice(0, MAX_LINE_LENGTH) : rawLine;
-    const lowerLine = line.toLowerCase();
-    if (allow.some((a2) => lowerLine.includes(a2))) continue;
-    for (const rule of SECRET_RULES) {
-      if (CONFIDENCE_RANK[rule.confidence] < minRank) continue;
-      const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace("g", ""));
-      const m = re.exec(line);
-      if (!m) continue;
-      if (VALUE_CAPTURE_RULES.has(rule.id)) {
-        const value = m[1] ?? "";
-        if (looksLikePlaceholder(value)) continue;
-        if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) continue;
+    const found = /* @__PURE__ */ new Map();
+    for (const w of lineWindows(rawLine)) {
+      const lower = w.text.toLowerCase();
+      if (allow.some((a2) => lower.includes(a2))) continue;
+      for (const { rule, re } of rules2) {
+        if (found.has(rule)) continue;
+        const hit = judge3(rule, firstMatch2(rule, re, w), i2);
+        if (hit !== null) found.set(rule, hit);
       }
-      const dedupeKey = `${rule.id}:${i2}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
-      const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m[1] ?? m[0] : m[0];
-      hits.push({
-        ruleId: rule.id,
-        title: rule.title,
-        confidence: rule.confidence,
-        line: i2 + 1,
-        preview: redact(matched)
-      });
+    }
+    for (const { rule } of rules2) {
+      const hit = found.get(rule);
+      if (hit !== void 0) hits.push(hit);
     }
   }
   return hits;
+}
+function judge3(rule, m, i2) {
+  if (!m) return null;
+  if (VALUE_CAPTURE_RULES.has(rule.id)) {
+    const value = m.value ?? "";
+    if (looksLikePlaceholder(value)) return null;
+    if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) return null;
+  }
+  const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m.value ?? m.text : m.text;
+  return {
+    ruleId: rule.id,
+    title: rule.title,
+    confidence: rule.confidence,
+    line: i2 + 1,
+    preview: redact(matched)
+  };
 }
 
 // src/agentaudit/rules.ts

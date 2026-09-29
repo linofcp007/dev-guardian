@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SECRET_RULES,
   redact,
   scanForSecrets,
   shannonEntropy,
@@ -200,6 +201,124 @@ describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
     const start = performance.now();
     scanForSecrets(text);
     expect(performance.now() - start).toBeLessThan(500);
+  });
+});
+
+/**
+ * Review of 3.0.0, I3: only the first 16 KB of a line was read, so a token at
+ * column ~16.4K of a one-line JSON file or a minified bundle passed the opt-in
+ * block, the PostToolUse warning and `check --file`. A long line is now read
+ * in overlapping 16 KB windows — each bounded, the total linear.
+ */
+describe('scanForSecrets — a long line is read to its end (review I3)', () => {
+  const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(3)}xY9zQ8`;
+  const at = (column: number, filler = 'a'): string => `{"k":"${filler.repeat(column - 6)}", "t": "${TOKEN}"}`;
+
+  it.each([16_300, 16_350, 16_374, 16_384, 16_400, 30_000, 1_000_000])('finds a token at column %i', (column) => {
+    const line = at(column);
+    expect(line.indexOf(TOKEN)).toBeGreaterThanOrEqual(column);
+    for (const minConfidence of ['high', 'medium'] as const) {
+      const hits = scanForSecrets(line, { minConfidence });
+      expect(hits.map((h) => h.ruleId)).toContain('github-token');
+      expect(hits.find((h) => h.ruleId === 'github-token')?.line).toBe(1);
+    }
+  });
+
+  it('finds a token on a later long line, with its line number', () => {
+    const text = `short\n${at(40_000)}\nafter`;
+    expect(scanForSecrets(text).find((h) => h.ruleId === 'github-token')?.line).toBe(2);
+  });
+
+  it('reports a token once, even where two windows overlap', () => {
+    const hits = scanForSecrets(at(15_000));
+    expect(hits.filter((h) => h.ruleId === 'github-token')).toHaveLength(1);
+  });
+
+  it('a window edge never makes a token of a longer run: no hit where the whole line has none', () => {
+    // A 60-character run after `ghp_` is no GitHub token (`{36}\b`), wherever
+    // a window happens to cut it; nor is `xghp_…`, whose `\b` is missing.
+    for (let column = 16_300; column <= 16_400; column += 1) {
+      const run = `ghp_${'b'.repeat(60)}`;
+      const line = `${'a '.repeat(column / 2)}${run} tail`;
+      expect(scanForSecrets(line, { minConfidence: 'high' }).map((h) => h.ruleId)).not.toContain('github-token');
+    }
+    for (let column = 14_300; column <= 14_400; column += 1) {
+      const line = `${'a '.repeat(column / 2)}xghp_${'c'.repeat(36)} tail`;
+      expect(scanForSecrets(line, { minConfidence: 'high' }).map((h) => h.ruleId)).not.toContain('github-token');
+    }
+  });
+
+  it('the allowlist still silences what it names', () => {
+    expect(scanForSecrets(at(20_000), { allowlist: [TOKEN] })).toEqual([]);
+  });
+
+  // The linear finders must agree with the patterns they replace: a seeded
+  // random walk over the pieces those patterns are made of.
+  it('every linear finder agrees with its pattern on 6000 random texts', () => {
+    const pieces = [
+      'eyJ', '.', 'eyJhbGciOi', 'abcdefgh', 'ABCDEFGHIJ', '-', '_', ' ', '"', '=', 'token', 'password', 'api_key',
+      'secret_key', 'Token', 'access_token', '12345678', 'x', '\t', '$', '(', ')', 'a'.repeat(40), 'b'.repeat(900),
+      'c'.repeat(1990), 'Q'.repeat(2005),
+    ];
+    let seed = 7;
+    const rnd = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const withFind = SECRET_RULES.filter((r) => r.find !== undefined);
+    expect(withFind.map((r) => r.id).sort()).toEqual(['generic-assignment-env', 'jwt']);
+    for (let k = 0; k < 6000; k += 1) {
+      const text = Array.from({ length: 1 + rnd(14) }, () => pieces[rnd(pieces.length)] ?? '').join('');
+      const from = rnd(3) === 0 ? rnd(Math.max(1, text.length)) : 0;
+      for (const rule of withFind) {
+        const re = new RegExp(rule.pattern.source, `${rule.pattern.flags}g`);
+        re.lastIndex = from;
+        const want = re.exec(text);
+        const got = rule.find?.(text, from) ?? null;
+        const same =
+          want === null
+            ? got === null
+            : got !== null && got.index === want.index && got.text === want[0] && (got.value ?? undefined) === (want[1] ?? undefined);
+        if (!same) throw new Error(`${rule.id} disagrees from ${from} on ${JSON.stringify(text.slice(0, 200))}…`);
+      }
+    }
+  });
+
+  // The windows are bounded, and so is every rule within one: the three
+  // medium rules that were quadratic inside a 16 KB window (≈0.1-0.5 s each)
+  // would have made a 1 MB line cost tens of seconds.
+  describe('the cost is linear in the length of the line', () => {
+    const shapes: Array<[string, (n: number) => string]> = [
+      ['eyJ-', (n) => 'eyJ-'.repeat(n / 4)],
+      ['a-', (n) => 'a-'.repeat(n / 2)],
+      ['sk-', (n) => 'sk-'.repeat(n / 3)],
+      ['token= … "', (n) => `${'token='.repeat(n / 6)}"`],
+      ['Token= … "', (n) => `${'xToken='.repeat(n / 7)}"`],
+      ['a://b:', (n) => 'a://b:'.repeat(n / 6)],
+      ['password=" … (unclosed)', (n) => `password="${'q'.repeat(n)}`],
+      ['one minified line', (n) => 'var a=function(b){return b+1};'.repeat(n / 30)],
+    ];
+    const best = (text: string): number => {
+      scanForSecrets(text);
+      let t = Number.POSITIVE_INFINITY;
+      for (let k = 0; k < 3; k += 1) {
+        const t0 = performance.now();
+        scanForSecrets(text);
+        t = Math.min(t, performance.now() - t0);
+      }
+      return t;
+    };
+
+    it.each(shapes)('a 1 MB line of %s is scanned in well under 1.5 s', (_label, make) => {
+      expect(best(make(1_000_000))).toBeLessThan(1500);
+    });
+
+    it.each(shapes)('%s: four times the length costs well under eight times as much', (_label, make) => {
+      const small = best(make(250_000));
+      const large = best(make(1_000_000));
+      // Linear is ~4x; quadratic 16x. The floor absorbs timer noise on tiny values.
+      expect(large).toBeLessThan(8 * Math.max(small, 5));
+    });
   });
 });
 

@@ -54,8 +54,16 @@ export const SECRET_RULES = [
     // `'eyJ-'.repeat(50000)` (no dot anywhere in it) into ~27s of backtracking.
     // Bounding caps the work per candidate start at a constant instead of
     // letting it grow with input size — the other half of the fix is the 16KB
-    // per-line cap below, which bounds input size itself.
-    { id: 'jwt', title: 'JSON Web Token (JWT)', confidence: 'medium', pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/ },
+    // window below, which bounds input size itself. Even so, every `eyJ` of a
+    // 16 KB run rescanned up to 2000 characters (~90 ms a window), so the
+    // scanner uses `findJwt`, which reads each run once (review I3).
+    {
+        id: 'jwt',
+        title: 'JSON Web Token (JWT)',
+        confidence: 'medium',
+        pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/,
+        find: (text, from) => findJwt(text, from),
+    },
     {
         id: 'generic-assignment',
         title: 'Hard-coded credential',
@@ -96,16 +104,122 @@ export const SECRET_RULES = [
         // excludes `$`, `{`, `}`, `<`, `>`, `(`, `)` and whitespace, which is what
         // keeps `${VAR}`, `<your-key>` and `password = getPassword()` unmatched
         // without needing a placeholder check to catch them.
+        //
+        // The value's run is rescanned from every key inside it when it does not
+        // end at whitespace (`token=token=…"`: ~250 ms a window), so the scanner
+        // uses `findEnvAssignment`, which reads each run once (review I3).
         pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i,
+        find: (text, from) => findEnvAssignment(text, from),
     },
     {
         id: 'uri-credentials',
         title: 'Credentials embedded in a URI',
         confidence: 'medium',
         // scheme://user:password@host — postgres://user:pass@host/db and the like.
-        pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i,
+        // The scheme is at most 32 characters (`mongodb+srv` is 11): unbounded,
+        // every word start of a long `a-a-a-…` run rescanned the rest of it — up
+        // to 0.5 s a window (review I3).
+        pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i,
     },
 ];
+/** `[A-Za-z0-9_-]`: base64url, a JWT segment's alphabet. */
+function isB64url(c) {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 45;
+}
+/** `\w` in a regular expression without the `u` flag. */
+function isWordChar(c) {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+}
+/** Whether `\b` holds at `at`. */
+function isBoundary(text, at) {
+    const before = at > 0 && isWordChar(text.charCodeAt(at - 1));
+    const after = at < text.length && isWordChar(text.charCodeAt(at));
+    return before !== after;
+}
+/**
+ * `runEnd(i)`: the first index at or after `i` whose character is not in the
+ * class, from one right-to-left pass — so every start inside a run costs
+ * nothing more.
+ */
+function runEnds(text, inClass) {
+    const ends = new Int32Array(text.length + 1);
+    ends[text.length] = text.length;
+    for (let i = text.length - 1; i >= 0; i -= 1)
+        ends[i] = inClass(text.charCodeAt(i)) ? (ends[i + 1] ?? i) : i;
+    return (i) => (i >= text.length ? text.length : (ends[i] ?? i));
+}
+/**
+ * The `jwt` pattern's first match at or after `from`, in linear time. A
+ * segment's class has no `.`, so each segment ends where its run of
+ * `[A-Za-z0-9_-]` ends: the first two must end at a `.` within 8-2000
+ * characters, and the third takes the longest length of 8-2000 that ends at a
+ * word boundary — the same answer the pattern's backtracking reaches.
+ */
+function findJwt(text, from) {
+    if (!text.includes('.eyJ', from))
+        return null;
+    const end = runEnds(text, isB64url);
+    let lastThird = -1;
+    let lastThirdEnd = -1;
+    for (let p = text.indexOf('eyJ', from); p >= 0; p = text.indexOf('eyJ', p + 1)) {
+        if (p > 0 && isWordChar(text.charCodeAt(p - 1)))
+            continue;
+        const e1 = end(p + 3);
+        const l1 = e1 - (p + 3);
+        if (l1 < 8 || l1 > 2000 || !text.startsWith('.eyJ', e1))
+            continue;
+        const q = e1 + 4;
+        const e2 = end(q);
+        const l2 = e2 - q;
+        if (l2 < 8 || l2 > 2000 || text.charCodeAt(e2) !== 46)
+            continue;
+        const r = e2 + 1;
+        if (r !== lastThird) {
+            lastThird = r;
+            lastThirdEnd = -1;
+            const longest = Math.min(end(r) - r, 2000);
+            for (let x = r + longest; x >= r + 8; x -= 1) {
+                if (isBoundary(text, x)) {
+                    lastThirdEnd = x;
+                    break;
+                }
+            }
+        }
+        if (lastThirdEnd >= 0)
+            return { index: p, text: text.slice(p, lastThirdEnd) };
+    }
+    return null;
+}
+/** The keys of `generic-assignment-env`, then `\s*=\s*`. */
+const ENV_KEY = /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*/gi;
+/** Whether a character may be in an unquoted `.env` value: not whitespace, a quote, `$`, a brace, `<`, `>` or a parenthesis. */
+function isEnvValueChar(c) {
+    return !(c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) ||
+        c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff ||
+        c === 34 || c === 39 || c === 96 || c === 36 || c === 123 || c === 125 || c === 60 || c === 62 || c === 40 || c === 41);
+}
+/**
+ * The `generic-assignment-env` pattern's first match at or after `from`, in
+ * linear time: the value is the whole run after the `=` (its class has no
+ * whitespace, so no shorter value can be followed by one), and it counts when
+ * it is at least 8 characters and the run ends at whitespace or the end.
+ */
+function findEnvAssignment(text, from) {
+    if (!text.includes('=', from))
+        return null;
+    const end = runEnds(text, isEnvValueChar);
+    const key = new RegExp(ENV_KEY.source, ENV_KEY.flags);
+    key.lastIndex = from;
+    for (let m = key.exec(text); m !== null; m = key.exec(text)) {
+        const v = m.index + m[0].length;
+        const e = end(v);
+        if (e - v >= 8 && (e === text.length || /\s/.test(text.charAt(e)))) {
+            return { index: m.index, text: text.slice(m.index, e), value: text.slice(v, e) };
+        }
+        key.lastIndex = m.index + 1;
+    }
+    return null;
+}
 /** Rule ids whose match's capture group is the credential VALUE to vet
  *  (placeholder / entropy checks) rather than the whole match. */
 const VALUE_CAPTURE_RULES = new Set([
@@ -174,9 +288,65 @@ export function redact(secret) {
     const tail = trimmed.length >= 16 ? trimmed.slice(-2) : '';
     return `${head}…${tail} (${trimmed.length})`;
 }
-/** Each scanned line is capped here — see the module doc's ReDoS note in
- *  `bashGuard.ts`, which this mirrors. */
-const MAX_LINE_LENGTH = 16 * 1024;
+/**
+ * A line is read in windows of this size — see the module doc's ReDoS note in
+ * `bashGuard.ts`, which this mirrors: every pattern sees a bounded text,
+ * however long the line. It used to be a cap: only the first 16 KB of a line
+ * was read, and a token at column ~16.4K of a one-line JSON file or a minified
+ * bundle passed the block, the warning and `check --file` (review I3).
+ */
+const WINDOW = 16 * 1024;
+/**
+ * Consecutive windows share this much, so any match up to this long lies
+ * whole inside one of them: every provider token is under 256 characters, and
+ * 2 KB also holds an ordinary JWT.
+ */
+const OVERLAP = 2 * 1024;
+const STEP = WINDOW - OVERLAP;
+function lineWindows(line) {
+    if (line.length <= WINDOW)
+        return [{ text: line, cutLeft: false, cutRight: false }];
+    const out = [];
+    for (let s = 0;; s += STEP) {
+        const e = Math.min(line.length, s + WINDOW);
+        const from = Math.max(0, s - 1);
+        const to = Math.min(line.length, e + 1);
+        out.push({ text: line.slice(from, to), cutLeft: from > 0, cutRight: to < line.length });
+        if (e >= line.length)
+            return out;
+    }
+}
+/**
+ * A rule's first match in a window that does not lean on the window's edge: a
+ * match starting on the left context character belongs to the window before,
+ * and one running up to the right edge may be the cut-off start of a longer
+ * run — no `\b` really ends it there. That one is left to the next window,
+ * which holds it whole when it is at most {@link OVERLAP} long; the search in
+ * this window stops, so a window costs at most two searches per rule.
+ */
+function firstMatch(rule, re, w) {
+    let from = 0;
+    for (let tries = 0; tries < 2; tries += 1) {
+        let m;
+        if (rule.find !== undefined)
+            m = rule.find(w.text, from);
+        else {
+            re.lastIndex = from;
+            const r = re.exec(w.text);
+            m = r === null ? null : { index: r.index, text: r[0], ...(r[1] !== undefined ? { value: r[1] } : {}) };
+        }
+        if (m === null)
+            return null;
+        if (w.cutRight && m.index + m.text.length >= w.text.length)
+            return null;
+        if (w.cutLeft && m.index === 0) {
+            from = 1;
+            continue;
+        }
+        return m;
+    }
+    return null;
+}
 /**
  * Scan free text for likely secrets. Returns redacted hits, de-duplicated by
  * (ruleId, line). The raw secret is never included in the output.
@@ -186,61 +356,72 @@ export function scanForSecrets(text, options = {}) {
         return [];
     const minRank = CONFIDENCE_RANK[options.minConfidence ?? 'medium'];
     const allow = (options.allowlist ?? []).map((a) => a.toLowerCase()).filter(Boolean);
+    const rules = SECRET_RULES.filter((rule) => CONFIDENCE_RANK[rule.confidence] >= minRank).map((rule) => ({
+        rule,
+        re: new RegExp(rule.pattern.source, `${rule.pattern.flags.replace(/[gy]/g, '')}g`),
+    }));
     const lines = text.split(/\r?\n/);
     const hits = [];
-    const seen = new Set();
     for (let i = 0; i < lines.length; i++) {
         const rawLine = lines[i];
         if (rawLine === undefined || rawLine.length === 0)
             continue;
-        // Bounds every pattern below to a fixed-size worst case regardless of how
-        // long the real line is — the JWT rule's own bounded quantifiers still
-        // rely on this: a 200KB single line of `'eyJ-'.repeat(50000)` took ~27s
-        // before either fix, and this alone caps the input the regex ever sees.
-        const line = rawLine.length > MAX_LINE_LENGTH ? rawLine.slice(0, MAX_LINE_LENGTH) : rawLine;
-        const lowerLine = line.toLowerCase();
-        if (allow.some((a) => lowerLine.includes(a)))
-            continue;
-        for (const rule of SECRET_RULES) {
-            if (CONFIDENCE_RANK[rule.confidence] < minRank)
+        const found = new Map();
+        // Every pattern reads one bounded window at a time — the JWT rule's own
+        // bounded quantifiers still rely on this: a 200KB single line of
+        // `'eyJ-'.repeat(50000)` took ~27s before either fix.
+        for (const w of lineWindows(rawLine)) {
+            // The allowlist names text near the finding: per window, which for a
+            // line of up to 16 KB is the whole line, as before.
+            const lower = w.text.toLowerCase();
+            if (allow.some((a) => lower.includes(a)))
                 continue;
-            const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace('g', ''));
-            const m = re.exec(line);
-            if (!m)
-                continue;
-            // For the value-capturing rules, the captured group is the credential
-            // itself (not the whole match, which includes the key name / URI
-            // prefix too); vet it before reporting.
-            if (VALUE_CAPTURE_RULES.has(rule.id)) {
-                const value = m[1] ?? '';
-                if (looksLikePlaceholder(value))
+            for (const { rule, re } of rules) {
+                if (found.has(rule))
                     continue;
-                // The entropy floor is skipped for the unquoted `.env`-style rule
-                // specifically: a human-chosen password (the brief's own example,
-                // `DB_PASSWORD=hunter2hunter2`, is ~2.8 bits/char) is real and
-                // common in a `.env` file, and routinely falls under 3.2 despite
-                // being an actual credential. The other false-positive shapes an
-                // entropy floor would catch here are already excluded structurally
-                // — the value charset itself rules out `${VAR}`/`<your-key>`/a
-                // function call, and `looksLikePlaceholder` still catches
-                // `changeme`/repeated-char values — so this rule does not need it.
-                if (rule.id !== 'generic-assignment-env' && shannonEntropy(value) < 3.2)
-                    continue;
+                const hit = judge(rule, firstMatch(rule, re, w), i);
+                if (hit !== null)
+                    found.set(rule, hit);
             }
-            const dedupeKey = `${rule.id}:${i}`;
-            if (seen.has(dedupeKey))
-                continue;
-            seen.add(dedupeKey);
-            const matched = VALUE_CAPTURE_RULES.has(rule.id) ? (m[1] ?? m[0]) : m[0];
-            hits.push({
-                ruleId: rule.id,
-                title: rule.title,
-                confidence: rule.confidence,
-                line: i + 1,
-                preview: redact(matched),
-            });
+        }
+        for (const { rule } of rules) {
+            const hit = found.get(rule);
+            if (hit !== undefined)
+                hits.push(hit);
         }
     }
     return hits;
+}
+/** A match as a hit on line `i` (0-based), or `null` when its value is a placeholder or too plain. */
+function judge(rule, m, i) {
+    if (!m)
+        return null;
+    // For the value-capturing rules, the captured group is the credential
+    // itself (not the whole match, which includes the key name / URI
+    // prefix too); vet it before reporting.
+    if (VALUE_CAPTURE_RULES.has(rule.id)) {
+        const value = m.value ?? '';
+        if (looksLikePlaceholder(value))
+            return null;
+        // The entropy floor is skipped for the unquoted `.env`-style rule
+        // specifically: a human-chosen password (the brief's own example,
+        // `DB_PASSWORD=hunter2hunter2`, is ~2.8 bits/char) is real and
+        // common in a `.env` file, and routinely falls under 3.2 despite
+        // being an actual credential. The other false-positive shapes an
+        // entropy floor would catch here are already excluded structurally
+        // — the value charset itself rules out `${VAR}`/`<your-key>`/a
+        // function call, and `looksLikePlaceholder` still catches
+        // `changeme`/repeated-char values — so this rule does not need it.
+        if (rule.id !== 'generic-assignment-env' && shannonEntropy(value) < 3.2)
+            return null;
+    }
+    const matched = VALUE_CAPTURE_RULES.has(rule.id) ? (m.value ?? m.text) : m.text;
+    return {
+        ruleId: rule.id,
+        title: rule.title,
+        confidence: rule.confidence,
+        line: i + 1,
+        preview: redact(matched),
+    };
 }
 //# sourceMappingURL=secretScan.js.map
