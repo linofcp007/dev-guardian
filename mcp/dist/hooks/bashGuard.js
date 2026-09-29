@@ -3087,7 +3087,7 @@ const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|c
  *     `$s = irm …; iex $s` is seen;
  *   - parentheses, pipes and statement separators.
  */
-const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:system\s*\.\s*management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
+const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
 /**
  * `Invoke-Expression` over a download, on the masked command text (review I1):
  * `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's official
