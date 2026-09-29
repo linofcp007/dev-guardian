@@ -150,9 +150,12 @@ describe('scan --baseline-ref / --rules-ref — usage (no scanner reached)', () 
 
   // Review M-1: help used to be looked for in every argument, so a flag whose
   // VALUE read like help printed the usage and exited 0 — no scan, a pass.
+  // The ref case runs on the default project, this checkout — which is no git
+  // work tree when it is a `git archive` (the POSIX container run): either
+  // refusal names `help` as the ref, which is what is under test.
   it.each([
     [['--baseline-ref', '--help'], /--baseline-ref takes a git ref, not an option/],
-    [['--baseline-ref', 'help'], /--baseline-ref help: names no commit/],
+    [['--baseline-ref', 'help'], /--baseline-ref help: (names no commit|.* is not inside a git work tree)/],
     [['--fail-on', '-h'], /--fail-on must be one of/],
     [['--project', '--help'], /--project does not exist or is not a directory/],
   ])('a flag whose value reads like help is that flag\'s value, never a help request: %j → exit 3', (args, message) => {
