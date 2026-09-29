@@ -38,7 +38,7 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   classifyRestoreFailure,
@@ -576,26 +576,33 @@ const MAX_REQUIREMENTS_BYTES = 1024 * 1024;
  * and every file they include (`-r` / `-c`, relative to the including file,
  * as pip resolves them), transitively and bounded — project-relative,
  * `/`-separated. An include that is a URL, holds an environment variable or
- * leaves the project is not read (the server reads within the project), so
- * an index option there is not named.
+ * leaves the project — by its path or through a link — is not read (the
+ * server reads within the project), so an index option there is not named.
  */
 function requirementsFilesRead(projectPath: string, handed: readonly string[]): string[] {
-  const inProject = (abs: string): string | null => {
-    const rel = relative(projectPath, abs);
+  const within = (root: string, abs: string): string | null => {
+    const rel = relative(root, abs);
     if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null;
     return rel.split(sep).join('/');
   };
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(projectPath);
+  } catch {
+    return [];
+  }
   const seen = new Set<string>();
   const out: string[] = [];
   const queue = [...handed];
   while (queue.length > 0 && out.length < MAX_REQUIREMENTS_FILES) {
     const abs = queue.shift();
     if (abs === undefined) break;
-    const rel = inProject(abs);
+    const rel = within(projectPath, abs);
     if (rel === null || seen.has(rel)) continue;
     seen.add(rel);
     let text: string;
     try {
+      if (within(realRoot, realpathSync(abs)) === null) continue;
       const st = statSync(abs);
       if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) continue;
       text = readFileSync(abs, 'utf8');

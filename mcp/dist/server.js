@@ -53768,7 +53768,7 @@ var tool3 = {
 registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
-import { existsSync as existsSync24, readdirSync as readdirSync17, readFileSync as readFileSync25, statSync as statSync11, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync24, readdirSync as readdirSync17, readFileSync as readFileSync25, realpathSync as realpathSync6, statSync as statSync11, writeFileSync as writeFileSync9 } from "node:fs";
 import { dirname as dirname15, isAbsolute as isAbsolute8, join as join38, relative as relative13, resolve as resolve12, sep as sep10 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
@@ -54414,22 +54414,29 @@ var PIP_INCLUDE = /^[ \t]*(?:--requirement|--constraint|-r|-c)(?:[ \t]*=[ \t]*|[
 var MAX_REQUIREMENTS_FILES = 50;
 var MAX_REQUIREMENTS_BYTES = 1024 * 1024;
 function requirementsFilesRead(projectPath, handed) {
-  const inProject = (abs) => {
-    const rel2 = relative13(projectPath, abs);
+  const within = (root, abs) => {
+    const rel2 = relative13(root, abs);
     if (rel2 === "" || isAbsolute8(rel2) || rel2 === ".." || rel2.startsWith(`..${sep10}`)) return null;
     return rel2.split(sep10).join("/");
   };
+  let realRoot;
+  try {
+    realRoot = realpathSync6(projectPath);
+  } catch {
+    return [];
+  }
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   const queue = [...handed];
   while (queue.length > 0 && out.length < MAX_REQUIREMENTS_FILES) {
     const abs = queue.shift();
     if (abs === void 0) break;
-    const rel2 = inProject(abs);
+    const rel2 = within(projectPath, abs);
     if (rel2 === null || seen.has(rel2)) continue;
     seen.add(rel2);
     let text2;
     try {
+      if (within(realRoot, realpathSync6(abs)) === null) continue;
       const st = statSync11(abs);
       if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) continue;
       text2 = readFileSync25(abs, "utf8");
@@ -70643,7 +70650,7 @@ import {
   readFileSync as readFileSync40,
   readdirSync as readdirSync28,
   readlinkSync,
-  realpathSync as realpathSync6,
+  realpathSync as realpathSync7,
   rmSync as rmSync8,
   statSync as statSync22,
   writeFileSync as writeFileSync17
@@ -70926,7 +70933,7 @@ function collectDir(root) {
   let truncated = false;
   let rootReal;
   try {
-    rootReal = realpathSync6(root);
+    rootReal = realpathSync7(root);
   } catch {
     rootReal = root;
   }
@@ -71007,7 +71014,7 @@ function readLinkTargetSafely(abs) {
 }
 function safeRealpath(abs) {
   try {
-    return realpathSync6(abs);
+    return realpathSync7(abs);
   } catch {
     return null;
   }
@@ -71272,7 +71279,7 @@ function numProp(value, key) {
 }
 
 // src/surface/collectors/ports.ts
-import { existsSync as existsSync49, readFileSync as readFileSync41, realpathSync as realpathSync7 } from "node:fs";
+import { existsSync as existsSync49, readFileSync as readFileSync41, realpathSync as realpathSync8 } from "node:fs";
 import { basename as basename7, join as join69 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
@@ -71336,7 +71343,7 @@ function readLines(path8) {
 }
 function canonicalPath2(path8) {
   try {
-    return realpathSync7.native(path8);
+    return realpathSync8.native(path8);
   } catch {
     return void 0;
   }
@@ -76045,7 +76052,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync53, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync11 } from "node:fs";
+import { existsSync as existsSync53, mkdtempSync as mkdtempSync7, realpathSync as realpathSync9, rmSync as rmSync11 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { join as join79, resolve as resolve18 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -76135,7 +76142,7 @@ async function resolveRegisteredPath(projectPath, branch, dir, timeoutMs) {
 function samePathKey(path8) {
   let real;
   try {
-    real = realpathSync8.native(path8);
+    real = realpathSync9.native(path8);
   } catch {
     real = resolve18(path8);
   }

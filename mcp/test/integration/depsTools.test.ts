@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -1084,8 +1085,15 @@ describe('deps_audit', () => {
       ['an index option in a comment', '# --index-url https://x.example/simple\ndjango==2.0.1\n'],
       ['a per-requirement hash', 'django==2.0.1 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n'],
       ['an include with no index option', '-r base.txt\ndjango==2.0.1\n'],
+      // The server reads within the project: an include out of it is not read.
+      ['an include through a link out of the project', '-r link/idx.txt\ndjango==2.0.1\n'],
+      ['an include by a path out of the project', '-r ../idx.txt\ndjango==2.0.1\n'],
     ])('names nothing for %s', async (_label, text) => {
-      const project = tempProject();
+      const outside = makeTempDir('deps-tools-outside-');
+      writeFileSync(join(outside, 'idx.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      const project = join(outside, 'project');
+      mkdirSync(project);
+      symlinkSync(outside, join(project, 'link'), 'junction');
       writeFileSync(join(project, 'requirements.txt'), text, 'utf8');
       writeFileSync(join(project, 'base.txt'), 'flask==1.0\n', 'utf8');
       const run = await pipAuditRun(project);

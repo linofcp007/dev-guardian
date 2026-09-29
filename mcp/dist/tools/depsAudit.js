@@ -37,7 +37,7 @@
  *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
@@ -508,16 +508,23 @@ const MAX_REQUIREMENTS_BYTES = 1024 * 1024;
  * and every file they include (`-r` / `-c`, relative to the including file,
  * as pip resolves them), transitively and bounded — project-relative,
  * `/`-separated. An include that is a URL, holds an environment variable or
- * leaves the project is not read (the server reads within the project), so
- * an index option there is not named.
+ * leaves the project — by its path or through a link — is not read (the
+ * server reads within the project), so an index option there is not named.
  */
 function requirementsFilesRead(projectPath, handed) {
-    const inProject = (abs) => {
-        const rel = relative(projectPath, abs);
+    const within = (root, abs) => {
+        const rel = relative(root, abs);
         if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`))
             return null;
         return rel.split(sep).join('/');
     };
+    let realRoot;
+    try {
+        realRoot = realpathSync(projectPath);
+    }
+    catch {
+        return [];
+    }
     const seen = new Set();
     const out = [];
     const queue = [...handed];
@@ -525,12 +532,14 @@ function requirementsFilesRead(projectPath, handed) {
         const abs = queue.shift();
         if (abs === undefined)
             break;
-        const rel = inProject(abs);
+        const rel = within(projectPath, abs);
         if (rel === null || seen.has(rel))
             continue;
         seen.add(rel);
         let text;
         try {
+            if (within(realRoot, realpathSync(abs)) === null)
+                continue;
             const st = statSync(abs);
             if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES)
                 continue;
