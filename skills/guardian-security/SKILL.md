@@ -11,13 +11,13 @@ Scan profundo de segurança. Combina vários scanners open-source e contextualiz
 
 Pergunta ao utilizador qual (ou corre tudo se ele disser "tudo"). Cada tipo é uma tool MCP:
 
-| Tipo                | O que faz                                                      | Tool MCP (o que corre)                                                 |
-| ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| **SAST**            | Análise estática de código aplicacional                        | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)      |
-| **Secrets**         | API keys, tokens, passwords no código e no histórico Git       | `scan_secrets` (gitleaks)                                              |
-| **Dependencies**    | CVEs em bibliotecas/packages                                   | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit     |
-| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm      | `scan_containers` (Trivy + hadolint), `scan_iac` (Trivy)               |
-| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                        | `scan_dast` (+ nuclei)                                                 |
+| Tipo                | O que faz                                                 | Tool MCP (o que corre)                                                                       |
+| ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **SAST**            | Análise estática de código aplicacional                   | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)                            |
+| **Secrets**         | API keys, tokens, passwords no código e no histórico Git  | `scan_secrets` (gitleaks)                                                                    |
+| **Dependencies**    | CVEs em bibliotecas/packages                              | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit                           |
+| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm | `scan_containers` (Trivy + hadolint; cosign para a assinatura da imagem), `scan_iac` (Trivy) |
+| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                   | `scan_dast` (+ nuclei)                                                                       |
 
 Não há brakeman, gosec nem Checkov no que as tools correm — não os anuncies como corridos.
 
@@ -84,10 +84,25 @@ por defeito, e vale a pena dizê-lo ao utilizador quando ele pergunta se algo
 sai da máquina.
 
 Alternativa: `scan_sast` com `local_only: true` — sem registry, com
-`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto e o que
-tenha sido registado com `register_custom_rules`). Menos regras que o modo por
-defeito; nada sai da máquina. Sem regras locais, o scan é reportado como
-skipped e não como resultado limpo.
+`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto, o que
+tenha sido registado com `register_custom_rules` e o pack LLM do plugin). Menos
+regras que o modo por defeito; nada sai da máquina. Sem regras do projeto, o
+scan é reportado como skipped e não como resultado limpo.
+
+#### Aplicações com LLM
+
+Em todas as corridas, com e sem `local_only`, o `scan_sast` corre também o
+pack do plugin `configs/semgrep/llm.yml` (Python e JS/TS): saída de um modelo
+que chega a `eval`/`exec`, à shell, ao programa ou ao script `-c` de um
+processo, ou a SQL; o nome de uma ferramenta escolhido pelo modelo usado com
+`getattr`/`import` sem lista de permitidos; `trust_remote_code=True` sem revisão
+fixada num commit; `torch.load` com `weights_only=False` (ou sem o argumento,
+em baixa severidade: só é inseguro antes do torch 2.6); dados do pedido HTTP no
+prompt de sistema; chamadas à OpenAI sem limite de tokens. Os findings são `security`, com a subcategoria
+`llm-*` e a categoria da OWASP Top 10 para LLM 2025 nos metadados da regra. O
+fallback de Docker monta a pasta dos packs do plugin só de leitura e corre-o
+também. Como no `local_only`, o pack sozinho não faz um scan SAST: se todas as
+regras do projeto falharem a carregar, o scan continua `failed`.
 
 ### 3. Triagem inteligente
 
@@ -227,7 +242,10 @@ raiz nas rotas que `map_attack_surface` já mapeou.
    findings abertos — é o comportamento por omissão).
 3. Lê o veredito por finding — `reachable` / `unreachable` / `unknown` — **ao
    lado** de `coverage_gaps`, nunca sozinho: uma contagem de vereditos sem os
-   gaps ao lado não é uma resposta.
+   gaps ao lado não é uma resposta. Um CVE de dependência (npm, PyPI) tem
+   também o veredito do provider `dependency`: `reachable` (um ficheiro que
+   uma rota alcança importa o package), `imported` ou `unknown` — nunca
+   `unreachable`.
 4. Usa isto como CONTEXTO na conversa com o utilizador ("este finding não
    parece alcançável por nenhuma rota, mas é uma leitura estática — quer
    mesmo assim mantê-lo como prioridade?"), nunca como justificação
@@ -246,6 +264,61 @@ Limites a respeitar sempre que apresentares um `unreachable`:
   não é uma afirmação de que o código nunca corre.
 - **Granularidade de ficheiro, não de função.** Um finding dentro de um
   helper nunca chamado, mas cujo ficheiro É importado, lê `reachable`.
+
+## Servidores MCP — `audit_agent_config` e `audit_mcp_tools`
+
+Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
+
+1. `audit_agent_config { project_path: "<project>" }` primeiro. Lê as
+   configurações (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
+   `.gemini/settings.json`, `.claude-plugin/plugin.json`; com
+   `include_user_config: true` também as do utilizador — Claude Code, Claude
+   Desktop, Cursor, Windsurf, Gemini) **sem executar nada**, e diz que
+   servidores estão declarados.
+2. `audit_mcp_tools { project_path: "<project>", servers: ["<nome>"] }` só
+   para os servidores que o utilizador pediu para auditar — os nomes são
+   dele, nunca os escolhas nem passes a lista inteira sem perguntar. **Esta
+   tool executa código de terceiros**: arranca o comando de cada servidor
+   nomeado com um ambiente mínimo (mais o `env` da própria entrada), envia
+   `initialize` e os pedidos de listagem de tools, prompts e resources,
+   **nunca chama `tools/call`**, e mata a árvore de processos no fim.
+   Servidores remotos só com `allow_remote: true`, que o utilizador tem de
+   pedir — remoto é uma entrada com URL, um comando num caminho de rede, um
+   URL na linha de comando ou num valor de `env` (`mcp-remote` e outros
+   proxies, um URL de base de dados), `ssh` ou `kubectl` em qualquer ponto
+   da linha de comando, ou `docker`/`podman` apontado a outro motor. Um URL
+   cujo host é exatamente `localhost`, `127.x.x.x` ou `[::1]` é local
+   (`postgres://localhost/app` não pede `allow_remote`), mas pode ser um
+   túnel (`ssh -L`, um proxy local) que a configuração não mostra.
+   Se vários ficheiros declaram o mesmo nome com comandos diferentes, a tool
+   recusa e lista os nomes qualificados (`.mcp.json::github`): pergunta ao
+   utilizador qual quer e passa esse.
+3. Lê `coverage` e `servers[].status` antes dos findings: um servidor
+   `skipped` (não declarado, ambíguo, remoto sem `allow_remote`, cancelado,
+   sem orçamento), `failed` (não arrancou, não respondeu em `timeout_ms`) ou
+   `partial` (uma listagem cortada por um limite) não foi auditado por
+   inteiro — não é um resultado limpo. E mesmo um resultado limpo cobre só o
+   que o servidor quis mostrar a esta auditoria: ela identifica-se como
+   `dev-guardian-audit`, e um servidor pode reconhecê-la e mostrar outra
+   coisa ao anfitrião. Diz isso ao utilizador.
+4. Os findings dizem em que tool e em que campo (descrição, `inputSchema`,
+   …) está o problema: instruções ao modelo, Unicode escondido, pedidos para
+   ler chaves ou configurações, para esconder algo do utilizador, para enviar
+   dados para um URL ou num parâmetro, instruções sobre outras tools
+   (*shadowing*). `mcp-tool-definition-changed` (high) é um *rug pull*: a
+   mesma tool com outra definição (título, descrição, esquemas de entrada ou
+   de saída, anotações) desde a auditoria anterior — reportado uma vez, e a
+   nova definição passa a ser a referência; uma tool que desaparece e volta
+   diferente também conta. As `instructions` do servidor (que vão para o
+   system prompt) contam como uma tool (`mcp-server-instructions-changed`,
+   high). Prompts, resources e templates também ficam registados
+   (`mcp-prompt-definition-changed` e afins, medium). Duas tools com o
+   mesmo nome são `mcp-tool-duplicate-name` (high): o cliente escolhe uma
+   delas de forma ambígua. `mcp-tool-sensitive-file-access` em medium
+   significa que a tool manda o modelo ler um ficheiro de credenciais ou de
+   configuração: confirma com o utilizador se esse é o propósito da tool
+   (um cliente SSH ou de registry pode precisar disso); em high, manda
+   também passá-lo a outro sítio ou escondê-lo — isso nenhuma tool precisa.
 
 ## Quando não correr scans completos
 

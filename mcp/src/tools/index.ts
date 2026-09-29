@@ -10,6 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { ToolResult } from '../types.js';
+import { boundResponsePayload } from './responseBounds.js';
 
 /**
  * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
@@ -122,7 +123,12 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
   }
 }
 
-function toCallToolResult<T extends Record<string, unknown>>(
+/**
+ * A handler's result as the MCP host receives it. Per-file gap lists are cut
+ * here and only here (`tools/responseBounds.ts`): the row and every internal
+ * caller keep them whole. Exported for the response-size tests.
+ */
+export function toCallToolResult<T extends Record<string, unknown>>(
   result: ToolResult<T>,
   contentOnlyKeys: readonly string[],
 ): {
@@ -132,7 +138,7 @@ function toCallToolResult<T extends Record<string, unknown>>(
 } {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
-    const payload = { ok: true, ...rest } as Record<string, unknown>;
+    const payload = boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>);
     const structured: Record<string, unknown> = { ...payload };
     for (const key of contentOnlyKeys) delete structured[key];
     // A tool with a bulky content-only payload is serialised compactly too:

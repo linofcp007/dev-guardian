@@ -188,6 +188,123 @@ export function noRuleLoaded(configs, failed, ctx = {}, readAt = (config) => con
     }
     return true;
 }
+/** How many YAML files {@link mayHoldTaintRules} reads under one rule directory before it answers "may". */
+const TAINT_SCAN_FILE_LIMIT = 500;
+/**
+ * Whether a run of `configs` can hold a taint rule — what tells a fixpoint
+ * timeout that names a plugin-pack rule first of several apart from one that
+ * may also be another config's (`semgrepReport.ts`). A config may, unless it
+ * is PROVEN not to: a registry pack, `auto` or a URL always may, and so does
+ * a local file that cannot be read or parsed, a directory past
+ * {@link TAINT_SCAN_FILE_LIMIT} files, and any file whose text names
+ * `taint`, `pattern-sources` or `pattern-sinks` anywhere, in any case. The
+ * test is on those tokens and never on a key: Semgrep 1.176.1 runs a rule
+ * with a `taint:` block and no `mode:` as a taint rule (round 4, A-2: read
+ * by its `mode` alone, it read as taint-free and the pack took a group of
+ * two rules), and the syntax keeps changing. A directory is read
+ * recursively, as Semgrep loads it. `readAt` maps a config to the file to
+ * read (the Docker fallback's `/src/…`).
+ */
+export function mayHoldTaintRules(configs, readAt = (c) => c) {
+    for (const config of configs) {
+        const kind = localKind(config);
+        if (kind === null)
+            return true;
+        const at = readAt(config);
+        if (kind === 'file') {
+            if (fileMayHoldTaintRule(at))
+                return true;
+            continue;
+        }
+        const files = yamlFilesUnder(at, TAINT_SCAN_FILE_LIMIT);
+        if (files === null || files.some((file) => fileMayHoldTaintRule(file)))
+            return true;
+    }
+    return false;
+}
+/** Tokens any spelling of a taint rule has used: `mode: taint`, a `taint:` block, sources and sinks. */
+const TAINT_TOKENS = /taint|pattern-sources|pattern-sinks/i;
+/** Whether a rule file may hold a taint rule: true unless it reads, parses and names none of {@link TAINT_TOKENS}. */
+function fileMayHoldTaintRule(file) {
+    let text;
+    try {
+        text = readFileSync(file, 'utf8');
+    }
+    catch {
+        return true;
+    }
+    if (TAINT_TOKENS.test(text))
+        return true;
+    try {
+        parseYaml(text);
+    }
+    catch {
+        return true;
+    }
+    return false;
+}
+/**
+ * Every spelling Semgrep gives, in one run, a rule of the plugin's own packs:
+ * `<prefix>.<rule id>`, where the prefix is Semgrep's for the pack file as it
+ * was passed (`packConfigs`: the host path natively, `/guardian-packs/…` in
+ * the Docker fallback) and, when the file lies under Semgrep's working
+ * directory `cwd`, the one relative to it. Never a bare id: a project-root
+ * rule named like a pack rule is spelled bare and is NOT the pack's (round 4,
+ * A-1: matched through the normalised id, it was). `readAt` maps a config to
+ * the file its ids are read from.
+ *
+ * The relative spelling exists only when the plugin itself sits inside the
+ * scanned tree (this repo, or a monorepo that vendors it). There Semgrep's
+ * prefix is lossy — it drops leading dots and characters outside
+ * `[A-Za-z0-9._-]` — so a project taint rule in `.configs/semgrep/` or
+ * `con figs/semgrep/` carrying a pack rule's id would be taken for the pack's.
+ * A user's own project cannot reach it otherwise (final review, minor).
+ */
+export function pluginPackCheckIds(packConfigs, opts = {}) {
+    const out = new Set();
+    for (const config of packConfigs) {
+        const fp = flavourOf(config, opts.cwd);
+        const absolute = fp.isAbsolute(config) ? config : opts.cwd !== undefined ? fp.resolve(opts.cwd, config) : config;
+        const underCwd = opts.cwd === undefined ? null : insideRelative(fp, opts.cwd, absolute);
+        const prefixes = new Set([semgrepConfigPrefix(config), semgrepConfigPrefix(absolute), ...(underCwd !== null ? [semgrepConfigPrefix(underCwd)] : [])]);
+        const ids = ruleIdsInFile(opts.readAt !== undefined ? opts.readAt(config) : config);
+        for (const prefix of prefixes) {
+            if (prefix.length === 0)
+                continue;
+            for (const id of ids)
+                out.add(`${prefix}.${id}`);
+        }
+    }
+    return out;
+}
+/** Every `.yml`/`.yaml` file under `dir`, recursively; null past `limit` files or when `dir` cannot be read. */
+function yamlFilesUnder(dir, limit) {
+    const out = [];
+    const stack = [dir];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (current === undefined)
+            break;
+        let entries;
+        try {
+            entries = readdirSync(current, { withFileTypes: true });
+        }
+        catch {
+            return null;
+        }
+        for (const entry of entries) {
+            const full = path.join(current, entry.name);
+            if (entry.isDirectory())
+                stack.push(full);
+            else if (/\.ya?ml$/i.test(entry.name)) {
+                out.push(full);
+                if (out.length > limit)
+                    return null;
+            }
+        }
+    }
+    return out;
+}
 /** Every rule id the YAML rule files of `dir` declare (not recursive); unreadable files are skipped. */
 export function ruleIdsInDir(dir) {
     const ids = new Set();

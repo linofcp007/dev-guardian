@@ -57,6 +57,7 @@ import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
 import { extractSurface, languageFromPath } from '../surface/extract.js';
 import {
+  externalImports,
   extractModuleEdges,
   resolveModuleEdges,
   type ModuleEdge,
@@ -79,6 +80,7 @@ import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
 import { resolveVersion } from '../platform/version.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { nameAFew } from '../runners/semgrepReport.js';
 import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import type {
@@ -233,7 +235,10 @@ async function handler(
       tree_hash: treeHash,
       freshThreshold: new Date(Date.now() - SURFACE_CACHE_TTL_MS).toISOString(),
     });
-    if (cached) {
+    // A snapshot persisted before `external_imports` was recorded is not
+    // reused: served from the cache, it would tell the dependency provider
+    // nothing about which packages are imported for up to a day.
+    if (cached && cached.snapshot.external_imports !== undefined) {
       return summarize(cached.snapshot, cached.id, cachedToolsRun(cached.snapshot), ctx, projectPath);
     }
   }
@@ -417,7 +422,7 @@ async function handler(
     };
     return withNote(
       persistAndSummarize(partialSnapshot, toolsRun),
-      `Semgrep only partly parsed ${partiallyParsed.map((p) => p.file).join(', ')} ` +
+      `Semgrep only partly parsed ${nameAFew(partiallyParsed.map((p) => p.file))} ` +
         '(see partially_parsed): routes in the unparsed spans may be missing from this surface, ' +
         'so coverage is partial. Everything else was mapped and persisted.',
     );
@@ -638,6 +643,11 @@ function buildSnapshot(
     // absolute and native-separator — a separate, pre-existing mismatch that
     // `validate/staticProvider.ts` relativizes on its own side.
     imports: resolvedEdges,
+    // The unresolved edges that name a package, in the same project-relative
+    // space (the edges were relativized above, before resolution). They were
+    // only ever counted in `coverage[].unresolved_imports`; the dependency
+    // provider needs to know which file imports which package.
+    external_imports: externalImports(unresolvedEdges),
   };
 }
 

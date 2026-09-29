@@ -31,7 +31,7 @@ going public; we will credit reporters who want it.
 In scope: the MCP server (`mcp/`), the CLI (`cli/dev-guardian.mjs`), the
 guardrail hooks (`hooks/`), the skills and slash commands, the bundled configs
 and CI templates (`configs/`), and the supply-chain logic in `scan_skill`,
-`vet_packages` and `audit_agent_config`.
+`vet_packages`, `audit_agent_config` and `audit_mcp_tools`.
 
 Out of scope: vulnerabilities in the third-party scanners dev-guardian
 orchestrates (Semgrep, Trivy, gitleaks, Syft, WPScan, …) — report those to
@@ -86,6 +86,82 @@ their respective projects.
   names one of those keys, and so is `claude plugin disable|uninstall` of
   dev-guardian.
   See [docs/hooks.md](docs/hooks.md).
+- **`audit_mcp_tools` executes third-party code.** It starts the MCP servers
+  named in its `servers` argument — their `command` and `args`, as the host
+  would launch them — **only for the server names the caller lists
+  explicitly**: there is no wildcard and no default, and a name no config
+  declares is skipped. A name selects entries exactly: `<source>::<name>`
+  picks one; a bare name whose entries launch different servers is refused
+  with the qualified names to choose from; another project's entries in
+  Claude Code's global config are never started. Each runs with a **minimal
+  environment** (the MCP SDK's default allowlist — `PATH`, `HOME` /
+  `USERPROFILE` and a few more, plus the variables Windows adds to every
+  process — **plus the entry's own `env`**), never this server's full
+  environment, and a `${VAR}` placeholder is passed literally rather than
+  filled from it; its working directory is the project. The audit sends
+  `initialize` and the list methods only and **never calls `tools/call`**;
+  it **contacts a remote server only with `allow_remote: true`** — an entry
+  is remote when it has a URL; when a UNC or device path appears anywhere in
+  its command, an argument or an `env` value (touching it would send the
+  user's credentials to that host over SMB); when a URL with a host appears
+  there (`mcp-remote` and other proxies, `file://host/…`, `NODE_OPTIONS`,
+  `DOCKER_HOST`, a database URL — every `scheme://`, and `http`, `https`,
+  `ws`, `wss` or `ftp` followed by `:` with or without `//`, parsed as
+  WHATWG does; one that does not parse is remote); when any word of its
+  command line, a `-c` / `/c` string included, is `ssh`, `sshpass`, `plink`,
+  `kubectl` or `oc`; or when it runs `docker`, `podman` or `nerdctl`
+  against another engine (`-H`, `--host`, a context, `--remote`,
+  `--connection`, `--url`, `DOCKER_CONTEXT`, `CONTAINER_CONNECTION`). A URL
+  whose parsed host is exactly `localhost`, a `127.x.x.x` address or `[::1]`
+  is local (`DATABASE_URL=postgres://user:pw@localhost/app` needs no
+  `allow_remote`) — unless it carries a backslash anywhere, more than one
+  `@`, a host after its `@` that is not written as loopback, or a query on
+  a non-HTTP scheme (libpq reads a host from `?host=`), or a space, quote
+  or control character inside its host, since another parser may then read
+  another host (TAB and newline are deleted first, as URL parsers delete
+  them); a `url` entry
+  needs `allow_remote` even at localhost. **Loopback is where a tunnel
+  starts**: `ssh -L`, `kubectl port-forward`, a local proxy or a VPN client
+  listening on 127.0.0.1 make a loopback URL reach another machine, and the
+  configuration does not say so. **This is a textual gate on the shapes a
+  configuration can take, not a sandbox**: a program that looks local still
+  reaches the network by itself once started (`npx` downloads the package; a
+  server calls its own API), and nothing here sees that. It **kills the server's
+  process tree afterwards** (the process group on POSIX, `taskkill /T` on
+  Windows), whether the server answered or not. On Windows the command is
+  resolved with asynchronous look-ups over the local `PATH` entries only, so
+  a network path never blocks the server — though a `PATH` entry that looks
+  local but is not (a mapped drive, a junction to a share) is still looked
+  up, off the event loop. Each server has a time budget, an
+  inbound budget (4 MiB, 10 000 messages, 2 MiB per message — 40 times the
+  largest real listing measured) and a 1000-item cap per list; its listing
+  is analysed right after it answers, up to 2 MiB of text, 64 KiB per
+  string and 50 000 strings, with a turn of the event loop between items
+  and every 256 KiB of text or 16 ms inside one,
+  then dropped. The whole audit has a budget (`GUARDIAN_MCP_AUDIT_BUDGET_MS`);
+  cancelling the call, or the budget running out, stops launching and stops
+  the analysis. Whatever a bound leaves unread makes that server partial.
+  What a started server does while it runs — its own network requests
+  included — is that server's code: run the audit only for servers you would
+  let the host start.
+- **A clean `audit_mcp_tools` result covers only what the server chose to
+  show this client.** The audit names itself honestly (`dev-guardian-audit`,
+  no client capabilities, a minimal environment), so a server can recognise
+  it and serve it definitions other than those it serves the host. Pins help
+  (a definition that changes later, or a tool that vanishes and returns
+  changed, is reported), but no audit from outside the host can prove what
+  the host is shown.
+- **Agent configs are read the way the hooks read theirs.** `audit_agent_config`
+  and `audit_mcp_tools` read every MCP host config — the user-level ones
+  included, and Claude Code's from `CLAUDE_CONFIG_DIR` when that is set —
+  through the hooks' hardened reader: links below the project (or the home
+  directory) are walked first and a link to a network or device path is
+  refused unopened, then the file is opened non-blocking and only a regular
+  file within its cap (256 KiB; 16 MiB for Claude Code's `.claude.json`) is
+  read. A FIFO, a device, a directory or a network link in a config's place
+  can no longer hang either tool; a config that is there and was not read is
+  named in `sources_unreadable`, is a failed pass in `tools_run`, and lowers
+  coverage — never read as "no servers declared".
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -94,7 +170,8 @@ their respective projects.
 
 `GUARDIAN_OFFLINE=1` stops the lookups dev-guardian makes on its own initiative
 — marked ★ below: threat intelligence, package vetting, `scan_skill`'s OSV
-lookup, live secret verification and the Wordfence / wordpress.org feed. What could not be checked
+lookup, live secret verification, the Wordfence / wordpress.org feed and
+`scan_containers`' cosign check of an image's signature. What could not be checked
 is then reported as `unknown` or as a coverage gap, never as clean. It does
 **not** stop a request to a target you named (DAST, a skill URL, a Lighthouse
 URL), anything a third-party scanner or build tool does on its own, or the
@@ -111,6 +188,7 @@ project's own build and test commands.
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check_source` ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
 | The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_rest_audit`, the CLI's DAST health check | per call |
 | The URL you name | `scan_skill` given an HTTP(S) or git URL | per call |
+| A remote MCP server you name — a URL entry, a UNC command, or the URL a proxy on the command line talks to | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
 
 ### Requests the scanners and tools dev-guardian runs make
 
@@ -121,6 +199,7 @@ project's own build and test commands.
 | The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
 | Docker registry (`semgrep/semgrep` image) | `scan_sast`, `map_attack_surface` | only when Semgrep is not installed and Docker is |
 | Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
+| The image's registry, and Sigstore's public-good trust root (`tuf-repo-cdn.sigstore.dev`) — Rekor (`rekor.sigstore.dev`) only for a signature that carries no inclusion proof | `scan_containers` given an `image`, which runs cosign ★: `cosign triangulate` (to pin the digest), then `cosign download signature` and `cosign download attestation` without a signer, `cosign verify` with `signer_identity` + `signer_issuer` (Sigstore's trust root is fetched for `verify` only) — all of one image's calls within one deadline, `GUARDIAN_SCAN_TIMEOUT_MS` | per call, when cosign is installed; `GUARDIAN_OFFLINE=1` starts no cosign at all (`cosign` is then skipped and in `missing_tools`). cosign reads registry credentials from the Docker config, like Trivy, and keeps its trust root under `~/.sigstore`. It never signs, attests or pushes anything. The downloads that decide an absence run with cosign's `-d` request log, which is parsed, never stored or forwarded (go-containerregistry already writes `Authorization: <redacted>`; URL query strings — a CDN's signed URL — are cut from every reason, finding and log line): what is attached is the referrers index the registry itself generated, read from that log (never `cosign tree`, which prints a pusher's annotation as it finds it), and whether each referrer was served is the registry's own status for its manifest and bundle. Two registry faults cosign itself does not report. (1) A referrer whose manifest or bundle blob the registry fails to serve (a 5xx, a 429, a refusal, a transport error) is skipped in silence; dev-guardian reports it as unknown, never as unsigned or rejected — so too a referrer the log never shows fetched, and a log cut at its size cap. A bundle answered 200 whose body then breaks mid-transfer reads exactly like one that does not parse: an existence check downloads once more and, still without it, reports unknown; a verification, after its own re-run, rejects — and says the bundle was listed and served but cosign could not use it, not a bundle it can parse or a transfer that failed mid-body, to re-run if the registry was unstable. On a registry with no referrers API, the `sha256-<hex>` fallback tag that stands in for the index is written by whoever can push, not by the registry, and cosign is silent about anything there it cannot use: a tag the registry served that holds no index cosign reads, or an entry of it cosign never fetched, is nothing attached (it is read as go-containerregistry reads it, so what cosign did fetch from it is judged like any referrer); only the registry failing to serve the tag withholds. (2) A referrers API answering with no OCI index at all — an HTML 200, a 400, a 406 — is read by go-containerregistry as "no referrers API", and every signature and attestation attached as a referrer silently disappears — a signed image then reads unsigned (an existence check says absent; a verification reports a high "no signature" finding). No request fails, so neither cosign nor dev-guardian can report it. (An index served with a Content-Type other than exactly the OCI index type, which go-containerregistry ignores the same way, is seen: its body is in the log, and what it lists cosign never fetched is unknown.) |
 | Maven Central | Trivy, for a `pom.xml` (in the tools above) | when it resolves Maven dependencies |
 | Package registries, through the package managers | `deps_audit` (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI), `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
 | The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
@@ -133,6 +212,8 @@ project's own build and test commands.
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
 | Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, curl from GitHub releases) | `install_toolchain` | only when asked; `dry_run` prints the commands |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
+| Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
+| Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
 
 `map_attack_surface` itself sends nothing, but the Semgrep it runs does what
 the rows above say: its version check, and metrics when you are logged in. The

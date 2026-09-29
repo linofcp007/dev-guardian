@@ -287,6 +287,45 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(res.coverage).toBe('partial');
   });
 
+  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout is only in
+  // `time.fixpoint_timeouts` — `errors: []` — and is read the same way.
+  it('a changed file whose taint analysis timed out (time.fixpoint_timeouts): ok, listed missing, the file named', async () => {
+    const dir = await repo('main', { 'agent.py': 'x = 0\n' });
+    write(dir, 'agent.py', 'x = 1\n');
+    await commitAll(dir);
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') {
+        const { out, targets } = semgrepTargets(call.args);
+        const location = { path: targets[0], start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } };
+        writeFileSync(
+          out,
+          JSON.stringify({
+            version: '1.176.1',
+            results: [],
+            errors: [],
+            paths: { scanned: targets },
+            time: { fixpoint_timeouts: [{ error_type: 'Fixpoint timeout', severity: 'warn', message: 'Fixpoint timeout', location }] },
+          }),
+        );
+        return ok(0);
+      }
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      return ok();
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string }> }
+      | undefined;
+    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): agent\.py/);
+    expect(semgrep?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['agent.py', 'Fixpoint timeout']]);
+    expect(res.missing_tools).toContain('semgrep');
+    expect(res.coverage).toBe('partial');
+  });
+
   it('one batch of files no rule targets does not fail a run whose other batches scanned', async () => {
     const dir = await repo('main', { 'keep.txt': 'x\n' });
     const long = 'a-rather-long-directory-name-to-push-the-command-line-over-the-limit';
@@ -514,6 +553,45 @@ describe('review_pr — secrets, Python, dependencies', () => {
     const res = r as unknown as ReviewResult;
     expect(calls.some((c) => c.command === 'trivy')).toBe(true);
     expect(res.tools_run.find((t) => t.name === 'trivy')?.status).toBe('ok');
+  });
+
+  // OWASP coverage reads whether the registry ran from the scan row; a
+  // review row that did not say claimed the registry's categories even
+  // under local_only (frameworks/coverage.ts#registryRan).
+  it.each([true, false])('records local_only=%s on the scan row', async (localOnly) => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'a = 2\n');
+    await commitAll(dir);
+    const { r, p } = await review(dir, { base_ref: 'main', ...(localOnly ? { local_only: true } : {}) });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    expect(p.storage.scans.getById(res.scan_id)?.meta?.['local_only']).toBe(localOnly);
+  });
+
+  // M-b: the languages of the tree the review scanned — the head's own tree
+  // when it is not checked out — recorded for OWASP coverage.
+  it('records the languages of the reviewed head, not of the working tree', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'lib.rs', 'fn f() {}\n');
+    await commitAll(dir);
+    await git(dir, 'checkout', '-q', 'main');
+    const { r, p } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const meta = p.storage.scans.getById((r as unknown as ReviewResult).scan_id)?.meta;
+    expect(meta?.['project_languages']).toMatchObject({ languages: ['python', 'rust'] });
+  });
+
+  // A head that is an ancestor of the base changes no file and is not
+  // checked out: the working tree's languages are not the head's.
+  it('records no languages for a head it never checked out', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'lib.rs', 'fn f() {}\n');
+    await commitAll(dir);
+    const { r, p } = await review(dir, { base_ref: 'feature', head_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const meta = p.storage.scans.getById((r as unknown as ReviewResult).scan_id)?.meta;
+    expect(meta?.['scanned_tree']).toBe('head_checkout');
+    expect(meta?.['project_languages']).toMatchObject({ languages: null });
   });
 
   it('an empty pull request runs no scanner and says why', async () => {

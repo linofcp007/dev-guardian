@@ -81,6 +81,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "vê o Dockerfile / o terraform" | `/guardian-infra docker` / `/guardian-infra iac` |
 | "esta skill é segura?" | `guardian-scanskill` |
 | "o `.mcp.json` / as settings do agente são seguras?" | `audit_agent_config { project_path: "<project>" }` |
+| "as tools que o servidor MCP X expõe são seguras?" / "mudaram?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (executa o servidor — só os nomes que o utilizador indicar) |
 
 **Features de AI / LLM dentro da app** (prompt injection, custo, evals): não há módulo dedicado. `/guardian-scan` apanha chaves expostas e sinks perigosos; o resto — input do utilizador a chegar ao prompt sem isolamento, output do modelo a causar efeitos (escritas na DB, chamadas externas), limites de tokens e de custo — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura.
 
@@ -106,7 +107,7 @@ JavaScript/TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (com
 
 ## Ferramentas
 
-Corridas pelas tools MCP: Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (quando instalado no projeto), staticcheck, hadolint, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, os analyzers do .NET SDK, OSV.dev.
+Corridas pelas tools MCP: Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (quando instalado no projeto), staticcheck, hadolint, cosign, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, os analyzers do .NET SDK, OSV.dev.
 
 Recomendadas mas configuradas à mão (as tools não as correm): Renovate (o `init_project` instala o `renovate.json`), GlitchTip / Sentry, Prometheus + Grafana, Uptime Kuma, Artillery, Playwright.
 

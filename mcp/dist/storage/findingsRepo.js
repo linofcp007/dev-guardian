@@ -14,6 +14,11 @@
  *     (or to no project at all, for a suppression written before that
  *     column existed) — see that constant's own comment.
  *
+ * Since schema 13 a finding also carries its `cwe` and `owasp` lists (JSON
+ * arrays, `frameworks/taxonomy.ts`) — annotations outside both keys. A NULL,
+ * empty or unreadable column reads as the field ABSENT, which every reader
+ * treats as unknown and never as an OWASP category.
+ *
  * **A project's open findings are NOT read here.** They are the union over
  * every state-describing scan type of that type's newest usable scan — see
  * `history/openSet.ts#openSetForProject`, which every resource and history
@@ -92,9 +97,10 @@ export class FindingsRepo {
       INSERT OR IGNORE INTO findings (
         fingerprint, scan_id, tool, rule_id, severity, category, subcategory,
         title, message, file_path, line_start, line_end,
-        snippet, fix_available, fix_applied, raw, identity, content_key
+        snippet, fix_available, fix_applied, raw, identity, content_key,
+        cwe, owasp, vuln_aliases
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         // The identity of the most recent scan's row for this fingerprint. Rows
         // of older scans can share a fingerprint with a DIFFERENT identity (same
@@ -197,7 +203,7 @@ export class FindingsRepo {
         const tx = this.db.transaction((rows) => {
             let inserted = 0;
             for (const f of rows) {
-                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw), f.identity ?? null, f.content_key ?? null);
+                const info = this.insertStmt.run(f.fingerprint, f.scan_id, f.tool, f.rule_id ?? null, f.severity, f.category, f.subcategory ?? null, f.title, f.message ?? null, f.file_path ?? null, f.line_start ?? null, f.line_end ?? null, f.snippet ?? null, boolToInt(f.fix_available), boolToInt(f.fix_applied), f.raw === undefined ? null : JSON.stringify(f.raw), f.identity ?? null, f.content_key ?? null, taxonomyColumn(f.cwe), taxonomyColumn(f.owasp), f.vuln_aliases === undefined || f.vuln_aliases.length === 0 ? null : JSON.stringify(f.vuln_aliases));
                 inserted += info.changes;
             }
             return inserted;
@@ -371,6 +377,62 @@ function rowToFinding(row) {
         finding.identity = row.identity;
     if (row.content_key !== null)
         finding.content_key = row.content_key;
+    const cwe = readTaxonomyColumn(row.cwe, STORED_CWE);
+    if (cwe !== null)
+        finding.cwe = cwe;
+    const owasp = readTaxonomyColumn(row.owasp, STORED_OWASP);
+    if (owasp !== null)
+        finding.owasp = owasp;
+    const aliases = parseAliases(row.vuln_aliases);
+    if (aliases.length > 0)
+        finding.vuln_aliases = aliases;
     return finding;
+}
+/**
+ * A finding's `cwe` / `owasp` list as stored (migration 013): a JSON array,
+ * or NULL when there is nothing to say. An empty list is stored as NULL too
+ * — both mean "unknown" to every reader.
+ */
+function taxonomyColumn(values) {
+    return values === undefined || values.length === 0 ? null : JSON.stringify(values);
+}
+const STORED_CWE = /^CWE-[1-9]\d*$/;
+const STORED_OWASP = /^A(0[1-9]|10):2025$/;
+/**
+ * The stored list, keeping only well-formed entries. NULL, unreadable JSON,
+ * a non-array or a list with nothing well-formed in it all read as null —
+ * the field stays absent, which every renderer reads as unknown. A malformed
+ * value is never coerced into a category.
+ */
+function readTaxonomyColumn(stored, shape) {
+    if (stored === null)
+        return null;
+    let parsed;
+    try {
+        parsed = JSON.parse(stored);
+    }
+    catch {
+        return null;
+    }
+    if (!Array.isArray(parsed))
+        return null;
+    const kept = parsed.filter((v) => typeof v === 'string' && shape.test(v));
+    return kept.length > 0 ? kept : null;
+}
+/**
+ * A damaged column reads as no aliases — the finding is then tied by its
+ * rule id alone, which only ever narrows what it is tied to, never widens it.
+ * `?? null` covers a row read before migration 014 ran on this handle.
+ */
+function parseAliases(raw) {
+    if (raw === null || raw === undefined)
+        return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : [];
+    }
+    catch {
+        return [];
+    }
 }
 //# sourceMappingURL=findingsRepo.js.map

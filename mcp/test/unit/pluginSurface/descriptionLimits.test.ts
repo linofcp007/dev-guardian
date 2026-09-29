@@ -16,6 +16,8 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
+import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
+import { RESOURCES } from '../../../src/resources/index.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import { commandDocs, frontmatter, skillDocs } from './pluginDocs.js';
 
@@ -75,4 +77,40 @@ describe('command frontmatter', () => {
       expect(String(fm['description']).length).toBeLessThanOrEqual(SKILL_DESCRIPTION_MAX);
     },
   );
+
+  // Claude Code shows `argument-hint` beside the command in its picker; a
+  // non-string (an unquoted `[a, b]` parses as a YAML list) shows nothing.
+  it.each(commandDocs().map((c) => [c.name, c] as const))(
+    '%s: argument-hint, when present, is a short single-line string',
+    (_name, command) => {
+      const hint = frontmatter(command)['argument-hint'];
+      if (hint === undefined) return;
+      expect(typeof hint).toBe('string');
+      expect(String(hint)).not.toMatch(/\n/);
+      expect(String(hint).length).toBeLessThanOrEqual(200);
+    },
+  );
+});
+
+// Resource descriptions reach the model's context the same way tool
+// descriptions do; nothing bounded them.
+describe('MCP resource descriptions', () => {
+  it('every registered resource has a non-empty description of at most 1500 characters', () => {
+    expect(RESOURCES.length).toBeGreaterThan(0);
+    const bad = RESOURCES.filter((r) => r.description.trim() === '' || r.description.length > TOOL_DESCRIPTION_MAX).map(
+      (r) => `${r.name}: ${r.description.length}`,
+    );
+    expect(bad).toEqual([]);
+  });
+});
+
+// The host rules every AI host is given state how many tools and resources
+// the server exposes. The number was a literal nobody checked, and it said 54
+// tools while the server registered 57.
+describe('the host rules name the real tool and resource counts', () => {
+  it('RULES_BODY says N tools and M resources, as registered', () => {
+    const m = /(\d+) tools and (\d+) resources/.exec(RULES_BODY);
+    expect(m).not.toBeNull();
+    expect([Number(m?.[1]), Number(m?.[2])]).toEqual([TOOLS.length, RESOURCES.length]);
+  });
 });

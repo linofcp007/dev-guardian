@@ -421,4 +421,108 @@ describe('migrations runner', () => {
     };
     expect(row.project_path).toBe('/main');
   });
+
+  it('upgrades a version-11 database in place: stored findings read as taxonomy-unknown (013)', () => {
+    // A 3.0.0 database: findings have no cwe/owasp columns. After the
+    // upgrade they exist, the old rows hold NULL in both, and a reader sees
+    // neither field — unknown, never a category — while a new row written
+    // through the repo keeps what it was given.
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 11)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '11')`);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('s1', 'sast', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, rule_id, severity, category, title, file_path, line_start)
+       VALUES ('fp-old', 's1', 'semgrep', 'javascript.lang.security.audit.sqli', 'high', 'security', 't', 'a.js', 3)`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const columns = (db.prepare(`PRAGMA table_info(findings)`).all() as Array<{ name: string }>).map((c) => c.name);
+    expect(columns).toEqual(expect.arrayContaining(['cwe', 'owasp']));
+    expect(db.prepare(`SELECT cwe, owasp FROM findings WHERE fingerprint = 'fp-old'`).get()).toEqual({ cwe: null, owasp: null });
+
+    const storage = new Storage(db);
+    const [old] = storage.findings.listByScan('s1');
+    expect(old?.fingerprint).toBe('fp-old');
+    expect(old).not.toHaveProperty('cwe');
+    expect(old).not.toHaveProperty('owasp');
+  });
+
+  it('upgrades a pre-014 database: suppressions gain VEX columns, and an existing one claims no VEX status', () => {
+    // An existing suppression was a plain "false positive" — it must not
+    // start reading as a VEX `not_affected` statement after the upgrade.
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    // Whatever the newest pre-014 migration is once parallel branches merge.
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path)
+       VALUES ('fp-old', 'reviewed', '2026-01-01T00:00:00.000Z', '/p')`,
+    );
+
+    runMigrations(db);
+
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+    const row = db
+      .prepare(`SELECT vex_status, vex_justification, vex_impact_statement FROM suppressions`)
+      .get();
+    expect(row).toEqual({ vex_status: null, vex_justification: null, vex_impact_statement: null });
+    expect(new Storage(db).suppressions.listAll()[0]?.vex_status).toBeUndefined();
+  });
+
+  it('upgrades a pre-014 database: an existing finding reads no vulnerability aliases', () => {
+    const db = new Database(':memory:');
+    const before = listMigrations().filter((x) => x.version < 14);
+    for (const m of before) db.exec(readFileSync(m.filePath, 'utf8'));
+    const previous = String(Math.max(...before.map((m) => m.version)));
+    db.prepare(`INSERT INTO schema_meta(key, value) VALUES('version', ?)`).run(previous);
+    db.exec(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('d1', 'deps', '/p', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed')`,
+    );
+    db.exec(
+      `INSERT INTO findings (fingerprint, scan_id, tool, rule_id, severity, category, title, message)
+       VALUES ('fp-old', 'd1', 'pip-audit', 'PYSEC-2021-142', 'medium', 'security', 't',
+               'an incomplete fix for CVE-2020-1747')`,
+    );
+
+    runMigrations(db);
+
+    const [finding] = new Storage(db).findings.listByScan('d1');
+    expect(finding?.rule_id).toBe('PYSEC-2021-142');
+    expect(finding?.vuln_aliases).toBeUndefined();
+  });
+
+  it('upgrades a version-11 database in place: audit_mcp_tools gets its pin table, old rows untouched (012)', () => {
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 11)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '11')`);
+    db.exec(
+      `INSERT INTO agent_config_hashes (project_path, entry_key, hash, updated_at)
+       VALUES ('/p', '.mcp.json::x', 'h', '2026-01-01T00:00:00.000Z')`,
+    );
+
+    runMigrations(db);
+
+    const columns = (db.prepare(`PRAGMA table_info(mcp_tool_pins)`).all() as { name: string }[]).map((c) => c.name);
+    expect(columns).toEqual(expect.arrayContaining(['project_path', 'server_key', 'tool_name', 'hash', 'updated_at']));
+    const storage = new Storage(db);
+    expect(storage.agentAudit.getHashes('/p').get('.mcp.json::x')).toBe('h');
+    expect(storage.mcpToolPins.getServerPins('/p', '.mcp.json::x')).toEqual(new Map());
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+  });
 });

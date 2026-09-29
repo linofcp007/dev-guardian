@@ -18,6 +18,7 @@ import {
   getProp,
   getString,
   makeFinding,
+  SECRET_CWE,
   parseInputAsJson,
   toRelativeIfPossible,
   type ParserContext,
@@ -66,6 +67,7 @@ function mapItem(raw: unknown, ctx: ParserContext): Finding | null {
     title: description ?? `Possible secret matching rule '${ruleId}'`,
     file_path: toRelativeIfPossible(file, ctx.project_path),
     fix_available: false,
+    taxonomy: { cwe: [SECRET_CWE] },
   };
   if (lineStart !== undefined) input.line_start = lineStart;
   if (lineEnd !== undefined) input.line_end = lineEnd;

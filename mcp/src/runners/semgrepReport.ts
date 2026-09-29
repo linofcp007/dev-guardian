@@ -45,11 +45,41 @@
  * `ok` stays true only for the first, so a caller that reads nothing else
  * (`fixpr/apply.ts`, `compliance_check`) keeps treating a partial run as
  * not done.
+ *
+ * ---- Taint fixpoint timeouts --------------------------------------------
+ *
+ * One more way to look complete: a taint rule whose dataflow analysis of
+ * one function runs past its budget is given up on that function, and what
+ * it had not found yet is lost. Semgrep does not put that in `errors[]` —
+ * `errors` stays empty and `paths.scanned` full — but only under
+ * `time.fixpoint_timeouts` (`error_type: "Fixpoint timeout"`, the file and
+ * the function's line in `location`). Measured: present on 1.170.1 and
+ * 1.176.1 in every JSON report, with or without `--time` (an empty list on
+ * a clean run); absent on 1.86.0, 1.95.0, 1.99.0 and 1.120.1 even with it.
+ * `--time` is never needed, and never passed: it adds per-target profiling
+ * (LibreChat: 94 MB against 1.7 MB). 644 of them on LibreChat and 77 on this
+ * repo's own `mcp/src` under `p/default` + the plugin's packs, and a true
+ * positive of the LLM pack dropped out of 3 scans in 17, each with a
+ * fixpoint timeout on its function.
+ *
+ * A file named there was not fully analysed — the same class as a per-rule
+ * `Timeout` in `errors[]` — so it joins the per-file problems: an otherwise
+ * complete run is `partial`, one entry per file (type
+ * {@link FIXPOINT_TIMEOUT_TYPE}, its function count in `functions`), and the
+ * reason names a few files and counts the rest. A timeout marks the function
+ * incomplete rather than empty — a scan once reported the very finding its
+ * function timed out on — but the file's result cannot be trusted either
+ * way. An entry that names no file cannot be scoped to one, and makes the
+ * run `failed`, as an error naming no file does. A timeout of the plugin's
+ * own pack alone is the pack's gap, never the verdict
+ * ({@link PluginPackFixpoint}). An engine that does not
+ * emit the field cannot say: {@link semgrepEngineOf}, and the note callers
+ * add (`semgrepConfigs.ts#semgrepEngineNote`).
  */
 
-import type { FailedRule, PartialParse } from '../types.js';
+import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import type { ProcessOutcome } from './processRunner.js';
-import { asArray, getProp, getString, parseInputAsJson, toRelativeIfPossible } from './scannerParsers/index.js';
+import { asArray, getProp, getString, parseInputAsJson, toPosixPath, toRelativeIfPossible } from './scannerParsers/index.js';
 
 export type SemgrepVerdict = 'ok' | 'partial' | 'scanned_nothing' | 'failed';
 
@@ -97,6 +127,11 @@ export interface SemgrepReportCheck {
    * a crash, a target).
    */
   rule_config_error?: string;
+  /**
+   * `ok`, `partial` or `rules_not_loaded`: the plugin's pack's own fixpoint
+   * timeouts ({@link PluginPackFixpoint}) — never part of the verdict.
+   */
+  plugin_pack_fixpoint?: PluginPackFixpoint;
 }
 
 /** A rule a Semgrep run did not load, by its stored id, and Semgrep's reason. */
@@ -104,6 +139,19 @@ export type RuleNotLoaded = FailedRule;
 
 /** Longest error text carried into a reason. */
 const MAX_ERROR_TEXT = 300;
+
+/** The `error_type` of a `time.fixpoint_timeouts` entry, and the `PartialParse.type` its file is stored under. */
+export const FIXPOINT_TIMEOUT_TYPE = 'Fixpoint timeout';
+
+/**
+ * The `PartialParse.type` of a file whose fixpoint timeouts are the plugin's
+ * pack's alone ({@link PluginPackFixpoint}): kept for history, never the
+ * scan's partial verdict nor the CI gate's (`ci/runScans.ts` leaves it out).
+ */
+export const FIXPOINT_TIMEOUT_PACK_TYPE = 'Fixpoint timeout (plugin pack)';
+
+/** How many files a partial reason names before "+N more" — parse errors and fixpoint timeouts alike. The stored list keeps every one. */
+export const FIXPOINT_FILES_NAMED = 5;
 
 /**
  * Error types that describe the rules or the configuration, never one target
@@ -127,6 +175,23 @@ export function checkSemgrepReport(args: {
    * not load is named as its findings are. Identity when omitted.
    */
   ruleIdOf?: (checkId: string) => string;
+  /**
+   * The plugin's own packs' rules (`configs/semgrep/`, what scan_sast and
+   * review_pr append) as Semgrep spells them in THIS run, prefix included
+   * (`semgrepRuleIds.ts#pluginPackCheckIds`) — matched against the raw id a
+   * fixpoint timeout names, never a normalised one: a project rule named
+   * like a pack rule is spelled bare, and is not the pack's (round 4, A-1).
+   * A timeout whose only rule is one of them is the pack's gap, not the
+   * scan's ({@link PluginPackFixpoint}). None when omitted.
+   */
+  pluginPackCheckIds?: ReadonlySet<string>;
+  /**
+   * Whether any config of the run besides the plugin's packs may hold a
+   * taint rule (`semgrepRuleIds.ts#mayHoldTaintRules`: unless proven not
+   * to). Default true. When false, a timeout that names a pack rule first
+   * of several is the pack's too: every rule that can time out is the pack's.
+   */
+  nonPackTaintRules?: boolean;
 }): SemgrepReportCheck {
   const { raw, exitCode, outcome, targets, projectPath } = args;
   const relative = (list: readonly PartialParse[]): PartialParse[] =>
@@ -145,6 +210,16 @@ export function checkSemgrepReport(args: {
   const errorEntries = asArray(getProp(root, 'errors'));
   const errors = describeErrors(errorEntries);
   const exitClean = exitCode === 0 || exitCode === 1;
+  // Functions the taint analysis gave up on (the module comment): per file,
+  // project-relative, beside `errors[]` rather than in it. Those of the
+  // plugin's pack alone are its own gap, and never the verdict's.
+  const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? new Set(), args.nonPackTaintRules ?? true);
+  const fixpoint = all.scan;
+  const fixpointFiles = relative(fixpoint.files);
+  const packGap: PluginPackFixpoint | null =
+    all.pack.functions > 0 ? { files: relative(all.pack.files), functions: all.pack.functions } : null;
+  const withPackGap = (check: SemgrepReportCheck): SemgrepReportCheck =>
+    packGap === null ? check : { ...check, plugin_pack_fixpoint: packGap };
 
   const problems: string[] = [];
   if (!exitClean) problems.push(`exit ${String(exitCode)}`);
@@ -152,43 +227,243 @@ export function checkSemgrepReport(args: {
   if (errors.length > 0) {
     problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join('; '))}`);
   }
-  if (problems.length === 0) return { ok: true, verdict: 'ok', scanned, errors: 0 };
+  if (fixpoint.functions > 0) problems.push(describeFixpointTimeouts(fixpointFiles, fixpoint.unscoped));
+  if (problems.length === 0) return withPackGap({ ok: true, verdict: 'ok', scanned, errors: 0 });
   const reason = problems.join('; ');
 
-  if (exitClean && scanned === 0 && errors.length === 0) {
+  if (exitClean && scanned === 0 && errors.length === 0 && fixpoint.functions === 0) {
     return { ok: false, verdict: 'scanned_nothing', scanned, errors: 0, reason };
   }
-  if (exitClean && scanned > 0 && errors.length > 0) {
-    const partial = perFileErrors(errorEntries);
+  if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
+    const partial = errors.length > 0 ? perFileErrors(errorEntries) : [];
     if (partial !== null) {
-      return { ok: false, verdict: 'partial', scanned, errors: errors.length, reason, partial: relative(partial) };
+      return withPackGap({
+        ok: false,
+        verdict: 'partial',
+        scanned,
+        errors: errors.length,
+        reason,
+        partial: [...relative(partial), ...fixpointFiles],
+      });
     }
   }
   const failed: SemgrepReportCheck = { ok: false, verdict: 'failed', scanned, errors: errors.length, reason };
   const configError = ruleConfigError(errorEntries);
   if (configError !== null) failed.rule_config_error = configError;
-  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0)) {
+  if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0) && fixpoint.unscoped === 0) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
-      return {
+      const files = [...relative(ruleGap.files), ...fixpointFiles];
+      return withPackGap({
         ...someRan,
         rules_not_loaded: ruleGap.rules,
-        ...(ruleGap.files.length > 0 ? { partial: relative(ruleGap.files) } : {}),
-      };
+        ...(files.length > 0 ? { partial: files } : {}),
+      });
     }
   }
   return failed;
 }
 
 /**
+ * `a, b, c, d, e, +N more`: the first {@link FIXPOINT_FILES_NAMED} of
+ * `names`, then how many were left out — for any reason or warning that
+ * names files (round 3, N-2: a loaded run names hundreds).
+ */
+export function nameAFew(names: readonly string[], separator = ', '): string {
+  const more = names.length - FIXPOINT_FILES_NAMED;
+  return [...names.slice(0, FIXPOINT_FILES_NAMED), ...(more > 0 ? [`+${more} more`] : [])].join(separator);
+}
+
+/**
+ * The plugin's pack's own taint gap: fixpoint timeouts whose only rule is
+ * one of its rules (`[rules: 1, first: <a pack rule>]`). Measured on this
+ * repo's `mcp/src`, a TypeScript tree with no model call in it: 6 to 22 per
+ * run, every one from the pack's JS rules — their sources are names and
+ * shapes, with no literal for Semgrep to prefilter on, so taint runs on
+ * every function. Counted in the verdict, they made the scan partial and the
+ * CI gate red on code the pack has nothing to say about, with nothing a user
+ * could accept (review of the LLM pack, round 3, N-1). So they are the
+ * PACK's gap: stored beside the scan's gaps under
+ * {@link FIXPOINT_TIMEOUT_PACK_TYPE} (a finding in such a file still reads
+ * not re-measured), named in a note, never the run's partial verdict and
+ * never the gate's. A timeout that names another rule, more than one rule
+ * (Semgrep names only the first), or no parseable rule stays the scan's.
+ */
+export interface PluginPackFixpoint {
+  /** One entry per file, type {@link FIXPOINT_TIMEOUT_PACK_TYPE}; project-relative. */
+  files: PartialParse[];
+  /** Functions in all, those in no named file included. */
+  functions: number;
+}
+
+/**
+ * The files `time.fixpoint_timeouts` names (the module comment), one entry
+ * per file in the order first reported, each with its function count; how
+ * many functions in all; and how many entries named no file — split into
+ * the scan's and the plugin's pack's ({@link PluginPackFixpoint}).
+ */
+function fixpointTimeoutsOf(
+  root: unknown,
+  packCheckIds: ReadonlySet<string>,
+  nonPackTaintRules: boolean,
+): { scan: FixpointTally; pack: FixpointTally } {
+  const scan = new FixpointTally(FIXPOINT_TIMEOUT_TYPE);
+  const pack = new FixpointTally(FIXPOINT_TIMEOUT_PACK_TYPE);
+  for (const entry of asArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts'))) {
+    const rules = rulesOf(getString(entry, 'message'));
+    // The pack's alone when its rule — as Semgrep spells the PACK's, raw,
+    // prefix included — is the only one named, or is named first of several
+    // and no other config of the run can hold a taint rule at all (then
+    // every rule that can time out is the pack's).
+    const firstIsPack = rules !== null && packCheckIds.has(rules.first);
+    const isPack = firstIsPack && (rules.count === 1 || !nonPackTaintRules);
+    (isPack ? pack : scan).add(getString(getProp(entry, 'location'), 'path'));
+  }
+  return { scan, pack };
+}
+
+/**
+ * The rules a fixpoint timeout names, or null when its message does not say:
+ * Semgrep writes `… [rules: N, first: <check id>]` (1.176.1) — how many rules
+ * timed out on the function, and only the first of them.
+ */
+function rulesOf(message: string | undefined): { count: number; first: string } | null {
+  const m = /\[rules: (\d+), first: ([^\]\s]+)\]/.exec(message ?? '');
+  const first = m?.[2];
+  if (m === null || first === undefined) return null;
+  return { count: Number.parseInt(m[1] ?? '0', 10), first };
+}
+
+/** Fixpoint timeouts counted per file, in the order first reported. */
+class FixpointTally {
+  readonly files: PartialParse[] = [];
+  functions = 0;
+  unscoped = 0;
+  private readonly byFile = new Map<string, PartialParse>();
+
+  constructor(private readonly type: string) {}
+
+  add(path: string | undefined): void {
+    this.functions += 1;
+    if (path === undefined || path.length === 0) {
+      this.unscoped += 1;
+      return;
+    }
+    const file = toPosixPath(path);
+    const known = this.byFile.get(file);
+    if (known !== undefined) {
+      known.functions = (known.functions ?? 0) + 1;
+      known.message = fixpointMessage(known.functions);
+      return;
+    }
+    const entry: PartialParse = { file, type: this.type, message: fixpointMessage(1), functions: 1 };
+    this.byFile.set(file, entry);
+    this.files.push(entry);
+  }
+}
+
+/** The one-line message a fixpoint file's entry carries — its own, never Semgrep's (which repeats the path and rule list per function). */
+function fixpointMessage(functions: number): string {
+  return `taint analysis gave up on ${functions} function(s) here (Semgrep fixpoint timeout)`;
+}
+
+/**
+ * The note a run carries for {@link PluginPackFixpoint}: `the plugin's LLM
+ * pack: taint analysis incomplete (Semgrep fixpoint timeout) in N
+ * function(s) across M file(s): a.ts, +K more — its findings in those
+ * functions may be missing; the rest of the scan is complete`.
+ */
+export function describePluginPackFixpoint(gap: PluginPackFixpoint): string {
+  const unscoped = gap.functions - gap.files.reduce((n, f) => n + (f.functions ?? 1), 0);
+  return (
+    `the plugin's LLM pack: ${describeFixpointTimeouts(gap.files, Math.max(0, unscoped))} — ` +
+    'its findings in those functions may be missing; the rest of the scan is not affected'
+  );
+}
+
+/**
+ * `run` with the plugin's pack's own gap recorded ({@link PluginPackFixpoint}):
+ * its files added to `partially_parsed` under their own type — history reads
+ * a finding there as not re-measured — the note appended to the reason, and
+ * `plugin_packs.llm` partial. The run's status and the caller's
+ * `missing_tools` are untouched: the pack's gap is not the scan's.
+ */
+export function withPluginPackFixpoint(run: ToolRun, gap: PluginPackFixpoint | undefined): ToolRun {
+  if (gap === undefined || gap.functions === 0) return run;
+  const note = describePluginPackFixpoint(gap);
+  return {
+    ...run,
+    reason: [run.reason, note].filter((s) => s !== undefined).join('; '),
+    ...(gap.files.length > 0 ? { partially_parsed: [...(run.partially_parsed ?? []), ...gap.files] } : {}),
+    plugin_packs: { ...(run.plugin_packs ?? {}), llm: { status: 'partial', reason: note } },
+  };
+}
+
+/**
+ * `taint analysis incomplete (Semgrep fixpoint timeout) in N function(s)
+ * across M file(s): a.py, b.ts, +K more` — at most
+ * {@link FIXPOINT_FILES_NAMED} files named; with `unscoped`, how many
+ * functions no file was named for.
+ */
+function describeFixpointTimeouts(files: readonly PartialParse[], unscoped = 0): string {
+  const functions = files.reduce((n, f) => n + (f.functions ?? 1), 0) + unscoped;
+  const list = nameAFew(files.map((f) => f.file));
+  return (
+    `taint analysis incomplete (Semgrep fixpoint timeout) in ${functions} function(s)` +
+    (unscoped > 0 ? `, ${unscoped} of them in no named file` : '') +
+    (files.length > 0 ? ` across ${files.length} file(s): ${list}` : '')
+  );
+}
+
+/**
+ * What the engine that wrote a Semgrep report says about itself: its
+ * `version`, and whether it reports taint fixpoint timeouts — `true` when
+ * the report carries `time.fixpoint_timeouts` (1.170.1, 1.176.1: always,
+ * an empty list on a clean run), `false` when a report that names its
+ * version and scanned files has none (1.86.0 … 1.120.1, measured), absent
+ * when that cannot be told. Nothing at all for no report or no JSON.
+ */
+export interface SemgrepEngine {
+  version?: string;
+  fixpointTimeoutsReported?: boolean;
+}
+
+export function semgrepEngineOf(raw: unknown): SemgrepEngine {
+  if (raw === null || raw === undefined) return {};
+  const root = parseInputAsJson(raw);
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) return {};
+  const version = getString(root, 'version');
+  if (version === undefined || version.length === 0) return {};
+  if (Array.isArray(getProp(getProp(root, 'time'), 'fixpoint_timeouts'))) return { version, fixpointTimeoutsReported: true };
+  const scanned = asArray(getProp(getProp(root, 'paths'), 'scanned')).length;
+  return scanned > 0 ? { version, fixpointTimeoutsReported: false } : { version };
+}
+
+/**
  * The reason a `partial` run carries: `partial: N file(s) only partly parsed
- * — <what may be missing> (PartialParsing: a.php; Syntax error: b.js)`.
+ * — <what may be missing> (PartialParsing: a.php; Syntax error: b.js)`, and
+ * for the files a taint analysis gave up on, `partial: taint analysis
+ * incomplete (Semgrep fixpoint timeout) in N function(s) across M file(s):
+ * a.py, +K more — taint findings in those functions may be missing` (a few
+ * named: there can be hundreds).
  */
 export function describePartialParse(partial: readonly PartialParse[], consequence: string): string {
-  const listed = partial.map((p) => `${p.type}: ${p.file}`).join('; ');
-  const files = new Set(partial.map((p) => p.file)).size;
-  return `partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`;
+  // The plugin's pack's own gap has its own note (describePluginPackFixpoint).
+  const parsed = partial.filter((p) => p.type !== FIXPOINT_TIMEOUT_TYPE && p.type !== FIXPOINT_TIMEOUT_PACK_TYPE);
+  const fixpoint = partial.filter((p) => p.type === FIXPOINT_TIMEOUT_TYPE);
+  const parts: string[] = [];
+  if (parsed.length > 0) {
+    // A few named, the rest counted (round 3, N-2): the full list is on the
+    // run (`partially_parsed`), and a reason is read by a person.
+    const listed = nameAFew(parsed.map((p) => `${p.type}: ${p.file}`), '; ');
+    const files = new Set(parsed.map((p) => p.file)).size;
+    parts.push(`partial: ${files} file(s) only partly parsed — ${consequence} (${listed})`);
+  }
+  if (fixpoint.length > 0) {
+    parts.push(`partial: ${describeFixpointTimeouts(fixpoint)} — taint findings in those functions may be missing`);
+  }
+  return parts.join('; ');
 }
 
 /**

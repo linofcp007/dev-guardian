@@ -171,6 +171,17 @@
 # As outras oito sao a regra a trabalhar. O que separa os dois casos nao é o
 # verdicto, é ler os ficheiros.
 # ---------------------------------------------------------------------------
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # ERROR, e é a única regra desta série cuja forma correta nao é uma guarda
   # mas outro nó da AST. `throw ex;` dentro de um `catch (E ex)` reescreve
@@ -220,6 +231,11 @@ rules:
   #
   # A regra e o oraculo concordam. §4c do desenho tem os números.
   - id: bugfix-cs-error-handling-rethrow-loses-stacktrace
+    metadata:
+      # O CWE-755 seria o candidato, mas a MITRE desaconselha-o (Class,
+      # Discouraged) e nenhum Base descreve a perda da stack trace.
+      cwe: []
+      owasp: []
     patterns:
       - pattern: throw $V;
       - pattern-either:
@@ -306,6 +322,11 @@ rules:
   # para o próximo leitor nao voltar a abrir.
   #
   - id: bugfix-cs-error-handling-empty-catch
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - patterns:
           - pattern-either:
@@ -367,6 +388,11 @@ rules:
   # parametros com `object` a abrir E a convenção de handler do .NET, mas um
   # `async void Processa(object payload, Config c)` também escapa.
   - id: bugfix-cs-race-condition-async-void
+    metadata:
+      cwe:
+        - "CWE-248: Uncaught Exception"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: async void $M(...) { ... }
       - pattern-not: async void $M(object $S, $T $E) { ... }
@@ -469,6 +495,10 @@ rules:
   # seria dizer mais do que se mediu.
   # ---------------------------------------------------------------------------
   - id: bugfix-cs-race-condition-blocking-on-task
+    metadata:
+      cwe:
+        - "CWE-833: Deadlock"
+      owasp: []
     pattern-either:
       - patterns:
           - pattern: $V.Result
@@ -523,6 +553,10 @@ rules:
   # para o CA5394. Tratá-lo como segunda opiniao seria ler concordancia onde
   # nao existe sequer o mesmo assunto.
   - id: bugfix-cs-race-condition-static-random
+    metadata:
+      cwe:
+        - "CWE-567: Unsynchronized Access to Shared Data in a Multithreaded Context"
+      owasp: []
     pattern: static $T $F = new Random(...);
     message: >-
       `Random` estático partilhado entre threads. O `Random` nao é thread-safe:
@@ -574,6 +608,10 @@ rules:
   # gate, mas serve de segunda opiniao, que é para o que os oráculos deste pack
   # existem. Concordancia exata nas duas direções.
   - id: bugfix-cs-race-condition-lock-on-shared-instance
+    metadata:
+      cwe:
+        - "CWE-412: Unrestricted Externally Accessible Lock"
+      owasp: []
     pattern-either:
       - pattern: lock (this) { ... }
       - pattern: lock ("...") { ... }
@@ -695,6 +733,10 @@ rules:
   # aditivo POR MEDICAO — acrescentar a exclusao por simetria seria acrescentar
   # uma suposição, e o custo dela é um falso negativo que ninguém mediu.
   - id: bugfix-cs-off-by-one-loop-lte-length
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: for (var $I = 0; $I <= $A.Length; $I++) $BODY
@@ -749,6 +791,10 @@ rules:
   # `Count`. A alternativa era largar a restrição de tipo, e isso traz de volta
   # o objeto de domínio com um `int Count`, que é pior.
   - id: bugfix-cs-off-by-one-loop-lte-count
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: for (var $I = 0; $I <= $A.Count; $I++) ...
@@ -798,6 +844,10 @@ rules:
   # escapava. A exclusão pelo campo estático nao tem esse ponto cego: nomeia a
   # forma correta em vez de tentar delimitar onde a errada pode aparecer.
   - id: bugfix-cs-memory-leak-httpclient-per-call
+    metadata:
+      cwe:
+        - "CWE-770: Allocation of Resources Without Limits or Throttling"
+      owasp: []
     patterns:
       - pattern: new HttpClient(...)
       - pattern-not-inside: static $T $F = new HttpClient(...);
@@ -909,6 +959,11 @@ rules:
   # falso positivo declarado acima é o que a regra encontra quando encontra
   # alguma coisa. Os ramos `SingleOrDefault` e `LastOrDefault` produzem zero.
   - id: bugfix-cs-null-safety-ordefault-deref
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     pattern-either:
       - pattern: $X.FirstOrDefault(...).$M
       - pattern: $X.SingleOrDefault(...).$M
@@ -967,6 +1022,10 @@ rules:
   # `goto`, que ninguém escreve e que nenhuma fixture cobre — acrescentá-lo
   # seria uma clausula morta.
   - id: bugfix-cs-edge-case-modify-during-iteration
+    metadata:
+      # Nenhum CWE descreve esta falha com rigor, por isso fica sem categoria.
+      cwe: []
+      owasp: []
     patterns:
       - pattern: $COLL.$RM(...)
       - metavariable-regex:

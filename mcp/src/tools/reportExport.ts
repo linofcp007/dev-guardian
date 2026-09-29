@@ -11,13 +11,26 @@
  *     CVE tables for a scan_id.
  *   - narrative mode (`content_markdown`): wraps stakeholder Markdown in the same
  *     branded shell — used by `/guardian-report`. scan_id is ignored here.
+ *
+ * Scan mode also states each finding's CWE / OWASP Top 10:2025 category and
+ * an "OWASP Top 10:2025 coverage" table (`frameworks/coverage.ts`): a
+ * category is tested only when, for every source language of the scanned
+ * project (`frameworks/projectLanguages.ts`), a scanner that ran fully ok in
+ * THIS scan has enough rules for it. For an orchestrated security_full the
+ * bookkeeping is its child scans', whose rows record what the parent's
+ * merged bookkeeping does not (whether scan_sast ran `local_only`); for an
+ * audit_executive row, its sub-scans' (and their children's), since the
+ * row itself lists sub-tools, not scanners.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
+import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
+import { isOrchestratedFullScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import {
@@ -28,6 +41,7 @@ import {
   severityBar,
   severityChip,
 } from '../report/htmlTheme.js';
+import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
 import {
@@ -82,7 +96,10 @@ const tool: ToolModule = {
     'Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), ' +
     'sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass ' +
     'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
-    'format=html). Local file only — no external services, no web fonts.',
+    'format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: ' +
+    'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per ' +
+    'source language of the project. ' +
+    'Local file only — no external services, no web fonts.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -165,7 +182,16 @@ async function handler(
     ? ctx.storage.cves.listActive(scanId)
     : [];
 
-  const { content, fileName } = renderReport(format, scan, findings, cves, lang);
+  // Judged against the languages the scans recorded when they ran; a row
+  // written before that record falls back to today's tree, and says so —
+  // listed without blocking the server (`git ls-files` can take seconds).
+  const runs = coverageRunsOfScan(ctx, scan);
+  const owasp = owaspCoverage(
+    runs,
+    findings,
+    await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan.project_path)),
+  );
+  const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
   const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, fileName);
@@ -186,30 +212,79 @@ async function handler(
 
 type ScanRecordT = NonNullable<ReturnType<PluginContext['storage']['scans']['getById']>>;
 
+/** The scan ids a row delegates to: an orchestrated security_full's children, an audit's sub-scans. */
+function delegatedScanIds(scan: ScanRecordT): string[] | null {
+  if (isOrchestratedFullScan(scan)) {
+    const children = scan.meta?.['child_scans'];
+    return (Array.isArray(children) ? (children as unknown[]) : []).flatMap((child) => {
+      const id = child !== null && typeof child === 'object' ? (child as { scan_id?: unknown }).scan_id : undefined;
+      return typeof id === 'string' ? [id] : [];
+    });
+  }
+  if (scan.scan_type === 'audit') {
+    const subs = scan.meta?.['sub_scan_ids'];
+    if (subs === null || typeof subs !== 'object' || Array.isArray(subs)) return [];
+    return Object.values(subs as Record<string, unknown>).filter((id): id is string => typeof id === 'string');
+  }
+  return null;
+}
+
+/**
+ * The bookkeeping this report's coverage rests on: the scan itself, or —
+ * for an orchestrated security_full or an audit_executive row — the scans
+ * it delegated to, followed down (an audit's security_full sub-scan to its
+ * own children). A delegated scan that is gone or did not complete
+ * contributes nothing, so its categories read "not tested" rather than
+ * borrowing the parent's merged bookkeeping.
+ */
+function coverageRunsOfScan(ctx: PluginContext, scan: ScanRecordT, seen: Set<string> = new Set()): CoverageRun[] {
+  if (seen.has(scan.scan_id)) return [];
+  seen.add(scan.scan_id);
+  const delegated = delegatedScanIds(scan);
+  if (delegated === null) {
+    return [
+      {
+        scan_id: scan.scan_id,
+        scan_type: scan.scan_type,
+        tools_run: scan.tools_run,
+        missing_tools: scan.missing_tools,
+        ...(scan.meta !== undefined ? { meta: scan.meta } : {}),
+      },
+    ];
+  }
+  const runs: CoverageRun[] = [];
+  for (const id of delegated) {
+    const row = ctx.storage.scans.getById(id);
+    if (row !== null && row.status === 'completed') runs.push(...coverageRunsOfScan(ctx, row, seen));
+  }
+  return runs;
+}
+
 function renderReport(
   format: 'html' | 'sarif' | 'markdown' | 'json',
   scan: ScanRecordT,
   findings: Finding[],
   cves: Cve[],
   lang: Lang,
+  owasp: OwaspCoverage,
 ): { content: string; fileName: string } {
   switch (format) {
     case 'sarif':
       return { content: toSarif(findings), fileName: 'report.sarif' };
     case 'json':
       return {
-        content: JSON.stringify({ scan, findings, cves }, null, 2),
+        content: JSON.stringify({ scan, findings, cves, owasp_2025: owasp }, null, 2),
         fileName: 'report.json',
       };
     case 'markdown':
-      return { content: renderMarkdown(scan, findings, cves), fileName: 'report.md' };
+      return { content: renderMarkdown(scan, findings, cves, owasp), fileName: 'report.md' };
     case 'html':
     default:
-      return { content: renderHtml(scan, findings, cves, lang), fileName: 'report.html' };
+      return { content: renderHtml(scan, findings, cves, lang, owasp), fileName: 'report.html' };
   }
 }
 
-function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[]): string {
+function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owasp: OwaspCoverage): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines: string[] = [];
@@ -230,15 +305,17 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[]): st
   if (findings.length === 0) {
     lines.push('_No findings._');
   } else {
-    lines.push('| Sev | Tool | Rule | Title | Location |');
-    lines.push('| --- | --- | --- | --- | --- |');
+    lines.push('| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
     for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
       const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '';
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} |`,
+        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`,
       );
     }
   }
+  lines.push('');
+  lines.push(...owaspCoverageMarkdown(owasp));
   if (cves.length > 0) {
     lines.push('');
     lines.push(`## Active CVEs (${cves.length})`);
@@ -269,7 +346,7 @@ const SCAN_TITLE: Record<Lang, string> = {
   es: 'Informe de Seguridad',
 };
 
-function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang): string {
+function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang, owasp: OwaspCoverage): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
 
@@ -295,6 +372,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   <td><code>${escapeHtml(f.rule_id ?? '')}</code></td>
   <td>${escapeHtml(f.title)}</td>
   <td><code>${escapeHtml(f.file_path ?? '')}${f.line_start ? `:${f.line_start}` : ''}</code></td>
+  <td>${escapeHtml(taxonomyCell(f))}</td>
 </tr>`,
     )
     .join('');
@@ -302,7 +380,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
     `<h2>Findings (${findings.length})</h2>\n` +
     (findings.length === 0
       ? '<p class="pdk-empty">No findings.</p>'
-      : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th></tr></thead><tbody>${findingRows}</tbody></table>`);
+      : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th><th>CWE / OWASP 2025</th></tr></thead><tbody>${findingRows}</tbody></table>`);
 
   const cveRows = cves
     .map(
@@ -324,7 +402,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
     subtitle: `${scan.scan_type} · ${scan.started_at} · ${scan.status}`,
-    sections: [meta, sevSection, findingsSection, cveSection],
+    sections: [meta, sevSection, findingsSection, owaspCoverageHtml(owasp), cveSection],
     lang,
   });
 }

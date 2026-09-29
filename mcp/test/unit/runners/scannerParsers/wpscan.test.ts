@@ -16,6 +16,20 @@ describe('wpscanParser', () => {
     expect(cves).toHaveLength(4);
   });
 
+  it('keeps the first CVE as the rule id and records every other one as an alias', () => {
+    const json = JSON.stringify({
+      plugins: {
+        akismet: {
+          version: { number: '4.1' },
+          vulnerabilities: [{ title: 'Akismet XSS', fixed_in: '4.1.1', references: { cve: ['2024-1', '2024-2'] } }],
+        },
+      },
+    });
+    const { findings } = wpscanParser.parse(json);
+    expect(findings[0]?.rule_id).toBe('CVE-2024-1');
+    expect(findings[0]?.vuln_aliases).toEqual(['CVE-2024-2']);
+  });
+
   it('maps CVSS scores to severities', () => {
     const { findings } = wpscanParser.parse(readFileSync(FIXTURE, 'utf8'));
     const critical = findings.find((f) => /Contact Form/.test(f.title));

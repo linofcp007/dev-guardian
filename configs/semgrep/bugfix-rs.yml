@@ -125,6 +125,17 @@
 # minúsculas acentuadas são válidas.
 # ---------------------------------------------------------------------------
 
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # Sleep bloqueante dentro de uma `async fn`.
   #
@@ -191,6 +202,10 @@ rules:
   # `underflow` / `out.of.range`, que vão todos para `off_by_one` porque
   # `edge_case` é testado em último lugar.
   - id: bugfix-rs-race-condition-blocking-sleep-in-async
+    metadata:
+      cwe:
+        - "CWE-1322: Use of Blocking Code in Single-threaded, Non-blocking Context"
+      owasp: []
     patterns:
       # (b) acima: a grafia QUALIFICADA é a larga. Não acrescente um
       # `pattern-either` com `thread::sleep(...)` — é um subconjunto estrito.

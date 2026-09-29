@@ -28,6 +28,11 @@
  * cached by, so a moved branch is a new review, not a stale hit.
  */
 
+import {
+  PROJECT_LANGUAGES_META_KEY,
+  resolveProjectLanguagesAsync,
+  type ProjectLanguages,
+} from '../frameworks/projectLanguages.js';
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
@@ -48,7 +53,9 @@ import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
+import { semgrepEngineOf } from '../runners/semgrepReport.js';
+import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -121,6 +128,7 @@ const reviewPr = makeScanTool<ReviewPrInput>({
     const headIsCheckedOut = (await resolveCommit(ctx.projectPath, 'HEAD')) === head;
     let tree: MaterialisedTree | null = null;
     let cleanupNote: string | null = null;
+    let projectLanguages: ProjectLanguages | null = null;
     try {
       let scanRoot = ctx.projectPath;
       let unavailable: string | null = null;
@@ -133,6 +141,17 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         }
       }
       const where = headIsCheckedOut ? 'the working tree' : `head ${head.slice(0, 12)}`;
+      // The languages of the tree this review reads — the head's own when it
+      // is not checked out — listed before that tree is removed below. A
+      // head that is not checked out and changes no file was never
+      // materialised: the working tree is not the head, so nothing is
+      // recorded rather than the wrong tree's languages.
+      projectLanguages =
+        unavailable !== null
+          ? { languages: null, source: `could not be determined (${unavailable})` }
+          : !headIsCheckedOut && tree === null
+            ? { languages: null, source: `not recorded: head ${head.slice(0, 12)} was not checked out (no file changed)` }
+            : await resolveProjectLanguagesAsync(ctx.plugin.storage.stack, ctx.projectPath, { walkRoot: scanRoot });
 
       if (unavailable !== null) {
         // gitleaks reads commits, not files, and still runs below.
@@ -189,6 +208,11 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         head_sha: head,
         scanned_tree: headIsCheckedOut ? 'working_tree' : 'head_checkout',
         changed_files: changed.length,
+        // Whether the Semgrep registry ran — OWASP coverage
+        // (`frameworks/coverage.ts`) claims registry categories only when
+        // the row says `false`, as scan_sast's rows always have.
+        local_only: input.local_only === true,
+        ...(projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {}),
         ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
       },
     };
@@ -250,17 +274,30 @@ async function runSemgrep(
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } },
+    rules: {
+      configs: plan.rulePacks,
+      ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot },
+      loadedFrom: plan.ruleConfigs,
+      // The plugin's pack's own fixpoint timeouts are its gap, not the review's.
+      packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: args.scanRoot }),
+      nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs),
+    },
   });
   // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
   // project's rules by their absolute path; stored canonical, as scan_sast's.
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
-  out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
+  // What the engine cannot do — report taint fixpoint timeouts, resolve the
+  // LLM pack's node: imports — said once, as scan_sast says it.
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  out.tools_run.push(
+    withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : []), ...(engineNote !== null ? [engineNote] : [])]),
+  );
   // Scanned nothing at all, not every changed file, or some only partly
   // parsed or rules that did not load (`ok` + missing, runners/semgrepReport.ts):
   // a gap, not a clean result.
-  const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0);
+  // The plugin's LLM pack missing from disk (runners/semgrepConfigs.ts) is a gap too.
+  const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial) out.missing_tools.push('semgrep');
   out.cancelled ||= run.cancelled;
 }

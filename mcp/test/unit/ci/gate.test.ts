@@ -538,6 +538,27 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     }
   });
 
+  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout is a file
+  // Semgrep did not fully analyse — the same class as a per-file Timeout. The
+  // gate must treat it exactly as it treats a Timeout: exit 2, never
+  // accepted by --accept-partial-parse, coverage partial.
+  it('a Fixpoint timeout is gated exactly as a per-file Timeout: exit 2, never accepted, the type named', () => {
+    const gateOf = (type: string, accept: string[]) =>
+      evaluateGate(input({
+        steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type }] } })],
+        acceptedPartialParses: accept,
+      }));
+    for (const accept of [[], [WP]]) {
+      const timeout = gateOf('Timeout', accept);
+      const fixpoint = gateOf('Fixpoint timeout', accept);
+      expect(fixpoint.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      expect(fixpoint.coverage).toBe('partial');
+      expect(fixpoint.acceptedGaps).toEqual([]);
+      expect({ ...fixpoint, coverageGaps: fixpoint.coverageGaps.map((g) => g.replace('Fixpoint timeout', 'Timeout')) }).toEqual(timeout);
+    }
+    expect(gateOf('Fixpoint timeout', [WP]).coverageGaps[0]).toMatch(/not accepted: Fixpoint timeout on wp\/rest-controller\.php/);
+  });
+
   it("the DAST step's partial-surface gap is accepted with the surface's files", () => {
     const dast = step({
       tool: 'scan_dast',

@@ -49,13 +49,10 @@ export class ValidationsRepo {
       WHERE project_path = ?
       ORDER BY fingerprint ASC, provider ASC
     `);
-        // ORDER BY computed_at DESC LIMIT 1 — see getByFingerprint's doc comment
-        // for why this method needs a tie-break at all.
+        // The full primary key: at most one row, no tie to break.
         this.getByFingerprintStmt = db.prepare(`
       SELECT * FROM finding_validations
-      WHERE project_path = ? AND fingerprint = ?
-      ORDER BY computed_at DESC
-      LIMIT 1
+      WHERE project_path = ? AND fingerprint = ? AND provider = ?
     `);
     }
     /**
@@ -79,22 +76,17 @@ export class ValidationsRepo {
         return this.listByProjectStmt.all(projectPath).map(rowToValidation);
     }
     /**
-     * Returns one verdict for a finding, or `null` if none exists yet.
+     * One provider's verdict for a finding, or `null` if it has none.
      *
-     * The table's key is `(project_path, fingerprint, provider)`, not just
-     * `(project_path, fingerprint)`: once more than one provider has scored the
-     * same finding — `runtime`, `dependency`, both still to come — more than
-     * one row can match. This method takes no `provider` argument, so that
-     * case is resolved by returning the most recently computed row across all
-     * providers ("the latest answer, whoever gave it"), not by picking a
-     * preferred provider. A caller that wants a specific provider's verdict —
-     * e.g. "what did `static` say about this finding" — needs a different
-     * accessor; none exists yet because only `static` is implemented, and nothing
-     * today needs it. Recorded here for whoever adds `runtime` next, so this is
-     * a decision to revisit deliberately rather than a behaviour to rediscover.
+     * The table's key is `(project_path, fingerprint, provider)`, and a
+     * dependency finding carries a `static` AND a `dependency` verdict — two
+     * different questions. This used to take no provider and return "the newest
+     * row", which `validate_finding` made arbitrary: it mints one `computed_at`
+     * per batch, so both rows tie on it (review of the 3.0 additions, M5). The
+     * provider is the caller's to name.
      */
-    getByFingerprint(projectPath, fingerprint) {
-        const row = this.getByFingerprintStmt.get(projectPath, fingerprint);
+    getByFingerprint(projectPath, fingerprint, provider) {
+        const row = this.getByFingerprintStmt.get(projectPath, fingerprint, provider);
         return row ? rowToValidation(row) : null;
     }
 }

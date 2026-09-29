@@ -19,17 +19,21 @@
  */
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { MAX_GRAPH_EDGES } from './importGraph.js';
-import { VERDICTS } from './types.js';
+import { IMPLEMENTED_PROVIDERS, VERDICTS, } from './types.js';
 export function buildSummary(input) {
     const { persisted, graph, validations, dast } = input;
     const stale = persisted.tree_hash !== input.workingTreeHash;
+    const providersRun = input.providersRun ?? ['static'];
     // Code routes only, and their deduplicated files — the roots the provider
     // actually traverses from. See `routeRoots`.
     const codeRoutes = persisted.snapshot.routes.filter((r) => r.provenance === 'code');
     return {
-        findings_selected: validations.length,
-        counts_by_verdict: countByVerdict(validations),
-        coverage_gaps: collectGaps(input, stale),
+        findings_selected: input.findingsSelected ?? new Set(validations.map((v) => v.fingerprint)).size,
+        // Per provider, keyed by provider (review of the 3.0 additions, M4): a
+        // dependency finding carries a verdict from each, so one flat count
+        // counted it twice and mixed two different questions.
+        counts_by_verdict: Object.fromEntries(providersRun.map((p) => [p, countByVerdict(validations.filter((v) => v.provider === p))])),
+        coverage_gaps: collectGaps(input, stale, providersRun),
         snapshot: {
             id: persisted.id,
             tree_hash: persisted.tree_hash,
@@ -77,7 +81,7 @@ export function buildSummary(input) {
             anonymous_exposure_files: dast.files.size,
             scans_searched: dast.scansSearched,
         },
-        providers_run: ['static'],
+        providers_run: [...providersRun],
     };
 }
 /**
@@ -142,12 +146,39 @@ function ageHours(scan, now) {
  * provider has no clock, no filesystem and no storage, so it cannot know the
  * snapshot has aged or that no DAST scan exists.
  */
-function collectGaps(input, stale) {
-    const gaps = new Set();
-    for (const validation of input.validations) {
-        for (const gap of validation.coverage_gaps)
-            gaps.add(gap);
+/**
+ * The per-finding gaps, one line per KIND (review of the 3.0 additions, M4:
+ * 30 packages made 34 entries, 10 KB). Two gaps are one kind when they differ
+ * only in what they quote (`'src/a.x'` vs `'src/b.y'`): a kind seen once is
+ * kept verbatim — which is also why a per-finding gap still appears in the
+ * summary exactly as the finding carries it — and one seen with several
+ * values becomes one line naming how many findings and the first values.
+ */
+function aggregateByKind(validations) {
+    const kinds = new Map();
+    for (const validation of validations) {
+        for (const gap of validation.coverage_gaps) {
+            const kind = gap.replace(/'[^']*'/g, "'…'");
+            const entry = kinds.get(kind) ?? { variants: new Set(), findings: new Set(), values: [] };
+            if (!entry.variants.has(gap)) {
+                entry.variants.add(gap);
+                entry.values.push(...(gap.match(/'[^']*'/g) ?? []).slice(0, 1));
+            }
+            entry.findings.add(validation.fingerprint);
+            kinds.set(kind, entry);
+        }
     }
+    return [...kinds].map(([kind, entry]) => {
+        const [only] = entry.variants;
+        if (entry.variants.size === 1 && only !== undefined)
+            return only;
+        const shown = entry.values.slice(0, 3).join(', ');
+        const more = entry.values.length > 3 ? `, … ${entry.values.length - 3} more` : '';
+        return `${kind} — ${entry.findings.size} findings (${shown}${more})`;
+    });
+}
+function collectGaps(input, stale, providersRun) {
+    const gaps = new Set(aggregateByKind(input.validations));
     if (stale) {
         gaps.add(`the surface snapshot describes tree ${input.persisted.tree_hash} but the working tree is ` +
             `now ${input.workingTreeHash} — every verdict here was computed against the snapshot's ` +
@@ -174,8 +205,28 @@ function collectGaps(input, stale) {
             'most recent scans, so no reaching route could be cross-referenced as confirmed ' +
             'anonymously exposed — that is a missing input, not evidence that nothing is exposed');
     }
-    gaps.add("only the 'static' provider exists in this version — 'runtime' (live confirmation) and " +
-        "'dependency' are not implemented, so no verdict here can be 'confirmed'");
+    const uncoordinated = input.withoutCoordinates ?? [];
+    if (uncoordinated.length > 0) {
+        const ids = [...new Set(uncoordinated.flatMap((f) => f.ids.slice(0, 1)))];
+        const shown = `${ids.slice(0, 3).join(', ')}${ids.length > 3 ? `, … ${ids.length - 3} more` : ''}`;
+        gaps.add(`${uncoordinated.length} finding${uncoordinated.length === 1 ? '' : 's'} with a vulnerability id of ` +
+            `${uncoordinated.length === 1 ? 'its' : 'their'} own (${shown}) name${uncoordinated.length === 1 ? 's' : ''} ` +
+            "no package version: the 'dependency' provider does not apply, and " +
+            `${uncoordinated.length === 1 ? 'it is' : 'they are'} not exportable to VEX (no package coordinates)`);
+    }
+    if (providersRun.includes('dependency') && input.persisted.snapshot.external_imports === undefined) {
+        gaps.add('the surface snapshot was mapped before third-party imports were recorded, so the ' +
+            "'dependency' provider could match no package — re-run map_attack_surface with force: true");
+    }
+    for (const provider of IMPLEMENTED_PROVIDERS) {
+        if (providersRun.includes(provider))
+            continue;
+        gaps.add(provider === 'dependency'
+            ? "'dependency' was not requested, so no dependency finding was checked for an import of its package"
+            : "'static' was not requested, so no finding's own file was checked for a path from a route");
+    }
+    gaps.add("'runtime' (live confirmation) is not implemented in this version, so no verdict here can be " +
+        "'confirmed'");
     return [...gaps];
 }
 //# sourceMappingURL=summary.js.map

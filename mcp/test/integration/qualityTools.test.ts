@@ -282,6 +282,36 @@ describe('bug_hunt', () => {
     expect(r.missing_tools).toEqual(['semgrep']);
   });
 
+  // Review of the LLM pack, round 2 (I-C): bug_hunt's whole-project run reads
+  // a taint fixpoint timeout as scan_sast does — partial, the file named —
+  // and an engine that cannot report one carries the named note.
+  it('a taint fixpoint timeout makes the run partial, the file named; an engine without the field is noted', async () => {
+    const project = tempProject();
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const location = { path: join(project, 'agent.py'), start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } };
+    const reportOf = (over: Record<string, unknown>) => (opts: Parameters<typeof writeOutput>[0]) => {
+      writeOutput(opts, JSON.stringify({ results: [], errors: [], paths: { scanned: [join(project, 'agent.py')] }, ...over }));
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    };
+    type Out = { missing_tools: string[]; tools_run: { name: string; status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string }> }[] };
+    vi.mocked(runProcess).mockImplementation(async (opts) =>
+      reportOf({ version: '1.176.1', time: { fixpoint_timeouts: [{ error_type: 'Fixpoint timeout', severity: 'warn', message: 'x', location }] } })(opts),
+    );
+    const r = (await getTool('bug_hunt').handler({ project_path: project }, makePlugin(project))) as unknown as Out;
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): agent\.py/);
+    expect(run?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['agent.py', 'Fixpoint timeout']]);
+    expect(r.missing_tools).toEqual(['semgrep']);
+
+    vi.mocked(runProcess).mockImplementation(async (opts) => reportOf({ version: '1.120.1' })(opts));
+    const old = (await getTool('bug_hunt').handler({ project_path: project, force: true }, makePlugin(project))) as unknown as Out;
+    const oldRun = old.tools_run.find((t) => t.name === 'semgrep');
+    expect(oldRun?.status).toBe('ok');
+    expect(oldRun?.reason).toBe('this Semgrep (1.120.1) does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected');
+    expect(old.missing_tools).toEqual([]);
+  });
+
   it('the local bugfix-*.yml rules survive and still report findings when BOTH base registry packs fail to download', async () => {
     // This is the design of record's actual reason the local rules are on
     // by default (the design of record): "a local file cannot 404 ... even with the registry

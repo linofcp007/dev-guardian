@@ -22,6 +22,7 @@ import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
+import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
 import {
   AllowDirty,
   AutoFix,
@@ -268,17 +269,23 @@ function recordSemgrepWp(args: {
 }): void {
   const { raw, run, projectPath, tools_run, missing_tools } = args;
   const check = checkSemgrepReport({ raw, exitCode: run.exitCode, outcome: run.outcome, targets: 1, projectPath });
+  // What the engine cannot report (taint fixpoint timeouts), on a run that scanned.
   if (check.verdict === 'ok') {
-    tools_run.push({ name: 'semgrep-wp', status: 'ok' });
+    tools_run.push(withSemgrepEngineNote({ name: 'semgrep-wp', status: 'ok' }, raw));
     return;
   }
   if (check.verdict === 'partial' && check.partial !== undefined) {
-    tools_run.push({
-      name: 'semgrep-wp',
-      status: 'ok',
-      reason: describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
-      partially_parsed: check.partial,
-    });
+    tools_run.push(
+      withSemgrepEngineNote(
+        {
+          name: 'semgrep-wp',
+          status: 'ok',
+          reason: describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
+          partially_parsed: check.partial,
+        },
+        raw,
+      ),
+    );
     missing_tools.push('semgrep-wp');
     return;
   }

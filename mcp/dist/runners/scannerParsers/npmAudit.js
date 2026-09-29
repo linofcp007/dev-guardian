@@ -15,8 +15,14 @@
  * advisory objects carry GHSA urls rather than reliable CVE ids, and Trivy
  * already populates the CVE table across stacks — npm audit's value here is
  * the GitHub-advisory coverage that turns into counted Findings.
+ *
+ * Each finding records its advisory's own ids as `vuln_aliases`: the GHSA id
+ * of its advisory URL (both shapes) and, on v1, its `cves` and
+ * `github_advisory_id` — never an id its title or description mentions
+ * (`intel/vulnIds.ts`).
  */
-import { asArray, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
+import { advisoryIdFromUrl } from '../../intel/vulnIds.js';
+import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
 export const NPM_AUDIT_TOOL_NAME = 'npm-audit';
 export const npmAuditParser = {
     name: NPM_AUDIT_TOOL_NAME,
@@ -83,6 +89,9 @@ function mapV2Advisory(via, fixAvailable, seen, _ctx) {
         file_path: 'package.json',
         fix_available: fixAvailable,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
+        taxonomy: dependencyTaxonomy(cweList(getProp(via, 'cwe'))),
+        // The advisory's GHSA id, from its own URL; npm's v2 report gives no CVE.
+        vuln_aliases: ghsaOf(url),
     };
     const message = composeMessage(pkg, range, url);
     if (message)
@@ -113,6 +122,12 @@ function mapV1Advisory(adv, seen) {
         file_path: 'package.json',
         fix_available: recommendation ? /upgrad|updat/i.test(recommendation) : false,
         snippet: `${pkg ?? ''}@${range ?? ''}`,
+        taxonomy: dependencyTaxonomy(cweList(getProp(adv, 'cwe'))),
+        vuln_aliases: [
+            ...asArray(getProp(adv, 'cves')),
+            getString(adv, 'github_advisory_id'),
+            ...ghsaOf(url),
+        ],
     };
     const message = composeMessage(pkg, range, url ?? recommendation);
     if (message)
@@ -130,6 +145,11 @@ function mapV1Advisory(adv, seen) {
     }
     return { finding: makeFinding(input), cves };
 }
+/** The GHSA id of a GitHub advisory URL, as a one-element list; empty for anything else. */
+function ghsaOf(url) {
+    const id = url === undefined ? null : advisoryIdFromUrl(url);
+    return id === null ? [] : [id];
+}
 function composeMessage(pkg, range, tail) {
     const parts = [];
     if (pkg)
@@ -139,5 +159,9 @@ function composeMessage(pkg, range, tail) {
     if (tail)
         parts.push(tail);
     return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+/** An advisory's `cwe`: a list in npm 7+ (`via[].cwe`), one string in npm 6. */
+function cweList(value) {
+    return typeof value === 'string' ? [value] : asArray(value);
 }
 //# sourceMappingURL=npmAudit.js.map

@@ -75,8 +75,12 @@ import './tools/validateFinding.js';
 import './tools/createFixPr.js';
 // Agent workspace audit (Task 22):
 import './tools/auditAgentConfig.js';
+// What configured MCP servers actually serve (3.0 additions, part A):
+import './tools/auditMcpTools.js';
 // Install-time package vetting (Task 16):
 import './tools/vetPackages.js';
+// VEX export (3.0 additions, part C):
+import './tools/exportVex.js';
 
 // Resources:
 import './resources/scans.js';

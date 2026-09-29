@@ -14,19 +14,37 @@
  * each from the 50 newest scans of the whole database, the newest baseline
  * of any project and every active suppression — an evidence pack handed to
  * an auditor that could describe a different project than the one it named.
+ *
+ * `owasp-top10-2025` and `nist-csf-2.0` are evidenced per category from the
+ * project's OPEN SET (`history/openSet.ts`): its open findings, and the
+ * bookkeeping of the scans behind them. An OWASP category is evidenced only
+ * when it was `tested` — for every source language of the project, a
+ * scanner that ran fully ok has enough rules for it (`frameworks/coverage.ts`);
+ * a `partial` one is listed apart, never among the evidenced. A CSF 2.0
+ * category is evidenced only through an OWASP category that was tested, via
+ * dev-guardian's own OWASP → CSF mapping (`frameworks/nistCsf2.ts`,
+ * labelled as ours in the document), and partial when it is reached only
+ * through partial ones. CSF categories no code scan can speak for are
+ * listed as not covered, never left out.
  */
 import { z } from 'zod';
-import { findLatestUsable } from '../history/openSet.js';
+import { coverageRunsOf, owaspCoverage } from '../frameworks/coverage.js';
+import { CSF_CATEGORIES, owaspForCsfCategory } from '../frameworks/nistCsf2.js';
+import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
+import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedHint } from '../report/owaspCoverage.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { registerToolModule } from './index.js';
+const FRAMEWORKS = ['gdpr', 'soc2', 'iso27001', 'owasp-top10-2025', 'nist-csf-2.0', 'generic'];
 const inputSchema = {
     project_path: ProjectPath,
     framework: z
-        .enum(['gdpr', 'soc2', 'iso27001', 'generic'])
+        .enum(FRAMEWORKS)
         .optional()
-        .describe('Which framework to label the evidence under. Default: generic.'),
+        .describe('Which framework to label the evidence under. owasp-top10-2025 and nist-csf-2.0 give per-category ' +
+        'evidence from the open findings and the scanners that ran. Default: generic.'),
 };
 const tool = {
     name: 'compliance_evidence',
@@ -34,7 +52,10 @@ const tool = {
     description: "Generate a Markdown evidence document from one project's accumulated state (project_path, " +
         "default: the server's working directory): latest compliance scan, license summary, CVE " +
         'counts, baseline status, suppressions, policy docs found. Tag with a framework ' +
-        '(gdpr/soc2/iso27001/generic) to shape the section labels. Read-only.',
+        '(gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for ' +
+        'per-category evidence: a category counts as covered only when, for every source language of the ' +
+        'project, a scanner that ran ok has enough rules for it; partial categories are listed apart ' +
+        '(NIST CSF via dev-guardian\'s own OWASP mapping). Read-only.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -65,6 +86,17 @@ async function handler(input, ctx) {
     const suppressions = storage.suppressions
         .listActive()
         .filter((s) => s.project_path === undefined || s.project_path === projectPath);
+    // Per-category frameworks read the open set: open findings (suppressions
+    // applied) and the bookkeeping of every scan behind them.
+    let owasp = null;
+    if (framework === 'owasp-top10-2025' || framework === 'nist-csf-2.0') {
+        const open = openSetForProject(storage, projectPath);
+        const runs = coverageRunsOf(open.bookkeeping, open.scans);
+        owasp = {
+            coverage: owaspCoverage(runs, open.findings, await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(storage.stack, projectPath))),
+            findings: open.findings,
+        };
+    }
     const md = build({
         framework,
         project_path: projectPath,
@@ -74,6 +106,7 @@ async function handler(input, ctx) {
         sbom,
         baseline,
         suppressionsCount: suppressions.length,
+        owasp,
         ctx,
     });
     return {
@@ -93,6 +126,8 @@ const FRAMEWORK_LABEL = {
     gdpr: 'GDPR',
     soc2: 'SOC 2',
     iso27001: 'ISO 27001',
+    'owasp-top10-2025': 'OWASP Top 10:2025',
+    'nist-csf-2.0': 'NIST CSF 2.0',
 };
 /**
  * What each framework's mapping used to claim unconditionally, now gated on
@@ -159,6 +194,10 @@ function frameworkControls(framework, args) {
                         : 'no `compliance_check` scan on file — license posture was never measured',
                 },
             ];
+        case 'owasp-top10-2025':
+            return owaspControls(args.owasp);
+        case 'nist-csf-2.0':
+            return csfControls(args.owasp);
         case 'iso27001':
             return [
                 {
@@ -187,6 +226,122 @@ function frameworkControls(framework, args) {
                 },
             ];
     }
+}
+function openFindings(n) {
+    return `${n} open finding${n === 1 ? '' : 's'}`;
+}
+/** One control per OWASP 2025 category: evidenced only when a capable scanner ran ok. */
+function owaspControls(evidence) {
+    if (evidence === null)
+        return [];
+    const owasp = evidence;
+    return owasp.coverage.categories.map((c) => {
+        const found = openFindings(c.findings);
+        if (c.status === 'not_tested') {
+            return {
+                id: c.id,
+                description: c.title,
+                evidenced: false,
+                note: `no scanner able to detect it ran ok in the scans behind this document — ${untestedHint(c, owasp.coverage)}` +
+                    (c.findings > 0 ? ` (${found} from other scanners)` : ''),
+            };
+        }
+        const tested = `tested by ${testedByScans(c)}`;
+        if (c.status === 'partial') {
+            return {
+                id: c.id,
+                description: c.title,
+                evidenced: false,
+                partial: true,
+                note: `PARTIAL — ${tested}, but ${c.reasons.join('; ')}; ${found}`,
+            };
+        }
+        return { id: c.id, description: c.title, evidenced: true, note: `${tested}; ${found}` };
+    });
+}
+/** `semgrep (sast, scan 1a2b3c4d)`, once per tool and scan. */
+function testedByScans(c) {
+    const seen = new Set();
+    const out = [];
+    for (const e of c.tested_by) {
+        const text = `${e.tool} (${e.scan_type}, scan ${e.scan_id.slice(0, 8)})`;
+        if (!seen.has(text)) {
+            seen.add(text);
+            out.push(text);
+        }
+    }
+    return out.length > 0 ? out.join(', ') : testedByText(c.tested_by);
+}
+/**
+ * One control per CSF 2.0 category (all 22), evidenced through the OWASP
+ * categories dev-guardian's own mapping files under it — only those that
+ * were tested. A category the mapping does not reach is a process no code
+ * scan can evidence, and says so.
+ */
+function csfControls(owasp) {
+    if (owasp === null)
+        return [];
+    const byId = new Map(owasp.coverage.categories.map((c) => [c.id, c]));
+    return CSF_CATEGORIES.map((csf) => {
+        const mapped = owaspForCsfCategory(csf.id);
+        if (mapped.length === 0) {
+            return {
+                id: csf.id,
+                description: csf.title,
+                evidenced: false,
+                note: 'an organisational outcome no code scan evidences — not assessable by dev-guardian',
+            };
+        }
+        const statusOf = (id) => byId.get(id)?.status ?? 'not_tested';
+        const tested = mapped.filter((m) => statusOf(m.owasp) === 'tested');
+        const partial = mapped.filter((m) => statusOf(m.owasp) === 'partial');
+        const looked = [...tested, ...partial];
+        const subcategories = [...new Set(looked.flatMap((m) => m.subcategories))].sort();
+        // Each finding once, however many of its categories this CSF category takes.
+        const lookedIds = new Set(looked.map((m) => m.owasp));
+        const findings = owasp.findings.filter((f) => (f.owasp ?? []).some((id) => lookedIds.has(id))).length;
+        if (looked.length === 0) {
+            return {
+                id: csf.id,
+                description: csf.title,
+                evidenced: false,
+                note: `none of the OWASP categories mapped here was tested: ${mapped.map((m) => m.owasp).join(', ')}`,
+            };
+        }
+        const via = [...tested.map((m) => `${m.owasp} (tested)`), ...partial.map((m) => `${m.owasp} (partial)`)];
+        const untested = mapped.filter((m) => !looked.includes(m)).map((m) => m.owasp);
+        const note = `via ${via.join(', ')} — subcategories ${subcategories.join(', ')}; ` +
+            `${findings} open finding${findings === 1 ? '' : 's'} in those categories` +
+            (untested.length > 0 ? `; not tested here: ${untested.join(', ')}` : '');
+        // Reached only through partial OWASP categories: partial, never evidenced.
+        if (tested.length === 0)
+            return { id: csf.id, description: csf.title, evidenced: false, partial: true, note: `PARTIAL — ${note}` };
+        return { id: csf.id, description: csf.title, evidenced: true, note };
+    });
+}
+/** The paragraph that heads a per-category framework's lists. */
+function frameworkPreamble(framework, evidence) {
+    const owasp = evidence?.coverage ?? null;
+    if (framework !== 'owasp-top10-2025' && framework !== 'nist-csf-2.0')
+        return [];
+    const out = [];
+    out.push(`${COVERAGE_RULE} Source of the categories and their CWEs: https://owasp.org/Top10/2025/.`);
+    if (owasp !== null) {
+        out.push('');
+        out.push(languagesLine(owasp));
+    }
+    if (framework === 'nist-csf-2.0') {
+        out.push('');
+        out.push('CSF 2.0 function and category ids are NIST\'s (CSWP 29, https://nvlpubs.nist.gov/nistpubs/CSWP/NIST.CSWP.29.pdf). ' +
+            "Which OWASP categories evidence which CSF category is dev-guardian's own mapping — neither NIST nor OWASP " +
+            'publishes one. A CSF category counts as evidenced only through an OWASP category a capable scanner tested.');
+    }
+    if (owasp !== null && owasp.findings_total > 0) {
+        out.push('');
+        out.push(unmappedSentence(owasp, 'open findings'));
+    }
+    out.push('');
+    return out;
 }
 function build(args) {
     const out = [];
@@ -261,13 +416,17 @@ function build(args) {
     out.push('');
     out.push('## Frameworks');
     if (args.framework === 'generic') {
-        out.push('No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping.');
+        out.push('No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping, or ' +
+            '`owasp-top10-2025|nist-csf-2.0` for per-category evidence.');
     }
     else {
         const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+        out.push(...frameworkPreamble(args.framework, args.owasp));
         const controls = frameworkControls(args.framework, args);
         const evidenced = controls.filter((c) => c.evidenced);
-        const notCovered = controls.filter((c) => !c.evidenced);
+        const partial = controls.filter((c) => !c.evidenced && c.partial === true);
+        const notCovered = controls.filter((c) => !c.evidenced && c.partial !== true);
+        const perCategory = args.framework === 'owasp-top10-2025' || args.framework === 'nist-csf-2.0';
         out.push(`### ${label} controls evidenced by this document`);
         if (evidenced.length === 0) {
             out.push('(none — see "not covered" below)');
@@ -277,6 +436,16 @@ function build(args) {
                 out.push(`- ${c.id} (${c.description}): ${c.note}`);
         }
         out.push('');
+        // A partial category is not evidence of the control; it gets its own list.
+        if (perCategory) {
+            out.push(`### ${label} controls PARTIALLY covered by this document`);
+            if (partial.length === 0)
+                out.push('(none)');
+            else
+                for (const c of partial)
+                    out.push(`- ${c.id} (${c.description}): ${c.note}`);
+            out.push('');
+        }
         out.push(`### ${label} controls NOT covered by this document`);
         if (notCovered.length === 0) {
             out.push('(none)');

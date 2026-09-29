@@ -54,3 +54,65 @@ describe('renderCiTemplate', () => {
     expect(() => renderCiTemplate('${{ github.event_name }}', {})).not.toThrow();
   });
 });
+
+// `ci-init --attest`: one template, two renderings. A `# {{#NAME}}` …
+// `# {{/NAME}}` block is kept only when the caller turns NAME on, a
+// `# {{^NAME}}` … `# {{/NAME}}` block only when it is off; the marker lines
+// themselves never reach the output, and anything malformed throws rather
+// than leak a half-rendered pipeline.
+describe('renderCiTemplate: sections', () => {
+  const text = [
+    'jobs:',
+    '  # {{#ATTEST}}',
+    '  attest: {{NAME}}',
+    '  # {{/ATTEST}}',
+    '        # {{^ATTEST}}',
+    '  human: true',
+    '        # {{/ATTEST}}',
+    'end',
+  ].join('\n');
+
+  it('keeps a {{#X}} block and drops a {{^X}} block when X is on — marker lines removed', () => {
+    expect(renderCiTemplate(text, { NAME: 'ok' }, { ATTEST: true })).toBe('jobs:\n  attest: ok\nend');
+  });
+
+  it('the reverse when X is off', () => {
+    expect(renderCiTemplate(text, { NAME: 'ok' }, { ATTEST: false })).toBe('jobs:\n  human: true\nend');
+  });
+
+  it('a dropped block may reference placeholders the caller does not supply', () => {
+    expect(renderCiTemplate('# {{#ATTEST}}\n{{ONLY_WITH_ATTEST}}\n# {{/ATTEST}}\nx', {}, { ATTEST: false })).toBe('x');
+  });
+
+  it('throws on a section the caller did not declare — never silently kept or dropped', () => {
+    expect(() => renderCiTemplate('# {{#OTHER}}\nx\n# {{/OTHER}}', {}, { ATTEST: true })).toThrow(/unknown section OTHER/);
+    expect(() => renderCiTemplate('# {{#ATTEST}}\nx\n# {{/ATTEST}}', {})).toThrow(/unknown section ATTEST/);
+  });
+
+  it('throws on an unclosed, a mismatched or a nested section', () => {
+    expect(() => renderCiTemplate('# {{#ATTEST}}\nx', {}, { ATTEST: true })).toThrow(/unclosed section ATTEST/);
+    expect(() => renderCiTemplate('x\n# {{/ATTEST}}', {}, { ATTEST: true })).toThrow(/without an opening/);
+    expect(() =>
+      renderCiTemplate('# {{#ATTEST}}\n# {{#B}}\nx\n# {{/B}}\n# {{/ATTEST}}', {}, { ATTEST: true, B: true }),
+    ).toThrow(/nested section B/);
+  });
+
+  it('throws on a marker that is not on a line of its own', () => {
+    expect(() => renderCiTemplate('run: x # {{#ATTEST}}', {}, { ATTEST: true })).toThrow(/section marker/);
+  });
+
+  // Review M7: a near-miss used to pass as a plain YAML comment, so its
+  // block was kept whatever the flag said.
+  it.each(['# {{#attest}}', '# {{ #ATTEST }}', '#{{#ATTEST}}', '  # {{/ ATTEST}}', '# {{^Attest}}', '# {{#ATTEST-2}}'])(
+    'a malformed marker %j throws — it is never read as a plain comment',
+    (marker) => {
+      const text = ['a', marker, 'b'].join('\n');
+      expect(() => renderCiTemplate(text, {}, { ATTEST: false })).toThrow(/malformed section marker/);
+    },
+  );
+
+  it('a GitHub expression is not a marker: `${{ !cancelled() }}` and `${{ github.ref }}` render untouched', () => {
+    const text = "if: ${{ !cancelled() && github.event_name == 'push' }}\nx: ${{ github.ref }}";
+    expect(renderCiTemplate(text, {}, { ATTEST: true })).toBe(text);
+  });
+});

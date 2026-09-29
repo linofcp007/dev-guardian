@@ -41,6 +41,8 @@
  * identity after a line shift came back as "resolved".
  */
 
+import { coverageRunsOf, owaspCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
+import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import {
   findLatestUsable,
   latestStateScan,
@@ -108,10 +110,21 @@ export function buildSnapshot(
   // and that has to reach coverage or it renders as a clean "0 CVEs".
   const cveSourceScan = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
   const cveGap = currentScan !== null && cveSourceScan === null;
-  const coverage = buildCoverage(open, cveGap);
-
   const openFindings = open.findings;
-  const findings = buildFindingsSummary(openFindings, truncation);
+  // OWASP 2025: which categories the scans behind these numbers could and
+  // did test, over the same bookkeeping `buildCoverage` reads, for the
+  // project's source languages as the scans recorded them. The one read
+  // here that is not storage: a scan written before that record falls back
+  // to today's tree (the files and the detect_stack snapshot), saying so.
+  const owaspRuns = coverageRunsOf(open.bookkeeping, open.scans);
+  const owasp = owaspCoverage(
+    owaspRuns,
+    openFindings,
+    languagesOfRuns(owaspRuns, () => resolveProjectLanguages(storage.stack, projectPath)),
+  );
+  const coverage = buildCoverage(open, cveGap, owasp);
+
+  const findings = buildFindingsSummary(openFindings, truncation, owasp);
 
   const cveItems: Cve[] = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
   const cves = buildCveSummary(cveItems);
@@ -193,7 +206,7 @@ function toScanSummary(scan: ScanRecord, now: number): ScanSummary {
  * gitleaks it was missing when a newer scan_secrets measured secrets. Names
  * de-duplicated in first-seen order.
  */
-function buildCoverage(open: OpenSet, cveGap: boolean): CoverageState {
+function buildCoverage(open: OpenSet, cveGap: boolean, owasp: OwaspCoverage): CoverageState {
   const toolsRun: string[] = [];
   const missingTools: string[] = [];
   const partialTools: string[] = [];
@@ -229,6 +242,18 @@ function buildCoverage(open: OpenSet, cveGap: boolean): CoverageState {
     missing_tools: missingTools,
     partial_tools: partialTools,
     omitted_categories: omittedCategories,
+    owasp: owasp.categories.map((c) => ({
+      id: c.id,
+      title: c.title,
+      status: c.status,
+      findings: c.findings,
+      ...(c.reasons.length > 0 ? { reasons: c.reasons } : {}),
+    })),
+    owasp_languages: {
+      languages: owasp.languages,
+      source: owasp.languages_source,
+      ...(owasp.languages_incomplete !== undefined ? { incomplete: owasp.languages_incomplete } : {}),
+    },
   };
 }
 
@@ -262,6 +287,7 @@ function omittedCategoriesFor(missingTools: readonly string[], cveGap: boolean):
 function buildFindingsSummary(
   openFindings: readonly Finding[],
   truncation: TruncationNotice[],
+  owasp: OwaspCoverage,
 ): FindingsSummary {
   const items = openFindings.slice(0, FINDINGS_CAP);
   if (items.length < openFindings.length) {
@@ -284,6 +310,8 @@ function buildFindingsSummary(
     by_severity: groupBySeverity(openFindings),
     by_category: groupBy(openFindings, (f) => f.category),
     by_tool: groupBy(openFindings, (f) => f.tool),
+    by_owasp: Object.fromEntries(owasp.categories.filter((c) => c.findings > 0).map((c) => [c.id, c.findings])),
+    owasp_unmapped: owasp.findings_unmapped,
     hotspots: rankFiles(openFindings, openFindings.length).hotspots,
     items,
   };

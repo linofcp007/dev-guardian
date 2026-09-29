@@ -9,8 +9,8 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 ## What's inside
 
 - **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
-- An **MCP server** with **57 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
-- **142 Semgrep rules in 10 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, and a route-inventory pack for nine languages — see [docs/rule-packs.md](docs/rule-packs.md).
+- An **MCP server** with **59 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
+- **151 Semgrep rules in 11 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, a route-inventory pack for nine languages, and an LLM-application pack (model output reaching eval/shell/SQL, remote code in a model load, prompt injection surface, no token cap) that `scan_sast` runs — see [docs/rule-packs.md](docs/rule-packs.md).
 - **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
 - A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
 
@@ -82,7 +82,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | --- | --- |
 | Security scans | `security_scan_full`, `scan_sast`, `scan_secrets`, `scan_deps`, `scan_containers`, `scan_iac`, `review_pr` |
 | Bugs and quality | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
-| Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
+| Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Attack surface | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
 | Reports | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
@@ -107,7 +107,7 @@ Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cv
 | Ruby | yes | none — use RuboCop | Rails-style routes | Trivy (`Gemfile.lock`) | reachable / unknown only |
 | Kotlin | **detection only** | — | — | — | — |
 
-Beyond the table, `scan_sast` runs Semgrep's registry ruleset (`--config=auto`), which picks rules for whatever languages it finds — Kotlin included — and gitleaks scans every project for secrets. Containers and IaC (Dockerfile, images, compose, Terraform, Kubernetes, CloudFormation, Helm, GitHub Actions workflows) are covered by `scan_containers` and `scan_iac`. "Reachable / unknown only" means the tool never claims code is unreachable in a language that resolves code at runtime (autoload, annotations, DI containers). `.NET` also has four dedicated tools; WordPress has ten. Trivy reads a Gradle lock file for any project, Kotlin included, and a Gradle build it could not read is a named coverage gap; no bug rule or route extractor exists for Kotlin.
+Beyond the table, `scan_sast` runs Semgrep's registry ruleset (`--config=auto`), which picks rules for whatever languages it finds — Kotlin included — and gitleaks scans every project for secrets. Containers and IaC (Dockerfile, images, compose, Terraform, Kubernetes, CloudFormation, Helm, GitHub Actions workflows) are covered by `scan_containers` and `scan_iac`; for an image, `scan_containers` also uses cosign to check whether it is signed and has signed SLSA provenance, and verifies the signer when you name one. "Reachable / unknown only" means the tool never claims code is unreachable in a language that resolves code at runtime (autoload, annotations, DI containers). `.NET` also has four dedicated tools; WordPress has ten. Trivy reads a Gradle lock file for any project, Kotlin included, and a Gradle build it could not read is a named coverage gap; no bug rule or route extractor exists for Kotlin.
 
 **Gradle and Python need a lock file for Trivy.** Trivy reads Gradle dependencies only from `gradle.lockfile`, and Python ones only from `poetry.lock`, `uv.lock`, `Pipfile.lock` or a pinned `requirements.txt`. A `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` or `requirements*.txt` it could not read is reported as a coverage gap (`trivy:gradle`, `trivy:python`, or `trivy` skipped when it read nothing else), never as a clean scan. Generate the lock file to close it. For Gradle, first enable `dependencyLocking { lockAllConfigurations() }` in the build — without it `gradle dependencies --write-locks` writes nothing — then run that command. For Python, run `poetry lock`, `uv lock` or `pipenv lock`, or pin every dependency in `requirements.txt`.
 

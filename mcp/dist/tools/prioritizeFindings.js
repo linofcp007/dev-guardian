@@ -24,6 +24,13 @@
  * EPSS boost — see the constants below) and a list of `factors` the model
  * can quote.
  *
+ * A row whose finding is correlated with a CVE also carries `ssvc`: CISA's
+ * SSVC deployer decision (Act / Attend / Track* / Track), each decision point
+ * with its value, what it rests on, and whether it was assumed — see
+ * `intel/ssvc.ts` for the table's source and every approximation. It is
+ * reported BESIDE the score and never moves it; `summary.ssvc` counts the
+ * decisions over every open finding.
+ *
  * Reads `project_path`'s open set (default: the server's working directory)
  * — every finding-producing scan type's newest usable scan, suppressions
  * removed (`history/openSet.ts`) — never the single latest scan in the whole
@@ -33,8 +40,13 @@ import { z } from 'zod';
 import { describeOpenSet, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { exploitabilitySignal, findingCveIds, isUncorrelatedFinding } from '../intel/rank.js';
+import { MISSION_WELLBEING_VALUES, SSVC_DECISIONS, assessSsvc, automatablePoint, exploitationPoint, missionWellbeingPoint, technicalImpactPoint, } from '../intel/ssvc.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
+import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
+import { buildImportGraph } from '../validate/importGraph.js';
+import { makeNpmResolver } from '../validate/npmResolve.js';
+import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { registerToolModule } from './index.js';
 /** Added once when ANY of a finding's correlated CVEs is CISA KEV-listed —
  *  between `security`'s category weight (200) and `critical`'s severity
@@ -71,6 +83,11 @@ const inputSchema = {
         .max(500)
         .optional()
         .describe('Cap on returned items. Default 50.'),
+    mission_wellbeing: z
+        .enum(MISSION_WELLBEING_VALUES)
+        .optional()
+        .describe("SSVC Mission & Well-being for this system (CISA: mission prevalence x public well-being " +
+        'impact). Default medium, reported as assumed.'),
 };
 const tool = {
     name: 'prioritize_findings',
@@ -79,10 +96,13 @@ const tool = {
         'the newest usable scan of every finding-producing type, suppressions removed) by a weighted ' +
         'heuristic: severity + category + fix_available + age, boosted when a finding is linked to a ' +
         'CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured ' +
-        'CVEs get no boost, never a fabricated one). `cve_intel.uncorrelated` counts findings from a ' +
-        'CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id and so cannot be ' +
-        'weighted yet. Returns top-N with explanation. No LLM call — the calling model uses the ' +
-        'ranking to drive follow-ups.',
+        'CVEs get no boost, never a fabricated one). Every CVE finding also gets a CISA SSVC deployer ' +
+        'decision (Act / Attend / Track* / Track) from Exploitation (KEV; EPSS as a PoC proxy), ' +
+        'Automatable (a route reaches a file importing the package, from the latest ' +
+        'map_attack_surface), Technical Impact (from severity) and mission_wellbeing; a point with no ' +
+        'data takes the more severe value and is listed in ssvc.assumed. SSVC does not change the ' +
+        'score. `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit ' +
+        'v2) that carry no extractable CVE id. Returns top-N with explanation. No LLM call.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -107,6 +127,9 @@ async function handler(input, ctx) {
     const cveIdsByFinding = new Map(open.map((f) => [f.fingerprint, findingCveIds(f)]));
     const allCveIds = [...new Set([...cveIdsByFinding.values()].flat())];
     const intel = await enrichCveIntel(ctx.storage, allCveIds);
+    // Which tree each finding was measured on, to tell a stale surface snapshot.
+    const scanTrees = new Map(set.scans.map((scan) => [scan.scan_id, scan.tree_hash]));
+    const ssvcFor = ssvcAssessor(ctx, projectPath, intel, inp.mission_wellbeing, scanTrees);
     const ranked = open.map((f) => {
         const factors = [];
         let score = 0;
@@ -133,7 +156,11 @@ async function handler(input, ctx) {
             score += boost;
             factors.push(`FIRST EPSS ${signal.max_epss.toFixed(3)} (${signal.cve_ids.join(', ')}) (+${boost} of ${EPSS_BOOST_MAX})`);
         }
-        return { finding: f, priority_score: score, factors };
+        // Beside the score, never inside it: SSVC assumes the worst for an
+        // unmeasured CVE, and the score promises no boost from intel it does not
+        // have. Folding one into the other would break one of the two promises.
+        const ssvc = ssvcFor.assess(f, cveIdsByFinding.get(f.fingerprint) ?? []);
+        return { finding: f, priority_score: score, factors, ssvc };
     });
     ranked.sort((a, b) => b.priority_score - a.priority_score ||
         a.finding.fingerprint.localeCompare(b.finding.fingerprint));
@@ -142,6 +169,8 @@ async function handler(input, ctx) {
         total_open: open.length,
         returned: top.length,
         score_range: scoreRange(top),
+        // Over every open finding, not just the returned top-N.
+        ssvc: ssvcSummary(ranked, ssvcFor),
     };
     return {
         ok: true,
@@ -151,7 +180,9 @@ async function handler(input, ctx) {
         cve_intel: uncorrelatedCoverage(open),
         instructions_for_model: 'Pick the first 3-5 entries to action. For each, prefer `suggest_fix(finding_fingerprint)` ' +
             'over speculation. If most top entries are security/critical, call `audit_executive` to ' +
-            'understand cross-cutting impact first.',
+            'understand cross-cutting impact first. For CVE findings, `ssvc.decision` is CISA\'s: Act ' +
+            'and Attend come before the schedule, Track*/Track within it — and read `ssvc.assumed` ' +
+            'before quoting it: an assumed point is dev-guardian having no data, not a finding.',
         // unused reference to keep the time variable from being dead-code'd by
         // future maintainers who add age-weighting.
         _recent_scan_ts: recentScanTs,
@@ -176,6 +207,86 @@ function uncorrelatedCoverage(open) {
         uncorrelated,
         note: `${uncorrelated} finding(s) come from a CVE-capable scanner but carry no extractable CVE id, ` +
             'so they cannot be weighted by KEV/EPSS yet.',
+    };
+}
+/**
+ * Everything the SSVC decision needs that is the same for the whole batch:
+ * the intel, the mission value, and the project's latest attack-surface
+ * snapshot with its import graph (built once) for the Automatable point.
+ */
+function ssvcAssessor(ctx, projectPath, intel, missionWellbeing, scanTrees) {
+    const mission = missionWellbeingPoint(missionWellbeing);
+    // THIS project's snapshot — another project's would relativize into a
+    // different path space and match nothing (see validate_finding).
+    const surface = ctx.storage.surface.getLatestForProject(projectPath);
+    const index = surface === null
+        ? null
+        : prepareDependencyIndex({
+            snapshot: surface.snapshot,
+            graph: buildImportGraph(surface.snapshot.imports),
+            projectPath,
+            npmResolver: makeNpmResolver(projectPath),
+            pypiPins: makePypiPinResolver(projectPath),
+        });
+    const assessor = {
+        mission,
+        missionGiven: missionWellbeing !== undefined,
+        surfaceSnapshotId: surface?.id ?? null,
+        surfaceStale: false,
+        assess(finding, cveIds) {
+            if (cveIds.length === 0)
+                return null;
+            // Exposure read off a map of another tree is not data about this one
+            // (review of part C, M8) — export_vex says the same in `unknowns`.
+            const findingTree = scanTrees.get(finding.scan_id);
+            const stale = surface !== null && findingTree !== undefined && findingTree !== '' && findingTree !== surface.tree_hash
+                ? `the attack-surface snapshot maps another tree (${surface.tree_hash}) than this finding's scan (${findingTree})`
+                : null;
+            if (stale !== null)
+                assessor.surfaceStale = true;
+            const subject = dependencySubjectOf(finding);
+            const dependency = subject !== null && index !== null ? assessDependency(subject, index) : null;
+            const whyNone = index === null
+                ? 'no attack-surface snapshot for this project (run map_attack_surface)'
+                : subject === null
+                    ? 'the finding names no package to look for in the imports'
+                    : null;
+            return {
+                ...assessSsvc({
+                    exploitation: exploitationPoint(cveIds, intel),
+                    automatable: automatablePoint(dependency, whyNone, stale),
+                    technical_impact: technicalImpactPoint(finding.severity),
+                    mission_wellbeing: mission,
+                }),
+                cve_ids: [...cveIds],
+            };
+        },
+    };
+    return assessor;
+}
+/** Decision counts over every open finding, and how many rest on assumptions. */
+function ssvcSummary(ranked, assessor) {
+    const decisions = Object.fromEntries(SSVC_DECISIONS.map((d) => [d, 0]));
+    const assumedInputs = { exploitation: 0, automatable: 0, mission_wellbeing: 0 };
+    let notApplicable = 0;
+    for (const row of ranked) {
+        if (row.ssvc === null) {
+            notApplicable += 1;
+            continue;
+        }
+        decisions[row.ssvc.decision] += 1;
+        for (const key of row.ssvc.assumed)
+            assumedInputs[key] = (assumedInputs[key] ?? 0) + 1;
+    }
+    return {
+        decisions,
+        not_applicable: notApplicable,
+        assumed_inputs: assumedInputs,
+        mission_wellbeing: { value: assessor.mission.value, source: assessor.missionGiven ? 'parameter' : 'default' },
+        surface_snapshot_id: assessor.surfaceSnapshotId,
+        surface_snapshot_stale: assessor.surfaceStale,
+        source: 'CISA SSVC Guide (Nov 2022), Table 9 — the deployer decision tree; see intel/ssvc.ts for ' +
+            'which decision points dev-guardian approximates',
     };
 }
 /**

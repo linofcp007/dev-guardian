@@ -27,8 +27,13 @@
  * completely different failure.
  */
 import { z } from 'zod';
+import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { openSetForProject } from '../history/openSet.js';
+import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
+import { OPENVEX_JUSTIFICATIONS, } from '../types.js';
+import { isVexCopyIn, vexStatementKeys } from '../vex/statements.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
@@ -46,6 +51,22 @@ const inputSchema = {
         .datetime()
         .optional()
         .describe('ISO-8601 expiry. When omitted, the suppression never expires.'),
+    vex_status: z
+        .enum(['not_affected'])
+        .optional()
+        .describe("Also record a VEX statement: the product is not_affected by the finding's vulnerability. " +
+        'Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, …). ' +
+        'export_vex publishes it.'),
+    justification: z
+        .enum(OPENVEX_JUSTIFICATIONS)
+        .optional()
+        .describe('OpenVEX justification for vex_status not_affected. Required with it.'),
+    impact_statement: z
+        .string()
+        .min(1)
+        .max(1000)
+        .optional()
+        .describe('Optional free-text VEX impact statement, with vex_status.'),
 };
 const tool = {
     name: 'suppress_finding',
@@ -55,7 +76,12 @@ const tool = {
         'exclude it while the suppression is active — including after the code around it moves: the ' +
         "finding's line-independent identity is recorded alongside the fingerprint and either one " +
         'matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. ' +
-        'Pass expires_at for a temporary snooze.',
+        'Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id — ' +
+        'never one its text mentions), vex_status: not_affected with an ' +
+        'OpenVEX justification (and optional impact_statement) also makes it a VEX statement that ' +
+        'export_vex publishes — only for a finding that names a package version (`vex.exportable`), ' +
+        'and as not_affected only once every copy of the vulnerability has one: the reply names the ' +
+        'other open copies (`vex.other_open_findings`, `warning`).',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -65,6 +91,11 @@ async function handler(input, ctx) {
     if (!inp.finding_fingerprint || !inp.reason) {
         return failDomain('unknown_finding', 'finding_fingerprint and reason are required.');
     }
+    // Checked before anything is looked up or written: a VEX statement that is
+    // not valid VEX must never reach the table half-formed.
+    const vexProblem = vexArgumentProblem(inp);
+    if (vexProblem !== null)
+        return failDomain('unsupported_target', vexProblem);
     let projectPath;
     try {
         projectPath = resolveProjectPath(inp.project_path).path;
@@ -76,7 +107,25 @@ async function handler(input, ctx) {
     if (!located) {
         return failDomain('unknown_finding', `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`);
     }
+    // A VEX statement is about a vulnerability, named by the finding's OWN
+    // ids — its rule id and the aliases its scanner recorded, never an id its
+    // text mentions (intel/vulnIds.ts). A finding with none gives a VEX
+    // consumer nothing to match the statement against.
+    const vulnIds = findingVulnIds(located.finding);
+    if (inp.vex_status !== undefined && vulnIds.length === 0) {
+        return failDomain('unsupported_target', `vex_status needs a finding with a vulnerability id of its own (CVE, GHSA, PYSEC, …), and ` +
+            `${inp.finding_fingerprint} (${located.finding.tool}` +
+            `${located.finding.rule_id !== undefined ? ` ${located.finding.rule_id}` : ''}) has none. ` +
+            'Suppress it without vex_status.');
+    }
     const identity = located.finding.identity;
+    const vex = inp.vex_status !== undefined && inp.justification !== undefined
+        ? {
+            status: inp.vex_status,
+            justification: inp.justification,
+            ...(inp.impact_statement !== undefined ? { impact_statement: inp.impact_statement } : {}),
+        }
+        : null;
     const id = ctx.storage.suppressions.insert({
         finding_fingerprint: inp.finding_fingerprint,
         ...(identity !== undefined ? { finding_identity: identity } : {}),
@@ -86,17 +135,112 @@ async function handler(input, ctx) {
         // Scopes the suppression to THIS project at match time (migration 011) —
         // already resolved above to look the finding up, so no extra lookup.
         project_path: projectPath,
+        ...(vex !== null
+            ? {
+                vex_status: vex.status,
+                vex_justification: vex.justification,
+                ...(vex.impact_statement !== undefined ? { vex_impact_statement: vex.impact_statement } : {}),
+            }
+            : {}),
     });
+    if (vex === null) {
+        return {
+            ok: true,
+            suppression_id: id,
+            finding_fingerprint: inp.finding_fingerprint,
+            // Null: this project's stored row for this fingerprint has no identity
+            // (written before schema 7, or by a tool that computes none), so the
+            // suppression matches it by fingerprint only and lapses if lines shift.
+            finding_identity: identity ?? null,
+            expires_at: inp.expires_at ?? null,
+            // Null for an ordinary suppression: it states nothing in VEX terms.
+            vex: null,
+        };
+    }
+    // What export_vex will make of it (final review, M-b and M-d). A statement
+    // is about a package version, so a finding naming none — a nuclei template,
+    // a scanner's CVE on a URL — is recorded but never exported. And a
+    // statement is not_affected only when EVERY copy of the vulnerability
+    // carries a VEX justification, so the copies still open are named here,
+    // where the caller can act on them, rather than only in the document.
+    const exportable = dependencyCoordinates(located.finding) !== null;
+    const { statements, others } = otherOpenCopies(ctx, projectPath, located);
+    const warning = others.length === 0
+        ? null
+        : `${others.length} other open finding(s) are copies of the same VEX statement ` +
+            `(${statements.join(', ')}): ` +
+            `${others.slice(0, MAX_NAMED_COPIES).map((o) => `${o.file_path ?? '(no file)'} [${o.fingerprint.slice(0, 12)}]`).join(', ')}` +
+            `${others.length > MAX_NAMED_COPIES ? ` and ${others.length - MAX_NAMED_COPIES} more` : ''}. ` +
+            'export_vex states not_affected only when every copy in a statement carries a VEX justification ' +
+            '— suppress those with vex_status too, or it stays under_investigation.';
     return {
         ok: true,
         suppression_id: id,
         finding_fingerprint: inp.finding_fingerprint,
-        // Null: this project's stored row for this fingerprint has no identity
-        // (written before schema 7, or by a tool that computes none), so the
-        // suppression matches it by fingerprint only and lapses if lines shift.
         finding_identity: identity ?? null,
         expires_at: inp.expires_at ?? null,
+        vex: {
+            ...vex,
+            vulnerability_ids: vulnIds,
+            exportable,
+            ...(exportable
+                ? {}
+                : {
+                    note: 'not exportable to VEX (no package coordinates): export_vex states a vulnerability per ' +
+                        'package version, and this finding names none. The suppression is recorded and hides it.',
+                }),
+            other_open_findings: others.slice(0, MAX_LISTED_COPIES),
+        },
+        ...(warning !== null ? { warning } : {}),
     };
+}
+/** Copies named in the warning, and listed in the reply. */
+const MAX_NAMED_COPIES = 5;
+const MAX_LISTED_COPIES = 50;
+/**
+ * The project's OTHER open findings that are copies in a VEX statement the
+ * suppressed finding is a copy in — `export_vex`'s own membership rule
+ * (`vex/statements.ts#isVexCopyIn`), over the statements the finding's scan
+ * makes (`vexStatementKeys`), so the two can never disagree about which
+ * findings one statement needs. Read after the suppression is inserted, so
+ * the one just suppressed is not among them.
+ */
+function otherOpenCopies(ctx, projectPath, located) {
+    const keys = vexStatementKeys({
+        cves: ctx.storage.cves.listActive(located.scan_id),
+        findings: ctx.storage.findings.listByScan(located.scan_id),
+    }).filter((key) => isVexCopyIn(located.finding, key));
+    if (keys.length === 0)
+        return { statements: [], others: [] };
+    const others = openSetForProject(ctx.storage, projectPath)
+        .findings.filter((f) => f.fingerprint !== located.finding.fingerprint && keys.some((key) => isVexCopyIn(f, key)))
+        .map((f) => {
+        const coordinates = dependencyCoordinates(f);
+        return {
+            fingerprint: f.fingerprint,
+            tool: f.tool,
+            rule_id: f.rule_id ?? null,
+            file_path: f.file_path ?? null,
+            package: coordinates === null ? null : `${coordinates.name}@${coordinates.version}`,
+        };
+    });
+    return { statements: [...new Set(keys.map((k) => k.name))], others };
+}
+/**
+ * The VEX arguments go together or not at all: `not_affected` without a
+ * justification is not valid VEX (CISA's minimum requirements; OpenVEX
+ * recommends the machine-readable label and discourages the free-text
+ * impact statement alone, so this tool requires the label), and a
+ * justification or impact statement without a status states nothing.
+ */
+function vexArgumentProblem(inp) {
+    if (inp.vex_status !== undefined && inp.justification === undefined) {
+        return ('vex_status not_affected needs a justification: one of ' + `${OPENVEX_JUSTIFICATIONS.join(', ')}.`);
+    }
+    if (inp.vex_status === undefined && (inp.justification !== undefined || inp.impact_statement !== undefined)) {
+        return 'justification and impact_statement describe a VEX statement: pass vex_status: not_affected with them.';
+    }
+    return null;
 }
 function failDomain(code, message) {
     return { ok: false, error: { code, message } };

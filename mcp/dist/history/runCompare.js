@@ -661,16 +661,27 @@ export class StillCarry {
 function isNarrowGapName(name) {
     return / \((partly parsed|rules not loaded): /.test(name);
 }
-/** `semgrep (partly parsed: a.php, b.js)` / `(rules not loaded: …)` for each run with a narrower gap. */
+/** How many files a run's narrower-gap name lists before "+N more" ({@link narrowGapNames}). */
+const NARROW_GAP_FILES_NAMED = 5;
+/**
+ * `semgrep (partly parsed: a.php, b.js)` / `(rules not loaded: …)` for each
+ * run with a narrower gap. The files are named once each and only the first
+ * few, then counted (`+N more`): a loaded scan's taint fixpoint timeouts put
+ * hundreds of files there (`runners/semgrepReport.ts`). Only a label — which
+ * finding is not re-measured is decided from `partially_parsed` itself.
+ */
 function narrowGapNames(book) {
     const names = [];
     for (const run of book.tools_run) {
         if (run.status !== 'ok')
             continue;
-        const parsed = run.partially_parsed ?? [];
+        const parsed = [...new Set((run.partially_parsed ?? []).map((pp) => pp.file))];
         const failed = run.failed_rules ?? [];
-        if (parsed.length > 0)
-            names.push(`${run.name} (partly parsed: ${parsed.map((pp) => pp.file).join(', ')})`);
+        if (parsed.length > 0) {
+            const more = parsed.length - NARROW_GAP_FILES_NAMED;
+            const listed = [...parsed.slice(0, NARROW_GAP_FILES_NAMED), ...(more > 0 ? [`+${more} more`] : [])];
+            names.push(`${run.name} (partly parsed: ${listed.join(', ')})`);
+        }
         if (failed.length > 0)
             names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(', ')})`);
     }
@@ -720,7 +731,13 @@ const PROJECT_FILES = 'project files';
 function targetOf(run) {
     if (runNameEntry(run.name)?.ownTarget !== true)
         return { pass: PROJECT_FILES };
-    return run.target !== undefined && run.target !== '' ? { pass: run.name, ref: normalizeImageRef(run.target) } : { pass: run.name };
+    if (run.target === undefined || run.target === '')
+        return { pass: run.name };
+    // A verification's target is the image AND the signer it was verified
+    // against (`ToolRun.signer`): a pass for another signer did not ask the
+    // question the older verdict answered.
+    const signer = run.signer !== undefined ? `\0signer\0${run.signer}` : '';
+    return { pass: run.name, ref: `${normalizeImageRef(run.target)}${signer}` };
 }
 /**
  * One image reference in the one spelling Docker resolves it to, so that
@@ -772,7 +789,10 @@ function sameTarget(a, b) {
 }
 /** The name a pass that did not run again is reported under: `trivy-image (registry/app:1)`, as the run recorded it. */
 function passLabel(run, target) {
-    return target.ref === undefined ? run.name : `${run.name} (${run.target ?? target.ref})`;
+    if (target.ref === undefined)
+        return run.name;
+    const signer = run.signer !== undefined ? `, signer ${run.signer}` : '';
+    return `${run.name} (${run.target ?? target.ref}${signer})`;
 }
 /**
  * A pass `holder` ran ok that may have produced `f` (it measures `f`'s key)

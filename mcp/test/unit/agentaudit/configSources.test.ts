@@ -7,9 +7,11 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
-import { MAX_CONFIG_BYTES, readConfigSources } from '../../../src/agentaudit/configSources.js';
+import { dirname, join } from 'node:path';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { MAX_CLAUDE_JSON_BYTES, MAX_CONFIG_BYTES, readConfigSources } from '../../../src/agentaudit/configSources.js';
+import { claudeDesktopConfigPath } from '../../../src/hostsetup/mcpConfig.js';
+import { detectOs } from '../../../src/platform/osDetect.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -61,17 +63,17 @@ describe('readConfigSources — real disk I/O', () => {
     });
   });
 
-  it('reports an unreadable path (a directory where a file is expected) as a parse error, not a crash', () => {
+  // A directory where the file should be EXISTS and was not read: refused as
+  // not a regular file (it used to read as "missing" — as if nothing were there).
+  it('refuses a directory where a file is expected: it exists and was not read', () => {
     const dir = makeTempDir('agentaudit-cfg-');
-    // No permission trick (chmod is unreliable for the owner on POSIX and
-    // near-meaningless on Windows, doubly so running as Administrator): a
-    // directory at the expected file path makes readFileSync throw EISDIR
-    // on every platform, which exercises the same catch branch.
     mkdirSync(join(dir, '.mcp.json'));
     expect(() => readConfigSources(dir, false)).not.toThrow();
     const [mcpJson] = readConfigSources(dir, false);
-    expect(mcpJson?.exists).toBe(false);
-    expect(mcpJson?.parseError).toContain('could not read');
+    expect(mcpJson?.exists).toBe(true);
+    expect(mcpJson?.refusal).toBe('not-a-regular-file');
+    expect(mcpJson?.parseError).toContain('not a regular file');
+    expect(mcpJson?.json).toBeUndefined();
   });
 
   it('reports a file over the size cap as a gap rather than reading it', () => {
@@ -98,5 +100,124 @@ describe('readConfigSources — real disk I/O', () => {
     const dir = makeTempDir('agentaudit-cfg-');
     const sources = readConfigSources(dir, false);
     expect(sources.some((s) => s.kind === 'user')).toBe(false);
+  });
+});
+
+/**
+ * Part A.1 (3.0 additions): the hosts dev-guardian itself writes configs for
+ * (`hostsetup/mcpConfig.ts`) are also where an MCP server can be declared.
+ * A plugin's own `.claude-plugin/plugin.json` is project-scoped; Claude
+ * Desktop, Cursor, Windsurf and Gemini's user-level files are read only with
+ * `include_user_config`, at the same OS paths `mcp-config --write` uses.
+ */
+describe('readConfigSources — the wider host set', () => {
+  const saved = {
+    HOME: process.env['HOME'],
+    USERPROFILE: process.env['USERPROFILE'],
+    APPDATA: process.env['APPDATA'],
+    CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  function pointHomeAt(dir: string): void {
+    process.env['HOME'] = dir;
+    process.env['USERPROFILE'] = dir;
+    process.env['APPDATA'] = join(dir, 'AppData', 'Roaming');
+    delete process.env['CLAUDE_CONFIG_DIR'];
+  }
+
+  // Fix round 3, I9: Claude Code reads its global config from
+  // $CLAUDE_CONFIG_DIR when set (.claude.json and settings.json directly in
+  // it). Reading ~/.claude.json instead audited ANOTHER account's servers.
+  it('reads .claude.json and settings.json from CLAUDE_CONFIG_DIR when it is set', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    writeAt(join(home, '.claude.json'), { mcpServers: { wrong: { command: 'node' } } });
+    const ccd = makeTempDir('agentaudit-ccd-');
+    writeAt(join(ccd, '.claude.json'), { mcpServers: { right: { command: 'node' } } });
+    writeAt(join(ccd, 'settings.json'), { permissions: { allow: [] } });
+    process.env['CLAUDE_CONFIG_DIR'] = ccd;
+
+    const sources = readConfigSources(makeTempDir('agentaudit-cfg-'), true);
+    const global = sources.find((s) => s.label === '$CLAUDE_CONFIG_DIR/.claude.json');
+    expect(global?.absolutePath).toBe(join(ccd, '.claude.json'));
+    expect(global?.json).toEqual({ mcpServers: { right: { command: 'node' } } });
+    expect(sources.find((s) => s.label === '$CLAUDE_CONFIG_DIR/settings.json')?.exists).toBe(true);
+    expect(sources.some((s) => s.label === '~/.claude.json')).toBe(false);
+  });
+
+  // ~/.claude.json accumulates every project's history: 55-82 KB on this
+  // machine, and far more on a long-used one. It gets a cap of its own.
+  it('reads a ~/.claude.json over the 256 KiB cap of other configs, up to its own 16 MiB cap', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    const pad = 'x'.repeat(MAX_CONFIG_BYTES * 2);
+    writeAt(join(home, '.claude.json'), { mcpServers: { a: { command: 'node' } }, pad });
+    const big = readConfigSources(makeTempDir('agentaudit-cfg-'), true).find((s) => s.label === '~/.claude.json');
+    expect(big?.parseError).toBeUndefined();
+    expect(big?.json).toMatchObject({ mcpServers: { a: { command: 'node' } } });
+    expect(MAX_CLAUDE_JSON_BYTES).toBe(16 * 1024 * 1024);
+  });
+
+  function writeAt(path: string, content: unknown): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(content), 'utf8');
+  }
+
+  const USER_LABELS = [
+    'claude_desktop_config.json',
+    '~/.cursor/mcp.json',
+    '~/.codeium/windsurf/mcp_config.json',
+    '~/.gemini/settings.json',
+  ];
+
+  it("reads a plugin's .claude-plugin/plugin.json as a project source of mcpServers", () => {
+    const dir = makeTempDir('agentaudit-cfg-');
+    writeAt(join(dir, '.claude-plugin', 'plugin.json'), {
+      name: 'p',
+      mcpServers: { srv: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/server.js'] } },
+    });
+    const source = readConfigSources(dir, false).find((s) => s.label === '.claude-plugin/plugin.json');
+    expect(source?.kind).toBe('project');
+    expect(source?.exists).toBe(true);
+    expect(source?.mcpServersField).toBe('mcpServers');
+  });
+
+  it('reads Claude Desktop, ~/.cursor, Windsurf and ~/.gemini configs with include_user_config', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    const desktop = claudeDesktopConfigPath({ os: detectOs(), home, appData: process.env['APPDATA'] });
+    expect(desktop).not.toBeNull();
+    if (desktop === null) return;
+    writeAt(desktop, { mcpServers: { a: { command: 'node' } } });
+    writeAt(join(home, '.cursor', 'mcp.json'), { mcpServers: { b: { command: 'node' } } });
+    writeAt(join(home, '.codeium', 'windsurf', 'mcp_config.json'), { mcpServers: { c: { command: 'node' } } });
+    writeAt(join(home, '.gemini', 'settings.json'), { mcpServers: { d: { command: 'node' } } });
+
+    const dir = makeTempDir('agentaudit-cfg-');
+    const sources = readConfigSources(dir, true);
+    for (const label of USER_LABELS) {
+      const source = sources.find((s) => s.label === label);
+      expect(source, label).toBeDefined();
+      expect(source?.kind, label).toBe('user');
+      expect(source?.exists, label).toBe(true);
+      expect(source?.mcpServersField, label).toBe('mcpServers');
+    }
+    expect(sources.find((s) => s.label === 'claude_desktop_config.json')?.absolutePath).toBe(desktop);
+  });
+
+  it('never reads those user-level files without include_user_config', () => {
+    const home = makeTempDir('agentaudit-home-');
+    pointHomeAt(home);
+    writeAt(join(home, '.cursor', 'mcp.json'), { mcpServers: { b: { command: 'node' } } });
+    const dir = makeTempDir('agentaudit-cfg-');
+    const labels = readConfigSources(dir, false).map((s) => s.label);
+    for (const label of USER_LABELS) expect(labels).not.toContain(label);
   });
 });

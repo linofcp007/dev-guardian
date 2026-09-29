@@ -409,6 +409,33 @@ describe('makeScanTool', () => {
     expect(seen?.signal?.aborted).toBe(true);
   });
 
+  // M-b: OWASP coverage judges a scan against the languages the project
+  // had WHEN it ran, recorded on the row — for every scan type a detector
+  // reads, and only those.
+  it.each([
+    ['sast', true],
+    ['quality', false],
+  ] as const)('a %s scan records the project languages on its row: %s', async (scanType, recorded) => {
+    writeFileSync(join(projectPath, 'main.go'), 'package main\n');
+    const tool = makeScanTool({
+      name: `lang_${scanType}`,
+      scan_type: scanType,
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => ({ outcome: 'completed', tools_run: [{ name: 'mock', status: 'ok' }], missing_tools: [], parser_inputs: [], report_paths: [] }),
+    });
+    const r = okResult<ToolOkPayload>(await tool.handler({ project_path: projectPath }, plugin));
+    const meta = plugin.storage.scans.getById(r.scan_id)?.meta;
+    if (recorded) {
+      expect(meta?.['project_languages']).toMatchObject({ languages: ['go'] });
+      // Bookkeeping, not an extra of the response.
+      expect((r as unknown as Record<string, unknown>)['project_languages']).toBeUndefined();
+    } else {
+      expect(meta?.['project_languages']).toBeUndefined();
+    }
+  });
+
   it('applies severity_min to the response', async () => {
     const tool = toolReporting('sev_scan', oneOfEach(['low', 'high']));
     const r = okResult<ToolOkPayload>(
@@ -854,7 +881,9 @@ describe('makeScanTool: severity_min filters the response, not the history', () 
     const rf = okResult<ToolOkPayload>(
       await filtered.handler({ project_path: projectPath, severity_min: 'high' }, plugin),
     );
-    expect(plugin.storage.scans.getById(rf.scan_id)?.meta).toEqual({ severity_min: 'high' });
+    // (A sast row also records the project's languages — see the
+    // project_languages test above; this one is about the floor.)
+    expect(plugin.storage.scans.getById(rf.scan_id)?.meta).toMatchObject({ severity_min: 'high' });
 
     // No floor passed ⇒ nothing recorded: absence means "unfiltered".
     // `force` because both scans share a tree_hash and would otherwise be

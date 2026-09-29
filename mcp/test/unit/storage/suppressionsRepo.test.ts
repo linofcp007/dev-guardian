@@ -91,6 +91,29 @@ describe('SuppressionsRepo', () => {
     expect(all).toContain('gone'); // the whole point: listActive() would drop this
     expect(repo.listActive().map((s) => s.finding_fingerprint)).not.toContain('gone');
   });
+
+  it('round-trips a VEX not_affected status with its justification and impact statement (migration 014)', () => {
+    const repo = freshRepo();
+    repo.insert({
+      finding_fingerprint: 'vex',
+      reason: 'the vulnerable function is never called',
+      vex_status: 'not_affected',
+      vex_justification: 'vulnerable_code_not_in_execute_path',
+      vex_impact_statement: 'we only use lodash.get',
+    });
+    repo.insert({ finding_fingerprint: 'plain', reason: 'fp' });
+
+    const byFp = new Map(repo.listAll().map((s) => [s.finding_fingerprint, s]));
+    expect(byFp.get('vex')).toMatchObject({
+      vex_status: 'not_affected',
+      vex_justification: 'vulnerable_code_not_in_execute_path',
+      vex_impact_statement: 'we only use lodash.get',
+    });
+    // A suppression without VEX says nothing about VEX — no key at all.
+    expect(byFp.get('plain')?.vex_status).toBeUndefined();
+    expect(byFp.get('plain')?.vex_justification).toBeUndefined();
+    expect(byFp.get('plain')?.vex_impact_statement).toBeUndefined();
+  });
 });
 
 describe('SuppressionsRepo.adoptIdentities', () => {

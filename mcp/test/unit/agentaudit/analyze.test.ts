@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeAgentConfig } from '../../../src/agentaudit/analyze.js';
+import { analyzeAgentConfig, collectMcpEntries } from '../../../src/agentaudit/analyze.js';
 import type { ConfigSource } from '../../../src/agentaudit/configSources.js';
 
 function mcpSource(overrides: Partial<ConfigSource>): ConfigSource {
@@ -117,6 +117,7 @@ describe('analyzeAgentConfig', () => {
         label: '~/.claude.json',
         kind: 'user',
         absolutePath: '/home/u/.claude.json',
+        nestedProjects: true,
         mcpServersField: 'mcpServers',
         exists: true,
         json: {
@@ -133,5 +134,119 @@ describe('analyzeAgentConfig', () => {
     expect(keys).toContain('~/.claude.json::global1');
     expect(keys.some((k) => k.includes('proj1'))).toBe(true);
     expect(result.findings.some((f) => f.rule_id === 'agent-audit-unpinned-launcher')).toBe(true);
+  });
+
+  // A plugin's `mcpServers` may be a PATH to another JSON file rather than
+  // an inline object. Nothing here follows it, so that must be said: an
+  // audit that silently skipped it would read as "no servers" — clean.
+  it('warns when a source declares mcpServers as a path it does not follow', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({
+        label: '.claude-plugin/plugin.json',
+        absolutePath: '/proj/.claude-plugin/plugin.json',
+        json: { name: 'p', mcpServers: './servers.json' },
+      }),
+    ];
+    const result = analyzeAgentConfig(sources, new Map());
+    expect(result.mcpServersFound).toBe(0);
+    expect(result.warnings.some((w) => w.includes('.claude-plugin/plugin.json') && w.includes('./servers.json'))).toBe(
+      true,
+    );
+  });
+});
+
+describe('collectMcpEntries: a source that exists and was not read', () => {
+  it('is a named warning and an unreadable source — neither read nor missing, never "no servers"', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({ json: { mcpServers: { a: { command: 'node' } } } }),
+      {
+        label: '.cursor/mcp.json',
+        kind: 'project',
+        absolutePath: '/proj/.cursor/mcp.json',
+        mcpServersField: 'mcpServers',
+        exists: true,
+        refusal: 'remote-link',
+        parseError: 'reached through a link to a network or device path; not opened',
+      },
+    ];
+    const collected = collectMcpEntries(sources);
+    expect(collected.sourcesRead).toEqual(['.mcp.json']);
+    expect(collected.sourcesMissing).toEqual([]);
+    expect(collected.sourcesUnreadable).toEqual([
+      { source: '.cursor/mcp.json', reason: 'reached through a link to a network or device path; not opened' },
+    ]);
+    expect(collected.warnings.some((w) => w.startsWith('.cursor/mcp.json:'))).toBe(true);
+  });
+});
+
+describe('collectMcpEntries: fix round 3', () => {
+  const claudeJson = (projects: Record<string, unknown>): ConfigSource => ({
+    label: '~/.claude.json',
+    kind: 'user',
+    absolutePath: '/home/u/.claude.json',
+        nestedProjects: true,
+    mcpServersField: 'mcpServers',
+    exists: true,
+    json: { mcpServers: { global: { command: 'node' } }, projects },
+  });
+
+  // I1: audit_mcp_tools starts servers with cwd = THIS project, so another
+  // project's entries in ~/.claude.json are never candidates there.
+  it('with onlyProject, expands only that project from ~/.claude.json (path spelling normalised)', () => {
+    const here = process.platform === 'win32' ? 'C:\\Work\\Proj' : '/work/proj';
+    const stored = process.platform === 'win32' ? 'c:/work/proj/' : '/work/proj/';
+    const collected = collectMcpEntries(
+      [
+        claudeJson({
+          [stored]: { mcpServers: { github: { command: 'node', args: ['mine.js'] } } },
+          '/some/other/project': { mcpServers: { github: { command: 'node', args: ['theirs.js'] } } },
+        }),
+      ],
+      { onlyProject: here },
+    );
+    expect(collected.entries.map((e) => e.sourceLabel)).toEqual([
+      '~/.claude.json',
+      `~/.claude.json (project: ${stored})`,
+    ]);
+  });
+
+  it('without onlyProject (audit_agent_config), still expands every project', () => {
+    const collected = collectMcpEntries([
+      claudeJson({ '/a': { mcpServers: { x: { command: 'node' } } }, '/b': { mcpServers: { y: { command: 'node' } } } }),
+    ]);
+    expect(collected.entries).toHaveLength(3);
+  });
+
+  // M8: a path-form mcpServers means that file's servers were not read.
+  it('counts a path-form mcpServers as a source whose servers were not read', () => {
+    const collected = collectMcpEntries([
+      mcpSource({ label: '.claude-plugin/plugin.json', json: { name: 'p', mcpServers: './servers.json' } }),
+    ]);
+    expect(collected.sourcesUnreadable).toEqual([
+      { source: '.claude-plugin/plugin.json', reason: expect.stringContaining('./servers.json') },
+    ]);
+  });
+});
+
+describe('collectMcpEntries', () => {
+  it('returns every entry across sources, nested ~/.claude.json projects included', () => {
+    const sources: ConfigSource[] = [
+      mcpSource({ json: { mcpServers: { a: { command: 'node' } } } }),
+      {
+        label: '~/.claude.json',
+        kind: 'user',
+        absolutePath: '/home/u/.claude.json',
+        nestedProjects: true,
+        mcpServersField: 'mcpServers',
+        exists: true,
+        json: { projects: { '/p': { mcpServers: { b: { command: 'node' } } } } },
+      },
+    ];
+    const collected = collectMcpEntries(sources);
+    expect(collected.entries.map((e) => `${e.sourceLabel}::${e.name}`)).toEqual([
+      '.mcp.json::a',
+      '~/.claude.json (project: /p)::b',
+    ]);
+    expect(collected.sourcesRead).toEqual(['.mcp.json', '~/.claude.json']);
   });
 });

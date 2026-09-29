@@ -81,3 +81,30 @@ describe('extractMcpServers', () => {
     expect(entries[0]?.raw).toEqual(raw);
   });
 });
+
+/**
+ * Fix round 3, M5: hosts spell a remote server's address differently —
+ * Windsurf `serverUrl`, Gemini `httpUrl` (Streamable HTTP) and Gemini `url`
+ * (SSE). Each is read as a remote entry with the transport that host means.
+ */
+describe('extractMcpServers: remote spellings and their transport', () => {
+  it.each([
+    ['.mcp.json', { type: 'http', url: 'https://a.example/mcp' }, 'https://a.example/mcp', 'http'],
+    ['.mcp.json', { type: 'sse', url: 'https://a.example/sse' }, 'https://a.example/sse', 'sse'],
+    ['.cursor/mcp.json', { url: 'https://a.example/mcp' }, 'https://a.example/mcp', 'http'],
+    ['.cursor/mcp.json', { url: 'https://a.example/sse' }, 'https://a.example/sse', 'sse'],
+    ['~/.codeium/windsurf/mcp_config.json', { serverUrl: 'https://w.example/mcp' }, 'https://w.example/mcp', 'http'],
+    ['~/.codeium/windsurf/mcp_config.json', { serverUrl: 'https://w.example/sse' }, 'https://w.example/sse', 'sse'],
+    ['~/.gemini/settings.json', { httpUrl: 'https://g.example/mcp' }, 'https://g.example/mcp', 'http'],
+    ['.gemini/settings.json', { url: 'https://g.example/events' }, 'https://g.example/events', 'sse'],
+  ])('%s %j is %s over %s', (label, entry, url, transport) => {
+    const [e] = extractMcpServers(source({ label, json: { mcpServers: { r: entry } } }));
+    expect(e?.url).toBe(url);
+    expect(e?.remoteTransport).toBe(transport);
+  });
+
+  it('a stdio entry has no remote transport', () => {
+    const [e] = extractMcpServers(source({ json: { mcpServers: { s: { command: 'node' } } } }));
+    expect(e?.remoteTransport).toBeUndefined();
+  });
+});

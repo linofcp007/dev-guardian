@@ -225,6 +225,28 @@
  * the whole pack; point it at one of those language trees to repeat a rule's
  * axis 3, not at their union — every clause re-scans the corpus, and the union
  * is ~15 000 files.
+ *
+ * **`llm.yml`, `GUARDIAN_LLM_SRC`.** Unset, axis 3 is `N/A`, not `mcp/src`:
+ * this repo never calls a model, so every rule would compare an empty set with
+ * an empty set. The pack was measured (2026-09-28) on 29 permissively licensed
+ * LLM applications, shallow clones kept OUTSIDE the repo — URLs, commits and
+ * the per-rule triage are in the pack header. Their union is ~15 000 files and
+ * a scan of the pack over it takes minutes, too slow for a ~100-clause sweep,
+ * so the tree `GUARDIAN_LLM_SRC` pointed at was the directories that hold the
+ * pack's real findings, sources only, test directories removed (1 914 files,
+ * ~20 s a scan): langchain-experimental's `langchain_experimental`; MetaGPT's
+ * `actions`, `strategy`, `environment/android`, `ext/sela`, `provider`;
+ * PrivateGPT's `components`; SuperAGI's `agent`, `models`, `tools`;
+ * FastChat's `fastchat`; h2oGPT's `src`, `openai_server` and `finetune.py`;
+ * vanna's `legacy`; openai/swarm's streaming example; screenshot-to-code's
+ * `backend/routes`; gpt-engineer's `gpt_engineer`; TaskWeaver's `llm`;
+ * gpt-researcher's `evals`; fragments' `app`; mem0's `mem0-demo` and
+ * `mem0-ts/src`; AnythingLLM's `server/utils`; chatbot-ui's `app`; and the
+ * Anthropic customer-support quickstart. It reaches every rule but the JS
+ * interpreter one and `llm-torch-load-weights-only-false`, which fired
+ * nowhere in the 29 — their axis 3 is vacuous there, and the report says so.
+ * The review round rebuilt the same tree from clones at the same commits
+ * (1 914 files again) and re-ran the whole pack on it.
  */
 
 import { existsSync } from 'node:fs';
@@ -261,6 +283,9 @@ export const PHP_SRC_ENV = 'GUARDIAN_PHP_SRC';
 
 /** Env var naming a tree of real application code for the RGPD pack, for axis 3. */
 export const RGPD_SRC_ENV = 'GUARDIAN_RGPD_SRC';
+
+/** Env var naming a tree of real LLM-application code (Python and JS/TS), for axis 3. */
+export const LLM_SRC_ENV = 'GUARDIAN_LLM_SRC';
 
 /**
  * An opt-in axis-3 corpus read from an environment variable.
@@ -323,6 +348,15 @@ export function rgpdCorpus(): RealCorpus {
   return envCorpus(RGPD_SRC_ENV, 'RGPD corpus (GUARDIAN_RGPD_SRC)', 'a tree of real application code') ?? MCP_SRC;
 }
 
+/**
+ * Axis-3 corpus for the LLM-application pack. Unset, axis 3 is `N/A`: this
+ * repo holds no code that calls a model, so `mcp/src` would compare an empty
+ * set with an empty set for every rule. See the file header.
+ */
+export function llmCorpus(): RealCorpus | undefined {
+  return envCorpus(LLM_SRC_ENV, 'LLM corpus (GUARDIAN_LLM_SRC)', 'a tree of real LLM-application code (Python and JS/TS)');
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
 const JAVA_SRC = javaCorpus();
@@ -330,6 +364,7 @@ const PYTHON_SRC = pythonCorpus();
 const GO_SRC = goCorpus();
 const PHP_SRC = phpCorpus();
 const RGPD_SRC = rgpdCorpus();
+const LLM_SRC = llmCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -405,6 +440,15 @@ export const PACKS: readonly PackSpec[] = [
     fixtures: fixtures('rgpd'),
     hitsSubdir: 'hits',
     realCode: RGPD_SRC,
+  },
+  // The LLM-application pack (Python and JS/TS), run by scan_sast. See the
+  // file header for the corpus, and `test/integration/llmRules.test.ts`.
+  {
+    name: 'llm',
+    config: config('llm'),
+    fixtures: fixtures('llm'),
+    hitsSubdir: 'hits',
+    realCode: LLM_SRC,
   },
 ];
 

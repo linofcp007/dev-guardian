@@ -138,13 +138,38 @@ describe('buildSummary — caps and gaps', () => {
   it('reports every verdict at zero for an empty batch, rather than an empty object', () => {
     const summary = buildSummary(input({ validations: [] }));
 
-    expect(summary['counts_by_verdict']).toEqual({
-      unreachable: 0,
-      reachable: 0,
-      confirmed: 0,
-      unknown: 0,
-    });
+    // Per provider (review M4): a dependency finding carries a verdict from
+    // each, so one flat count would count it twice.
+    expect(summary['counts_by_verdict']).toEqual({ static: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 0 } });
     expect(summary['findings_selected']).toBe(0);
+  });
+
+  it('counts each provider apart', () => {
+    const summary = buildSummary(input({
+      providersRun: ['static', 'dependency'],
+      validations: [
+        validation({ fingerprint: 'fp1', provider: 'static', verdict: 'unknown' }),
+        validation({ fingerprint: 'fp1', provider: 'dependency', verdict: 'reachable' }),
+      ],
+    }));
+    expect(summary['counts_by_verdict']).toEqual({
+      static: { unreachable: 0, reachable: 0, imported: 0, confirmed: 0, unknown: 1 },
+      dependency: { unreachable: 0, reachable: 1, imported: 0, confirmed: 0, unknown: 0 },
+    });
+    expect(summary['findings_selected']).toBe(1);
+  });
+
+  it('says a gap once per kind, however many findings or files it names (review M4)', () => {
+    const files = ['a.x', 'b.y', 'c.z', 'd.w'];
+    const summary = buildSummary(input({
+      validations: files.map((f, i) => validation({
+        fingerprint: `fp${i}`, coverage_gaps: [`could not determine the language of '${f}'`],
+      })),
+    }));
+    const lines = gaps(summary).filter((g) => g.startsWith('could not determine the language'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/4 findings/);
+    expect(lines[0]).toMatch(/'a.x'/);
   });
 });
 

@@ -40,6 +40,7 @@ import { classifyTarget } from '../dast/target.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
+import { nameAFew } from '../runners/semgrepReport.js';
 import { SEVERITY_ORDER, } from '../types.js';
 import { registerToolModule } from './index.js';
 import { assessCoverage } from './scanCoverage.js';
@@ -379,7 +380,7 @@ async function handler(input, ctx, callMeta) {
         const files = surfaceGaps.partially_parsed.map((p) => p.file);
         const failed = (surfaceGaps.failed_steps ?? []).map((run) => run.name);
         const causes = [
-            ...(files.length > 0 ? [`Semgrep only partly parsed ${files.join(', ')}`] : []),
+            ...(files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : []),
             ...(failed.length > 0 ? [`its ${failed.join(', ')} step failed`] : []),
         ];
         warnings.push('The attack-surface snapshot is partial' +

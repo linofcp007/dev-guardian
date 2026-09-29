@@ -47,6 +47,19 @@
  * pairs: the rules a threshold drop takes down are exactly the ones that go
  * unnamed. Excluding those files from both sides of a comparison took the two
  * runs to 793 and 793, differing in nothing.
+ *
+ * A second kind of unfinished file never reaches `errors[]` at all: a taint
+ * rule's FIXPOINT TIMEOUT, where Semgrep gives up the dataflow analysis of
+ * one function and every finding in it vanishes. It is reported only under
+ * `time.fixpoint_timeouts` (present on 1.170+ with or without `--time`,
+ * absent on 1.86-1.120). Measured by the llm pack's second review: one true
+ * positive, `langchain_experimental/sql/base.py:178`, dropped out of 3 scans
+ * in 17, each with a fixpoint timeout on `_call`, with `errors: []` and a
+ * full `paths.scanned` -- and the first round's noise floor of 0 did not
+ * catch it. Measured again on this repo's `mcp/src` with `p/default`: a
+ * registry finding in `platform/glob.ts` was in one run and not the next, and
+ * the run without it had a fixpoint timeout on that file. Those files are
+ * aborted too.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -232,6 +245,7 @@ export function parseScan(parsed: unknown, root: string, target: string): ScanRe
     results?: unknown;
     paths?: { scanned?: unknown };
     errors?: unknown;
+    time?: { fixpoint_timeouts?: unknown };
   };
   const rawResults = Array.isArray(doc.results) ? doc.results : [];
   const scannedList = Array.isArray(doc.paths?.scanned) ? doc.paths.scanned : [];
@@ -262,6 +276,17 @@ export function parseScan(parsed: unknown, root: string, target: string): ScanRe
     const e = raw as RawError;
     if (!isAbortError(stringify(e.type))) continue;
     const path = stringify(e.path);
+    if (path === '') unscopedAborts += 1;
+    else aborted.add(rel(path));
+  }
+  // Taint analysis that gave up on a function: reported ONLY here (Semgrep
+  // 1.170+, with or without --time; absent on 1.86-1.120, measured), never in
+  // `errors[]`, and the findings in that function silently disappear. The
+  // file is not finished -- the same exclusion as a rule timeout.
+  const fixpoints = Array.isArray(doc.time?.fixpoint_timeouts) ? doc.time.fixpoint_timeouts : [];
+  for (const raw of fixpoints) {
+    const location = typeof raw === 'object' && raw !== null ? (raw as { location?: { path?: unknown } }).location : undefined;
+    const path = stringify(location?.path);
     if (path === '') unscopedAborts += 1;
     else aborted.add(rel(path));
   }

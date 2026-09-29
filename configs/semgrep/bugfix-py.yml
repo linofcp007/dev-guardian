@@ -39,6 +39,17 @@
 # WARNING -> `medium` (src/runners/scannerParsers/semgrep.ts), e o
 # `create_fix_pr` usa `severity_min: high` por omissão. `bug_hunt` não filtra
 # nada, por isso um scan continua a mostrar tudo.
+# metadata.cwe / metadata.owasp: o CWE de cada regra (MITRE, CWE 4.20) e a
+# categoria OWASP Top 10:2025 que o mapeamento oficial da OWASP atribui a
+# esse CWE (https://owasp.org/Top10/2025/, lido em 2026-09-28). Uma regra
+# cujo CWE não consta de nenhuma categoria fica com `owasp: []`; uma falha
+# que nenhum CWE descreve com rigor fica com `cwe: []`. Os valores são
+# listas, nunca texto solto: o parser do Semgrep deriva a subcategoria de um
+# `owasp` em texto, e as findings destas regras não podem mudar por isso.
+# O Semgrep não usa `metadata` para casar padrões, logo nada do que as
+# regras apanham muda (medido: as mesmas findings antes e depois, fixture a
+# fixture).
+
 rules:
   # Três formas de `try`, e as três são precisas: o padrão `try/except` NÃO
   # casa um `try` que tenha `finally:` ou `else:`, por isso acrescentar
@@ -57,6 +68,11 @@ rules:
   # (`_reraise()`), ou de um `raise` dentro de um `if`, é código correto que
   # dispara. Não é "sempre um bug".
   - id: bugfix-py-error-handling-bare-except
+    metadata:
+      cwe:
+        - "CWE-396: Declaration of Catch for Generic Exception"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: |
@@ -141,6 +157,11 @@ rules:
   # distinguem sintaticamente. É por isso que a regra fica em WARNING em vez
   # de ganhar uma lista de tipos "inofensivos" adivinhada.
   - id: bugfix-py-error-handling-except-pass
+    metadata:
+      cwe:
+        - "CWE-390: Detection of Error Condition Without Action"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: |
@@ -275,6 +296,11 @@ rules:
   # há formas que não reconhece — `get_object_or_404`, um helper próprio, um
   # decorador que apanha DoesNotExist.
   - id: bugfix-py-error-handling-get-without-doesnotexist
+    metadata:
+      cwe:
+        - "CWE-248: Uncaught Exception"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $M.objects.get(...)
       - pattern-not-inside:
@@ -338,6 +364,11 @@ rules:
   # `re.compile(...)` que o produziu é dataflow entre instruções, fora do
   # Semgrep OSS.
   - id: bugfix-py-null-safety-none-deref-match
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern-either:
           - pattern: re.match(...)
@@ -385,6 +416,11 @@ rules:
   # `assert k in d`) são exatamente o caso em que a correção depende de a
   # regra reconhecer a guarda, e há mais formas do que estas duas.
   - id: bugfix-py-null-safety-none-deref-dict-get
+    metadata:
+      cwe:
+        - "CWE-476: NULL Pointer Dereference"
+      owasp:
+        - "A10:2025 - Mishandling of Exceptional Conditions"
     patterns:
       - pattern: $D.get($K).$M(...)
       - metavariable-regex:
@@ -427,6 +463,10 @@ rules:
   # ...>` desce até dentro do condicional e dispara na mesma. Medido, não
   # deduzido.
   - id: bugfix-py-off-by-one-range-len-plus-one
+    metadata:
+      cwe:
+        - "CWE-193: Off-by-one Error"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: |
@@ -455,6 +495,10 @@ rules:
   # auditor disparavam; a exclusão de atributo (`self.handle = open(...)`)
   # já existia e é a sexta.
   - id: bugfix-py-memory-leak-open-without-context
+    metadata:
+      cwe:
+        - "CWE-775: Missing Release of File Descriptor or Handle after Effective Lifetime"
+      owasp: []
     patterns:
       - pattern-inside: |
           def $FN(...):
@@ -516,6 +560,12 @@ rules:
   # entrega a corotina a quem consome o gerador, e era o único falso
   # positivo que restava.
   - id: bugfix-py-race-condition-asyncio-not-awaited
+    metadata:
+      # Uma corotina que nunca corre não é uma race (CWE-362), e nenhum Base
+      # da MITRE descreve "o resultado de uma chamada assíncrona nunca é
+      # aguardado", por isso fica sem categoria.
+      cwe: []
+      owasp: []
     patterns:
       - pattern-either:
           - pattern: asyncio.sleep(...)
@@ -560,6 +610,10 @@ rules:
   # direto e apanhar FileNotFoundError) não se aplica. Os modos de escrita
   # estão excluídos.
   - id: bugfix-py-race-condition-toctou-exists-open
+    metadata:
+      cwe:
+        - "CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition"
+      owasp: []
     patterns:
       - pattern-either:
           - pattern-inside: |
@@ -646,6 +700,11 @@ rules:
   # silencioso. Continua a ser um silêncio pela razão certa (há um
   # select_related) em vez de por acidente.
   - id: bugfix-py-edge-case-queryset-n-plus-one
+    metadata:
+      # O CWE-1073 está proibido para mapeamento (MITRE, Prohibited), e
+      # nenhum outro descreve um N+1 com rigor.
+      cwe: []
+      owasp: []
     patterns:
       - pattern-inside: |
           for $O in <... $M.objects ...>:

@@ -479,6 +479,11 @@ function assertNoEmptyCollections(node: unknown, address: Address): void {
   }
   for (const pair of node.items) {
     const key = keyName(pair.key) ?? '?';
+    // `metadata` is prose Semgrep never matches on, and no clause lives in
+    // it (`enumerateClauses` skips it too). An empty list there — the
+    // findings packs' `owasp: []` for a CWE in no OWASP 2025 category — is
+    // written on purpose, not left behind by a detach.
+    if (key === 'metadata') continue;
     assertNoEmptyCollections(pair.value, [...address, key]);
   }
 }

@@ -61,9 +61,29 @@ const SHA256 = /^[0-9a-f]{64}$/;
 describe('configs/ci/pinned.json: actions', () => {
   const pinned = readPinned();
 
-  it.each(['checkout', 'setup_node', 'upload_sarif', 'setup_dotnet'])('%s is pinned by a full 40-hex commit SHA, never a floating tag', (key) => {
+  it.each([
+    'checkout',
+    'setup_node',
+    'upload_sarif',
+    'setup_dotnet',
+    'attest_build_provenance',
+    'upload_artifact',
+    'download_artifact',
+  ])('%s is pinned by a full 40-hex commit SHA, never a floating tag', (key) => {
     expect(pinned.actions[key]?.sha).toMatch(FULL_SHA);
     expect(pinned.actions[key]?.version).toMatch(/^v\d+\.\d+\.\d+$/);
+  });
+
+  // `ci-init --attest`'s three actions. The SHAs were resolved with
+  // `gh api repos/<repo>/tags` and cross-checked with `git ls-remote`
+  // (2026-09-28) — locked here so a careless edit, not a deliberate bump
+  // that changes version and SHA together, fails the suite.
+  it.each([
+    ['attest_build_provenance', 'actions/attest-build-provenance', 'v4.2.2', '4d101475d8b20a2381f78447822ac1eab6504dd8'],
+    ['upload_artifact', 'actions/upload-artifact', 'v7.0.1', '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'],
+    ['download_artifact', 'actions/download-artifact', 'v8.0.1', '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'],
+  ])('%s is %s %s at the commit that tag named when it was pinned', (key, repo, version, sha) => {
+    expect(pinned.actions[key]).toMatchObject({ repo, version, sha });
   });
 });
 

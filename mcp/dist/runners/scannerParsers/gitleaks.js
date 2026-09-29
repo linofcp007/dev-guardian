@@ -10,7 +10,7 @@
  * we additionally strip the `Match` / `Secret` fields when assembling the
  * snippet — only the rule id and surrounding context survive.
  */
-import { asArray, getNumber, getProp, getString, makeFinding, parseInputAsJson, toRelativeIfPossible, } from './index.js';
+import { asArray, getNumber, getProp, getString, makeFinding, SECRET_CWE, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const GITLEAKS_TOOL_NAME = 'gitleaks';
 export const gitleaksParser = {
     name: GITLEAKS_TOOL_NAME,
@@ -46,6 +46,7 @@ function mapItem(raw, ctx) {
         title: description ?? `Possible secret matching rule '${ruleId}'`,
         file_path: toRelativeIfPossible(file, ctx.project_path),
         fix_available: false,
+        taxonomy: { cwe: [SECRET_CWE] },
     };
     if (lineStart !== undefined)
         input.line_start = lineStart;

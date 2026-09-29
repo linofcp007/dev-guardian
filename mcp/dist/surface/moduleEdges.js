@@ -179,6 +179,94 @@ export function resolveModuleEdges(edges, projectFiles) {
     return { resolved, unresolved };
 }
 /**
+ * The unresolved edges that name a PACKAGE rather than a project file — the
+ * third-party (and standard-library) imports, persisted on the snapshot as
+ * `external_imports` for `validate_finding`'s dependency provider
+ * (`validate/dependencyProvider.ts`), which matches a vulnerable package's
+ * name against them.
+ *
+ * Dropped, because they name no package: a relative or absolute path that
+ * failed to resolve (a missing `./x`, Python's `.models`) and Rust's
+ * `crate::`/`self::`/`super::` paths, which are the crate's own code. Keeping
+ * them would let a package whose name happens to equal such a path read as
+ * imported — the one direction the provider must never err in.
+ *
+ * Every other language's unresolved specifier is kept as written (a Java or
+ * C# namespace, a Go module path): whether it can be matched to a package is
+ * the provider's question, not this one's.
+ *
+ * STORED COMPACTLY (`ExternalImports`, review of the 3.0 additions, M6): each
+ * importing path once, and per (specifier, language) the indices of its
+ * files, deduplicated and capped at {@link MAX_FILES_PER_PACKAGE} with the
+ * true `file_count` beside them. One `{file, specifier, language}` object per
+ * import measured 783 KB of a 933 KB snapshot at 10.5k imports. Everything
+ * sorted, so a snapshot does not change with the order Semgrep reported in.
+ */
+export function externalImports(unresolved) {
+    const byPackage = new Map();
+    for (const edge of unresolved) {
+        if (!namesAPackage(edge))
+            continue;
+        const key = `${edge.specifier}\u0000${edge.language}`;
+        const entry = byPackage.get(key) ?? { specifier: edge.specifier, language: edge.language, files: new Set() };
+        entry.files.add(edge.file);
+        byPackage.set(key, entry);
+    }
+    const packages = [...byPackage.values()]
+        .sort((a, b) => codeUnitOrder(a.specifier, b.specifier) || codeUnitOrder(a.language, b.language))
+        .map((p) => ({ ...p, kept: [...p.files].sort(codeUnitOrder).slice(0, MAX_FILES_PER_PACKAGE) }));
+    const files = [...new Set(packages.flatMap((p) => p.kept))].sort(codeUnitOrder);
+    const indexOf = new Map(files.map((file, index) => [file, index]));
+    return {
+        files,
+        packages: packages.map((p) => ({
+            specifier: p.specifier,
+            language: p.language,
+            files: p.kept.flatMap((file) => {
+                const index = indexOf.get(file);
+                return index === undefined ? [] : [index];
+            }),
+            file_count: p.files.size,
+        })),
+    };
+}
+/** Files recorded per package; a package imported by more keeps its true `file_count`. */
+export const MAX_FILES_PER_PACKAGE = 1000;
+/**
+ * The stored form read back as one `ModuleEdge` per (file, specifier), plus
+ * every package whose file list was capped — a reader that looks for an
+ * importer must know when it may be one of the unrecorded ones.
+ * `undefined` (a snapshot that never recorded them) reads as nothing.
+ */
+export function expandExternalImports(stored) {
+    const entries = [];
+    const truncated = [];
+    for (const p of stored?.packages ?? []) {
+        for (const index of p.files) {
+            const file = stored?.files[index];
+            if (file !== undefined)
+                entries.push({ file, specifier: p.specifier, language: p.language });
+        }
+        if (p.file_count > p.files.length) {
+            truncated.push({ specifier: p.specifier, language: p.language, recorded: p.files.length, total: p.file_count });
+        }
+    }
+    return { entries, truncated };
+}
+function namesAPackage(edge) {
+    const specifier = edge.specifier;
+    if (specifier.length === 0)
+        return false;
+    if (specifier.startsWith('.') || specifier.startsWith('/'))
+        return false;
+    if (edge.language === 'rust' && /^(crate|self|super)::/.test(specifier))
+        return false;
+    return true;
+}
+function codeUnitOrder(a, b) {
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+/**
  * Zero, one or many target files. Only Go can name more than one — a Go
  * import names a package DIRECTORY, and every file in it is imported — but
  * the plural shape is the contract for all of them, because "resolved to

@@ -194,6 +194,15 @@ export const RUN_NAMES = {
   // compose-file hardening checks.
   hadolint: scanner('hadolint'),
   'docker-compose': scanner('docker-compose'),
+  // scan_containers' cosign check of the image it was given
+  // (runners/cosignCheck.ts). Two passes, two keys: an existence check that
+  // finds a signature must never resolve a verification's "signed by the
+  // wrong identity". Each looks at its image only, and only on request (it
+  // needs an image). `cosign` is only ever skipped — not installed, or
+  // GUARDIAN_OFFLINE=1 — so neither pass ran.
+  'cosign-verify': { measures: ['cosign-verify'], ownTarget: true, onRequest: true },
+  'cosign-referrers': { measures: ['cosign-referrers'], ownTarget: true, onRequest: true },
+  cosign: scanner('cosign-verify', 'cosign-referrers'),
 
   // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
   // existing — independent of Trivy and of each other.
@@ -250,6 +259,10 @@ export const RUN_NAMES = {
 
   // audit_agent_config: its own static checks of the agent workspace config.
   'agent-audit': scanner('agent-audit'),
+  // audit_mcp_tools: one `mcp-tool-audit:<source>::<server>` entry per server
+  // it started (`runNameEntry` reads each as a pass of this base); a server
+  // that failed or was skipped leaves the audit's findings unmeasured.
+  'mcp-tool-audit': scanner('mcp-tool-audit'),
 
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these

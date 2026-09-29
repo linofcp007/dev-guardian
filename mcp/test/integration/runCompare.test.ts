@@ -903,6 +903,49 @@ describe("Task 15's scanners in the comparison", () => {
     });
   });
 
+  /**
+   * Part E review, I1 — a verification answers for its signer. `cosign
+   * verify` asks "was this image signed by THIS identity and issuer?", so a
+   * later verify against another signer — `.*` accepts anyone — did not ask
+   * the question the older rejection answered, and must not resolve it. The
+   * run records the canonical signer (`ToolRun.signer`) and it is part of
+   * the pass's target, beside the image.
+   */
+  describe('cosign-verify re-measures only its own image AND signer', () => {
+    const V = 'v'.repeat(64);
+    const EXPECTED = '{"identity":"https://github.com/org/app/.github/workflows/EXPECTED.yml@refs/heads/main","issuer":"https://token.actions.githubusercontent.com"}';
+    const ANYONE = '{"identity_regexp":".*","issuer_regexp":".*"}';
+    const rejected: SeedFinding = {
+      fp: V, tool: 'cosign-verify', rule_id: 'image-signature-not-verified', subcategory: 'supply-chain', file: 'registry/app:1', severity: 'high',
+    };
+    const verify = (target: string, signer: string): ToolRun => ({ name: 'cosign-verify', status: 'ok', target, signer });
+
+    function pair(first: ToolRun[], second: ToolRun[]): { s: Seeded; p: string } {
+      const s = freshPlugin();
+      const p = projectDir('runcmp-cosign-');
+      seedScan(s, { id: 'a', type: 'containers', project: p, tools_run: first, findings: [rejected] });
+      seedScan(s, { id: 'b', type: 'containers', project: p, tools_run: second });
+      return { s, p };
+    }
+
+    it('a pass against another signer does not resolve the rejection — it stays open, not re-measured', async () => {
+      const { s, p } = pair([verify('registry/app:1', EXPECTED)], [verify('registry/app:1', ANYONE)]);
+      const d = await diff(s, p, 'containers');
+      expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+      expect(d.not_measured?.[0]).toMatch(/^cosign-verify \(registry\/app:1, signer .*EXPECTED\.yml/);
+    });
+
+    it('nor does an existence-only check of the same image', async () => {
+      const { s, p } = pair([verify('registry/app:1', EXPECTED)], [{ name: 'cosign-referrers', status: 'ok', target: 'registry/app:1' }]);
+      expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    });
+
+    it('control: the same signer on the same image (spelled differently) resolves it', async () => {
+      const { s, p } = pair([verify('registry/app:1', EXPECTED)], [verify('docker.io/registry/app:1', EXPECTED)]);
+      expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
+    });
+  });
+
   it("hadolint's finding: resolved when hadolint ran, whatever else failed; not re-measured when it failed", async () => {
     const lint = [{ fp: H, tool: 'hadolint', category: 'quality' as const, severity: 'medium' as const }];
     const first: ToolRun[] = [{ name: 'trivy-dockerfile', status: 'ok' }, { name: 'hadolint', status: 'ok' }];
@@ -1252,5 +1295,30 @@ describe('a Semgrep run that only partly parsed some files', () => {
     expect(d.reference_not_measured).toEqual(['semgrep (partly parsed: wp/rest-controller.php)']);
     expect(d.note).toMatch(/reference scan \S+ only partly measured semgrep \(partly parsed/);
     expect(d.note).not.toMatch(/failed, or was not installed/);
+  });
+
+  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout lands in
+  // `partially_parsed` too, one entry per file, and a loaded scan of a real
+  // project names hundreds of them (644 functions on LibreChat). A finding
+  // there is still not re-measured, and the scan's gap name lists a few
+  // files, then counts the rest — once each, whatever the types.
+  it('a fixpoint-timeout file is not re-measured like any other; the gap name names a few files, then "+N more"', async () => {
+    const files = Array.from({ length: 8 }, (_, i) => `src/f${i}.py`);
+    const run: ToolRun = {
+      name: 'semgrep',
+      status: 'ok',
+      reason: 'partial',
+      partially_parsed: [
+        { file: 'src/f0.py', type: 'PartialParsing', message: 'x' },
+        ...files.map((file) => ({ file, type: 'Fixpoint timeout', message: 'x', functions: 1 })),
+      ],
+    };
+    const { s, p } = pair('src/f7.py', run);
+    const d = await diff(s, p);
+    expect(d.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(d.not_measured).toEqual(['semgrep (partly parsed: src/f0.py, src/f1.py, src/f2.py, src/f3.py, src/f4.py, +3 more)']);
+    // Control: a finding in a file outside the list is resolved.
+    const control = pair('src/other.py', run);
+    expect((await diff(control.s, control.p)).summary).toMatchObject({ resolved: 1, not_remeasured: 0 });
   });
 });

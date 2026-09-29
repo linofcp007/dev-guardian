@@ -1,0 +1,762 @@
+/**
+ * The `dependency` evidence provider: is a vulnerable PACKAGE — the exact
+ * copy the finding is about — imported by the project's own code, and is the
+ * file that imports it one an HTTP route reaches?
+ *
+ * The static provider asks that about the file a finding lives in. A
+ * dependency finding lives in a lockfile, which no route imports, so the
+ * static answer for every CVE is `unknown`. This provider answers from the
+ * package's side instead: `map_attack_surface` persists the import specifiers
+ * that name a package (`AttackSurfaceSnapshot.external_imports`), and the
+ * finding's package is matched against them.
+ *
+ * Three verdicts, and never a fourth:
+ *
+ *   - `reachable` — a project file under the finding's manifest imports the
+ *     package, LOADS THE VULNERABLE VERSION (npm: read from the lockfile or
+ *     `node_modules`, see below), and the import graph connects it to a route
+ *     file (0 hops when the route file itself imports it). File-level, like
+ *     the static provider: a route reaches code that loads the package, not
+ *     necessarily the vulnerable function.
+ *   - `imported` — such a file imports it, and either no route was shown to
+ *     reach it or which version it loads could not be told.
+ *   - `unknown` — everything else, each with the reason in `coverage_gaps`.
+ *
+ * `unreachable` is never produced. "No file imports this package" is absence
+ * of evidence: a transitive dependency is never imported by the project's own
+ * code, `import(expr)` / `require(variable)` / `importlib.import_module(name)`
+ * match no rule, and a package reached through another package's re-export
+ * is invisible. Each of those is a common way for a vulnerable package to be
+ * very much in use.
+ *
+ * WHICH COPY (review of the 3.0 additions, I1). A package name alone said
+ * nothing about which install the finding is about, and two defects came of
+ * it, both reproduced with real Trivy and Semgrep:
+ *   - a monorepo: `packages/tool` holds lodash 4.17.20 (vulnerable) and no
+ *     code; `packages/api` holds 4.17.21 and a route importing it — the CVE
+ *     read `reachable`, citing `packages/api`. Importers now count only under
+ *     the directory of the manifest the finding came from.
+ *   - a nested copy: `node_modules/x/node_modules/lodash` is 4.17.20 while the
+ *     project's code resolves `node_modules/lodash` 4.17.21. For npm, each
+ *     importing file's resolved version is now read — Node's own lookup,
+ *     `node_modules` from the file's directory up to the manifest's, from the
+ *     lockfile or the installed tree (`npmResolve.ts`) — and only a file that
+ *     resolves exactly the vulnerable version counts. When the version cannot
+ *     be read (no `package-lock.json`, nothing installed, a finding that gives
+ *     a vulnerable range rather than a version), the answer is at most
+ *     `imported`, never `reachable`.
+ *   - Python is different (review N1): an environment is not scoped to a
+ *     directory — `deploy/requirements.txt` is installed into the one
+ *     `app/web.py` runs in — and holds one version of a distribution. So
+ *     any importer counts, and the question is whether the project pins the
+ *     package only at the vulnerable version (`pypiPins.ts` reads every
+ *     manifest): another pin means an import may load it, and the answer is
+ *     `unknown`, naming that pin.
+ *
+ * Matching, per ecosystem:
+ *
+ *   - npm — a JS/TS specifier equal to the package name or under it
+ *     (`lodash`, `lodash/merge`, `@babel/core/lib/x`), never a Node built-in:
+ *     Node resolves `require('punycode')` to the core module even when the
+ *     npm package of that name is installed (`punycode/` reaches the package).
+ *   - PyPI — only through {@link PYPI_MODULES}, a table of distributions whose
+ *     import names are known and unique. A distribution's import name is not
+ *     derivable from its name (PyYAML → `yaml`, Pillow → `PIL`, scikit-learn
+ *     → `sklearn`); matching "same name" would claim an import on a
+ *     coincidence, so a distribution not in the table is `unknown`, and so is
+ *     one whose module another distribution also installs
+ *     ({@link PYPI_AMBIGUOUS}: an import of `jwt` does not say whether PyJWT
+ *     or the `jwt` distribution is loaded).
+ *   - anything else (Go, Maven, NuGet, Cargo, …) — `unknown`, naming the
+ *     ecosystem. Not because it is impossible, but because it is not built.
+ *
+ * Which ecosystem a finding's package belongs to comes from the scanner
+ * (`npm-audit`, `pip-audit`) or from the manifest Trivy named as the target
+ * ({@link ecosystemOfManifest}). A name alone is never enough: npm and PyPI
+ * both have a `requests`.
+ *
+ * Gap sentences name no package — the finding already does — so a batch
+ * summary can say each kind of gap once (`summary.ts`).
+ *
+ * Pure: no I/O, no clock. The caller passes the snapshot, its graph, the
+ * project root, the timestamp and the npm version lookup.
+ */
+
+import { isBuiltin } from 'node:module';
+import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
+import { expandExternalImports } from '../surface/moduleEdges.js';
+import { reachFrom, type ImportGraph, type ReachResult } from './importGraph.js';
+import { groupRoutesByRelFile, hopWord, mostInformative, routeLabel } from './staticProvider.js';
+import type { FindingValidation, ValidationEvidence } from './types.js';
+import type { AttackSurfaceSnapshot, Finding, RouteRecord } from '../types.js';
+
+/** A package, its ecosystem (a purl type: `npm`, `pypi`, …), which copy and whose. */
+export interface DependencySubject {
+  package_name: string;
+  /** Null when nothing said which ecosystem the package is from. */
+  ecosystem: string | null;
+  /**
+   * The exact installed version the finding is about. Null when the scanner
+   * gave a vulnerable RANGE instead (npm audit: `<4.17.21`) or nothing.
+   */
+  version: string | null;
+  /**
+   * Project-relative POSIX path of the lockfile or manifest the finding came
+   * from — for npm, its directory scopes which importing files count. Null
+   * when the finding names none (an image target, an environment audit).
+   */
+  manifest: string | null;
+}
+
+/** The version of a package some code loads, and what says so. */
+export interface ResolvedPackage {
+  version: string;
+  /** `package-lock.json`, `packages/api/node_modules/lodash/package.json`, … */
+  source: string;
+}
+
+/** No version could be read — and why, in words the provider quotes. */
+export interface UnresolvedPackage {
+  version: null;
+  reason: string;
+}
+
+/**
+ * Which version of `name` code in `fromDir` loads — Node's lookup, the
+ * `node_modules` of `fromDir` and every directory above it up to `rootDir`
+ * (both project-relative POSIX, `''` for the project root) — or why it
+ * cannot be told.
+ */
+export type NpmResolver = (fromDir: string, rootDir: string, name: string) => ResolvedPackage | UnresolvedPackage;
+
+/** One exact pin of a PyPI distribution in one of the project's manifests. */
+export interface PypiPin {
+  manifest: string;
+  version: string;
+}
+
+/**
+ * Every exact pin of a PyPI distribution (by its PEP 503 name) the project's
+ * manifests hold (`pypiPins.ts`), or null when they could not all be read.
+ */
+export type PypiPinResolver = (name: string) => readonly PypiPin[] | null;
+
+export interface DependencyAssessment {
+  verdict: 'reachable' | 'imported' | 'unknown';
+  confidence: FindingValidation['confidence'];
+  evidence: ValidationEvidence[];
+  coverage_gaps: string[];
+  /** Project-relative files that import the package (the vulnerable copy, or one not told apart). */
+  importing_files: string[];
+}
+
+/** What {@link assessDependency} reads, built once per batch. */
+export interface DependencyIndex {
+  /** The snapshot's third-party imports, expanded; undefined when it never recorded them. */
+  external: ReturnType<typeof expandExternalImports> | undefined;
+  graph: ImportGraph;
+  roots: readonly string[];
+  routesByFile: ReadonlyMap<string, RouteRecord[]>;
+  partiallyParsed: number;
+  reachCache: Map<string, ReachResult>;
+  npmResolver: NpmResolver | undefined;
+  pypiPins: PypiPinResolver | undefined;
+}
+
+export function prepareDependencyIndex(input: {
+  snapshot: AttackSurfaceSnapshot;
+  graph: ImportGraph;
+  projectPath: string;
+  npmResolver?: NpmResolver;
+  pypiPins?: PypiPinResolver;
+}): DependencyIndex {
+  const routesByFile = groupRoutesByRelFile(input.snapshot.routes, input.projectPath);
+  return {
+    external:
+      input.snapshot.external_imports === undefined ? undefined : expandExternalImports(input.snapshot.external_imports),
+    graph: input.graph,
+    roots: [...routesByFile.keys()],
+    routesByFile,
+    partiallyParsed: input.snapshot.partially_parsed?.length ?? 0,
+    reachCache: new Map(),
+    npmResolver: input.npmResolver,
+    pypiPins: input.pypiPins,
+  };
+}
+
+const PREDATES_GAP =
+  'the surface snapshot was mapped before third-party imports were recorded (it has no ' +
+  'external_imports), so no package can be matched — re-run map_attack_surface with force: true';
+
+/** How far the answer reaches, said beside every positive verdict. */
+const FILE_LEVEL_GAP =
+  'file-level only: a file importing the package is not proof that the vulnerable function is ' +
+  'called, or called with attacker-controlled input';
+
+const NO_IMPORT_GAP =
+  'no project file imports the package directly. That is absence of evidence, not of use: a ' +
+  'transitive dependency is never imported by the project itself, a dynamic import ' +
+  '(import(expr), require(variable), importlib) matches no rule, and a package used ' +
+  "through another package's re-export is invisible";
+
+const NO_MANIFEST_GAP =
+  'the finding names no manifest, so an import anywhere in the project counts — it may load ' +
+  'another install of the package than the one the finding is about';
+
+const RANGE_GAP =
+  'the finding gives a vulnerable version range, not the installed version, so whether the ' +
+  'importing files load a vulnerable copy could not be told — no route is claimed to reach it';
+
+const PINS_UNREAD_GAP =
+  "whether another of the project's manifests pins a different version could not be read, so " +
+  'no route is claimed to reach the vulnerable one';
+
+export function assessDependency(subject: DependencySubject, index: DependencyIndex): DependencyAssessment {
+  const name = subject.package_name;
+  if (index.external === undefined) return unknown([PREDATES_GAP]);
+
+  const matcher = matcherFor(subject);
+  if ('gap' in matcher) return unknown([matcher.gap]);
+
+  // npm installs per directory (node_modules), so only importers under the
+  // manifest's directory load its copy. A Python environment is not scoped
+  // to a directory (review of part C, N1): `deploy/requirements.txt` is
+  // installed into the environment `app/web.py` runs in.
+  const scopeDir = subject.ecosystem === 'npm' && subject.manifest !== null ? dirOf(subject.manifest) : null;
+  const matching = index.external.entries.filter(
+    (entry) =>
+      matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !outsideProjectCode(entry.file),
+  );
+  const inScope = unique(matching.filter((e) => scopeDir === null || isUnder(e.file, scopeDir)).map((e) => e.file));
+  const outOfScope = unique(matching.map((e) => e.file)).filter((f) => !inScope.includes(f));
+
+  const gaps: string[] = [];
+  if (subject.ecosystem === 'npm' && subject.manifest === null) gaps.push(NO_MANIFEST_GAP);
+  if (index.partiallyParsed > 0) {
+    gaps.push(
+      `${index.partiallyParsed} file(s) were only partly parsed when the surface was mapped; an ` +
+        'import inside an unparsed span is missing',
+    );
+  }
+  // The snapshot caps each package's file list (MAX_FILES_PER_PACKAGE): an
+  // unrecorded importer may be the one a route reaches.
+  const capped = index.external.truncated.filter(
+    (t) => matcher.languages.has(t.language) && matcher.matches(t.specifier),
+  );
+  if (capped.length > 0) {
+    gaps.push(
+      'the snapshot records at most ' +
+        `${capped.map((t) => `${t.recorded} of the ${t.total} files importing '${t.specifier}'`).join(', ')}; ` +
+        'an unrecorded importer may be one a route reaches',
+    );
+  }
+
+  if (inScope.length === 0) {
+    if (outOfScope.length > 0 && scopeDir !== null) {
+      return unknown([
+        `the package is imported only by files outside '${scopeDir === '' ? '.' : scopeDir}', the directory ` +
+          "of the manifest this finding came from — they load another install's copy",
+        ...gaps,
+      ]);
+    }
+    const ambiguous = ambiguousImportGap(subject, index.external.entries);
+    return unknown([ambiguous ?? NO_IMPORT_GAP, ...gaps]);
+  }
+
+  // Which of them load the vulnerable copy.
+  const loads: { file: string; source: string | null }[] = [];
+  const unverified: string[] = [];
+  const others = new Map<string, string>(); // resolved version → source
+  if (subject.ecosystem === 'npm') {
+    const reasons = new Set<string>();
+    for (const file of inScope) {
+      if (subject.version === null) {
+        unverified.push(file);
+        continue;
+      }
+      const resolved = index.npmResolver?.(dirOf(file), scopeDir ?? '', name) ?? {
+        version: null,
+        reason: 'no lockfile or installed tree was read',
+      };
+      if (resolved.version === null) {
+        unverified.push(file);
+        reasons.add(resolved.reason);
+      } else if (resolved.version === subject.version) {
+        loads.push({ file, source: resolved.source });
+      } else {
+        others.set(resolved.version, resolved.source);
+      }
+    }
+    if (subject.version === null && unverified.length > 0) gaps.push(RANGE_GAP);
+    if (reasons.size > 0) {
+      gaps.push(
+        `which version the importing files load could not be read: ${[...reasons].join('; ')} — so none ` +
+          'is claimed to reach the vulnerable one',
+      );
+    }
+  } else {
+    // PyPI: one environment, one version of a distribution — unless the
+    // project pins it at more than one version (review of part C, N1).
+    const pins = index.pypiPins?.(name) ?? null;
+    if (pins === null) {
+      unverified.push(...inScope);
+      gaps.push(PINS_UNREAD_GAP);
+    } else {
+      const different = pins.filter((p) => subject.version === null || p.version !== subject.version);
+      if (different.length > 0) {
+        return unknown([
+          `the project pins '${name}' at more than one version, so an import of it may load a different pin ` +
+            `(${different.map((p) => `${p.manifest}: ${p.version}`).join(', ')}) than the vulnerable ` +
+            `${subject.version ?? '?'}`,
+          ...gaps,
+        ]);
+      }
+      for (const file of inScope) loads.push({ file, source: null });
+    }
+  }
+
+  if (loads.length === 0 && unverified.length === 0) {
+    const resolvedTo = [...others].map(([version, source]) => `${version} (${source})`).join(', ');
+    return unknown([
+      `the project's code resolves '${name}' ${resolvedTo}, not the vulnerable ${subject.version ?? '?'}: that ` +
+        'copy is installed under another package and loaded through it, which the import graph does not follow',
+      ...gaps,
+    ]);
+  }
+
+  let nearest: { file: string; hops: number; root: string; source: string | null } | null = null;
+  for (const load of loads) {
+    const reach = cachedReach(index, load.file);
+    const root = reach.reachingRoots[0];
+    if (reach.hops === null || root === undefined) continue;
+    if (nearest === null || reach.hops < nearest.hops) nearest = { ...load, hops: reach.hops, root };
+  }
+
+  const importing = [...loads.map((l) => l.file), ...unverified].sort();
+  const importedBy = `'${name}' is imported by ${importing.length} project file(s): ${sample(importing)}`;
+  if (nearest !== null) {
+    const route = mostInformative(index.routesByFile.get(nearest.root));
+    const via = route === undefined ? nearest.root : `${routeLabel(route)} (${nearest.root})`;
+    const version = subject.version === null ? '' : ` ${subject.version}`;
+    const source = nearest.source === null ? '' : `, per ${nearest.source}`;
+    return {
+      verdict: 'reachable',
+      confidence: 'medium',
+      evidence: [
+        {
+          detail:
+            `${nearest.file} imports '${name}'${version}${source} and is reachable in ` +
+            `${hopWord(nearest.hops)} via ${via}`,
+        },
+        { detail: importedBy },
+      ],
+      coverage_gaps: [FILE_LEVEL_GAP, ...gaps],
+      importing_files: loads.map((l) => l.file).sort(),
+    };
+  }
+
+  const why =
+    loads.length === 0
+      ? ' — which version they load could not be told'
+      : ' — none of them is reached from a known route through the import graph';
+  return {
+    verdict: 'imported',
+    confidence: 'medium',
+    evidence: [{ detail: `${importedBy}${why}` }],
+    coverage_gaps: [FILE_LEVEL_GAP, ...graphGaps(index), ...gaps],
+    importing_files: importing,
+  };
+}
+
+/**
+ * Why "no route reaches an importer" is weaker than it reads — said on every
+ * `imported`, since that verdict is exactly the one a reader is tempted to
+ * treat as "safe".
+ */
+function graphGaps(index: DependencyIndex): string[] {
+  const gaps = [
+    'only HTTP routes are entry points: a file run by a CLI, a cron job or a queue consumer, or ' +
+      'loaded by a dynamic import, reads as reached by no route',
+  ];
+  if (index.graph.truncated) {
+    gaps.push('the import graph was truncated at its edge cap, so a path from a route may be missing');
+  }
+  if (index.roots.length === 0) gaps.push('the surface snapshot holds no code route to start from');
+  return gaps;
+}
+
+function cachedReach(index: DependencyIndex, file: string): ReachResult {
+  const cached = index.reachCache.get(file);
+  if (cached !== undefined) return cached;
+  const result = reachFrom(index.graph, index.roots, file);
+  index.reachCache.set(file, result);
+  return result;
+}
+
+function unknown(gaps: string[]): DependencyAssessment {
+  return { verdict: 'unknown', confidence: 'low', evidence: [], coverage_gaps: gaps, importing_files: [] };
+}
+
+function sample(files: readonly string[]): string {
+  const shown = files.slice(0, 5).join(', ');
+  return files.length > 5 ? `${shown}, … (${files.length - 5} more)` : shown;
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+/** The directory of a project-relative POSIX path; `''` for the project root. */
+function dirOf(path: string): string {
+  const posix = path.replace(/\\/g, '/');
+  const at = posix.lastIndexOf('/');
+  return at === -1 ? '' : posix.slice(0, at);
+}
+
+function isUnder(file: string, dir: string): boolean {
+  return dir === '' || file.startsWith(`${dir}/`);
+}
+
+/** An installed package's own file, not the project's code: `node_modules`, a virtualenv. */
+function outsideProjectCode(file: string): boolean {
+  return /(^|\/)(node_modules|site-packages|\.venv|venv)\//.test(file);
+}
+
+/**
+ * For a PyPI distribution none of whose unique modules is imported: an
+ * import of a module the table leaves out because another distribution
+ * also installs it (review of part C, M-g) is named as ambiguous, with the
+ * candidates — never "no project file imports the package".
+ */
+function ambiguousImportGap(
+  subject: DependencySubject,
+  entries: readonly { file: string; specifier: string; language: string }[],
+): string | null {
+  if (subject.ecosystem !== 'pypi') return null;
+  const shared = PYPI_SHARED_MODULES[normalizePypiName(subject.package_name)];
+  if (shared === undefined) return null;
+  for (const [module, other] of Object.entries(shared)) {
+    const importer = entries.find(
+      (e) => e.language === 'python' && (e.specifier === module || e.specifier.startsWith(`${module}.`)) && !outsideProjectCode(e.file),
+    );
+    if (importer === undefined) continue;
+    return (
+      `the import name '${module}' is ambiguous: ${importer.file} imports it, and it is installed by ` +
+      `${subject.package_name} and by ${other} — which one is loaded cannot be told`
+    );
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------------- *
+ * Matching a package name against import specifiers
+ * ---------------------------------------------------------------------- */
+
+type Matcher =
+  | { languages: ReadonlySet<string>; matches: (specifier: string) => boolean }
+  | { gap: string };
+
+const JS_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript']);
+const PYTHON_LANGUAGES: ReadonlySet<string> = new Set(['python']);
+
+function matcherFor(subject: DependencySubject): Matcher {
+  const name = subject.package_name;
+  switch (subject.ecosystem) {
+    case null:
+      return {
+        gap:
+          "could not tell which ecosystem the package belongs to (the finding's target is not a " +
+          'known lockfile or manifest), and a name alone matches packages of every ecosystem',
+      };
+    case 'npm':
+      return { languages: JS_LANGUAGES, matches: (specifier) => npmSpecifierMatches(specifier, name) };
+    case 'pypi': {
+      const normalized = normalizePypiName(name);
+      const ambiguous = PYPI_AMBIGUOUS[normalized];
+      if (ambiguous !== undefined) {
+        return {
+          gap: `the module of this PyPI distribution is ambiguous — ${ambiguous} — so an import of it does not say which one is loaded`,
+        };
+      }
+      const modules = PYPI_MODULES[normalized];
+      if (modules === undefined) {
+        return {
+          gap:
+            'no known distribution-to-module mapping for this PyPI package: its import name cannot ' +
+            'be derived from its name (PyYAML is imported as yaml), so no import is matched',
+        };
+      }
+      return {
+        languages: PYTHON_LANGUAGES,
+        matches: (specifier) => modules.some((m) => specifier === m || specifier.startsWith(`${m}.`)),
+      };
+    }
+    default:
+      return {
+        gap: `import matching is implemented for npm and PyPI packages only; this is a ${subject.ecosystem} package`,
+      };
+  }
+}
+
+function npmSpecifierMatches(specifier: string, name: string): boolean {
+  if (specifier.startsWith('node:') || isBuiltin(specifier)) return false;
+  return specifier === name || specifier.startsWith(`${name}/`);
+}
+
+/** PEP 503 normalisation: case-folded, every run of `-`, `_`, `.` a single `-`. */
+function normalizePypiName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/g, '-');
+}
+
+/**
+ * PyPI distributions whose top-level import names are known AND unique,
+ * keyed by the PEP 503 normalised name. Deliberately a table, not a rule: the
+ * whole point is that the mapping is not derivable. A missing entry costs an
+ * `unknown`, a wrong one a false `imported`, so an entry goes in only when
+ * its import name is certain and no other distribution is known to install
+ * the same module (review of the 3.0 additions, M10: `multipart` and `bson`
+ * were listed for python-multipart and pymongo, and are also the modules of
+ * the `multipart` and `bson` distributions). Two exceptions, kept on
+ * purpose: Pillow's `PIL` and mysqlclient's `MySQLdb` are also the modules
+ * of `PIL` and `MySQL-python`, which never supported Python 3.
+ * A fork can still install a listed module under another name (`redis3`
+ * for `redis`); the table cannot know every fork.
+ */
+export const PYPI_MODULES: Readonly<Record<string, readonly string[]>> = {
+  aiohttp: ['aiohttp'],
+  attrs: ['attrs'],
+  babel: ['babel'],
+  beautifulsoup4: ['bs4'],
+  bleach: ['bleach'],
+  celery: ['celery'],
+  certifi: ['certifi'],
+  cryptography: ['cryptography'],
+  django: ['django'],
+  djangorestframework: ['rest_framework'],
+  ecdsa: ['ecdsa'],
+  fastapi: ['fastapi'],
+  flask: ['flask'],
+  gunicorn: ['gunicorn'],
+  httplib2: ['httplib2'],
+  httpx: ['httpx'],
+  idna: ['idna'],
+  jinja2: ['jinja2'],
+  jsonpickle: ['jsonpickle'],
+  lxml: ['lxml'],
+  mako: ['mako'],
+  markdown: ['markdown'],
+  mysqlclient: ['MySQLdb'],
+  numpy: ['numpy'],
+  pandas: ['pandas'],
+  paramiko: ['paramiko'],
+  pillow: ['PIL'],
+  pip: ['pip'],
+  protobuf: ['google.protobuf'],
+  pyasn1: ['pyasn1'],
+  pycryptodomex: ['Cryptodome'],
+  pydantic: ['pydantic'],
+  pymongo: ['pymongo', 'gridfs'],
+  pymysql: ['pymysql'],
+  pyopenssl: ['OpenSSL'],
+  'python-dateutil': ['dateutil'],
+  'python-multipart': ['python_multipart'],
+  pyyaml: ['yaml'],
+  redis: ['redis'],
+  requests: ['requests'],
+  rsa: ['rsa'],
+  'scikit-learn': ['sklearn'],
+  scipy: ['scipy'],
+  setuptools: ['setuptools'],
+  sqlalchemy: ['sqlalchemy'],
+  starlette: ['starlette'],
+  tornado: ['tornado'],
+  twisted: ['twisted'],
+  ujson: ['ujson'],
+  urllib3: ['urllib3'],
+  waitress: ['waitress'],
+  werkzeug: ['werkzeug'],
+  wheel: ['wheel'],
+};
+
+/**
+ * Modules a distribution in {@link PYPI_MODULES} also installs but that are
+ * left out of its entry because another distribution installs them too —
+ * named, with that other distribution, when they are the only import found
+ * (review of part C, M-g).
+ */
+export const PYPI_SHARED_MODULES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  attrs: { attr: "the 'attr' distribution" },
+  pymongo: { bson: "the 'bson' distribution" },
+  'python-multipart': { multipart: "the 'multipart' distribution" },
+};
+
+/**
+ * Distributions whose module another distribution also installs — checked
+ * against PyPI on 2026-09-28 (each named distribution exists). An import of
+ * the module does not say which one is loaded, so these answer `unknown`.
+ */
+export const PYPI_AMBIGUOUS: Readonly<Record<string, string>> = {
+  pyjwt: "its module 'jwt' is also installed by the 'jwt' distribution",
+  'python-jose': "its module 'jose' is also installed by the 'jose' distribution",
+  pycryptodome: "its module 'Crypto' is also installed by 'pycrypto'",
+  dnspython: "its module 'dns' is also installed by 'dnspython3'",
+  psycopg2: "its module 'psycopg2' is also installed by 'psycopg2-binary'",
+  'psycopg2-binary': "its module 'psycopg2' is also installed by 'psycopg2'",
+  'opencv-python': "its module 'cv2' is also installed by the other OpenCV distributions",
+  'opencv-python-headless': "its module 'cv2' is also installed by the other OpenCV distributions",
+  'opencv-contrib-python': "its module 'cv2' is also installed by the other OpenCV distributions",
+};
+
+/* ---------------------------------------------------------------------- *
+ * Which package, from which ecosystem, a finding is about
+ * ---------------------------------------------------------------------- */
+
+/** Scanners that only ever audit one ecosystem. */
+const TOOL_ECOSYSTEMS: Readonly<Record<string, string>> = {
+  'npm-audit': 'npm',
+  'pip-audit': 'pypi',
+  wpscan: 'wordpress',
+};
+
+/**
+ * The package a dependency finding is about — its name, ecosystem, exact
+ * installed version and manifest — or `null` for a finding that is not about
+ * a dependency. The package and version come from the snippet every
+ * dependency scanner writes (`fingerprint/findingIdentity.ts
+ * #dependencyCoordinates`); the ecosystem from the scanner, else from the
+ * manifest the finding names.
+ */
+export function dependencySubjectOf(finding: Finding): DependencySubject | null {
+  const coordinates = dependencyCoordinates(finding);
+  if (coordinates === null || coordinates.name === '') return null;
+  const manifest =
+    finding.file_path !== undefined && ecosystemOfManifest(finding.file_path) !== null
+      ? finding.file_path.replace(/\\/g, '/')
+      : null;
+  return {
+    package_name: coordinates.name,
+    ecosystem: ecosystemOf(finding),
+    version: isExactVersion(coordinates.version) ? coordinates.version : null,
+    manifest,
+  };
+}
+
+/** `4.17.20`, `v0.1.0`, `1.0.0-rc.1` — not `<4.17.21`, `^1.2`, `1.2.x` or `*`. */
+function isExactVersion(version: string): boolean {
+  return /^v?\d[\w.+-]*$/.test(version) && !/(^|\.)[xX*](\.|$)/.test(version);
+}
+
+function ecosystemOf(finding: Finding): string | null {
+  const byTool = TOOL_ECOSYSTEMS[finding.tool.toLowerCase()];
+  if (byTool !== undefined) return byTool;
+  return finding.file_path === undefined ? null : ecosystemOfManifest(finding.file_path);
+}
+
+/** Lockfiles and manifests by exact basename, as purl types. */
+const MANIFEST_ECOSYSTEMS: Readonly<Record<string, string>> = {
+  'package-lock.json': 'npm',
+  'npm-shrinkwrap.json': 'npm',
+  'yarn.lock': 'npm',
+  'pnpm-lock.yaml': 'npm',
+  'package.json': 'npm',
+  'bun.lock': 'npm',
+  'bun.lockb': 'npm',
+  'pipfile.lock': 'pypi',
+  pipfile: 'pypi',
+  'poetry.lock': 'pypi',
+  'uv.lock': 'pypi',
+  'pdm.lock': 'pypi',
+  'pyproject.toml': 'pypi',
+  'setup.py': 'pypi',
+  'setup.cfg': 'pypi',
+  'go.mod': 'golang',
+  'go.sum': 'golang',
+  'cargo.lock': 'cargo',
+  'cargo.toml': 'cargo',
+  'composer.lock': 'composer',
+  'composer.json': 'composer',
+  'pom.xml': 'maven',
+  'gradle.lockfile': 'maven',
+  'build.gradle': 'maven',
+  'build.gradle.kts': 'maven',
+  'packages.lock.json': 'nuget',
+  'packages.config': 'nuget',
+  'gemfile.lock': 'gem',
+  gemfile: 'gem',
+  'mix.lock': 'hex',
+  'pubspec.lock': 'pub',
+};
+
+/**
+ * Rules for names that vary: `requirements-dev.txt`, `dev-requirements.txt`,
+ * `App.csproj`, and a Java archive Trivy scanned (`app.jar`, review M-e),
+ * whose packages Trivy names `group:artifact`.
+ */
+const MANIFEST_PATTERNS: readonly (readonly [RegExp, string])[] = [
+  [/^requirements.*\.txt$/, 'pypi'],
+  [/-requirements\.txt$/, 'pypi'],
+  [/\.(cs|fs|vb)proj$/, 'nuget'],
+  [/\.sln$/, 'nuget'],
+  [/\.deps\.json$/, 'nuget'],
+  [/\.gemspec$/, 'gem'],
+  [/\.(jar|war|ear)$/, 'maven'],
+];
+
+/** The ecosystem a lockfile or manifest path belongs to, or `null` for anything else. */
+export function ecosystemOfManifest(path: string): string | null {
+  const posix = path.replace(/\\/g, '/').toLowerCase();
+  const base = posix.split('/').pop() ?? '';
+  const exact = MANIFEST_ECOSYSTEMS[base];
+  if (exact !== undefined) return exact;
+  // `requirements/base.txt`, `requirements/prod.txt`: pip's split layout.
+  if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix)) return 'pypi';
+  for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
+    if (pattern.test(base)) return ecosystem;
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------------- *
+ * The provider
+ * ---------------------------------------------------------------------- */
+
+export interface DependencyProviderInput {
+  snapshot: AttackSurfaceSnapshot;
+  snapshotId: number;
+  treeHash: string;
+  graph: ImportGraph;
+  findings: readonly Finding[];
+  computedAt: string;
+  projectPath: string;
+  /** The npm version lookup (`npmResolve.ts#makeNpmResolver`); without one, npm is at most `imported`. */
+  npmResolver?: NpmResolver;
+  /** The project's PyPI pins (`pypiPins.ts#makePypiPinResolver`); without them, PyPI is at most `imported`. */
+  pypiPins?: PypiPinResolver;
+}
+
+/**
+ * One `dependency` verdict per dependency finding in the batch; a finding
+ * that is not about a package gets none (the provider does not apply to it,
+ * which is not the same as `unknown`).
+ */
+export function validateDependencies(input: DependencyProviderInput): FindingValidation[] {
+  const index = prepareDependencyIndex(input);
+  const out: FindingValidation[] = [];
+  for (const finding of input.findings) {
+    const subject = dependencySubjectOf(finding);
+    if (subject === null) continue;
+    const assessment = assessDependency(subject, index);
+    out.push({
+      fingerprint: finding.fingerprint,
+      provider: 'dependency',
+      verdict: assessment.verdict,
+      confidence: assessment.confidence,
+      evidence: assessment.evidence,
+      coverage_gaps: assessment.coverage_gaps,
+      snapshot_id: input.snapshotId,
+      tree_hash: input.treeHash,
+      computed_at: input.computedAt,
+    });
+  }
+  return out;
+}

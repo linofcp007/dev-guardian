@@ -71,6 +71,8 @@ export const SCAN_TYPES = [
   'dast',
   // Agent workspace / host-config audit
   'agent_audit',
+  // What the configured MCP servers actually serve (audit_mcp_tools)
+  'mcp_tool_audit',
 ] as const;
 export type ScanType = (typeof SCAN_TYPES)[number];
 
@@ -118,6 +120,15 @@ export interface ToolRun {
    */
   target?: string;
   /**
+   * `cosign-verify` only: the signer the image was verified against, in
+   * canonical form (`runners/cosignCheck.ts#canonicalSignerPolicy`). Part of
+   * the pass's target with `target`: a rejection for one signer is
+   * re-measured only by a verification against the same signer
+   * (`history/runCompare.ts#targetOf`) — a later `.*` that accepts anyone
+   * never resolves it.
+   */
+  signer?: string;
+  /**
    * A Semgrep run the shared judge (`runners/semgrepReport.ts`) found
    * `partial`: `ok`, and also listed in `missing_tools`, because these files
    * were only partly parsed (project-relative). What the CI gate's
@@ -142,6 +153,30 @@ export interface ToolRun {
    * scanner" (`tools/scanCoverage.ts`).
    */
   rule_config_error?: true;
+  /**
+   * With `rule_config_error` on a scan_sast Semgrep run: no registry or
+   * project rule loaded, but the plugin's own LLM-application pack did, and
+   * its findings are recorded. The run stays `failed` (the pack alone is not
+   * a SAST scan); the coverage warning says what ran instead of "NOTHING was
+   * scanned" (`tools/scanCoverage.ts`).
+   */
+  plugin_pack_only?: true;
+  /**
+   * A Semgrep run that ran the plugin's own packs, when one of them did not
+   * fully run: by pack (`llm`), its status and why. Today only the LLM pack's
+   * own taint fixpoint timeouts (`runners/semgrepReport.ts`,
+   * `PluginPackFixpoint`) — the pack's gap, not the scan's: the run's status,
+   * `missing_tools` and the CI gate are untouched. Absent: every pack the run
+   * passed ran complete.
+   */
+  plugin_packs?: Record<string, { status: 'partial'; reason: string }>;
+  /**
+   * Responses only (`tools/responseBounds.ts`), never stored: when
+   * `partially_parsed` was cut to its first entries for the MCP response,
+   * how many the run named in all, and how many of each type.
+   */
+  partially_parsed_total?: number;
+  partially_parsed_by_type?: Record<string, number>;
 }
 
 /** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */
@@ -181,6 +216,32 @@ export interface Finding {
    * text. Present exactly when `identity` is.
    */
   content_key?: string;
+  /**
+   * The weakness, as CWE ids (`CWE-89`), ascending — from the scanner
+   * (Semgrep rule metadata, Trivy `CweIDs`, Bandit `issue_cwe`) or, for a
+   * finding class that is one weakness by definition (a known-vulnerable
+   * dependency, a committed secret), from its parser. An annotation: part
+   * of neither `fingerprint` nor `identity`. ABSENT MEANS UNKNOWN — rows
+   * stored before schema 13, and findings whose scanner named no CWE — never
+   * "no weakness". See `frameworks/taxonomy.ts`.
+   */
+  cwe?: string[];
+  /**
+   * OWASP Top 10:2025 categories (`A05:2025`), in list order: the scanner's
+   * own 2025 labels plus the categories OWASP maps `cwe` to
+   * (`frameworks/owaspTop10_2025.ts`). Absent means unknown or unmapped —
+   * never filed under a category.
+   */
+  owasp?: string[];
+  /**
+   * Other ids of the SAME vulnerability, as its scanner records them
+   * (Trivy `VendorIDs`, pip-audit's OSV `aliases`, npm audit's GHSA and
+   * CVE ids, WPScan's further CVEs) — never an id the text mentions. With
+   * the rule id, these are the finding's own vulnerability ids
+   * (`intel/vulnIds.ts`). Not part of the fingerprint or identity. Absent
+   * when the scanner gave none, and on every row stored before migration 014.
+   */
+  vuln_aliases?: string[];
 }
 
 export interface ScanRecord {
@@ -282,7 +343,33 @@ export interface Suppression {
    * had. Present on every suppression `suppress_finding` writes from now on.
    */
   project_path?: string;
+  /**
+   * Migration 014: the suppression is also a VEX statement that the product
+   * is `not_affected` by the CVE the finding names, for `vex_justification`'s
+   * reason. Absent on an ordinary suppression — which states nothing in VEX
+   * terms and is never exported as `not_affected`.
+   */
+  vex_status?: VexSuppressionStatus;
+  /** Present exactly when `vex_status` is (suppress_finding requires it). */
+  vex_justification?: OpenVexJustification;
+  vex_impact_statement?: string;
 }
+
+/** The only VEX status a suppression can carry: the others are not reasons to hide a finding. */
+export type VexSuppressionStatus = 'not_affected';
+
+/**
+ * OpenVEX's `not_affected` justification labels (OpenVEX spec v0.2.0, "Status
+ * Justifications" — the labels of CISA's VEX Status Justifications, June 2022).
+ */
+export const OPENVEX_JUSTIFICATIONS = [
+  'component_not_present',
+  'vulnerable_code_not_present',
+  'vulnerable_code_not_in_execute_path',
+  'vulnerable_code_cannot_be_controlled_by_adversary',
+  'inline_mitigations_already_exist',
+] as const;
+export type OpenVexJustification = (typeof OPENVEX_JUSTIFICATIONS)[number];
 
 export interface Baseline {
   id: number;
@@ -558,6 +645,21 @@ export interface AttackSurfaceSnapshot {
    */
   imports: { file: string; module_file: string }[];
   /**
+   * The imports that name a package rather than a project file — `express`,
+   * `lodash/merge`, `yaml`, `github.com/gin-gonic/gin` — and which files
+   * import each, project-relative POSIX like `imports`. Stdlib modules are
+   * here too; nothing tells them apart from a package by the text alone.
+   * Read by `validate_finding`'s dependency provider to decide whether a
+   * vulnerable package is imported, and whether by a file a route reaches
+   * (`surface/moduleEdges.ts#externalImports` says what is left out).
+   *
+   * ABSENT on every snapshot persisted before it was recorded — "this
+   * snapshot never looked" must not read as "nothing imports any package",
+   * so a reader checks `=== undefined` first — and on one stored in an
+   * earlier shape of this field (`surfaceRepo.ts` drops it on read).
+   */
+  external_imports?: ExternalImports;
+  /**
    * Files Semgrep could read only in part (a warn-level `PartialParsing`, a
    * syntax error confined to one file): the routes outside the unparsed span
    * are in `routes`, the ones inside it may be missing. Present only when
@@ -568,6 +670,27 @@ export interface AttackSurfaceSnapshot {
   partially_parsed?: PartialParse[];
 }
 
+/**
+ * `AttackSurfaceSnapshot.external_imports`, stored compactly: each importing
+ * path once in `files`, and per (specifier, language) the indices of the
+ * files that import it. The flat `{file, specifier, language}` list it
+ * replaced measured 783 KB of a 933 KB snapshot at 10.5k imports.
+ */
+export interface ExternalImports {
+  /** Project-relative POSIX files, each once, sorted — the index space of `packages[].files`. */
+  files: string[];
+  packages: ExternalImportEntry[];
+}
+
+export interface ExternalImportEntry {
+  specifier: string;
+  language: string;
+  /** Indices into `ExternalImports.files`, at most `MAX_FILES_PER_PACKAGE` (`surface/moduleEdges.ts`). */
+  files: number[];
+  /** How many files import it in all — more than `files.length` when the list was capped. */
+  file_count: number;
+}
+
 /** One file a Semgrep run could not fully parse, as `map_attack_surface` reports it. */
 export interface PartialParse {
   /** Project-relative when the file is inside the project. */
@@ -576,6 +699,12 @@ export interface PartialParse {
   type: string;
   /** The first line of Semgrep's message. */
   message: string;
+  /**
+   * `Fixpoint timeout` entries only (`runners/semgrepReport.ts`): how many
+   * functions of this file the taint analysis gave up on. One entry per
+   * file, however many functions.
+   */
+  functions?: number;
 }
 
 /**

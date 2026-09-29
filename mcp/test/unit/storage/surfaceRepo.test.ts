@@ -1,7 +1,7 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
-import { SurfaceRepo } from '../../../src/storage/surfaceRepo.js';
+import { SURFACE_SNAPSHOTS_KEPT, SurfaceRepo } from '../../../src/storage/surfaceRepo.js';
 import type { AttackSurfaceSnapshot, RouteRecord } from '../../../src/types.js';
 
 function makeRoute(overrides: Partial<RouteRecord> = {}): RouteRecord {
@@ -202,5 +202,55 @@ describe('SurfaceRepo', () => {
 
     const repo = new SurfaceRepo(db);
     expect(repo.getLatest()?.snapshot.routes[0]?.provenance).toBe('spec');
+  });
+});
+
+describe('SurfaceRepo — third-party imports and retention (review of part C, M6)', () => {
+  function withRow(json: unknown): SurfaceRepo {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    db.prepare(
+      `INSERT INTO surface_snapshots (project_path, captured_at, tree_hash, json)
+       VALUES ('/p', '2026-01-01T00:00:00.000Z', 'h', ?)`,
+    ).run(JSON.stringify(json));
+    return new SurfaceRepo(db);
+  }
+
+  it('reads external_imports stored in the earlier flat shape as absent, so it is recomputed', () => {
+    const repo = withRow({ routes: [], external_imports: [{ file: 'a.ts', specifier: 'x', language: 'typescript' }] });
+    expect(repo.getLatest()?.snapshot.external_imports).toBeUndefined();
+  });
+
+  it('drops a stored package entry whose file index points nowhere, keeping the rest', () => {
+    const repo = withRow({
+      routes: [],
+      external_imports: {
+        files: ['a.ts'],
+        packages: [
+          { specifier: 'x', language: 'typescript', files: [0], file_count: 1 },
+          { specifier: 'y', language: 'typescript', files: [7], file_count: 1 },
+        ],
+      },
+    });
+    expect(repo.getLatest()?.snapshot.external_imports).toEqual({
+      files: ['a.ts'],
+      packages: [{ specifier: 'x', language: 'typescript', files: [0], file_count: 1 }],
+    });
+  });
+
+  it(`keeps the newest ${SURFACE_SNAPSHOTS_KEPT} snapshots per project and never touches another project's`, () => {
+    const repo = setup();
+    const ids: number[] = [];
+    for (let i = 0; i < SURFACE_SNAPSHOTS_KEPT + 3; i += 1) {
+      ids.push(repo.insert({ project_path: '/a', tree_hash: `h${i}`, snapshot: makeSnapshot() }).id);
+    }
+    const other = repo.insert({ project_path: '/b', tree_hash: 'hb', snapshot: makeSnapshot() }).id;
+
+    expect(repo.getById(ids[0] ?? -1)).toBeNull();
+    expect(repo.getById(ids[2] ?? -1)).toBeNull();
+    expect(repo.getById(ids[3] ?? -1)).not.toBeNull();
+    expect(repo.getLatestForProject('/a')?.id).toBe(ids[ids.length - 1]);
+    expect(repo.getById(other)).not.toBeNull();
+    expect(repo.listRecent(100).filter((s) => s.project_path === '/a')).toHaveLength(SURFACE_SNAPSHOTS_KEPT);
   });
 });

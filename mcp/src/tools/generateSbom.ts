@@ -28,6 +28,7 @@ import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   ensureReportDir,
   scannerAvailable,
@@ -91,6 +92,9 @@ async function handler(
     return failDomain('not_a_git_repo', (e as Error).message);
   }
 
+  // The tree the SBOM describes, taken before anything is written: export_vex
+  // compares it with the dependency scan's before trusting the SBOM's product.
+  const treeHash = await computeTreeHash(projectPath);
   const format: SbomFormat = inp.format ?? 'cyclonedx-json';
   const inlineMaxBytes = Math.min(inp.inline_max_kb ?? DEFAULT_INLINE_KB, MAX_INLINE_KB) * 1024;
   const scanId = randomUUID();
@@ -149,7 +153,7 @@ async function handler(
     scan_id: scanId,
     scan_type: 'sbom',
     project_path: projectPath,
-    tree_hash: '',
+    tree_hash: treeHash,
     report_dir: outFile,
   });
   ctx.storage.scans.finalize({

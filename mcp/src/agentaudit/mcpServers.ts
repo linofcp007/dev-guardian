@@ -18,11 +18,40 @@ export interface McpServerEntry {
   command?: string;
   args?: string[];
   cwd?: string;
+  /** The remote address, whichever key the host spells it with: `url`, Windsurf's `serverUrl`, Gemini's `httpUrl`. */
   url?: string;
+  /**
+   * Set whenever `url` is: the transport this host means by that entry —
+   * `type` when given; Gemini's `httpUrl` is Streamable HTTP and its `url`
+   * SSE; otherwise a path ending in `/sse` is SSE and anything else
+   * Streamable HTTP (what Cursor and Windsurf try first).
+   */
+  remoteTransport?: 'http' | 'sse';
   type?: string;
   env?: Record<string, unknown>;
   /** The entry's own raw object, for hashing and for fields this type does not model. */
   raw: Record<string, unknown>;
+}
+
+function remoteAddress(
+  raw: Record<string, unknown>,
+  sourceLabel: string,
+): { url: string; transport: 'http' | 'sse' } | undefined {
+  const str = (k: string): string | undefined => (typeof raw[k] === 'string' ? (raw[k] as string) : undefined);
+  const type = str('type')?.toLowerCase();
+  const gemini = /(^|\/)\.gemini\/settings\.json$/.test(sourceLabel);
+  const httpUrl = str('httpUrl');
+  const url = str('url');
+  const serverUrl = str('serverUrl');
+  const address = httpUrl ?? url ?? serverUrl;
+  if (address === undefined) return undefined;
+  let transport: 'http' | 'sse';
+  if (type === 'sse') transport = 'sse';
+  else if (type !== undefined && type !== 'stdio') transport = 'http';
+  else if (httpUrl !== undefined) transport = 'http';
+  else if (gemini && url !== undefined) transport = 'sse';
+  else transport = /\/sse\/?(?:[?#]|$)/i.test(address) ? 'sse' : 'http';
+  return { url: address, transport };
 }
 
 export function extractMcpServers(source: ConfigSource): McpServerEntry[] {
@@ -41,8 +70,11 @@ export function extractMcpServers(source: ConfigSource): McpServerEntry[] {
     if (Array.isArray(args) && args.every((a) => typeof a === 'string')) entry.args = args as string[];
     const cwd = raw['cwd'];
     if (typeof cwd === 'string') entry.cwd = cwd;
-    const url = raw['url'];
-    if (typeof url === 'string') entry.url = url;
+    const remote = remoteAddress(raw, source.label);
+    if (remote !== undefined) {
+      entry.url = remote.url;
+      entry.remoteTransport = remote.transport;
+    }
     const type = raw['type'];
     if (typeof type === 'string') entry.type = type;
     const env = raw['env'];

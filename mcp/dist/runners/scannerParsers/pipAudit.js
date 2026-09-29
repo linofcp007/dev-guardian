@@ -43,7 +43,7 @@
  * `unplanned`, never guessed at).
  */
 import { minCleanVersionAbove } from '../../deps/versionCompare.js';
-import { asArray, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
+import { asArray, dependencyTaxonomy, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, } from './index.js';
 export const PIP_AUDIT_TOOL_NAME = 'pip-audit';
 export const pipAuditParser = {
     name: PIP_AUDIT_TOOL_NAME,
@@ -77,6 +77,9 @@ export const pipAuditParser = {
                     fix_available: fixVersions.length > 0,
                     file_path: filePath,
                     snippet: `${name}@${version ?? ''}`,
+                    taxonomy: dependencyTaxonomy(),
+                    // OSV's own aliases — what ties PYSEC-… to its CVE and GHSA.
+                    vuln_aliases: aliases,
                 };
                 if (description !== undefined)
                     findingInput.message = description;

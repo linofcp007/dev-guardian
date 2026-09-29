@@ -9,8 +9,8 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 ## Qué incluye
 
 - **13 skills** y **10 comandos** slash para Claude Code / Cowork (abajo).
-- Un **servidor MCP** con **57 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés).
-- **142 reglas Semgrep en 10 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD y un pack de inventario de rutas para nueve lenguajes — ver [docs/rule-packs.md](docs/rule-packs.md).
+- Un **servidor MCP** con **59 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés).
+- **151 reglas Semgrep en 11 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD, un pack de inventario de rutas para nueve lenguajes y un pack para aplicaciones con LLM (salida del modelo en eval/shell/SQL, código remoto al cargar un modelo, superficie de inyección de prompt, llamadas sin límite de tokens) que `scan_sast` ejecuta — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de protección** que bloquean comandos de shell catastróficos, revisan paquetes en el momento de instalarlos y avisan cuando se escribe un secreto en un archivo — ver [docs/hooks.md](docs/hooks.md).
 - Una **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuración de hosts, un resumen en terminal y un panel HTML.
 
@@ -82,7 +82,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | --- | --- |
 | Escaneos de seguridad | `security_scan_full`, `scan_sast`, `scan_secrets`, `scan_deps`, `scan_containers`, `scan_iac`, `review_pr` |
 | Bugs y calidad | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
-| Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `license_compatibility`, `scan_skill`, `audit_agent_config` |
+| Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superficie de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
 | Informes | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
@@ -107,7 +107,7 @@ Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian:/
 | Ruby | sí | ninguna — usa RuboCop | rutas estilo Rails | Trivy (`Gemfile.lock`) | solo alcanzable / desconocido |
 | Kotlin | **solo detección** | — | — | — | — |
 
-Más allá de la tabla, `scan_sast` ejecuta el ruleset del registry de Semgrep (`--config=auto`), que elige reglas para los lenguajes que encuentre — Kotlin incluido — y gitleaks busca secretos en cualquier proyecto. Contenedores e IaC (Dockerfile, imágenes, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows de GitHub Actions) quedan cubiertos por `scan_containers` y `scan_iac`. "Solo alcanzable / desconocido" significa que la herramienta nunca afirma que un código es inalcanzable en un lenguaje que resuelve el código en tiempo de ejecución (autoload, anotaciones, contenedores de DI). .NET tiene además cuatro herramientas propias y WordPress diez. Trivy lee un lock file de Gradle en cualquier proyecto, Kotlin incluido, y un build de Gradle que no pudo leer se señala como hueco de cobertura; para Kotlin no hay reglas de bugs ni extracción de rutas.
+Más allá de la tabla, `scan_sast` ejecuta el ruleset del registry de Semgrep (`--config=auto`), que elige reglas para los lenguajes que encuentre — Kotlin incluido — y gitleaks busca secretos en cualquier proyecto. Contenedores e IaC (Dockerfile, imágenes, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows de GitHub Actions) quedan cubiertos por `scan_containers` y `scan_iac`; en una imagen, `scan_containers` usa además cosign para ver si está firmada y tiene procedencia SLSA firmada, y verifica quién la firmó cuando indicas el firmante. "Solo alcanzable / desconocido" significa que la herramienta nunca afirma que un código es inalcanzable en un lenguaje que resuelve el código en tiempo de ejecución (autoload, anotaciones, contenedores de DI). .NET tiene además cuatro herramientas propias y WordPress diez. Trivy lee un lock file de Gradle en cualquier proyecto, Kotlin incluido, y un build de Gradle que no pudo leer se señala como hueco de cobertura; para Kotlin no hay reglas de bugs ni extracción de rutas.
 
 **Gradle y Python necesitan un lock file para Trivy.** Trivy solo lee las dependencias de Gradle desde `gradle.lockfile`, y las de Python desde `poetry.lock`, `uv.lock`, `Pipfile.lock` o un `requirements.txt` con versiones fijadas. Un `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` o `requirements*.txt` que no pudo leer se informa como hueco de cobertura (`trivy:gradle`, `trivy:python`, o `trivy` omitido cuando no leyó nada más), nunca como un escaneo limpio. Para cerrarlo, genera el lock file. En Gradle, activa primero `dependencyLocking { lockAllConfigurations() }` en el build — sin ello, `gradle dependencies --write-locks` no escribe nada — y solo después ejecuta ese comando. En Python, ejecuta `poetry lock`, `uv lock` o `pipenv lock`, o fija la versión de cada dependencia en `requirements.txt`.
 

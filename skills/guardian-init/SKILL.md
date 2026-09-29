@@ -125,7 +125,7 @@ Próximos passos sugeridos:
 | Ruby | Semgrep (registry), Trivy em `Gemfile.lock` | brakeman, RuboCop |
 | Java / Kotlin | Semgrep, `bugfix-java.yml`, Trivy em `pom.xml` / `build.gradle` | SpotBugs + FindSecBugs |
 | C# / .NET | Semgrep, `bugfix-cs.yml`, analyzers do SDK, `dotnet list package --vulnerable`, `/guardian-dotnet` | — |
-| Docker / IaC | Trivy (`scan_containers`, `scan_iac`), hadolint, checks de compose | Checkov, se quiserem uma segunda opinião |
+| Docker / IaC | Trivy (`scan_containers`, `scan_iac`), hadolint, cosign (assinatura da imagem), checks de compose | Checkov, se quiserem uma segunda opinião |
 
 Nunca anuncies como instalado ou corrido algo da última coluna.
 

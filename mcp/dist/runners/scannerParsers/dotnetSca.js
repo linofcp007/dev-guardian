@@ -32,7 +32,7 @@
  * `npmAudit.ts` makes for its own v2 (GHSA-only) advisories — Trivy remains
  * the canonical CVE source across stacks.
  */
-import { asArray, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
+import { asArray, dependencyTaxonomy, getProp, getString, makeFinding, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const DOTNET_SCA_TOOL_NAME = 'dotnet-list-package';
 export const dotnetScaParser = {
     name: DOTNET_SCA_TOOL_NAME,
@@ -76,6 +76,7 @@ function mapPackage(raw, projectPath, framework, ctx) {
             fix_available: false,
             file_path: relPath,
             snippet: `${id}@${resolved ?? ''}`,
+            taxonomy: dependencyTaxonomy(),
         };
         if (url !== undefined)
             findingInput.message = url;

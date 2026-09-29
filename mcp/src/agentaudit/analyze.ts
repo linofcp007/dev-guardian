@@ -33,6 +33,13 @@ export interface AgentAuditResult {
   entriesChanged: number;
   sourcesRead: string[];
   sourcesMissing: string[];
+  sourcesUnreadable: UnreadableSource[];
+}
+
+/** A config source that exists and was not read (refused, too large, or not valid JSON). */
+export interface UnreadableSource {
+  source: string;
+  reason: string;
 }
 
 function entryKey(entry: McpServerEntry): string {
@@ -45,22 +52,27 @@ function entryKey(entry: McpServerEntry): string {
  * are exposed as their own synthetic source — labelled distinctly — so a
  * stale or malicious server declared for some OTHER project in the user's
  * global config is not silently skipped just because its path does not
- * match the project being audited.
+ * match the project being audited. With `onlyProject` (`audit_mcp_tools`,
+ * which starts servers with this project as their working directory) only
+ * that project's entry is expanded: another project's server is not this
+ * project's to run.
  */
-function expandNestedProjectSources(source: ConfigSource): ConfigSource[] {
-  if (source.label !== '~/.claude.json' || !source.exists || source.json === undefined) return [];
+function expandNestedProjectSources(source: ConfigSource, onlyProject?: string): ConfigSource[] {
+  if (source.nestedProjects !== true || !source.exists || source.json === undefined) return [];
   const root = source.json;
   if (root === null || typeof root !== 'object' || Array.isArray(root)) return [];
   const projects = (root as Record<string, unknown>)['projects'];
   if (projects === null || typeof projects !== 'object' || Array.isArray(projects)) return [];
 
   const out: ConfigSource[] = [];
+  const wanted = onlyProject === undefined ? undefined : normalizeProjectKey(onlyProject);
   for (const [projectKey, value] of Object.entries(projects as Record<string, unknown>)) {
+    if (wanted !== undefined && normalizeProjectKey(projectKey) !== wanted) continue;
     if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
     const mcpServers = (value as Record<string, unknown>)['mcpServers'];
     if (mcpServers === null || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) continue;
     out.push({
-      label: `~/.claude.json (project: ${projectKey})`,
+      label: `${source.label} (project: ${projectKey})`,
       kind: 'user',
       absolutePath: source.absolutePath,
       mcpServersField: 'mcpServers',
@@ -71,18 +83,57 @@ function expandNestedProjectSources(source: ConfigSource): ConfigSource[] {
   return out;
 }
 
-export function analyzeAgentConfig(
-  sources: ConfigSource[],
-  previousHashes: ReadonlyMap<string, string>,
-): AgentAuditResult {
+/**
+ * A project path as Claude Code keys it and as this server resolves it,
+ * compared equal: forward slashes, no trailing slash, and case-insensitive
+ * on Windows (`C:/Work/x` and `c:\work\x\` are one project there).
+ */
+export function normalizeProjectKey(path: string): string {
+  const forward = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' ? forward.toLowerCase() : forward;
+}
+
+export interface CollectMcpEntriesOptions {
+  /** Expand only this project's `projects[...]` entry of Claude Code's global config. */
+  onlyProject?: string;
+}
+
+export interface CollectedMcpEntries {
+  /** Every source that was read and parsed, nested `~/.claude.json` projects included. */
+  sources: ConfigSource[];
+  entries: McpServerEntry[];
+  warnings: string[];
+  sourcesRead: string[];
+  sourcesMissing: string[];
+  /**
+   * Sources that exist and were not read: their servers are unknown, which is
+   * not the same as none. Never in `sourcesRead` or `sourcesMissing`.
+   */
+  sourcesUnreadable: UnreadableSource[];
+}
+
+/**
+ * Every MCP server entry the read sources declare — shared by
+ * `audit_agent_config` (static checks) and `audit_mcp_tools` (which starts
+ * only the entries the caller names). A source that exists and could not be
+ * read or parsed is a named warning and an entry of `sourcesUnreadable`, and so is an `mcpServers` given as a path to another file (a
+ * plugin's `plugin.json` may do that): nothing here follows it, and saying
+ * nothing would read as "no servers there".
+ */
+export function collectMcpEntries(
+  sources: readonly ConfigSource[],
+  options: CollectMcpEntriesOptions = {},
+): CollectedMcpEntries {
   const warnings: string[] = [];
   const sourcesRead: string[] = [];
   const sourcesMissing: string[] = [];
+  const sourcesUnreadable: UnreadableSource[] = [];
 
   const allSources: ConfigSource[] = [];
   for (const source of sources) {
     if (source.parseError !== undefined) {
       warnings.push(`${source.label}: ${source.parseError}`);
+      sourcesUnreadable.push({ source: source.label, reason: source.parseError });
       continue;
     }
     if (!source.exists) {
@@ -91,13 +142,41 @@ export function analyzeAgentConfig(
     }
     sourcesRead.push(source.label);
     allSources.push(source);
-    allSources.push(...expandNestedProjectSources(source));
+    allSources.push(...expandNestedProjectSources(source, options.onlyProject));
+    const pathForm = mcpServersPath(source);
+    if (pathForm !== null) {
+      // The file was read, but the servers it points at were not: a gap.
+      const reason =
+        `${source.mcpServersField ?? 'mcpServers'} is a path ("${pathForm}"), not an inline object; ` +
+        'the servers declared in that file were not read';
+      warnings.push(`${source.label}: ${reason}`);
+      sourcesUnreadable.push({ source: source.label, reason });
+    }
   }
 
-  const findings: Finding[] = [];
   const entries: McpServerEntry[] = [];
-  for (const source of allSources) {
-    entries.push(...extractMcpServers(source));
+  for (const source of allSources) entries.push(...extractMcpServers(source));
+  return { sources: allSources, entries, warnings, sourcesRead, sourcesMissing, sourcesUnreadable };
+}
+
+/** The `mcpServers` value when it is a string (a path to another file), else null. */
+function mcpServersPath(source: ConfigSource): string | null {
+  if (source.mcpServersField === null) return null;
+  const root = source.json;
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) return null;
+  const value = (root as Record<string, unknown>)[source.mcpServersField];
+  return typeof value === 'string' ? value : null;
+}
+
+export function analyzeAgentConfig(
+  sources: ConfigSource[],
+  previousHashes: ReadonlyMap<string, string>,
+): AgentAuditResult {
+  const collected = collectMcpEntries(sources);
+  const { warnings, sourcesRead, sourcesMissing, sourcesUnreadable, entries } = collected;
+
+  const findings: Finding[] = [];
+  for (const source of collected.sources) {
     findings.push(...checkWildcardPermissions(source));
     findings.push(...checkBypassPermissions(source));
     findings.push(...checkEnableAllProjectMcpServers(source));
@@ -143,5 +222,6 @@ export function analyzeAgentConfig(
     entriesChanged,
     sourcesRead,
     sourcesMissing,
+    sourcesUnreadable,
   };
 }
