@@ -82,10 +82,12 @@
  * `.gitleaksignore` and `.gitleaks.toml`, restored to the ref's bytes, and
  * deleted where the ref has none. A CLI option rather than a shell step in
  * each CI template: one implementation, tested here, for all three hosts.
- * It refuses anything but a clean checkout (it rewrites files), a
- * gitignored or untracked exclusion file (no fresh checkout holds one, and
- * deleting it could not be undone), and a path through a link; an exclusion
- * file that IS a link is unlinked and replaced, never written through.
+ * It runs only where the environment says CI ({@link ciEnvironment}): on a
+ * developer's clean checkout it would revert their own exclusion files. It
+ * refuses anything but a clean checkout (it rewrites files), a gitignored or
+ * untracked exclusion file (no fresh checkout holds one, and deleting it
+ * could not be undone), and a path through a link; an exclusion file that IS
+ * a link is unlinked and replaced, never written through.
  */
 import { execa } from 'execa';
 import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -439,13 +441,35 @@ function lstatOrNull(path) {
     }
 }
 /**
+ * The variable that says this process runs in CI, or null: `CI` (`true` or
+ * `1` — GitHub Actions, GitLab CI and Bitbucket Pipelines all set
+ * `CI=true`), else each host's own marker.
+ */
+export function ciEnvironment(env) {
+    const is = (name) => (env[name] ?? '').trim().toLowerCase() === 'true';
+    const ci = (env['CI'] ?? '').trim().toLowerCase();
+    if (ci === 'true' || ci === '1')
+        return 'CI';
+    if (is('GITHUB_ACTIONS'))
+        return 'GITHUB_ACTIONS';
+    if (is('GITLAB_CI'))
+        return 'GITLAB_CI';
+    if ((env['BITBUCKET_BUILD_NUMBER'] ?? '').trim() !== '')
+        return 'BITBUCKET_BUILD_NUMBER';
+    return null;
+}
+/**
  * Puts the scanned tree's exclusion files back to the ref's — see the module
  * comment's `--reset-exclusions-from` section. Throws {@link CiRefError} —
- * before touching a file — on a checkout that is not clean, an exclusion file
- * git does not track, or a directory on the way that is a link.
+ * before touching a file — outside CI (`env`), on a checkout that is not
+ * clean, an exclusion file git does not track, or a directory on the way that
+ * is a link.
  */
-export async function resetExclusionsFromRef(projectPath, at) {
+export async function resetExclusionsFromRef(projectPath, at, env = process.env) {
     const flag = '--reset-exclusions-from';
+    if (ciEnvironment(env) === null) {
+        throw new CiRefError(`${flag} rewrites tracked files and runs only in CI (CI=true); outside CI, review the PR's exclusion-file changes instead`);
+    }
     const top = await git(projectPath, ['rev-parse', '--show-toplevel']);
     if (top.exitCode !== 0)
         throw new CiRefError(`${flag}: git rev-parse --show-toplevel failed: ${firstLine(top.stderr)}`);

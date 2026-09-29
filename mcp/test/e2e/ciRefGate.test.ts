@@ -63,8 +63,16 @@ const WEAKENED = `rules:
 const CLEAN_JS = "'use strict';\nmodule.exports = (a, b) => a + b;\n";
 const EVAL_JS = "'use strict';\nmodule.exports = (input) => eval(input);\n";
 
-function runCli(args: string[], timeout = SCAN_TIMEOUT_MS): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [CLI, ...args], { cwd: REPO_ROOT, encoding: 'utf8', timeout, env: process.env });
+/** The environment of a run: this process's, with every CI marker removed (a developer's shell), plus `extra`. */
+function envWith(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of ['CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BITBUCKET_BUILD_NUMBER']) delete env[key];
+  return { ...env, ...extra };
+}
+const IN_CI = envWith({ CI: 'true' });
+
+function runCli(args: string[], timeout = SCAN_TIMEOUT_MS, env: NodeJS.ProcessEnv = envWith()): SpawnSyncReturns<string> {
+  return spawnSync(process.execPath, [CLI, ...args], { cwd: REPO_ROOT, encoding: 'utf8', timeout, env });
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -105,7 +113,8 @@ interface JsonReport {
 }
 
 function scanJson(project: string, ...extra: string[]): { status: number | null; report: JsonReport; stderr: string } {
-  const r = runCli(['scan', '--project', project, '--local-only', '--format', 'json', ...extra]);
+  // In CI: --reset-exclusions-from runs only there, and the other flags do not care.
+  const r = runCli(['scan', '--project', project, '--local-only', '--format', 'json', ...extra], SCAN_TIMEOUT_MS, IN_CI);
   let report: JsonReport;
   try {
     report = JSON.parse(r.stdout) as JsonReport;
@@ -303,9 +312,24 @@ describe.skipIf(!RUN_REAL || !GITLEAKS_INSTALLED)('a pull request that hides its
     write(dirty, 'index.js', CLEAN_JS);
     const at = await commitAll(dirty, 'base');
     write(dirty, '.semgrepignore', 'index.js\n');
-    const r = runCli(['scan', '--project', dirty, '--reset-exclusions-from', at], FAST_TIMEOUT_MS);
+    const r = runCli(['scan', '--project', dirty, '--reset-exclusions-from', at], FAST_TIMEOUT_MS, IN_CI);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/runs only in a clean checkout/);
     expect(existsSync(join(dirty, '.semgrepignore'))).toBe(true);
+  });
+
+  it('outside CI (no CI=true) it is refused with exit 3, and a clean checkout keeps its own exclusion files', async () => {
+    const mine = await newRepo('ciref-reset-local-');
+    write(mine, 'index.js', CLEAN_JS);
+    const at = await commitAll(mine, 'base');
+    write(mine, '.semgrepignore', 'index.js\n');
+    await commitAll(mine, 'my own .semgrepignore');
+    const r = runCli(['scan', '--project', mine, '--reset-exclusions-from', at], FAST_TIMEOUT_MS);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(
+      /--reset-exclusions-from rewrites tracked files and runs only in CI \(CI=true\); outside CI, review the PR's exclusion-file changes instead/,
+    );
+    expect(r.stdout).toBe('');
+    expect(existsSync(join(mine, '.semgrepignore'))).toBe(true);
   });
 });

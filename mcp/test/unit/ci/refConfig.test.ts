@@ -18,6 +18,7 @@ import {
   GATE_CONFIG,
   readAtRef,
   readBaselineAtRef,
+  ciEnvironment,
   resetExclusionsFromRef,
   resolveCiRef,
 } from '../../../src/ci/refConfig.js';
@@ -277,6 +278,29 @@ describe('configDifferences', () => {
 describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI checkout only)', () => {
   const read = (root: string, rel: string): string | null =>
     existsSync(join(root, ...rel.split('/'))) ? readFileSync(join(root, ...rel.split('/')), 'utf8') : null;
+  const IN_CI: NodeJS.ProcessEnv = { CI: 'true' };
+
+  it('outside CI it refuses, before touching anything: it rewrites tracked files', async () => {
+    const repo = await newRepo('refcfg-reset-local-');
+    write(repo, '.semgrepignore', 'vendor/\n');
+    const base = await commitAll(repo, 'base');
+    write(repo, '.semgrepignore', 'vendor/\nsrc/\n');
+    await commitAll(repo, 'my own change, on my own branch');
+    const at = await resolveCiRef(repo, base, '--reset-exclusions-from');
+    for (const env of [{}, { CI: 'false' }, { CI: '' }] as NodeJS.ProcessEnv[]) {
+      await expect(resetExclusionsFromRef(repo, at, env), JSON.stringify(env)).rejects.toThrow(
+        '--reset-exclusions-from rewrites tracked files and runs only in CI (CI=true); outside CI, review the PR\'s exclusion-file changes instead',
+      );
+    }
+    expect(read(repo, '.semgrepignore')).toBe('vendor/\nsrc/\n');
+  });
+
+  it.each([{ CI: 'true' }, { CI: '1' }, { GITHUB_ACTIONS: 'true' }, { GITLAB_CI: 'true' }, { BITBUCKET_BUILD_NUMBER: '42' }])(
+    'CI is recognised from %j',
+    (env) => {
+      expect(ciEnvironment(env)).not.toBeNull();
+    },
+  );
 
   it("puts every .semgrepignore, .gitleaksignore and .gitleaks.toml back to the ref's, and deletes those the ref lacks", async () => {
     const repo = await newRepo('refcfg-reset-');
@@ -292,7 +316,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     rmSync(join(repo, '.gitleaks.toml'));
     await commitAll(repo, 'pr');
 
-    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'));
+    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'), IN_CI);
     expect(reset).toEqual({
       ref: base,
       commit: base,
@@ -310,7 +334,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     const repo = await newRepo('refcfg-reset-none-');
     write(repo, '.semgrepignore', 'vendor/\n');
     const base = await commitAll(repo, 'base');
-    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'));
+    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'), IN_CI);
     expect(reset.restored).toEqual([]);
     expect(reset.removed).toEqual([]);
   });
@@ -322,7 +346,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     write(repo, '.semgrepignore', 'api/\n');
     await commitAll(repo, 'pr');
     const project = join(repo, 'api');
-    const reset = await resetExclusionsFromRef(project, await resolveCiRef(project, base, '--reset-exclusions-from'));
+    const reset = await resetExclusionsFromRef(project, await resolveCiRef(project, base, '--reset-exclusions-from'), IN_CI);
     expect(reset.removed).toEqual(['../.semgrepignore']);
     expect(read(repo, '.semgrepignore')).toBeNull();
   });
@@ -332,7 +356,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     write(repo, '.semgrepignore', 'vendor/\n');
     const base = await commitAll(repo, 'base');
     write(repo, 'notes.txt', 'uncommitted work\n');
-    await expect(resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'))).rejects.toThrow(
+    await expect(resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'), IN_CI)).rejects.toThrow(
       /runs only in a clean checkout.*notes\.txt/,
     );
   });
@@ -342,7 +366,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     write(repo, '.gitignore', '.gitleaksignore\n');
     const base = await commitAll(repo, 'base');
     write(repo, '.gitleaksignore', 'abc:x:y:1\n');
-    await expect(resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'))).rejects.toThrow(
+    await expect(resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'), IN_CI)).rejects.toThrow(
       /\.gitleaksignore is not tracked/,
     );
     expect(read(repo, '.gitleaksignore')).toBe('abc:x:y:1\n');
@@ -357,7 +381,7 @@ describe('resetExclusionsFromRef (--reset-exclusions-from: a disposable CI check
     await commitLink(repo, '.gitleaks.toml', outside.replace(/\\/g, '/'));
     await git(repo, 'checkout', '-q', '--', '.');
     await git(repo, 'reset', '-q', '--hard');
-    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'));
+    const reset = await resetExclusionsFromRef(repo, await resolveCiRef(repo, base, '--reset-exclusions-from'), IN_CI);
     expect(reset.restored).toEqual(['.gitleaks.toml']);
     expect(readFileSync(outside, 'utf8')).toBe('untouched\n');
     expect(read(repo, '.gitleaks.toml')).toBe('[extend]\nuseDefault = true\n');

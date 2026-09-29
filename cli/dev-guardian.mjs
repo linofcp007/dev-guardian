@@ -28,7 +28,7 @@
  *                                                      from that commit, never the tree
  *                             --rules-ref <ref>        read the project's Semgrep rules
  *                                                      and ignore files from that commit
- *                             --reset-exclusions-from <ref>  a CLEAN (CI) checkout only:
+ *                             --reset-exclusions-from <ref>  CI only (CI=true), clean checkout:
  *                                                      put .semgrepignore, .gitleaksignore
  *                                                      and .gitleaks.toml back to that commit's
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
@@ -318,7 +318,9 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          still read from the tree — each one the tree changes
                          against <ref> is named in the report. See docs/ci.md.
   --reset-exclusions-from <ref>
-                         In a disposable CI checkout only: before scanning, put
+                         In CI only (CI=true, or GITHUB_ACTIONS / GITLAB_CI /
+                         BITBUCKET_BUILD_NUMBER; exit 3 elsewhere — it would
+                         revert your own files): before scanning, put
                          every .semgrepignore the scan reads, .gitleaksignore and
                          .gitleaks.toml back to <ref>'s, deleting those <ref>
                          lacks — no scanner flag reads them from elsewhere. Refused
