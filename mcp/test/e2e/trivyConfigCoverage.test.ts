@@ -198,6 +198,30 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
     expect(clean.out.coverage).toBe('full');
   });
 
+  /**
+   * Round 5, item 1: Trivy reads hidden directories — a clean
+   * `.devcontainer/Dockerfile` is in its report (else it would be named
+   * below too) — so a templated `.k8s/pod.yaml` is a named gap, and a
+   * workflow under `.github/workflows` is not IaC-looking at all.
+   */
+  it.skipIf(!TRIVY_INSTALLED)('hidden directories: a templated .k8s manifest is named, a clean .devcontainer Dockerfile and a workflow are not', async () => {
+    const r = await run(
+      'scan_iac',
+      project({
+        '.devcontainer/Dockerfile': 'FROM alpine:3.18\nUSER nobody\nHEALTHCHECK CMD true\n',
+        '.k8s/pod.yaml': POD.replace('name: priv', 'name: {{ name }}'),
+        '.github/workflows/ci.yml': 'name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n',
+      }),
+    );
+    const trivy = r.out.tools_run.find((t) => t.name === 'trivy-config');
+    expect(trivy?.reason).toMatch(/Trivy read nothing from 1 IaC-looking file: \.k8s\/pod\.yaml/);
+    expect(trivy?.reason ?? '').not.toMatch(/devcontainer|workflows/);
+    expect(r.findings).toBeGreaterThanOrEqual(0);
+
+    const clean = await run('scan_iac', project({ '.devcontainer/Dockerfile': 'FROM alpine:3.18\nUSER nobody\nHEALTHCHECK CMD true\n' }));
+    expect(clean.out.tools_run.find((t) => t.name === 'trivy-config')).toEqual({ name: 'trivy-config', status: 'ok' });
+  });
+
   it.skipIf(!TRIVY_INSTALLED)('a Helm chart with a template its values disable is full', async () => {
     const r = await run(
       'scan_iac',

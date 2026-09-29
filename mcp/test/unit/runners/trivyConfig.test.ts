@@ -178,16 +178,40 @@ describe('iacLookingFiles', () => {
     expect(iacLookingFiles(dir, null).files).toEqual([]);
   });
 
-  it('skips dependency, build and hidden directories, and .guardianignore entries', () => {
+  it('skips dependency, build, version-control and cache directories, and .guardianignore entries', () => {
     const dir = tree({
       'node_modules/x/main.tf': 'resource "a" "b" {}\n',
       'vendor/y/Dockerfile': 'FROM alpine\n',
       '.terraform/modules/m/main.tf': 'resource "a" "b" {}\n',
+      '.git/hooks/Dockerfile': 'FROM alpine\n',
+      '.yarn/cache/Dockerfile': 'FROM alpine\n',
+      'bower_components/x/Dockerfile': 'FROM alpine\n',
       'fixtures/Dockerfile': 'FROM alpine\n',
       'main.tf': 'resource "a" "b" {}\n',
     });
     const ignores = (rel: string): boolean => rel === 'fixtures' || rel.startsWith('fixtures/');
     expect(iacLookingFiles(dir, { ignores }).files).toEqual(['main.tf']);
+  });
+});
+
+/**
+ * Round 5, item 1: the walk skipped every hidden directory, but Trivy reads
+ * them — a `.devcontainer/Dockerfile`, a `.k8s/` manifest. Hidden
+ * directories are walked like the manifest walk walks them: all but version
+ * control and caches. A workflow under `.github/workflows` is walked and
+ * never IaC-looking: it has no top-level `apiVersion`/`kind`/`metadata`.
+ */
+describe('iacLookingFiles — hidden directories', () => {
+  it('walks hidden directories Trivy reads; a GitHub workflow is not IaC-looking', () => {
+    const dir = tree({
+      '.devcontainer/Dockerfile': 'FROM alpine\n',
+      '.k8s/pod.yaml': 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: {{ name }}\n',
+      '.docker/app.Dockerfile': 'FROM alpine\n',
+      '.github/workflows/ci.yml':
+        'name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n',
+      '.github/workflows/deploy.yaml': 'on:\n  workflow_dispatch: {}\njobs:\n  kind:\n    runs-on: x\n    steps: []\n',
+    });
+    expect(iacLookingFiles(dir, null).files).toEqual(['.devcontainer/Dockerfile', '.docker/app.Dockerfile', '.k8s/pod.yaml']);
   });
 });
 

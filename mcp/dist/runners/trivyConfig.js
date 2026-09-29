@@ -74,7 +74,7 @@
  */
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
+import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured } from './trivyRun.js';
 /** An ANSI colour sequence (ESC [ … letter), in case a log is ever coloured. */
@@ -217,9 +217,12 @@ function looksLikeIacText(text) {
 /**
  * Files under `projectPath` that look like something `trivy config` scans —
  * see the module comment for how narrow that is. Bounded like the other
- * project walks: `PROJECT_WALK_EXCLUDE`, hidden directories, a chart's
- * `templates/` and `.guardianignore` entries are not entered, symbolic links
- * not followed; a JSON file is parsed only up to 2 MB.
+ * project walks: `PROJECT_WALK_EXCLUDE`, `SCANNER_WALK_EXCLUDE` (version
+ * control and caches — every other hidden directory is entered, as Trivy
+ * enters them), a chart's `templates/` and `.guardianignore` entries are not
+ * entered, symbolic links not followed; a JSON file is parsed only up to
+ * 2 MB. A GitHub workflow is walked and never IaC-looking: it has no
+ * top-level `apiVersion`/`kind`/`metadata`.
  */
 export function iacLookingFiles(projectPath, exclusions) {
     const files = [];
@@ -250,7 +253,8 @@ export function iacLookingFiles(projectPath, exclusions) {
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
             if (e.isDirectory()) {
-                if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith('.'))
+                // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`.
+                if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name))
                     continue;
                 if (isChart && e.name === 'templates')
                     continue;

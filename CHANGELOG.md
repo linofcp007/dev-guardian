@@ -106,7 +106,10 @@ version bump.
   `k8s/pod.yaml` beside one clean Dockerfile read full (`num=1`). Trivy lists every file it read in `Results`,
   clean ones with their Successes, and Terraform per module directory (measured on 0.69.3), so a file the report
   does not name is partial — "Trivy read nothing from 1 IaC-looking file: k8s/pod.yaml". A chart's `templates/`
-  is Helm's to render and not compared (a template its values disable renders nothing, legitimately). A JSON file
+  is Helm's to render and not compared (a template its values disable renders nothing, legitimately). The files
+  compared include hidden directories, as Trivy reads them (a `.devcontainer/Dockerfile`, a `.k8s/` manifest) —
+  all but version control and caches, the manifest walk's rule; a workflow under `.github/workflows` is never
+  IaC-looking. A JSON file
   is IaC-looking by its top-level keys only, parsed (up to 2 MB): a JSON Schema listing `apiVersion`, `kind` and
   `metadata` as properties read partial.
 - `wp_vuln_check` is judged by WPScan's report. With no WPScan database (a fresh machine), WPScan writes

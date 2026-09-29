@@ -14,7 +14,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { PROJECT_WALK_EXCLUDE } from '../projectFiles.js';
+import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from '../projectFiles.js';
 import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, SECRET_CWE, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
 export const trivyParser = {
@@ -440,38 +440,19 @@ function dirOf(path) {
     return i < 0 ? '' : posix.slice(0, i);
 }
 /**
- * Directories the manifest walk does not enter besides `PROJECT_WALK_EXCLUDE`
- * (round 4, items 4 and 5): version control, the package managers' own
- * caches, and bower's and jspm's dependency directories — what is in them is
- * not the project's manifest. Every other hidden directory IS walked: Trivy
- * reads them, and a GitHub composite action's `.github/actions/notify/
- * package.json` with no lock read full while the walk skipped `.github`.
- * Examples, docs and fixtures are walked too — whether one ships is the
- * project's to say, in `.guardianignore` (the coverage warning says so).
- */
-const MANIFEST_WALK_EXCLUDE = new Set([
-    '.git',
-    '.hg',
-    '.svn',
-    '.bzr',
-    '_darcs',
-    'CVS',
-    '.yarn',
-    '.pnpm-store',
-    '.npm',
-    '.gradle',
-    '.m2',
-    '.terraform',
-    'bower_components',
-    'jspm_packages',
-]);
-/**
  * Every manifest of a {@link ECOSYSTEM_MANIFESTS} ecosystem under the
  * project, bounded: the directories no scan of the project's own files
  * reads (`node_modules`, `vendor`, build output, virtualenvs, caches — the
- * `PROJECT_WALK_EXCLUDE` every other walk uses), {@link MANIFEST_WALK_EXCLUDE}
- * and `.guardianignore` entries are not entered, symbolic links are not
- * followed, and at most `maxDirs` directories are read.
+ * `PROJECT_WALK_EXCLUDE` every other walk uses), `SCANNER_WALK_EXCLUDE`
+ * (version control, package-manager caches, bower's and jspm's dependency
+ * directories) and `.guardianignore` entries are not entered, symbolic
+ * links are not followed, and at most `maxDirs` directories are read.
+ *
+ * Every other hidden directory IS walked (round 4, item 4): Trivy reads
+ * them, and a GitHub composite action's `.github/actions/notify/
+ * package.json` with no lock read full while the walk skipped `.github`.
+ * Examples, docs and fixtures are walked too — whether one ships is the
+ * project's to say, in `.guardianignore` (the coverage warning says so).
  */
 function walkManifests(projectPath, opts) {
     const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
@@ -505,7 +486,7 @@ function walkManifests(projectPath, opts) {
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
             if (e.isDirectory()) {
-                if (PROJECT_WALK_EXCLUDE.has(e.name) || MANIFEST_WALK_EXCLUDE.has(e.name))
+                if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name))
                     continue;
                 if (ignores !== null && ignores(child, true))
                     continue;

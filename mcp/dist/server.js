@@ -42940,6 +42940,22 @@ async function walk(root, dir, out) {
 
 // src/runners/projectFiles.ts
 var PROJECT_WALK_EXCLUDE = /* @__PURE__ */ new Set([...FS_EXCLUDE, "vendor"]);
+var SCANNER_WALK_EXCLUDE = /* @__PURE__ */ new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".bzr",
+  "_darcs",
+  "CVS",
+  ".yarn",
+  ".pnpm-store",
+  ".npm",
+  ".gradle",
+  ".m2",
+  ".terraform",
+  "bower_components",
+  "jspm_packages"
+]);
 function readDir(dir) {
   try {
     return readdirSync7(dir, { withFileTypes: true });
@@ -45038,22 +45054,6 @@ function dirOf(path8) {
   const i2 = posix2.lastIndexOf("/");
   return i2 < 0 ? "" : posix2.slice(0, i2);
 }
-var MANIFEST_WALK_EXCLUDE = /* @__PURE__ */ new Set([
-  ".git",
-  ".hg",
-  ".svn",
-  ".bzr",
-  "_darcs",
-  "CVS",
-  ".yarn",
-  ".pnpm-store",
-  ".npm",
-  ".gradle",
-  ".m2",
-  ".terraform",
-  "bower_components",
-  "jspm_packages"
-]);
 function walkManifests(projectPath, opts) {
   const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
   const ignores = opts.ignores ?? null;
@@ -45082,7 +45082,7 @@ function walkManifests(projectPath, opts) {
     for (const e of entries2) {
       const child = rel2 === "" ? e.name : `${rel2}/${e.name}`;
       if (e.isDirectory()) {
-        if (PROJECT_WALK_EXCLUDE.has(e.name) || MANIFEST_WALK_EXCLUDE.has(e.name)) continue;
+        if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
         if (ignores !== null && ignores(child, true)) continue;
         stack.push(child);
       } else if (e.isFile()) {
@@ -49989,7 +49989,7 @@ function iacLookingFiles(projectPath, exclusions) {
     for (const e of entries2) {
       const child = rel2 === "" ? e.name : `${rel2}/${e.name}`;
       if (e.isDirectory()) {
-        if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith(".")) continue;
+        if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
         if (isChart && e.name === "templates") continue;
         if (exclusions !== null && exclusions.ignores(child, true)) continue;
         stack.push(child);
