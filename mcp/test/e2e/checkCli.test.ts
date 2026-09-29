@@ -71,8 +71,9 @@ describe('check — arguments (review M3)', () => {
 });
 
 // `--local-only` keeps Semgrep local — project rules plus the plugin's own
-// packs, no registry — and nothing more: Trivy's database fetch, a .NET
-// restore and Semgrep's version check still go out. The help text said "no
+// packs, no registry — and nothing more: Trivy's database fetch and a .NET
+// restore still go out (Semgrep's version check is off on every run since
+// review 3.0, wave 2, local-only or not). The help text said "no
 // registry download, no telemetry" and nothing about either half, which read
 // as "nothing leaves the machine" (the same wording the tool descriptions and
 // SECURITY.md now use).

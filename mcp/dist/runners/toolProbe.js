@@ -56,6 +56,8 @@ export async function runVersionProbe(probe, cwd) {
         command: probe.command,
         args: probe.args,
         cwd,
+        // Merged over the server's own environment (runProcess extends it).
+        ...(probe.env !== undefined ? { env: { ...probe.env } } : {}),
         timeoutMs: PROBE_TIMEOUT_MS,
         stdoutCapBytes: 256 * 1024,
     });

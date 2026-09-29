@@ -89,6 +89,37 @@ describe('install_toolchain WSL fallback', () => {
   });
 });
 
+/**
+ * Review 3.0, wave 2, round 2: on Windows, scoop and choco installed
+ * whatever upstream released last. The pinned, sha256-checked release ZIP
+ * (through PowerShell) comes first; a package manager is the fallback, and
+ * it names the pinned version.
+ */
+describe('install_toolchain on Windows: pinned release archives first', () => {
+  interface DryRun {
+    would_install: Array<{ tool: string; manager?: string; command?: string }>;
+  }
+
+  it('picks the pinned, sha256-checked ZIP through PowerShell over scoop', async () => {
+    vi.mocked(resolveBinary).mockImplementation(async (name) =>
+      name === 'powershell' ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' : name === 'scoop' ? 'C:\\scoop.cmd' : null,
+    );
+    const r = (await tool('install_toolchain').handler({ tools: ['trivy', 'gitleaks', 'syft'], dry_run: true }, plugin())) as unknown as DryRun;
+    expect(r.would_install.map((e) => [e.tool, e.manager])).toEqual([
+      ['trivy', 'release'],
+      ['gitleaks', 'release'],
+      ['syft', 'release'],
+    ]);
+    expect(r.would_install[0]?.command).toMatch(/trivy v0\.74\.0 release archive \(windows, sha256-checked\)/);
+  });
+
+  it('without PowerShell, scoop installs the pinned version — never latest', async () => {
+    vi.mocked(resolveBinary).mockImplementation(async (name) => (name === 'scoop' ? 'C:\\scoop.cmd' : null));
+    const r = (await tool('install_toolchain').handler({ tools: ['trivy'], dry_run: true }, plugin())) as unknown as DryRun;
+    expect(r.would_install).toEqual([expect.objectContaining({ tool: 'trivy', manager: 'scoop', command: 'scoop install trivy@0.74.0' })]);
+  });
+});
+
 describe('install_toolchain and the scanner cache', () => {
   it('a scanner installed by install_toolchain is visible to the next scan at once', async () => {
     // Before: not on PATH, and that answer is cached.

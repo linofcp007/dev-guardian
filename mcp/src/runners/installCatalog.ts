@@ -13,9 +13,16 @@
 
 import type { DetectedOs } from '../platform/osDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 import type { VersionProbe } from './toolProbe.js';
 
-export type WindowsPkgManager = 'winget' | 'scoop' | 'choco' | 'wsl';
+/**
+ * `release`: a pinned GitHub release ZIP, checked against its sha256 with
+ * PowerShell before it is unpacked (`windowsReleaseInstaller`) — preferred
+ * where the catalogue has one; winget, scoop and choco follow their own
+ * manifests.
+ */
+export type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'wsl';
 export type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
 
 export interface InstallSpec {
@@ -60,12 +67,14 @@ export interface ToolMeta {
 }
 
 /**
- * The Trivy release the curl installer fetches AND installs. Pinned because
- * the installer used to be piped from the `main` branch into `sh` and then
+ * The Trivy release every Trivy install fetches: the pinned archive in
+ * {@link PINNED_RELEASES} on Linux, macOS (after Homebrew) and Windows, and
+ * the version winget, scoop and choco are asked for. Pinned because the
+ * installer used to be piped from the `main` branch into `sh` and then
  * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
- * `compromised` on the trivy entry). A tag's `install.sh` is immutable
- * (GitHub immutable releases, enabled on aquasecurity/trivy since
- * 2026-03-03); v0.74.0 was published 2026-08-14. Bump deliberately.
+ * `compromised` on the trivy entry). v0.74.0 was published 2026-08-14 as an
+ * immutable release (enabled on aquasecurity/trivy since 2026-03-03). Bump it
+ * and its sums together, deliberately.
  */
 export const TRIVY_INSTALL_TAG = 'v0.74.0';
 
@@ -92,11 +101,83 @@ export const COSIGN_RELEASE_SHA256 = {
   'darwin-arm64': '5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76',
 } as const;
 
+/** A platform a pinned release archive is published for. */
+export type ReleasePlatform = 'linux-amd64' | 'linux-arm64' | 'darwin-amd64' | 'darwin-arm64' | 'windows-amd64';
+
+/** A release pinned by its version AND by the sha256 of each archive an install may fetch. */
+export interface PinnedRelease {
+  version: string;
+  /** `https://github.com/<owner>/<repo>/releases/download/v<version>` */
+  base: string;
+  assets: Readonly<Record<ReleasePlatform, { file: string; sha256: string }>>;
+}
+
+const SYFT_VERSION = '1.52.0';
+const TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
+const GITLEAKS_VERSION = '8.30.1';
+
+/**
+ * The Syft, Trivy and gitleaks releases every install of them fetches — the
+ * entries below on every OS, and `scripts/install/install-linux.sh`, which
+ * `install_toolchain` runs for the Linux defaults and the Windows WSL
+ * fallback (a test holds its tags and sums to these). Each used to come in
+ * through a route that followed upstream — Syft's `install.sh` piped from
+ * `main`, Trivy from apt or `releases/latest`, gitleaks from
+ * `releases/latest`, scoop and choco on Windows — the route the malicious
+ * Trivy v0.69.4 took on 2026-03-19 ({@link TRIVY_INSTALL_TAG}). Bump a
+ * version and its sums together, deliberately.
+ *
+ * Every sha256 was checked on 2026-09-29 three ways, and they agreed: the
+ * archive downloaded and hashed independently; the release's own
+ * `<tool>_<version>_checksums.txt` (itself matching its GitHub asset
+ * digest); and the digest GitHub records for the asset. The Windows ZIPs
+ * also match scoop's Main bucket (all three) and winget-pkgs (Trivy,
+ * gitleaks). Syft 1.52.0 (2026-09-17) and Trivy 0.74.0 (2026-08-14) are
+ * immutable releases; gitleaks 8.30.1 (2026-03-21) is not — its assets could
+ * be replaced, which the pinned sums catch.
+ */
+export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks', PinnedRelease>> = {
+  syft: {
+    version: SYFT_VERSION,
+    base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
+    assets: {
+      'linux-amd64': { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: 'caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d' },
+      'linux-arm64': { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: 'c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706' },
+      'darwin-amd64': { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: '56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917' },
+      'darwin-arm64': { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: '014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6' },
+      'windows-amd64': { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: 'de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2' },
+    },
+  },
+  trivy: {
+    version: TRIVY_VERSION,
+    base: `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}`,
+    assets: {
+      'linux-amd64': { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a' },
+      'linux-arm64': { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: 'b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5' },
+      'darwin-amd64': { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: '472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485' },
+      'darwin-arm64': { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: '1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11' },
+      'windows-amd64': { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: '94c40e0696e4b907a74b7b2e1438d5d72ebaca83115817407f568a002d520842' },
+    },
+  },
+  gitleaks: {
+    version: GITLEAKS_VERSION,
+    base: `https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}`,
+    assets: {
+      'linux-amd64': { file: `gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz`, sha256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' },
+      'linux-arm64': { file: `gitleaks_${GITLEAKS_VERSION}_linux_arm64.tar.gz`, sha256: 'e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080' },
+      'darwin-amd64': { file: `gitleaks_${GITLEAKS_VERSION}_darwin_x64.tar.gz`, sha256: 'dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709' },
+      'darwin-arm64': { file: `gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz`, sha256: 'b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5' },
+      'windows-amd64': { file: `gitleaks_${GITLEAKS_VERSION}_windows_x64.zip`, sha256: 'd29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e' },
+    },
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolMeta> = {
   semgrep: {
     name: 'semgrep',
     version_floor: '1.0.0',
-    probe: { command: 'semgrep', args: ['--version'] },
+    // `semgrep --version` runs Semgrep's version check too: off (semgrepRun.ts).
+    probe: { command: 'semgrep', args: ['--version'], env: SEMGREP_NO_VERSION_CHECK_ENV },
     required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr', 'compliance_check'],
     install: {
       win32: {
@@ -142,19 +223,17 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       'generate_sbom',
     ],
     install: {
+      // The pinned release archive, sha256-checked, on every OS (see
+      // PINNED_RELEASES); a package manager only at that same version. No
+      // apt entry: aquasecurity's apt repository serves whatever is latest.
       win32: {
-        scoop: scoopInstall('trivy'),
-        choco: chocoInstall('trivy'),
-        winget: wingetInstall('AquaSecurity.Trivy'),
+        release: windowsReleaseInstaller('trivy'),
+        scoop: scoopInstall(`trivy@${TRIVY_VERSION}`),
+        choco: chocoInstall('trivy', TRIVY_VERSION),
+        winget: wingetInstall('AquaSecurity.Trivy', TRIVY_VERSION),
       },
-      linux: {
-        apt: aptInstall('trivy'),
-        curl: curlInstaller(
-          `https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_INSTALL_TAG}/contrib/install.sh`,
-          TRIVY_INSTALL_TAG,
-        ),
-      },
-      darwin: { brew: brewInstall('aquasecurity/trivy/trivy') },
+      linux: { curl: releaseArchiveInstaller('trivy', 'linux') },
+      darwin: { brew: brewInstall('aquasecurity/trivy/trivy'), curl: releaseArchiveInstaller('trivy', 'darwin') },
     },
     default: true,
   },
@@ -164,24 +243,18 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     probe: { command: 'gitleaks', args: ['version'] },
     required_by: ['scan_secrets', 'security_scan_full', 'review_pr'],
     install: {
+      // The pinned release archive, sha256-checked (see PINNED_RELEASES).
+      // Linux had no entry at all — gitleaks ships archives, no install
+      // script — and install-linux.sh took `releases/latest` unchecked.
       win32: {
-        scoop: scoopInstall('gitleaks'),
-        choco: chocoInstall('gitleaks'),
-        winget: wingetInstall('gitleaks.gitleaks'),
+        release: windowsReleaseInstaller('gitleaks'),
+        scoop: scoopInstall(`gitleaks@${GITLEAKS_VERSION}`),
+        choco: chocoInstall('gitleaks', GITLEAKS_VERSION),
+        // The id as winget-pkgs spells it: `--exact` matches case too.
+        winget: wingetInstall('Gitleaks.Gitleaks', GITLEAKS_VERSION),
       },
-      linux: {
-        // No curl entry: `.../releases/latest` resolves to the release's
-        // HTML page, not an install script (measured: Content-Type:
-        // text/html on the final 200 — see curlInstaller's doc comment).
-        // gitleaks ships per-arch release archives, not a stable
-        // install.sh, so there is no safe URL to hand curlInstaller here.
-        // The default bootstrap flow is unaffected — it delegates to
-        // install-linux.sh, which resolves the real download URL itself;
-        // only an explicit install_toolchain(tools:["gitleaks"]) call on
-        // Linux reaches this empty bucket, and degrades to manual_steps
-        // the same way nuclei's linux entry below does.
-      },
-      darwin: { brew: brewInstall('gitleaks') },
+      linux: { curl: releaseArchiveInstaller('gitleaks', 'linux') },
+      darwin: { brew: brewInstall('gitleaks'), curl: releaseArchiveInstaller('gitleaks', 'darwin') },
     },
     default: true,
   },
@@ -191,11 +264,15 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     probe: { command: 'syft', args: ['version'] },
     required_by: ['generate_sbom'],
     install: {
-      win32: { scoop: scoopInstall('syft'), choco: chocoInstall('syft') },
-      linux: {
-        curl: curlInstaller('https://raw.githubusercontent.com/anchore/syft/main/install.sh'),
+      // The pinned release archive, sha256-checked (see PINNED_RELEASES) —
+      // never install.sh from `main`, never "latest".
+      win32: {
+        release: windowsReleaseInstaller('syft'),
+        scoop: scoopInstall(`syft@${SYFT_VERSION}`),
+        choco: chocoInstall('syft', SYFT_VERSION),
       },
-      darwin: { brew: brewInstall('syft') },
+      linux: { curl: releaseArchiveInstaller('syft', 'linux') },
+      darwin: { brew: brewInstall('syft'), curl: releaseArchiveInstaller('syft', 'darwin') },
     },
     default: true,
   },
@@ -289,8 +366,9 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     required_by: ['scan_containers'],
     install: {
       // No install.sh on hadolint/hadolint (verified: no `install` entry in
-      // its repo tree) — releases are prebuilt binaries only, so per
-      // curlInstaller's own doc comment this is left unfabricated.
+      // its repo tree) — releases are prebuilt binaries only, and none is
+      // pinned here with its sum, so Linux is left empty rather than
+      // fabricated (see cosignReleaseInstaller's doc comment).
       win32: {
         scoop: scoopInstall('hadolint'),
         winget: wingetInstall('hadolint.hadolint'),
@@ -404,11 +482,11 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       // day), so scoop is the only entry.
       win32: { scoop: scoopInstall('nuclei') },
       linux: {
-        // No curl entry, for the same reason as gitleaks' linux entry
-        // above: `.../releases/latest`
-        // resolves to the release's HTML page, not an install script
-        // (measured: Content-Type: text/html on the final 200). Left
-        // empty rather than fabricated, per curlInstaller's doc comment.
+        // No curl entry: `.../releases/latest` resolves to the release's
+        // HTML page, not an install script (measured: Content-Type:
+        // text/html on the final 200), and no nuclei archive is pinned
+        // here with its sum. Left empty rather than fabricated (see
+        // cosignReleaseInstaller's doc comment).
       },
       darwin: { brew: brewInstall('nuclei') },
     },
@@ -539,21 +617,25 @@ function scoopInstall(pkg: string): InstallSpec {
   };
 }
 
-function chocoInstall(pkg: string): InstallSpec {
+/** `choco install`, at `version` when given — never "whatever is latest" for a pinned tool. */
+function chocoInstall(pkg: string, version?: string): InstallSpec {
+  const pinned = version !== undefined ? ['--version', version] : [];
   return {
     command: 'choco',
-    args: ['install', '-y', pkg],
+    args: ['install', '-y', pkg, ...pinned],
     needs_elevation: true,
-    description: `choco install -y ${pkg}`,
+    description: `choco install -y ${pkg}${version !== undefined ? ` --version ${version}` : ''}`,
   };
 }
 
-function wingetInstall(id: string): InstallSpec {
+/** `winget install`, exactly `id` at `version` when given (as cosign's entry). */
+function wingetInstall(id: string, version?: string): InstallSpec {
+  const pinned = version !== undefined ? ['--exact', '--version', version] : [];
   return {
     command: 'winget',
-    args: ['install', '--id', id, '--accept-source-agreements', '--accept-package-agreements'],
+    args: ['install', '--id', id, ...pinned, '--accept-source-agreements', '--accept-package-agreements'],
     needs_elevation: false,
-    description: `winget install ${id}`,
+    description: `winget install ${id}${version !== undefined ? ` --version ${version}` : ''}`,
   };
 }
 
@@ -567,43 +649,19 @@ function npmInstallGlobal(pkg: string): InstallSpec {
 }
 
 /**
- * Single-shot install script — invocation is `bash -c "curl … | sh"`.
- *
- * PRECONDITION: `url` must resolve to a raw shell script (trivy's and
- * syft's `contrib/install.sh` / `install.sh` on raw.githubusercontent.com
- * are the real examples in this file), never a GitHub *page* — in
- * particular never a bare `.../releases/latest`. That URL 302s to the
- * release's HTML tag page, which `-f` accepts (it only fails on HTTP
- * error status) and `sh` cannot execute: the caller gets a wall of shell
- * syntax errors, not an install and not a usable instruction. Measured
- * directly with `curl -sSIL` rather than assumed — gitleaks' and
- * nuclei's linux entries both once took this shape and both came back
- * `Content-Type: text/html` on the final 200; see the comments on those
- * catalog entries. A broken command is worse than none: leave the OS
- * bucket empty (as nuclei's and gitleaks' linux entries do) rather than call
- * this helper on a URL that has not been checked.
- *
- * `tag`, when given, is passed to the script as the release to install —
- * godownloader-style scripts (trivy's, syft's) otherwise install "latest"
- * at the moment they run, so pinning the script's URL alone pins nothing.
- */
-function curlInstaller(url: string, tag?: string): InstallSpec {
-  const pinned = tag !== undefined ? ` ${tag}` : '';
-  return {
-    command: 'bash',
-    args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
-    needs_elevation: false,
-    description: `curl ${url} | sh${pinned}`,
-  };
-}
-
-/**
  * cosign's pinned release binary for this CPU, checked against
  * {@link COSIGN_RELEASE_SHA256} before it is installed to `~/.local/bin`.
  * sigstore/cosign ships no install script — releases are bare binaries — so
- * this is the download itself, not {@link curlInstaller}'s `curl | sh`. A CPU
- * with no pinned checksum is refused rather than guessed, and `set -eu`
- * stops at a failed download or a checksum mismatch, before `install`.
+ * this is the download itself. A CPU with no pinned checksum is refused
+ * rather than guessed, and `set -eu` stops at a failed download or a
+ * checksum mismatch, before `install`.
+ *
+ * No entry pipes a script into `sh`: a script fetched from a branch or a
+ * `releases/latest` redirect installs whatever upstream published last, and
+ * one pinned by tag still downloads an archive checked only against the
+ * same release's own checksums. Where a tool ships no pinned archive with a
+ * sum here, its OS bucket stays empty (nuclei, hadolint on Linux) rather
+ * than hold a command that has not been checked.
  */
 function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
   const url = `https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${os}-$arch`;
@@ -627,6 +685,86 @@ function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
     args: ['-c', script],
     needs_elevation: false,
     description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) → ~/.local/bin/cosign`,
+  };
+}
+
+/**
+ * `tool`'s pinned release archive for this CPU ({@link PINNED_RELEASES}),
+ * checked against its sha256 before it is unpacked and its binary installed
+ * to `~/.local/bin` — the shape of {@link cosignReleaseInstaller}, for a
+ * `.tar.gz`. Each case arm holds an asset and its own sum; a CPU with no
+ * pinned archive is refused rather than guessed, and `set -eu` stops at a
+ * failed download or a checksum mismatch, before anything is unpacked.
+ */
+function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux' | 'darwin'): InstallSpec {
+  const r = PINNED_RELEASES[tool];
+  const amd = r.assets[`${os}-amd64`];
+  const arm = r.assets[`${os}-arm64`];
+  const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+  const script = [
+    'set -eu',
+    'case "$(uname -m)" in',
+    `  x86_64|amd64) asset=${amd.file}; sum=${amd.sha256} ;;`,
+    `  aarch64|arm64) asset=${arm.file}; sum=${arm.sha256} ;;`,
+    `  *) echo "${tool}: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;`,
+    'esac',
+    'tmp="$(mktemp -d)"',
+    'trap \'rm -rf "$tmp"\' EXIT',
+    `curl -sSfL -o "$tmp/${tool}.tar.gz" "${r.base}/$asset"`,
+    `echo "$sum  $tmp/${tool}.tar.gz" | ${check}`,
+    `tar -xzf "$tmp/${tool}.tar.gz" -C "$tmp" ${tool}`,
+    'mkdir -p "$HOME/.local/bin"',
+    `install -m 0755 "$tmp/${tool}" "$HOME/.local/bin/${tool}"`,
+  ].join('\n');
+  return {
+    command: 'bash',
+    args: ['-c', script],
+    needs_elevation: false,
+    description: `${tool} v${r.version} release archive (${os}, sha256-checked) → ~/.local/bin/${tool}`,
+  };
+}
+
+/**
+ * The Windows twin of {@link releaseArchiveInstaller}: `tool`'s pinned
+ * release ZIP, downloaded with PowerShell (`powershell.exe`, in every
+ * supported Windows), checked with `Get-FileHash` before `Expand-Archive`,
+ * and its `<tool>.exe` copied to `%USERPROFILE%\.local\bin` — the per-user
+ * directory the POSIX installers use as `~/.local/bin`. It is not added to
+ * PATH (a warning says so when it is missing): `check_toolchain` finds the
+ * tool once it is. x64 only; any other CPU is refused. Written with single
+ * quotes alone, so the Windows command line has no `"` to re-quote.
+ */
+function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpec {
+  const r = PINNED_RELEASES[tool];
+  const a = r.assets['windows-amd64'];
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    '$arch = $env:PROCESSOR_ARCHITEW6432',
+    'if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }',
+    `if ($arch -ne 'AMD64') { throw ('${tool}: no pinned release archive for this CPU (' + $arch + ')') }`,
+    '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12',
+    '$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())',
+    'New-Item -ItemType Directory -Path $tmp | Out-Null',
+    'try {',
+    `  $zip = Join-Path $tmp '${tool}.zip'`,
+    `  Invoke-WebRequest -UseBasicParsing -Uri '${r.base}/${a.file}' -OutFile $zip`,
+    '  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()',
+    `  if ($got -ne '${a.sha256}') { throw ('${tool}: sha256 mismatch, got ' + $got) }`,
+    "  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')",
+    "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
+    '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
+    `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool}.exe') -Destination (Join-Path $bin '${tool}.exe') -Force`,
+    `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool}: ' + $bin + ' is not on PATH; add it there for dev-guardian to find ${tool}.exe') }`,
+    '} finally {',
+    '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n');
+  return {
+    command: 'powershell',
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    needs_elevation: false,
+    description: `${tool} v${r.version} release archive (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\${tool}.exe`,
   };
 }
 

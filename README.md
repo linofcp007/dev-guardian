@@ -149,7 +149,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 
 ## Privacy and network
 
-dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it) and its version check, Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
+dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it), Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
 
 ## Troubleshooting
 
@@ -164,7 +164,7 @@ dev-guardian sends no telemetry of its own. Some tools do reach the network — 
 
 **`install_toolchain` with `elevation_allowed: true` fails with "sudo: a terminal is required to read the password".** Install steps run detached, with no terminal, so on Linux and macOS elevation only works with passwordless sudo for those commands. Otherwise run the commands listed under `requires_elevation` yourself. The .NET SDK is never installed automatically.
 
-**Semgrep sends metrics.** The default `scan_sast` uses `--config=auto`, which Semgrep only allows with metrics on. Pass `local_only: true` (or `--local-only` on the CLI) to keep Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off` and no registry download. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database, a .NET project is still restored from its NuGet feeds, and Semgrep still checks for a newer version ([SECURITY.md](SECURITY.md#network-egress)).
+**Semgrep sends metrics.** The default `scan_sast` uses `--config=auto`, which Semgrep only allows with metrics on. Pass `local_only: true` (or `--local-only` on the CLI) to keep Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off` and no registry download. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database and a .NET project is still restored from its NuGet feeds ([SECURITY.md](SECURITY.md#network-egress)). Semgrep's own version check is off on every run.
 
 ## Repository layout
 

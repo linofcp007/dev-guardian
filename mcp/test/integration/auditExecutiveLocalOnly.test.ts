@@ -149,6 +149,15 @@ describe('audit_executive local_only', () => {
     expect(gaps.join('\n')).not.toMatch(/check\.trivy\.dev/);
   });
 
+  // Review 3.0, wave 2 (d): every Semgrep run now has its version check off
+  // (runners/semgrepRun.ts), so it is no longer something local_only misses.
+  it("no longer lists Semgrep's version check: dev-guardian turns it off", async () => {
+    const { plugin, project } = wordpressAndDotnet();
+    recordInputs();
+    const r = await audit({ project_path: project, local_only: true }, plugin);
+    expect((r.local_only_gaps ?? []).join('\n')).not.toMatch(/version check|SEMGREP_ENABLE_VERSION_CHECK/);
+  });
+
   it('without it nothing changes: no child is handed local_only, scan_wordpress runs, no gaps listed', async () => {
     const { plugin, project } = wordpressAndDotnet();
     const seen = recordInputs();
@@ -175,5 +184,9 @@ describe('audit_executive says what it runs', () => {
     expect(d()).toMatch(/PyPI/);
     expect(d()).toMatch(/MSBuild/);
     expect(d()).toMatch(/local_only/);
+  });
+
+  it("says Semgrep's version check is off, as Trivy's is", () => {
+    expect(d()).toMatch(/Semgrep's version check/);
   });
 });

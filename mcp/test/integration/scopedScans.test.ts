@@ -233,6 +233,43 @@ describe('scan_sast — scope', () => {
     expect(r.findings_count_by_severity.high).toBe(4);
   });
 
+  // Review 3.0, wave 2 (a): Bandit given explicit files never looks for a
+  // `.bandit` (it searches below directory targets only), so a scoped run
+  // ignored the project's root one — the same a.py read 14 findings
+  // whole-project and 9 scoped. A scoped run now gets the SAME `--ini` as a
+  // whole-project run, and names the file the same way.
+  it("hands a scoped Bandit the same --ini as a whole-project run: the project's root .bandit, named", async () => {
+    const dir = project();
+    write(dir, 'src/a.py');
+    write(dir, '.bandit', '[bandit]\nskips: B101\n');
+    write(dir, 'sub/.bandit', '[bandit]\nskips: B101,B602,B404\n');
+    const whole = await ok('scan_sast', dir);
+    const scoped = await ok('scan_sast', dir, { scope: { paths: ['src'] } });
+
+    const [wholeCall, scopedCall] = byCommand('bandit');
+    expect(after(wholeCall?.args ?? [], '--ini')).toBe(join(dir, '.bandit'));
+    expect(after(scopedCall?.args ?? [], '--ini')).toBe(join(dir, '.bandit'));
+    expect(targets(scopedCall?.args ?? [])).toEqual(['src/a.py']);
+
+    const wholeRun = whole.tools_run.find((t) => t.name === 'bandit');
+    const scopedRun = scoped.tools_run.find((t) => t.name === 'bandit');
+    expect(scopedRun?.honoured_config).toEqual(['.bandit']);
+    expect(scopedRun?.honoured_config).toEqual(wholeRun?.honoured_config);
+    expect(scopedRun?.reason).toMatch(/honoured the project's \.bandit \(its skips and tests decide what is reported\)/);
+  });
+
+  it('without a root .bandit, a scoped Bandit gets the neutral --ini too, and names nothing', async () => {
+    const dir = project();
+    write(dir, 'src/a.py');
+    write(dir, 'src/.bandit', '[bandit]\nskips: B101,B602,B404\n');
+    const scoped = await ok('scan_sast', dir, { scope: { paths: ['src/a.py'] } });
+    const ini = after(byCommand('bandit')[0]?.args ?? [], '--ini');
+    expect(ini).toMatch(/bandit-neutral\.ini$/);
+    expect(ini.startsWith(dir)).toBe(true);
+    expect(ini).not.toBe(join(dir, 'src', '.bandit'));
+    expect(scoped.tools_run.find((t) => t.name === 'bandit')?.honoured_config).toBeUndefined();
+  });
+
   it('a file as project_path is refused with the scoped call to make', async () => {
     const dir = project();
     write(dir, 'app.py');

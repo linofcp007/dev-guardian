@@ -53,7 +53,7 @@ export interface MarkdownViews {
   prose: string[];
 }
 
-const FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
+export const FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
 const INDENTED = /^(?: {4,}|\t)(?=\S)/;
 const HTML_CODE_TAG = /<\/?(?:pre|code|kbd|samp|tt)\b[^>]*>/gi;
 const HTML_CODE_INLINE = /<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
@@ -270,9 +270,15 @@ function htmlBlockOpener(outside: string): { close: RegExp; endsAtBlank: boolean
 
 /** The line with each backtick span replaced by spaces, so positions still line up. */
 function blankSpans(line: string, spans: Span[]): string {
-  let out = line;
-  for (const s of spans) out = out.slice(0, s.start) + ' '.repeat(s.end - s.start) + out.slice(s.end);
-  return out;
+  // In one pass: re-slicing the whole line once per span was quadratic, and a
+  // 1 MB line of spans took 42 s (wave 2 of the 3.0 review).
+  let out = '';
+  let at = 0;
+  for (const s of spans) {
+    out += line.slice(at, s.start) + ' '.repeat(s.end - s.start);
+    at = s.end;
+  }
+  return out + line.slice(at);
 }
 
 function isClosingFence(line: string, fence: { char: string; length: number }): boolean {
@@ -281,8 +287,10 @@ function isClosingFence(line: string, fence: { char: string; length: number }): 
   return run !== undefined && run.charAt(0) === fence.char && run.length >= fence.length;
 }
 
-interface Span {
+export interface Span {
+  /** Where the opening backticks start. */
   start: number;
+  /** Just past the closing backticks. */
   end: number;
   text: string;
 }
@@ -292,7 +300,7 @@ interface Span {
  * of exactly N closes, and an unmatched run is literal text. One leading and
  * one trailing space are stripped when both are present.
  */
-function inlineSpans(line: string): Span[] {
+export function inlineSpans(line: string): Span[] {
   const out: Span[] = [];
   let i = 0;
   while (i < line.length) {

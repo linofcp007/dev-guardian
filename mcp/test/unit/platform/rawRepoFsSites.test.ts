@@ -70,6 +70,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'repo-safe',
     reason: 'Dirent-typed walk: descends only entries that are directories themselves, never a link; names only',
   },
+  'src/hooks/dataRegistry.ts': {
+    apis: { readdirSync: 1 },
+    kind: 'own',
+    reason: "the per-user data directory's registry listing, the hook's own guard path; never the project",
+  },
   'src/hooks/guardedPath.ts': {
     apis: { statSync: 1 },
     kind: 'repo-safe',

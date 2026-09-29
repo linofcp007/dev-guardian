@@ -25,6 +25,12 @@ import {
 export interface ScoreSignal {
   severity: Severity;
   isExecutable: boolean;
+  /**
+   * False: counted in `by_severity` and `total_findings`, but adds no points
+   * — a repeat of a signal already scored (a rule's second citation in the
+   * same skill, see `analyze.ts`). Default true.
+   */
+  scored?: boolean;
 }
 
 export interface ScoreResult {
@@ -48,7 +54,7 @@ export function scoreFindings(signals: ScoreSignal[]): ScoreResult {
   let executableFindings = 0;
   for (const s of signals) {
     by_severity[s.severity] += 1;
-    const base = SEVERITY_POINTS[s.severity];
+    const base = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
     raw += s.isExecutable ? base * EXECUTABLE_MULTIPLIER : base;
     if (s.isExecutable) executableFindings += 1;
   }

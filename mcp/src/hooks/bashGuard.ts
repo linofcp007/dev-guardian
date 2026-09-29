@@ -98,6 +98,7 @@
  */
 
 import { homedir } from 'node:os';
+import { userDataDir } from './dataRegistry.js';
 import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 
@@ -134,6 +135,13 @@ export interface BashAssessment {
   reasons: string[];
   /** Matched rule ids, for telemetry / allowlisting. */
   rules: string[];
+  /**
+   * The whole deny message, when the one rule that blocks words its own —
+   * `db-adopt-yes`, whose reason already says what to do instead — for the
+   * hook to send in place of its standard wording. Absent otherwise, and
+   * whenever another rule blocks too.
+   */
+  denyMessage?: string;
 }
 
 /**
@@ -423,6 +431,16 @@ export type StatementEnd = '&&' | '||' | ';' | '&' | '\n' | '(' | ')' | '`';
 export interface ShellSplit {
   /** The whole command, masked, with separators intact and heredocs removed. */
   maskedCommand: string;
+  /**
+   * `maskedCommand` with, after the mask of each double-quoted span, the
+   * variables that span interpolates ({@link interpolatedVariables}): `$b =
+   * "$a"` reads `$b =  $a `. A copy through a string is still a copy — the
+   * one thing {@link powershellDownloadExecution} reads this for; every other
+   * rule reads `maskedCommand`, where a quoted span is data. A quoted variable
+   * NAME where a name goes (`-OutVariable 'r'`, {@link quotedName}) is
+   * written back the same way, so it names that variable and no other.
+   */
+  interpolatedCommand: string;
   statements: ShellStatement[];
 }
 
@@ -466,6 +484,70 @@ function scanQuote(source: string, start: number): { inner: string; next: number
   }
   // Unterminated quote: treat the rest of the input as quoted.
   return { inner, next: source.length };
+}
+
+/**
+ * A variable a double-quoted string interpolates (`$a`, `${a}`, `$script:a`),
+ * a subexpression opening, or a parenthesis — the tokens
+ * {@link interpolatedVariables} reads. `${…}` is capped, so a run of unclosed
+ * `${` cannot make each one rescan the rest.
+ */
+const INTERPOLATION = /\$\{[^}\n]{0,128}\}|\$[\w:]+|\$\(|[()]/g;
+
+/**
+ * The variables a double-quoted string's text interpolates, as written: `$a`
+ * and `${a}` in the string itself — its whole value, whatever follows
+ * (`"$a.txt"` is `$a` and then `.txt`) — and, inside a `$( … )` subexpression,
+ * one that is not read for a member or an index: `"$($items.Count)"` holds a
+ * count, not `$items`.
+ */
+function interpolatedVariables(inner: string): string[] {
+  if (!inner.includes('$')) return [];
+  const out: string[] = [];
+  let depth = 0;
+  for (const m of inner.matchAll(INTERPOLATION)) {
+    const t = m[0];
+    if (t === '$(') depth += 1;
+    else if (t === '(') depth += depth > 0 ? 1 : 0;
+    else if (t === ')') depth -= depth > 0 ? 1 : 0;
+    else {
+      const next = inner.charAt(m.index + t.length);
+      if (depth === 0 || (next !== '.' && next !== '[')) out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * The end of the masked text where a variable's NAME comes next: after
+ * `-OutVariable` / `-ov`, `Tee-Object`'s `-Variable`, `-Name`, or right after
+ * `Set-` / `New-` / `Get-Variable`. A quoted name there is written back too
+ * (review 3.0 wave 2, round 2), so `-OutVariable 'r'` fills `$r` and not, as a
+ * masked name did, every variable.
+ */
+const NAME_POSITION =
+  /(?:(?:^|[\s;|&(])-(?:ov|outv[a-z]*|v[a-z]*|n[a-z]*)[ \t]*:?[ \t]*|(?:^|[\s;|&(])(?:set-variable|new-variable|get-variable|sv|nv|gv)[ \t]+)$/i;
+/** A variable's name, with its scope — never one of the words the flow tokens read as a command. */
+const QUOTED_NAME = /^(?:(?:global|script|local|private|using|variable):)?[A-Za-z_]\w{0,63}$/i;
+const TOKEN_WORD =
+  /^(?:iex|invoke-expression|irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|set-variable|new-variable|get-variable|sv|nv|gv|tee|tee-object)$/i;
+
+/** A quoted span's text, when it is a variable's name in a place a name goes ({@link NAME_POSITION}). */
+function quotedName(maskedBefore: string, inner: string): string | undefined {
+  if (!QUOTED_NAME.test(inner) || TOKEN_WORD.test(inner)) return undefined;
+  return NAME_POSITION.test(maskedBefore.slice(-48)) ? inner : undefined;
+}
+
+/** `masked` with each interpolation's variables written back after the mask that ends at its offset. */
+function withInterpolations(masked: string, interpolations: ReadonlyArray<{ at: number; vars: string }>): string {
+  if (interpolations.length === 0) return masked;
+  let out = '';
+  let from = 0;
+  for (const { at, vars } of interpolations) {
+    out += `${masked.slice(from, at)}${vars} `;
+    from = at;
+  }
+  return out + masked.slice(from);
 }
 
 const HEREDOC_WORD = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -587,6 +669,8 @@ const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 
 export function splitShell(command: string): ShellSplit {
   const statements: ShellStatement[] = [];
   let maskedCommand = '';
+  /** Where in `maskedCommand` a double-quoted span's mask ends, and the variables it interpolates. */
+  const interpolations: Array<{ at: number; vars: string }> = [];
 
   let masked = '';
   let commands: ShellWord[][] = [];
@@ -736,8 +820,12 @@ export function splitShell(command: string): ShellSplit {
       buf += scanned.inner;
       bufQuoted = true;
       hasWord = true;
+      const name = quotedName(maskedCommand, scanned.inner);
       masked += MASK;
       maskedCommand += MASK;
+      const vars = ch === '"' ? interpolatedVariables(scanned.inner) : [];
+      if (name !== undefined) vars.push(name);
+      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
       lastCode = MASK;
       i = scanned.next;
       continue;
@@ -864,7 +952,7 @@ export function splitShell(command: string): ShellSplit {
   }
   endStatement();
 
-  return { maskedCommand, statements };
+  return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
 }
 
 // ────────────────────────────────────────────────────── tokenised rules
@@ -917,7 +1005,8 @@ const RUNNER_VALUED: Readonly<Record<string, { short: string; long: ReadonlySet<
   timeout: { short: 'sk', long: new Set(['signal', 'kill-after']) },
   stdbuf: { short: 'ioe', long: new Set(['input', 'output', 'error']) },
   xargs: {
-    short: 'adEILnPs',
+    // `J` is BSD's `-J replstr`.
+    short: 'adEIJLnPs',
     long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
   },
   watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
@@ -1314,6 +1403,44 @@ function isSettingsPath(path: string, configDirName: string | undefined): boolea
   return false;
 }
 
+/** A path as the registry checks compare it: `/` separators, no doubled or trailing one, lower-cased. */
+function normalizedPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * dev-guardian's data directory as a command spells its default locations and
+ * its variable (review 3.0 wave 2, round 2): `%LOCALAPPDATA%` / `$env:LOCALAPPDATA`
+ * / `…/AppData/Local`, `$XDG_DATA_HOME`, `~/.local/share` — each followed by
+ * `dev-guardian` — and `$GUARDIAN_DATA_DIR` / `%GUARDIAN_DATA_DIR%`. Matched
+ * at the end of a normalised path.
+ */
+const DATA_DIR_SPELLED =
+  /(?:(?:\$\{?(?:env:)?(?:localappdata|xdg_data_home)\}?|%(?:localappdata|xdg_data_home)%|appdata\/local|\.local\/share)\/dev-guardian|\$\{?(?:env:)?guardian_data_dir\}?|%guardian_data_dir%)$/;
+
+/** Whether `path` names dev-guardian's data directory: its actual path (`dataDir`, normalised) or a spelling of it. */
+function isDataDirPath(path: string, dataDir: string | undefined): boolean {
+  const p = normalizedPath(path);
+  return (dataDir !== undefined && p === dataDir) || DATA_DIR_SPELLED.test(p);
+}
+
+/**
+ * Whether `path` is dev-guardian's registry of trusted databases,
+ * `<data dir>/registry`, or a path below it — the data directory as it
+ * actually is (`dataDir`, normalised) or as {@link DATA_DIR_SPELLED} spells it.
+ * A `registry` of any other directory (a project's, npm's) is not it.
+ */
+function isRegistryPath(path: string, dataDir: string | undefined): boolean {
+  const p = normalizedPath(path);
+  for (let at = p.indexOf('/registry'); at >= 0; at = p.indexOf('/registry', at + 1)) {
+    const next = p.charAt(at + '/registry'.length);
+    if (next !== '' && next !== '/') continue;
+    const parent = p.slice(0, at);
+    if ((dataDir !== undefined && parent === dataDir) || DATA_DIR_SPELLED.test(parent)) return true;
+  }
+  return false;
+}
+
 /** The last segment of `CLAUDE_CONFIG_DIR`, lower-cased, as {@link isSettingsPath} matches it; none when unset. */
 function configDirNameOf(dir: string | undefined): string | undefined {
   const last = (dir ?? '').trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
@@ -1394,7 +1521,7 @@ const CD_RETURNS = new Set(['popd', 'pop-location']);
  * `popd` and `Pop-Location` go back somewhere this does not track, which reads
  * as where the command started (`''`).
  */
-function cwdAfter(name: string, args: readonly string[], cwd: string): string | undefined {
+function cwdAfter(name: string, args: readonly string[], cwd: string, dataDir?: string): string | undefined {
   if (CD_RETURNS.has(name)) return '';
   if (!CD_COMMANDS.has(name)) return undefined;
   const dir =
@@ -1403,10 +1530,15 @@ function cwdAfter(name: string, args: readonly string[], cwd: string): string | 
   if (dir === '-') return '';
   const next = resolveFrom(cwd, dir);
   // Only a directory a later relative path could need is tracked: one that
-  // names a configuration directory or a parent of one. Any other
-  // relative target still names its own config path in full. And never one
-  // longer than a real directory: a chain of `cd`s built to be slow.
-  return next.length > MAX_CWD || !/\.guardian|dev-guardian|\.config|\.claude/i.test(next) ? '' : next;
+  // names a configuration directory or a parent of one — or dev-guardian's
+  // data directory, whose registry is guarded too (review 3.0 wave 2, round
+  // 2). Any other relative target still names its own path in full. And
+  // never one longer than a real directory: a chain of `cd`s built to be slow.
+  if (next.length > MAX_CWD) return '';
+  const tracked =
+    /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) ||
+    (dataDir !== undefined && normalizedPath(next).startsWith(dataDir));
+  return tracked ? next : '';
 }
 
 const GLOB = /[*?[]/;
@@ -1549,7 +1681,6 @@ function lnDestinations(args: readonly string[]): string[] {
   return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
 
-/** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
 /** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
 function lnHardSources(args: readonly string[]): string[] {
   if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
@@ -1569,8 +1700,45 @@ function lnHardSources(args: readonly string[]): string[] {
   return dir || names.length < 2 ? names : names.slice(0, -1);
 }
 
+/**
+ * `New-Item`'s parameters that take a value, by the name the code below uses,
+ * with every name and alias it may be spelled by. PowerShell binds any prefix
+ * that names one parameter (review 3.0, wave 2: `ni -it HardLink` is
+ * `-ItemType`), and a common parameter never makes one ambiguous — measured
+ * on pwsh 7.6 and Windows PowerShell 5.1, `-i` is `-ItemType` and `-v` is
+ * `-Value`, whatever `-InformationAction` and `-Verbose` begin with (round 2).
+ * `-t` begins both `-Type` and `-Target`, and PowerShell refuses it.
+ */
+const NEW_ITEM_VALUED: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['type', ['itemtype', 'type']],
+  ['path', ['path', 'literalpath', 'pspath', 'lp']],
+  ['name', ['name']],
+  ['target', ['value', 'target']],
+  ['credential', ['credential']],
+];
+
+function newItemParam(spelled: string): string | undefined {
+  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
+  if (exact !== undefined) return exact[0];
+  const matches = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
+  return matches.length === 1 ? matches[0]?.[0] : undefined;
+}
+
+/**
+ * The item type a FileSystem `-ItemType` value names. The provider matches
+ * the value as a prefix, wildcards allowed, in this order — so `h` and
+ * `Hard` are `HardLink`, `s*` is `SymbolicLink` — and `''` is a file.
+ */
+function itemTypeOf(value: string): string {
+  if (value === '') return 'file';
+  const pattern = `${value.toLowerCase()}*`;
+  if (wildcardMatch(pattern, 'directory') || wildcardMatch(pattern, 'container')) return 'directory';
+  return ['file', 'symboliclink', 'junction', 'hardlink'].find((t) => wildcardMatch(pattern, t)) ?? 'unknown';
+}
+
+/** `New-Item`'s item type ({@link itemTypeOf}) and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
 function newItemArgs(args: readonly string[]): { itemType: string; paths: string[]; target?: string } {
-  let itemType = '';
+  let spelledType = '';
   let target: string | undefined;
   const paths: string[] = [];
   const positional: string[] = [];
@@ -1581,16 +1749,16 @@ function newItemArgs(args: readonly string[]): { itemType: string; paths: string
       positional.push(a);
       continue;
     }
-    const name = (param[1] ?? '').toLowerCase();
+    const name = newItemParam((param[1] ?? '').toLowerCase());
     const inline = param[2];
-    const takesValue = ['path', 'literalpath', 'name', 'itemtype', 'type', 'target', 'value', 'credential'].includes(name);
-    const value = inline !== undefined ? inline : takesValue ? (args[++i] ?? '') : undefined;
+    const value = inline !== undefined ? inline : name !== undefined ? (args[++i] ?? '') : undefined;
     if (value === undefined) continue;
-    if (name === 'itemtype' || name === 'type') itemType = value;
-    else if (name === 'path' || name === 'literalpath' || name === 'name') paths.push(value);
-    else if (name === 'target' || name === 'value') target = value;
+    if (name === 'type') spelledType = value;
+    else if (name === 'path' || name === 'name') paths.push(value);
+    else if (name === 'target') target = value;
   }
   if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? '');
+  const itemType = itemTypeOf(spelledType);
   return target === undefined ? { itemType, paths } : { itemType, paths, target };
 }
 
@@ -2127,9 +2295,9 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
     case 'new-item':
     case 'ni': {
       const item = newItemArgs(args);
-      if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType)) pushAll(e.links, item.paths.map(at));
-      if (/^hardlink$/i.test(item.itemType) && item.target !== undefined) e.hardLinkSources.push(at(item.target));
-      else if (item.itemType === '' || /^file$/i.test(item.itemType)) pushAll(e.writes, item.paths.map(at));
+      if (['symboliclink', 'hardlink', 'junction'].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
+      if (item.itemType === 'hardlink' && item.target !== undefined) e.hardLinkSources.push(at(item.target));
+      else if (item.itemType === 'file') pushAll(e.writes, item.paths.map(at));
       return e;
     }
     case 'cp':
@@ -2205,7 +2373,7 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
 const PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
 const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
 /** `X run … python -c …`: tools that run an interpreter in a managed environment. */
-const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba']);
+const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba', 'pixi']);
 
 function isInterpreter(name: string): boolean {
   return PYTHON.test(name) || INTERPRETERS.has(name);
@@ -2758,8 +2926,33 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
 const RULE_HARD_LINK: MatchedRule = {
   id: 'guard-config-hard-link',
   level: 'block',
-  reason: "Makes a hard link to the guardrail hooks' own configuration — a second name through which it can be rewritten",
+  reason:
+    "Makes a hard link to the guardrail hooks' own configuration or to Claude Code's settings — a second name through which it can be rewritten",
 };
+
+/** The directory that holds Claude Code's project or user settings; separators optional as in `HOOK_CONFIG_PATH`. */
+const CLAUDE_DIR = /\.claude\/?$/i;
+
+/**
+ * dev-guardian's registry of trusted databases written from the shell (review
+ * 3.0 wave 2, round 2): what `db adopt --yes` writes, and so the user's
+ * decision whichever command writes it.
+ */
+const RULE_REGISTRY: MatchedRule = {
+  id: 'guardian-registry-write',
+  level: 'block',
+  reason:
+    "Writes dev-guardian's registry of trusted databases (<data dir>/registry) — which database to trust is the " +
+    "user's decision: they run `dev-guardian db adopt` themselves, in a terminal",
+};
+
+/** Program text naming the registry: a literal path in it, or its parts (`'dev-guardian', 'registry'`). */
+function literalsNameRegistry(literals: readonly string[], dataDir: string | undefined): boolean {
+  const paths = literalPaths(literals);
+  if (paths.some((p) => isRegistryPath(p, dataDir))) return true;
+  const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
+  return has(/(?:^|\/)dev-guardian\/?$/i) && has(/^registry\/?$/i);
+}
 
 const RULE_SPECIAL: MatchedRule = {
   id: 'guard-config-special-file',
@@ -2819,7 +3012,27 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
-  if (e.hardLinkSources.some(isHookConfigPath)) out.push({ ...RULE_HARD_LINK });
+  // A hard link to a configuration file, to Claude Code's settings (the Write
+  // guard judges a write through one as that file; a shell write through one
+  // names neither), or — `cp -al` — to every file of a directory that holds
+  // them (review 3.0, wave 2).
+  const linksGuarded = (p: string): boolean =>
+    isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
+  if (e.hardLinkSources.some(linksGuarded)) out.push({ ...RULE_HARD_LINK });
+  // dev-guardian's registry of trusted databases (round 2): an entry written,
+  // linked or copied into it, a hard link to one, or the registry or the whole
+  // data directory replaced. Removing one only un-trusts a database.
+  const inRegistry = (p: string): boolean => isRegistryPath(p, scope.dataDir);
+  const registryOrData = (p: string): boolean => inRegistry(p) || isDataDirPath(p, scope.dataDir);
+  if (
+    e.writes.some(inRegistry) ||
+    e.special.some(inRegistry) ||
+    e.hardLinkSources.some(inRegistry) ||
+    e.links.some(registryOrData) ||
+    e.dirs.some(registryOrData)
+  ) {
+    out.push({ ...RULE_REGISTRY });
+  }
   if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }
@@ -2848,12 +3061,193 @@ function turnsPluginOff(words: readonly ShellWord[], start: number): boolean {
   return rest.some((a) => /dev-guardian/i.test(a));
 }
 
+/**
+ * `dev-guardian db adopt --yes` makes a project's database trusted. That is a
+ * person's decision, taken after reading the summary `db adopt` prints without
+ * `--yes`: a hostile repository can ship a database that hides its findings,
+ * and its text can talk an assistant into adopting it (review 3.0, wave 2).
+ * The reason is the whole deny message ({@link BashAssessment.denyMessage}).
+ */
+const RULE_DB_ADOPT: MatchedRule = {
+  id: 'db-adopt-yes',
+  level: 'block',
+  reason: 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes',
+};
+
+/** The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`, `dev-guardian.cmd`, `dev-guardian@3.0.1`. */
+const CLI_NAME = /^dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?$/i;
+/** What runs the CLI named as its program: node and the other runtimes, and the package runners. */
+const CLI_HOSTS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'npx', 'pnpx', 'bunx', 'npm', 'pnpm', 'yarn']);
+/** A package runner's or a runtime's subcommand before the program: `pnpm dlx`, `npm exec`, `bun x`, `deno run`. */
+const CLI_HOST_SUBCOMMANDS = new Set(['dlx', 'exec', 'x', 'run']);
+
+/**
+ * The arguments the dev-guardian CLI is given by this command, or none when it
+ * does not run the CLI: its name at the command position (a path to it, `.mjs`
+ * and a package version included), or as the program of `node` (past node's
+ * own options), `npx` / `pnpm dlx` / `bunx` / `npm exec` and the like.
+ */
+function cliArgs(words: readonly ShellWord[], at: number): string[] | undefined {
+  const head = words[at];
+  if (head === undefined) return undefined;
+  if (CLI_NAME.test(basename(head.value))) return words.slice(at + 1).map((w) => w.value);
+  if (!CLI_HOSTS.has(interpreterName(head.value))) return undefined;
+  let subcommand = false;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v.startsWith('-')) {
+      i += !v.includes('=') && (NODE_OPTION_VALUED.has(v) || LAUNCHER_VALUED.has(v)) ? 1 : 0;
+      continue;
+    }
+    if (!subcommand && CLI_HOST_SUBCOMMANDS.has(v)) {
+      subcommand = true;
+      continue;
+    }
+    return CLI_NAME.test(basename(v)) ? words.slice(i + 1).map((w) => w.value) : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * `dev-guardian db adopt … --yes` (or `--yes=…`), its options in any order,
+ * when the command at `at` runs the CLI directly ({@link cliArgs}) — a
+ * speed bump, not a wall: the indirect launches are in docs/hooks.md's known
+ * limits, and the registry the command writes is guarded by path.
+ */
+function adoptsDatabase(words: readonly ShellWord[], at: number): boolean {
+  const args = cliArgs(words, at);
+  if (args === undefined) return false;
+  const db = args.findIndex((a) => !a.startsWith('-'));
+  if (args[db] !== 'db' || !args.slice(db + 1).includes('adopt')) return false;
+  return args.some((a) => a === '--yes' || a.startsWith('--yes='));
+}
+
+/**
+ * The same, launched one step removed (review 3.0 wave 2, round 2): by
+ * PowerShell's `Start-Process` / `saps` / `start` (its program and
+ * `-ArgumentList`), or by `find … -exec` / `-execdir` / `-ok`. (`env -S` is
+ * read as a nested script instead: it can hand on any command.)
+ */
+function adoptsDatabaseThroughLauncher(words: readonly ShellWord[], at: number): boolean {
+  const started = startProcessArgv(words, at);
+  if (started !== undefined && adoptsDatabase(started, 0)) return true;
+  return findExecCommands(words, at).some((cmd) => adoptsDatabase(cmd, resolveCommand(cmd).index));
+}
+
+const START_PROCESS = new Set(['start-process', 'saps', 'start']);
+
+/** As plain words. */
+function plainWords(values: readonly string[]): ShellWord[] {
+  return values.map((value) => ({ value, quoted: false }));
+}
+
+/**
+ * The command line `Start-Process` starts: its `-FilePath` (or first
+ * positional) and every word of its `-ArgumentList` (or second positional) —
+ * a list's items and a single string's words alike. None when the command at
+ * or before `at` is not Start-Process.
+ */
+function startProcessArgv(words: readonly ShellWord[], at: number): ShellWord[] | undefined {
+  const sp = words.findIndex((w, i) => i <= at && START_PROCESS.has(commandName(w.value)));
+  if (sp < 0) return undefined;
+  let file: string | undefined;
+  const list: string[] = [];
+  const positional: string[] = [];
+  let inList = false;
+  for (let i = sp + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    const param = /^-([A-Za-z]+)(?::([\s\S]*))?$/.exec(v);
+    if (param !== null) {
+      inList = false;
+      const name = `-${param[1] ?? ''}`;
+      const inline = param[2];
+      if (PS_FILE_PATH.test(name)) file = inline ?? words[(i += 1)]?.value;
+      else if (PS_ARGUMENT_LIST.test(name)) {
+        inList = true;
+        if (inline !== undefined) list.push(inline);
+      } else if (inline === undefined && /^-(?:verb|wo\w*|windowstyle|w|redirect\w*|credential|cred|environment)$/i.test(name)) i += 1;
+      continue;
+    }
+    if (inList) list.push(v);
+    else positional.push(v);
+  }
+  file ??= positional.shift();
+  if (list.length === 0 && positional[0] !== undefined) list.push(positional[0]);
+  if (file === undefined) return undefined;
+  return plainWords([file, ...list.flatMap((a) => a.split(/\s+/).filter((s) => s !== ''))]);
+}
+
+/** The commands `find` runs for what it finds: each `-exec` / `-execdir` / `-ok` / `-okdir` to its `;` or `{} +`. */
+function findExecCommands(words: readonly ShellWord[], at: number): ShellWord[][] {
+  if (commandName(words[at]?.value ?? '') !== 'find') return [];
+  const out: ShellWord[][] = [];
+  let cmd: ShellWord[] | undefined;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === undefined) continue;
+    if (cmd === undefined) {
+      if (/^-(?:exec|execdir|ok|okdir)$/.test(w.value)) cmd = [];
+      continue;
+    }
+    if (w.value === ';' || (w.value === '+' && words[i - 1]?.value === '{}')) {
+      out.push(cmd);
+      cmd = undefined;
+    } else cmd.push(w);
+  }
+  if (cmd !== undefined && cmd.length > 0) out.push(cmd);
+  return out;
+}
+
+/**
+ * The command line `env -S STRING [args…]` (`--split-string`, `-S` in a
+ * cluster) runs: the string split into words, then the rest — read as a
+ * nested script, since it can hand on any command (`env -S 'rm -rf /'`).
+ * `end` is where the command after the runners starts.
+ */
+function envSplitScript(words: readonly ShellWord[], end: number): string | undefined {
+  for (let i = 0; i < Math.min(end, words.length); i += 1) {
+    if (commandName(words[i]?.value ?? '') !== 'env') continue;
+    for (let j = i + 1; j < words.length; j += 1) {
+      const a = words[j]?.value ?? '';
+      let value: string | undefined;
+      let next = j + 1;
+      const long = /^--split-string(?:=([\s\S]*))?$/.exec(a);
+      // `-S` in a short cluster, unless a letter before it takes the value (`-uS` is `-u S`).
+      const valued = /^-[^-]/.test(a) ? /[uCSa]/.exec(a.slice(1)) : null;
+      if (long !== null) {
+        if (long[1] !== undefined) value = long[1];
+        else {
+          value = words[j + 1]?.value;
+          next = j + 2;
+        }
+      } else if (valued !== null && valued[0] === 'S') {
+        const rest = a.slice(valued.index + 2);
+        if (rest !== '') value = rest;
+        else {
+          value = words[j + 1]?.value;
+          next = j + 2;
+        }
+      } else if (/^-[^-]/.test(a) || a.startsWith('--')) {
+        j += runnerOptionWords('env', a) - 1;
+        continue;
+      } else if (ASSIGNMENT.test(a) || a === '-') {
+        continue;
+      } else return undefined;
+      if (value === undefined) return undefined;
+      return [value, ...words.slice(next).map((w) => w.value)].join(' ');
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 /** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
 function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
   const out: MatchedRule[] = [];
   if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
   if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  if (literalsNameRegistry(literals, scope.dataDir)) out.push({ ...RULE_REGISTRY });
   return out;
 }
 
@@ -2869,6 +3263,8 @@ interface Scope {
   home?: HomeDir | undefined;
   /** The last segment of Claude Code's `CLAUDE_CONFIG_DIR`, lower-cased, when it is set. */
   configDirName?: string | undefined;
+  /** dev-guardian's per-user data directory, normalised ({@link normalizedPath}), whose `registry/` is guarded. */
+  dataDir?: string | undefined;
   /** These statements are a `cmd /c` line: cmd.exe runs a bare name from the working directory. */
   cmdLine?: boolean;
 }
@@ -3119,23 +3515,137 @@ function readsStdinAsScript(words: readonly ShellWord[], at: number): boolean {
   if (STDIN_SHELLS.has(name)) return true;
   if ((name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? '')) return true;
   if (name === 'xargs') return xargsRunsStdin(words, at);
-  return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
+  const plain = withoutRedirectWords(words.slice(at));
+  if (RUN_WRAPPERS.has(name) && words[at + 1]?.value === 'run') return runWrapperReadsStdin(plain, 2, name === 'uv');
+  // `uvx python -`, `uv tool run python -` (review 3.0 wave 2, round 2).
+  if (name === 'uvx') return runWrapperReadsStdin(plain, 1, false);
+  if (name === 'uv' && words[at + 1]?.value === 'tool' && words[at + 2]?.value === 'run') return runWrapperReadsStdin(plain, 3, false);
+  return isInterpreter(name) && isBareInterpreterStdin(plain);
+}
+
+/** `uv run`, `uvx`, `pixi run`, `poetry run`, `conda run` … options that take the next word as their value. */
+const RUN_WRAPPER_VALUED = new Set([
+  '--with', '--with-editable', '--with-requirements', '-p', '--python', '--project', '--directory', '--env-file',
+  '--extra', '--group', '--only-group', '--no-group', '--package', '--index', '--default-index', '-i', '--index-url',
+  '--extra-index-url', '-f', '--find-links', '--config-file', '--cache-dir', '-C', '--config-setting', '-n', '--name',
+  '--prefix', '--cwd', '-e', '--environment', '--from', '--manifest-path',
+]);
+
+/**
+ * `uv run python -`, `poetry run python`, `uv run -` (review 3.0, wave 2), and
+ * `pixi run python -`, `uvx python -` (round 2): a wrapper whose program — the
+ * first word at `from` past the wrapper's own options — is an interpreter
+ * reading its program from stdin, or, where `dashIsProgram` (`uv run`), `-`
+ * itself: `uv run -` runs a Python script read from stdin. `uv run python
+ * script.py` and `uv run parse.py -` read stdin as data.
+ */
+function runWrapperReadsStdin(words: readonly ShellWord[], from: number, dashIsProgram: boolean): boolean {
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v === '-') return dashIsProgram;
+    if (v === '--') continue;
+    if (v.startsWith('-')) {
+      i += !v.includes('=') && RUN_WRAPPER_VALUED.has(v) ? 1 : 0;
+      continue;
+    }
+    return isInterpreter(interpreterName(v)) && isBareInterpreterStdin(words.slice(i));
+  }
+  return false;
 }
 
 /**
  * `xargs [options] sh -c` with no script after `-c` (review round 3, item 2):
  * xargs appends what it reads on stdin, so that text becomes the `-c` script —
  * `curl … | xargs -0 sh -c` runs the download. Also an interpreter's `-c` /
- * `-e` left without its program text.
+ * `-e` left without its program text. And (review 3.0, wave 2) a `-c` script
+ * or program text holding xargs's replacement string (`-I{}`, `-i`,
+ * `--replace`, BSD's `-J`): `xargs -I{} sh -c '{}'` writes each line it reads
+ * into the program — `sh -c 'echo "$0"'`, where the line is an argument, does
+ * not.
  */
 function xargsRunsStdin(words: readonly ShellWord[], at: number): boolean {
+  return xargsProgram(words, at) !== undefined;
+}
+
+/**
+ * How xargs makes its input a program, for {@link xargsRunsStdin}: `appended`
+ * as the `-c` script or program text itself, `replaced` into it through the
+ * replacement string — which has a safe form the deny can name (review 3.0
+ * wave 2, round 2: the line as an argument, `sh -c '… "$1"' _ {}`).
+ */
+function xargsProgram(words: readonly ShellWord[], at: number): 'appended' | 'replaced' | undefined {
   const rest = withoutRedirectWords(words.slice(at));
   const i = resolveCommand(rest).index;
   const name = commandName(rest[i]?.value ?? '');
   const last = rest[rest.length - 1]?.value ?? '';
-  if (i >= rest.length - 1) return false;
-  if (SCRIPT_SHELLS.has(name) || name === 'su') return DASH_C.test(last);
-  return isInterpreter(name) && /^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last);
+  if (i >= rest.length - 1) return undefined;
+  const replace = xargsReplacement(rest.slice(1, i).map((w) => w.value));
+  if (SCRIPT_SHELLS.has(name) || name === 'su') {
+    if (DASH_C.test(last)) return 'appended';
+    const c = rest.findIndex((w, k) => k > i && !w.quoted && DASH_C.test(w.value));
+    const script = c < 0 ? undefined : rest[c + 1]?.value;
+    if (script === undefined) return undefined;
+    if (replace !== undefined && script.includes(replace)) return 'replaced';
+    return runsItsArguments(script) ? 'appended' : undefined;
+  }
+  if (!isInterpreter(name)) return undefined;
+  if (/^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last)) return 'appended';
+  return replace !== undefined && inlineCode(rest, i).some((code) => code.includes(replace)) ? 'replaced' : undefined;
+}
+
+/** A positional parameter: `$0`–`$9`, `$@`, `$*`, `${1}`. */
+const POSITIONAL = /\$(?:[0-9@*]|\{[0-9@*]\})/;
+
+/**
+ * A `-c` script that runs its own arguments (review 3.0 wave 2, round 2): one
+ * of its commands is `eval` of a positional parameter (`eval "$0"`, `eval
+ * $1`), or is named by one (`"$0"`, `$@`). xargs hands each line it reads to
+ * such a script as an argument, and the script runs it — `sh -c 'echo "$0"'`
+ * only prints it.
+ */
+function runsItsArguments(script: string): boolean {
+  if (!POSITIONAL.test(script)) return false;
+  return splitShell(script).statements.some((st) =>
+    st.commands.some((words) => {
+      const at = resolveCommand(words).index;
+      const head = words[at]?.value ?? '';
+      if (POSITIONAL.test(head) && head.replace(POSITIONAL, '') === '') return true;
+      return basename(head) === 'eval' && words.slice(at + 1).some((w) => POSITIONAL.test(w.value));
+    }),
+  );
+}
+
+/**
+ * The string xargs replaces with each line it reads, from its own options:
+ * `-I R` / `-IR`, `-i` / `-iR` and `--replace[=R]` (`{}` when none is given),
+ * BSD's `-J R`; none without one of them.
+ */
+function xargsReplacement(options: readonly string[]): string | undefined {
+  let replace: string | undefined;
+  for (let k = 0; k < options.length; k += 1) {
+    const o = options[k] ?? '';
+    if (o === '--replace') replace = '{}';
+    else if (o.startsWith('--replace=')) replace = o.slice('--replace='.length) || '{}';
+    else if (/^-[^-]/.test(o)) {
+      for (let c = 1; c < o.length; c += 1) {
+        const letter = o.charAt(c);
+        const attached = o.slice(c + 1);
+        if (letter === 'I' || letter === 'J') {
+          replace = attached !== '' ? attached : options[(k += 1)];
+          break;
+        }
+        if (letter === 'i') {
+          replace = attached !== '' ? attached : '{}';
+          break;
+        }
+        if ('adELnPs'.includes(letter)) {
+          if (attached === '') k += 1;
+          break;
+        }
+      }
+    }
+  }
+  return replace === '' ? undefined : replace;
 }
 
 /** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
@@ -3186,16 +3696,31 @@ const RULE_PROCESS_FETCH: MatchedRule = {
  * quotes and an absolute path — is a shell. The text rule only knew a bare
  * shell name right after the `|` (and `sudo`), so `| /bin/bash`, `| env
  * PNPM_VERSION=10 sh -`, `| "bash"` and `| command bash` all ran unassessed.
+ * xargs writing the download into its program through the replacement string
+ * gets a reason of its own, which names the safe form.
  */
-function pipesDownloadIntoShell(statement: ShellStatement): boolean {
+function pipesDownloadIntoShell(statement: ShellStatement): MatchedRule | null {
   let downloaded = false;
   for (const words of statement.commands) {
     const at = resolveCommand(words, PIPE_RUNNERS).index;
-    if (downloaded && readsStdinAsScript(words, at)) return true;
+    if (downloaded && readsStdinAsScript(words, at)) {
+      const xargs = commandName(words[at]?.value ?? '') === 'xargs' ? xargsProgram(words, at) : undefined;
+      return xargs === 'replaced' ? RULE_XARGS_REPLACED : RULE_PIPE_TO_SHELL;
+    }
     if (DOWNLOADERS.has(commandName(words[at]?.value ?? ''))) downloaded = true;
   }
-  return false;
+  return null;
 }
+
+/** A download written into xargs's program through its replacement string — and how to hand it over as data. */
+const RULE_XARGS_REPLACED: MatchedRule = {
+  id: 'xargs-download-program',
+  level: 'block',
+  reason:
+    "Writes downloaded text into a program through xargs's replacement string (xargs -I{} sh -c '… {} …'), " +
+    `where it runs as code; hand each line over as an argument instead: xargs -I{} sh -c '… "$1"' _ {} ` +
+    '(sys.argv / process.argv for an interpreter)',
+};
 
 /** `bash <<< "$(curl …)"`, `source /dev/stdin <<< "$(wget …)"`: a download handed to a shell as a here-string. */
 function hereStringFetchIntoShell(words: readonly ShellWord[], at: number): boolean {
@@ -3223,12 +3748,98 @@ const PS_DOWNLOAD =
  *     / `.NewScriptBlock(…)` and `-ScriptBlock (…)` (review round 3: Microsoft's
  *     dotnet-install one-liner is `&([scriptblock]::Create((iwr …)))`);
  *   - `dl` — a download;
- *   - `assign` / `ref` — a variable assigned, and a variable read, so that
- *     `$s = irm …; iex $s` is seen;
+ *   - `ref`, and `assign` after it — a variable read, or assigned, so that
+ *     `$s = irm …; iex $s` is seen — as `$s`, `${s}` or `$script:s`, one
+ *     variable ({@link psVariable}). One group for both, so a run of unclosed
+ *     `${` is scanned for its capped name once per `$`, not twice;
+ *   - the other ways a command puts a value in a variable, or reads one back
+ *     (review 3.0, wave 2): `setvar` — `Set-Variable` / `New-Variable` (`sv`,
+ *     `nv`), whose name {@link variableNamed} reads; `outvar` — the common
+ *     `-OutVariable` (`-ov`) of any cmdlet, with its name; `tee` and `teevar`
+ *     — `Tee-Object` (`tee`) and its `-Variable`; `getvar` — `Get-Variable`
+ *     (`gv`), a read of the variable it names;
  *   - parentheses, pipes and statement separators.
  */
 const PS_EXEC_TOKENS =
-  /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
+  /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<ref>\$(?:\{[^}\n]{0,128}\}|[\w:]+))(?<assign>\s*\+?=(?!=))?|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_][\w:]*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_][\w:]*))?)|&&|\|\||[()|;\n]/gi;
+
+/**
+ * A variable as one name: `$` and the name, lower-cased, without braces or a
+ * scope — `${Script:S}`, `$script:s` and `$s` are all `$s` (`$env:x` stays
+ * itself: an environment variable is another variable).
+ */
+function psVariable(spelled: string): string {
+  let v = spelled.toLowerCase();
+  if (v.startsWith('$')) v = v.slice(1);
+  if (v.startsWith('{') && v.endsWith('}')) v = v.slice(1, -1);
+  return `$${v.replace(/^(?:global|script|local|private|using|variable):/, '')}`;
+}
+
+/** `Set-`, `New-` and `Get-Variable` parameters that take a value, other than `-Name`. */
+const VARIABLE_VALUED = ['value', 'scope', 'option', 'description', 'include', 'exclude', 'visibility'];
+
+/** How far {@link variableNamed} reads for a name, and how many names one assessment reads. */
+const VARIABLE_NAME_WINDOW = 256;
+const MAX_VARIABLE_NAMES = 256;
+
+/**
+ * The variable a `Set-Variable` / `New-Variable` / `Get-Variable` whose name
+ * ends at `from` names, as {@link psVariable} spells it: `-Name x`, `-Name:x`,
+ * `-n x`, or else its first positional argument (a named `-Name` binds first,
+ * wherever it stands). `*` — any variable — when the name cannot be read: a
+ * quoted one (masked in this text), one computed by an expression, or none
+ * within the next {@link VARIABLE_NAME_WINDOW} characters.
+ */
+function variableNamed(text: string, from: number): string {
+  const end = Math.min(text.length, from + VARIABLE_NAME_WINDOW);
+  let named: string | undefined;
+  let positional: string | undefined;
+  let wantName = false;
+  let skipValue = false;
+  let i = from;
+  while (i < end) {
+    const c = text.charAt(i);
+    if (c === ' ' || c === '\t') {
+      i += 1;
+      continue;
+    }
+    if (c === ';' || c === '|' || c === '\n' || c === '&' || c === ')') break;
+    // One word: to a blank or a separator — a parenthesised value whole.
+    let j = i + 1;
+    if (c === '(') {
+      for (let depth = 1; j < end && depth > 0; j += 1) {
+        const d = text.charAt(j);
+        if (d === '(') depth += 1;
+        else if (d === ')') depth -= 1;
+      }
+    } else {
+      while (j < end && !' \t;|&()\n'.includes(text.charAt(j))) j += 1;
+    }
+    const word = text.slice(i, j);
+    i = j;
+    if (wantName) {
+      wantName = false;
+      named = /^[$\w{}:]+$/.test(word) ? psVariable(word) : '*';
+      continue;
+    }
+    if (skipValue) {
+      skipValue = false;
+      continue;
+    }
+    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(word);
+    if (param !== null) {
+      const p = (param[1] ?? '').toLowerCase();
+      const inline = param[2];
+      if ('name'.startsWith(p)) {
+        if (inline === undefined) wantName = true;
+        else named = /^[$\w{}:]+$/.test(inline) ? psVariable(inline) : '*';
+      } else if (inline === undefined && p.length >= 2 && VARIABLE_VALUED.some((v) => v.startsWith(p))) skipValue = true;
+      continue;
+    }
+    positional ??= /^[\w{}:]+$/.test(word) ? psVariable(word) : '*';
+  }
+  return named ?? positional ?? '*';
+}
 
 /**
  * `Invoke-Expression` over a download, on the masked command text (review I1):
@@ -3239,6 +3850,10 @@ const PS_EXEC_TOKENS =
  * tokens, so linear: a stack says which open parentheses hold `iex`'s
  * argument, and a download seen in the current `;`/newline segment is armed by
  * the next `|` for an `iex` after it.
+ *
+ * `text` is the command's {@link ShellSplit.interpolatedCommand}: a quoted
+ * span is masked, except for the variables a double-quoted one interpolates —
+ * `$b = "$a"` copies `$a`, and `iex "$s"` runs `$s`.
  */
 function powershellDownloadExecution(text: string): boolean {
   if (!/iex|invoke-expression|scriptblock|invokescript/i.test(text)) return false;
@@ -3247,16 +3862,28 @@ function powershellDownloadExecution(text: string): boolean {
   let pendingIex = false;
   let downloaded = false;
   let piped = false;
-  /** The variable being assigned in this `;`/newline segment, and the variables that hold a download. */
-  let assigning: string | undefined;
+  /** The variables being assigned in this `;`/newline segment, and the variables that hold a download. */
+  let assigning: string[] = [];
   const tainted = new Set<string>();
+  /** In a `Tee-Object` command, whose `-Variable` receives what it is piped. */
+  let inTee = false;
+  let names = 0;
+  /** `*`, a variable whose name could not be read, holds whatever any name may. */
+  const holdsDownload = (v: string): boolean => tainted.has(v) || tainted.has('*') || (v === '*' && tainted.size > 0);
   /** A download (or a variable holding one): run when it is `iex`'s argument, else armed for a pipe. */
   const download = (): boolean => {
     if (inIex > 0 || pendingIex) return true;
     downloaded = true;
-    if (assigning !== undefined) tainted.add(assigning);
+    for (const v of assigning) tainted.add(v);
     return false;
   };
+  /** A variable this command fills — from what it is piped, or from a download later in the segment. */
+  const fills = (v: string): void => {
+    assigning.push(v);
+    if (downloaded) tainted.add(v);
+  };
+  /** The name a `Set-` / `New-` / `Get-Variable` gives, read at most {@link MAX_VARIABLE_NAMES} times. */
+  const nameAfter = (at: number): string => (++names > MAX_VARIABLE_NAMES ? '*' : variableNamed(text, at));
   for (const m of text.matchAll(PS_EXEC_TOKENS)) {
     const t = m[0].toLowerCase();
     const g = m.groups ?? {};
@@ -3265,10 +3892,20 @@ function powershellDownloadExecution(text: string): boolean {
       pendingIex = true;
     } else if (g['dl'] !== undefined) {
       if (download()) return true;
-    } else if (g['assign'] !== undefined) {
-      assigning = t.replace(/\s*=$/, '');
     } else if (g['ref'] !== undefined) {
-      if (tainted.has(t) && download()) return true;
+      const v = psVariable(g['ref']);
+      if (g['assign'] !== undefined) assigning = [v];
+      else if (holdsDownload(v) && download()) return true;
+    } else if (g['setvar'] !== undefined) {
+      fills(nameAfter(m.index + m[0].length));
+    } else if (g['getvar'] !== undefined) {
+      if (holdsDownload(nameAfter(m.index + m[0].length)) && download()) return true;
+    } else if (g['tee'] !== undefined) {
+      inTee = true;
+    } else if (g['outvar'] !== undefined) {
+      fills(g['outname'] === undefined ? '*' : psVariable(g['outname']));
+    } else if (g['teevar'] !== undefined) {
+      if (inTee) fills(g['teename'] === undefined ? '*' : psVariable(g['teename']));
     } else if (t === '(') {
       opens.push(pendingIex);
       if (pendingIex) inIex += 1;
@@ -3279,12 +3916,14 @@ function powershellDownloadExecution(text: string): boolean {
     } else if (t === '|') {
       if (downloaded) piped = true;
       pendingIex = false;
+      inTee = false;
     } else {
       // `;`, a newline, `&&`, `||`.
       downloaded = false;
       piped = false;
       pendingIex = false;
-      assigning = undefined;
+      assigning = [];
+      inTee = false;
     }
   }
   return false;
@@ -3383,6 +4022,18 @@ function posixSaves(name: string, words: readonly ShellWord[], at: number): stri
     return saved.map((f) => (isAbsolutePath(f) ? f : `${dir.replace(/[\\/]+$/, '')}/${f}`));
   }
   return saved;
+}
+
+/**
+ * The files a command saves from what it is piped: `tee` / `Tee-Object`,
+ * `sponge`, `dd of=`, `Set-Content`, `Add-Content`, `Out-File` — and its
+ * stdout redirected (`gunzip > tool`, `cat > i.sh`). Behind a download that
+ * writes to its stdout, these are the download saved under another name.
+ */
+function pipedSaves(name: string, words: readonly ShellWord[], at: number): string[] {
+  const out = redirectTargets(words.slice(at + 1));
+  pushAll(out, commandWriteDestinations(name, withoutRedirections(words.slice(at + 1))).filter((f) => !f.startsWith('-')));
+  return out;
 }
 
 /** The files a PowerShell web cmdlet saves: `-OutFile path`, BITS's `-Destination path`. */
@@ -3591,17 +4242,50 @@ function transfersOf(name: string, words: readonly ShellWord[], at: number): Arr
   });
 }
 
+/** gpg's options that take the next word as their value — never a signature or a data file. */
+const GPG_VALUED = new Set([
+  '--keyring', '--primary-keyring', '--secret-keyring', '--homedir', '--trustdb-name', '--options', '--status-fd',
+  '--logger-fd', '--attribute-fd', '--passphrase-fd', '--command-fd', '--status-file', '--logger-file',
+  '--default-key', '-u', '--local-user', '-r', '--recipient', '-o', '--output', '--trusted-key', '--trust-model',
+  '--verify-options', '--assert-signer', '--weak-digest', '--auto-key-locate', '--keyserver', '--keyserver-options',
+  '--compress-algo', '--cipher-algo', '--digest-algo', '--display-charset', '--charset',
+]);
+
+/** What `gpg --verify` / `gpgv` is handed: its signature, then the data files it verifies against it. */
+function gpgOperands(args: readonly string[], gpgv: boolean): string[] {
+  const out: string[] = [];
+  let verifying = gpgv;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (!optionsDone && a === '--verify') verifying = true;
+    else if (!optionsDone && a === '--') optionsDone = true;
+    else if (!optionsDone && a.startsWith('-') && a !== '-') i += !a.includes('=') && GPG_VALUED.has(a) ? 1 : 0;
+    else if (verifying) out.push(a);
+  }
+  return out;
+}
+
+/** The data file a detached signature or a checksum file is named after: `i.sh.asc` → `i.sh`. */
+const SIDECAR = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/;
+
 /**
  * An integrity check at the end of a statement's pipeline, and what it names
  * (review round 3, item 3): `names`, every word of every member (`echo "<sha>
  * f" | sha256sum -c` names `f`), split on blanks; `lists`, the checksum lists a
- * `sha256sum -c` is handed as operands. Paths as {@link runKey}s.
+ * `sha256sum -c` is handed as operands; `implied`, the data files a sidecar
+ * implies — each checksum file's (`sha256sum -c i.sh.sha256` checks `i.sh`), and
+ * a signature's only when gpg is handed it alone (`gpg --verify i.sh.asc`
+ * verifies `i.sh`). Handed a data file, gpg verifies THAT file: `gpg --verify
+ * i.sh.asc other` says nothing of `i.sh` (review 3.0, wave 2). cosign,
+ * minisign, signify and openssl always name the file they check. Paths as
+ * {@link runKey}s.
  */
 function integrityCheckOf(
   statement: ShellStatement,
   heads: readonly number[],
   cwd: string,
-): { names: string[]; lists: string[] } | undefined {
+): { names: string[]; lists: string[]; implied: string[] } | undefined {
   const last = statement.commands.length - 1;
   const words = statement.commands[last];
   const at = heads[last] ?? 0;
@@ -3613,10 +4297,95 @@ function integrityCheckOf(
       for (const token of w.value.split(/\s+/)) if (token !== '' && !token.startsWith('-')) names.push(key(token));
     }
   });
-  const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(commandName(words[at]?.value ?? ''));
-  const lists = sumTool ? withoutRedirections(words.slice(at + 1)).filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
-  return { names, lists };
+  const tool = commandName(words[at]?.value ?? '');
+  const args = withoutRedirections(words.slice(at + 1));
+  const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(tool);
+  const lists = sumTool ? args.filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
+  const implying = sumTool ? names.slice() : [];
+  if (tool === 'gpg' || tool === 'gpg2' || tool === 'gpgv') {
+    const operands = gpgOperands(args, tool === 'gpgv');
+    const signature = operands[0];
+    if (operands.length === 1 && signature !== undefined) implying.push(key(signature));
+  }
+  const implied = implying.flatMap((name) => SIDECAR.exec(name)?.[1] ?? []);
+  return { names, lists, implied };
 }
+
+/**
+ * What an archive extraction reads and where it writes: `tar` / `bsdtar`
+ * extracting (`x` in its first-word cluster or a `-…x…` one, `--extract`,
+ * `--get`) from `-f FILE` / `--file` — stdin when none or `-` — into `-C DIR` /
+ * `--directory` (the working directory when none); `unzip FILE -d DIR`. The
+ * valued letters of a cluster take the following words in order, as tar's own
+ * old style does (`tar xzfC t.tgz /usr/local/bin`). None for anything else.
+ */
+function archiveExtraction(name: string, words: readonly ShellWord[], at: number): { dir?: string; archive?: string } | undefined {
+  const args = withoutRedirections(words.slice(at + 1));
+  const out: { dir?: string; archive?: string } = {};
+  if (name === 'unzip') {
+    for (let i = 0; i < args.length; i += 1) {
+      const a = args[i] ?? '';
+      if (a === '-d') out.dir = args[(i += 1)];
+      else if (a.startsWith('-d') && a.length > 2) out.dir = a.slice(2);
+      else if (!a.startsWith('-') && out.archive === undefined) out.archive = a;
+    }
+    return out.archive === undefined ? undefined : out;
+  }
+  if (name !== 'tar' && name !== 'bsdtar' && name !== 'gtar') return undefined;
+  let extract = false;
+  const pending: string[] = [];
+  const take = (letter: string, value: string | undefined): void => {
+    if (letter === 'f') out.archive = value;
+    else out.dir = value;
+  };
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a === '--extract' || a === '--get') {
+      extract = true;
+      continue;
+    }
+    const long = /^--(directory|file)(?:=(.*))?$/.exec(a);
+    if (long !== null) {
+      take(long[1] === 'file' ? 'f' : 'C', long[2] ?? args[(i += 1)]);
+      continue;
+    }
+    if (a.startsWith('--')) continue;
+    const option = a.startsWith('-') && a !== '-';
+    if (!option && i > 0) {
+      const letter = pending.shift();
+      if (letter !== undefined) take(letter, a);
+      continue;
+    }
+    const cluster = option ? a.slice(1) : a;
+    for (let c = 0; c < cluster.length; c += 1) {
+      const letter = cluster.charAt(c);
+      if (letter === 'x') extract = true;
+      if (letter !== 'f' && letter !== 'C') continue;
+      const rest = cluster.slice(c + 1);
+      if (option && rest !== '') {
+        take(letter, rest);
+        break;
+      }
+      pending.push(letter);
+      if (option) break;
+    }
+  }
+  return extract ? out : undefined;
+}
+
+/**
+ * Commands that do not run an extracted archive's files: shell builtins and the
+ * file tools an install runs around one (`chmod +x`, `ls -l`, `which`, a
+ * checksum). After an archive of unknown names is extracted into a PATH
+ * directory, any other bare command may be one of its files.
+ */
+const NOT_FROM_ARCHIVE = new Set([
+  'echo', 'printf', 'cd', 'pwd', 'export', 'unset', 'set', 'true', 'false', 'test', '[', '[[', 'command', 'type', 'hash',
+  'which', 'whereis', 'ls', 'chmod', 'chown', 'chgrp', 'rm', 'rmdir', 'mv', 'cp', 'ln', 'mkdir', 'touch', 'cat', 'head',
+  'tail', 'grep', 'sed', 'awk', 'sort', 'wc', 'file', 'stat', 'du', 'df', 'tar', 'bsdtar', 'gzip', 'gunzip', 'xz', 'unzip',
+  'curl', 'wget', 'install', 'sleep', 'date', 'uname', 'id', 'whoami', 'exit', 'sha256sum', 'sha512sum', 'shasum', 'gpg',
+  'readlink', 'realpath', 'basename', 'dirname', 'tee', 'find', 'source', '.', 'popd', 'pushd',
+]);
 
 /**
  * A file downloaded and run by the same command line (review I1, PowerShell's
@@ -3650,6 +4419,12 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
   const verified = new Map<string, number>();
   let listAt = -2;
   let cwd = '';
+  /**
+   * PATH directories a download was extracted into (round 2), each with its
+   * first extraction: what the archive held is unknown, so a later bare name
+   * may be any of it. One entry per directory, so a lookup is constant time.
+   */
+  const extracted = new Map<string, { at: number; kind: DownloadKind }>();
   for (let k = 0; k < statements.length; k += 1) {
     const statement = statements[k];
     if (statement === undefined) continue;
@@ -3657,14 +4432,44 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
     const ran: string[] = [];
     const saved: Array<{ key: string; kind: DownloadKind }> = [];
     // Nothing downloaded yet: nothing a run could match, so runs are not read.
-    const reading = downloads.size > 0;
+    const reading = downloads.size > 0 || extracted.size > 0;
     const piped = reading ? pipedIntoRunners(statement, heads) : [];
+    /** A download earlier in this pipeline writes to its stdout: what a later member saves is the download. */
+    let streaming: DownloadKind | undefined;
+    /** A bare name run after an extraction into a PATH directory, and what downloaded the archive. */
+    let fromArchive: DownloadKind | undefined;
+    /** Whether `archive` (a file, or stdin for `-` / none) is a download no check has cleared: what downloaded it. */
+    const downloadedArchive = (archive: string | undefined): DownloadKind | undefined => {
+      if (archive === undefined || archive === '-') return streaming;
+      const key = runKey(resolveFrom(cwd, archive));
+      const d = downloads.get(key);
+      return d !== undefined && !((verified.get(key) ?? -3) > d.at) && !(listAt > d.at) ? d.kind : undefined;
+    };
     statement.commands.forEach((words, c) => {
       const at = heads[c] ?? 0;
       const head = words[at]?.value ?? '';
       const name = commandName(head);
-      for (const dest of posixSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
-      for (const dest of powershellSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+      const posix = posixSaves(name, words, at);
+      const ps = powershellSaves(name, words, at);
+      for (const dest of posix) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
+      for (const dest of ps) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+      // `curl … | sudo tee /usr/local/bin/tool`, `| gunzip > tool`, `irm … |
+      // Out-File i.ps1` (review 3.0 wave 2, round 2).
+      if (streaming !== undefined) {
+        const kind = streaming;
+        for (const dest of pipedSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind });
+      }
+      // `curl … | tar xz -C /usr/local/bin`, `tar xzf t.tgz -C ~/.local/bin`
+      // after `curl -o t.tgz`, `unzip t.zip -d /usr/local/bin` (round 2).
+      const extraction = archiveExtraction(name, words, at);
+      if (extraction !== undefined) {
+        const dir = runKey(resolveFrom(cwd, extraction.dir ?? '.')).replace(/\/+$/, '');
+        const kind = downloadedArchive(extraction.archive);
+        if (kind !== undefined && PATH_DIRS.test(dir) && !extracted.has(dir)) extracted.set(dir, { at: k, kind });
+      }
+      if (DOWNLOADERS.has(name) && posix.length === 0 && ps.length === 0) {
+        streaming = name === 'curl' || name === 'wget' ? 'posix' : 'powershell';
+      }
       if (reading) {
         for (const file of commandRuns(statement, c, heads, piped[c] === true)) ran.push(runKey(resolveFrom(cwd, file)));
         // The command itself: a path runs that file. A bare name is looked up
@@ -3674,6 +4479,9 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
         else if (head !== '') {
           const onPath = pathBins.get(head.toLowerCase());
           if (onPath !== undefined) ran.push(onPath);
+          if (!NOT_FROM_ARCHIVE.has(head.toLowerCase())) {
+            for (const e of extracted.values()) if (e.at < k) fromArchive ??= e.kind;
+          }
           if (bareRunsCwd) {
             for (const ext of /\.[A-Za-z0-9]+$/.test(head) ? [''] : ['', '.exe', '.cmd', '.bat', '.com']) {
               ran.push(runKey(resolveFrom(cwd, `${head}${ext}`)));
@@ -3708,20 +4516,25 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
       const d = downloads.get(file);
       // Run after its download, and not behind a check of it made after that download.
       if (d !== undefined && d.at < k && !((verified.get(file) ?? -3) > d.at) && !(listAt > d.at)) return d.kind;
+      // A file of an archive extracted into a PATH directory, run by its path.
+      const e = extracted.get(dirOf(file));
+      if (e !== undefined && e.at < k) return e.kind;
     }
+    if (fromArchive !== undefined) return fromArchive;
     for (const { key, kind } of saved) {
       downloads.set(key, { at: k, kind });
       verified.delete(key);
+      // Saved straight into a PATH directory, it runs by its bare name as a
+      // moved one does (review 3.0, wave 2: `curl -o /usr/local/bin/tool …`).
+      const bin = lastSegment(key);
+      if (PATH_DIRS.test(dirOf(key)) && bin !== '') pathBins.set(bin, key);
     }
     // A pipeline's status is its last member's: only a check there decides —
     // and only for the files it names (review round 3, item 3).
     const check = integrityCheckOf(statement, heads, cwd);
     if (check !== undefined) {
-      for (const name of check.names) {
-        if (downloads.has(name)) verified.set(name, k);
-        const signed = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/.exec(name)?.[1];
-        if (signed !== undefined) verified.set(signed, k);
-      }
+      for (const name of check.names) if (downloads.has(name)) verified.set(name, k);
+      for (const name of check.implied) verified.set(name, k);
       if (check.lists.some((list) => downloads.has(list))) listAt = k;
     }
     if (statement.end !== '&&') {
@@ -3753,7 +4566,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     return;
   }
 
-  const { maskedCommand, statements } = splitShell(cmd);
+  const { maskedCommand, interpolatedCommand, statements } = splitShell(cmd);
 
   // The whole-command rules are local signatures, or have a linear `test`
   // (see `BashRule.test`), so they read the whole command uncapped: a long
@@ -3768,8 +4581,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   // statement boundary to `splitShell`, so it is judged on the command text.
   pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd, scope.notes), scope));
   // PowerShell running a download (review I1): through `iex` across the `(`
-  // that splits statements, and a file downloaded then run.
-  if (powershellDownloadExecution(commandText)) out.push(RULE_IEX_DOWNLOAD);
+  // that splits statements, and a file downloaded then run. A variable copied
+  // through a double-quoted string is still the download (review 3.0, wave 2).
+  const flowText = interpolatedCommand === maskedCommand ? commandText : collapseBlanks(interpolatedCommand);
+  if (powershellDownloadExecution(flowText)) out.push(RULE_IEX_DOWNLOAD);
   const ranDownload = downloadsThenRuns(cmd, statements, scope.cmdLine === true);
   if (ranDownload !== null) out.push(ranDownload === 'posix' ? RULE_POSIX_DOWNLOAD_RUN : RULE_DOWNLOAD_RUN);
   // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).
@@ -3792,7 +4607,8 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
-    if (pipesDownloadIntoShell(statement)) out.push(RULE_PIPE_TO_SHELL);
+    const piped = pipesDownloadIntoShell(statement);
+    if (piped !== null) out.push(piped);
     for (const words of statement.commands) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).
@@ -3811,7 +4627,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
+      if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
       const scripts = nestedScripts(words, resolved.index);
+      const split = envSplitScript(words, resolved.index);
+      if (split !== undefined) scripts.push(shellScript(split));
       const cmdHead = words[resolved.index];
       const line =
         cmdHead !== undefined && commandName(cmdHead.value) === 'cmd'
@@ -3844,7 +4663,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       const head = words[resolved.index];
       if (head !== undefined) {
         const args = withoutRedirections(words.slice(resolved.index + 1));
-        scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd) ?? scope.cwd;
+        scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd, scope.dataDir) ?? scope.cwd;
       }
     }
     // Finding 4: text a shell actually reads as its script — `bash <<EOF …
@@ -3896,6 +4715,13 @@ export interface AssessOptions {
   platform?: NodeJS.Platform;
   /** Claude Code's `CLAUDE_CONFIG_DIR`, whose `settings*.json` are its settings (default: the environment's; `''` for none). */
   claudeConfigDir?: string;
+  /**
+   * dev-guardian's per-user data directory, whose `registry/` a command may not
+   * write (default: `userDataDir()` from the environment; tests). Its default
+   * spellings (`~/.local/share/dev-guardian`, `%LOCALAPPDATA%\dev-guardian`,
+   * `$GUARDIAN_DATA_DIR`) are recognised whatever this is.
+   */
+  dataDir?: string;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -3965,7 +4791,12 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
   const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
-  const where: Where = { home, configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']) };
+  const dataDir = normalizedPath(opts.dataDir ?? safeUserDataDir());
+  const where: Where = {
+    home,
+    configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']),
+    dataDir: dataDir === '' ? undefined : dataDir,
+  };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
   // closing quote and swallows the rest of the command, with no warning.
@@ -3980,6 +4811,17 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
 interface Where {
   home: HomeDir | undefined;
   configDirName: string | undefined;
+  /** dev-guardian's data directory, normalised. */
+  dataDir: string | undefined;
+}
+
+/** {@link userDataDir}, or `''` when it cannot be worked out. */
+function safeUserDataDir(): string {
+  try {
+    return userDataDir();
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -4031,10 +4873,14 @@ function assessReadings(
   // A catastrophic delete makes the broad-delete note redundant noise.
   if (byId.has('rm-rf-root')) byId.delete('rm-rf-broad');
   const effective = [...byId.values()].sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level]);
+  const blocks = effective.filter((r) => r.level === 'block');
+  const only = blocks.length === 1 ? blocks[0] : undefined;
+  const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
+    ...(own === undefined ? {} : { denyMessage: own }),
   };
 }

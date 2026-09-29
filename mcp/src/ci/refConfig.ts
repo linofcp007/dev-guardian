@@ -160,6 +160,7 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   'dotnet-analyzers': 'tree',
   // deps_audit, scan_containers and quality_check are not gate steps.
   npm: 'not_in_gate',
+  'pip-audit': 'not_in_gate',
   dotnet: 'not_in_gate',
   hadolint: 'not_in_gate',
   ruff: 'not_in_gate',

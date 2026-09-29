@@ -118,7 +118,7 @@ Recomendadas mas configuradas à mão (as tools não as correm): Renovate (o `in
 
 ## Cross-platform
 
-Linux, macOS e Windows. `check_toolchain {}` mostra o que está instalado e o comando de instalação para este sistema; `install_toolchain { dry_run: true }` mostra o plano — em Linux/macOS usa os scripts em `scripts/install/`, em Windows usa winget, scoop ou choco (ou WSL).
+Linux, macOS e Windows. `check_toolchain {}` mostra o que está instalado e o comando de instalação para este sistema; `install_toolchain { dry_run: true }` mostra o plano — em Linux/macOS usa os scripts em `scripts/install/`, em Windows usa winget, scoop ou choco (ou WSL). O Syft, o Trivy e o gitleaks vêm sempre de uma release fixada, com o sha256 verificado (em Windows, um ZIP descarregado pelo PowerShell para `%USERPROFILE%\.local\bin`).
 
 ## Quando NÃO usar
 

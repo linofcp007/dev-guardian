@@ -66,11 +66,13 @@ describe('install_toolchain: the elevation hint says when elevation_allowed can 
 
     const tool = TOOLS.find((t) => t.name === 'install_toolchain');
     if (!tool) throw new Error('install_toolchain not registered');
-    const r = (await tool.handler({ tools: ['trivy'] }, plugin())) as InstallOut;
+    // k6: Trivy has no apt entry any more (a pinned release archive, review
+    // 3.0 wave 2), and k6's is still an apt install.
+    const r = (await tool.handler({ tools: ['k6'] }, plugin())) as InstallOut;
 
-    const step = r.requires_elevation.find((s) => s.tool === 'trivy');
+    const step = r.requires_elevation.find((s) => s.tool === 'k6');
     expect(step?.hint).toMatch(/passwordless sudo/);
-    expect(step?.hint).toContain('`sudo apt-get install -y trivy`');
+    expect(step?.hint).toContain('`sudo apt-get install -y k6`');
     expect(step?.hint).toMatch(/yourself in a terminal/);
     expect(step?.hint).not.toMatch(/^Re-call with elevation_allowed=true to run this step\.$/);
   });

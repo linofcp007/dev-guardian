@@ -8,8 +8,10 @@
  *        The scripts are mature, idempotent, and already handle apt/dnf/pacman,
  *        ~/.local/bin fallback, pipx, etc.
  *      - Windows    → walk the catalogue's default set, picking the first
- *        reachable Windows pkg manager (winget → scoop → choco). If none of
- *        them are present AND WSL is, delegate to
+ *        reachable installer (the pinned release ZIP through PowerShell,
+ *        where the catalogue has one → winget → scoop → choco, those three
+ *        at the pinned version where it names one). If no package manager
+ *        is present AND WSL is, delegate to
  *        `wsl bash scripts/install/install-linux.sh`. Otherwise return
  *        `manual_steps` with the suggested commands.
  *
@@ -58,7 +60,9 @@ const tool = {
     title: 'Install missing toolchain',
     description: 'Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. ' +
         'Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/' +
-        'choco/WSL. dry_run prints commands without executing.',
+        'choco/WSL. Syft, Trivy and gitleaks are always a pinned release checked against its sha256 ' +
+        '(on Windows a ZIP fetched with PowerShell into %USERPROFILE%\\.local\\bin), or a package ' +
+        'manager asked for that same version — never "latest". dry_run prints commands without executing.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -315,9 +319,19 @@ function describeSpec(spec) {
  */
 async function listAvailableManagers(os) {
     if (os === 'win32') {
-        const all = ['winget', 'scoop', 'choco'];
-        return Promise.all(all.map(async (name) => {
-            const path = await resolveBinary(name);
+        // `release` first: the pinned, sha256-checked release ZIP, run through
+        // PowerShell (installCatalog.ts#windowsReleaseInstaller). The package
+        // managers follow their own manifests, and are asked for the pinned
+        // version where the catalogue names one.
+        // Each installer, and the program on PATH that makes it usable.
+        const all = [
+            ['release', 'powershell'],
+            ['winget', 'winget'],
+            ['scoop', 'scoop'],
+            ['choco', 'choco'],
+        ];
+        return Promise.all(all.map(async ([name, onPath]) => {
+            const path = await resolveBinary(onPath);
             const candidate = { name, available: path !== null };
             if (path !== null)
                 candidate.command_path = path;

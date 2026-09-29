@@ -454,11 +454,13 @@ describe('precision on dev-guardian’s own skills and commands', () => {
     expect(serious).toEqual([]);
   });
 
-  it.each([['skills'], ['commands']])('%s/ as a whole reads SAFE or REVIEW, with no high finding', async (dir) => {
+  // Wave 2 of the 3.0 review: SAFE, not "SAFE or REVIEW" — both read SAFE
+  // (5 and 0) before the text rules were narrowed, and must stay there.
+  it.each([['skills'], ['commands']])('%s/ as a whole reads SAFE, with no high finding', async (dir) => {
     const ing = await ingestTarget(resolve(REPO_ROOT, dir));
     if (!ing.ok) throw new Error(ing.message);
     const r = await analyzeSkill(ing.files, { checkDeps: false, symlinks: ing.symlinks });
-    expect(['SAFE', 'REVIEW']).toContain(r.score.recommendation);
+    expect(r.score.recommendation).toBe('SAFE');
     expect(r.score.by_severity.high + r.score.by_severity.critical).toBe(0);
   });
 });

@@ -287,9 +287,9 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          registry download. Fewer rules than the default
                          registry ruleset. It is NOT "nothing leaves the
                          machine": Trivy still fetches its vulnerability
-                         database, a .NET project is still restored from its
-                         NuGet feeds, and Semgrep still checks for a newer
-                         version (SECURITY.md, network egress).
+                         database and a .NET project is still restored from
+                         its NuGet feeds (SECURITY.md, network egress).
+                         Semgrep's own version check is off on every run.
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan

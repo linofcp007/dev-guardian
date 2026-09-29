@@ -40,8 +40,8 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
-import { listProjectDir, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
-import { join, relative } from 'node:path';
+import { listProjectDir, projectPathKind, readProjectText, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   classifyRestoreFailure,
   findDotnetTargets,
@@ -53,7 +53,7 @@ import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/n
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
-import { honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
+import { honouredHandedFiles, honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -129,7 +129,8 @@ registerToolModule(
       'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
       'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
       'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
-      'from PyPI (network access; an sdist\'s build step runs there); and for any .sln/.csproj, ' +
+      'from PyPI, or from an index the requirements file names (named in tools_run) — network ' +
+      'access; an sdist\'s build step runs there; and for any .sln/.csproj, ' +
       '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
       '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
       'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
@@ -413,20 +414,43 @@ function auditEnv(ctx: { scriptEnv: NodeJS.ProcessEnv }): { env: NodeJS.ProcessE
  * `requirements/dev.txt` split) — never a recursive walk, matching this
  * file's other manifest checks (`package.json`, `pyproject.toml`), which are
  * root-level existence checks too.
+ *
+ * `files` are handed to pip-audit. `outside` — project-relative, a
+ * `requirements/` directory with its trailing `/` — are candidates that lead
+ * out of the project through a link (`platform/projectFs.ts`): never listed,
+ * read or handed over, and named as not audited rather than skipped silently.
  */
-function findRequirementsFiles(projectPath: string): string[] {
-  const out: string[] = [];
-  // `platform/projectFs.ts`: a `requirements/` that links out of the project
-  // is not listed, and a file that links out is not handed to pip-audit.
-  const inside = (abs: string): boolean => projectPathKind(projectPath, abs) === 'file';
+function findRequirementsFiles(projectPath: string): { files: string[]; outside: string[] } {
+  const files: string[] = [];
+  const outside: string[] = [];
+  const sort = (abs: string, rel: string): void => {
+    const kind = projectPathKind(projectPath, abs);
+    if (kind === 'file') files.push(abs);
+    else if (kind === 'outside') outside.push(rel);
+  };
   for (const { name } of listProjectDir(projectPath, projectPath)) {
-    if (/^requirements.*\.txt$/i.test(name) && inside(join(projectPath, name))) out.push(join(projectPath, name));
+    if (/^requirements.*\.txt$/i.test(name)) sort(join(projectPath, name), name);
   }
   const reqDir = join(projectPath, 'requirements');
+  if (projectPathKind(projectPath, reqDir) === 'outside') outside.push('requirements/');
   for (const { name } of listProjectDir(projectPath, reqDir)) {
-    if (name.toLowerCase().endsWith('.txt') && inside(join(reqDir, name))) out.push(join(reqDir, name));
+    if (name.toLowerCase().endsWith('.txt')) sort(join(reqDir, name), `requirements/${name}`);
   }
-  return out;
+  return { files, outside };
+}
+
+/**
+ * `run` naming the requirements candidates {@link findRequirementsFiles} did
+ * not hand to pip-audit because they lead out of the project: in the reason,
+ * each as not audited. Not in `honoured_config` — nothing was taken from them.
+ */
+function withOutsideRequirements(run: ToolRun, outside: readonly string[]): ToolRun {
+  if (outside.length === 0) return run;
+  const notes = outside.map((rel) => `${rel} leads out of the project: not read or audited by dev-guardian`);
+  const shown = notes.slice(0, MAX_UNREAD_NAMED);
+  const more = notes.length > shown.length ? [`and ${notes.length - shown.length} more not audited`] : [];
+  const reason = [run.reason, ...shown, ...more].filter((s) => s !== undefined && s.length > 0).join('; ');
+  return { ...run, reason };
 }
 
 /**
@@ -477,14 +501,21 @@ async function runPipAudit(opts: {
   parser_inputs: ScannerInvocation['parser_inputs'];
 }): Promise<void> {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
-  const requirementsFiles = findRequirementsFiles(ctx.projectPath);
+  const { files: requirementsFiles, outside } = findRequirementsFiles(ctx.projectPath);
   const hasPyproject = existsSync(join(ctx.projectPath, 'pyproject.toml'));
-  if (requirementsFiles.length === 0 && !hasPyproject) return; // nothing to audit — not a gap
+  // Nothing to audit — not a gap. A candidate that leads out of the project is one.
+  if (requirementsFiles.length === 0 && !hasPyproject && outside.length === 0) return;
 
   const bin = await scannerAvailable('pip-audit');
   if (!bin) {
     tools_run.push({ name: 'pip-audit', status: 'skipped', reason: 'not_installed' });
     missing_tools.push('pip-audit');
+    return;
+  }
+  // Something left unaudited is a gap in coverage, whatever the rest did.
+  if (outside.length > 0) missing_tools.push('pip-audit');
+  if (requirementsFiles.length === 0 && !hasPyproject) {
+    tools_run.push(withOutsideRequirements({ name: 'pip-audit', status: 'skipped' }, outside));
     return;
   }
 
@@ -532,21 +563,151 @@ async function runPipAudit(opts: {
     }
   }
 
+  // The requirements files it read whose index options steered the
+  // resolution, named (`runners/repoConfig.ts`): honoured — a private index
+  // is legitimate — never silently. What pip reads and this server does not
+  // (a URL, an environment variable, a path or link out of the project) is
+  // named too: its index options are unknown, and one line of it picks the
+  // index.
+  const read = requirementsFilesRead(ctx.projectPath, requirementsFiles);
+  const steering = honouredHandedFiles(ctx.projectPath, 'pip-audit', read.read);
+  const named = (run: ToolRun): ToolRun =>
+    withOutsideRequirements(withUnreadRequirements(withProjectConfig(run, steering), read.unread), outside);
   if (anyOk) {
-    tools_run.push({
-      name: 'pip-audit',
-      status: 'ok',
-      reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
-    });
-    if (anyFailed) missing_tools.push('pip-audit');
+    tools_run.push(
+      named({
+        name: 'pip-audit',
+        status: 'ok',
+        reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
+      }),
+    );
+    if (anyFailed && outside.length === 0) missing_tools.push('pip-audit');
   } else {
-    tools_run.push({
-      name: 'pip-audit',
-      status: 'failed',
-      reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
-    });
-    missing_tools.push('pip-audit');
+    tools_run.push(
+      named({
+        name: 'pip-audit',
+        status: 'failed',
+        reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
+      }),
+    );
+    if (outside.length === 0) missing_tools.push('pip-audit');
   }
+}
+
+/** pip's includes: another requirements (`-r`) or constraints (`-c`) file, read with the same options. */
+const PIP_INCLUDE = /^[ \t]*(?:--requirement|--constraint|-r|-c)(?:[ \t]*=[ \t]*|[ \t]+|(?=[^\s=]))(\S+)/;
+/** Most requirements files {@link requirementsFilesRead} reads. */
+const MAX_REQUIREMENTS_FILES = 50;
+/** A requirements file is read up to this size. */
+const MAX_REQUIREMENTS_BYTES = 1024 * 1024;
+/** Most unread includes named in the reason; the files holding them are all in `honoured_config`. */
+const MAX_UNREAD_NAMED = 5;
+
+/**
+ * A file pip reads for pip-audit that this server does not: an include
+ * (`from`, the project file holding the line; `target` as written there), or
+ * a handed requirements file the bounded read refused — over its size, or
+ * changed under it since it was found (`from` null, `target` its
+ * project-relative path).
+ */
+interface UnreadRequirements {
+  from: string | null;
+  target: string;
+}
+
+/**
+ * The requirements files pip reads when pip-audit is handed `handed`: those,
+ * and every file they include (`-r` / `-c`, relative to the including file,
+ * as pip resolves them), transitively and bounded — project-relative,
+ * `/`-separated (`read`). What pip reads and the server does not (it reads
+ * within the project) is `unread`: an include that is a URL, holds an
+ * environment variable, or leaves the project by its path or through a
+ * link; a file that is not a regular one, or is over the size read; and
+ * whatever the bound left. An include that is not there is neither — pip
+ * fails on it.
+ */
+function requirementsFilesRead(
+  projectPath: string,
+  handed: readonly string[],
+): { read: string[]; unread: UnreadRequirements[] } {
+  const within = (root: string, abs: string): string | null => {
+    const rel = relative(root, abs);
+    if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null;
+    return rel.split(sep).join('/');
+  };
+  const seen = new Set<string>();
+  const read: string[] = [];
+  const unread: UnreadRequirements[] = [];
+  const queue: Array<{ abs: string; from: string | null; target: string }> = handed.map((abs) => ({
+    abs,
+    from: null,
+    target: within(projectPath, abs) ?? abs,
+  }));
+  const notRead = (item: { from: string | null; target: string }): void => {
+    unread.push({ from: item.from, target: item.target });
+  };
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item === undefined) break;
+    const rel = within(projectPath, item.abs);
+    if (rel === null) {
+      notRead(item);
+      continue;
+    }
+    if (seen.has(rel)) continue;
+    if (read.length >= MAX_REQUIREMENTS_FILES) {
+      notRead(item);
+      continue;
+    }
+    seen.add(rel);
+    // Bounded, regular files only, never through a link out of the project
+    // (`platform/projectFs.ts`). Not there: pip fails on it, nothing is taken
+    // from it. There but refused (a link out, a FIFO, oversized): pip may
+    // still read it, so it is named.
+    const got = readProjectText(projectPath, rel, MAX_REQUIREMENTS_BYTES);
+    if (got.status === 'absent') continue;
+    if (got.status !== 'ok') {
+      notRead(item);
+      continue;
+    }
+    const text = got.text;
+    read.push(rel);
+    // pip joins a line that ends in a backslash with the next.
+    for (const line of text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+      const target = PIP_INCLUDE.exec(line)?.[1]?.replace(/^["']|["']$/g, '');
+      if (target === undefined || target === '') continue;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes('$')) {
+        notRead({ from: rel, target });
+        continue;
+      }
+      queue.push({ abs: resolve(dirname(item.abs), target), from: rel, target });
+    }
+  }
+  return { read, unread };
+}
+
+/**
+ * `run` naming what pip read and this server did not: in the reason,
+ * "requirements.txt includes <x> (not read by dev-guardian): pip may take
+ * its index from it" (the first {@link MAX_UNREAD_NAMED}); the file holding
+ * each such line in `honoured_config`.
+ */
+function withUnreadRequirements(run: ToolRun, unread: readonly UnreadRequirements[]): ToolRun {
+  if (unread.length === 0) return run;
+  const notes = [
+    ...new Set(
+      unread.map((u) =>
+        u.from === null
+          ? `${u.target} (not read by dev-guardian): pip may take its index from it`
+          : `${u.from} includes ${u.target} (not read by dev-guardian): pip may take its index from it`,
+      ),
+    ),
+  ];
+  const shown = notes.slice(0, MAX_UNREAD_NAMED);
+  const more = notes.length > shown.length ? [`and ${notes.length - shown.length} more not read by dev-guardian`] : [];
+  const reason = [run.reason, ...shown, ...more].filter((s) => s !== undefined && s.length > 0).join('; ');
+  const holders = unread.map((u) => u.from ?? u.target);
+  return { ...run, reason, honoured_config: [...new Set([...(run.honoured_config ?? []), ...holders])].sort() };
 }
 
 

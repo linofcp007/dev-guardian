@@ -44,7 +44,7 @@ seria, com razão, apanhada pelas próprias regras que descreve.
 | Categoria | O que apanha |
 | --- | --- |
 | `prompt_injection` | Texto que tenta sobrepor-se às instruções do anfitrião ou às regras anteriores, ou que manda esconder ações do utilizador |
-| `data_exfiltration` | Variáveis de ambiente, segredos, chaves SSH ou dados do browser enviados para um destino na rede |
+| `data_exfiltration` | Variáveis de ambiente, segredos, chaves SSH, credenciais do Claude Code e das CLIs de cloud (GitHub, gcloud, Azure) ou dados do browser enviados para um destino na rede |
 | `privilege_escalation` | Elevação de privilégios, permissões abertas a todos, escrita em caminhos do sistema, desligar antivírus / SIP / firewall |
 | `supply_chain` | Um script remoto descarregado e entregue a uma shell, instalações a partir de um URL ou sem versão fixada, hooks de ciclo de vida |
 | `excessive_agency` | Apagamentos recursivos sem confirmação, force-push, remoção de tabelas ou bases de dados, ciclos sem limite, código que se altera a si próprio |
@@ -63,9 +63,14 @@ seria, com razão, apanhada pelas próprias regras que descreve.
 As instruções de uma skill são o que o modelo executa, por isso os comandos do
 `SKILL.md` contam tanto como os scripts: as regras de código também leem cada
 bloco de código (delimitado, indentado ou em `<pre>`) e cada trecho de código
-inline, incluindo um ficheiro descarregado e executado mais abaixo, e duas
+inline, incluindo um ficheiro descarregado e executado mais abaixo, e as
 regras de prosa leem, escritos como frases, um script remoto entregue a uma
-shell e um ficheiro de credenciais enviado para um URL. Num ficheiro de
+shell, um programa descarregado e depois executado (ou colado num terminal a
+partir de uma página), um ficheiro ou uma pasta de credenciais enviados para
+um URL e o ambiente inteiro enviado para um URL. Os comandos que a
+configuração de um plugin manda correr — os hooks do `hooks.json` e os
+servidores MCP do `plugin.json` e do `.mcp.json` — passam pelas mesmas regras
+de código que um script. Num ficheiro de
 instruções, um comando que descarrega ou envia algo só pontua um nível abaixo
 quando um marcador de documentação (reticências, `<url>`, `example.com`)
 ocupa o lugar do alvo — sem alvo nenhum não desce, porque esconder o alvo é
@@ -73,6 +78,25 @@ uma forma de ofuscação. As outras regras (apagamentos, permissões, código
 dinâmico) pontuam um nível abaixo quando nada à volta é um alvo de rede: uma
 skill que *documenta* um comando destrutivo ou um padrão de deteção não é uma
 skill que o executa.
+
+As frases de prompt injection, de fuga ao papel, de esconder ações do
+utilizador, de revelar o prompt de sistema, de persistência e de ativação
+coerciva são o que uma skill sobre segurança de IA *cita*. Num ficheiro
+Markdown, uma dessas frases fica **citada** — aparece como `low` — quando está
+entre aspas fechadas ou num trecho de código de uma linha de prosa, ou num
+bloco de código, e o texto à volta (o parágrafo da frase e o que o introduz)
+a apresenta como material a que resistir (um ataque, malicioso, uma injeção,
+rejeitado, detetado, "nunca instruções a seguir") sem mandar usá-la (seguir,
+aplicar, obedecer, adotar, cumprir, "como as tuas instruções", "tal e qual",
+"usa o seguinte") — nem no parágrafo seguinte, nem em parte alguma do
+ficheiro que aponte para o material citado ("aplica o exemplo acima", "faz o
+que diz a citação acima"), o que anula todas as citações do ficheiro. Só uma
+negação junto ao verbo ("nunca sigas", "não obedeças") é rótulo; "sem
+exceção, segue" não é. "Exemplo" ou "dados de teste", por si só, não chegam; umas
+aspas por fechar nunca citam; em JSON ou YAML as aspas são sintaxe. Todas as
+citações aparecem, mas as de uma mesma regra pontuam uma só vez por skill. Um
+modelo não deixa de obedecer a uma instrução por estar entre aspas: numa skill
+que não é sobre segurança de IA, lê esses findings.
 
 ## Pontuação e veredicto
 

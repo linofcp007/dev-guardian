@@ -78,7 +78,8 @@
  * mounts the whole project, so without a native Semgrep a scoped scan is a
  * named gap rather than a silently widened one. The .NET analyzers run inside
  * a build of the whole project: for a scope they are `skipped` as
- * project-level, and a gap whenever .NET sources are in the scope. Unscoped,
+ * project-level, and a gap whenever .NET sources are in the scope. Bandit
+ * gets the whole-project run's `--ini` either way (`banditIni`). Unscoped,
  * the project's `.guardianignore` reaches Semgrep as `--exclude` and Bandit as
  * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
@@ -515,7 +516,8 @@ function ignoreFrom(ctx) {
 /** An empty `[bandit]` section: Bandit reads it and nothing else. */
 export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
 /**
- * The `--ini` of a whole-project Bandit run (round 4, item 3). Without one,
+ * The `--ini` of every Bandit run scan_sast makes, whole-project and scoped
+ * alike (round 4, item 3; review 3.0, wave 2). Without one,
  * `bandit -r` walks the whole tree for a file named `.bandit` and applies it
  * to every file it scans — measured on 1.9.4: a `sub/.bandit`, or one in a
  * dependency's directory the scan excludes, with `skips: B101,B602,B404`
@@ -621,7 +623,14 @@ async function runSemgrepOnScope(args) {
     if (gapped.missing)
         markMissing(missing_tools, 'semgrep');
 }
-/** Bandit over a scope's `.py` files; no entry at all when it holds none. */
+/**
+ * Bandit over a scope's `.py` files; no entry at all when it holds none.
+ * With the whole-project run's `--ini` ({@link banditIni}): Bandit handed
+ * explicit files looks for no `.bandit`, so without it a scoped run ignored
+ * the project's root one (measured on 1.9.4: with a root `.bandit` skipping
+ * B101, the same `a.py` read B404 and B602 whole-project and B101 too
+ * scoped). Named the same way, too.
+ */
 async function runBanditOnScope(args) {
     const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
     if (files.length === 0)
@@ -631,8 +640,14 @@ async function runBanditOnScope(args) {
         missing_tools.push('bandit');
         return;
     }
+    const ini = banditIni(ctx.projectPath, reportDir);
+    if ('error' in ini) {
+        tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
+        return;
+    }
     const run = await banditOnFiles({
         files,
+        ini: ini.path,
         cwd: ctx.projectPath,
         reportDir,
         env: ctx.scriptEnv,
@@ -641,7 +656,7 @@ async function runBanditOnScope(args) {
     });
     for (const raw of run.reports)
         parser_inputs.push({ parser: banditParser, input: raw });
-    tools_run.push(run.toolRun);
+    tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, 'bandit') : run.toolRun);
 }
 /**
  * The .NET analyzers compile the whole project — there is no "build these

@@ -257,6 +257,15 @@ function mapSecret(raw: unknown, target: string, ctx: ParserContext): Finding | 
 // does not read (pnpm-lock.yaml, bun.lock, bun.lockb) or cannot parse
 // counts as locking something. test/e2e/trivyManifestCoverage.test.ts pins
 // both measured facts on the Trivy on PATH.
+//
+// A `package.json` with only devDependencies is the opposite case (review
+// 3.0, wave 2): it declares something, and a committed lock locks it, but
+// Trivy skips dev dependencies by default — measured on 0.69.3, a lock
+// holding only `dev: true` packages gets no Result, and
+// `--include-dev-deps` brings it back. Still a gap (nothing was reported for
+// it), but the advice used to be "commit the lock file" for a lock that was
+// there. Such a manifest beside a lock file is listed in the gap's
+// `dev_only`, and the advice says why instead. The e2e pins that fact too.
 
 interface EcosystemManifest {
   /** Human label used in `ManifestCoverageGap.ecosystem`. */
@@ -277,6 +286,14 @@ interface EcosystemManifest {
   /** True when the manifest at this path declares nothing Trivy could
    *  report on, so its missing Result is not a gap. Absent: always a gap. */
   declaresNothing?: (path: string) => boolean;
+  /**
+   * True when the manifest at this path declares only what Trivy skips by
+   * default (npm's devDependencies). With a lock file Trivy reads beside it
+   * — or at the workspace root that declares it a member — its missing
+   * Result is still a gap, but not for want of a lock file: the gap says so
+   * (`ManifestCoverageGap.dev_only`), and so does the advice.
+   */
+  declaresOnlyDev?: (path: string) => boolean;
   /** How to give Trivy something to read: the lock file to generate, and how. */
   fix: string;
 }
@@ -288,6 +305,7 @@ const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
     trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
     lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
     declaresNothing: npmManifestDeclaresNothing,
+    declaresOnlyDev: npmManifestDeclaresOnlyDev,
     fix: 'commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)',
   },
   {
@@ -367,6 +385,14 @@ export const MANIFEST_ECOSYSTEMS: readonly string[] = ECOSYSTEM_MANIFESTS.map((e
 export function lockFileAdvice(ecosystem: string): string | null {
   return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
 }
+
+/**
+ * Why a `ManifestCoverageGap.dev_only` manifest has no Result: its lock file
+ * was there, and Trivy skips dev dependencies by default (measured on 0.69.3:
+ * a lock holding only `dev: true` packages gets no Result; `--include-dev-deps`
+ * brings it back, and dev-guardian does not pass it).
+ */
+export const DEV_ONLY_ADVICE = 'only devDependencies, which Trivy skips by default';
 
 /** Each ecosystem with the lock file names Trivy reports its Results under. */
 export const MANIFEST_ECOSYSTEM_LOCKFILES: ReadonlyArray<{ ecosystem: string; lockfiles: readonly string[] }> =
@@ -462,6 +488,24 @@ function npmManifestDeclaresNothing(path: string): boolean {
   return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
 }
 
+/**
+ * A `package.json` that parses to an object with no production dependency
+ * (every field but `devDependencies` and `workspaces` absent, `{}` or `[]`)
+ * and `devDependencies` or `workspaces` with entries — all it locks itself
+ * is what Trivy skips by default. A workspace root with no Result of its
+ * own is one whose members lock nothing else either: a member's production
+ * dependency is in the root's lock file, and Trivy reports that file.
+ */
+function npmManifestDeclaresOnlyDev(path: string): boolean {
+  const manifest = readJsonFile(path);
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
+  const fields = manifest as Record<string, unknown>;
+  return (
+    NPM_DECLARING_FIELDS.every((k) => k === 'devDependencies' || k === 'workspaces' || isEmptyField(fields[k])) &&
+    (!isEmptyField(fields['devDependencies']) || !isEmptyField(fields['workspaces']))
+  );
+}
+
 /** A TOML value that is literally empty: `[]` or `{}`, an optional trailing comment. */
 const EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
 /** Key names that declare dependencies in whatever table they sit in (setuptools' dynamic ones included). */
@@ -529,6 +573,12 @@ export interface ManifestCoverageGap {
   ecosystem: string;
   /** The manifest file(s) Trivy read nothing for, project-relative (`/`), sorted. */
   files: string[];
+  /**
+   * Those of `files` that declare only what Trivy skips by default (npm's
+   * devDependencies) beside a lock file it reads: the lock was there, so
+   * the advice is {@link DEV_ONLY_ADVICE}, not a lock file. Absent: none.
+   */
+  dev_only?: string[];
 }
 
 export interface ManifestCoverageAssessment {
@@ -815,7 +865,22 @@ export function assessManifestCoverage(
     return false;
   };
 
+  /** A lock file of `eco` in `dir`, or at an ancestor whose workspace declares `dir` a member. */
+  const hasLockFile = (eco: EcosystemManifest, dir: string): boolean => {
+    const abs = (rel: string): string => (rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
+    const lockIn = (rel: string): boolean => eco.lockfiles.some((name) => existsSync(join(abs(rel), name)));
+    if (lockIn(dir)) return true;
+    const segments = dir === '' ? [] : dir.split('/');
+    for (let n = segments.length - 1; n >= 0; n--) {
+      const ancestor = segments.slice(0, n).join('/');
+      const decl = workspaceOf(abs(ancestor), eco.ecosystem);
+      if (decl !== null && declaredMember(decl, segments.slice(n).join('/')) && lockIn(ancestor)) return true;
+    }
+    return false;
+  };
+
   const gapFiles = new Map<string, string[]>();
+  const devOnlyFiles = new Map<string, string[]>();
   const dirsOf = new Map<string, Set<string>>();
   for (const m of walked.found) {
     if (m.eco.declaresNothing?.(m.abs) ?? false) continue;
@@ -826,12 +891,17 @@ export function assessManifestCoverage(
     }
     if (covered(m.eco, m.dir, dirs)) continue;
     gapFiles.set(m.eco.ecosystem, [...(gapFiles.get(m.eco.ecosystem) ?? []), m.rel]);
+    if ((m.eco.declaresOnlyDev?.(m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
+      devOnlyFiles.set(m.eco.ecosystem, [...(devOnlyFiles.get(m.eco.ecosystem) ?? []), m.rel]);
+    }
   }
 
   const gaps: ManifestCoverageGap[] = [];
   for (const eco of ECOSYSTEM_MANIFESTS) {
     const files = gapFiles.get(eco.ecosystem);
-    if (files !== undefined) gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort() });
+    if (files === undefined) continue;
+    const devOnly = devOnlyFiles.get(eco.ecosystem);
+    gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort(), ...(devOnly !== undefined ? { dev_only: [...devOnly].sort() } : {}) });
   }
   const out: ManifestCoverageAssessment = { gaps, sawAnyResults: results.length > 0 };
   if (walked.incomplete !== undefined) out.walkIncomplete = walked.incomplete;
