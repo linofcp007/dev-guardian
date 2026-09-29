@@ -1214,6 +1214,76 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review round 2, ruling 4: without CLAUDE_PROJECT_DIR the project root was
+  // the nearest ancestor holding `.guardian` or `.git` — and this machine has
+  // stray `.guardian` directories in %TEMP% and in the home directory, so every
+  // unmarked project below either took its configuration from there.
+  describe('the home directory, its ancestors and the temp dir are never the project root (review round 2)', () => {
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const blockConfig = (dir: string): void => {
+      mkdirSync(join(dir, '.guardian'), { recursive: true });
+      writeFileSync(join(dir, '.guardian', 'hooks.config.json'), JSON.stringify({ secrets: { block: true } }));
+    };
+    const writeSecret = (cwd: string, env: Record<string, string> = {}): HookResult =>
+      runHook(preToolUse('Write', { file_path: join(cwd, 'src', 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, cwd), {
+        cwd,
+        homeDir,
+        projectDir: '',
+        env,
+      });
+
+    it('a .guardian in the home directory is not an unmarked project’s configuration', () => {
+      blockConfig(homeDir);
+      const proj = join(homeDir, 'work', 'proj');
+      mkdirSync(proj, { recursive: true });
+      expect(decision(writeSecret(proj))).toBeUndefined();
+    });
+
+    it('…nor is a .guardian above the home directory', () => {
+      const above = join(homeDir, 'nested-home');
+      mkdirSync(above, { recursive: true });
+      blockConfig(homeDir);
+      const proj = join(above, 'proj');
+      mkdirSync(proj, { recursive: true });
+      const r = runHook(preToolUse('Write', { file_path: join(proj, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, proj), {
+        cwd: proj,
+        homeDir: above,
+        projectDir: '',
+      });
+      expect(decision(r)).toBeUndefined();
+    });
+
+    it('a .guardian in the temp dir itself is not either', () => {
+      const fakeTemp = join(homeDir, 'tmp');
+      blockConfig(fakeTemp);
+      const proj = join(fakeTemp, 'proj');
+      mkdirSync(proj, { recursive: true });
+      expect(decision(writeSecret(proj, { TEMP: fakeTemp, TMP: fakeTemp, TMPDIR: fakeTemp }))).toBeUndefined();
+    });
+
+    it('a project of its own below home is still found by its .git', () => {
+      blockConfig(homeDir);
+      const proj = join(homeDir, 'work', 'proj');
+      mkdirSync(join(proj, '.git'), { recursive: true });
+      blockConfig(proj);
+      const sub = join(proj, 'packages', 'api');
+      mkdirSync(sub, { recursive: true });
+      expect(decision(writeSecret(sub))).toBe('deny');
+    });
+
+    it('CLAUDE_PROJECT_DIR may still name the home directory', () => {
+      blockConfig(homeDir);
+      const r = runHook(preToolUse('Write', { file_path: join(homeDir, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, homeDir), {
+        cwd: homeDir,
+        homeDir,
+        projectDir: homeDir,
+      });
+      expect(decision(r)).toBe('deny');
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

@@ -30,7 +30,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -483,9 +483,20 @@ function presentNoFollow(path) {
 function projectRootOf(cwd) {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
   if (fromEnv && existsSync(fromEnv)) return resolve(fromEnv);
+  // Never the home directory or an ancestor of it, nor the temp dir itself
+  // (review round 2): a stray `.guardian` there — this machine has one in
+  // each — made every unmarked project below it take its configuration from
+  // there. Compared as the filesystem spells them (8.3 names: %TEMP% is
+  // often `C:\Users\ADMINI~1\…`).
+  const home = guardedPath(resolve(homedir()));
+  const temp = guardedPath(resolve(tmpdir()));
+  const excluded = (dir) => {
+    const d = guardedPath(dir);
+    return samePath(d, home) || isBelow(d, home) || samePath(d, temp);
+  };
   let dir = resolve(cwd);
   for (let i = 0; i < 256; i += 1) {
-    if (presentNoFollow(join(dir, '.guardian')) || presentNoFollow(join(dir, '.git'))) return dir;
+    if (!excluded(dir) && (presentNoFollow(join(dir, '.guardian')) || presentNoFollow(join(dir, '.git')))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
