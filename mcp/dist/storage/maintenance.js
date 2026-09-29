@@ -60,9 +60,7 @@
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
-import { lstatSync, statSync } from 'node:fs';
-import { isAbsolute, join, parse, resolve, sep } from 'node:path';
-import { canonicalPath } from '../platform/projectPath.js';
+import { spellingOnlyCanonical } from '../platform/pathSpelling.js';
 import { openSetForProject } from '../history/openSet.js';
 import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 export const DEFAULT_RETENTION_SCANS = 50;
@@ -531,39 +529,6 @@ export function canonicalizeStoredProjectPaths(db) {
         }
         return changed;
     })();
-}
-/**
- * The canonical spelling of `path` when it names an existing directory,
- * differs from it, and reaches it through no link; null otherwise.
- */
-function spellingOnlyCanonical(path) {
-    if (!isAbsolute(path))
-        return null;
-    try {
-        if (!statSync(path).isDirectory())
-            return null;
-    }
-    catch {
-        return null;
-    }
-    const canonical = canonicalPath(path);
-    if (canonical === path)
-        return null;
-    // Every component, from the root down, must be a real directory entry.
-    const resolved = resolve(path);
-    const root = parse(resolved).root;
-    let current = root;
-    for (const part of resolved.slice(root.length).split(sep).filter((s) => s !== '')) {
-        current = join(current, part);
-        try {
-            if (lstatSync(current).isSymbolicLink())
-                return null;
-        }
-        catch {
-            return null;
-        }
-    }
-    return canonical;
 }
 /** Runs {@link canonicalizeStoredProjectPaths} at startup; logs, never throws. */
 export function canonicalizeProjectPathsAtStartup(storage, log) {

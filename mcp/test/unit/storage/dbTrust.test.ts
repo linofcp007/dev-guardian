@@ -31,6 +31,7 @@ import {
   userDataDir,
 } from '../../../src/storage/db.js';
 import { openSetForProject } from '../../../src/history/openSet.js';
+import { canonicalPath } from '../../../src/platform/projectPath.js';
 import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
 import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
@@ -192,6 +193,9 @@ describe('a database holding objects the migrations never create', () => {
       const raw = new DatabaseSync(primary);
       for (const m of listMigrations().filter((x) => x.version <= upTo)) raw.exec(readFileSync(m.filePath, 'utf8'));
       raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${upTo}')`);
+      raw.prepare(
+        `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status) VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
+      ).run(canonicalPath(dir));
       raw.close();
 
       const opened = openDatabase({ projectPath: dir });
@@ -216,6 +220,9 @@ describe('a database holding objects the migrations never create', () => {
       raw.exec(readFileSync(m.filePath, 'utf8'));
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
+    raw.prepare(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status) VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
+    ).run(canonicalPath(dir));
     raw.close();
 
     const opened = openDatabase({ projectPath: dir });
@@ -407,6 +414,14 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     return primary;
   }
 
+  /** SQL for one completed scan filed under `projectPath` — what a real earlier run left. */
+  function scanOf(projectPath: string, id = 'legacy-1'): string {
+    return (
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) ` +
+      `VALUES ('${id}', 'sast', '${projectPath.replace(/'/g, "''")}', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed');`
+    );
+  }
+
   function dbIdOf(path: string): string | undefined {
     const raw = new DatabaseSync(path, { readOnly: true });
     try {
@@ -489,7 +504,7 @@ describe('provenance: only a database this user created (or adopted) is trusted'
   it("a legacy database in the project's own, untracking repository is adopted once, and registered", () => {
     const dir = project();
     git(dir, 'init', '-q');
-    const primary = legacyDatabase(dir);
+    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
     const first = openDatabase({ projectPath: dir });
     try {
       expect(first.path).toBe(primary);
@@ -507,6 +522,87 @@ describe('provenance: only a database this user created (or adopted) is trusted'
       expect(second.notice).toBeUndefined();
     } finally {
       second.db.close();
+    }
+  });
+
+  // Round 4: git state cannot tell an attacker's `.git` from the user's — a
+  // crafted archive can ship one whose index omits the database, or a
+  // gitfile pointing at another repository. So adoption also needs a
+  // completed scan filed under THIS project's path (or a spelling of it): a
+  // database made elsewhere carries that machine's paths.
+  it("a crafted archive with its own .git, whose index omits the database, but scans filed under another path: foreign", () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    legacyDatabase(dir, scanOf(isWindows ? 'C:\\Users\\attacker\\app' : '/home/attacker/app'));
+    const warning = expectForeign(dir, /no completed scan of this project/);
+    expect(warning).toMatch(/delete it or move it aside/);
+  });
+
+  it('a legacy database with no scans at all is foreign', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    legacyDatabase(dir);
+    expectForeign(dir, /no completed scan of this project/);
+  });
+
+  it('scans filed under a LINK to the project are not its spelling: foreign', () => {
+    // A link can mean any directory (`/proc/self/cwd` is whichever one the
+    // reader runs in): never a spelling of the project's path.
+    const dir = project();
+    git(dir, 'init', '-q');
+    const link = `${dir}-link`;
+    symlinkSync(dir, link, isWindows ? 'junction' : 'dir');
+    undo.push(() => rmDir(link));
+    legacyDatabase(dir, scanOf(link));
+    expectForeign(dir, /no completed scan of this project/);
+  });
+
+  it.runIf(isWindows)("scans filed under 2.0.0's lower-case drive spelling: adopted", () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    const canonical = canonicalPath(dir);
+    const primary = legacyDatabase(dir, scanOf(canonical.charAt(0).toLowerCase() + canonical.slice(1)));
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.notice).toMatch(/adopted/);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it.runIf(!isWindows)('scans filed under another spelling of the same directory entries: adopted', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    const primary = legacyDatabase(dir, scanOf(`${canonicalPath(dir)}/.`));
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.notice).toMatch(/adopted/);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it("a linked worktree (a .git gitfile) holding the user's legacy database, filed under its own path: adopted", () => {
+    const base = makeTempDir('guardian-worktree-');
+    const main = join(base, 'main');
+    mkdirSync(main);
+    git(main, 'init', '-q');
+    writeFileSync(join(main, 'README'), 'x');
+    git(main, 'add', 'README');
+    git(main, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    const wt = join(base, 'wt');
+    git(main, 'worktree', 'add', '-q', wt);
+    undo.push(() => rmDir(dirname(resolveFallbackDbPath(wt))));
+    expect(lstatSync(join(wt, '.git')).isFile()).toBe(true);
+    const primary = legacyDatabase(wt, scanOf(canonicalPath(wt)));
+    const opened = openDatabase({ projectPath: wt });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.notice).toMatch(/adopted/);
+    } finally {
+      opened.db.close();
     }
   });
 

@@ -508,7 +508,7 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
   if (probe.empty) return { kind: 'create' };
   if (probe.dbId !== null && lookupDbId(probe.dbId) !== null) return { kind: 'trusted', dbId: probe.dbId };
 
-  const adoption = adoptionProblem(projectPath, dbPath, index);
+  const adoption = adoptionProblem(projectPath, dbPath, index, probe.scanProjects);
   if (adoption === null) return { kind: 'adopt' };
   return {
     kind: 'foreign',

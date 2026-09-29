@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { GuardianDatabase, openDatabase } from '../../src/storage/db.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
+import { canonicalPath } from '../../src/platform/projectPath.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 import { holdWriteLock } from '../helpers/writeLockHolder.js';
@@ -143,6 +144,11 @@ describe('server startup against a 3.0 development database', () => {
       raw.exec(readFileSync(m.filePath, 'utf8'));
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
+    // The project's own scans, as a real development database holds them.
+    raw.prepare(
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status)
+       VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
+    ).run(canonicalPath(project));
     raw.close();
 
     const server = startServer(project);

@@ -26,6 +26,13 @@
  *   - `.guardian` is not a gitlink (a submodule brings its own files);
  *   - `.guardian` and the database files are not links or junctions, and the
  *     database's real path lies inside the project;
+ *   - it holds at least one completed scan filed under THIS project's
+ *     canonical path, or a spelling of it (2.0.0's lower-case drive letter;
+ *     never a path through a link — `platform/pathSpelling.ts`). Git state
+ *     cannot tell an attacker's `.git` from the user's — an archive can ship
+ *     one whose index omits the database, or a gitfile naming another
+ *     repository — but a database written on another machine carries that
+ *     machine's paths, and an attacker would have to guess this one's;
  *   - its schema is clean (`schemaCheck.ts`, asked by `db.ts`).
  * Adoption then registers a fresh id, once.
  *
@@ -38,6 +45,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, lstatSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
+import { isSpellingOf } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { GuardianDbError } from './dbError.js';
 import { DB_ID_KEY, DB_ID_SHAPE } from './dbRegistry.js';
@@ -179,14 +187,51 @@ export function locationProblem(projectPath: string, dbPath: string): string | n
  * legacy database, or null when it can (see the module comment). The schema
  * check is asked by the caller, after this.
  */
-export function adoptionProblem(projectPath: string, dbPath: string, index: GitIndexAnswer): string | null {
+export function adoptionProblem(
+  projectPath: string,
+  dbPath: string,
+  index: GitIndexAnswer,
+  scanProjects: readonly string[],
+): string | null {
+  // A `.git` DIRECTORY, or a gitfile (`gitdir: …`): a linked worktree's
+  // `.git` is a file, and a worktree is a legitimate layout (this repository
+  // is developed in them). What makes it count is that git answers below —
+  // `ls-files` fails when the gitdir does not resolve to a repository. Git
+  // state alone cannot tell an attacker's `.git` from the user's, though (an
+  // archive can ship either), which is what the scan check at the end is for.
   const git = lstatOrNull(join(projectPath, '.git'));
   if (git === null) {
     return 'the project has no .git of its own (a repository downloaded as an archive, or not a repository at all)';
   }
   if (git.isSymbolicLink()) return "the project's .git is a link";
   if (index.state !== 'ok') return `git could not be asked whether it tracks the database (${index.detail})`;
-  return gitProblem(index) ?? locationProblem(projectPath, dbPath);
+  const fromGit = gitProblem(index) ?? locationProblem(projectPath, dbPath);
+  if (fromGit !== null) return fromGit;
+  return scanProblem(projectPath, scanProjects);
+}
+
+/**
+ * Why the database's own scans do not show it was written for THIS project,
+ * or null: it must hold a completed scan filed under the project's canonical
+ * path or a spelling of it (`platform/pathSpelling.ts` — 2.0.0's lower-case
+ * drive letter among them, never a path through a link). A database made on
+ * another machine, or for another project, carries other paths, and an
+ * attacker would have to guess this machine's.
+ */
+function scanProblem(projectPath: string, scanProjects: readonly string[]): string | null {
+  let canonical: string;
+  try {
+    canonical = canonicalPath(projectPath);
+  } catch {
+    return 'the project path could not be resolved';
+  }
+  if (scanProjects.some((p) => isSpellingOf(p, canonical))) return null;
+  if (scanProjects.length === 0) return 'it holds no completed scan of this project (no completed scan at all)';
+  const shown = scanProjects.slice(0, 2).join("', '");
+  return (
+    `it holds no completed scan of this project — its scans are filed under ${scanProjects.length} other ` +
+    `path(s) ('${shown}'${scanProjects.length > 2 ? ', …' : ''}): a database written elsewhere`
+  );
 }
 
 // ---- Reading a database without changing it ---------------------------------
@@ -199,7 +244,16 @@ export interface DatabaseProbe {
   empty: boolean;
   /** Its `schema_meta` db_id when it is a well-formed one, else null. */
   dbId: string | null;
+  /**
+   * The distinct `project_path` of its completed scans (at most
+   * {@link MAX_SCAN_PROJECTS}), for the legacy adoption's "written for this
+   * project" check. Empty when it has none, or no `scans` table.
+   */
+  scanProjects: string[];
 }
+
+/** Project paths a probe reads; a database written for one project holds one or a few. */
+const MAX_SCAN_PROJECTS = 200;
 
 /**
  * Reads what {@link DatabaseProbe} names through a READ-ONLY connection with
@@ -216,16 +270,26 @@ export function probeDatabase(dbPath: string): DatabaseProbe {
     db.exec('PRAGMA trusted_schema = OFF');
     db.exec('PRAGMA cell_size_check = ON');
     const count = db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get() as { n: number } | undefined;
-    if ((count?.n ?? 0) === 0) return { empty: true, dbId: null };
-    const meta = db.prepare(`SELECT type FROM sqlite_master WHERE name = 'schema_meta'`).get() as
-      | { type: string }
-      | undefined;
-    if (meta?.type !== 'table') return { empty: false, dbId: null };
-    const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY) as
-      | { value: unknown }
-      | undefined;
-    const id = typeof row?.value === 'string' && DB_ID_SHAPE.test(row.value) ? row.value : null;
-    return { empty: false, dbId: id };
+    if ((count?.n ?? 0) === 0) return { empty: true, dbId: null, scanProjects: [] };
+    // Read only real tables, never through a view of the same name.
+    const isTable = (name: string): boolean =>
+      (db?.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name) as { type: string } | undefined)?.type ===
+      'table';
+    let id: string | null = null;
+    if (isTable('schema_meta')) {
+      const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY) as
+        | { value: unknown }
+        | undefined;
+      id = typeof row?.value === 'string' && DB_ID_SHAPE.test(row.value) ? row.value : null;
+    }
+    const scanProjects = isTable('scans')
+      ? (db
+          .prepare(`SELECT DISTINCT project_path AS p FROM scans WHERE status = 'completed' LIMIT ?`)
+          .all(MAX_SCAN_PROJECTS) as Array<{ p: unknown }>)
+          .map((r) => r.p)
+          .filter((p): p is string => typeof p === 'string')
+      : [];
+    return { empty: false, dbId: id, scanProjects };
   } catch (error) {
     const code = sqliteCode(error);
     if (code === 11 || code === 26) {

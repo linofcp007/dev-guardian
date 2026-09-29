@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase } from '../../src/storage/db.js';
 import { lookupDbId } from '../../src/storage/dbRegistry.js';
+import { canonicalPath } from '../../src/platform/projectPath.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
@@ -66,6 +67,11 @@ function databaseAt2_0_0(project: string): void {
     db.exec(readFileSync(m.filePath, 'utf8'));
   }
   db.exec("INSERT INTO schema_meta (key, value) VALUES ('version', '3')");
+  // A real 2.0.0 database holds this project's scans — what adoption checks.
+  db.prepare(
+    `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status)
+     VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
+  ).run(canonicalPath(project));
   db.close();
 }
 

@@ -48,7 +48,8 @@ their respective projects.
   exactly dev-guardian's. A database dev-guardian creates carries a random id
   registered in a per-user registry; one from 3.0.0 or earlier is adopted
   once, only in the project's own git repository that does not track it (any
-  case), with no submodule, link or junction involved. Anything else — a
+  case), with no submodule, link or junction involved, and only when it holds
+  a completed scan filed under this project's own path. Anything else — a
   clone, an archive, a submodule, a link, a database git tracks, or a schema
   holding what the migrations never create (a trigger, a view, an unknown
   table or index, a constraint added to a known table) — is not opened and

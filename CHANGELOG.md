@@ -38,7 +38,11 @@ version bump.
   under a case-insensitive pathspec (`.Guardian/guardian.db` committed is served as
   `.guardian/guardian.db` on Windows and macOS), `.guardian` is not a submodule, neither
   `.guardian` nor the files are links or junctions, the database's real path is inside the
-  project, and its schema is clean. Anything else — a repository downloaded as an archive, a
+  project, it holds a completed scan filed under this project's canonical path or a spelling of it
+  (2.0.0's lower-case drive letter; never a path through a link) — git state cannot tell a
+  crafted archive's own `.git` from the user's, but a database written elsewhere carries another
+  machine's paths — and its schema is clean. A linked worktree's `.git` file counts when git
+  resolves it. Anything else — a repository downloaded as an archive, a
   submodule, a link, an unregistered id, a registered database git tracks — is foreign: the
   per-user fallback is used, the project file is left untouched (it is only read, read-only, for
   its id), and the warning says why, that the scans made meanwhile stay in the fallback and are
