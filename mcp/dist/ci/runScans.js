@@ -33,6 +33,14 @@
  * findings (`security_scan_full`, `scan_dast`) already persist them as a
  * side effect of their own handlers, the same way they do for an
  * interactive MCP session.
+ *
+ * `rulesRef` (`--rules-ref`): the project's Semgrep rules and the scanner
+ * configuration `ci/refConfig.ts` lists are copied from that commit into this
+ * run's temporary directory, and every step reads the copy
+ * (`PluginContext.repoConfigFromRef`) — never the tree's. The result says
+ * what was copied and which configuration files the tree changes
+ * (`rulesSource`). A file the ref has but that cannot be copied stops the run
+ * before any step, with `CiRefError`.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -47,6 +55,7 @@ import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
 import { Storage } from '../storage/index.js';
 import { TOOLS } from '../tools/index.js';
+import { configDifferences, copyConfigFromRef } from './refConfig.js';
 // Side-effect registration of every tool — populates TOOLS. See
 // registerAll.ts's own doc comment; server.ts imports it for the same reason,
 // and this module needs the same full registry to look tools up by name.
@@ -87,11 +96,25 @@ export async function runScans(opts) {
                 // ProgressNotifier shape server.ts wires to the real MCP transport.
                 progressNotifier: { send: () => { } },
             };
+            let rulesSource = { from: 'tree' };
+            const at = opts.rulesRef;
+            if (at !== undefined) {
+                const copy = await copyConfigFromRef(opts.projectPath, at, join(tmpDir, 'config-from-ref'));
+                ctx.repoConfigFromRef = { root: copy.root, ref: at.ref, commit: at.commit };
+                rulesSource = {
+                    from: 'ref',
+                    ref: at.ref,
+                    commit: at.commit,
+                    copied: copy.copied,
+                    absent: copy.absent,
+                    tree_differences: await configDifferences(opts.projectPath, at, copy),
+                };
+            }
             const steps = [];
             for (const name of buildSequence(opts)) {
                 steps.push(await runStep(name, buildInput(name, opts), ctx));
             }
-            return { findings: collectFindings(storage, opts.projectPath), steps };
+            return { findings: collectFindings(storage, opts.projectPath), steps, rulesSource };
         }
         finally {
             try {

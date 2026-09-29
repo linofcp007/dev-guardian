@@ -105,6 +105,27 @@ describe('runTrivy', () => {
     expect(withHonoured(plain, { honoured: [] })).toBe(plain);
   });
 
+  it("ignoreFileFrom (the CI gate's --rules-ref copy): that .trivyignore is passed, the project's never", async () => {
+    const project = makeTempDir('trivy-run-project-');
+    const work = makeTempDir('trivy-run-work-');
+    const fromRef = makeTempDir('trivy-run-ref-');
+    // The pull request's own suppression, and the base's.
+    writeFileSync(join(project, '.trivyignore'), 'CVE-2020-8203\nCVE-2021-23337\n');
+    writeFileSync(join(fromRef, '.trivyignore'), 'CVE-2020-8203\n');
+    const r = await runTrivy({ args: ['fs'], target: project, workDir: work, ignoreFrom: project, ignoreFileFrom: fromRef });
+    const args = mockedRun.mock.calls[0]?.[0].args ?? [];
+    expect(args).toEqual(expect.arrayContaining(['--ignorefile', join(fromRef, '.trivyignore')]));
+    expect(args).not.toContain(join(project, '.trivyignore'));
+    expect(r.honoured).toEqual(['.trivyignore']);
+
+    // None at the ref: none at all — the tree's is not read in its place.
+    mockedRun.mockClear();
+    const empty = makeTempDir('trivy-run-ref-');
+    const none = await runTrivy({ args: ['fs'], target: project, workDir: work, ignoreFrom: project, ignoreFileFrom: empty });
+    expect(mockedRun.mock.calls[0]?.[0].args).not.toContain('--ignorefile');
+    expect(none.honoured).toEqual([]);
+  });
+
   it('a .trivyignore that is not a regular file is not passed', async () => {
     const project = makeTempDir('trivy-run-project-');
     const work = makeTempDir('trivy-run-work-');

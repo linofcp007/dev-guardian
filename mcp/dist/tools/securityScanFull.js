@@ -48,7 +48,10 @@ registerToolModule(makeScanTool({
         'history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each ' +
         'runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and ' +
         'lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is ' +
-        'partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the ' +
+        'partial/none, never full. Each tools_run entry names the project configuration that decided it ' +
+        '(`honoured_config`: .trivyignore, .gitleaks.toml, .bandit, .semgrepignore, .guardianignore…), and ' +
+        '`suppressed_by_repo_config` what .trivyignore suppressed — reported, never counted as findings. ' +
+        'auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the ' +
         'Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules ' +
         "on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on " +
         "a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
@@ -58,7 +61,7 @@ registerToolModule(makeScanTool({
     // scan_secrets reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
-    rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { projectPath, plugin, rulesProjectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,

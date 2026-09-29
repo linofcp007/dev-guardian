@@ -268,7 +268,7 @@ export async function runTrivy(inv) {
             honoured: [],
         };
     }
-    const ignoreFile = inv.ignoreFrom !== undefined ? projectTrivyIgnore(inv.ignoreFrom) : null;
+    const ignoreFile = inv.ignoreFrom !== undefined ? projectTrivyIgnore(inv.ignoreFileFrom ?? inv.ignoreFrom) : null;
     const version = await installedTrivyVersion(inv.workDir);
     const run = await runProcess({
         command: 'trivy',

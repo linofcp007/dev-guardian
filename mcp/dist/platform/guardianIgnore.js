@@ -234,9 +234,13 @@ function escapeRegExp(text) {
  * of the directory. Either way `PROJECT_WALK_EXCLUDE` (`node_modules`,
  * `.git`, `.guardian`, build output, …) is left out: no scan of the
  * project's own files reads those.
+ *
+ * `configRoot` is where the file itself is read — the project, unless the CI
+ * gate took it from `--rules-ref` (`ci/refConfig.ts`): the ref's copy is then
+ * applied to the project's files, and the project's own is never read.
  */
-export async function loadProjectExclusions(projectPath) {
-    const file = join(projectPath, GUARDIAN_IGNORE_FILE);
+export async function loadProjectExclusions(projectPath, configRoot = projectPath) {
+    const file = join(configRoot, GUARDIAN_IGNORE_FILE);
     let text;
     try {
         text = readFileSync(file, 'utf8');
@@ -278,14 +282,15 @@ const PROBE_CHILD = '.guardian-probe-7f3a';
  * (`libs/core/**`) — is not the project's to scan, so its unscanned
  * contents are no gap; one it excludes only part of (`libs/core/*.js`) still
  * is. A `.guardianignore` that cannot be read excludes nothing here: the gap
- * stays named.
+ * stays named. `configRoot` is where it is read — the CI gate's `--rules-ref`
+ * copy (`ci/refConfig.ts`) instead of the project, like `loadProjectExclusions`.
  */
-export function submodulesNotIgnored(projectPath, submodules) {
+export function submodulesNotIgnored(projectPath, submodules, configRoot = projectPath) {
     if (submodules.length === 0)
         return [];
     let text;
     try {
-        text = readFileSync(join(projectPath, GUARDIAN_IGNORE_FILE), 'utf8');
+        text = readFileSync(join(configRoot, GUARDIAN_IGNORE_FILE), 'utf8');
     }
     catch {
         return [...submodules];

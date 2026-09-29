@@ -35,7 +35,17 @@
 import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
-import { CI_EXIT, type BaselineFile, type CiExitCode, type PartialParseRef, type ScanStepResult } from './types.js';
+import { BASELINE_RELATIVE_PATH } from './baseline.js';
+import {
+  CI_EXIT,
+  type BaselineFile,
+  type BaselineSource,
+  type CiExitCode,
+  type ExclusionReset,
+  type PartialParseRef,
+  type RulesSource,
+  type ScanStepResult,
+} from './types.js';
 
 export interface GateInput {
   findings: readonly Finding[];
@@ -67,6 +77,16 @@ export interface GateInput {
    * folding.
    */
   acceptedPartialParses?: readonly string[];
+  /**
+   * Where `baseline` and the scan's rules came from (`--baseline-ref`,
+   * `--rules-ref`; `ci/refConfig.ts`). Visibility only, like
+   * `suppressedByRepoConfig`: carried to every format, never into the exit
+   * code. Omitted: the scanned tree's own.
+   */
+  baselineSource?: BaselineSource;
+  rulesSource?: RulesSource;
+  /** What `--reset-exclusions-from` put back before the scan; omitted: nothing was reset. */
+  exclusionsReset?: ExclusionReset | null;
 }
 
 export interface GateVerdict {
@@ -107,6 +127,12 @@ export interface GateVerdict {
    * decided it; the gate says so, in every format.
    */
   suppressedByRepoConfig: RepoSuppressionEntry[];
+  /** See `GateInput.baselineSource` — the tree's own when the input said nothing. */
+  baselineSource: BaselineSource;
+  /** See `GateInput.rulesSource`. */
+  rulesSource: RulesSource;
+  /** See `GateInput.exclusionsReset`; null when the flag was not given. */
+  exclusionsReset: ExclusionReset | null;
 }
 
 /** One scanner run's repository-suppressed findings, and the step that ran it. */
@@ -323,5 +349,8 @@ export function evaluateGate(input: GateInput): GateVerdict {
     acceptedGaps,
     unusedPartialParseAcceptances: [...accepted].filter((path) => !reported.has(path)),
     suppressedByRepoConfig,
+    baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
+    rulesSource: input.rulesSource ?? { from: 'tree' },
+    exclusionsReset: input.exclusionsReset ?? null,
   };
 }

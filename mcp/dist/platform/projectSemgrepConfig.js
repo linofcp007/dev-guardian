@@ -58,9 +58,9 @@ import { readManifest } from '../configdrift/manifest.js';
  * not name one. `.yml` first so a project carrying both gets the spelling
  * `init_project` installs.
  */
-const CONVENTIONAL_TARGETS = ['.semgrep.yml', '.semgrep.yaml'];
+export const CONVENTIONAL_TARGETS = ['.semgrep.yml', '.semgrep.yaml'];
 /** Manifest entries under this `configs/` prefix are Semgrep rule files. */
-const SEMGREP_SOURCE_PREFIX = 'semgrep/';
+export const SEMGREP_SOURCE_PREFIX = 'semgrep/';
 export function inspectProjectSemgrepConfigs(projectPath) {
     const usable = [];
     const unusable = [];

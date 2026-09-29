@@ -79,6 +79,12 @@ export interface TrivyInvocation {
   workDir: string;
   /** The project whose `.trivyignore` is honoured (explicitly). Omitted: none is. */
   ignoreFrom?: string;
+  /**
+   * Where that `.trivyignore` is read, when not in `ignoreFrom` itself: the CI
+   * gate's `--rules-ref` copy of the project's configuration
+   * (`ci/refConfig.ts`) — the tree's own is then never passed. None there: none.
+   */
+  ignoreFileFrom?: string;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onLog?: (line: string) => void;
@@ -309,7 +315,7 @@ export async function runTrivy(inv: TrivyInvocation): Promise<TrivyRunResult> {
       honoured: [],
     };
   }
-  const ignoreFile = inv.ignoreFrom !== undefined ? projectTrivyIgnore(inv.ignoreFrom) : null;
+  const ignoreFile = inv.ignoreFrom !== undefined ? projectTrivyIgnore(inv.ignoreFileFrom ?? inv.ignoreFrom) : null;
   const version = await installedTrivyVersion(inv.workDir);
   const run = await runProcess({
     command: 'trivy',

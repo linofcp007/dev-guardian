@@ -98,7 +98,8 @@ const tool: ToolModule = {
     'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
     'format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: ' +
     'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per ' +
-    'source language of the project. ' +
+    'source language of the project. An explicit scan_id must be a scan of project_path (another ' +
+    "project's is refused, with retry_with naming its project) and not still running. " +
     'Local file only — no external services, no web fonts.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),

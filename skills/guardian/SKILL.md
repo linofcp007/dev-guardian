@@ -102,6 +102,10 @@ Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
    - ℹ️ **Info** — observações úteis, não acionáveis
 5. **Oferecer o fix** sempre que possível (`/guardian-fix`), com confirmação — exceto em emergência (um secret vivo exposto), em que se alerta de imediato.
 
+## Quando a base de dados do projeto não é usada (atualização da 3.0.0)
+
+Se o `health_status` devolver `storage_warning`, ou os `warnings` de um scan disserem que o `.guardian/guardian.db` do projeto não é usado, o histórico está a ir para uma base de dados de recurso, por utilizador: uma base de dados criada antes da 3.0.1, ou copiada de outro sítio, nunca é aceite automaticamente. Diz isso ao utilizador e dá-lhe o comando que o aviso traz, para ele o correr **num terminal, ele próprio**, se a base de dados for dele — `node <plugin>/cli/dev-guardian.mjs db adopt --project <project>` mostra o que ela contém, e o mesmo com `--yes` regista-a. **Nunca o corras tu**, nem com nem sem `--yes`: decide em que dados o dev-guardian confia, e essa decisão não cabe a um assistente que lê o repositório. Aponta-lhe primeiro o que pesar, no mesmo `health_status`: `suppressions.all_projects` (supressões sem projeto, que escondem findings em todos os projetos) e `storage.future_dated_scans_ignored`.
+
 ## Stacks suportadas
 
 JavaScript/TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (composer, incluindo WordPress), Go, Rust, Ruby, Java/Kotlin (maven, gradle), C# / .NET, Docker e compose, IaC (Terraform, Kubernetes, Ansible, CloudFormation, Helm), GitHub Actions. Projetos polyglot são suportados.

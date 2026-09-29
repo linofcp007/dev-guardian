@@ -65,9 +65,15 @@ export async function semgrepCoverageGaps(
     among?: readonly string[];
     /** The submodules, when the caller knows them better (a review: the gitlinks its diff changed). */
     submodules?: readonly string[];
+    /** Where `.guardianignore` is read, when not the project: the CI gate's `--rules-ref` copy. */
+    guardianIgnoreFrom?: string;
   } = {},
 ): Promise<SemgrepCoverageGaps> {
-  const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== undefined ? { only: opts.files } : {});
+  const from = opts.guardianIgnoreFrom;
+  const sized = await oversizedSourceFilesAsync(projectPath, {
+    ...(opts.files !== undefined ? { only: opts.files } : {}),
+    ...(from !== undefined ? { guardianIgnoreFrom: from } : {}),
+  });
   // A directory target reads them; explicit file targets do not.
   const honoured = opts.files === undefined ? await honouredFiles(projectPath, 'semgrep') : [];
   const withHonoured = (gaps: SemgrepCoverageGaps): SemgrepCoverageGaps =>
@@ -75,12 +81,12 @@ export async function semgrepCoverageGaps(
   if (opts.submodules !== undefined) {
     const out: SemgrepCoverageGaps = {
       oversized: sized.files,
-      submodules: submodulesNotIgnored(projectPath, opts.submodules).sort(),
+      submodules: submodulesNotIgnored(projectPath, opts.submodules, from).sort(),
     };
     if (sized.incomplete !== undefined) out.incomplete = sized.incomplete;
     return withHonoured(out);
   }
-  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
+  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
   const submodules =
     among === undefined

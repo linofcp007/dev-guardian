@@ -411,8 +411,75 @@ them again. Scans made on the fallback meanwhile are not merged back.
 - A database whose schema is still incomplete after its migrations ran stops the server with one
   line naming the file and the missing object (`is missing column findings.cwe`), not a stack
   trace from inside `new Storage()`.
+- The CLI's last-resort handler printed a database the storage layer refuses as
+  `dev-guardian: unexpected error: <message>` — a crash, to anyone reading it, where the message
+  names the file and what to do. A `GuardianDbError` that reaches it is now printed alone, with
+  exit 3: what `status` and `dashboard` exit with when they refuse an unusable database
+  themselves. `db adopt` already printed its own the same way (exit 1, as documented).
+- The CLI looked for `--help` in every argument, so a flag whose value read like help —
+  `scan --baseline-ref --help`, `--baseline-ref help`, `--fail-on -h`, `--project --help` —
+  printed the usage and exited 0 without scanning: a pass, to a pipeline. A value-taking flag's
+  operand is now its value; the command's own parser reads it, and a missing or bad one is exit 3.
+- **The response fields this release added were in no tool description**, so a model never read
+  them: `regression_alert` said `regressed: false` without a word about the criticals a
+  suppression had taken out of its score. Each description now names what a model needs to use
+  the tool correctly — `regression_alert`'s `suppressed_by_severity`; `diff_scans`'
+  `summary.suppressed` / `suppressed_findings` and its refusal of another project's or an
+  unfinished scan; `health_status`'s `storage_warning`, `suppressions` {active, this_project,
+  all_projects}, `future_dated_scans_ignored` / `future_dated_note`; `risk_score`'s
+  `suppressed_count` and `future_dated_note`; `report_export`'s refusal of another project's or a
+  running scan (with `retry_with`); the scans' `tools_run[].honoured_config`,
+  `suppressed_by_repo_config` and `plugin_packs`; `review_pr`'s `preexisting_manifest_gaps` —
+  all within the 1500-character limit. A test holds each description to its fields, and the
+  history tools' real results to what the descriptions promise. The router skill, every host's
+  rules file and `/guardian-status` say what to do with a `storage_warning`: give the user the
+  `db adopt` command to run themselves, in a terminal — never run it for them.
 
 ### Security
+
+- **A pull request could gate itself.** `dev-guardian scan` read `.guardian/baseline.json`, the
+  project's Semgrep rules and its `.guardianignore` from the checkout it scanned — on a pull
+  request, the pull request's own. A fork adopted its new finding into the baseline, or deleted
+  the rule that caught it from `.semgrep.yml`, or listed the file in `.guardianignore`, and the
+  gate passed (reproduced: exit 0 each way). Two new flags take them from a commit the pull
+  request does not control:
+  - `--baseline-ref <ref>` reads the baseline with git from that commit (size-checked), never
+    from the working tree. None there is no baseline; a ref that names no commit, or an empty
+    value, is exit 3.
+  - `--rules-ref <ref>` copies `.semgrep.yml`/`.semgrep.yaml` and the rule files the ref's
+    `.dev-guardian/configs.json` records, `.guardianignore`, `.trivyignore` and `.bandit` from
+    that commit and hands the scanners the copy. Findings keep the rule id a scan of the checkout
+    stores, so the base's baseline still matches. A file the ref lacks is read from nowhere; one
+    it has but that cannot be copied stops the scan (exit 3); Semgrep's Docker fallback, which
+    would read the checkout's rules, is not used.
+  - What cannot come from a ref is named instead: `.semgrepignore` (Semgrep has only internal
+    flags for it), `.gitleaks.toml` and `.gitleaksignore` (gitleaks 8.30.1 reads the source's
+    `.gitleaksignore` whatever `--gitleaks-ignore-path` says — measured — so taking only the
+    config from the ref would protect nothing), actionlint's and zizmor's configuration, and the
+    .NET build's files. Each one the pull request adds, changes or deletes is listed in the report
+    (a gitignored `.gitleaksignore` too: gitleaks reads it anyway), without changing the exit code.
+    The ref's `.guardianignore` also decides which initialised submodules and oversized files are
+    named as coverage gaps and which languages the project counts, so the pull request's copy cannot
+    hide a submodule's gap.
+  - `--reset-exclusions-from <ref>` (review of this fix, R-1): named was not enough for
+    `.semgrepignore` and `.gitleaksignore` — a pull request adding either passed, its only trace a
+    log line. In a disposable CI checkout, every `.semgrepignore` the scan reads (below the project
+    and above it to the repository root), `.gitleaksignore` and `.gitleaks.toml` are put back to
+    the ref's before the scan, deleted where it has none, and the report names them
+    (`exclusions_reset`). A CLI option rather than a shell step in each template: one tested
+    implementation. It runs only in CI (`CI=true`, or the host's own marker) — on a developer's
+    clean checkout it would revert their own files, so there it exits 3 — and even there refuses
+    (exit 3) a checkout with changes, an untracked or ignored exclusion file, and a path through a
+    link, and never writes through a link.
+  - The human and JSON reports now say where the baseline and the rules came from
+    (`baseline_source`, `rules_source` with `tree_differences`) on every run.
+  - The `ci-init` pipelines pass all three on pull-request pipelines — GitHub
+    `github.event.pull_request.base.sha` (through `env:`), GitLab
+    `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` or `CI_MERGE_REQUEST_DIFF_BASE_SHA` (a merge request
+    pipeline with neither stops), Bitbucket `origin/$BITBUCKET_PR_DESTINATION_BRANCH` (fetched
+    first) — and nothing on a push. Re-run `ci-init --write --force` to get them. The pipeline file
+    itself still comes from the pull request's branch on all three: protect it with a required
+    review. See docs/ci.md, "A pull request cannot gate itself".
 
 - **`scan_skill` read the commands in a SKILL.md as nothing.** Every
   exfiltration, supply-chain and dangerous-code rule was a `code` rule, and a

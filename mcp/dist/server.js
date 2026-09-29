@@ -43818,7 +43818,7 @@ async function runTrivy(inv) {
       honoured: []
     };
   }
-  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFrom) : null;
+  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFileFrom ?? inv.ignoreFrom) : null;
   const version2 = await installedTrivyVersion(inv.workDir);
   const run = await runProcess({
     command: "trivy",
@@ -44628,13 +44628,13 @@ function withSemgrepEngineNote(run, raw) {
   if (note === null) return run;
   return { ...run, reason: [run.reason, note].filter((s) => s !== void 0).join("; ") };
 }
-function planSemgrepConfigs(projectPath, plugin, localOnly) {
+function planSemgrepConfigs(projectPath, plugin, localOnly, scannedPath = projectPath) {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom3 = inspectCustomSemgrepConfigs(plugin, projectPath);
   const legacy = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, projectPath));
   const projectConfigs = inspection.usable.map((c3) => c3.path);
   const local = [...projectConfigs, ...custom3.usable];
-  const registry2 = localOnly ? [] : ["auto", ...hasDotnetProject(projectPath) ? ["p/csharp"] : []];
+  const registry2 = localOnly ? [] : ["auto", ...hasDotnetProject(scannedPath) ? ["p/csharp"] : []];
   const llmPack = llmRulesPath();
   const pluginPacks = existsSync13(llmPack) ? [llmPack] : [];
   const rulePacks = [...registry2, ...local, ...pluginPacks];
@@ -47239,8 +47239,8 @@ function findClassEnd(pattern, start) {
 function escapeRegExp(text2) {
   return text2.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
-async function loadProjectExclusions(projectPath) {
-  const file = join22(projectPath, GUARDIAN_IGNORE_FILE);
+async function loadProjectExclusions(projectPath, configRoot = projectPath) {
+  const file = join22(configRoot, GUARDIAN_IGNORE_FILE);
   let text2;
   try {
     text2 = readFileSync15(file, "utf8");
@@ -47268,11 +47268,11 @@ async function loadProjectExclusions(projectPath) {
   };
 }
 var PROBE_CHILD = ".guardian-probe-7f3a";
-function submodulesNotIgnored(projectPath, submodules) {
+function submodulesNotIgnored(projectPath, submodules, configRoot = projectPath) {
   if (submodules.length === 0) return [];
   let text2;
   try {
-    text2 = readFileSync15(join22(projectPath, GUARDIAN_IGNORE_FILE), "utf8");
+    text2 = readFileSync15(join22(configRoot, GUARDIAN_IGNORE_FILE), "utf8");
   } catch {
     return [...submodules];
   }
@@ -47495,10 +47495,10 @@ async function readTextAsync(path8) {
     return null;
   }
 }
-async function ignoreTextsAsync(root) {
+async function ignoreTextsAsync(root, guardianFrom = root) {
   const [semgrep, guardian] = await Promise.all([
     readTextAsync(join23(root, ".semgrepignore")),
-    readTextAsync(join23(root, GUARDIAN_IGNORE_FILE))
+    readTextAsync(join23(guardianFrom, GUARDIAN_IGNORE_FILE))
   ]);
   return { semgrep, guardian };
 }
@@ -47694,7 +47694,7 @@ function fromFiles(listing, files, exclusions, incomplete) {
   return out;
 }
 async function languagesFromFilesAsync(root, opts = {}) {
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   const listed = opts.useGit === false ? null : await gitListAsync(root);
   if (listed !== null) return fromFiles("git", listed, exclusions);
   const walked = await walkAsync(root, exclusions, opts);
@@ -47733,7 +47733,7 @@ async function sizesOver(root, rels, limit) {
 }
 async function oversizedSourceFilesAsync(root, opts = {}) {
   const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   if (opts.only !== void 0) {
     const rels = opts.only.map((p) => p.split("\\").join("/")).filter((rel2) => isScannedSource(rel2, exclusions));
     return { files: await sizesOver(root, rels, limit) };
@@ -48881,8 +48881,9 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   if (plugin.storageWarning) warnings.push(plugin.storageWarning);
   const driftAdvisory = configDriftAdvisory(plugin, projectPath);
   if (driftAdvisory) warnings.push(driftAdvisory);
+  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
   let exclusions = null;
-  const loadedExclusions = await loadProjectExclusions(projectPath);
+  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
   if (loadedExclusions !== null) {
     if ("error" in loadedExclusions) {
       warnings.push(
@@ -48909,7 +48910,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     }
   }
   const treeHash = callMeta?.parentScanId !== void 0 && callMeta.treeHash !== void 0 ? callMeta.treeHash : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
+  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
   let cacheState = {};
   if (config2.cacheState) {
     try {
@@ -48996,6 +48997,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
         ...callMeta?.originProjectPath !== void 0 ? { originProjectPath: callMeta.originProjectPath } : {}
       },
       rulesProjectPath,
+      configRoot,
       scope,
       exclusions,
       ...parentScanId !== void 0 ? { parentScanId } : {}
@@ -49113,6 +49115,7 @@ async function runScanBody(args) {
     },
     childCallMeta: args.childCallMeta,
     rulesProjectPath: args.rulesProjectPath,
+    configRoot: args.configRoot,
     scope: args.scope,
     exclusions: args.exclusions
   };
@@ -49142,7 +49145,7 @@ async function runScanBody(args) {
   }
   report("recording results");
   if (args.exclusions !== null) {
-    const ignore = honouredRootFiles(projectPath, "guardian");
+    const ignore = honouredRootFiles(args.configRoot, "guardian");
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run) => run.status === "skipped" ? run : withProjectConfig(run, ignore))
@@ -49217,7 +49220,12 @@ async function runScanBody(args) {
   if (exclusionReport !== null) meta["exclusions"] = exclusionReport;
   if (invocation.warnings !== void 0 && invocation.warnings.length > 0) meta["run_warnings"] = invocation.warnings;
   if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === void 0) {
-    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
+      plugin.storage.stack,
+      projectPath,
+      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {}
+    );
   }
   if (Object.keys(meta).length > 0) finalize2.meta = meta;
   const finishedAt = plugin.storage.scans.finalize(finalize2);
@@ -50184,18 +50192,22 @@ function shortenTitle(message3, checkId) {
 
 // src/runners/semgrepCoverageGaps.ts
 async function semgrepCoverageGaps(projectPath, opts = {}) {
-  const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== void 0 ? { only: opts.files } : {});
+  const from = opts.guardianIgnoreFrom;
+  const sized = await oversizedSourceFilesAsync(projectPath, {
+    ...opts.files !== void 0 ? { only: opts.files } : {},
+    ...from !== void 0 ? { guardianIgnoreFrom: from } : {}
+  });
   const honoured = opts.files === void 0 ? await honouredFiles(projectPath, "semgrep") : [];
   const withHonoured2 = (gaps) => honoured.length > 0 ? { ...gaps, honoured } : gaps;
   if (opts.submodules !== void 0) {
     const out2 = {
       oversized: sized.files,
-      submodules: submodulesNotIgnored(projectPath, opts.submodules).sort()
+      submodules: submodulesNotIgnored(projectPath, opts.submodules, from).sort()
     };
     if (sized.incomplete !== void 0) out2.incomplete = sized.incomplete;
     return withHonoured2(out2);
   }
-  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
+  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
   const submodules = among === void 0 ? all : all.filter((sub) => among.some((p) => {
     const posix2 = p.split("\\").join("/");
@@ -50242,14 +50254,14 @@ registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records), rules registered for this project with register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model output reaching eval/shell/SQL, model-chosen tool names, trust_remote_code, torch.load, request data in a system prompt, no token cap). Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced), reading their SARIF per target framework \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named. Reports go to .guardian/reports/sast-<scan>/. PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. (Semgrep refuses it with metrics off). Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
+    description: "Static analysis with Semgrep: the registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records), rules registered with register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model output reaching eval/shell/SQL, trust_remote_code, request data in a system prompt, \u2026; a pack that ran only in part: `tools_run[].plugin_packs`, its own gap). Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced) \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named; so are the project files that decided a run (`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to .guardian/reports/sast-<scan>/. PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
     scan_type: "sast",
     category: "security",
     supportsScope: true,
     // The cache key and the argv read the SAME plan (see the module comment).
     // `rulesProjectPath` is the scanned path, except when create_fix_pr
     // re-scans a worktree and needs the original project's rules.
-    rulePacks: (input, { rulesProjectPath, plugin }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { rulesProjectPath, plugin, projectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -50301,7 +50313,7 @@ registerToolModule(
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join32(reportDir, "sast.json");
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
       name: "semgrep",
@@ -50332,7 +50344,7 @@ async function runSemgrep2(args) {
       configs: plan.rulePacks,
       loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing,
-      gaps: await semgrepCoverageGaps(ctx.projectPath),
+      gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)),
       tools_run,
       missing_tools,
       parser_inputs
@@ -50342,6 +50354,16 @@ async function runSemgrep2(args) {
   const dockerBin = await scannerAvailable("docker");
   if (!dockerBin) {
     tools_run.push({ name: "semgrep", status: "skipped", reason: "not_installed (no docker fallback available)" });
+    missing_tools.push("semgrep");
+    return;
+  }
+  const fromRef = ctx.plugin.repoConfigFromRef;
+  if (fromRef !== void 0) {
+    tools_run.push({
+      name: "semgrep",
+      status: "skipped",
+      reason: `semgrep is not installed, and its Docker fallback reads the project's rules from the tree it mounts \u2014 this scan takes them from ${fromRef.ref} (--rules-ref): install semgrep`
+    });
     missing_tools.push("semgrep");
     return;
   }
@@ -50530,7 +50552,7 @@ async function runBandit(args) {
     missing_tools.push("bandit");
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ("error" in ini) {
     tools_run.push({ name: "bandit", status: "failed", reason: ini.error });
     return;
@@ -50559,7 +50581,10 @@ async function runBandit(args) {
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   const check2 = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const run = check2.ok ? { name: "bandit", status: "ok" } : { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" };
-  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, "bandit") : run);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, "bandit") : run);
+}
+function ignoreFrom(ctx) {
+  return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
 }
 var NEUTRAL_BANDIT_INI = "bandit-neutral.ini";
 function banditIni(projectPath, reportDir) {
@@ -50584,7 +50609,7 @@ async function runSemgrepOnScope(args) {
     tools_run.push({ name: "semgrep", status: "skipped", reason: "the scope holds no file \u2014 nothing to scan" });
     return;
   }
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
       name: "semgrep",
@@ -50631,7 +50656,7 @@ async function runSemgrepOnScope(args) {
   tools_run.push(entry);
   const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
-  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;
@@ -51256,7 +51281,7 @@ async function scan(opts, result) {
       await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
     if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
-    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
+    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head }, opts.guardianIgnoreFrom);
     return;
   }
   const state = await repoState(opts.projectPath);
@@ -51264,7 +51289,7 @@ async function scan(opts, result) {
     case "has_commits":
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, void 0, opts.guardianIgnoreFrom);
       return;
     case "no_commits":
       result.tools_run.push({
@@ -51273,7 +51298,7 @@ async function scan(opts, result) {
         reason: "the repository has no commits yet \u2014 no history to scan"
       });
       await workingTreePass(opts, result, false);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, void 0, opts.guardianIgnoreFrom);
       return;
     case "error":
       result.tools_run.push({
@@ -51288,7 +51313,7 @@ async function scan(opts, result) {
       return;
   }
 }
-async function noteSubmodules(projectPath, result, range) {
+async function noteSubmodules(projectPath, result, range, guardianIgnoreFrom) {
   let submodules;
   if (range === void 0) {
     submodules = await initialisedSubmodules(projectPath);
@@ -51301,7 +51326,7 @@ async function noteSubmodules(projectPath, result, range) {
     }
     submodules = await gitlinksAmong(projectPath, range.head, changed);
   }
-  submodules = submodulesNotIgnored(projectPath, submodules);
+  submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);
   if (submodules.length === 0) return;
   const note = describeSubmodules(submodules);
   const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === "ok") ?? result.tools_run.find((t) => t.status === "ok") ?? result.tools_run[0];
@@ -51324,7 +51349,7 @@ async function scopedScan(opts, result, scope) {
       result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: `no commits in ${label}` });
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
-      if ("base" in history) await noteSubmodules(opts.projectPath, result, history);
+      if ("base" in history) await noteSubmodules(opts.projectPath, result, history, opts.guardianIgnoreFrom);
     }
   }
   if (result.cancelled) return;
@@ -52295,7 +52320,7 @@ function keptByScan(ctx) {
 var scanSecrets = makeScanTool({
   name: "scan_secrets",
   title: "Secret scan (gitleaks)",
-  description: "Detect secrets / API keys / tokens with gitleaks: in git history AND in files not committed yet (modified, staged, untracked-not-ignored), or the whole directory when the project is not a git repository (skipping node_modules, vendor, .git and build output). Each finding says where it was found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits is reported as failed, never as clean. The raw secret never reaches MCP output, the database or reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are scanned as files, diff.base and since as exactly those commits. .guardianignore paths are filtered out. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live (raised to critical, with where to revoke it), revoked or unknown.",
+  description: "Detect secrets / API keys / tokens with gitleaks: in git history AND in files not committed yet (modified, staged, untracked-not-ignored), or the whole directory when the project is not a git repository (skipping node_modules, vendor, .git and build output). Each finding says where it was found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits is reported as failed, never as clean. The raw secret never reaches MCP output, the database or reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are scanned as files, diff.base and since as exactly those commits. .guardianignore paths are filtered out. The project's .gitleaks.toml and .gitleaksignore are honoured, and named in `tools_run[].honoured_config`. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live (raised to critical, with where to revoke it), revoked or unknown.",
   scan_type: "secrets",
   // History is read beyond the working tree: HEAD and every ref join the key.
   // A verifying scan run offline (every verdict `unknown`) must not be served
@@ -52336,7 +52361,9 @@ var scanSecrets = makeScanTool({
       env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog,
-      ...verify && !offline ? { captureSecrets: isVerifiableRule } : {}
+      ...verify && !offline ? { captureSecrets: isVerifiableRule } : {},
+      // The CI gate's --rules-ref: the ref's .guardianignore decides the submodule gap too.
+      ...ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {}
     });
     const invocation = {
       outcome: scan2.cancelled ? "cancelled" : "completed",
@@ -52423,7 +52450,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_deps",
     title: "Dependency vuln + license scan",
-    description: "Run Trivy fs with vuln+license scanners. Findings carry CVE id, severity, and fix version; CVEs are also indexed for the guardian://cves/active resource. `packages` narrows the response to those packages (every finding is still recorded; `package_filter` counts what was withheld and names requested packages with no finding). .guardianignore paths are excluded from the results, and skipped by Trivy where they can be named exactly.",
+    description: "Run Trivy fs with vuln+license scanners. Findings carry CVE id, severity, and fix version; CVEs are also indexed for the guardian://cves/active resource. `packages` narrows the response to those packages (every finding is still recorded; `package_filter` counts what was withheld and names requested packages with no finding). .guardianignore paths are excluded from the results, and skipped by Trivy where they can be named exactly. The project's .trivyignore is honoured, never silently: the run lists it in `tools_run[].honoured_config`, and `tools_run[].suppressed_by_repo_config` counts and names what it suppressed (reported, not findings, not a coverage gap).",
     scan_type: "deps",
     category: "security",
     supportsAutoFix: false,
@@ -52462,6 +52489,8 @@ registerToolModule(
         target: ctx.projectPath,
         workDir: reportDir,
         ignoreFrom: ctx.projectPath,
+        // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+        ...ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {},
         env: ctx.scriptEnv,
         signal: ctx.signal,
         onLog: ctx.onLog
@@ -52947,7 +52976,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_iac",
     title: "IaC config scan (Terraform / K8s / CloudFormation / GitHub Actions)",
-    description: "Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions security auditor: template injection, unpinned actions, excessive permissions) and actionlint (workflow schema/expression correctness), each when installed.",
+    description: "Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions security auditor: template injection, unpinned actions, excessive permissions) and actionlint (workflow schema/expression correctness), each when installed. The project configuration each one reads (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; `suppressed_by_repo_config` says what .trivyignore suppressed \u2014 `trivy config` cannot list it and says so (count null, unlisted_because).",
     scan_type: "iac",
     category: "security",
     supportsAutoFix: false,
@@ -52982,6 +53011,8 @@ registerToolModule(
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,
+          // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+          ...ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {},
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog
@@ -53064,14 +53095,14 @@ registerToolModule(
   makeScanTool({
     name: "security_scan_full",
     title: "Full security scan",
-    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
+    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. Each tools_run entry names the project configuration that decided it (`honoured_config`: .trivyignore, .gitleaks.toml, .bandit, .semgrepignore, .guardianignore\u2026), and `suppressed_by_repo_config` what .trivyignore suppressed \u2014 reported, never counted as findings. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
     scan_type: "security_full",
     category: "security",
     orchestrator: true,
     // scan_secrets reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
-    rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { projectPath, plugin, rulesProjectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     inputSchema: {
       project_path: ProjectPath,
       severity_min: SeverityMin,
@@ -55973,7 +56004,7 @@ var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\
 var reviewPr = makeScanTool({
   name: "review_pr",
   title: "Pre-PR diff review",
-  description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database.',
+  description: "Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never \"no files changed\". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database. `preexisting_manifest_gaps`: dependency manifests Trivy read nothing for that the diff did not touch \u2014 the project's gap, in warnings, never the review's coverage. A diff that edits .guardianignore or .trivyignore is called out in warnings.",
   scan_type: "review_pr",
   category: "security",
   supportsAutoFix: false,
@@ -62002,7 +62033,7 @@ var inputSchema6 = {
 var tool12 = {
   name: "diff_scans",
   title: "Diff scans (regression / resolution detection)",
-  description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in from, of a type to did not measure \u2014 e.g. a failed child of a security_scan_full run; never counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the project's baseline of the same scan type.",
+  description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in from, of a type to did not measure \u2014 e.g. a failed child of a security_scan_full run; never counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the project's baseline of the same scan type. A finding under an active suppression is listed apart (`summary.suppressed`, `suppressed_findings`), never as new, resolved or unchanged. An explicit scan id of another project (from: or of another scan type), or of a scan that did not complete (running, failed, cancelled), is refused with unknown_scan_id, never diffed.",
   inputSchema: inputSchema6,
   handler: async (input, ctx) => handler9(input, ctx)
 };
@@ -64217,7 +64248,7 @@ function rankByExploitability(items, cveIdsOf, intel) {
 var tool17 = {
   name: "risk_score",
   title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and `coverage_caveat` when the numbers are incomplete.",
+  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and `coverage_caveat` when the numbers are incomplete. `suppressed_count`: findings an active suppression took out of the score \u2014 a mass suppression shows here, never as a clean project. `future_dated_note` when scans dated in the future were ignored.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler14(input, ctx)
 };
@@ -64518,7 +64549,7 @@ var inputSchema9 = {
 var tool19 = {
   name: "regression_alert",
   title: "Regression alert",
-  description: "Compare one project's latest scan against its baseline of the same scan type (or its previous scan of that type) and flag when the severity-weighted change exceeds a threshold. project_path defaults to the server's working directory; scan_type defaults to the newest finding-producing scan. Never compares scans of different types or projects. Returns enough context for the model to recommend follow-up actions.",
+  description: "Compare one project's latest scan against its baseline of the same scan type (or its previous scan of that type) and flag when the severity-weighted change exceeds a threshold. project_path defaults to the server's working directory; scan_type defaults to the newest finding-producing scan. Never compares scans of different types or projects. A finding under an active suppression is neither new nor resolved and never moves the score: it is counted apart in `suppressed_by_severity` \u2014 a mass suppression shows there, never as an improvement. One whose scanner did not run this time is `not_remeasured_by_severity` (the scanners in `not_measured`), never resolved. Returns enough context for the model to recommend follow-up actions.",
   inputSchema: inputSchema9,
   handler: async (input, ctx) => handler16(input, ctx)
 };
@@ -65122,7 +65153,7 @@ var SERVER_VERSION = resolveVersion();
 var tool24 = {
   name: "health_status",
   title: "Server health",
-  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only.",
+  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db is not being used \u2014 one from before 3.0.1 or a copy is not trusted until its owner registers it, and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the warning names, to run it themselves in a terminal; never run it yourself \u2014 it decides whose data dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions that apply here; all_projects ones have no project and hide findings in every project. `storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which every count, list and \"latest\" ignores.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler21(input, ctx)
 };
@@ -65691,7 +65722,7 @@ var inputSchema12 = {
 var tool25 = {
   name: "report_export",
   title: "Export a report (branded HTML / SARIF / Markdown / JSON)",
-  description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per source language of the project. Local file only \u2014 no external services, no web fonts.",
+  description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per source language of the project. An explicit scan_id must be a scan of project_path (another project's is refused, with retry_with naming its project) and not still running. Local file only \u2014 no external services, no web fonts.",
   inputSchema: inputSchema12,
   handler: async (input, ctx) => handler22(input, ctx)
 };
@@ -73907,7 +73938,9 @@ async function handler39(input, ctx) {
     );
   }
   const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
-  const gapped = applySemgrepCoverageGaps(judged.toolRun, await semgrepCoverageGaps(projectPath), {
+  const fromRef = ctx.repoConfigFromRef?.root;
+  const gaps = await semgrepCoverageGaps(projectPath, fromRef !== void 0 ? { guardianIgnoreFrom: fromRef } : {});
+  const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
     scannedNothing: judged.verdict === "scanned_nothing"
   });
   const semgrepRun = gapped.toolRun;

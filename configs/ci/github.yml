@@ -74,6 +74,18 @@
 #      `dev-guardian baseline update`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
+#      On a pull request the baseline, the project's Semgrep rules and its
+#      .guardianignore/.trivyignore/.bandit are read from the pull request's
+#      BASE commit (`--baseline-ref`/`--rules-ref`
+#      `github.event.pull_request.base.sha`), never from the pull request's
+#      own tree, which could otherwise adopt its own findings or delete the
+#      rule that catches them (docs/ci.md). `--reset-exclusions-from` also puts
+#      every .semgrepignore, .gitleaksignore and .gitleaks.toml of this
+#      disposable checkout back to the base's (no scanner flag can read them
+#      from elsewhere) and the report names what it reset. Step 1's `fetch-depth: 0` already
+#      fetched the base branch, so that commit is here; on a push nothing is
+#      passed and the committed files are the gate. The workflow file itself
+#      is the pull request's too: protect it (CODEOWNERS, a required review).
 #   9. Uploads the SARIF report to GitHub code scanning — only for a COMPLETE
 #      run: step 8 exited 0 (gate passed), or exited 1 (gate failed) with
 #      every SARIF run's `executionSuccessful` true (coverage full). Step 8
@@ -237,14 +249,21 @@ jobs:
 
       - name: dev-guardian scan
         id: scan
+        env:
+          # Empty on a push. On a pull request: its base commit, whose baseline
+          # and rules gate it (header, step 8).
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          set --
+          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"; fi
           # {{^ATTEST}}
           set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \
             --project . \
             --fail-on high \
             --format human \
-            --sarif dev-guardian-results.sarif
+            --sarif dev-guardian-results.sarif \
+            "$@"
           status=$?
           # {{/ATTEST}}
           # {{#ATTEST}}
@@ -255,6 +274,7 @@ jobs:
             --fail-on high \
             --format json \
             --sarif dev-guardian-results.sarif \
+            "$@" \
             | tee dev-guardian-report.json
           status=$?
           # {{/ATTEST}}

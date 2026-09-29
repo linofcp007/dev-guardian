@@ -172,23 +172,25 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      'Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset ' +
+      'Static analysis with Semgrep: the registry ruleset ' +
       "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-      '.dev-guardian/configs.json records), rules registered for this project with ' +
+      '.dev-guardian/configs.json records), rules registered with ' +
       "register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model " +
-      'output reaching eval/shell/SQL, model-chosen tool names, trust_remote_code, torch.load, ' +
-      'request data in a system prompt, no token cap). Also runs Bandit when Python files are present, and ' +
+      'output reaching eval/shell/SQL, trust_remote_code, request data in a system prompt, …; a pack ' +
+      'that ran only in part: `tools_run[].plugin_packs`, its own gap). Also runs Bandit ' +
+      'when Python files are present, and ' +
       'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
       'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
-      '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
+      '(plus Security Code Scan when referenced) — that ' +
       "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
       'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
-      'did not load, is partial coverage, named. Reports go to .guardian/reports/sast-<scan>/. ' +
-      'PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. ' +
-      '(Semgrep refuses it with metrics off). ' +
+      'did not load, is partial coverage, named; so are the project files that decided a run ' +
+      '(`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to ' +
+      '.guardian/reports/sast-<scan>/. PRIVACY: --config=auto ' +
+      'downloads registry rules and sends usage metrics to Semgrep Inc. ' +
       'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
-      'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
-      'changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
+      'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or ' +
+      'changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
       'Semgrep and Bandit where they can be named exactly.',
     scan_type: 'sast',
     category: 'security',
@@ -196,8 +198,8 @@ registerToolModule(
     // The cache key and the argv read the SAME plan (see the module comment).
     // `rulesProjectPath` is the scanned path, except when create_fix_pr
     // re-scans a worktree and needs the original project's rules.
-    rulePacks: (input, { rulesProjectPath, plugin }) =>
-      planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { rulesProjectPath, plugin, projectPath }) =>
+      planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -273,7 +275,7 @@ async function runSemgrep(args: Collect & {
 }): Promise<void> {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join(reportDir, 'sast.json');
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
 
   // local_only with nothing on disk to run is not a clean scan, it is no
   // scan at all. Saying so beats reporting zero findings from zero rules.
@@ -307,7 +309,7 @@ async function runSemgrep(args: Collect & {
     });
     recordSemgrepRun({
       ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
-      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath), tools_run, missing_tools, parser_inputs,
+      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)), tools_run, missing_tools, parser_inputs,
     });
     return;
   }
@@ -321,6 +323,21 @@ async function runSemgrep(args: Collect & {
   const dockerBin = await scannerAvailable('docker');
   if (!dockerBin) {
     tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
+    missing_tools.push('semgrep');
+    return;
+  }
+  // The container sees the project through its mount, so it would read the
+  // tree's own rules: never with the CI gate's --rules-ref, which takes them
+  // from a ref (`ci/refConfig.ts`). A gap, named, rather than the tree's rules.
+  const fromRef = ctx.plugin.repoConfigFromRef;
+  if (fromRef !== undefined) {
+    tools_run.push({
+      name: 'semgrep',
+      status: 'skipped',
+      reason:
+        `semgrep is not installed, and its Docker fallback reads the project's rules from the tree it mounts — ` +
+        `this scan takes them from ${fromRef.ref} (--rules-ref): install semgrep`,
+    });
     missing_tools.push('semgrep');
     return;
   }
@@ -568,7 +585,8 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
     missing_tools.push('bandit');
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  // The project's root .bandit — the CI gate's --rules-ref copy of it when set (`ci/refConfig.ts`).
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ('error' in ini) {
     tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
     return;
@@ -599,7 +617,12 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const run: ToolRun = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
   // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
-  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, 'bandit') : run);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
+}
+
+/** The CI gate's `--rules-ref` copy of `.guardianignore`, for the shared coverage gaps; none otherwise. */
+function ignoreFrom(ctx: InvokeContext): { guardianIgnoreFrom?: string } {
+  return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
 }
 
 /** An empty `[bandit]` section: Bandit reads it and nothing else. */
@@ -654,7 +677,7 @@ async function runSemgrepOnScope(args: Collect & {
     tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
     return;
   }
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
       name: 'semgrep',
@@ -710,7 +733,7 @@ async function runSemgrepOnScope(args: Collect & {
   if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
   // The scope's files over Semgrep's size limit, and submodules they reach
   // (runners/semgrepCoverageGaps.ts): named, a gap.
-  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned,
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;

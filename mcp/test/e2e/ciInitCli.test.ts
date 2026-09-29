@@ -830,7 +830,8 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
   it('the scan step writes the JSON report, and its exit code still gates the job (pipefail)', () => {
     const { doc } = renderGithub(['--attest']);
     const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan');
-    expect(scan?.run).toMatch(/^set -uo pipefail\nset \+e\n/);
+    // After the base-ref arguments (`set --`, see the --baseline-ref tests below).
+    expect(scan?.run).toMatch(/^set --\nif \[ -n "\$BASE_SHA" \][^\n]*\nset -uo pipefail\nset \+e\n/);
     expect(scan?.run).toMatch(/--format json/);
     expect(scan?.run).toMatch(/--sarif dev-guardian-results\.sarif/);
     expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\nstatus=\$\?\n/);
@@ -1060,5 +1061,120 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     });
     const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
     expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+  });
+});
+
+/**
+ * A pull request is gated against its base, never its own tree
+ * (`--baseline-ref` / `--rules-ref`, docs/ci.md): each template passes the
+ * base commit on a pull-request pipeline, and nothing on a push. Checked by
+ * running each template's own scan script under bash, with stand-ins for
+ * `node` (which records its arguments) and `git`.
+ */
+describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass nothing', () => {
+  const BASE = 'b'.repeat(40);
+
+  /** The scan script of a rendered template: the one that runs `dev-guardian.mjs" scan`. */
+  function scanScript(target: string, extra: string[] = []): string {
+    const project = makeProject();
+    const r = runCli(['ci-init', target, '--project', project, ...extra]);
+    expect(r.status, r.stderr).toBe(0);
+    const doc = parseYaml(r.stdout.split('\n').slice(2, -2).join('\n')) as Record<string, unknown>;
+    const scripts: unknown[] =
+      target === 'github'
+        ? ((doc as unknown as RenderedWorkflow).jobs['scan']?.steps ?? []).map((s) => s.run)
+        : target === 'gitlab'
+          ? ((doc['dev-guardian'] as { script: unknown[] }).script ?? [])
+          : ((doc['definitions'] as { steps: Array<{ step: { script: unknown[] } }> }).steps[0]?.step.script ?? []);
+    const found = scripts.find((s): s is string => typeof s === 'string' && s.includes('dev-guardian.mjs" scan'));
+    if (found === undefined) throw new Error(`${target}: no scan script`);
+    return found;
+  }
+
+  it('github: the base SHA reaches the step through env, never interpolated into the script', () => {
+    for (const extra of [[], ['--attest']]) {
+      const { doc } = renderGithub(extra);
+      const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan') as
+        | { run?: string; env?: Record<string, string> }
+        | undefined;
+      expect(scan?.env, extra.join(' ')).toEqual({ BASE_SHA: '${{ github.event.pull_request.base.sha }}' });
+      expect(scan?.run ?? '', extra.join(' ')).not.toMatch(/\$\{\{/);
+    }
+  });
+
+  it.skipIf(PROBE_BASH === null)(`each template's scan script, run with and without a pull request${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const cases: Array<{ target: string; extra?: string[]; env: Record<string, string>; expect: string[] }> = [
+      { target: 'github', env: { BASE_SHA: '' }, expect: [] },
+      { target: 'github', env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
+      { target: 'github', extra: ['--attest'], env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
+      { target: 'gitlab', env: {}, expect: [] },
+      {
+        target: 'gitlab',
+        env: { CI_MERGE_REQUEST_IID: '7', CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE, CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main' },
+        expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE],
+      },
+      {
+        // A merged results pipeline: the target branch's own commit wins.
+        target: 'gitlab',
+        env: {
+          CI_MERGE_REQUEST_IID: '7',
+          CI_MERGE_REQUEST_TARGET_BRANCH_SHA: 'c'.repeat(40),
+          CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE,
+          CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main',
+        },
+        expect: ['--baseline-ref', 'c'.repeat(40), '--rules-ref', 'c'.repeat(40), '--reset-exclusions-from', 'c'.repeat(40)],
+      },
+      { target: 'bitbucket', env: {}, expect: [] },
+      {
+        target: 'bitbucket',
+        env: { BITBUCKET_PR_DESTINATION_BRANCH: 'release/2.x' },
+        expect: ['--baseline-ref', 'origin/release/2.x', '--rules-ref', 'origin/release/2.x', '--reset-exclusions-from', 'origin/release/2.x'],
+      },
+    ];
+    for (const c of cases) {
+      const label = `${c.target} ${JSON.stringify(c.extra ?? [])} ${JSON.stringify(c.env)}`;
+      const dir = makeProject();
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      // node records the scan's arguments after `--sarif <file>`; git records its own.
+      writeFileSync(
+        join(bin, 'node'),
+        '#!/bin/sh\nif [ "$1" = "-e" ]; then exit 0; fi\nshift 10\nfor a in "$@"; do case "$a" in --sarif|dev-guardian-results.sarif) ;; *) printf "%s\\n" "$a" >> args.txt ;; esac; done\n: >> args.txt\nexit 0\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\nprintf "%s\\n" "$*" >> git.txt\nexit 0\n', { mode: 0o755 });
+      writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript(c.target, c.extra)}`);
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir };
+      for (const key of Object.keys(env)) if (/^(CI_MERGE_REQUEST_|BITBUCKET_PR_|BASE_SHA$)/.test(key)) delete env[key];
+      const r = spawnSync(PROBE_BASH ?? 'bash', ['step.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000, env: { ...env, ...c.env } });
+      expect(r.status, `${label}: ${r.stderr}`).toBe(0);
+      const args = readFileSync(join(dir, 'args.txt'), 'utf8').split('\n').filter((l) => l.length > 0);
+      expect(args, label).toEqual(c.expect);
+      if (c.target === 'bitbucket' && c.expect.length > 0) {
+        // Fetched first, so the ref exists in a pull-request clone.
+        expect(readFileSync(join(dir, 'git.txt'), 'utf8'), label).toMatch(
+          /^fetch --quiet --no-tags origin \+refs\/heads\/release\/2\.x:refs\/remotes\/origin\/release\/2\.x$/m,
+        );
+      }
+    }
+  }, 240_000);
+
+  it.skipIf(PROBE_BASH === null)(`gitlab: a merge request pipeline with no base commit stops, never scans against its own tree${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const dir = makeProject();
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'node'), '#!/bin/sh\necho scanned > scanned.txt\n', { mode: 0o755 });
+    writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript('gitlab')}`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('CI_MERGE_REQUEST_')) delete env[key];
+    const r = spawnSync(PROBE_BASH ?? 'bash', ['step.sh'], {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...env, CI_MERGE_REQUEST_IID: '7' },
+    });
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/no base commit to gate against/);
+    expect(existsSync(join(dir, 'scanned.txt'))).toBe(false);
   });
 });

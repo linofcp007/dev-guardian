@@ -638,3 +638,109 @@ describe("findings the repository's own configuration suppressed (round 4, item 
     expect(rules).toEqual(expect.arrayContaining(['CVE-2020-8203', 'NSWG-ECO-516']));
   });
 });
+
+describe('where the baseline and the rules came from (--baseline-ref, --rules-ref)', () => {
+  const COMMIT = '3a5adedb7f872de55c5a35820033be7f01d75f2a';
+
+  it("without either flag, both lines name the scanned tree — the pull request's own, on a pull request", () => {
+    const v = evaluateGate(input());
+    expect(v.baselineSource).toEqual({ from: 'tree', path: '.guardian/baseline.json' });
+    expect(v.rulesSource).toEqual({ from: 'tree' });
+    const text = renderHuman(v);
+    expect(text).toMatch(/^baseline: \.guardian\/baseline\.json in the scanned tree \(no --baseline-ref\)$/m);
+    expect(text).toMatch(/^rules and configuration: the scanned tree's own \(no --rules-ref\)$/m);
+    const o = JSON.parse(renderJson(v));
+    expect(o.baseline_source).toEqual({ from: 'tree', path: '.guardian/baseline.json' });
+    expect(o.rules_source).toEqual({ from: 'tree' });
+  });
+
+  it("a baseline read at a ref names the ref and its commit, and says the tree's differing copy was not read", () => {
+    const baselineSource = {
+      from: 'ref' as const,
+      path: '.guardian/baseline.json',
+      ref: 'origin/main',
+      commit: COMMIT,
+      present: true,
+      tree_differs: true,
+    };
+    const v = evaluateGate(input({ baseline: buildBaseline([], null, 'now'), baselineSource }));
+    expect(renderHuman(v)).toMatch(
+      /^baseline: \.guardian\/baseline\.json at origin\/main \(3a5adedb7f87\) — the scanned tree's copy differs and was not read$/m,
+    );
+    expect(JSON.parse(renderJson(v)).baseline_source).toEqual(baselineSource);
+  });
+
+  it('none at the ref: every finding is new, and the fix is on that branch — not "run baseline update" here', () => {
+    const baselineSource = {
+      from: 'ref' as const,
+      path: '.guardian/baseline.json',
+      ref: 'origin/main',
+      commit: COMMIT,
+      present: false,
+      tree_differs: false,
+    };
+    const text = renderHuman(evaluateGate(input({ findings: [finding()], baselineSource })));
+    expect(text).toMatch(/^baseline: none at origin\/main \(3a5adedb7f87\), so every finding is new$/m);
+    expect(text).toMatch(/no usable baseline at origin\/main — run `dev-guardian baseline update` on that branch/);
+    expect(text).not.toMatch(/no baseline found/);
+  });
+
+  it('rules from a ref: what was read, what the ref lacks, and each configuration change named by which copy applied', () => {
+    const rulesSource = {
+      from: 'ref' as const,
+      ref: 'origin/main',
+      commit: COMMIT,
+      copied: ['.semgrep.yml'],
+      absent: ['.guardianignore', '.trivyignore'],
+      tree_differences: [
+        { path: '.gitleaksignore', change: 'added' as const, applied: 'tree' as const, read_by: ['gitleaks'] },
+        { path: '.guardianignore', change: 'added' as const, applied: 'ref' as const, read_by: ['guardian'] },
+        { path: '.semgrep.yml', change: 'modified' as const, applied: 'ref' as const, read_by: ['semgrep'] },
+      ],
+    };
+    const v = evaluateGate(input({ rulesSource }));
+    // Visibility only: a clean run still passes.
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    const text = renderHuman(v);
+    expect(text).toMatch(
+      /^rules and configuration: from origin\/main \(3a5adedb7f87\): \.semgrep\.yml; not at the ref, so none read: \.guardianignore, \.trivyignore$/m,
+    );
+    expect(text).toMatch(
+      /read from the scanned tree although it differs from origin\/main \(no ref can supply it — review it\):\n {2}- \.gitleaksignore \(added; read by gitleaks\)/,
+    );
+    expect(text).toMatch(
+      /changed in the scanned tree, not applied \(origin\/main's copy was read\):\n {2}- \.guardianignore \(added\)\n {2}- \.semgrep\.yml \(modified\)/,
+    );
+    expect(JSON.parse(renderJson(v)).rules_source).toEqual(rulesSource);
+  });
+
+  it('--reset-exclusions-from: the files it put back are named, in the human report and the JSON; absent otherwise', () => {
+    const exclusionsReset = { ref: 'origin/main', commit: COMMIT, restored: ['.semgrepignore'], removed: ['.gitleaksignore', 'src/.semgrepignore'] };
+    const v = evaluateGate(input({ exclusionsReset }));
+    expect(renderHuman(v)).toMatch(
+      /^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: restored \.semgrepignore; removed \.gitleaksignore, src\/\.semgrepignore \(none at the ref\)$/m,
+    );
+    expect(JSON.parse(renderJson(v)).exclusions_reset).toEqual(exclusionsReset);
+    const none = evaluateGate(input({ exclusionsReset: { ...exclusionsReset, restored: [], removed: [] } }));
+    expect(renderHuman(none)).toMatch(/^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: none differed$/m);
+    const without = evaluateGate(input());
+    expect(renderHuman(without)).not.toMatch(/exclusion files reset/);
+    expect(JSON.parse(renderJson(without)).exclusions_reset).toBeNull();
+  });
+
+  it('nothing changed against the ref: no difference section at all', () => {
+    const rulesSource = {
+      from: 'ref' as const,
+      ref: 'main',
+      commit: COMMIT,
+      copied: [],
+      absent: ['.semgrep.yml'],
+      tree_differences: [],
+    };
+    const text = renderHuman(evaluateGate(input({ rulesSource })));
+    expect(text).toMatch(
+      /^rules and configuration: from main \(3a5adedb7f87\): none — the ref has none of them; not at the ref, so none read: \.semgrep\.yml$/m,
+    );
+    expect(text).not.toMatch(/differs from main|not applied/);
+  });
+});

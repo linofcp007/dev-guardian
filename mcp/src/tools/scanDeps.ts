@@ -54,7 +54,9 @@ registerToolModule(
       '`packages` narrows the response to those packages (every finding is still recorded; ' +
       '`package_filter` counts what was withheld and names requested packages with no finding). ' +
       '.guardianignore paths are excluded from the results, and skipped by Trivy where they can be ' +
-      'named exactly.',
+      "named exactly. The project's .trivyignore is honoured, never silently: the run lists it in " +
+      '`tools_run[].honoured_config`, and `tools_run[].suppressed_by_repo_config` counts and names what ' +
+      'it suppressed (reported, not findings, not a coverage gap).',
     scan_type: 'deps',
     category: 'security',
     supportsAutoFix: false,
@@ -103,6 +105,8 @@ registerToolModule(
         target: ctx.projectPath,
         workDir: reportDir,
         ignoreFrom: ctx.projectPath,
+        // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+        ...(ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {}),
         env: ctx.scriptEnv,
         signal: ctx.signal,
         onLog: ctx.onLog,

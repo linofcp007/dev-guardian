@@ -34,7 +34,8 @@
 import { SEVERITY_ORDER } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
-import { CI_EXIT } from './types.js';
+import { BASELINE_RELATIVE_PATH } from './baseline.js';
+import { CI_EXIT, } from './types.js';
 /**
  * The one spelling `--accept-partial-parse` paths and the scanners' partial
  * files are compared in: `/`-separated, without a leading `./`. Nothing else
@@ -224,6 +225,9 @@ export function evaluateGate(input) {
         acceptedGaps,
         unusedPartialParseAcceptances: [...accepted].filter((path) => !reported.has(path)),
         suppressedByRepoConfig,
+        baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
+        rulesSource: input.rulesSource ?? { from: 'tree' },
+        exclusionsReset: input.exclusionsReset ?? null,
     };
 }
 //# sourceMappingURL=gate.js.map

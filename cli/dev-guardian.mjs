@@ -24,6 +24,13 @@
  *                             --accept-partial-parse <path>  repeatable, CLI ARGV
  *                                                      ONLY: accept that Semgrep
  *                                                      only partly parsed <path>
+ *                             --baseline-ref <ref>     read .guardian/baseline.json
+ *                                                      from that commit, never the tree
+ *                             --rules-ref <ref>        read the project's Semgrep rules
+ *                                                      and ignore files from that commit
+ *                             --reset-exclusions-from <ref>  CI only (CI=true), clean checkout:
+ *                                                      put .semgrepignore, .gitleaksignore
+ *                                                      and .gitleaks.toml back to that commit's
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -296,6 +303,30 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          --base-url, DAST never probed routes in those spans.
                          CLI ARGV ONLY, like --start-command: a repository
                          file declaring it is refused.
+  --baseline-ref <ref>  Read .guardian/baseline.json from the commit <ref> names
+                         (git, never the working tree). For a pull request: its
+                         base (the ci-init pipelines pass it), so the pull request
+                         cannot add its own findings to the baseline it is gated
+                         against. None at <ref> is no baseline; a <ref> that names
+                         no commit (not fetched) is exit 3.
+  --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
+                         those .dev-guardian/configs.json records), .guardianignore,
+                         .trivyignore and .bandit from <ref> instead of the tree:
+                         a pull request cannot delete the rule that catches it.
+                         .semgrepignore, .gitleaks.toml, .gitleaksignore, actionlint
+                         and zizmor configuration and the .NET build's files are
+                         still read from the tree — each one the tree changes
+                         against <ref> is named in the report. See docs/ci.md.
+  --reset-exclusions-from <ref>
+                         In CI only (CI=true, or GITHUB_ACTIONS / GITLAB_CI /
+                         BITBUCKET_BUILD_NUMBER; exit 3 elsewhere — it would
+                         revert your own files): before scanning, put
+                         every .semgrepignore the scan reads, .gitleaksignore and
+                         .gitleaks.toml back to <ref>'s, deleting those <ref>
+                         lacks — no scanner flag reads them from elsewhere. Refused
+                         (exit 3) in a checkout with changes, for one of those
+                         files git does not track, or through a link. The report
+                         names what it reset.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines
@@ -720,7 +751,7 @@ async function loadCiModules() {
     );
     process.exit(USAGE_ERROR_EXIT);
   }
-  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types] = await Promise.all([
+  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig] = await Promise.all([
     import('../mcp/dist/ci/types.js'),
     import('../mcp/dist/ci/baseline.js'),
     import('../mcp/dist/ci/gate.js'),
@@ -728,6 +759,7 @@ async function loadCiModules() {
     import('../mcp/dist/ci/runScans.js'),
     import('../mcp/dist/ci/appRunner.js'),
     import('../mcp/dist/types.js'),
+    import('../mcp/dist/ci/refConfig.js'),
   ]);
   return {
     CI_EXIT: ciTypes.CI_EXIT,
@@ -743,6 +775,9 @@ async function loadCiModules() {
     runScans: runScansMod.runScans,
     startApp: appRunner.startApp,
     SEVERITIES: types.SEVERITIES,
+    resolveCiRef: refConfig.resolveCiRef,
+    readBaselineAtRef: refConfig.readBaselineAtRef,
+    resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
   };
 }
 
@@ -949,10 +984,28 @@ function parseScanArgs(argv) {
     localOnly: false,
     startCommand: undefined,
     acceptPartialParse: [],
+    baselineRef: undefined,
+    rulesRef: undefined,
+    resetExclusionsFrom: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project') {
+    const ref = refFlag(a);
+    if (ref !== null) {
+      // requireNonEmpty: an unset CI variable (`--baseline-ref "$BASE"`) must
+      // not silently fall back to the tree's own baseline — exit 3 instead.
+      let value;
+      if (a === ref.flag) {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        value = r.value;
+        i = r.nextIndex;
+      } else {
+        value = a.slice(ref.flag.length + 1);
+        if (isMissingOperand(value, true)) return { error: `${ref.flag} requires a value` };
+      }
+      out[ref.key] = value;
+    } else if (a === '--project') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.project = r.value;
@@ -1014,6 +1067,22 @@ function parseScanArgs(argv) {
     } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
+}
+
+/**
+ * `--baseline-ref` / `--rules-ref` in either spelling (`--x v`, `--x=v`), or
+ * null. Both take a git ref and are read against the scanned project's
+ * repository (`mcp/src/ci/refConfig.ts`).
+ */
+function refFlag(a) {
+  for (const [flag, key] of [
+    ['--baseline-ref', 'baselineRef'],
+    ['--rules-ref', 'rulesRef'],
+    ['--reset-exclusions-from', 'resetExclusionsFrom'],
+  ]) {
+    if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
+  }
+  return null;
 }
 
 function parseBaselineUpdateArgs(argv) {
@@ -1222,6 +1291,9 @@ async function cmdScan(argv) {
     startApp,
     BASELINE_RELATIVE_PATH,
     SEVERITIES,
+    resolveCiRef,
+    readBaselineAtRef,
+    resetExclusionsFromRef,
   } = ci;
 
   if (!SEVERITIES.includes(opts.failOn)) {
@@ -1237,6 +1309,29 @@ async function cmdScan(argv) {
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+
+  // --baseline-ref / --rules-ref (docs/ci.md): resolved, and the baseline
+  // read, before anything starts or scans — a ref that names no commit, or a
+  // baseline at it too large to read, is a usage error (exit 3), never "no
+  // baseline" and never the tree's own copy.
+  let baselineRef = null;
+  let rulesRef = null;
+  let baselineAtRef = null;
+  let exclusionsReset = null;
+  try {
+    if (opts.baselineRef !== undefined) {
+      baselineRef = await resolveCiRef(projectPath, opts.baselineRef, '--baseline-ref');
+      baselineAtRef = await readBaselineAtRef(projectPath, baselineRef);
+    }
+    if (opts.rulesRef !== undefined) rulesRef = await resolveCiRef(projectPath, opts.rulesRef, '--rules-ref');
+    // Last: it rewrites the checkout, so only once every other flag resolved.
+    if (opts.resetExclusionsFrom !== undefined) {
+      const resetRef = await resolveCiRef(projectPath, opts.resetExclusionsFrom, '--reset-exclusions-from');
+      exclusionsReset = await resetExclusionsFromRef(projectPath, resetRef);
+    }
+  } catch (e) {
+    return usageError(e instanceof Error ? e.message : String(e));
+  }
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -1270,6 +1365,7 @@ async function cmdScan(argv) {
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
+      ...(rulesRef !== null ? { rulesRef } : {}),
     });
   } catch (e) {
     pipelineError = e;
@@ -1288,8 +1384,23 @@ async function cmdScan(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-  const baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+  let baselineText;
+  let baselineSource;
+  if (baselineRef !== null && baselineAtRef !== null) {
+    baselineText = baselineAtRef.text;
+    baselineSource = {
+      from: 'ref',
+      path: BASELINE_RELATIVE_PATH,
+      ref: baselineRef.ref,
+      commit: baselineRef.commit,
+      present: baselineAtRef.text !== null,
+      tree_differs: baselineAtRef.treeDiffers,
+    };
+  } else {
+    const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
+    baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+    baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
+  }
   const parsedBaseline = parseBaseline(baselineText);
 
   const verdict = evaluateGate({
@@ -1300,6 +1411,9 @@ async function cmdScan(argv) {
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
+    baselineSource,
+    rulesSource: result.rulesSource,
+    exclusionsReset,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human
@@ -2617,19 +2731,43 @@ async function cmdDashboard(argv) {
 
 /**
  * Last-resort safety net for `cmdScan`/`cmdBaseline`/`cmdStatus`/
- * `cmdDashboard`: each already wraps (or, for the latter two, delegates to
- * `buildProjectSnapshot`'s own try/finally for) its own storage/pipeline
- * work and converts every usage problem to `usageError` (exit 3), so nothing
- * inside them SHOULD reject. This exists so that if one somehow does anyway
- * — an unreadable database file, an --out write failure, anything not
+ * `cmdDashboard`/`cmdDb`: each already wraps (or, for status/dashboard,
+ * delegates to `buildProjectSnapshot`'s own try/finally for) its own
+ * storage/pipeline work and converts every usage problem to `usageError`
+ * (exit 3), so nothing inside them SHOULD reject. This exists so that if one
+ * somehow does anyway — a database the storage layer refuses (printed as
+ * its own message, see `fatalOutcome`), an --out write failure, anything not
  * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
  * exactly the kind of stray noise the pristine-output requirement (the
  * design of record, and this task's e2e) exists to keep out of a CI log.
  */
 function fatal(e) {
-  process.stderr.write(`dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(USAGE_ERROR_EXIT);
+  const out = fatalOutcome(e);
+  process.stderr.write(out.text);
+  process.exit(out.exitCode);
+}
+
+/**
+ * What `fatal` prints for `e`, and its exit code — pure, for the tests.
+ *
+ * A `GuardianDbError` (`mcp/src/storage/dbError.ts`) is not an unexpected
+ * error: it is a database dev-guardian cannot use, and its message already
+ * names the file and what to do. Printed after "unexpected error:" it read as
+ * a crash in dev-guardian, so it is printed alone — with exit 3, what
+ * `status`/`dashboard` exit with when they refuse an unusable database
+ * themselves. Recognised by name: the storage layer is loaded lazily from
+ * `mcp/dist`, so this file holds no class to test `instanceof` against.
+ * Anything else is still unexpected, exit 3.
+ */
+export function fatalOutcome(e) {
+  if (e instanceof Error && e.name === 'GuardianDbError') {
+    return { text: `dev-guardian: ${e.message}\n`, exitCode: USAGE_ERROR_EXIT };
+  }
+  return {
+    text: `dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`,
+    exitCode: USAGE_ERROR_EXIT,
+  };
 }
 
 // --- db adopt ---------------------------------------------------------------
@@ -2836,12 +2974,40 @@ const HELP_FLAGS = new Set(['-h', '--help', 'help']);
  * for help, not us, and swallowing it would silently skip the scan.
  */
 function asksForHelp(rest) {
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
     if (a === '--start-command') return false;
+    // A value-taking flag's operand is its value, never a help request:
+    // `scan --baseline-ref --help` used to print the usage and exit 0 without
+    // scanning. The command's own parser then reads it (and a missing or
+    // bad value is exit 3, as for any flag).
+    if (VALUE_FLAGS.has(a)) {
+      i += 1;
+      continue;
+    }
     if (HELP_FLAGS.has(a)) return true;
   }
   return false;
 }
+
+/** Every flag, of every subcommand, that takes its value as the next argument. */
+const VALUE_FLAGS = new Set([
+  '--project',
+  '--fail-on',
+  '--format',
+  '--sarif',
+  '--base-url',
+  '--accept-partial-parse',
+  '--baseline-ref',
+  '--rules-ref',
+  '--reset-exclusions-from',
+  '--scope',
+  '--file',
+  '--bash',
+  '--min',
+  '--branch',
+  '--out',
+]);
 
 function main() {
   const argv = process.argv.slice(2);

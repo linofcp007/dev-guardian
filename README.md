@@ -145,7 +145,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .      
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
+`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
 
 ## Privacy and network
 

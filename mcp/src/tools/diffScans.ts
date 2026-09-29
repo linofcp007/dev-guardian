@@ -99,7 +99,10 @@ const tool: ToolModule = {
     "by fingerprint. Default: from=previous, to=latest — the newest usable scan of project_path " +
     "(default: the server's working directory), never an SBOM/stack/diff-review run or one whose " +
     'scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the ' +
-    "project's baseline of the same scan type.",
+    "project's baseline of the same scan type. A finding under an active suppression is listed apart " +
+    '(`summary.suppressed`, `suppressed_findings`), never as new, resolved or unchanged. An explicit ' +
+    'scan id of another project (from: or of another scan type), or of a scan that did not complete ' +
+    '(running, failed, cancelled), is refused with unknown_scan_id, never diffed.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
