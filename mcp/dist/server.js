@@ -37981,11 +37981,15 @@ function userDataDir() {
   return join4(xdg !== void 0 && isAbsolute2(xdg) ? xdg : join4(homedir2(), ".local", "share"), "dev-guardian");
 }
 function notPrivate(path8, why) {
-  return new GuardianDbError(
-    "untrusted",
-    path8,
-    `'${path8}' ${why}, so dev-guardian will not keep its per-user data there. Remove it, or set GUARDIAN_DATA_DIR to a directory only you can write, and restart.`
-  );
+  return new GuardianDbError("data-dir", path8, `'${path8}' ${why}`);
+}
+function dataDirFailure(path8, doing, error2) {
+  if (error2 instanceof GuardianDbError) return error2;
+  const detail = error2 instanceof Error ? error2.message : String(error2);
+  return new GuardianDbError("data-dir", path8, `'${path8}' cannot be ${doing} (${detail})`);
+}
+function isDataDirError(error2) {
+  return error2 instanceof GuardianDbError && error2.kind === "data-dir";
 }
 function currentUid() {
   return typeof process.getuid === "function" ? process.getuid() : void 0;
@@ -37996,22 +38000,34 @@ function assertPrivateDir(path8, st) {
   if (process.platform === "win32") return;
   const uid = currentUid();
   if (uid !== void 0 && st.uid !== uid) throw notPrivate(path8, `belongs to uid ${st.uid}, not to this user (${uid})`);
-  if ((st.mode & 63) !== 0) chmodSync(path8, 448);
+  if ((st.mode & 63) !== 0) {
+    try {
+      chmodSync(path8, 448);
+    } catch (error2) {
+      throw dataDirFailure(path8, "made private (chmod 0700)", error2);
+    }
+  }
 }
 function statOrNull(path8, follow) {
   try {
     return follow ? statSync4(path8) : lstatSync2(path8);
   } catch (error2) {
     if (error2.code === "ENOENT") return null;
-    throw error2;
+    throw dataDirFailure(path8, "read", error2);
   }
 }
 function ensurePrivateDataDir() {
   const dir = userDataDir();
   const existing = statOrNull(dir, true);
   if (existing === null) {
-    mkdirSync(dir, { recursive: true, mode: 448 });
-    assertPrivateDir(dir, statSync4(dir));
+    try {
+      mkdirSync(dir, { recursive: true, mode: 448 });
+    } catch (error2) {
+      throw dataDirFailure(dir, "created", error2);
+    }
+    const created = statOrNull(dir, true);
+    if (created === null) throw notPrivate(dir, "vanished as it was created");
+    assertPrivateDir(dir, created);
   } else {
     assertPrivateDir(dir, existing);
   }
@@ -38025,10 +38041,12 @@ function ensurePrivateSubdir(name) {
     try {
       mkdirSync(dir, { mode: 448 });
     } catch (error2) {
-      if (error2.code !== "EEXIST") throw error2;
+      if (error2.code !== "EEXIST") throw dataDirFailure(dir, "created", error2);
     }
   }
-  assertPrivateDir(dir, lstatSync2(dir));
+  const st = statOrNull(dir, false);
+  if (st === null) throw notPrivate(dir, "vanished as it was created");
+  assertPrivateDir(dir, st);
   return dir;
 }
 function assertOwnedRegularFileIfPresent(path8) {
@@ -38081,13 +38099,17 @@ function registerDbId(entry) {
   const dir = ensurePrivateSubdir("registry");
   const target = join5(dir, `${entry.db_id}.json`);
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync3(temp, `${JSON.stringify(entry, null, 2)}
+  try {
+    writeFileSync3(temp, `${JSON.stringify(entry, null, 2)}
 `, { flag: "wx", mode: 384 });
+  } catch (error2) {
+    throw dataDirFailure(dir, "written", error2);
+  }
   try {
     renameSync(temp, target);
   } catch (error2) {
     rmSync(temp, { force: true });
-    throw error2;
+    throw dataDirFailure(dir, "written", error2);
   }
 }
 function forgetDbId(id) {
@@ -40040,6 +40062,9 @@ function openDatabase(options) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
       } catch (error2) {
+        if (isDataDirError(error2)) {
+          return unpersisted(error2.message);
+        }
         if (error2 instanceof GuardianDbError && error2.kind === "untrusted") {
           refusal = `${error2.message}. The file is left as it is; delete it or move it aside to have dev-guardian start a new one there`;
         } else if (isNotWritableError(error2)) {
@@ -40055,13 +40080,25 @@ function openDatabase(options) {
   if (existingOnly && !existsSync7(chosenPath)) {
     return { ...openInMemory(), ...refusal !== void 0 ? { warning: `${refusal}.` } : {} };
   }
-  ensurePrivateSubdir(shortHash(projectPath));
-  const db = openFallback(chosenPath);
+  let db;
+  try {
+    ensurePrivateSubdir(shortHash(projectPath));
+    db = openFallback(chosenPath);
+  } catch (error2) {
+    if (isDataDirError(error2)) return unpersisted(error2.message, refusal);
+    throw error2;
+  }
   if (refusal === void 0) return { db, path: chosenPath };
   return {
     db,
     path: chosenPath,
     warning: `${refusal}. This project's scans are kept in '${chosenPath}' instead, and stay there: they are not merged back into the project file later.`
+  };
+}
+function unpersisted(reason, refusal) {
+  return {
+    ...openInMemory(),
+    warning: (refusal !== void 0 ? `${refusal}. ` : "") + `dev-guardian's per-user data directory cannot be used, so neither the project's database nor a per-user fallback is, and history will not persist: ${reason}; set GUARDIAN_DATA_DIR to a writable directory. This session runs on an in-memory database.`
   };
 }
 function judgeProjectDatabase(projectPath, dbPath) {
@@ -40096,6 +40133,7 @@ function openProjectDatabase(projectPath, dbPath, verdict) {
     project_path: safeCanonical(projectPath),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   });
+  if (verdict.kind !== "trusted") ensurePrivateSubdir("registry");
   if (verdict.kind === "create") {
     const db2 = openWritable(dbPath, (raw) => claimDbId(raw, entryFor));
     return { db: db2, path: dbPath };

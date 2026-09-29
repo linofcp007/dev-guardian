@@ -74,6 +74,16 @@ version bump.
   not merged back, and how to recover (delete a database that came with the repository; `git rm
   --cached` one committed by mistake; there is no way to mark a database as trusted). The CLI's
   `status` / `dashboard` decide the same way.
+- A per-user data directory that cannot be used is never fatal. The registry and the fallback
+  live there, so the first cut exited 1 when it could not be created — in Docker `node:22` as
+  uid 4242 with no passwd entry (`HOME=/`): `fatal: Error: EACCES: permission denied, mkdir
+  '/.local/share/dev-guardian'`, where 3.0.0 had opened the project's database. The session now
+  runs on an in-memory database, and `health_status` and every scan say `history will not
+  persist: <reason>; set GUARDIAN_DATA_DIR to a writable directory`. The project's database is
+  not trusted unregistered in its place, and nothing is created or written in the project. A
+  registry or data directory another user owns, a link, or a file where the directory should be
+  is said the same way, naming that directory — it used to end "…and restart.. The file is left
+  as it is; delete it or move it aside…", telling the user to delete their project's database.
 - A database whose schema holds anything the migrations never create — a trigger, a view, an unknown
   table or index, a known index redefined, or a CHECK / UNIQUE constraint added to a known table
   (every insert is `INSERT OR IGNORE`, which obeys them silently) — is refused too, before the

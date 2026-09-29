@@ -6,7 +6,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
@@ -184,6 +184,26 @@ describe('server startup against a 3.0 development database', () => {
     const err = server.stderr();
     expect(err).not.toContain(`db opened: ${path}`);
     expect(err).toMatch(/db warning: .*git tracks \.guardian\/guardian\.db/);
+  }, 60_000);
+
+  it('a per-user data directory that cannot be created is never fatal: the server starts on an in-memory database and says so', async () => {
+    // Round 5, reproduced in Docker node:22 as uid 4242 with no passwd
+    // entry (HOME=/): `fatal: Error: EACCES: permission denied, mkdir
+    // '/.local/share/dev-guardian'`, exit 1, where 3.0.0 opened the project
+    // database. A file where the directory should be is the same failure on
+    // every platform.
+    const project = makeTempDir('guardian-server-nodatadir-');
+    const blocker = join(makeTempDir('guardian-server-blocker-'), 'not-a-directory');
+    writeFileSync(blocker, 'x');
+
+    const server = startServer(project, [], { GUARDIAN_DATA_DIR: join(blocker, 'dev-guardian') });
+    await server.waitFor(/listening on stdio/);
+    const err = server.stderr();
+    expect(err).not.toMatch(/fatal/);
+    expect(err).toContain('db opened: :memory:');
+    expect(err).toMatch(/db warning: .*history will not persist: .*; set GUARDIAN_DATA_DIR to a writable directory/);
+    // Not silently the project's own database either: nothing written there.
+    expect(existsSync(join(project, '.guardian', 'guardian.db'))).toBe(false);
   }, 60_000);
 
   it('exits 1 with one line naming a corrupt database file and saying to move it aside', async () => {

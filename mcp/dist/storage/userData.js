@@ -8,6 +8,13 @@
  * directory itself may be a link — the user chose it — nothing under it
  * may), and narrowed to 0700 when it is wider. Windows keeps
  * `%LOCALAPPDATA%` per-user by its ACL and has no uid to compare.
+ *
+ * Every failure here is a {@link GuardianDbError} of kind `data-dir` whose
+ * message is the reason alone — a directory that cannot be created (a
+ * container user with no home: `HOME=/`), one another user owns, a file
+ * where a directory should be. `db.ts#openDatabase` never exits for one: it
+ * runs the session on an in-memory database and says history will not
+ * persist, and to set `GUARDIAN_DATA_DIR`.
  */
 import { chmodSync, lstatSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -31,10 +38,20 @@ export function userDataDir() {
     const xdg = process.env['XDG_DATA_HOME']?.trim();
     return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), '.local', 'share'), 'dev-guardian');
 }
-/** A {@link GuardianDbError} for a per-user location this user does not own. */
+/** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */
 export function notPrivate(path, why) {
-    return new GuardianDbError('untrusted', path, `'${path}' ${why}, so dev-guardian will not keep its per-user data there. Remove it, or set ` +
-        'GUARDIAN_DATA_DIR to a directory only you can write, and restart.');
+    return new GuardianDbError('data-dir', path, `'${path}' ${why}`);
+}
+/** A {@link GuardianDbError} of kind `data-dir` for a file-system failure on `path`. */
+export function dataDirFailure(path, doing, error) {
+    if (error instanceof GuardianDbError)
+        return error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return new GuardianDbError('data-dir', path, `'${path}' cannot be ${doing} (${detail})`);
+}
+/** Whether `error` says the per-user data directory cannot be used. */
+export function isDataDirError(error) {
+    return error instanceof GuardianDbError && error.kind === 'data-dir';
 }
 function currentUid() {
     return typeof process.getuid === 'function' ? process.getuid() : undefined;
@@ -50,8 +67,14 @@ function assertPrivateDir(path, st) {
     const uid = currentUid();
     if (uid !== undefined && st.uid !== uid)
         throw notPrivate(path, `belongs to uid ${st.uid}, not to this user (${uid})`);
-    if ((st.mode & 0o077) !== 0)
-        chmodSync(path, 0o700);
+    if ((st.mode & 0o077) !== 0) {
+        try {
+            chmodSync(path, 0o700);
+        }
+        catch (error) {
+            throw dataDirFailure(path, 'made private (chmod 0700)', error);
+        }
+    }
 }
 function statOrNull(path, follow) {
     try {
@@ -60,7 +83,7 @@ function statOrNull(path, follow) {
     catch (error) {
         if (error.code === 'ENOENT')
             return null;
-        throw error;
+        throw dataDirFailure(path, 'read', error);
     }
 }
 /**
@@ -71,8 +94,16 @@ export function ensurePrivateDataDir() {
     const dir = userDataDir();
     const existing = statOrNull(dir, true);
     if (existing === null) {
-        mkdirSync(dir, { recursive: true, mode: 0o700 });
-        assertPrivateDir(dir, statSync(dir));
+        try {
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+        }
+        catch (error) {
+            throw dataDirFailure(dir, 'created', error);
+        }
+        const created = statOrNull(dir, true);
+        if (created === null)
+            throw notPrivate(dir, 'vanished as it was created');
+        assertPrivateDir(dir, created);
     }
     else {
         assertPrivateDir(dir, existing);
@@ -93,10 +124,13 @@ export function ensurePrivateSubdir(name) {
         }
         catch (error) {
             if (error.code !== 'EEXIST')
-                throw error;
+                throw dataDirFailure(dir, 'created', error);
         }
     }
-    assertPrivateDir(dir, lstatSync(dir));
+    const st = statOrNull(dir, false);
+    if (st === null)
+        throw notPrivate(dir, 'vanished as it was created');
+    assertPrivateDir(dir, st);
     return dir;
 }
 /** On POSIX, an existing file here must be a regular file of this user's (never a link). */

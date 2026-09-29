@@ -68,7 +68,7 @@ import {
 } from './dbProvenance.js';
 import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId, type RegistryEntry } from './dbRegistry.js';
 import { listMigrations, runMigrations } from './migrations/runner.js';
-import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, userDataDir } from './userData.js';
+import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, isDataDirError, userDataDir } from './userData.js';
 import {
   missingIndexSql,
   missingObjects,
@@ -481,6 +481,12 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
       } catch (error) {
+        if (isDataDirError(error)) {
+          // Creating or adopting needs the registry. Without it the project's
+          // database is not used — never trusted unregistered — and neither is
+          // a fallback in the same unusable directory.
+          return unpersisted(error.message);
+        }
         if (error instanceof GuardianDbError && error.kind === 'untrusted') {
           refusal =
             `${error.message}. The file is left as it is; ` +
@@ -499,8 +505,14 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
   if (existingOnly && !existsSync(chosenPath)) {
     return { ...openInMemory(), ...(refusal !== undefined ? { warning: `${refusal}.` } : {}) };
   }
-  ensurePrivateSubdir(shortHash(projectPath));
-  const db = openFallback(chosenPath);
+  let db: GuardianDatabase;
+  try {
+    ensurePrivateSubdir(shortHash(projectPath));
+    db = openFallback(chosenPath);
+  } catch (error) {
+    if (isDataDirError(error)) return unpersisted(error.message, refusal);
+    throw error;
+  }
   if (refusal === undefined) return { db, path: chosenPath };
   return {
     db,
@@ -508,6 +520,25 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
     warning:
       `${refusal}. This project's scans are kept in '${chosenPath}' instead, and stay there: they are not ` +
       'merged back into the project file later.',
+  };
+}
+
+/**
+ * The session's database when the per-user data directory cannot be used
+ * (`userData.ts` — `reason` is the failure, a `data-dir` error's message):
+ * an in-memory one, with a warning every tool surfaces. Never an exit — a
+ * container user with no home (`HOME=/`) made the server exit 1 where 3.0.0
+ * had opened the project's database — and never the project's database
+ * trusted unregistered, which would undo the provenance check.
+ */
+function unpersisted(reason: string, refusal?: string): OpenedDatabase {
+  return {
+    ...openInMemory(),
+    warning:
+      (refusal !== undefined ? `${refusal}. ` : '') +
+      "dev-guardian's per-user data directory cannot be used, so neither the project's database nor a " +
+      `per-user fallback is, and history will not persist: ${reason}; set GUARDIAN_DATA_DIR to a writable ` +
+      'directory. This session runs on an in-memory database.',
   };
 }
 
@@ -579,6 +610,9 @@ function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclu
     project_path: safeCanonical(projectPath),
     created_at: new Date().toISOString(),
   });
+  // Creating or adopting registers an id: the registry must be usable
+  // BEFORE anything is created in, or written to, the project's database.
+  if (verdict.kind !== 'trusted') ensurePrivateSubdir('registry');
   if (verdict.kind === 'create') {
     // Registered BEFORE it is written, so a process that reads the id from
     // the file always finds it registered; written before the migrations, so

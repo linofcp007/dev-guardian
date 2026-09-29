@@ -722,6 +722,26 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     }
   });
 
+  it('a legacy database it would adopt, with no usable data directory to register it in: in memory, the file untouched', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
+    const before = sha256(primary);
+    const blocker = join(makeTempDir('guardian-blocker-'), 'not-a-directory');
+    writeFileSync(blocker, 'x');
+    vi.stubEnv('GUARDIAN_DATA_DIR', join(blocker, 'dev-guardian'));
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toMatch(/history will not persist: .+; set GUARDIAN_DATA_DIR to a writable directory/);
+      expect(opened.adoption).toBeUndefined();
+    } finally {
+      opened.db.close();
+    }
+    expect(sha256(primary)).toBe(before);
+    expect(dbIdOf(primary)).toBeUndefined();
+  });
+
   it("an adoption is reported with the suppressions it brought that apply to every project", () => {
     const dir = project();
     git(dir, 'init', '-q');
@@ -945,7 +965,7 @@ describe('the per-user fallback location', () => {
     }
   });
 
-  it.runIf(!isWindows)("refuses a project directory under it that is a symbolic link (someone else's file)", () => {
+  it.runIf(!isWindows)("refuses a project directory under it that is a symbolic link (someone else's file): in memory, never used", () => {
     const base = makeTempDir('guardian-userdata-');
     vi.stubEnv('GUARDIAN_DATA_DIR', join(base, 'dg'));
     const dir = trackedProject();
@@ -953,8 +973,92 @@ describe('the per-user fallback location', () => {
     mkdirSync(elsewhere);
     mkdirSync(join(base, 'dg'), { recursive: true });
     symlinkSync(elsewhere, dirname(resolveFallbackDbPath(dir)));
-    expect(() => openDatabase({ projectPath: dir })).toThrow(GuardianDbError);
-    expect(() => openDatabase({ projectPath: dir })).toThrow(/symbolic link|not a directory/);
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toMatch(/is a symbolic link.*history will not persist/);
+    } finally {
+      opened.db.close();
+    }
+    expect(existsSync(join(elsewhere, 'guardian.db'))).toBe(false);
+  });
+});
+
+// Round 5: a per-user data directory that cannot be created was FATAL — in
+// Docker node:22 as uid 4242 with no passwd entry (HOME=/), `fatal: Error:
+// EACCES: permission denied, mkdir '/.local/share/dev-guardian'`, where 3.0.0
+// opened the project database. Never exit for it; never fall back to trusting
+// the project database unregistered either: an in-memory database for the
+// session, and a warning saying history will not persist and what to set.
+describe('a per-user data directory that cannot be used', () => {
+  /** A GUARDIAN_DATA_DIR under a regular file: mkdir fails on every platform. */
+  function uncreatableDataDir(): string {
+    const blocker = join(makeTempDir('guardian-blocker-'), 'not-a-directory');
+    writeFileSync(blocker, 'x');
+    return join(blocker, 'dev-guardian');
+  }
+
+  const NOT_PERSISTED = /history will not persist: .+; set GUARDIAN_DATA_DIR to a writable directory/;
+
+  it('a new project runs on an in-memory database, and nothing is written to the project', () => {
+    vi.stubEnv('GUARDIAN_DATA_DIR', uncreatableDataDir());
+    const dir = project();
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toMatch(NOT_PERSISTED);
+      expect(opened.warning).toMatch(/cannot be created/);
+      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+    } finally {
+      opened.db.close();
+    }
+    expect(existsSync(primaryOf(dir))).toBe(false);
+  });
+
+  it('a foreign project database: its refusal, then that the fallback cannot be used either', () => {
+    const dir = trackedProject();
+    vi.stubEnv('GUARDIAN_DATA_DIR', uncreatableDataDir());
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toMatch(/git tracks \.guardian\/guardian\.db/);
+      expect(opened.warning).toMatch(NOT_PERSISTED);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it('a registry that is not a directory is named, and the user is never told to delete the project database', () => {
+    // It read "…and restart.. The file is left as it is; delete it or move
+    // it aside…": the registry's problem, blamed on the project's file.
+    const base = makeTempDir('guardian-userdata-');
+    vi.stubEnv('GUARDIAN_DATA_DIR', base);
+    writeFileSync(join(base, 'registry'), 'x');
+    const dir = project();
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toContain(`'${join(base, 'registry')}' is not a directory`);
+      expect(opened.warning).toMatch(NOT_PERSISTED);
+      expect(opened.warning).not.toMatch(/delete it|move it aside|left as it is|restart\.\./);
+    } finally {
+      opened.db.close();
+    }
+    expect(existsSync(primaryOf(dir))).toBe(false);
+  });
+
+  it.runIf(!isWindows && process.getuid?.() !== 0)("a data directory another user owns: in memory, naming the owner", () => {
+    vi.stubEnv('GUARDIAN_DATA_DIR', '/');
+    const dir = project();
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(':memory:');
+      expect(opened.warning).toMatch(/'\/' belongs to uid 0, not to this user/);
+      expect(opened.warning).toMatch(NOT_PERSISTED);
+      expect(opened.warning).not.toMatch(/delete it|move it aside|left as it is/);
+    } finally {
+      opened.db.close();
+    }
   });
 });
 

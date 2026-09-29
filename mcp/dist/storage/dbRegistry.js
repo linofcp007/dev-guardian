@@ -31,7 +31,7 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, userDataDir } from './userData.js';
+import { assertOwnedRegularFileIfPresent, dataDirFailure, ensurePrivateSubdir, userDataDir } from './userData.js';
 export const DB_ID_SHAPE = /^[0-9a-f]{32}$/;
 /** The `schema_meta` key a database's id is stored under. */
 export const DB_ID_KEY = 'db_id';
@@ -81,9 +81,9 @@ export function lookupDbId(id) {
     }
 }
 /**
- * Registers `entry` (temporary file, then rename). Throws what the file
- * system throws, and a `GuardianDbError` when the data directory is not
- * private (`userData.ts`).
+ * Registers `entry` (temporary file, then rename). Every failure — the data
+ * directory or the registry not private, not creatable, not writable — is a
+ * `GuardianDbError` of kind `data-dir` (`userData.ts`).
  */
 export function registerDbId(entry) {
     if (!DB_ID_SHAPE.test(entry.db_id))
@@ -91,13 +91,18 @@ export function registerDbId(entry) {
     const dir = ensurePrivateSubdir('registry');
     const target = join(dir, `${entry.db_id}.json`);
     const temp = `${target}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-    writeFileSync(temp, `${JSON.stringify(entry, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    try {
+        writeFileSync(temp, `${JSON.stringify(entry, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    }
+    catch (error) {
+        throw dataDirFailure(dir, 'written', error);
+    }
     try {
         renameSync(temp, target);
     }
     catch (error) {
         rmSync(temp, { force: true });
-        throw error;
+        throw dataDirFailure(dir, 'written', error);
     }
 }
 /** Removes `id`'s entry, best effort: an id minted and never written to a database. */
