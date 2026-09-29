@@ -24,9 +24,9 @@
 
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
@@ -81,6 +81,29 @@ export async function repoState(cwd: string): Promise<RepoState> {
   const toplevel = top.stdout.trim();
   const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   return head.exitCode === 0 ? { kind: 'has_commits', toplevel } : { kind: 'no_commits', toplevel };
+}
+
+/**
+ * The shallow boundary of a shallow clone — the commits whose parents were
+ * never fetched (`git rev-parse --git-path shallow` lists them) — or null
+ * when the repository is not shallow. A shallow repository whose boundary
+ * file cannot be read answers `['(unknown)']`: shallow, boundary unnamed.
+ */
+export async function shallowBoundary(cwd: string): Promise<string[] | null> {
+  const shallow = await git(cwd, ['rev-parse', '--is-shallow-repository']);
+  if (shallow.exitCode !== 0 || shallow.stdout.trim() !== 'true') return null;
+  const where = await git(cwd, ['rev-parse', '--git-path', 'shallow']);
+  const rel = where.stdout.trim();
+  if (where.exitCode !== 0 || rel === '') return ['(unknown)'];
+  try {
+    const shas = readFileSync(isAbsolute(rel) ? rel : join(cwd, rel), 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => /^[0-9a-f]{40,64}$/.test(l));
+    return shas.length > 0 ? shas : ['(unknown)'];
+  } catch {
+    return ['(unknown)'];
+  }
 }
 
 /** The full commit id `ref` names, or null when it names no commit. */

@@ -61,6 +61,13 @@ version bump.
   `status`, `tools_run`, `missing_tools` and `coverage`. Its report goes under the install, or the per-user cache
   for a URL, never the server's working directory, and WPScan runs there (it reads `./.wpscan/scan.yml`). Its
   description no longer says a missing token only rate-limits.
+- A shallow clone's secret history no longer reads as complete. `git clone --depth 1` of a repository whose secret
+  was removed in a later commit gave "history: 1 commit(s) scanned", coverage full, 0 findings (the full clone:
+  2 commits, 1 high). When the repository is shallow and the history pass's walk reaches the boundary (every
+  boundary with no `log_opts`; those `git rev-list` lists for a range or `--since=`), the pass stays `ok` and
+  `gitleaks` is listed missing — coverage partial — its reason `history truncated at <commit> — a shallow clone:
+  the commits before it were not scanned (git fetch --unshallow, then re-run)`. Shared by `scan_secrets`,
+  `scan_wordpress`, `review_pr`, `init_project` and the CI gate (`runners/gitleaksScan.ts`).
 
 ## [3.0.0] - 2026-09-29
 

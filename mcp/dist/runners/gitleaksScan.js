@@ -68,7 +68,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { openPrivateReportDir, sanitizeGitleaksReport } from '../secrets/verify/rawReport.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
-import { countCommits, git, repoState, resolveCommit, uncommittedFiles } from './git.js';
+import { countCommits, git, repoState, resolveCommit, shallowBoundary, uncommittedFiles } from './git.js';
 import { runProcess } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -285,11 +285,49 @@ projectPrefix) {
     if (raw !== null && problems.length === 0) {
         pushParserInput(result, { parser: locatedParser('history', projectPrefix), input: raw }, report.secrets);
     }
+    // A shallow clone's history ends at its boundary: what gitleaks read is
+    // all there was HERE, not all there is (review I4). Ran, with a named gap.
+    const truncated = await truncatedAt(opts.projectPath, logOpts);
+    const truncation = truncated.length === 0
+        ? null
+        : `history truncated at ${truncated.slice(0, 3).map((s) => s.slice(0, 12)).join(', ')}${truncated.length > 3 ? ` and ${truncated.length - 3} more` : ''} — a shallow clone: the commits before it were not scanned (git fetch --unshallow, then re-run)`;
     // A missing count reaches here only with findings: say so, never git's count as gitleaks'.
     const scanned = commits;
-    result.tools_run.push(problems.length === 0
-        ? { name: GITLEAKS_HISTORY, status: 'ok', reason: `history: ${describeCount(scanned, 'commit')} scanned` }
-        : { name: GITLEAKS_HISTORY, status: 'failed', reason: problems.join('; ') });
+    const reasons = problems.length === 0 ? [`history: ${describeCount(scanned, 'commit')} scanned`] : problems;
+    if (truncation !== null) {
+        reasons.push(truncation);
+        result.missing_tools.push(GITLEAKS_HISTORY);
+    }
+    result.tools_run.push({
+        name: GITLEAKS_HISTORY,
+        status: problems.length === 0 ? 'ok' : 'failed',
+        reason: reasons.join('; '),
+    });
+}
+/**
+ * The shallow-boundary commits the history pass's own walk reaches, or none
+ * — review I4: `git clone --depth 1` of a repository whose secret was
+ * removed in a later commit read "1 commit(s) scanned", coverage full, 0
+ * findings. With no `log_opts` gitleaks walks every ref (`git log
+ * --full-history --all`), so every boundary is reached; a range or
+ * `--since=` reaches the boundaries `git rev-list` lists for it. A shallow
+ * repository whose walk cannot be listed is reported truncated: the gap is
+ * never assumed away.
+ */
+async function truncatedAt(cwd, logOpts) {
+    const boundary = await shallowBoundary(cwd);
+    if (boundary === null)
+        return [];
+    if (logOpts === undefined || logOpts.length === 0 || boundary.includes('(unknown)'))
+        return boundary;
+    // `logOpts` is validated (`resolveLogOpts`): --all, --since=<date>, resolved ranges.
+    const tokens = logOpts.split(' ').filter((t) => t.length > 0);
+    const hasRev = tokens.some((t) => t === '--all' || t.includes('..'));
+    const r = await git(cwd, ['rev-list', ...tokens, ...(hasRev ? [] : ['HEAD']), '--']);
+    if (r.exitCode !== 0)
+        return boundary;
+    const reached = new Set(r.stdout.split(/\r?\n/).map((l) => l.trim()));
+    return boundary.filter((b) => reached.has(b));
 }
 /**
  * The files of a repository that no commit holds: listed by git (a git error
