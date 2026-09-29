@@ -252,6 +252,13 @@ function fileMayHoldTaintRule(file) {
  * rule named like a pack rule is spelled bare and is NOT the pack's (round 4,
  * A-1: matched through the normalised id, it was). `readAt` maps a config to
  * the file its ids are read from.
+ *
+ * The relative spelling exists only when the plugin itself sits inside the
+ * scanned tree (this repo, or a monorepo that vendors it). There Semgrep's
+ * prefix is lossy — it drops leading dots and characters outside
+ * `[A-Za-z0-9._-]` — so a project taint rule in `.configs/semgrep/` or
+ * `con figs/semgrep/` carrying a pack rule's id would be taken for the pack's.
+ * A user's own project cannot reach it otherwise (final review, minor).
  */
 export function pluginPackCheckIds(packConfigs, opts = {}) {
     const out = new Set();
