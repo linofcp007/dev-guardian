@@ -67,6 +67,20 @@ node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller
 - With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
 - The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
 
+### A shallow checkout exits 2
+
+Most CI checkouts are shallow by default — GitHub's `actions/checkout` fetches one commit (`fetch-depth: 1`), GitLab uses `GIT_DEPTH: 20` / 50, Bitbucket clones 50 commits. The secrets pass reads git history, and on a shallow clone that history ends at the boundary the checkout fetched: a secret committed before it and removed since is invisible. So `scan` on a shallow checkout names the gap — `gitleaks … history truncated at <commit> — a shallow clone: the commits before it were not scanned` — and **exits 2** (incomplete), never 0.
+
+The fix is to fetch the whole history:
+
+| CI | Setting |
+| --- | --- |
+| GitHub Actions | `actions/checkout` with `fetch-depth: 0` |
+| GitLab CI | `variables: { GIT_DEPTH: "0" }` |
+| Bitbucket Pipelines | `clone: { depth: full }` |
+
+The pipelines `ci-init` writes already do this. With the MCP tools rather than the CLI, a history scan limited to commits you did fetch is complete too: `scan_secrets` with `log_opts: "<base>..HEAD"` reads only that range, and a range that stays above the shallow boundary is not truncated (`--all`, or no `log_opts`, reaches the boundary and is).
+
 ### Things a green pipeline does not tell you
 
 - **SARIF carries one bit of coverage.** `invocation.executionSuccessful` turns `false` when coverage is not full, but SARIF has no field for *which* scanner was missing. That is in exit code 2 and the human/JSON output. Treat an uploaded SARIF with zero results as inconclusive until you have checked the exit code.

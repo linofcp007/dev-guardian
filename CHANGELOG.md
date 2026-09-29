@@ -80,7 +80,11 @@ version bump.
   boundary with no `log_opts`; those `git rev-list` lists for a range or `--since=`), the pass stays `ok` and
   `gitleaks` is listed missing — coverage partial — its reason `history truncated at <commit> — a shallow clone:
   the commits before it were not scanned (git fetch --unshallow, then re-run)`. Shared by `scan_secrets`,
-  `scan_wordpress`, `review_pr`, `init_project` and the CI gate (`runners/gitleaksScan.ts`).
+  `scan_wordpress`, `review_pr`, `init_project` and the CI gate (`runners/gitleaksScan.ts`). **In CI this means a
+  shallow checkout now exits 2** — GitHub's `actions/checkout` fetches one commit by default. Fetch the whole
+  history (`fetch-depth: 0`, `GIT_DEPTH: "0"`, `clone: depth: full`), as the pipelines `ci-init` writes already do;
+  with the MCP tools, a `scan_secrets` range (`log_opts: "<base>..HEAD"`) that stays above the boundary is complete.
+  See docs/ci.md, "A shallow checkout exits 2".
 - `wp_audit` reads WP-CLI's checksum report. `wp core verify-checksums --format=json` and `wp plugin
   verify-checksums` print their mismatches as JSON on stdout, then `Error: …`, and exit 1 (wp-cli/checksum-command);
   the exit 1 read as a failed call, so a tampered install showed no mismatches, `wp-cli` ok, completed — after
