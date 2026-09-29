@@ -51,6 +51,17 @@
  * pass, and nothing this helper meets is allowed to throw out of it and take
  * the passes that did finish with it.
  *
+ * **The project's own gitleaks configuration is honoured, and named.**
+ * gitleaks reads `<source>/.gitleaks.toml` on its own (the history pass runs
+ * `detect -s <project>`; measured on 8.30.1: a committed allowlist over the
+ * one secret in history read 0 findings), the files pass passes it with
+ * `--config` and the directory pass extends it; every pass reads the
+ * project's `.gitleaksignore`. Both are the project's call — its rules, its
+ * accepted fingerprints — but they decide what the scan reports, so every
+ * pass that ran names them (`honoured_config`, and a note on its reason),
+ * as Trivy's `.trivyignore` is (`runners/trivyRun.ts`). gitleaks does not
+ * list what they suppressed.
+ *
  * Every finding says where it was found, in its `message`: `history`
  * (with the commit), `working_tree`, or `directory`.
  *
@@ -173,6 +184,7 @@ export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<Gitlea
   }
   try {
     await scan({ ...opts, raw }, result);
+    nameProjectConfig(opts.projectPath, result);
   } catch (e) {
     // Every step below handles its own failures; this is the net under them,
     // so a pass that did finish is never lost to one that did not.
@@ -189,6 +201,30 @@ export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<Gitlea
     }
   }
   return result;
+}
+
+/** The project's gitleaks files every pass reads, and what each decides. */
+const PROJECT_GITLEAKS_FILES: ReadonlyArray<{ file: string; decides: string }> = [
+  { file: '.gitleaks.toml', decides: 'its rules and allowlists decide what is reported' },
+  { file: '.gitleaksignore', decides: 'its fingerprints are not reported' },
+];
+
+/** Each pass that ran, naming the project's gitleaks files it honoured — see the module comment. */
+function nameProjectConfig(projectPath: string, result: GitleaksScanResult): void {
+  const present = PROJECT_GITLEAKS_FILES.filter(({ file }) => {
+    try {
+      return lstatSync(join(projectPath, file)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  if (present.length === 0) return;
+  const note = `honoured the project's ${present.map((p) => `${p.file} (${p.decides})`).join(', ')}`;
+  for (const run of result.tools_run) {
+    if (run.status === 'skipped') continue;
+    run.reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
+    run.honoured_config = [...new Set([...(run.honoured_config ?? []), ...present.map((p) => p.file)])];
+  }
 }
 
 async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {

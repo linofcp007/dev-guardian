@@ -75,6 +75,7 @@ import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import type { ParserOutput, ScannerParser } from '../runners/scannerParsers/index.js';
 import { runProcess } from '../runners/processRunner.js';
+import { presentProjectFiles, withProjectConfig } from '../runners/repoConfig.js';
 import { judgeTrivyConfig } from '../runners/trivyConfig.js';
 import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -334,10 +335,15 @@ const scanContainers = makeScanTool({
           tools_run.push({ name: 'hadolint', status: 'skipped', reason: 'not_installed' });
           missing_tools.push('hadolint');
         } else {
+          // hadolint reads `.hadolint.yaml` from its working directory: not
+          // the project (round 4, item 3). Its own root config is passed
+          // explicitly and named (`runners/repoConfig.ts`).
+          const hadolintConfig = presentProjectFiles(ctx.projectPath, ['.hadolint.yaml', '.hadolint.yml']).slice(0, 1);
+          const configArgs = hadolintConfig.map((rel) => ['--config', join(ctx.projectPath, rel)]).flat();
           const result = await runProcess({
             command: 'hadolint',
-            args: ['--format', 'json', dockerfile],
-            cwd: ctx.projectPath,
+            args: ['--format', 'json', ...configArgs, dockerfile],
+            cwd: reportDir,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
@@ -349,11 +355,12 @@ const scanContainers = makeScanTool({
             result.outcome !== 'cancelled' &&
             result.outcome !== 'timed_out' &&
             result.outcome !== 'output_too_large';
+          const decides = 'its ignored rules and severity overrides decide what is reported';
           if (finished && (result.exitCode === 0 || result.exitCode === 1)) {
             parser_inputs.push({ parser: hadolintParser, input: result.stdout });
-            tools_run.push({ name: 'hadolint', status: 'ok' });
+            tools_run.push(withProjectConfig({ name: 'hadolint', status: 'ok' }, hadolintConfig, decides));
           } else {
-            tools_run.push({ name: 'hadolint', status: 'failed' });
+            tools_run.push(withProjectConfig({ name: 'hadolint', status: 'failed' }, hadolintConfig, decides));
             if (result.outcome !== 'completed') anyOutcome = result.outcome;
           }
         }

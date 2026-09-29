@@ -191,6 +191,33 @@ describe.skipIf(!GITLEAKS)('scan_secrets with real gitleaks', () => {
     const { r, p } = await scan(dir);
     const res = r as unknown as SecretsResult;
     expect(findings(p, res.scan_id).map((f) => f.file_path)).toEqual(['keep.env']);
+    // Round 4, item 3: honoured, and named — never in silence.
+    const files = res.tools_run.find((t) => t.name === 'gitleaks-working-tree');
+    expect(files?.honoured_config).toEqual(['.gitleaksignore']);
+    expect(files?.reason).toMatch(/honoured the project's \.gitleaksignore/);
+  });
+
+  /**
+   * Round 4, item 3: gitleaks reads `<source>/.gitleaks.toml` on its own — the
+   * history pass runs `detect -s <project>` — so a committed config decides
+   * what the scan reports (here: an allowlist over the one secret in
+   * history, which then reads 0 findings). Honoured, as the project's own
+   * rules and allowlists are, and named on every pass that read it.
+   */
+  it("names the project's .gitleaks.toml, which gitleaks reads on its own", async () => {
+    const dir = await repoWithCleanCommit('secrets-config-');
+    writeFileSync(join(dir, 'creds.txt'), SECRET_LINE);
+    writeFileSync(join(dir, '.gitleaks.toml'), "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''creds\\.txt''']\n");
+    await git(dir, 'add', 'creds.txt', '.gitleaks.toml');
+    await git(dir, 'commit', '-q', '-m', 'config');
+
+    const { r, p } = await scan(dir);
+    const res = r as unknown as SecretsResult;
+    expect(findings(p, res.scan_id)).toEqual([]);
+    const history = res.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('ok');
+    expect(history?.honoured_config).toEqual(['.gitleaks.toml']);
+    expect(history?.reason).toMatch(/honoured the project's \.gitleaks\.toml \(its rules and allowlists decide/);
   });
 
   it('log_opts restricts history to a range, resolving each ref first', async () => {

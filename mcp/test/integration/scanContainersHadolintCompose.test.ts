@@ -134,6 +134,41 @@ describe('scan_containers: hadolint', () => {
     expect(total).toBeGreaterThan(0);
   });
 
+  /**
+   * Round 4, item 3: hadolint reads `.hadolint.yaml` from its working
+   * directory (`ignored:` rules, `trustedRegistries`, severity overrides), and
+   * it ran in the project. It runs in the report directory now; the
+   * project's own root config is passed with `--config`, and named.
+   */
+  it("runs outside the project; the project's .hadolint.yaml is passed explicitly and named", async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'hadolint' ? '/fake/bin/hadolint' : null));
+    vi.mocked(runProcess).mockImplementation(async () => ({ ...ok, stdout: '[]' }));
+    const bare = makeTempDir('containers-');
+    writeFileSync(join(bare, 'Dockerfile'), 'FROM alpine\n', 'utf8');
+    const plain = (await tool().handler({ project_path: bare }, plugin(bare))) as Result & {
+      tools_run: { name: string; honoured_config?: string[] }[];
+    };
+    const first = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'hadolint')?.[0];
+    expect(first?.cwd).not.toBe(bare);
+    expect(first?.args).not.toContain('--config');
+    expect(plain.tools_run.find((t) => t.name === 'hadolint')?.honoured_config).toBeUndefined();
+
+    vi.mocked(runProcess).mockClear();
+    const own = makeTempDir('containers-');
+    writeFileSync(join(own, 'Dockerfile'), 'FROM alpine\n', 'utf8');
+    writeFileSync(join(own, '.hadolint.yaml'), 'ignored:\n  - DL3006\n', 'utf8');
+    const r = (await tool().handler({ project_path: own }, plugin(own))) as Result & {
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const call = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'hadolint')?.[0];
+    expect(call?.cwd).not.toBe(own);
+    expect(call?.args).toEqual(expect.arrayContaining(['--config', join(own, '.hadolint.yaml')]));
+    const hadolint = r.tools_run.find((t) => t.name === 'hadolint');
+    expect(hadolint?.status).toBe('ok');
+    expect(hadolint?.honoured_config).toEqual(['.hadolint.yaml']);
+    expect(hadolint?.reason).toMatch(/honoured the project's \.hadolint\.yaml/);
+  });
+
   it('is a named gap (skipped, missing_tools) when hadolint is not installed', async () => {
     vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'trivy' ? '/fake/bin/trivy' : null));
     vi.mocked(runProcess).mockResolvedValue(ok);

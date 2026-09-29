@@ -83,7 +83,7 @@
  * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
@@ -101,6 +101,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { withProjectConfig } from '../runners/repoConfig.js';
 import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
@@ -567,10 +568,26 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
     missing_tools.push('bandit');
     return;
   }
+  const ini = banditIni(ctx.projectPath, reportDir);
+  if ('error' in ini) {
+    tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
+    return;
+  }
   const outFile = join(reportDir, 'bandit.json');
   const result = await runProcess({
     command: 'bandit',
-    args: ['-r', ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), '-f', 'json', '-o', outFile, '-q'],
+    args: [
+      '-r',
+      ctx.projectPath,
+      '--ini',
+      ini.path,
+      ...banditExcludeArgs(ctx.exclusions, ctx.projectPath),
+      '-f',
+      'json',
+      '-o',
+      outFile,
+      '-q',
+    ],
     cwd: ctx.projectPath,
     env: pythonUtf8Env(ctx.scriptEnv),
     signal: ctx.signal,
@@ -580,7 +597,37 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  tools_run.push(check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' });
+  const run: ToolRun = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
+  tools_run.push(withProjectConfig(run, ini.honoured ? ['.bandit'] : [], 'its skips and tests decide what is reported'));
+}
+
+/** An empty `[bandit]` section: Bandit reads it and nothing else. */
+export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
+
+/**
+ * The `--ini` of a whole-project Bandit run (round 4, item 3). Without one,
+ * `bandit -r` walks the whole tree for a file named `.bandit` and applies it
+ * to every file it scans — measured on 1.9.4: a `sub/.bandit`, or one in a
+ * dependency's directory the scan excludes, with `skips: B101,B602,B404`
+ * took a root `a.py` from 3 results to 0; two of them made Bandit exit 2.
+ * `--ini` replaces that search: the project's own ROOT `.bandit` (its call,
+ * like its `.trivyignore`) is passed explicitly and named; without one, an
+ * empty `[bandit]` file this scan writes. Never run without it.
+ */
+function banditIni(projectPath: string, reportDir: string): { path: string; honoured: boolean } | { error: string } {
+  const own = join(projectPath, '.bandit');
+  try {
+    if (lstatSync(own).isFile()) return { path: own, honoured: true };
+  } catch {
+    // None at the root.
+  }
+  const neutral = join(reportDir, NEUTRAL_BANDIT_INI);
+  try {
+    writeFileSync(neutral, '[bandit]\n', 'utf8');
+  } catch (e) {
+    return { error: `could not write the neutral Bandit configuration ${neutral}: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { path: neutral, honoured: false };
 }
 
 const isPython = (f: string): boolean => f.toLowerCase().endsWith('.py');

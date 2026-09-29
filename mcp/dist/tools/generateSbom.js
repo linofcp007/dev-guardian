@@ -22,7 +22,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { runProcess } from '../runners/processRunner.js';
+import { runSyft } from '../runners/syftRun.js';
 import { runTrivy } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
@@ -83,11 +83,8 @@ async function handler(input, ctx) {
     let producedBy = null;
     if (syftBin) {
         const syftFormat = format === 'cyclonedx-json' ? 'cyclonedx-json' : 'spdx-json';
-        const result = await runProcess({
-            command: 'syft',
-            args: [projectPath, '-o', `${syftFormat}=${outFile}`, '--quiet'],
-            cwd: projectPath,
-        });
+        // Never in the project, never its .syft.yaml, no update check (runners/syftRun.ts).
+        const result = await runSyft({ target: projectPath, format: syftFormat, outFile, workDir: reportDir });
         if (result.outcome === 'completed' && existsSync(outFile)) {
             producedBy = 'syft';
         }

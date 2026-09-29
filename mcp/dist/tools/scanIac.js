@@ -88,6 +88,7 @@ import { actionlintParser } from '../runners/scannerParsers/actionlint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { zizmorParser } from '../runners/scannerParsers/zizmor.js';
 import { runProcess } from '../runners/processRunner.js';
+import { presentProjectFiles, withProjectConfig } from '../runners/repoConfig.js';
 import { iacLookingFiles, judgeTrivyConfig } from '../runners/trivyConfig.js';
 import { runTrivy } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -235,9 +236,11 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
             // not fail the scan over a report artifact.
         }
     }
+    const honoured = presentProjectFiles(ctx.projectPath, spec.projectConfig.files);
+    const named = (run) => withProjectConfig(run, honoured, spec.projectConfig.decides);
     if (spec.isOk(result)) {
         return {
-            toolRun: { name: spec.name, status: 'ok' },
+            toolRun: named({ name: spec.name, status: 'ok' }),
             missing: false,
             parserInput: { parser: spec.parser, input: result.stdout },
             // A run its spec accepts is a completed one, whatever the runner
@@ -248,7 +251,7 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
     const toolRun = result.outcome === 'completed'
         ? { name: spec.name, status: 'failed' }
         : { name: spec.name, status: 'failed', reason: result.outcome };
-    return { toolRun, missing: false, processOutcome: result.outcome };
+    return { toolRun: named(toolRun), missing: false, processOutcome: result.outcome };
 }
 registerToolModule(makeScanTool({
     name: 'scan_iac',
@@ -337,6 +340,9 @@ registerToolModule(makeScanTool({
                     binary: 'zizmor',
                     args: ['--format=json', '--no-exit-codes', '--collect=workflows', ...workflowFiles],
                     parser: zizmorParser,
+                    // zizmor discovers its config beside the inputs (`rules:` can
+                    // disable or ignore an audit).
+                    projectConfig: { files: ['zizmor.yml', '.github/zizmor.yml'], decides: 'its rules can disable or ignore audits' },
                     // `--no-exit-codes` collapses the "findings by highest
                     // severity" codes (11-14) into 0; 1/2/3 are still real
                     // errors — see zizmor.ts's own doc comment for the exit-code
@@ -348,6 +354,12 @@ registerToolModule(makeScanTool({
                     binary: 'actionlint',
                     args: ['-pyflakes=', '-shellcheck=', '-format', '{{json .}}', ...workflowFiles],
                     parser: actionlintParser,
+                    // actionlint loads the repository's config (`paths: … ignore:`
+                    // silences errors by pattern).
+                    projectConfig: {
+                        files: ['.github/actionlint.yaml', '.github/actionlint.yml'],
+                        decides: 'its ignore patterns silence errors',
+                    },
                     // exit 0 (no problems) or 1 (problems found) are both a
                     // finished run — same convention as hadolint/jscpd/ruff/
                     // bandit elsewhere. The runner reports EVERY non-zero exit as

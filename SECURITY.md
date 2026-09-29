@@ -173,10 +173,26 @@ their respective projects.
   explicitly (`mcp/src/runners/trivyRun.ts`). The project's `.trivyignore` is
   still honoured — accepted risks are the project's to state — but only
   explicitly (`--ignorefile`), and the run names it (`honoured_config`, and
-  its `tools_run` reason); `review_pr` warns when the diff edits it. `npm
-  audit` still honours the project's `.npmrc` (a private registry is
-  legitimate), and `deps_audit` names the registry that answered when it is
-  not `registry.npmjs.org`, credentials removed.
+  its `tools_run` reason); `review_pr` warns when the diff edits it. What it
+  suppressed is counted and named in the scan's warnings and the CI gate's
+  output, JSON and SARIF (Trivy 0.50.0 or newer; `trivy config` cannot list
+  it and says so). `npm audit` still honours the project's `.npmrc` (a
+  private registry is legitimate), and `deps_audit` names the registry that
+  answered when it is not `registry.npmjs.org`, credentials removed.
+- **Nor Syft, nor a `.bandit` below the root; the rest is named.** Syft read
+  the project's `.syft.yaml` (`generate_sbom` ran in the project): a
+  committed `select-catalogers: ['-javascript']` emptied the SBOM of a
+  project pinning lodash, and the same file can turn on Syft's network
+  lookups. Syft now runs like Trivy (`mcp/src/runners/syftRun.ts`: a report
+  directory, `-c` pointing at an empty file, no update check). `bandit -r`
+  applied a `.bandit` found anywhere in the tree — a dependency's included —
+  to every file; it now gets `--ini`: the project's own root `.bandit`, or an
+  empty one. The configs a project legitimately owns and a scanner reads on
+  its own are honoured and named on the run (`honoured_config` and its
+  reason): a root `.bandit`, `.gitleaks.toml` and `.gitleaksignore`,
+  `.hadolint.yaml` (hadolint now runs in the report directory and is given it
+  with `--config`), `.github/actionlint.yaml`, `zizmor.yml` /
+  `.github/zizmor.yml`.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -220,7 +236,7 @@ project's own build and test commands.
 | Package registries, through the package managers | `deps_audit` (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI), `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
 | The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
 | nuclei's update check and templates | `scan_dast` with `use_nuclei` | nuclei's own automatic update check and template download are on by default; dev-guardian does not pass `-disable-update-check` |
-| Syft's update check (Anchore) | `generate_sbom` | Syft's `check-for-app-update` defaults to true; `SYFT_CHECK_FOR_APP_UPDATE=false` in the server's environment turns it off |
+| Syft's update check (`toolbox-data.anchore.io`) | **disabled by dev-guardian**: every Syft run gets `SYFT_CHECK_FOR_APP_UPDATE=false`, and `-c` pointing at an empty file, so a repository's `.syft.yaml` cannot turn on Syft's network lookups either (`mcp/src/runners/syftRun.ts`) | never |
 | The GitHub API | `scan_iac`'s zizmor, when a GitHub token (`GH_TOKEN`) is in the server's environment | zizmor's online audits; without a token it runs offline |
 | WPScan API, and the site itself | `wp_vuln_check` (through the `wpscan` CLI) | per call |
 | WPScan's database (`data.wpscan.org`) | `wp_vuln_check` runs `wpscan --update` | only when WPScan reports its local database missing (`scan_aborted: Update required`), once per call, then the scan runs again; never with `GUARDIAN_OFFLINE=1` (the scan is then failed, naming `wpscan --update`). An existing database is never refreshed: scans pass `--no-update`. |

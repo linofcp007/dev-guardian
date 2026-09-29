@@ -153,6 +153,50 @@ describe('scan_iac: workflow scanners gated on .github/workflows', () => {
     expect(r.coverage).toBe('full');
   });
 
+  /**
+   * Round 4, item 3: actionlint reads the repository's
+   * `.github/actionlint.yaml` (its `paths: … ignore:` patterns silence
+   * errors) and zizmor its `zizmor.yml` / `.github/zizmor.yml` (audits
+   * disabled or ignored) on their own. Honoured — the project's call — and
+   * named on the run that read them.
+   */
+  it("names the project's actionlint and zizmor configs, which each reads on its own", async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) =>
+      name === 'zizmor' || name === 'actionlint' ? `/fake/bin/${name}` : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) =>
+      opts.command === 'zizmor'
+        ? { outcome: 'completed', exitCode: 0, stdout: '[]', stderr: '', truncated: false }
+        : { outcome: 'completed', exitCode: 0, stdout: '[]', stderr: '', truncated: false },
+    );
+    const project = makeTempDir('iac-');
+    writeWorkflow(project);
+    writeFileSync(join(project, '.github', 'actionlint.yaml'), 'paths:\n  .github/workflows/**/*.yml:\n    ignore: [".*"]\n');
+    writeFileSync(join(project, '.github', 'zizmor.yml'), 'rules:\n  unpinned-uses:\n    disable: true\n');
+
+    const r = (await tool().handler({ project_path: project }, plugin(project))) as Result & {
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const zizmor = r.tools_run.find((t) => t.name === 'zizmor');
+    const actionlint = r.tools_run.find((t) => t.name === 'actionlint');
+    expect(zizmor?.honoured_config).toEqual(['.github/zizmor.yml']);
+    expect(zizmor?.reason).toMatch(/honoured the project's \.github\/zizmor\.yml/);
+    expect(actionlint?.honoured_config).toEqual(['.github/actionlint.yaml']);
+    expect(actionlint?.reason).toMatch(/honoured the project's \.github\/actionlint\.yaml/);
+    // Named, never a gap.
+    expect(r.missing_tools).toEqual(['trivy']);
+
+    // None there: nothing claimed.
+    const bare = makeTempDir('iac-');
+    writeWorkflow(bare);
+    const plain = (await tool().handler({ project_path: bare }, plugin(bare))) as Result & {
+      tools_run: { name: string; honoured_config?: string[] }[];
+    };
+    expect(plain.tools_run.find((t) => t.name === 'zizmor')?.honoured_config).toBeUndefined();
+    expect(plain.tools_run.find((t) => t.name === 'actionlint')?.honoured_config).toBeUndefined();
+  });
+
   it('actionlint exit 1 with findings is a completed run: the iac row is completed, not failed', async () => {
     vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'actionlint' ? '/fake/bin/actionlint' : null));
     vi.mocked(runProcess).mockImplementation(async (opts) =>

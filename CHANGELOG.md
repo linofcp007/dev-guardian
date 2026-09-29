@@ -31,6 +31,22 @@ version bump.
   (each as a result with `suppressions: [{kind: "external", justification: "suppressed by the repository's
   .trivyignore"}]`). Not a coverage gap. A config pass, or an older Trivy, says it cannot list them instead of a
   count.
+- A scanned repository no longer configures Syft, and Syft no longer phones home. `generate_sbom` ran `syft
+  <project>` in the project with no `-c`, so Syft read the project's `.syft.yaml`: reproduced on Syft 1.51.1, a
+  committed `select-catalogers: ['-javascript']` took a project pinning lodash 4.17.15 from 2 components to 0 (the
+  same file can turn on Syft's network lookups), and every run asked `toolbox-data.anchore.io` for a newer Syft.
+  Every Syft run now goes through one helper (`runners/syftRun.ts`, and a test fails on any spawn that bypasses
+  it): the report directory as working directory, `-c` pointing at an empty file, `SYFT_CHECK_FOR_APP_UPDATE=false`.
+- `scan_sast`'s Bandit no longer applies a `.bandit` from anywhere in the tree. `bandit -r` walks the whole project
+  for one and applies it to every file: measured on 1.9.4, a `sub/.bandit` — or one in a dependency's directory the
+  scan excludes — with `skips: B101,B602,B404` took a root `a.py` from 3 results to 0, and two such files made Bandit
+  exit 2 (a failed pass). Bandit now gets `--ini`: the project's own root `.bandit`, named on the run, or an empty
+  `[bandit]` file.
+- Repository configuration the scanners read on their own is named on the run that read it (`honoured_config` and
+  the reason; still honoured — the project's call): `.gitleaks.toml` and `.gitleaksignore` on every gitleaks pass
+  (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
+  findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
+  and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
 - Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
   anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
   Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and
