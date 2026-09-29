@@ -40,8 +40,8 @@ version bump.
   (`security_scan_full`), skips `scan_wordpress`, which has no local-only mode
   (reported `skipped` with the reason, coverage `partial`), is recorded on the
   audit row, and the result's `local_only_gaps` names what it does not stop:
-  Trivy, `deps_audit`'s registry calls, a .NET restore, Semgrep's version
-  check.
+  Trivy, `deps_audit`'s registry calls, a .NET restore. (Semgrep's version
+  check is off on every run — see Security.)
   - `compliance_check` is in `local_only_gaps` too, measured rather than
     assumed: Trivy 0.69.3 running its exact `fs --scanners license --quiet`
     against an empty cache, with every proxy variable on a logging proxy (a
@@ -451,6 +451,14 @@ version bump.
   (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
   findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
   and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
+- Semgrep no longer checks for a newer version. Its version check asked `semgrep.dev` on every run — `local_only`,
+  `--metrics=off` and `check_toolchain`'s `semgrep --version` included: measured through a refusing proxy on
+  Semgrep 1.176.1 with a fresh home, `semgrep --version` and a scan with local rules and `--metrics=off` each asked
+  four times; with `SEMGREP_ENABLE_VERSION_CHECK=0`, neither asked, and the scan's results were the same. Every
+  Semgrep spawn now gets it from the one helper (`runners/semgrepRun.ts`), whatever the server's environment says;
+  the Docker fallback passes it into the container (`-e`), `check_toolchain`'s probe and `init_project`'s status
+  script set it too. `audit_executive`'s `local_only_gaps` no longer names it, and SECURITY.md, the READMEs,
+  `docs/ci.md` and `scan --help` say it is off.
 - Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
   anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
   Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and

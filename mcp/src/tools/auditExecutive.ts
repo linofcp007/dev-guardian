@@ -70,7 +70,7 @@ const tool: ToolModule = {
     'severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this ' +
     "project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. " +
     "(security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a " +
-    "pom.xml (dev-guardian turns Trivy's version check and telemetry off); npm audit and PyPI " +
+    "pom.xml (dev-guardian turns Trivy's version check and telemetry off, and Semgrep's version check); npm audit and PyPI " +
     "(deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a " +
     "temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild " +
     "targets; quality_check runs the project's ESLint config. local_only=true passes local_only to " +
@@ -373,9 +373,8 @@ function localOnlyGaps(subTools: readonly string[]): string[] {
         'dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off).',
     );
   }
-  gaps.push(
-    "Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off.",
-  );
+  // Semgrep's own version check is no gap: every Semgrep run has it off
+  // (runners/semgrepRun.ts, SEMGREP_ENABLE_VERSION_CHECK=0).
   return gaps;
 }
 

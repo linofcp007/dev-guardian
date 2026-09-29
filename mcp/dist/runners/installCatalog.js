@@ -11,6 +11,7 @@
  * new scanner: append an entry and the rest is wired automatically.
  */
 import { compareSemver } from '../platform/semverCompare.js';
+import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 /**
  * The Trivy release the curl installer fetches AND installs. Pinned because
  * the installer used to be piped from the `main` branch into `sh` and then
@@ -45,7 +46,8 @@ export const TOOL_CATALOG = {
     semgrep: {
         name: 'semgrep',
         version_floor: '1.0.0',
-        probe: { command: 'semgrep', args: ['--version'] },
+        // `semgrep --version` runs Semgrep's version check too: off (semgrepRun.ts).
+        probe: { command: 'semgrep', args: ['--version'], env: SEMGREP_NO_VERSION_CHECK_ENV },
         required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr', 'compliance_check'],
         install: {
             win32: {

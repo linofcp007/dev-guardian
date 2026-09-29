@@ -13,6 +13,7 @@
 
 import type { DetectedOs } from '../platform/osDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 import type { VersionProbe } from './toolProbe.js';
 
 export type WindowsPkgManager = 'winget' | 'scoop' | 'choco' | 'wsl';
@@ -96,7 +97,8 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   semgrep: {
     name: 'semgrep',
     version_floor: '1.0.0',
-    probe: { command: 'semgrep', args: ['--version'] },
+    // `semgrep --version` runs Semgrep's version check too: off (semgrepRun.ts).
+    probe: { command: 'semgrep', args: ['--version'], env: SEMGREP_NO_VERSION_CHECK_ENV },
     required_by: ['scan_sast', 'security_scan_full', 'bug_hunt', 'review_pr', 'compliance_check'],
     install: {
       win32: {

@@ -112,7 +112,7 @@ describe.skipIf(SHELL === null)('initial-scan.sh', () => {
         path,
         [
           '#!/usr/bin/env bash',
-          `printf '%s|%s|%s|%s|%s\\n' "${name}" "$*" "\${TRIVY_SKIP_VERSION_CHECK:-}" "\${TRIVY_DISABLE_TELEMETRY:-}" "\${PYTHONUTF8:-}" >> '${log.replace(/\\/g, '/')}'`,
+          `printf '%s|%s|%s|%s|%s|%s\\n' "${name}" "$*" "\${TRIVY_SKIP_VERSION_CHECK:-}" "\${TRIVY_DISABLE_TELEMETRY:-}" "\${PYTHONUTF8:-}" "\${SEMGREP_ENABLE_VERSION_CHECK:-}" >> '${log.replace(/\\/g, '/')}'`,
           'exit 3',
           '',
         ].join('\n'),
@@ -128,6 +128,7 @@ describe.skipIf(SHELL === null)('initial-scan.sh', () => {
       PYTHONUTF8: '0',
       TRIVY_SKIP_VERSION_CHECK: 'false',
       TRIVY_DISABLE_TELEMETRY: 'false',
+      SEMGREP_ENABLE_VERSION_CHECK: '1',
     };
     const r = await runShellScript({ shell: SHELL, scriptPath: SCRIPT, args: [project], cwd: project, env });
     const { readFileSync } = await import('node:fs');
@@ -137,6 +138,8 @@ describe.skipIf(SHELL === null)('initial-scan.sh', () => {
     expect(trivy[1]).toMatch(/--config \S*trivy-config\.yaml/);
     expect([trivy[2], trivy[3]]).toEqual(['true', 'true']);
     expect(fields('semgrep')[4]).toBe('1');
+    // Review 3.0, wave 2 (d): Semgrep's version check is off here too.
+    expect(fields('semgrep')[5]).toBe('0');
     expect(r.stdout).toMatch(/honra o \.trivyignore/);
     // Round 5, item 3: what it suppressed is not counted here; the line says where it is.
     expect(r.stdout).toMatch(/honra o \.trivyignore do projeto.*o scan_deps diz quantos achados suprimiu, e quais/);

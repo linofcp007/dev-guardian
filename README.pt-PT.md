@@ -149,7 +149,7 @@ O `ci-init` gera um pipeline com cada action fixada por SHA de commit e cada sca
 
 ## Privacidade e rede
 
-O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à rede — o modo registry do Semgrep (que envia métricas de utilização à Semgrep Inc.; `local_only: true` evita-o) e a sua verificação de versão, a base de dados do Trivy, os feeds NuGet de um projeto .NET (o `scan_sast` restaura-o e compila-o, com ou sem `local_only`), o OSV, os registos de pacotes, CISA KEV / FIRST EPSS, a Wordfence e a verificação de segredos ao vivo, que é opcional. A lista completa, por ferramenta, está no [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desliga as consultas que o dev-guardian faz por iniciativa própria (informação sobre ameaças, verificação de pacotes, verificação de segredos ao vivo, o feed da Wordfence); todas as variáveis de ambiente estão em [docs/env.md](docs/env.md).
+O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à rede — o modo registry do Semgrep (que envia métricas de utilização à Semgrep Inc.; `local_only: true` evita-o), a base de dados do Trivy, os feeds NuGet de um projeto .NET (o `scan_sast` restaura-o e compila-o, com ou sem `local_only`), o OSV, os registos de pacotes, CISA KEV / FIRST EPSS, a Wordfence e a verificação de segredos ao vivo, que é opcional. A lista completa, por ferramenta, está no [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desliga as consultas que o dev-guardian faz por iniciativa própria (informação sobre ameaças, verificação de pacotes, verificação de segredos ao vivo, o feed da Wordfence); todas as variáveis de ambiente estão em [docs/env.md](docs/env.md).
 
 ## Resolução de problemas
 
@@ -164,7 +164,7 @@ O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à red
 
 **`install_toolchain` com `elevation_allowed: true` falha com "sudo: a terminal is required to read the password".** Os passos de instalação correm destacados, sem terminal, por isso em Linux e macOS a elevação só funciona com sudo sem palavra-passe para esses comandos. Caso contrário, corre tu os comandos listados em `requires_elevation`. O SDK do .NET nunca é instalado automaticamente.
 
-**O Semgrep envia métricas.** O `scan_sast` por omissão usa `--config=auto`, que o Semgrep só permite com métricas ligadas. Passa `local_only: true` (ou `--local-only` na CLI) para manter o Semgrep local: só regras em disco — as do projeto e os pacotes do plugin (o pacote para aplicações LLM continua a correr) — com `--metrics=off` e sem descarregar nada do registo. Não quer dizer "nada sai da máquina": o Trivy continua a descarregar a sua base de dados de vulnerabilidades, um projeto .NET continua a ser restaurado a partir dos seus feeds NuGet, e o Semgrep continua a verificar se há uma versão mais recente ([SECURITY.md](SECURITY.md#network-egress)).
+**O Semgrep envia métricas.** O `scan_sast` por omissão usa `--config=auto`, que o Semgrep só permite com métricas ligadas. Passa `local_only: true` (ou `--local-only` na CLI) para manter o Semgrep local: só regras em disco — as do projeto e os pacotes do plugin (o pacote para aplicações LLM continua a correr) — com `--metrics=off` e sem descarregar nada do registo. Não quer dizer "nada sai da máquina": o Trivy continua a descarregar a sua base de dados de vulnerabilidades e um projeto .NET continua a ser restaurado a partir dos seus feeds NuGet ([SECURITY.md](SECURITY.md#network-egress)). A verificação de versão do próprio Semgrep está desligada em todas as execuções.
 
 ## Estrutura do repositório
 

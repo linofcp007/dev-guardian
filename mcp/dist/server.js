@@ -45659,6 +45659,8 @@ async function runVersionProbe(probe2, cwd) {
     command: probe2.command,
     args: probe2.args,
     cwd,
+    // Merged over the server's own environment (runProcess extends it).
+    ...probe2.env !== void 0 ? { env: { ...probe2.env } } : {},
     timeoutMs: PROBE_TIMEOUT_MS,
     stdoutCapBytes: 256 * 1024
   });
@@ -47119,8 +47121,9 @@ function batchArgs(items, options) {
 
 // src/runners/semgrepRun.ts
 var SEMGREP_COMMAND = "semgrep";
+var SEMGREP_NO_VERSION_CHECK_ENV = { SEMGREP_ENABLE_VERSION_CHECK: "0" };
 function semgrepSpawn(env) {
-  return { command: SEMGREP_COMMAND, env: pythonUtf8Env(env) };
+  return { command: SEMGREP_COMMAND, env: { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV } };
 }
 function runSemgrep(opts, run = runProcess) {
   return run({ ...opts, ...semgrepSpawn(opts.env) });
@@ -47496,6 +47499,7 @@ function buildSemgrepDockerArgs(opts) {
     "--mount",
     `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
     ...(opts.readOnlyMounts ?? []).flatMap((m) => ["--mount", `type=bind,source=${m.source},target=${m.target},readonly`]),
+    ...Object.entries(SEMGREP_NO_VERSION_CHECK_ENV).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     "-w",
     CONTAINER_PROJECT_ROOT,
     image,
@@ -60899,7 +60903,7 @@ var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_ch
 var tool13 = {
   name: "audit_executive",
   title: "Executive audit (security + quality + deps + compliance)",
-  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a pom.xml (dev-guardian turns Trivy's version check and telemetry off); npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
+  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a pom.xml (dev-guardian turns Trivy's version check and telemetry off, and Semgrep's version check); npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
   inputSchema: {
     project_path: ProjectPath,
     severity_min: SeverityMin,
@@ -61098,9 +61102,6 @@ function localOnlyGaps(subTools) {
       "compliance_check: its Trivy license scan downloads no vulnerability database, but resolves a pom.xml's dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off)."
     );
   }
-  gaps.push(
-    "Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off."
-  );
   return gaps;
 }
 function subToolRuns(subTools, subResults) {
@@ -61172,7 +61173,8 @@ var TOOL_CATALOG = {
   semgrep: {
     name: "semgrep",
     version_floor: "1.0.0",
-    probe: { command: "semgrep", args: ["--version"] },
+    // `semgrep --version` runs Semgrep's version check too: off (semgrepRun.ts).
+    probe: { command: "semgrep", args: ["--version"], env: SEMGREP_NO_VERSION_CHECK_ENV },
     required_by: ["scan_sast", "security_scan_full", "bug_hunt", "review_pr", "compliance_check"],
     install: {
       win32: {
