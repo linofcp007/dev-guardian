@@ -293,7 +293,10 @@ registerToolModule(
       'Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation ' +
       'templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions ' +
       'security auditor: template injection, unpinned actions, excessive permissions) and actionlint ' +
-      '(workflow schema/expression correctness), each when installed.',
+      '(workflow schema/expression correctness), each when installed. The project configuration each ' +
+      'one reads (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; ' +
+      "`suppressed_by_repo_config` says what .trivyignore suppressed — `trivy config` cannot list it and " +
+      'says so (count null, unlisted_because).',
     scan_type: 'iac',
     category: 'security',
     supportsAutoFix: false,

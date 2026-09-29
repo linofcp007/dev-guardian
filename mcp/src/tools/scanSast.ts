@@ -172,23 +172,25 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      'Static analysis with Semgrep against the project. Runs the Semgrep registry ruleset ' +
+      'Static analysis with Semgrep: the registry ruleset ' +
       "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-      '.dev-guardian/configs.json records), rules registered for this project with ' +
+      '.dev-guardian/configs.json records), rules registered with ' +
       "register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model " +
-      'output reaching eval/shell/SQL, model-chosen tool names, trust_remote_code, torch.load, ' +
-      'request data in a system prompt, no token cap). Also runs Bandit when Python files are present, and ' +
+      'output reaching eval/shell/SQL, trust_remote_code, request data in a system prompt, …; a pack ' +
+      'that ran only in part: `tools_run[].plugin_packs`, its own gap). Also runs Bandit ' +
+      'when Python files are present, and ' +
       'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
       'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
-      '(plus Security Code Scan when referenced), reading their SARIF per target framework — that ' +
+      '(plus Security Code Scan when referenced) — that ' +
       "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
       'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
-      'did not load, is partial coverage, named. Reports go to .guardian/reports/sast-<scan>/. ' +
-      'PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. ' +
-      '(Semgrep refuses it with metrics off). ' +
+      'did not load, is partial coverage, named; so are the project files that decided a run ' +
+      '(`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to ' +
+      '.guardian/reports/sast-<scan>/. PRIVACY: --config=auto ' +
+      'downloads registry rules and sends usage metrics to Semgrep Inc. ' +
       'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
-      'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or what ' +
-      'changed since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
+      'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or ' +
+      'changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
       'Semgrep and Bandit where they can be named exactly.',
     scan_type: 'sast',
     category: 'security',

@@ -198,6 +198,18 @@ when a later scan runs, so regenerate it to see one. The window itself is
 bounded too — the latest scan plus two deltas, no multi-week trend (the
 plugin's own trend command still asks for history nothing here computes).
 
+## When the project's database is not used (upgrading from 3.0.0)
+
+If `health_status` returns a `storage_warning`, or a scan's `warnings` say the
+project's `.guardian/guardian.db` is not used, history is going to a per-user
+fallback: a database from before 3.0.1, or a copy, is never trusted automatically.
+Tell the user, and give them the command the warning names to run **themselves, in a
+terminal**, if the database is theirs — `node cli/dev-guardian.mjs db adopt --project <project>`
+shows what it holds; the same with `--yes` registers it. **Never run it yourself**,
+with or without `--yes`: it decides whose data dev-guardian trusts. Point them first at
+`suppressions.all_projects` (suppressions with no project hide findings in every
+project) and `storage.future_dated_scans_ignored` in the same result.
+
 ## Anti-patterns
 
 - Don't run `security_scan_full` for tiny changes — `review_pr` is 10×+ faster.

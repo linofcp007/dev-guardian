@@ -60,7 +60,9 @@ const reviewPr = makeScanTool({
         'from a temporary checkout of head. base_ref defaults to ' +
         'origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never ' +
         '"no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it ' +
-        'runs, may still download its database.',
+        'runs, may still download its database. `preexisting_manifest_gaps`: dependency manifests Trivy read ' +
+        "nothing for that the diff did not touch — the project's gap, in warnings, never the review's " +
+        'coverage. A diff that edits .guardianignore or .trivyignore is called out in warnings.',
     scan_type: 'review_pr',
     category: 'security',
     supportsAutoFix: false,

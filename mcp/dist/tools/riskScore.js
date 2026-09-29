@@ -49,7 +49,9 @@ const tool = {
         'recommend, and `coverage` — which scans it read, which newer scans it skipped because they ' +
         'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: ' +
         'findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and ' +
-        '`coverage_caveat` when the numbers are incomplete.',
+        '`coverage_caveat` when the numbers are incomplete. `suppressed_count`: findings an active ' +
+        'suppression took out of the score — a mass suppression shows here, never as a clean project. ' +
+        '`future_dated_note` when scans dated in the future were ignored.',
     inputSchema: { project_path: ProjectPath },
     handler: async (input, ctx) => handler(input, ctx),
 };

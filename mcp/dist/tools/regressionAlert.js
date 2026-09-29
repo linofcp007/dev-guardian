@@ -60,7 +60,10 @@ const tool = {
         'previous scan of that type) and flag when the severity-weighted change exceeds a ' +
         "threshold. project_path defaults to the server's working directory; scan_type defaults " +
         'to the newest finding-producing scan. Never compares scans of different types or ' +
-        'projects. Returns enough context for the model to recommend follow-up actions.',
+        'projects. A finding under an active suppression is neither new nor resolved and never moves the ' +
+        'score: it is counted apart in `suppressed_by_severity` — a mass suppression shows there, never as an ' +
+        "improvement. One whose scanner did not run this time is `not_remeasured_by_severity` (the scanners in " +
+        '`not_measured`), never resolved. Returns enough context for the model to recommend follow-up actions.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };

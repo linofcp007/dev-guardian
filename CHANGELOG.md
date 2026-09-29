@@ -416,6 +416,20 @@ them again. Scans made on the fallback meanwhile are not merged back.
   names the file and what to do. A `GuardianDbError` that reaches it is now printed alone, with
   exit 3: what `status` and `dashboard` exit with when they refuse an unusable database
   themselves. `db adopt` already printed its own the same way (exit 1, as documented).
+- **The response fields this release added were in no tool description**, so a model never read
+  them: `regression_alert` said `regressed: false` without a word about the criticals a
+  suppression had taken out of its score. Each description now names what a model needs to use
+  the tool correctly — `regression_alert`'s `suppressed_by_severity`; `diff_scans`'
+  `summary.suppressed` / `suppressed_findings` and its refusal of another project's or an
+  unfinished scan; `health_status`'s `storage_warning`, `suppressions` {active, this_project,
+  all_projects}, `future_dated_scans_ignored` / `future_dated_note`; `risk_score`'s
+  `suppressed_count` and `future_dated_note`; `report_export`'s refusal of another project's or a
+  running scan (with `retry_with`); the scans' `tools_run[].honoured_config`,
+  `suppressed_by_repo_config` and `plugin_packs`; `review_pr`'s `preexisting_manifest_gaps` —
+  all within the 1500-character limit. A test holds each description to its fields, and the
+  history tools' real results to what the descriptions promise. The router skill, every host's
+  rules file and `/guardian-status` say what to do with a `storage_warning`: give the user the
+  `db adopt` command to run themselves, in a terminal — never run it for them.
 
 ### Security
 
