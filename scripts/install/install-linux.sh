@@ -136,9 +136,28 @@ fi
 has bandit && g "✓ bandit"
 
 # Syft (SBOM)
+# A release fixada e o seu sha256, verificado ANTES de desempacotar — nunca o
+# script de instalação do ramo principal, que instalava a versão do momento.
+# Os mesmos valores de SYFT_VERSION / SYFT_RELEASE_SHA256 em
+# mcp/src/runners/installCatalog.ts (um teste mantém-nos iguais).
+# Cada passo sai por si ("|| exit 1"): dentro de "( … ) || r" o bash ignora o
+# set -e, e uma soma errada seguiria para o tar.
 b "=== Syft (SBOM) ==="
 if ! has syft; then
-  curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+  (
+    SYFT_VERSION=1.52.0
+    case "$(uname -m)" in
+      x86_64|amd64) arch=amd64; sum=caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d ;;
+      aarch64|arm64) arch=arm64; sum=c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706 ;;
+      *) echo "syft: sem arquivo fixado para este CPU ($(uname -m))" >&2; exit 1 ;;
+    esac
+    tmp="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$tmp"' EXIT
+    curl -sSfL -o "$tmp/syft.tar.gz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${arch}.tar.gz" || exit 1
+    echo "$sum  $tmp/syft.tar.gz" | sha256sum -c - || exit 1
+    tar -xzf "$tmp/syft.tar.gz" -C "$tmp" syft || exit 1
+    install -m 0755 "$tmp/syft" "$HOME/.local/bin/syft" || exit 1
+  ) || r "Falhou Syft — instala a v1.52.0 à mão (https://github.com/anchore/syft/releases/tag/v1.52.0)"
 fi
 has syft && g "✓ Syft"
 

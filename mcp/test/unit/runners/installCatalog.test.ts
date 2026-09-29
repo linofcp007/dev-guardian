@@ -3,10 +3,14 @@
  * the one install that piped a moving branch into `sh`, the probe every entry
  * now carries, and the known-compromised Trivy releases.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   COSIGN_RELEASE_SHA256,
   COSIGN_VERSION,
+  SYFT_RELEASE_SHA256,
+  SYFT_VERSION,
   TOOL_CATALOG,
   knownCompromise,
   suggestedInstallCommandString,
@@ -186,6 +190,60 @@ describe('cosign catalog entry', () => {
 
   it('macOS also offers Homebrew, the convention every other darwin entry follows', () => {
     expect(meta?.install.darwin.brew?.args).toEqual(['install', 'cosign']);
+  });
+});
+
+/**
+ * Review 3.0, wave 2 (e): Syft's Linux installer piped `install.sh` from
+ * anchore/syft's `main` branch into `sh`, and it installed "latest" — the
+ * route the TRIVY_INSTALL_TAG comment names for the 2026-03 Trivy
+ * compromise, in the default Linux profile. Now the pinned release archive,
+ * checked against its sha256 before it is unpacked, as cosign's binary is.
+ */
+describe('syft catalog entry', () => {
+  const meta = TOOL_CATALOG['syft'];
+
+  it.each([
+    ['linux', 'sha256sum -c -'],
+    ['darwin', 'shasum -a 256 -c -'],
+  ] as const)('%s: downloads the pinned release archive and checks its sha256 before unpacking it', (os, checker) => {
+    const spec = meta?.install[os].curl;
+    const script = spec?.args[1] ?? '';
+    expect(spec?.command).toBe('bash');
+    expect(SYFT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const key = `${os}-${arch}` as const;
+      expect(script).toContain(
+        `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_${os}_$arch.tar.gz`,
+      );
+      expect(script).toContain(SYFT_RELEASE_SHA256[key]);
+      expect(SYFT_RELEASE_SHA256[key]).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(script).toContain(checker);
+    // Checked, then unpacked, then installed; a failed check stops it (set -e).
+    expect(script.indexOf(checker)).toBeLessThan(script.indexOf('tar -xzf'));
+    expect(script.indexOf('tar -xzf')).toBeLessThan(script.indexOf('install -m 0755'));
+    expect(script.startsWith('set -eu')).toBe(true);
+    // No moving branch, no "latest", no script piped into a shell.
+    expect(script).not.toMatch(/\/main\/|latest|install\.sh|\|\s*sh\b/);
+    // An architecture with no pinned checksum is refused, never guessed.
+    expect(script).toMatch(/\*\) echo "[^"]*" >&2; exit 1/);
+    expect(spec?.description).toContain(SYFT_VERSION);
+  });
+
+  it('macOS offers Homebrew first, the convention every other darwin entry follows', () => {
+    expect(Object.keys(meta?.install.darwin ?? {})[0]).toBe('brew');
+  });
+
+  it('the default Linux bootstrap (install-linux.sh) installs the same pinned archive, checked the same way', () => {
+    const script = readFileSync(fileURLToPath(new URL('../../../../scripts/install/install-linux.sh', import.meta.url)), 'utf8');
+    const syft = script.slice(script.indexOf('# Syft (SBOM)'), script.indexOf('has syft && g'));
+    expect(syft).not.toMatch(/\/main\/|latest|install\.sh/);
+    expect(syft).toContain(`SYFT_VERSION=${SYFT_VERSION}`);
+    expect(syft).toContain(SYFT_RELEASE_SHA256['linux-amd64']);
+    expect(syft).toContain(SYFT_RELEASE_SHA256['linux-arm64']);
+    expect(syft).toContain('sha256sum -c -');
+    expect(syft.indexOf('sha256sum -c -')).toBeLessThan(syft.indexOf('tar -xzf'));
   });
 });
 

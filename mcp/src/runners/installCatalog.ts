@@ -93,6 +93,32 @@ export const COSIGN_RELEASE_SHA256 = {
   'darwin-arm64': '5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76',
 } as const;
 
+/**
+ * The Syft release the Linux and macOS release-archive installers fetch.
+ * Its `install.sh` used to be piped from anchore/syft's `main` branch into
+ * `sh` and install "latest" — the route {@link TRIVY_INSTALL_TAG} names for
+ * the 2026-03 Trivy compromise, in the default profile. v1.52.0 was published
+ * 2026-09-17 as an immutable GitHub release; bump it and
+ * {@link SYFT_RELEASE_SHA256} together, deliberately. `scripts/install/
+ * install-linux.sh` pins the same release and sums (a test holds them equal).
+ */
+export const SYFT_VERSION = '1.52.0';
+
+/**
+ * sha256 of each POSIX release archive of {@link SYFT_VERSION}. Each value
+ * was checked three ways on 2026-09-29 and all three agreed: the archive
+ * downloaded and hashed independently, the release's own
+ * `syft_1.52.0_checksums.txt`, and the digest GitHub records for the
+ * release asset. Windows installs go through scoop and choco, which verify
+ * against their own manifests.
+ */
+export const SYFT_RELEASE_SHA256 = {
+  'linux-amd64': 'caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d',
+  'linux-arm64': 'c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706',
+  'darwin-amd64': '56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917',
+  'darwin-arm64': '014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6',
+} as const;
+
 export const TOOL_CATALOG: Record<string, ToolMeta> = {
   semgrep: {
     name: 'semgrep',
@@ -194,10 +220,10 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     required_by: ['generate_sbom'],
     install: {
       win32: { scoop: scoopInstall('syft'), choco: chocoInstall('syft') },
-      linux: {
-        curl: curlInstaller('https://raw.githubusercontent.com/anchore/syft/main/install.sh'),
-      },
-      darwin: { brew: brewInstall('syft') },
+      // The pinned release archive, sha256-checked (see SYFT_VERSION) —
+      // never install.sh from `main`, never "latest".
+      linux: { curl: syftReleaseInstaller('linux') },
+      darwin: { brew: brewInstall('syft'), curl: syftReleaseInstaller('darwin') },
     },
     default: true,
   },
@@ -571,9 +597,9 @@ function npmInstallGlobal(pkg: string): InstallSpec {
 /**
  * Single-shot install script — invocation is `bash -c "curl … | sh"`.
  *
- * PRECONDITION: `url` must resolve to a raw shell script (trivy's and
- * syft's `contrib/install.sh` / `install.sh` on raw.githubusercontent.com
- * are the real examples in this file), never a GitHub *page* — in
+ * PRECONDITION: `url` must resolve to a raw shell script (trivy's
+ * `contrib/install.sh` at a release tag on raw.githubusercontent.com is the
+ * real example in this file), never a GitHub *page* — in
  * particular never a bare `.../releases/latest`. That URL 302s to the
  * release's HTML tag page, which `-f` accepts (it only fails on HTTP
  * error status) and `sh` cannot execute: the caller gets a wall of shell
@@ -586,8 +612,11 @@ function npmInstallGlobal(pkg: string): InstallSpec {
  * this helper on a URL that has not been checked.
  *
  * `tag`, when given, is passed to the script as the release to install —
- * godownloader-style scripts (trivy's, syft's) otherwise install "latest"
- * at the moment they run, so pinning the script's URL alone pins nothing.
+ * godownloader-style scripts (trivy's) otherwise install "latest" at the
+ * moment they run, so pinning the script's URL alone pins nothing. Where a
+ * release publishes its checksums, a pinned archive checked against them
+ * ({@link cosignReleaseInstaller}, {@link syftReleaseInstaller}) is better
+ * still: nothing fetched is run before it is checked.
  */
 function curlInstaller(url: string, tag?: string): InstallSpec {
   const pinned = tag !== undefined ? ` ${tag}` : '';
@@ -629,6 +658,40 @@ function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
     args: ['-c', script],
     needs_elevation: false,
     description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) → ~/.local/bin/cosign`,
+  };
+}
+
+/**
+ * Syft's pinned release archive for this CPU, checked against
+ * {@link SYFT_RELEASE_SHA256} before it is unpacked and its `syft` installed
+ * to `~/.local/bin` — the shape of {@link cosignReleaseInstaller}, for a
+ * `.tar.gz` instead of a bare binary. A CPU with no pinned checksum is
+ * refused rather than guessed, and `set -eu` stops at a failed download or a
+ * checksum mismatch, before anything is unpacked.
+ */
+function syftReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
+  const url = `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_${os}_$arch.tar.gz`;
+  const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+  const script = [
+    'set -eu',
+    'case "$(uname -m)" in',
+    `  x86_64|amd64) arch=amd64; sum=${SYFT_RELEASE_SHA256[`${os}-amd64`]} ;;`,
+    `  aarch64|arm64) arch=arm64; sum=${SYFT_RELEASE_SHA256[`${os}-arm64`]} ;;`,
+    '  *) echo "syft: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;',
+    'esac',
+    'tmp="$(mktemp -d)"',
+    'trap \'rm -rf "$tmp"\' EXIT',
+    `curl -sSfL -o "$tmp/syft.tar.gz" "${url}"`,
+    `echo "$sum  $tmp/syft.tar.gz" | ${check}`,
+    'tar -xzf "$tmp/syft.tar.gz" -C "$tmp" syft',
+    'mkdir -p "$HOME/.local/bin"',
+    'install -m 0755 "$tmp/syft" "$HOME/.local/bin/syft"',
+  ].join('\n');
+  return {
+    command: 'bash',
+    args: ['-c', script],
+    needs_elevation: false,
+    description: `syft v${SYFT_VERSION} release archive (${os}, sha256-checked) → ~/.local/bin/syft`,
   };
 }
 

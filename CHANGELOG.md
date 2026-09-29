@@ -451,6 +451,15 @@ version bump.
   (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
   findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
   and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
+- `install_toolchain` installs a pinned, checksummed Syft. Its Linux entry piped `install.sh` from anchore/syft's
+  `main` branch into `sh`, which installed whatever was "latest" when it ran — the route the 2026-03 Trivy compromise
+  took (`TRIVY_INSTALL_TAG`), for a tool in the default profile; the default Linux bootstrap
+  (`scripts/install/install-linux.sh`) did the same. Both now download the v1.52.0 release archive (published
+  2026-09-17, an immutable release) and check its sha256 before unpacking it, as cosign's installer does: each
+  value checked three ways (hashed independently, the release's `syft_1.52.0_checksums.txt`, GitHub's asset digest),
+  a CPU with no pinned sum refused. macOS gets the same archive after Homebrew. Measured in `node:22`: the archive
+  installs Syft 1.52.0; a wrong sum stops before `tar`, and nothing is installed. `SYFT_VERSION` and
+  `SYFT_RELEASE_SHA256` are bumped together, deliberately; a test holds the script to the same values.
 - Semgrep no longer checks for a newer version. Its version check asked `semgrep.dev` on every run — `local_only`,
   `--metrics=off` and `check_toolchain`'s `semgrep --version` included: measured through a refusing proxy on
   Semgrep 1.176.1 with a fresh home, `semgrep --version` and a scan with local rules and `--metrics=off` each asked

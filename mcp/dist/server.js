@@ -61169,6 +61169,13 @@ var COSIGN_RELEASE_SHA256 = {
   "darwin-amd64": "2347488e5d5b25336644024dfeca5601b190e91197a71a917bda44744aff106c",
   "darwin-arm64": "5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76"
 };
+var SYFT_VERSION = "1.52.0";
+var SYFT_RELEASE_SHA256 = {
+  "linux-amd64": "caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d",
+  "linux-arm64": "c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706",
+  "darwin-amd64": "56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917",
+  "darwin-arm64": "014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6"
+};
 var TOOL_CATALOG = {
   semgrep: {
     name: "semgrep",
@@ -61268,10 +61275,10 @@ var TOOL_CATALOG = {
     required_by: ["generate_sbom"],
     install: {
       win32: { scoop: scoopInstall("syft"), choco: chocoInstall("syft") },
-      linux: {
-        curl: curlInstaller("https://raw.githubusercontent.com/anchore/syft/main/install.sh")
-      },
-      darwin: { brew: brewInstall("syft") }
+      // The pinned release archive, sha256-checked (see SYFT_VERSION) —
+      // never install.sh from `main`, never "latest".
+      linux: { curl: syftReleaseInstaller("linux") },
+      darwin: { brew: brewInstall("syft"), curl: syftReleaseInstaller("darwin") }
     },
     default: true
   },
@@ -61677,6 +61684,31 @@ function cosignReleaseInstaller(os) {
     args: ["-c", script],
     needs_elevation: false,
     description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) \u2192 ~/.local/bin/cosign`
+  };
+}
+function syftReleaseInstaller(os) {
+  const url2 = `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_${os}_$arch.tar.gz`;
+  const check2 = os === "linux" ? "sha256sum -c -" : "shasum -a 256 -c -";
+  const script = [
+    "set -eu",
+    'case "$(uname -m)" in',
+    `  x86_64|amd64) arch=amd64; sum=${SYFT_RELEASE_SHA256[`${os}-amd64`]} ;;`,
+    `  aarch64|arm64) arch=arm64; sum=${SYFT_RELEASE_SHA256[`${os}-arm64`]} ;;`,
+    '  *) echo "syft: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;',
+    "esac",
+    'tmp="$(mktemp -d)"',
+    `trap 'rm -rf "$tmp"' EXIT`,
+    `curl -sSfL -o "$tmp/syft.tar.gz" "${url2}"`,
+    `echo "$sum  $tmp/syft.tar.gz" | ${check2}`,
+    'tar -xzf "$tmp/syft.tar.gz" -C "$tmp" syft',
+    'mkdir -p "$HOME/.local/bin"',
+    'install -m 0755 "$tmp/syft" "$HOME/.local/bin/syft"'
+  ].join("\n");
+  return {
+    command: "bash",
+    args: ["-c", script],
+    needs_elevation: false,
+    description: `syft v${SYFT_VERSION} release archive (${os}, sha256-checked) \u2192 ~/.local/bin/syft`
   };
 }
 function uvInstall(pkg) {
