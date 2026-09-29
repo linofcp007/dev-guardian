@@ -70,6 +70,13 @@ version bump.
   a lone `.tfvars`); Dockerfiles by Trivy's case-sensitive names; CloudFormation and ARM templates. Helm charts
   are not sniffed: a chart that fails to render is Trivy's own ERROR line, and one that renders nothing is not a
   gap. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is unchanged.
+- `scan_iac` compares every IaC-looking file with the report, not only when Trivy detected nothing: a templated
+  `k8s/pod.yaml` beside one clean Dockerfile read full (`num=1`). Trivy lists every file it read in `Results`,
+  clean ones with their Successes, and Terraform per module directory (measured on 0.69.3), so a file the report
+  does not name is partial — "Trivy read nothing from 1 IaC-looking file: k8s/pod.yaml". A chart's `templates/`
+  is Helm's to render and not compared (a template its values disable renders nothing, legitimately). A JSON file
+  is IaC-looking by its top-level keys only, parsed (up to 2 MB): a JSON Schema listing `apiVersion`, `kind` and
+  `metadata` as properties read partial.
 - `wp_vuln_check` is judged by WPScan's report. With no WPScan database (a fresh machine), WPScan writes
   `{"scan_aborted": "Update required, …"}` and exits 4 — the tool answered `ok`, 0 findings, with only a "rate
   limit" warning and no status or coverage. Now: exits 0 and 5 (VULNERABLE, which used to be stored as failed)

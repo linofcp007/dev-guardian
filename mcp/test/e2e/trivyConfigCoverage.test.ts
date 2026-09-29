@@ -168,6 +168,59 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
     expect(crd.out.coverage).toBe('full');
   });
 
+  /**
+   * Round 4, item 1: a templated manifest beside a file Trivy DID read read
+   * full, because the check ran only when Trivy detected nothing (num=1 here).
+   * Each IaC-looking file is now compared with the report's Targets.
+   */
+  it.skipIf(!TRIVY_INSTALLED)('a templated manifest beside a clean Dockerfile is partial; a clean mixed tree is full', async () => {
+    const DOCKERFILE = 'FROM alpine:3.18\nUSER nobody\nHEALTHCHECK CMD true\n';
+    const mixed = await run(
+      'scan_iac',
+      project({ Dockerfile: DOCKERFILE, 'k8s/pod.yaml': POD.replace('name: priv', 'name: {{ name }}') }),
+    );
+    const trivy = mixed.out.tools_run.find((t) => t.name === 'trivy-config');
+    expect(trivy?.reason).toMatch(/Trivy read nothing from 1 IaC-looking file: k8s\/pod\.yaml/);
+    expect(mixed.out.coverage).toBe('partial');
+
+    const clean = await run(
+      'scan_iac',
+      project({
+        Dockerfile: DOCKERFILE,
+        'k8s/pod.yaml': POD,
+        'infra/main.tf': 'variable "x" {\n  type = string\n}\n',
+        'infra/vars.tf': 'variable "y" {\n  type = string\n}\n',
+        'cfn/stack.yaml': 'AWSTemplateFormatVersion: "2010-09-09"\nResources:\n  T:\n    Type: AWS::SNS::Topic\n',
+        'k8s/deploy.json': JSON.stringify({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'x' }, spec: {} }),
+      }),
+    );
+    expect(clean.out.tools_run.find((t) => t.name === 'trivy-config')?.reason ?? '').not.toMatch(/read nothing|recognised/);
+    expect(clean.out.coverage).toBe('full');
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)('a Helm chart with a template its values disable is full', async () => {
+    const r = await run(
+      'scan_iac',
+      project({
+        'chart/Chart.yaml': 'apiVersion: v2\nname: x\nversion: 0.1.0\n',
+        'chart/templates/pod.yaml': POD.replace('name: priv', 'name: {{ .Values.name }}'),
+        'chart/templates/ingress.yaml':
+          '{{- if .Values.ingress.enabled }}\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: x\nspec:\n  rules: []\n{{- end }}\n',
+        'chart/values.yaml': 'name: p\ningress:\n  enabled: false\n',
+      }),
+    );
+    expect(r.findings).toBeGreaterThan(0);
+    expect(r.out.tools_run.find((t) => t.name === 'trivy-config')).toEqual({ name: 'trivy-config', status: 'ok' });
+    expect(r.out.coverage).toBe('full');
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)('scan_containers: a clean Dockerfile given in a subdirectory is full', async () => {
+    const dir = project({ 'docker/Dockerfile': 'FROM alpine:3.18\nUSER nobody\nHEALTHCHECK CMD true\n' });
+    const r = await run('scan_containers', dir, { dockerfile_path: 'docker/Dockerfile' });
+    expect(r.out.tools_run.find((t) => t.name === 'trivy-dockerfile')).toMatchObject({ status: 'ok' });
+    expect(r.out.missing_tools).not.toContain('trivy-dockerfile');
+  });
+
   it.skipIf(!TRIVY_INSTALLED)('scan_containers: a Dockerfile Trivy could not parse is partial, named', async () => {
     const dir = project({ Dockerfile: 'FROM alpine:3.18\nHEALTHCHECK --interval=bogus CMD true\n' });
     const r = await run('scan_containers', dir);

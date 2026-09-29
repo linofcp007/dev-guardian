@@ -114,6 +114,23 @@ describe('iacLookingFiles', () => {
    * Counted as IaC-looking, every Kustomize-only or skaffold project read
    * partial on every scan, with nothing to fix.
    */
+  // Round 4, item 7: the JSON rule matched the three keys ANYWHERE, so a JSON
+  // Schema listing them as properties read partial. Top-level keys only.
+  it('JSON: only top-level keys count, never a schema that lists them as properties', () => {
+    const dir = tree({
+      'schemas/pod.schema.json': JSON.stringify({
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        type: 'object',
+        properties: { apiVersion: { type: 'string' }, kind: { type: 'string' }, metadata: { type: 'object' } },
+      }),
+      'openapi.json': JSON.stringify({ components: { schemas: { Res: { properties: { Resources: {}, Type: 'AWS::X' } } } } }),
+      'k8s/deploy.json': JSON.stringify({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'x' } }),
+      'k8s/list.json': JSON.stringify([{ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'x' } }]),
+      'cfn/stack.json': JSON.stringify({ Resources: { B: { Type: 'AWS::S3::Bucket' } } }),
+    });
+    expect(iacLookingFiles(dir, null).files).toEqual(['cfn/stack.json', 'k8s/deploy.json']);
+  });
+
   it('does not count what Trivy never detects: Kustomize, skaffold, kind configs, a bare Chart.yaml, .tfvars', () => {
     const dir = tree({
       'base/kustomization.yaml': 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - https://example.com/base\n',
@@ -125,6 +142,27 @@ describe('iacLookingFiles', () => {
       'lower/dockerfile': 'FROM alpine\n',
     });
     expect(iacLookingFiles(dir, null).files).toEqual([]);
+  });
+
+  /**
+   * A chart's templates are Helm's to render, never files Trivy reads as they
+   * are: a template disabled by `{{- if .Values.x.enabled }}` renders nothing
+   * and is absent from the report legitimately (measured on 0.69.3: num=1,
+   * only the enabled template listed). With the per-file comparison of round
+   * 4, counting them would make every chart with an optional resource
+   * partial. A chart that fails to render is Trivy's own ERROR line.
+   */
+  it("a Helm chart's templates are not counted, subcharts' neither; the chart's siblings still are", () => {
+    const POD = 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: {{ .Values.name }}\n';
+    const dir = tree({
+      'chart/Chart.yaml': 'apiVersion: v2\nname: x\nversion: 0.1.0\n',
+      'chart/templates/pod.yaml': POD,
+      'chart/templates/ingress.yaml': '{{- if .Values.ingress.enabled }}\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: x\n{{- end }}\n',
+      'chart/charts/sub/Chart.yaml': 'apiVersion: v2\nname: sub\nversion: 0.1.0\n',
+      'chart/charts/sub/templates/pod.yaml': POD,
+      'k8s/templates/pod.yaml': POD,
+    });
+    expect(iacLookingFiles(dir, null).files).toEqual(['k8s/templates/pod.yaml']);
   });
 
   it('plain YAML and JSON that are not IaC do not count', () => {
@@ -183,9 +221,43 @@ describe('judgeTrivyConfig', () => {
     expect(j.missing).toEqual([]);
   });
 
-  it('detected files and no error is complete', () => {
-    const j = judgeTrivyConfig({ name: 'trivy-config', run: completed(TWO_DETECTED_LOG), raw: null, iacFiles: ['main.tf'] });
+  it('detected files, each in the report, and no error is complete', () => {
+    // Terraform is reported per module DIRECTORY ('.' at the root) — measured on 0.69.3.
+    const raw = JSON.stringify({ Results: [{ Target: '.', Type: 'terraform' }] });
+    const j = judgeTrivyConfig({ name: 'trivy-config', run: completed(TWO_DETECTED_LOG), raw, iacFiles: ['main.tf'] });
     expect(j.toolRun).toEqual({ name: 'trivy-config', status: 'ok' });
+  });
+
+  /**
+   * Round 4, item 1: the check ran only when Trivy detected NOTHING, so a
+   * templated pod.yaml beside one clean Dockerfile read full (num=1). Trivy
+   * lists every file it read in Results — clean ones too, with their
+   * `MisconfSummary` Successes (measured on 0.69.3) — so each IaC-looking
+   * file is compared with the report, one by one.
+   */
+  it('an IaC-looking file absent from the report is named, whatever else Trivy read', () => {
+    const raw = JSON.stringify({
+      Results: [
+        { Target: 'Dockerfile', Type: 'dockerfile', MisconfSummary: { Successes: 27, Failures: 0 } },
+        { Target: 'infra', Type: 'terraform', MisconfSummary: { Successes: 51, Failures: 0 } },
+        { Target: 'mod/main.tf', Type: 'terraform' },
+        { Target: 'k8s/clean.yaml', Type: 'kubernetes' },
+      ],
+    });
+    const j = judgeTrivyConfig({
+      name: 'trivy-config',
+      run: completed('2026-09-29T11:19:16+01:00\tINFO\tDetected config files\tnum=4\n'),
+      raw,
+      iacFiles: ['Dockerfile', 'infra/main.tf', 'infra/vars.tf', 'k8s/clean.yaml', 'k8s/pod.yaml', 'mod/main.tf', 'mod/vars.tf'],
+    });
+    expect(j.toolRun.reason).toMatch(/Trivy read nothing from 1 IaC-looking file: k8s\/pod\.yaml/);
+    expect(j.missing).toEqual(['trivy-config']);
+  });
+
+  it('scan_containers: a Dockerfile given in a subdirectory is reported by its own name', () => {
+    const raw = JSON.stringify({ Results: [{ Target: 'Dockerfile', Type: 'dockerfile' }] });
+    const j = judgeTrivyConfig({ name: 'trivy-dockerfile', run: completed(''), raw, iacFiles: ['docker/Dockerfile'], singleFile: true });
+    expect(j.missing).toEqual([]);
   });
 
   it('a count that was not logged falls back to the report: Results mean something was read', () => {

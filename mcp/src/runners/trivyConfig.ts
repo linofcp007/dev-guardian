@@ -25,9 +25,10 @@
  * The passes run without `--quiet` (the only output that changes is the log
  * on stderr: the report goes to `--output`). A parse error names its file in
  * a partial pass (`ok`, and its name in `missing_tools`, the reason naming
- * the files and Trivy's own error). A run that detected no config file at all
- * while files that look like IaC are there ({@link iacLookingFiles}) is
- * partial too — "no config file recognised" — naming them.
+ * the files and Trivy's own error). A file that looks like IaC
+ * ({@link iacLookingFiles}) and that the report does not name is partial too
+ * — "no config file recognised" when Trivy detected nothing, "Trivy read
+ * nothing from N IaC-looking file(s)" otherwise — naming them.
  *
  * ---- What "looks like IaC": what Trivy itself detects (round 2, item 3) ----
  *
@@ -54,19 +55,30 @@
  *     manifest (a library chart), is num=0 legitimately, and a chart that
  *     fails to render is reported by Trivy's own `ERROR [helm scanner]
  *     Failed to render Chart files` line (measured), which the parse-error
- *     path above names.
+ *     path above names. The `templates/` of a directory holding `Chart.yaml`
+ *     is not entered either: a template its values disable
+ *     (`{{- if .Values.ingress.enabled }}`) renders nothing and is absent
+ *     from the report legitimately (measured: num=1, only the enabled one).
+ *
+ * ---- Per file, not per run (round 4, item 1) --------------------------------
+ *
+ * The unrecognised-file check used to run only when Trivy detected NOTHING,
+ * so a templated pod.yaml beside one clean Dockerfile read full (num=1).
+ * Trivy lists every file it read in `Results` — clean ones too, with their
+ * `MisconfSummary` Successes — so each IaC-looking file is compared with the
+ * report's Targets ({@link readByTrivy}); any it does not name is partial.
  *
  * What this keeps catching is the I3 case: a manifest Trivy could not parse
  * — `name: {{ name }}` outside a chart, core kind or custom — has all three
  * keys at column 0 and was num=0 with no error.
  */
 
-import { closeSync, openSync, readdirSync, readSync, type Dirent } from 'node:fs';
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import type { ToolRun } from '../types.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
-import { asArray, getProp, parseInputAsJson } from './scannerParsers/index.js';
+import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured, type TrivyRunResult } from './trivyRun.js';
 
 export interface TrivyConfigParseError {
@@ -164,13 +176,49 @@ function head(abs: string): string | null {
   }
 }
 
-function looksLikeIacText(lowerName: string, text: string): boolean {
-  if (lowerName.endsWith('.json')) {
-    if (/"AWSTemplateFormatVersion"\s*:/.test(text)) return true;
-    if (/"Resources"\s*:/.test(text) && /"Type"\s*:\s*"AWS::/.test(text)) return true;
-    if (/"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json/i.test(text)) return true;
-    return /^\s*\{[\s\S]*"apiVersion"\s*:/.test(text) && /"kind"\s*:/.test(text) && /"metadata"\s*:/.test(text);
+/** JSON files larger than this are not parsed to decide (and not counted as IaC-looking). */
+const MAX_JSON_BYTES = 2 * 1024 * 1024;
+
+/**
+ * A JSON document's TOP-LEVEL keys decide (round 4, item 7): the three
+ * Kubernetes keys anywhere used to match a JSON Schema that merely lists them
+ * as properties. Parsed, bounded; an array, a non-object or a file that does
+ * not parse is not IaC-looking — Trivy's own JSON detection decodes an object.
+ */
+function looksLikeIacJson(text: string): boolean {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch {
+    return false;
   }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return false;
+  const top = doc as Record<string, unknown>;
+  if ('apiVersion' in top && 'kind' in top && 'metadata' in top) return true;
+  if ('AWSTemplateFormatVersion' in top) return true;
+  const schema = top['$schema'];
+  if (typeof schema === 'string' && /deploymentTemplate\.json/i.test(schema)) return true;
+  const resources = top['Resources'];
+  if (typeof resources === 'object' && resources !== null && !Array.isArray(resources)) {
+    return Object.values(resources).some((r) => {
+      const type = typeof r === 'object' && r !== null ? (r as Record<string, unknown>)['Type'] : undefined;
+      return typeof type === 'string' && type.startsWith('AWS::');
+    });
+  }
+  return false;
+}
+
+/** The whole file when it is at most `max` bytes; null otherwise, or unreadable. */
+function whole(abs: string, max: number): string | null {
+  try {
+    if (statSync(abs).size > max) return null;
+    return readFileSync(abs, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeIacText(text: string): boolean {
   // YAML: top-level keys only (column 0), so a nested `kind:` never counts;
   // all three of Trivy's keys in one document.
   const documents = text.split(/^---[^\n]*$/m);
@@ -216,10 +264,14 @@ export function iacLookingFiles(
     } catch {
       continue;
     }
+    // A chart's templates are Helm's to render (module comment): one disabled
+    // by its values renders nothing and is absent from the report legitimately.
+    const isChart = entries.some((e) => e.isFile() && e.name === 'Chart.yaml');
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
       if (e.isDirectory()) {
         if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith('.')) continue;
+        if (isChart && e.name === 'templates') continue;
         if (exclusions !== null && exclusions.ignores(child, true)) continue;
         stack.push(child);
         continue;
@@ -237,8 +289,13 @@ export function iacLookingFiles(
         continue;
       }
       sniffed += 1;
+      if (lower.endsWith('.json')) {
+        const text = whole(join(abs, e.name), MAX_JSON_BYTES);
+        if (text !== null && looksLikeIacJson(text)) files.push(child);
+        continue;
+      }
       const text = head(join(abs, e.name));
-      if (text !== null && looksLikeIacText(lower, text)) files.push(child);
+      if (text !== null && looksLikeIacText(text)) files.push(child);
     }
   }
   files.sort();
@@ -265,14 +322,44 @@ function named(items: readonly string[]): string {
   return items.length > MAX_NAMED ? `${shown} and ${items.length - MAX_NAMED} more` : shown;
 }
 
-/** Whether the report holds any Result — what a run that logged no count read. */
-function reportHasResults(raw: string | null): boolean {
-  if (raw === null) return false;
+/** Each Result's `Target` (`/`-separated) and `Type`, from the report; empty when there is none. */
+function reportTargets(raw: string | null): Array<{ target: string; type: string }> {
+  if (raw === null) return [];
   try {
-    return asArray(getProp(parseInputAsJson(raw), 'Results')).length > 0;
+    return asArray(getProp(parseInputAsJson(raw), 'Results')).flatMap((r) => {
+      const target = getString(r, 'Target');
+      return target === undefined ? [] : [{ target: target.split('\\').join('/').replace(/^\.\//, ''), type: getString(r, 'Type') ?? '' }];
+    });
   } catch {
-    return false;
+    return [];
   }
+}
+
+const TERRAFORM_FILE = /\.(tf|tf\.json|tofu|tofu\.json)$/;
+
+/**
+ * Whether Trivy's report covers `file`. Measured on 0.69.3: a Dockerfile,
+ * a manifest or a CloudFormation template is its own Target; Terraform is
+ * reported per module DIRECTORY (`infra`, `.` at the root), and a file of it
+ * with findings also by name — so a `.tf` counts as read when a terraform
+ * Result names its directory or any file in it. A single-file target
+ * (scan_containers) is named by its base name.
+ */
+function readByTrivy(file: string, read: ReadonlyArray<{ target: string; type: string }>, singleFile: boolean): boolean {
+  const slash = file.lastIndexOf('/');
+  const dir = slash < 0 ? '' : file.slice(0, slash);
+  const base = file.slice(slash + 1);
+  return read.some(({ target, type }) => {
+    if (target === file) return true;
+    if (singleFile && target === base) return true;
+    if (TERRAFORM_FILE.test(file) && type.startsWith('terraform')) {
+      const t = target === '.' ? '' : target;
+      if (t === dir) return true;
+      const tSlash = t.lastIndexOf('/');
+      return (tSlash < 0 ? '' : t.slice(0, tSlash)) === dir && TERRAFORM_FILE.test(t);
+    }
+    return false;
+  });
 }
 
 /**
@@ -285,6 +372,8 @@ export function judgeTrivyConfig(args: {
   run: TrivyRunResult;
   raw: string | null;
   iacFiles: readonly string[];
+  /** The run's target was one file (scan_containers): Trivy names it by its base name. */
+  singleFile?: boolean;
 }): TrivyConfigJudgement {
   const { name, run, raw, iacFiles } = args;
   if (run.outcome !== 'completed') {
@@ -299,16 +388,23 @@ export function judgeTrivyConfig(args: {
         'its misconfigurations were not checked',
     );
   }
-  const detected = log.detected ?? (reportHasResults(raw) ? 1 : 0);
-  if (detected === 0) {
-    const errored = new Set(log.parseErrors.map((e) => e.file).filter((f): f is string => f !== null));
-    const unrecognised = iacFiles.filter((f) => !errored.has(f) && !errored.has(f.slice(f.lastIndexOf('/') + 1)));
-    if (unrecognised.length > 0) {
-      gaps.push(
-        `no config file recognised: Trivy detected 0 config files, but ${named(unrecognised)} look like ` +
-          'infrastructure-as-code (a templated manifest or a layout Trivy does not read) — not checked',
-      );
-    }
+  // Per file, never only when Trivy detected nothing (round 4, item 1): a
+  // templated pod.yaml beside a clean Dockerfile read full on num=1. Trivy
+  // lists every file it read in Results — clean ones with their Successes.
+  const errored = new Set(log.parseErrors.map((e) => e.file).filter((f): f is string => f !== null));
+  const read = reportTargets(raw);
+  const unrecognised = iacFiles.filter(
+    (f) => !errored.has(f) && !errored.has(f.slice(f.lastIndexOf('/') + 1)) && !readByTrivy(f, read, args.singleFile === true),
+  );
+  if (unrecognised.length > 0) {
+    const detected = log.detected ?? read.length;
+    gaps.push(
+      detected === 0
+        ? `no config file recognised: Trivy detected 0 config files, but ${named(unrecognised)} look like ` +
+            'infrastructure-as-code (a templated manifest or a layout Trivy does not read) — not checked'
+        : `Trivy read nothing from ${unrecognised.length} IaC-looking file${unrecognised.length === 1 ? '' : 's'}: ` +
+            `${named(unrecognised)} (a templated manifest or a layout Trivy does not read) — not checked`,
+    );
   }
   if (gaps.length === 0) return { toolRun: withHonoured({ name, status: 'ok' }, run.honoured), missing: [] };
   return { toolRun: withHonoured({ name, status: 'ok', reason: gaps.join('; ') }, run.honoured), missing: [name] };

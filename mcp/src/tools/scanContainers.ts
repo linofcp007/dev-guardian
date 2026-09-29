@@ -225,6 +225,7 @@ const scanContainers = makeScanTool({
               run: result,
               raw,
               iacFiles: [relative(ctx.projectPath, dockerfile).split(sep).join('/')],
+              singleFile: true,
             });
             tools_run.push(judged.toolRun);
             missing_tools.push(...judged.missing);
