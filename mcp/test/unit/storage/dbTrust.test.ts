@@ -436,9 +436,24 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     );
   }
 
-  /** The project directory's birth time when this file system records one ({@link directoryBirthMs}). */
+  /**
+   * The project directory's birth time when this file system records one
+   * ({@link directoryBirthMs}). On Linux a birth time equal to the change
+   * time is not taken for one (it is what libuv reports without `statx`), and
+   * a directory nothing was added to since it was made — this test's, a
+   * moment ago, within one coarse timestamp tick — has exactly that. A real
+   * project's has had files added since; so has this one, a tick later.
+   */
   function birthOrSkip(dir: string, skip: () => void): number {
-    const birth = directoryBirthMs(canonicalPath(dir));
+    const canonical = canonicalPath(dir);
+    mkdirSync(join(dir, '.guardian'), { recursive: true });
+    let birth = directoryBirthMs(canonical);
+    if (birth === null) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      writeFileSync(join(dir, '.touched'), '');
+      rmDir(join(dir, '.touched'));
+      birth = directoryBirthMs(canonical);
+    }
     if (birth === null) skip();
     return birth ?? 0;
   }
@@ -976,7 +991,7 @@ describe('the per-user fallback location', () => {
     const opened = openDatabase({ projectPath: dir });
     try {
       expect(opened.path).toBe(':memory:');
-      expect(opened.warning).toMatch(/is a symbolic link.*history will not persist/);
+      expect(opened.warning).toMatch(/history will not persist: '[^']+' is a symbolic link; set GUARDIAN_DATA_DIR/);
     } finally {
       opened.db.close();
     }

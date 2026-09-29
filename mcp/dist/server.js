@@ -38012,7 +38012,8 @@ function statOrNull(path8, follow) {
   try {
     return follow ? statSync4(path8) : lstatSync2(path8);
   } catch (error2) {
-    if (error2.code === "ENOENT") return null;
+    const code = error2.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
     throw dataDirFailure(path8, "read", error2);
   }
 }

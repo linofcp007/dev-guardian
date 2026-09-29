@@ -104,7 +104,8 @@ describe('a path read from a database', () => {
           project.replace(/\\/g, '\\\\'),
           project.toUpperCase(),
         ]
-      : [project, `${project}/`, `${project}/.`, project.replace(/\//g, '//')];
+      : // Doubled separators after the root; a leading `//` is a network path, refused.
+        [project, `${project}/`, `${project}/.`, `/${project.slice(1).replace(/\//g, '//')}`];
     touched.length = 0;
     for (const s of spellings) expect({ s, match: isSpellingOf(s, project) }).toEqual({ s, match: true });
     expect(touched.filter((p) => !p.startsWith(project))).toEqual([]);

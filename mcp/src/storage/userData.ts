@@ -81,7 +81,10 @@ function statOrNull(path: string, follow: boolean): Stats | null {
   try {
     return follow ? statSync(path) : lstatSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // ENOTDIR: a component on the way is a file — the path does not exist
+    // either, and creating it is what fails, and says so.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
     throw dataDirFailure(path, 'read', error);
   }
 }
