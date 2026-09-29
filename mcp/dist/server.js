@@ -65146,9 +65146,9 @@ function failDomain19(code, message3) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync43, mkdirSync as mkdirSync11, readFileSync as readFileSync31, rmSync as rmSync7, writeFileSync as writeFileSync15 } from "node:fs";
-import { randomUUID as randomUUID9 } from "node:crypto";
-import { join as join56 } from "node:path";
+import { existsSync as existsSync43, mkdirSync as mkdirSync11, readdirSync as readdirSync23, readFileSync as readFileSync31, rmSync as rmSync7, writeFileSync as writeFileSync15 } from "node:fs";
+import { createHash as createHash10, randomUUID as randomUUID9 } from "node:crypto";
+import { dirname as dirname18, join as join56 } from "node:path";
 
 // src/runners/scannerParsers/wpscan.ts
 var WPSCAN_TOOL_NAME = "wpscan";
@@ -65604,8 +65604,9 @@ async function handler26(input, ctx) {
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   const scanId = randomUUID9();
-  const reportDir = localInstall !== void 0 ? join56(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join56(defaultWordfenceCacheDir(), "wp-vuln-check", `wpvuln-${scanId.slice(0, 8)}`);
+  const reportDir = localInstall !== void 0 ? join56(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join56(urlReportsDir(url2), `wpvuln-${String(Date.now()).padStart(13, "0")}-${scanId.slice(0, 8)}`);
   mkdirSync11(reportDir, { recursive: true });
+  if (localInstall === void 0) pruneUrlReports(dirname18(reportDir), reportDir);
   const outFile = join56(reportDir, "wpscan.json");
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -65700,6 +65701,36 @@ async function handler26(input, ctx) {
     report_path: outFile,
     warnings
   };
+}
+var URL_REPORT_DIR = /^wpvuln-\d{13}-[0-9a-f]{8}$/;
+function urlReportsDir(url2) {
+  const key = wpSiteKey(url2);
+  let host = "site";
+  try {
+    host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, "_") || "site";
+  } catch {
+  }
+  const hash = createHash10("sha256").update(key).digest("hex").slice(0, 12);
+  return join56(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash}`);
+}
+function pruneUrlReports(siteDir, current) {
+  const { keep } = resolveRetentionLimit(process.env["GUARDIAN_RETENTION_SCANS"]);
+  if (keep === 0) return;
+  let names;
+  try {
+    names = readdirSync23(siteDir).filter((n2) => URL_REPORT_DIR.test(n2));
+  } catch {
+    return;
+  }
+  const stale = names.sort().reverse().slice(Math.max(keep, 1));
+  for (const name of stale) {
+    const dir = join56(siteDir, name);
+    if (dir === current) continue;
+    try {
+      rmSync7(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+    }
+  }
 }
 var MISSING_DB = /update required|database file is missing/i;
 function readReport(outFile, stdout) {
@@ -67031,7 +67062,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync46, readFileSync as readFileSync32, readdirSync as readdirSync23, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync32, readdirSync as readdirSync24, statSync as statSync14 } from "node:fs";
 import { join as join60, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -67231,7 +67262,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync23(dir);
+      entries2 = readdirSync24(dir);
     } catch {
       return;
     }
@@ -67257,7 +67288,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { readFileSync as readFileSync33, readdirSync as readdirSync24, statSync as statSync15 } from "node:fs";
+import { readFileSync as readFileSync33, readdirSync as readdirSync25, statSync as statSync15 } from "node:fs";
 import { join as join61, relative as relative17 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -67374,7 +67405,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync24(dir);
+      entries2 = readdirSync25(dir);
     } catch {
       return;
     }
@@ -67398,7 +67429,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync47, readFileSync as readFileSync34, readdirSync as readdirSync25, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync47, readFileSync as readFileSync34, readdirSync as readdirSync26, statSync as statSync16 } from "node:fs";
 import { join as join62, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -67457,7 +67488,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync25(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync26(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -67534,7 +67565,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries2;
     try {
-      entries2 = readdirSync25(dir);
+      entries2 = readdirSync26(dir);
     } catch {
       return;
     }
@@ -68121,7 +68152,7 @@ function scoreRange(top) {
 }
 
 // src/tools/scanSkill.ts
-import { createHash as createHash10, randomUUID as randomUUID16 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID16 } from "node:crypto";
 import { mkdirSync as mkdirSync12, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join66 } from "node:path";
 
@@ -69270,7 +69301,7 @@ import {
   lstatSync as lstatSync6,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync37,
-  readdirSync as readdirSync26,
+  readdirSync as readdirSync27,
   readlinkSync,
   realpathSync as realpathSync6,
   rmSync as rmSync8,
@@ -69565,7 +69596,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries2;
     try {
-      entries2 = readdirSync26(dir);
+      entries2 = readdirSync27(dir);
     } catch {
       continue;
     }
@@ -69858,7 +69889,7 @@ function topFindings3(findings, limit) {
   return [...findings].sort((a2, b) => order[b.severity] - order[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)).slice(0, limit);
 }
 function hashFiles(parts) {
-  const h2 = createHash10("sha256");
+  const h2 = createHash11("sha256");
   for (const p of [...parts].sort()) h2.update(p).update("\n");
   return h2.digest("hex").slice(0, 32);
 }
@@ -70692,7 +70723,7 @@ function judgeSurfaceReport(args) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync39, readdirSync as readdirSync27, statSync as statSync20 } from "node:fs";
+import { readFileSync as readFileSync39, readdirSync as readdirSync28, statSync as statSync20 } from "node:fs";
 import { join as join69, relative as relative20, resolve as resolve14, sep as sep11 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -70744,7 +70775,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries2;
   try {
-    entries2 = readdirSync27(dir, { withFileTypes: true });
+    entries2 = readdirSync28(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -72357,7 +72388,7 @@ function livenessMessage(target, liveness, timeoutMs) {
 import { join as join72 } from "node:path";
 
 // src/dast/nuclei.ts
-import { dirname as dirname18 } from "node:path";
+import { dirname as dirname19 } from "node:path";
 var DEFAULT_NUCLEI_RATE_LIMIT = 10;
 var ALWAYS_EXCLUDED_TAGS = ["dos", "fuzz"];
 function excludedTags(allowIntrusive) {
@@ -72432,7 +72463,7 @@ async function invokeNuclei(opts) {
     // has no bearing on what gets scanned; `outputPath`'s own directory is
     // used only because it is a real, already-relevant path handed to us,
     // rather than reaching for ambient process state.
-    cwd: dirname18(opts.outputPath),
+    cwd: dirname19(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
     // first is decorative: execa extends `process.env` by default, and the
@@ -72553,7 +72584,7 @@ function normalizeNucleiJsonl(jsonl, routes) {
 }
 
 // src/dast/probe.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 var BODY_PREFIX_BYTES = 8192;
 var BODY_READ_CAP_BYTES = 256 * 1024;
 var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
@@ -72590,7 +72621,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text2.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash11("sha256").update(text2).digest("hex"),
+      body_hash: createHash12("sha256").update(text2).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -73919,7 +73950,7 @@ function escapeRegExp3(text2) {
 }
 
 // src/fixpr/candidates.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 var DEP_SCANNER_TOOLS = ["trivy", "npm-audit", "pip-audit", "dotnet-list-package", "wpscan"];
 function buildGroups(input) {
   const rescannable = input.rescannable ?? (() => true);
@@ -74063,7 +74094,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash = createHash12("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash = createHash13("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash };
 }
 function countFingerprints(group) {
@@ -74314,12 +74345,12 @@ function errorMessage2(e) {
 var import_yaml9 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync42, rmSync as rmSync10, statSync as statSync21, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename8, dirname as dirname19, join as join75 } from "node:path";
+import { basename as basename8, dirname as dirname20, join as join75 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
   const prefix = checkId.slice(0, checkId.length - id.length - 1);
-  const tail = basename8(dirname19(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  const tail = basename8(dirname20(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail.length > 0 && (prefix === tail || prefix.endsWith(`.${tail}`));
 }
 function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
@@ -75375,7 +75406,7 @@ function failDomain24(code, message3) {
 import { randomUUID as randomUUID18 } from "node:crypto";
 
 // src/agentaudit/hash.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 var Literal = class {
   constructor(text2) {
     this.text = text2;
@@ -75422,7 +75453,7 @@ function stableStringify2(value) {
   return parts.join("");
 }
 function hashConfigValue(value) {
-  return createHash13("sha256").update(stableStringify2(value)).digest("hex");
+  return createHash14("sha256").update(stableStringify2(value)).digest("hex");
 }
 
 // src/agentaudit/mcpServers.ts
@@ -76132,7 +76163,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname20, isAbsolute as isAbsolute15, join as join81, relative as relative24 } from "node:path";
+import { dirname as dirname21, isAbsolute as isAbsolute15, join as join81, relative as relative24 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync as closeSync3, constants as constants4, fstatSync, lstatSync as lstatSync8, openSync as openSync3, readlinkSync as readlinkSync2, readSync as readSync2 } from "node:fs";
@@ -76475,7 +76506,7 @@ function isWithin(root, path8) {
 function walkRoot(kind, projectPath, path8) {
   if (kind === "project") return projectPath;
   const home = homedir3();
-  return isWithin(home, path8) ? home : dirname20(dirname20(path8));
+  return isWithin(home, path8) ? home : dirname21(dirname21(path8));
 }
 function readOne2(descriptor, projectPath) {
   const absolutePath = descriptor.resolve(projectPath);
@@ -82753,9 +82784,9 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { lstatSync as lstatSync9, readdirSync as readdirSync28 } from "node:fs";
+import { lstatSync as lstatSync9, readdirSync as readdirSync29 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname21, isAbsolute as isAbsolute17, join as join83, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
+import { dirname as dirname22, isAbsolute as isAbsolute17, join as join83, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -82782,7 +82813,7 @@ function walkRoot2(path8, ctx, under) {
   const home = resolve21(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside4(project, abs)) return project;
-  const dir = dirname21(abs);
+  const dir = dirname22(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside4(home, abs)) return home;
   return parse6(abs).root;
@@ -82816,7 +82847,7 @@ function listDir(dir, ctx) {
     return [];
   }
   try {
-    return readdirSync28(dir);
+    return readdirSync29(dir);
   } catch (e) {
     const code = e.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir, "directory");
@@ -82836,7 +82867,7 @@ function ancestors(ctx) {
     if (stops.some((s) => samePath2(s, dir))) break;
     out.push(dir);
     if (present(join83(dir, ".git"))) break;
-    const parent = dirname21(dir);
+    const parent = dirname22(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -82944,9 +82975,9 @@ function npmConfigFiles(ctx) {
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
-    for (let dir = dirname21(top), i2 = 0; i2 < 64; dir = dirname21(dir), i2 += 1) {
+    for (let dir = dirname22(top), i2 = 0; i2 < 64; dir = dirname22(dir), i2 += 1) {
       files.push({ path: join83(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
-      if (dirname21(dir) === dir) break;
+      if (dirname22(dir) === dir) break;
     }
   }
   const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join83(home, ".config");
@@ -82963,7 +82994,7 @@ function npmConfigFiles(ctx) {
   );
   const globalConfig2 = envValue2(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join83(envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming"), "npm") : dirname21(dirname21(ctx.nodeExecPath ?? process.execPath)));
+  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join83(envValue2(env, "APPDATA") ?? join83(home, "AppData", "Roaming"), "npm") : dirname22(dirname22(ctx.nodeExecPath ?? process.execPath)));
   files.push({ path: join83(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
@@ -83019,7 +83050,7 @@ function findManifest(root, file, match, ctx) {
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
-      entries2 = readdirSync28(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
+      entries2 = readdirSync29(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
     } catch {
       continue;
     }
@@ -83198,7 +83229,7 @@ function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
   const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue2(env, name) ?? whole);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve21(dirname21(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve21(dirname22(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -83225,7 +83256,7 @@ function nugetRegistry(name, ctx) {
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
-      const parent = dirname21(dir);
+      const parent = dirname22(dir);
       if (parent === dir) break;
       dir = parent;
     }

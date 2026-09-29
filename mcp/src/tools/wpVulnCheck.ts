@@ -33,9 +33,10 @@
  *     never the server's working directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { resolveRetentionLimit } from '../storage/maintenance.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { canonicalPath } from '../platform/projectPath.js';
@@ -156,8 +157,9 @@ async function handler(
   const reportDir =
     localInstall !== undefined
       ? join(localInstall, '.guardian', 'reports', `wpvuln-${scanId.slice(0, 8)}`)
-      : join(defaultWordfenceCacheDir(), 'wp-vuln-check', `wpvuln-${scanId.slice(0, 8)}`);
+      : join(urlReportsDir(url), `wpvuln-${String(Date.now()).padStart(13, '0')}-${scanId.slice(0, 8)}`);
   mkdirSync(reportDir, { recursive: true });
+  if (localInstall === undefined) pruneUrlReports(dirname(reportDir), reportDir);
   const outFile = join(reportDir, 'wpscan.json');
 
   ctx.storage.scans.insert({
@@ -269,6 +271,56 @@ async function handler(
     report_path: outFile,
     warnings,
   };
+}
+
+// ---------------------------------------------------------------- URL-only reports in the user cache
+//
+// A site given only by URL has no project to hold its report, so the report
+// goes to the per-user dev-guardian cache (never the server's working
+// directory) — one directory per site, `<host>-<hash>` of the key the scan
+// row is filed under (`wpSiteKey`). Round 2, item 5: nothing pruned them.
+// Each site keeps its newest N reports, N being the scan retention's own
+// (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps everything —
+// `storage/maintenance.ts`), which is how many `wp_vuln_check` rows per site
+// the database keeps: a report outlives its row by at most that bound.
+// Report directories are named `wpvuln-<13-digit ms>-<scan>`, so their names
+// sort by age; nothing else in the directory is touched.
+
+const URL_REPORT_DIR = /^wpvuln-\d{13}-[0-9a-f]{8}$/;
+
+/** The cache directory of one site's reports. */
+function urlReportsDir(url: string): string {
+  const key = wpSiteKey(url);
+  let host = 'site';
+  try {
+    host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, '_') || 'site';
+  } catch {
+    /* not a URL the parser takes: the hash alone names it */
+  }
+  const hash = createHash('sha256').update(key).digest('hex').slice(0, 12);
+  return join(defaultWordfenceCacheDir(), 'wp-vuln-check', `${host}-${hash}`);
+}
+
+/** Keep the newest N report directories of one site (never `current`); best-effort. */
+function pruneUrlReports(siteDir: string, current: string): void {
+  const { keep } = resolveRetentionLimit(process.env['GUARDIAN_RETENTION_SCANS']);
+  if (keep === 0) return;
+  let names: string[];
+  try {
+    names = readdirSync(siteDir).filter((n) => URL_REPORT_DIR.test(n));
+  } catch {
+    return;
+  }
+  const stale = names.sort().reverse().slice(Math.max(keep, 1));
+  for (const name of stale) {
+    const dir = join(siteDir, name);
+    if (dir === current) continue;
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* the next scan of this site tries again */
+    }
+  }
 }
 
 /** WPScan's own words for a scan it refused without a database (`lib/wpscan/errors/update.rb`). */

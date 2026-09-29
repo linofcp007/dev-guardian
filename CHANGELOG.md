@@ -72,7 +72,9 @@ version bump.
   an API token WPScan returns no vulnerability data (`vuln_api.error`), so the pass is `skipped`, coverage `none`,
   `vulnerabilities_checked: false` — never a clean 0 — and an API error is `failed`. The response carries
   `status`, `tools_run`, `missing_tools` and `coverage`. Its report goes under the install, or the per-user cache
-  for a URL, never the server's working directory, and WPScan runs there (it reads `./.wpscan/scan.yml`). Its
+  for a URL, never the server's working directory, and WPScan runs there (it reads `./.wpscan/scan.yml`). A URL's
+  reports live in one directory per site and keep the newest N, N being the scan retention's own
+  (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all) — as many as the database keeps rows for that site. Its
   description no longer says a missing token only rate-limits.
 - A shallow clone's secret history no longer reads as complete. `git clone --depth 1` of a repository whose secret
   was removed in a later commit gave "history: 1 commit(s) scanned", coverage full, 0 findings (the full clone:

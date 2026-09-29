@@ -18,7 +18,7 @@
  */
 
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
@@ -225,6 +225,36 @@ describe('wp_vuln_check — judged by WPScan’s report (review C1)', () => {
     expect(wpvulnDirs()).toEqual(before);
     // Nor is WPScan started there (it reads ./.wpscan/scan.yml from its working directory).
     for (const c of vi.mocked(runProcess).mock.calls) expect(resolve(c[0].cwd)).not.toBe(resolve(process.cwd()));
+  });
+
+  /**
+   * Round 2, item 5: URL-only reports go to the user cache, which nothing
+   * pruned. They keep the newest N per URL — N being the scan retention's own
+   * (`GUARDIAN_RETENTION_SCANS`, default 50, 0 keeps everything), which is
+   * how many scan rows per (URL, scan type) the database keeps.
+   */
+  it('keeps the newest N reports per URL in the user cache, N the scan retention', async () => {
+    vi.stubEnv('GUARDIAN_RETENTION_SCANS', '2');
+    vi.mocked(runProcess).mockImplementation(async (o) => wpscanWrites(VULNERABLE, 5)(o));
+    const paths: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      paths.push((await check({ target_url: 'https://site.example/', api_token: 't' })).out.report_path);
+    }
+    const other = (await check({ target_url: 'https://other.example', api_token: 't' })).out.report_path;
+    const siteDir = dirname(dirname(paths[2] ?? ''));
+    expect(dirname(dirname(paths[0] ?? ''))).toBe(siteDir);
+    expect(readdirSync(siteDir).sort()).toEqual([basename(dirname(paths[1] ?? '')), basename(dirname(paths[2] ?? ''))].sort());
+    expect(existsSync(paths[2] ?? '')).toBe(true);
+    expect(existsSync(other)).toBe(true);
+    expect(dirname(dirname(other))).not.toBe(siteDir);
+  });
+
+  it('GUARDIAN_RETENTION_SCANS=0 keeps every report', async () => {
+    vi.stubEnv('GUARDIAN_RETENTION_SCANS', '0');
+    vi.mocked(runProcess).mockImplementation(async (o) => wpscanWrites(VULNERABLE, 5)(o));
+    const paths: string[] = [];
+    for (let i = 0; i < 3; i++) paths.push((await check({ target_url: 'https://keep.example/', api_token: 't' })).out.report_path);
+    for (const p of paths) expect(existsSync(p)).toBe(true);
   });
 
   it('a local install gets its report under the install, and WPScan runs in the report directory', async () => {
