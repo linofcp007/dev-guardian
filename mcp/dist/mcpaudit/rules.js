@@ -61,11 +61,17 @@ const READ_VERB = String.raw `(?:read|open|cat|load|include|pass|send|provide|at
 const DIRECTIVE = String.raw `(?:^|[.!?:;,(]\s*|\b(?:you\s+(?:must|should|need\s+to|have\s+to)|please|first|then|and|also|always|now)\s+)`;
 /** Up to 80 characters of the same sentence: a dot inside a path does not end it. */
 const SAME_SENTENCE = String.raw `(?:(?![.!?](?:\s|$))[^\n]){0,80}?`;
+/**
+ * What follows a `.ssh` path when it names a public key or `known_hosts`:
+ * neither is a secret (fix round 5, M7), and a key-registration helper
+ * legitimately reads one.
+ */
+const NOT_A_SECRET_AFTER = String.raw `(?![^\s\x60'"]*?(?:\.pub|known_hosts)\b)`;
 /** A credential or agent-config file, named as a path (either slash). */
 const SENSITIVE_PATH = [
-    String.raw `~[\/\\]\.ssh\b`,
-    String.raw `\.ssh[\/\\]`,
-    String.raw `\bid_(?:rsa|dsa|ecdsa|ed25519)\b`,
+    String.raw `~[\/\\]\.ssh\b${NOT_A_SECRET_AFTER}`,
+    String.raw `\.ssh[\/\\]${NOT_A_SECRET_AFTER}`,
+    String.raw `\bid_(?:rsa|dsa|ecdsa|ed25519)\b(?!\.pub\b)`,
     String.raw `\bauthorized_keys\b`,
     String.raw `\bmcp\.json\b`,
     String.raw `\bmcp_config\.json\b`,
@@ -81,24 +87,36 @@ const SENSITIVE_PATH = [
     String.raw `\.docker[\/\\]config\.json`,
     String.raw `\.kube[\/\\]config\b`,
     String.raw `\/etc\/(?:passwd|shadow)\b`,
-    // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`.
-    String.raw `(?:^|[\s\x60'"(\/\\])\.env(?:\.[\w-]+)?(?![\w-])`,
+    // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`, and not
+    // the templates `.env.example`, `.env.sample`, `.env.template` (fix round
+    // 5, M7). A lookbehind, so `read .env` matches: the verb's own space is
+    // not there to be consumed a second time.
+    String.raw `(?<=^|[\s\x60'"(\/\\])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)?(?![\w-])`,
 ].join('|');
 /** A credential or agent-config path anywhere in a text. */
 export const SENSITIVE_PATH_ANYWHERE = new RegExp(`(?:${SENSITIVE_PATH})`, 'i');
+/** `pass it`, `include its contents`, `send the key` … then a preposition: the start of a pass-on. */
+const PASS_ON = String.raw `\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` +
+    String.raw `(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` +
+    String.raw `[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|an\s+|this\s+)?`;
 /**
- * A directive to pass something ON — into a parameter, another tool, a URL,
- * a request — rather than to use it (fix round 4, M7): `pass its content as
- * 'sidenote'`, `include it as sidenote.`, `send it to https://…`, `put the
- * contents in the notes parameter`. With a sensitive path in the same text
- * this is the shape of tool-poisoning exfiltration, and the finding is high.
+ * A directive to pass something ON to a parameter, another tool or a URL
+ * (fix rounds 4 and 5, M7): `pass its content as 'sidenote'`, `put the
+ * contents in the notes parameter`, `pass it to the send_email tool`, `send
+ * it to https://…`. With a sensitive path in the same sentence this is the
+ * shape of tool-poisoning exfiltration, and the finding is high.
  */
-export const PASS_ELSEWHERE = [
-    new RegExp(String.raw `\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` +
-        String.raw `(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` +
-        String.raw `[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|this\s+)?` +
-        String.raw `(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?\b|arg(?:ument)?\b|https?:\/\/|[a-z_][\w-]*(?=\s*[.;,)]|\s*$))`, 'i'),
+export const PASS_TO_DESTINATION = [
+    new RegExp(PASS_ON +
+        String.raw `(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?s?\b|arg(?:ument)?s?\b|(?:other\s+|another\s+)?tool\b|[a-z][a-z0-9+.-]*:\/\/)`, 'i'),
 ];
+/**
+ * A pass-on to a bare word, captured: `include it in the response`, `add
+ * them to the report`, `include it as sidenote`. Output goes to the user,
+ * so this is medium — unless the word is a parameter of the tool itself, in
+ * which case it is a {@link PASS_TO_DESTINATION} written without quotes.
+ */
+export const PASS_TO_WORD = new RegExp(PASS_ON + String.raw `([a-z_][\w-]*)`, 'i');
 const OWNER = String.raw `(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
 const SECRET_NOUN = String.raw `(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 /** What an exfiltration instruction ships out. */

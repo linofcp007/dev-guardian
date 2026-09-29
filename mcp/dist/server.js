@@ -2809,11 +2809,11 @@ var require_validate = __commonJS({
         jsonPointer = $data;
         data = names_1.default.rootData;
       } else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
+        const matches2 = RELATIVE_JSON_POINTER.exec($data);
+        if (!matches2)
           throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
+        const up = +matches2[1];
+        jsonPointer = matches2[2];
         if (jsonPointer === "#") {
           if (up >= dataLevel)
             throw new Error(errorMsg("property/index", up));
@@ -3700,11 +3700,11 @@ var require_schemes = __commonJS({
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
-      const matches = urnComponent.path.match(URN_REG);
-      if (matches && matches[0] === urnComponent.path) {
+      const matches2 = urnComponent.path.match(URN_REG);
+      if (matches2 && matches2[0] === urnComponent.path) {
         const scheme = options.scheme || urnComponent.scheme || "urn";
-        urnComponent.nid = matches[1].toLowerCase();
-        urnComponent.nss = matches[2];
+        urnComponent.nid = matches2[1].toLowerCase();
+        urnComponent.nss = matches2[2];
         const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
@@ -4018,8 +4018,8 @@ var require_fast_uri = __commonJS({
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
     var AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/;
     var AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/;
-    function getParseError(parsed, matches) {
-      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+    function getParseError(parsed, matches2) {
+      if (matches2[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
         return 'URI path must start with "/" when authority is present.';
       }
       if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
@@ -4041,9 +4041,9 @@ var require_fast_uri = __commonJS({
     function isIPLiteral(host) {
       return host[0] === "[" && host[host.length - 1] === "]";
     }
-    function hasMalformedComponentPercentEncoding(matches) {
-      const host = matches[4];
-      return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
+    function hasMalformedComponentPercentEncoding(matches2) {
+      const host = matches2[4];
+      return hasMalformedPercentEncoding(matches2[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches2[6]) || hasMalformedPercentEncoding(matches2[7]) || hasMalformedPercentEncoding(matches2[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
@@ -4100,15 +4100,15 @@ var require_fast_uri = __commonJS({
           }
         }
       }
-      const matches = uri.match(URI_PARSE);
-      if (matches) {
-        parsed.scheme = matches[1];
-        parsed.userinfo = matches[3];
-        parsed.host = matches[4];
-        parsed.port = parseInt(matches[5], 10);
-        parsed.path = matches[6] || "";
-        parsed.query = matches[7];
-        parsed.fragment = matches[8];
+      const matches2 = uri.match(URI_PARSE);
+      if (matches2) {
+        parsed.scheme = matches2[1];
+        parsed.userinfo = matches2[3];
+        parsed.host = matches2[4];
+        parsed.port = parseInt(matches2[5], 10);
+        parsed.path = matches2[6] || "";
+        parsed.query = matches2[7];
+        parsed.fragment = matches2[8];
         if (parsed.scheme !== void 0) {
           const decodedScheme = unescape(parsed.scheme);
           if (VALID_SCHEME.test(decodedScheme)) {
@@ -4118,14 +4118,14 @@ var require_fast_uri = __commonJS({
             malformedScheme = true;
           }
         }
-        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches);
+        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches2);
         if (malformedPercentEncoding) {
           parsed.error = parsed.error || "URI contains malformed percent-encoding.";
         }
         if (isNaN(parsed.port)) {
-          parsed.port = matches[5];
+          parsed.port = matches2[5];
         }
-        const parseError = getParseError(parsed, matches);
+        const parseError = getParseError(parsed, matches2);
         if (parseError !== void 0) {
           parsed.error = parsed.error || parseError;
           malformedAuthorityOrPort = true;
@@ -6975,12 +6975,12 @@ var require_formats = __commonJS({
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     function date4(str6) {
-      const matches = DATE.exec(str6);
-      if (!matches)
+      const matches2 = DATE.exec(str6);
+      if (!matches2)
         return false;
-      const year = +matches[1];
-      const month = +matches[2];
-      const day = +matches[3];
+      const year = +matches2[1];
+      const month = +matches2[2];
+      const day = +matches2[3];
       return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && isLeapYear(year) ? 29 : DAYS[month]);
     }
     function compareDate(d1, d2) {
@@ -6995,16 +6995,16 @@ var require_formats = __commonJS({
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
       return function time3(str6) {
-        const matches = TIME.exec(str6);
-        if (!matches)
+        const matches2 = TIME.exec(str6);
+        if (!matches2)
           return false;
-        const hr = +matches[1];
-        const min = +matches[2];
-        const sec = +matches[3];
-        const tz = matches[4];
-        const tzSign = matches[5] === "-" ? -1 : 1;
-        const tzH = +(matches[6] || 0);
-        const tzM = +(matches[7] || 0);
+        const hr = +matches2[1];
+        const min = +matches2[2];
+        const sec = +matches2[3];
+        const tz = matches2[4];
+        const tzSign = matches2[5] === "-" ? -1 : 1;
+        const tzH = +(matches2[6] || 0);
+        const tzM = +(matches2[7] || 0);
         if (tzH > 23 || tzM > 59 || strictTimeZone && !tz)
           return false;
         if (hr <= 23 && min <= 59 && sec < 60)
@@ -44058,15 +44058,15 @@ async function findOwnMsysProcesses(command, token) {
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
     const grep = (files) => execa(join20(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
-    let matches;
+    let matches2;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
-      matches = parseEnvironMatches(all.stdout);
+      matches2 = parseEnvironMatches(all.stdout);
     } else {
       const each = await Promise.all(roots.map((f) => grep([f])));
-      matches = new Set(each.flatMap((r) => [...parseEnvironMatches(r.stdout)]));
+      matches2 = new Set(each.flatMap((r) => [...parseEnvironMatches(r.stdout)]));
     }
-    return selectOwnMsysProcesses(snapshot, matches, self);
+    return selectOwnMsysProcesses(snapshot, matches2, self);
   } catch {
     return none;
   }
@@ -57692,18 +57692,18 @@ function collectExplicit(projectPath, paths) {
         rejected.push({ path: raw, reason: "a glob must be relative to the project" });
         continue;
       }
-      const matches = expandGlob(projectPath, raw).filter((p) => {
+      const matches2 = expandGlob(projectPath, raw).filter((p) => {
         try {
           return statSync12(p).isFile();
         } catch {
           return false;
         }
       });
-      if (matches.length === 0) {
+      if (matches2.length === 0) {
         rejected.push({ path: raw, reason: "matched no file" });
         continue;
       }
-      for (const match of matches) consider(match, registered, rejected);
+      for (const match of matches2) consider(match, registered, rejected);
       continue;
     }
     consider(resolve12(projectPath, raw), registered, rejected);
@@ -60071,7 +60071,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
   const targets = allComponents(inventory).filter(
     (c3) => c3.version !== null
   );
-  const matches = [];
+  const matches2 = [];
   for (const vuln of Object.values(feed)) {
     for (const software of vuln.software) {
       const target = targets.find((t) => t.type === software.type && t.slug === software.slug);
@@ -60080,7 +60080,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
         (range) => versionInRange(target.version, range)
       );
       if (!inRange) continue;
-      matches.push({
+      matches2.push({
         vulnId: vuln.id,
         title: vuln.title,
         cve: vuln.cve ?? null,
@@ -60096,7 +60096,7 @@ function matchInventoryAgainstFeed(inventory, feed) {
       });
     }
   }
-  return matches;
+  return matches2;
 }
 function severityOf2(cvss) {
   const rating = cvss?.rating?.toLowerCase();
@@ -60321,7 +60321,7 @@ registerToolModule(
       warnings.push(...inventory.warnings);
       const offline = ctx.scriptEnv["GUARDIAN_OFFLINE"] === "1";
       const apiKey = ctx.scriptEnv["WORDFENCE_API_KEY"];
-      let matches = [];
+      let matches2 = [];
       const coverage = assessComponentCoverage(inventory);
       const wf = await getWordfenceFeed({
         ...apiKey !== void 0 ? { apiKey } : {},
@@ -60330,7 +60330,7 @@ registerToolModule(
         signal: ctx.signal
       });
       if (wf.ok) {
-        matches = matchInventoryAgainstFeed(inventory, wf.feed);
+        matches2 = matchInventoryAgainstFeed(inventory, wf.feed);
         const entry = { name: "wordfence-feed", status: "ok" };
         if (wf.stale) {
           entry.reason = `serving a cached feed from ${wf.fetched_at}`;
@@ -60350,7 +60350,7 @@ registerToolModule(
           );
         }
         tools_run.push(entry);
-        for (const match of matches) {
+        for (const match of matches2) {
           const { finding: finding4, cve } = wordfenceMatchToFindingAndCve(match);
           findings.push(finding4);
           if (cve !== null) cves.push(cve);
@@ -60456,7 +60456,7 @@ registerToolModule(
           status: "ok",
           stale: wf.stale,
           fetched_at: wf.fetched_at,
-          matched_count: matches.length,
+          matched_count: matches2.length,
           components_checked: coverage.matchable,
           components_total: coverage.total
         } : { status: "unavailable", reason: wf.reason },
@@ -62535,7 +62535,7 @@ var SKILL_RULES = [
   }
 ];
 function scanContent(content, isCode) {
-  const matches = [];
+  const matches2 = [];
   const lines = content.split(/\r?\n/);
   for (const rule of SKILL_RULES) {
     if (rule.target === "code" && !isCode) continue;
@@ -62545,7 +62545,7 @@ function scanContent(content, isCode) {
         const line = lines[i2] ?? "";
         pattern.lastIndex = 0;
         if (pattern.test(line)) {
-          matches.push({
+          matches2.push({
             rule,
             line: i2 + 1,
             snippet: line.trim().slice(0, 240)
@@ -62555,12 +62555,12 @@ function scanContent(content, isCode) {
       }
     }
   }
-  return dedupeByRuleLine(matches);
+  return dedupeByRuleLine(matches2);
 }
-function dedupeByRuleLine(matches) {
+function dedupeByRuleLine(matches2) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  for (const m of matches) {
+  for (const m of matches2) {
     const key = `${m.rule.id}:${m.line}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -68602,9 +68602,9 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
         return { ok: false, reason: `the finding for rule '${target.rule_id}' names no file` };
       }
       files.add(target.file_path.replace(/\\/g, "/"));
-      const matches = rules.filter((r) => checkIdMatches(target.rule_id, r.file, r.id));
-      if (matches.length > 0) {
-        for (const m of matches) {
+      const matches2 = rules.filter((r) => checkIdMatches(target.rule_id, r.file, r.id));
+      if (matches2.length > 0) {
+        for (const m of matches2) {
           const picked = byFile.get(m.file) ?? /* @__PURE__ */ new Map();
           picked.set(m.id, m.rule);
           byFile.set(m.file, picked);
@@ -70992,10 +70992,11 @@ var CONCEAL_SKILL_PATTERNS = SKILL_RULES.find((r) => r.id === "pi-conceal-from-u
 var READ_VERB = String.raw`(?:read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather|get)\s+`;
 var DIRECTIVE = String.raw`(?:^|[.!?:;,(]\s*|\b(?:you\s+(?:must|should|need\s+to|have\s+to)|please|first|then|and|also|always|now)\s+)`;
 var SAME_SENTENCE = String.raw`(?:(?![.!?](?:\s|$))[^\n]){0,80}?`;
+var NOT_A_SECRET_AFTER = String.raw`(?![^\s\x60'"]*?(?:\.pub|known_hosts)\b)`;
 var SENSITIVE_PATH = [
-  String.raw`~[\/\\]\.ssh\b`,
-  String.raw`\.ssh[\/\\]`,
-  String.raw`\bid_(?:rsa|dsa|ecdsa|ed25519)\b`,
+  String.raw`~[\/\\]\.ssh\b${NOT_A_SECRET_AFTER}`,
+  String.raw`\.ssh[\/\\]${NOT_A_SECRET_AFTER}`,
+  String.raw`\bid_(?:rsa|dsa|ecdsa|ed25519)\b(?!\.pub\b)`,
   String.raw`\bauthorized_keys\b`,
   String.raw`\bmcp\.json\b`,
   String.raw`\bmcp_config\.json\b`,
@@ -71011,16 +71012,21 @@ var SENSITIVE_PATH = [
   String.raw`\.docker[\/\\]config\.json`,
   String.raw`\.kube[\/\\]config\b`,
   String.raw`\/etc\/(?:passwd|shadow)\b`,
-  // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`.
-  String.raw`(?:^|[\s\x60'"(\/\\])\.env(?:\.[\w-]+)?(?![\w-])`
+  // `.env`, `C:\project\.env`, `./.env.local` — not `.environment`, and not
+  // the templates `.env.example`, `.env.sample`, `.env.template` (fix round
+  // 5, M7). A lookbehind, so `read .env` matches: the verb's own space is
+  // not there to be consumed a second time.
+  String.raw`(?<=^|[\s\x60'"(\/\\])\.env(?!\.(?:example|sample|template)\b)(?:\.[\w-]+)?(?![\w-])`
 ].join("|");
 var SENSITIVE_PATH_ANYWHERE = new RegExp(`(?:${SENSITIVE_PATH})`, "i");
-var PASS_ELSEWHERE = [
+var PASS_ON = String.raw`\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` + String.raw`(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` + String.raw`[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|an\s+|this\s+)?`;
+var PASS_TO_DESTINATION = [
   new RegExp(
-    String.raw`\b(?:pass|include|send|attach|add|put|append|embed|forward|upload|post|provide|copy|paste|insert|encode)\s+` + String.raw`(?:it|them|this|that|those|its\s+(?:full\s+|entire\s+|raw\s+)?contents?|the\s+(?:full\s+|entire\s+|raw\s+)?(?:contents?|file|key|keys|token|value|values|text|output))\b` + String.raw`[^.\n]{0,60}?\b(?:as|in|into|to|via|inside|within)\s+(?:the\s+|a\s+|this\s+)?` + String.raw`(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?\b|arg(?:ument)?\b|https?:\/\/|[a-z_][\w-]*(?=\s*[.;,)]|\s*$))`,
+    PASS_ON + String.raw`(?:[\x60'"][\w.-]+[\x60'"]|[\w-]+\s+(?:param(?:eter)?|arg(?:ument)?|field|tool)\b|param(?:eter)?s?\b|arg(?:ument)?s?\b|(?:other\s+|another\s+)?tool\b|[a-z][a-z0-9+.-]*:\/\/)`,
     "i"
   )
 ];
+var PASS_TO_WORD = new RegExp(PASS_ON + String.raw`([a-z_][\w-]*)`, "i");
 var OWNER = String.raw`(all\s+|any\s+|every\s+)?(of\s+)?(the\s+)?(user'?s?|your|their|local|stored|saved|cached)\s+(\w+\s+){0,2}`;
 var SECRET_NOUN = String.raw`(credentials?|api[\s_-]?keys?|private\s+keys?|ssh\s+keys?|access\s+tokens?|auth(entication)?\s+tokens?|secrets?|passwords?)\b`;
 var DATA_NOUN = String.raw`\b(data|contents?|conversation|chat|history|messages?|files?|results?|outputs?|keys?|tokens?|secrets?|credentials?|env(ironment)?|variables|everything|context|prompts?)\b`;
@@ -71420,14 +71426,41 @@ function shortName(name) {
   const visible = escapeInvisible(name);
   return visible.length > 80 ? `${visible.slice(0, 80)}\u2026` : visible;
 }
+var NO_PARAMS = /* @__PURE__ */ new Set();
+var MAX_PARAMS = 1e3;
+function schemaParams(schema) {
+  if (schema === null || typeof schema !== "object") return NO_PARAMS;
+  const props = schema["properties"];
+  if (props === null || typeof props !== "object" || Array.isArray(props)) return NO_PARAMS;
+  const out = /* @__PURE__ */ new Set();
+  for (const key in props) {
+    if (out.size >= MAX_PARAMS) break;
+    if (Object.hasOwn(props, key)) out.add(key.toLowerCase());
+  }
+  return out;
+}
+function promptParams(args) {
+  if (!Array.isArray(args)) return NO_PARAMS;
+  const out = /* @__PURE__ */ new Set();
+  for (const a2 of args.slice(0, MAX_PARAMS)) {
+    const name = a2 !== null && typeof a2 === "object" ? a2["name"] : void 0;
+    if (typeof name === "string") out.add(name.toLowerCase());
+  }
+  return out;
+}
 function* itemsOf(listing, onTooDeep) {
   if (listing.instructions !== void 0) {
-    yield { item: "server instructions", fields: [{ item: "server instructions", path: "instructions", text: listing.instructions }] };
+    yield {
+      item: "server instructions",
+      fields: [{ item: "server instructions", path: "instructions", text: listing.instructions }],
+      params: NO_PARAMS
+    };
   }
   for (const t of listing.tools) {
     const item = `tool '${shortName(t.name)}'`;
     yield {
       item,
+      params: schemaParams(t.inputSchema),
       fields: (function* () {
         yield { item, path: "name", text: t.name };
         if (t.title !== void 0) yield { item, path: "title", text: t.title };
@@ -71442,6 +71475,7 @@ function* itemsOf(listing, onTooDeep) {
     const item = `prompt '${shortName(p.name)}'`;
     yield {
       item,
+      params: promptParams(p.arguments),
       fields: (function* () {
         yield { item, path: "name", text: p.name };
         if (p.title !== void 0) yield { item, path: "title", text: p.title };
@@ -71460,7 +71494,7 @@ function* itemsOf(listing, onTooDeep) {
     if (r.title !== void 0) fields.push({ item, path: "title", text: r.title });
     if (r.description !== void 0) fields.push({ item, path: "description", text: r.description });
     if (r.uri !== void 0) fields.push({ item, path: "uri", text: r.uri });
-    yield { item, fields };
+    yield { item, fields, params: NO_PARAMS };
   }
 }
 var EXCERPT_BEFORE = 60;
@@ -71471,7 +71505,7 @@ function excerpt(text, index) {
   const body = escapeInvisible(text.slice(start, end)).replace(/\s+/g, " ").trim();
   return `${start > 0 ? "\u2026" : ""}${body}${end < text.length ? "\u2026" : ""}`;
 }
-function textRuleHits(field2) {
+function textRuleHits(field2, params) {
   const hits = [];
   const folded = readAs(field2.text);
   const texts = folded === field2.text ? [field2.text] : [field2.text, folded];
@@ -71495,38 +71529,81 @@ function textRuleHits(field2) {
     }
     if (hit !== null) hits.push(hit);
   }
-  return escalateSensitive(field2, texts, hits);
+  return escalateSensitive(field2, texts, hits, params);
 }
 var RULE_PATTERNS = (id) => TEXT_RULES.find((r) => r.id === id)?.patterns ?? [];
 var PASS_ON_OR_HIDE = [
-  ...PASS_ELSEWHERE,
+  ...PASS_TO_DESTINATION,
   ...RULE_PATTERNS("mcp-tool-parameter-smuggling"),
   ...RULE_PATTERNS("mcp-tool-conceal-from-user")
 ];
-function escalateSensitive(field2, texts, hits) {
-  let at = -1;
+function matches(pattern, text) {
+  pattern.lastIndex = 0;
+  return pattern.test(text);
+}
+function sentencesOf(text) {
+  const out = [];
+  let start = 0;
+  for (let i2 = 0; i2 < text.length; i2 += 1) {
+    const c3 = text[i2];
+    const next = text[i2 + 1];
+    const ends = c3 === "\n" || (c3 === "." || c3 === "!" || c3 === "?") && (next === void 0 || /\s/.test(next));
+    if (!ends) continue;
+    out.push({ text: text.slice(start, i2 + 1), start });
+    start = i2 + 1;
+  }
+  if (start < text.length) out.push({ text: text.slice(start), start });
+  return out;
+}
+var HIGH_SENSITIVE = {
+  severity: "high",
+  label: "an instruction to pass credential or agent-config files on",
+  explain: "The text points the model at an SSH key, cloud or package-registry credentials, a .env file or an MCP host config AND, in the same sentence, tells it to pass that to a parameter, another tool or a URL, or to hide it from the user \u2014 the shape of tool-poisoning exfiltration. No tool needs that."
+};
+function escalateSensitive(field2, texts, hits, params) {
+  let high = null;
+  let weak = null;
   for (const text of texts) {
-    const path8 = SENSITIVE_PATH_ANYWHERE.exec(text);
-    if (path8 === null) continue;
-    if (PASS_ON_OR_HIDE.some((p) => p.test(text))) {
-      at = Math.min(path8.index, field2.text.length);
-      break;
+    if (!SENSITIVE_PATH_ANYWHERE.test(text)) continue;
+    for (const s of sentencesOf(text)) {
+      const path8 = SENSITIVE_PATH_ANYWHERE.exec(s.text);
+      if (path8 === null) continue;
+      const at = Math.min(s.start + path8.index, field2.text.length);
+      if (PASS_ON_OR_HIDE.some((p) => matches(p, s.text))) {
+        high = at;
+        break;
+      }
+      const word = PASS_TO_WORD.exec(s.text)?.[1];
+      if (word === void 0) continue;
+      if (params.has(word.toLowerCase())) {
+        high = at;
+        break;
+      }
+      weak ??= { at, word: word.slice(0, 64) };
     }
+    if (high !== null) break;
   }
-  if (at < 0) return hits;
-  const high = {
-    severity: "high",
-    label: "an instruction to pass credential or agent-config files on",
-    explain: "The text points the model at an SSH key, cloud or package-registry credentials, a .env file or an MCP host config AND tells it to pass that on (a parameter, another tool, a URL) or to hide it from the user \u2014 the shape of tool-poisoning exfiltration. No tool needs that."
-  };
   const existing = hits.findIndex((h2) => h2.rule === "mcp-tool-sensitive-file-access");
-  const detail = "directs passing the file on or hiding it";
-  if (existing >= 0) {
+  const withDetail = (h2, detail) => ({ ...h2, detail: h2.detail === void 0 ? detail : `${h2.detail}; ${detail}` });
+  if (high !== null) {
+    const detail = "directs passing the file to a parameter, another tool or a URL, or hiding it, in the same sentence";
     const h2 = hits[existing];
-    if (h2 !== void 0) hits[existing] = { ...h2, ...high, detail: h2.detail === void 0 ? detail : `${h2.detail}; ${detail}` };
-    return hits;
+    if (h2 !== void 0) {
+      hits[existing] = withDetail({ ...h2, ...HIGH_SENSITIVE }, detail);
+      return hits;
+    }
+    return [...hits, { ...ruleMeta("mcp-tool-sensitive-file-access"), ...HIGH_SENSITIVE, field: field2, index: high, detail }];
   }
-  return [...hits, { ...ruleMeta("mcp-tool-sensitive-file-access"), ...high, field: field2, index: at, detail }];
+  if (weak !== null) {
+    const detail = `directs including the file in '${weak.word}' \u2014 output, not a parameter, a tool or a URL`;
+    const h2 = hits[existing];
+    if (h2 !== void 0) {
+      hits[existing] = withDetail(h2, detail);
+      return hits;
+    }
+    return [...hits, { ...ruleMeta("mcp-tool-sensitive-file-access"), field: field2, index: weak.at, detail }];
+  }
+  return hits;
 }
 function homoglyphHit(field2) {
   const mixed = mixedScriptWord(field2.text);
@@ -71734,7 +71811,7 @@ function* analysisSteps(run) {
       detail: `more than ${MAX_DEPTH} levels`
     });
   };
-  for (const { fields } of itemsOf(listing, onTooDeep)) {
+  for (const { fields, params } of itemsOf(listing, onTooDeep)) {
     for (const field2 of fields) {
       if (run.strings >= bounds.maxStrings) {
         run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);
@@ -71763,7 +71840,7 @@ function* analysisSteps(run) {
       text = text.slice(0, bounds.maxTextChars - run.chars);
       run.chars += text.length;
       const analysed = text === field2.text ? field2 : { ...field2, text };
-      for (const hit of textRuleHits(analysed)) addHit(run, hit);
+      for (const hit of textRuleHits(analysed, params)) addHit(run, hit);
       addHit(run, hiddenUnicodeHit(analysed));
       addHit(run, homoglyphHit(analysed));
       addHit(run, blobHit(analysed));

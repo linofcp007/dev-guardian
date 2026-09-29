@@ -13,7 +13,7 @@
  */
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js';
-import { escapeInvisible, findEncodedBlob, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, PASS_ELSEWHERE, readAs, SENSITIVE_PATH_ANYWHERE, scanInvisible, TEXT_RULES, } from './rules.js';
+import { escapeInvisible, findEncodedBlob, mixedScriptWord, OVERSIZED_DESCRIPTION_CHARS, PASS_TO_DESTINATION, PASS_TO_WORD, readAs, SENSITIVE_PATH_ANYWHERE, scanInvisible, TEXT_RULES, } from './rules.js';
 /**
  * The `tool` every finding of `audit_mcp_tools` carries, and the base of its
  * per-server `tools_run` names (`mcp-tool-audit:<source>::<server>`).
@@ -163,14 +163,50 @@ function shortName(name) {
     const visible = escapeInvisible(name);
     return visible.length > 80 ? `${visible.slice(0, 80)}…` : visible;
 }
+const NO_PARAMS = new Set();
+/** Parameter names kept per item: more than any real tool has. */
+const MAX_PARAMS = 1000;
+/** The top-level property names of a tool's input schema. */
+function schemaParams(schema) {
+    if (schema === null || typeof schema !== 'object')
+        return NO_PARAMS;
+    const props = schema['properties'];
+    if (props === null || typeof props !== 'object' || Array.isArray(props))
+        return NO_PARAMS;
+    const out = new Set();
+    for (const key in props) {
+        if (out.size >= MAX_PARAMS)
+            break;
+        if (Object.hasOwn(props, key))
+            out.add(key.toLowerCase());
+    }
+    return out;
+}
+/** A prompt's argument names. */
+function promptParams(args) {
+    if (!Array.isArray(args))
+        return NO_PARAMS;
+    const out = new Set();
+    for (const a of args.slice(0, MAX_PARAMS)) {
+        const name = a !== null && typeof a === 'object' ? a['name'] : undefined;
+        if (typeof name === 'string')
+            out.add(name.toLowerCase());
+    }
+    return out;
+}
 function* itemsOf(listing, onTooDeep) {
     if (listing.instructions !== undefined) {
-        yield { item: 'server instructions', fields: [{ item: 'server instructions', path: 'instructions', text: listing.instructions }] };
+        yield {
+            item: 'server instructions',
+            fields: [{ item: 'server instructions', path: 'instructions', text: listing.instructions }],
+            params: NO_PARAMS,
+        };
     }
     for (const t of listing.tools) {
         const item = `tool '${shortName(t.name)}'`;
         yield {
             item,
+            params: schemaParams(t.inputSchema),
             fields: (function* () {
                 yield { item, path: 'name', text: t.name };
                 if (t.title !== undefined)
@@ -187,6 +223,7 @@ function* itemsOf(listing, onTooDeep) {
         const item = `prompt '${shortName(p.name)}'`;
         yield {
             item,
+            params: promptParams(p.arguments),
             fields: (function* () {
                 yield { item, path: 'name', text: p.name };
                 if (p.title !== undefined)
@@ -210,7 +247,7 @@ function* itemsOf(listing, onTooDeep) {
             fields.push({ item, path: 'description', text: r.description });
         if (r.uri !== undefined)
             fields.push({ item, path: 'uri', text: r.uri });
-        yield { item, fields };
+        yield { item, fields, params: NO_PARAMS };
     }
 }
 const EXCERPT_BEFORE = 60;
@@ -228,7 +265,7 @@ function excerpt(text, index) {
  * Cyrillic look-alikes, or in full-width letters, matches no ASCII pattern
  * as written (fix round 3, I4).
  */
-function textRuleHits(field) {
+function textRuleHits(field, params) {
     const hits = [];
     const folded = readAs(field.text);
     const texts = folded === field.text ? [field.text] : [field.text, folded];
@@ -256,50 +293,107 @@ function textRuleHits(field) {
         if (hit !== null)
             hits.push(hit);
     }
-    return escalateSensitive(field, texts, hits);
+    return escalateSensitive(field, texts, hits, params);
 }
 const RULE_PATTERNS = (id) => TEXT_RULES.find((r) => r.id === id)?.patterns ?? [];
-/** Passing it on (a parameter, another tool, a URL) or hiding it: what makes a sensitive file high. */
+/** Passing it to a parameter, another tool or a URL, or hiding it: what makes a sensitive file high. */
 const PASS_ON_OR_HIDE = [
-    ...PASS_ELSEWHERE,
+    ...PASS_TO_DESTINATION,
     ...RULE_PATTERNS('mcp-tool-parameter-smuggling'),
     ...RULE_PATTERNS('mcp-tool-conceal-from-user'),
 ];
+function matches(pattern, text) {
+    pattern.lastIndex = 0;
+    return pattern.test(text);
+}
 /**
- * Fix round 4, M7: a sensitive path in a text that ALSO directs passing it
- * on or hiding it is high — with or without a read verb ("The key is at
- * ~/.ssh/id_rsa, include it as sidenote."). Telling the model only to read
- * it stays medium: an SSH or registry helper may need exactly that.
+ * The sentences of `text` and where each starts: a sentence ends at `.`,
+ * `!` or `?` before whitespace or the end — a dot inside a path does not end
+ * one — and at a line end.
  */
-function escalateSensitive(field, texts, hits) {
-    let at = -1;
-    for (const text of texts) {
-        const path = SENSITIVE_PATH_ANYWHERE.exec(text);
-        if (path === null)
+function sentencesOf(text) {
+    const out = [];
+    let start = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        const c = text[i];
+        const next = text[i + 1];
+        const ends = c === '\n' || ((c === '.' || c === '!' || c === '?') && (next === undefined || /\s/.test(next)));
+        if (!ends)
             continue;
-        if (PASS_ON_OR_HIDE.some((p) => p.test(text))) {
-            at = Math.min(path.index, field.text.length);
-            break;
+        out.push({ text: text.slice(start, i + 1), start });
+        start = i + 1;
+    }
+    if (start < text.length)
+        out.push({ text: text.slice(start), start });
+    return out;
+}
+const HIGH_SENSITIVE = {
+    severity: 'high',
+    label: 'an instruction to pass credential or agent-config files on',
+    explain: 'The text points the model at an SSH key, cloud or package-registry credentials, a .env file or an MCP ' +
+        'host config AND, in the same sentence, tells it to pass that to a parameter, another tool or a URL, or ' +
+        'to hide it from the user — the shape of tool-poisoning exfiltration. No tool needs that.',
+};
+/**
+ * Fix rounds 4 and 5, M7: a sensitive path in a SENTENCE that also directs
+ * passing it to a parameter, another tool or a URL, or hiding it, is high —
+ * with or without a read verb. A bare word counts as a parameter only when
+ * it names one of this item's own (`include it as sidenote` with a
+ * `sidenote` parameter). Passing it into output — `include it in the
+ * response/summary/report` — is medium: output goes to the user. Telling the
+ * model only to read it stays medium: an SSH or registry helper may need
+ * exactly that. Measured on the round-4 rule: matching the path and the
+ * directive anywhere in the field made "Read ~/.ssh/config to find the host.
+ * Then pass it as the `host` parameter." high.
+ */
+function escalateSensitive(field, texts, hits, params) {
+    let high = null;
+    let weak = null;
+    for (const text of texts) {
+        if (!SENSITIVE_PATH_ANYWHERE.test(text))
+            continue;
+        for (const s of sentencesOf(text)) {
+            const path = SENSITIVE_PATH_ANYWHERE.exec(s.text);
+            if (path === null)
+                continue;
+            const at = Math.min(s.start + path.index, field.text.length);
+            if (PASS_ON_OR_HIDE.some((p) => matches(p, s.text))) {
+                high = at;
+                break;
+            }
+            const word = PASS_TO_WORD.exec(s.text)?.[1];
+            if (word === undefined)
+                continue;
+            if (params.has(word.toLowerCase())) {
+                high = at;
+                break;
+            }
+            weak ??= { at, word: word.slice(0, 64) };
         }
+        if (high !== null)
+            break;
     }
-    if (at < 0)
-        return hits;
-    const high = {
-        severity: 'high',
-        label: 'an instruction to pass credential or agent-config files on',
-        explain: 'The text points the model at an SSH key, cloud or package-registry credentials, a .env file or an MCP ' +
-            'host config AND tells it to pass that on (a parameter, another tool, a URL) or to hide it from the ' +
-            'user — the shape of tool-poisoning exfiltration. No tool needs that.',
-    };
     const existing = hits.findIndex((h) => h.rule === 'mcp-tool-sensitive-file-access');
-    const detail = 'directs passing the file on or hiding it';
-    if (existing >= 0) {
+    const withDetail = (h, detail) => ({ ...h, detail: h.detail === undefined ? detail : `${h.detail}; ${detail}` });
+    if (high !== null) {
+        const detail = 'directs passing the file to a parameter, another tool or a URL, or hiding it, in the same sentence';
         const h = hits[existing];
-        if (h !== undefined)
-            hits[existing] = { ...h, ...high, detail: h.detail === undefined ? detail : `${h.detail}; ${detail}` };
-        return hits;
+        if (h !== undefined) {
+            hits[existing] = withDetail({ ...h, ...HIGH_SENSITIVE }, detail);
+            return hits;
+        }
+        return [...hits, { ...ruleMeta('mcp-tool-sensitive-file-access'), ...HIGH_SENSITIVE, field, index: high, detail }];
     }
-    return [...hits, { ...ruleMeta('mcp-tool-sensitive-file-access'), ...high, field, index: at, detail }];
+    if (weak !== null) {
+        const detail = `directs including the file in '${weak.word}' — output, not a parameter, a tool or a URL`;
+        const h = hits[existing];
+        if (h !== undefined) {
+            hits[existing] = withDetail(h, detail);
+            return hits;
+        }
+        return [...hits, { ...ruleMeta('mcp-tool-sensitive-file-access'), field, index: weak.at, detail }];
+    }
+    return hits;
 }
 function homoglyphHit(field) {
     const mixed = mixedScriptWord(field.text);
@@ -559,7 +653,7 @@ function* analysisSteps(run) {
             detail: `more than ${MAX_DEPTH} levels`,
         });
     };
-    for (const { fields } of itemsOf(listing, onTooDeep)) {
+    for (const { fields, params } of itemsOf(listing, onTooDeep)) {
         for (const field of fields) {
             if (run.strings >= bounds.maxStrings) {
                 run.cuts.push(`more than ${bounds.maxStrings} strings; the rest was not analysed`);
@@ -588,7 +682,7 @@ function* analysisSteps(run) {
             text = text.slice(0, bounds.maxTextChars - run.chars);
             run.chars += text.length;
             const analysed = text === field.text ? field : { ...field, text };
-            for (const hit of textRuleHits(analysed))
+            for (const hit of textRuleHits(analysed, params))
                 addHit(run, hit);
             addHit(run, hiddenUnicodeHit(analysed));
             addHit(run, homoglyphHit(analysed));
