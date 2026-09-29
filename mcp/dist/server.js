@@ -74499,7 +74499,10 @@ var SECRET_RULES = [
     title: "JSON Web Token (JWT)",
     confidence: "medium",
     pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/,
-    find: (text2, from) => findJwt(text2, from)
+    find: (text2, from) => findJwt(text2, from),
+    // At most 3 + 2000 + 4 + 2000 + 1 + 2000 characters: 8 KB holds any of
+    // them, where the 2 KB every other rule shares did not (round 3, item 6).
+    overlap: 8 * 1024
   },
   {
     id: "generic-assignment",
@@ -74679,11 +74682,10 @@ function redact(secret) {
 }
 var WINDOW = 16 * 1024;
 var OVERLAP = 2 * 1024;
-var STEP = WINDOW - OVERLAP;
-function lineWindows(line) {
+function lineWindows(line, overlap = OVERLAP) {
   if (line.length <= WINDOW) return [{ text: line, cutLeft: false, cutRight: false }];
   const out = [];
-  for (let s = 0; ; s += STEP) {
+  for (let s = 0; ; s += WINDOW - overlap) {
     const e = Math.min(line.length, s + WINDOW);
     const from = Math.max(0, s - 1);
     const to = Math.min(line.length, e + 1);
@@ -74719,19 +74721,26 @@ function scanForSecrets(text2, options = {}) {
     rule,
     re: new RegExp(rule.pattern.source, `${rule.pattern.flags.replace(/[gy]/g, "")}g`)
   }));
+  const byOverlap = /* @__PURE__ */ new Map();
+  for (const r of rules2) {
+    const overlap = r.rule.overlap ?? OVERLAP;
+    byOverlap.set(overlap, [...byOverlap.get(overlap) ?? [], r]);
+  }
   const lines = text2.split(/\r?\n/);
   const hits = [];
   for (let i2 = 0; i2 < lines.length; i2++) {
     const rawLine = lines[i2];
     if (rawLine === void 0 || rawLine.length === 0) continue;
     const found = /* @__PURE__ */ new Map();
-    for (const w of lineWindows(rawLine)) {
-      const lower = w.text.toLowerCase();
-      if (allow.some((a2) => lower.includes(a2))) continue;
-      for (const { rule, re } of rules2) {
-        if (found.has(rule)) continue;
-        const hit = judge3(rule, firstMatch2(rule, re, w), i2);
-        if (hit !== null) found.set(rule, hit);
+    for (const [overlap, group] of byOverlap) {
+      for (const w of lineWindows(rawLine, overlap)) {
+        const lower = w.text.toLowerCase();
+        if (allow.some((a2) => lower.includes(a2))) continue;
+        for (const { rule, re } of group) {
+          if (found.has(rule)) continue;
+          const hit = judge3(rule, firstMatch2(rule, re, w), i2);
+          if (hit !== null) found.set(rule, hit);
+        }
       }
     }
     for (const { rule } of rules2) {

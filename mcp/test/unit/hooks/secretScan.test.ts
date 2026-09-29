@@ -248,6 +248,21 @@ describe('scanForSecrets — a long line is read to its end (review I3)', () => 
     }
   });
 
+  // Review round 3, item 6: a JWT longer than the 2 KB overlap that crossed a
+  // window edge was in no window whole. The JWT finder has its own 8 KB
+  // overlap: every JWT the pattern can match (at most 2000 characters a
+  // segment, ~6 KB in all) lies whole in some window.
+  it('a JWT up to ~6 KB is found wherever it crosses a window edge', () => {
+    const seg = (n: number, c: string): string => `${c.repeat(n - 1)}Q`;
+    const jwt = `eyJ${seg(1990, 'a')}.eyJ${seg(1990, 'b')}.${seg(1990, 'c')}`;
+    expect(jwt.length).toBeGreaterThan(5900);
+    for (let column = 10_000; column <= 16_400; column += 400) {
+      const line = `${'z '.repeat(column / 2)}${jwt} tail`;
+      const hits = scanForSecrets(line);
+      expect({ column, found: hits.some((h) => h.ruleId === 'jwt') }).toEqual({ column, found: true });
+    }
+  });
+
   it('the allowlist still silences what it names', () => {
     expect(scanForSecrets(at(20_000), { allowlist: [TOKEN] })).toEqual([]);
   });

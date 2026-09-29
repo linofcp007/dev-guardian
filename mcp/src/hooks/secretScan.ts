@@ -34,6 +34,12 @@ export interface SecretRule {
    * the pattern was quadratic inside a window).
    */
   find?: (text: string, from: number) => SecretMatch | null;
+  /**
+   * How much consecutive windows of a long line share for this rule — longer
+   * than its longest match, so every match lies whole in one of them. Default
+   * 2 KB.
+   */
+  overlap?: number;
 }
 
 /** One match of a rule: where it starts, its text, and its first capture group when it has one. */
@@ -109,6 +115,9 @@ export const SECRET_RULES: SecretRule[] = [
     confidence: 'medium',
     pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/,
     find: (text, from) => findJwt(text, from),
+    // At most 3 + 2000 + 4 + 2000 + 1 + 2000 characters: 8 KB holds any of
+    // them, where the 2 KB every other rule shares did not (round 3, item 6).
+    overlap: 8 * 1024,
   },
   {
     id: 'generic-assignment',
@@ -353,11 +362,10 @@ export function redact(secret: string): string {
 const WINDOW = 16 * 1024;
 /**
  * Consecutive windows share this much, so any match up to this long lies
- * whole inside one of them: every provider token is under 256 characters, and
- * 2 KB also holds an ordinary JWT.
+ * whole inside one of them: every provider token is under 256 characters.
+ * A rule whose matches run longer sets its own ({@link SecretRule.overlap}).
  */
 const OVERLAP = 2 * 1024;
-const STEP = WINDOW - OVERLAP;
 
 /**
  * One window of a line: its text, with one character of the line on each side
@@ -370,10 +378,10 @@ interface LineWindow {
   cutRight: boolean;
 }
 
-function lineWindows(line: string): LineWindow[] {
+function lineWindows(line: string, overlap: number = OVERLAP): LineWindow[] {
   if (line.length <= WINDOW) return [{ text: line, cutLeft: false, cutRight: false }];
   const out: LineWindow[] = [];
-  for (let s = 0; ; s += STEP) {
+  for (let s = 0; ; s += WINDOW - overlap) {
     const e = Math.min(line.length, s + WINDOW);
     const from = Math.max(0, s - 1);
     const to = Math.min(line.length, e + 1);
@@ -387,7 +395,7 @@ function lineWindows(line: string): LineWindow[] {
  * match starting on the left context character belongs to the window before,
  * and one running up to the right edge may be the cut-off start of a longer
  * run — no `\b` really ends it there. That one is left to the next window,
- * which holds it whole when it is at most {@link OVERLAP} long; the search in
+ * which holds it whole when it is no longer than the rule's overlap; the search in
  * this window stops, so a window costs at most two searches per rule.
  */
 function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | null {
@@ -423,6 +431,13 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
     rule,
     re: new RegExp(rule.pattern.source, `${rule.pattern.flags.replace(/[gy]/g, '')}g`),
   }));
+  // The rules by the window overlap they need: most read windows sharing
+  // 2 KB, the JWT finder windows sharing 8 KB (review round 3, item 6).
+  const byOverlap = new Map<number, typeof rules>();
+  for (const r of rules) {
+    const overlap = r.rule.overlap ?? OVERLAP;
+    byOverlap.set(overlap, [...(byOverlap.get(overlap) ?? []), r]);
+  }
   const lines = text.split(/\r?\n/);
   const hits: SecretHit[] = [];
 
@@ -433,15 +448,17 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
     // Every pattern reads one bounded window at a time — the JWT rule's own
     // bounded quantifiers still rely on this: a 200KB single line of
     // `'eyJ-'.repeat(50000)` took ~27s before either fix.
-    for (const w of lineWindows(rawLine)) {
-      // The allowlist names text near the finding: per window, which for a
-      // line of up to 16 KB is the whole line, as before.
-      const lower = w.text.toLowerCase();
-      if (allow.some((a) => lower.includes(a))) continue;
-      for (const { rule, re } of rules) {
-        if (found.has(rule)) continue;
-        const hit = judge(rule, firstMatch(rule, re, w), i);
-        if (hit !== null) found.set(rule, hit);
+    for (const [overlap, group] of byOverlap) {
+      for (const w of lineWindows(rawLine, overlap)) {
+        // The allowlist names text near the finding: per window, which for a
+        // line of up to 16 KB is the whole line, as before.
+        const lower = w.text.toLowerCase();
+        if (allow.some((a) => lower.includes(a))) continue;
+        for (const { rule, re } of group) {
+          if (found.has(rule)) continue;
+          const hit = judge(rule, firstMatch(rule, re, w), i);
+          if (hit !== null) found.set(rule, hit);
+        }
       }
     }
     for (const { rule } of rules) {
