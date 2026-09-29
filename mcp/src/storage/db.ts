@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { StatementSync, SQLInputValue } from 'node:sqlite';
 import { runMigrations } from './migrations/runner.js';
-import { missingObjects, readSchema, type SchemaSnapshot } from './schemaCheck.js';
+import { missingIndexSql, missingObjects, readSchema, type SchemaSnapshot } from './schemaCheck.js';
 
 // `node:sqlite` is pulled in via createRequire rather than a static value
 // import on purpose: the production bundler (esbuild) and the test runner
@@ -283,10 +283,25 @@ function assertSchemaComplete(db: GuardianDatabase, dbPath: string): void {
   );
 }
 
+/**
+ * Recreates, from the reference, every index the migrated `db` lacks on a
+ * table it has: a 3.0 development database that ran 005's first cut never
+ * got three of them, and 005 is recorded as applied. An index changes speed,
+ * never an answer, so it is repaired rather than refused.
+ */
+function recreateMissingIndexes(db: GuardianDatabase): void {
+  const statements = missingIndexSql(db, expectedSchema());
+  if (statements.length === 0) return;
+  db.transaction(() => {
+    for (const sql of statements) db.exec(sql);
+  })();
+}
+
 /** Pragmas, migrations and the completeness check: what makes a handle usable. */
 function prepareForUse(db: GuardianDatabase, dbPath: string): void {
   applyPragmas(db);
   runMigrations(db);
+  recreateMissingIndexes(db);
   assertSchemaComplete(db, dbPath);
 }
 

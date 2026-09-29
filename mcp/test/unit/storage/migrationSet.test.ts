@@ -227,6 +227,33 @@ describe('statement by statement', () => {
   });
 });
 
+describe('an index a development database never got', () => {
+  it('is recreated at open instead of stopping the server (005 first cut)', () => {
+    // 005's first cut (2532683) had no indexes on the legacy cves table or on
+    // tree_cache; ae80f56 added three. A database that ran the first cut has
+    // 005 recorded, so nothing re-runs it.
+    const path = join(makeTempDir('guardian-index-'), 'guardian.db');
+    const setup = legacyDatabase({ upTo: 14, storedVersion: 14, path });
+    for (const name of ['idx_cves_first_seen_scan_id', 'idx_cves_last_seen_scan_id', 'idx_tree_cache_scan_id']) {
+      setup.exec(`DROP INDEX ${name}`);
+    }
+    setup.close();
+
+    const db = openDatabaseAtPath(path);
+    try {
+      const names = db
+        .prepare<[], { name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index'`)
+        .all()
+        .map((r) => r.name);
+      expect(names).toEqual(
+        expect.arrayContaining(['idx_cves_first_seen_scan_id', 'idx_cves_last_seen_scan_id', 'idx_tree_cache_scan_id']),
+      );
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe('a schema the runner cannot repair', () => {
   it('names the missing object and the database file instead of a bare prepare error', () => {
     // Every migration is recorded as applied, and a column is gone anyway

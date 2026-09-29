@@ -39088,22 +39088,26 @@ function listMigrations(dir = MIGRATIONS_DIR) {
 }
 
 // src/storage/schemaCheck.ts
+function masterRows(db) {
+  return db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master").all();
+}
 function readSchema(db) {
   const objects = /* @__PURE__ */ new Map();
   const columns = /* @__PURE__ */ new Map();
   const indexTables = /* @__PURE__ */ new Map();
-  const rows = db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master").all();
-  for (const row of rows) {
+  const sql = /* @__PURE__ */ new Map();
+  for (const row of masterRows(db)) {
     const type = asObjectType(row.type);
     if (type === null) continue;
     objects.set(row.name, type);
+    sql.set(row.name, row.sql);
     if (type === "index") indexTables.set(row.name, row.tbl_name);
     if (type === "table") {
       const cols = db.prepare("SELECT name FROM pragma_table_info(?)").all(row.name).map((c3) => c3.name);
       columns.set(row.name, new Set(cols));
     }
   }
-  return { objects, columns, indexTables };
+  return { objects, columns, indexTables, sql };
 }
 function asObjectType(type) {
   return type === "table" || type === "index" || type === "view" || type === "trigger" ? type : null;
@@ -39132,6 +39136,19 @@ function missingObjects(db, reference) {
     }
   }
   return [...tables.sort(), ...columns.sort(), ...indexes.sort()];
+}
+function missingIndexSql(db, reference) {
+  const actual = readSchema(db);
+  const out = [];
+  for (const [name, type] of reference.objects) {
+    if (type !== "index" || name.startsWith("sqlite_")) continue;
+    if (actual.objects.get(name) === "index") continue;
+    const table = reference.indexTables.get(name);
+    if (table === void 0 || actual.objects.get(table) !== "table") continue;
+    const sql = reference.sql.get(name);
+    if (typeof sql === "string") out.push(sql);
+  }
+  return out;
 }
 
 // src/storage/db.ts
@@ -39290,9 +39307,17 @@ function assertSchemaComplete(db, dbPath) {
     `the database '${dbPath}' is missing ${shown} after its migrations ran \u2014 it was changed outside dev-guardian, or copied from an incomplete file. Move it aside (rename it) and restart: a new database is created in its place, and the old file stays readable for recovery.`
   );
 }
+function recreateMissingIndexes(db) {
+  const statements = missingIndexSql(db, expectedSchema());
+  if (statements.length === 0) return;
+  db.transaction(() => {
+    for (const sql of statements) db.exec(sql);
+  })();
+}
 function prepareForUse(db, dbPath) {
   applyPragmas(db);
   runMigrations(db);
+  recreateMissingIndexes(db);
   assertSchemaComplete(db, dbPath);
 }
 function openDatabase(options) {

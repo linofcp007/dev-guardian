@@ -26,7 +26,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runMigrations } from './migrations/runner.js';
-import { missingObjects, readSchema } from './schemaCheck.js';
+import { missingIndexSql, missingObjects, readSchema } from './schemaCheck.js';
 let sqliteModule;
 function loadSqlite() {
     sqliteModule ??= createRequire(import.meta.url)('node:sqlite');
@@ -242,10 +242,26 @@ function assertSchemaComplete(db, dbPath) {
         'Move it aside (rename it) and restart: a new database is created in its place, ' +
         'and the old file stays readable for recovery.');
 }
+/**
+ * Recreates, from the reference, every index the migrated `db` lacks on a
+ * table it has: a 3.0 development database that ran 005's first cut never
+ * got three of them, and 005 is recorded as applied. An index changes speed,
+ * never an answer, so it is repaired rather than refused.
+ */
+function recreateMissingIndexes(db) {
+    const statements = missingIndexSql(db, expectedSchema());
+    if (statements.length === 0)
+        return;
+    db.transaction(() => {
+        for (const sql of statements)
+            db.exec(sql);
+    })();
+}
 /** Pragmas, migrations and the completeness check: what makes a handle usable. */
 function prepareForUse(db, dbPath) {
     applyPragmas(db);
     runMigrations(db);
+    recreateMissingIndexes(db);
     assertSchemaComplete(db, dbPath);
 }
 /**

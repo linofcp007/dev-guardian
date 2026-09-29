@@ -1,43 +1,70 @@
 /**
  * What a guardian database's schema must, and may, hold — compared against
- * the schema the shipped migrations build on an empty database.
+ * the schema the shipped migrations build on an empty database (the
+ * REFERENCE, `db.ts#expectedSchema`).
  *
  * Two questions, asked by `db.ts` at every file-backed open:
  *
- *   - {@link unexpectedObjects}, BEFORE the migrations run: does the file
- *     hold a schema object the migrations never create — a trigger, a view,
- *     a table or index of another name, or a known name of the wrong type (a
- *     view called `findings`)? Such a database is not trusted. The attack is
- *     measured, not hypothetical: `AFTER INSERT ON findings BEGIN DELETE FROM
- *     findings WHERE rowid = NEW.rowid; END` in a committed
- *     `.guardian/guardian.db` took a project from risk 55 to 8 and from 7
- *     open findings to 0 at coverage `full`, in risk_score, every report, the
- *     open set and create_fix_pr. Asked before migrating because the
- *     migrations and the plugin-pack re-key WRITE to findings, suppressions
- *     and baselines, and a trigger fires on those writes too.
+ *   - {@link untrustedObjects}, BEFORE the migrations run: does the file hold
+ *     a schema object the migrations never create? A trigger or a view (no
+ *     migration creates either), a table or index of another name, a known
+ *     name of the wrong type (a view called `findings`), or a known table or
+ *     index whose DEFINITION the migrations never wrote. Such a database is
+ *     not trusted. The attack is measured, not hypothetical: `AFTER INSERT ON
+ *     findings BEGIN DELETE FROM findings WHERE rowid = NEW.rowid; END` in a
+ *     committed `.guardian/guardian.db` took a project from risk 55 to 8 and
+ *     from 7 open findings to 0 at coverage `full` — in risk_score, every
+ *     report, the open set and create_fix_pr. The definition check closes
+ *     the same hole one level down: every repo inserts with `INSERT OR
+ *     IGNORE`, which silently skips a row that violates a CHECK or UNIQUE
+ *     constraint, so `CHECK (severity <> 'critical')` or `UNIQUE (scan_id)`
+ *     written into `findings` would hide rows exactly as the trigger did,
+ *     under every name and type the migrations use. Asked before migrating
+ *     because the migrations and the plugin-pack re-key WRITE to findings,
+ *     suppressions and baselines, and a trigger fires on those writes too.
  *   - {@link missingObjects}, AFTER they run: is every table, column and
- *     index the code prepares statements against really there? A database
- *     the runner could not bring there (a column dropped by hand, a file
- *     restored from a partial copy) otherwise died inside `new Storage()` on
- *     a bare `no such column`, naming neither the object nor the file.
+ *     index the code relies on really there? A database the runner could not
+ *     bring there (a column dropped by hand, a file restored from a partial
+ *     copy) otherwise died inside `new Storage()` on a bare `no such column`,
+ *     naming neither the object nor the file. A missing index is recreated
+ *     from the reference instead ({@link missingIndexSql}) — a 3.0
+ *     development database that ran 005's first cut lacks three of them, and
+ *     an index is never worth refusing to start over.
+ *
+ * A table's definition is compared as a SET of its top-level parts (column
+ * definitions and table constraints), normalised: comments dropped,
+ * whitespace collapsed, case folded. A set, because `ALTER TABLE … ADD
+ * COLUMN` appends to the stored text in the order migrations ran, and
+ * migrations written on parallel branches ran in either order. Before the
+ * migrations run a table may lack parts (an older database), never hold one
+ * the reference does not.
  *
  * SQLite's own objects are allowed: `sqlite_sequence` (AUTOINCREMENT),
- * `sqlite_stat1`–`sqlite_stat4` (ANALYZE) and a UNIQUE / PRIMARY KEY
- * constraint's `sqlite_autoindex_*` (an index with no SQL text). Nothing
- * else outside the reference is — the reference is a SUPERSET of every
- * older database's schema, because migrations only ever add.
+ * `sqlite_stat1`–`sqlite_stat4` (ANALYZE) and a PRIMARY KEY / UNIQUE
+ * constraint's `sqlite_autoindex_*` (the constraint itself is a part of the
+ * table's definition, checked above).
+ *
+ * A database a NEWER build has migrated holds objects this build's reference
+ * does not, and is refused like any other: the two cannot be told apart from
+ * inside the file (an attacker writes `schema_migrations` as easily as a
+ * trigger). The refusal says so, and the database falls back to the
+ * per-user location.
  */
+function masterRows(db) {
+    return db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master').all();
+}
 /** Reads `db`'s schema: every sqlite_master object, and every table's columns. */
 export function readSchema(db) {
     const objects = new Map();
     const columns = new Map();
     const indexTables = new Map();
-    const rows = db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master').all();
-    for (const row of rows) {
+    const sql = new Map();
+    for (const row of masterRows(db)) {
         const type = asObjectType(row.type);
         if (type === null)
             continue;
         objects.set(row.name, type);
+        sql.set(row.name, row.sql);
         if (type === 'index')
             indexTables.set(row.name, row.tbl_name);
         if (type === 'table') {
@@ -48,7 +75,7 @@ export function readSchema(db) {
             columns.set(row.name, new Set(cols));
         }
     }
-    return { objects, columns, indexTables };
+    return { objects, columns, indexTables, sql };
 }
 function asObjectType(type) {
     return type === 'table' || type === 'index' || type === 'view' || type === 'trigger' ? type : null;
@@ -60,28 +87,48 @@ function isSqliteInternal(row) {
     return row.type === 'index' && row.sql === null && row.name.startsWith('sqlite_autoindex_');
 }
 /**
- * Every object in `db` the reference does not hold under the same name and
- * type, as `trigger findings_hide` — empty when there is none. Reads
- * sqlite_master only; runs nothing the file defines.
+ * Every object in `db` the migrations did not create, one short phrase each
+ * (`trigger findings_hide`, `table findings: check(severity<>'critical')`) —
+ * empty when there is none. Reads sqlite_master only; runs nothing the file
+ * defines.
  */
-export function unexpectedObjects(db, reference) {
+export function untrustedObjects(db, reference) {
     const out = [];
-    const rows = db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_master').all();
-    for (const row of rows) {
+    for (const row of masterRows(db)) {
         if (isSqliteInternal(row))
             continue;
         const expected = reference.objects.get(row.name);
-        if (expected !== undefined && expected === row.type)
+        if (expected === undefined || expected !== row.type) {
+            out.push(`${row.type} ${row.name}`);
             continue;
-        out.push(`${row.type} ${row.name}`);
+        }
+        const referenceSql = reference.sql.get(row.name) ?? null;
+        if (row.type === 'table') {
+            const actual = tableDefinition(row.sql ?? '');
+            const allowed = tableDefinition(referenceSql ?? '');
+            if (actual === null || allowed === null || actual.tail !== allowed.tail) {
+                out.push(`table ${row.name}: a definition the migrations never wrote`);
+                continue;
+            }
+            const allowedParts = new Set(allowed.parts);
+            for (const part of actual.parts) {
+                if (!allowedParts.has(part))
+                    out.push(`table ${row.name}: ${shorten(part)}`);
+            }
+        }
+        else if (row.type === 'index') {
+            if (normaliseSql(row.sql ?? '') !== normaliseSql(referenceSql ?? '')) {
+                out.push(`index ${row.name}: a definition the migrations never wrote`);
+            }
+        }
     }
     return out.sort();
 }
 /**
- * Every table, column and index of the reference that `db` lacks, as
- * `table mcp_tool_pins`, `column findings.cwe`, `index idx_x` — tables
- * first, then columns, then indexes; an index of a missing table is not
- * listed again. Empty when the schema is complete.
+ * Every table and column of the reference that `db` lacks, as `table
+ * mcp_tool_pins` or `column findings.cwe` — tables first — then every index
+ * whose table is there but which is not (an index of a missing table is not
+ * listed again). Empty when the schema is complete.
  */
 export function missingObjects(db, reference) {
     const actual = readSchema(db);
@@ -113,5 +160,119 @@ export function missingObjects(db, reference) {
         }
     }
     return [...tables.sort(), ...columns.sort(), ...indexes.sort()];
+}
+/** The reference's CREATE INDEX text for every index `db` lacks on a table it has. */
+export function missingIndexSql(db, reference) {
+    const actual = readSchema(db);
+    const out = [];
+    for (const [name, type] of reference.objects) {
+        if (type !== 'index' || name.startsWith('sqlite_'))
+            continue;
+        if (actual.objects.get(name) === 'index')
+            continue;
+        const table = reference.indexTables.get(name);
+        if (table === undefined || actual.objects.get(table) !== 'table')
+            continue;
+        const sql = reference.sql.get(name);
+        if (typeof sql === 'string')
+            out.push(sql);
+    }
+    return out;
+}
+function shorten(text) {
+    return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+/** `sql` without comments, with whitespace collapsed and case folded. */
+export function normaliseSql(sql) {
+    let out = '';
+    let i = 0;
+    while (i < sql.length) {
+        const ch = sql[i] ?? '';
+        const next = sql[i + 1] ?? '';
+        if (ch === '-' && next === '-') {
+            const end = sql.indexOf('\n', i);
+            i = end < 0 ? sql.length : end + 1;
+            out += ' ';
+            continue;
+        }
+        if (ch === '/' && next === '*') {
+            const end = sql.indexOf('*/', i + 2);
+            i = end < 0 ? sql.length : end + 2;
+            out += ' ';
+            continue;
+        }
+        if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+            const closer = ch === '[' ? ']' : ch;
+            let j = i + 1;
+            for (;;) {
+                const end = sql.indexOf(closer, j);
+                if (end < 0) {
+                    j = sql.length;
+                    break;
+                }
+                if (closer !== ']' && sql[end + 1] === closer) {
+                    j = end + 2;
+                    continue;
+                }
+                j = end + 1;
+                break;
+            }
+            out += sql.slice(i, j);
+            i = j;
+            continue;
+        }
+        out += ch;
+        i += 1;
+    }
+    return out
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/\s*([(),])\s*/g, '$1')
+        .replace(/\bif not exists\b\s*/g, '')
+        .trim();
+}
+/**
+ * A CREATE TABLE text as its top-level parts (column definitions and table
+ * constraints), normalised, plus whatever follows the closing parenthesis
+ * (`without rowid`, `strict`). Null when the text has no parenthesised body.
+ */
+export function tableDefinition(sql) {
+    const text = normaliseSql(sql);
+    const open = text.indexOf('(');
+    if (open < 0)
+        return null;
+    const parts = [];
+    let depth = 0;
+    let current = '';
+    let i = open + 1;
+    for (; i < text.length; i++) {
+        const ch = text[i] ?? '';
+        if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+            const closer = ch === '[' ? ']' : ch;
+            let end = text.indexOf(closer, i + 1);
+            while (end >= 0 && closer !== ']' && text[end + 1] === closer)
+                end = text.indexOf(closer, end + 2);
+            const stop = end < 0 ? text.length - 1 : end;
+            current += text.slice(i, stop + 1);
+            i = stop;
+            continue;
+        }
+        if (ch === '(')
+            depth += 1;
+        if (ch === ')') {
+            if (depth === 0)
+                break;
+            depth -= 1;
+        }
+        if (ch === ',' && depth === 0) {
+            parts.push(current.trim());
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    if (current.trim() !== '')
+        parts.push(current.trim());
+    return { parts, tail: text.slice(i + 1).trim() };
 }
 //# sourceMappingURL=schemaCheck.js.map
