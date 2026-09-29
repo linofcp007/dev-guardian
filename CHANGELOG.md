@@ -447,6 +447,11 @@ version bump.
   tool` was denied, and `curl -o /usr/local/bin/tool URL && chmod +x /usr/local/bin/tool && tool` was `ok`. A
   download saved into one of the PATH directories the guard knows (`wget -P`, `curl -O` after a `cd` there included)
   now marks its name there as a moved one does.
+- **A signature over another file counted as a check of the one that ran.** In `curl -o i.sh URL && gpg --verify
+  i.sh.asc other && sh i.sh`, gpg verifies `other`, yet the signature's name alone lifted the deny for `i.sh`. A
+  `.asc` / `.sig` now implies the file it is named after only when gpg (`gpg --verify`, `gpgv`) is handed it alone;
+  cosign, minisign, signify and openssl count for the file they name. A checksum file (`sha256sum -c i.sh.sha256`)
+  still implies its file.
 
 ## [3.0.0] - 2026-09-29
 

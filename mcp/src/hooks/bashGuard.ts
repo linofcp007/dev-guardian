@@ -3762,17 +3762,50 @@ function transfersOf(name: string, words: readonly ShellWord[], at: number): Arr
   });
 }
 
+/** gpg's options that take the next word as their value — never a signature or a data file. */
+const GPG_VALUED = new Set([
+  '--keyring', '--primary-keyring', '--secret-keyring', '--homedir', '--trustdb-name', '--options', '--status-fd',
+  '--logger-fd', '--attribute-fd', '--passphrase-fd', '--command-fd', '--status-file', '--logger-file',
+  '--default-key', '-u', '--local-user', '-r', '--recipient', '-o', '--output', '--trusted-key', '--trust-model',
+  '--verify-options', '--assert-signer', '--weak-digest', '--auto-key-locate', '--keyserver', '--keyserver-options',
+  '--compress-algo', '--cipher-algo', '--digest-algo', '--display-charset', '--charset',
+]);
+
+/** What `gpg --verify` / `gpgv` is handed: its signature, then the data files it verifies against it. */
+function gpgOperands(args: readonly string[], gpgv: boolean): string[] {
+  const out: string[] = [];
+  let verifying = gpgv;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (!optionsDone && a === '--verify') verifying = true;
+    else if (!optionsDone && a === '--') optionsDone = true;
+    else if (!optionsDone && a.startsWith('-') && a !== '-') i += !a.includes('=') && GPG_VALUED.has(a) ? 1 : 0;
+    else if (verifying) out.push(a);
+  }
+  return out;
+}
+
+/** The data file a detached signature or a checksum file is named after: `i.sh.asc` → `i.sh`. */
+const SIDECAR = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/;
+
 /**
  * An integrity check at the end of a statement's pipeline, and what it names
  * (review round 3, item 3): `names`, every word of every member (`echo "<sha>
  * f" | sha256sum -c` names `f`), split on blanks; `lists`, the checksum lists a
- * `sha256sum -c` is handed as operands. Paths as {@link runKey}s.
+ * `sha256sum -c` is handed as operands; `implied`, the data files a sidecar
+ * implies — each checksum file's (`sha256sum -c i.sh.sha256` checks `i.sh`), and
+ * a signature's only when gpg is handed it alone (`gpg --verify i.sh.asc`
+ * verifies `i.sh`). Handed a data file, gpg verifies THAT file: `gpg --verify
+ * i.sh.asc other` says nothing of `i.sh` (review 3.0, wave 2). cosign,
+ * minisign, signify and openssl always name the file they check. Paths as
+ * {@link runKey}s.
  */
 function integrityCheckOf(
   statement: ShellStatement,
   heads: readonly number[],
   cwd: string,
-): { names: string[]; lists: string[] } | undefined {
+): { names: string[]; lists: string[]; implied: string[] } | undefined {
   const last = statement.commands.length - 1;
   const words = statement.commands[last];
   const at = heads[last] ?? 0;
@@ -3784,9 +3817,18 @@ function integrityCheckOf(
       for (const token of w.value.split(/\s+/)) if (token !== '' && !token.startsWith('-')) names.push(key(token));
     }
   });
-  const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(commandName(words[at]?.value ?? ''));
-  const lists = sumTool ? withoutRedirections(words.slice(at + 1)).filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
-  return { names, lists };
+  const tool = commandName(words[at]?.value ?? '');
+  const args = withoutRedirections(words.slice(at + 1));
+  const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(tool);
+  const lists = sumTool ? args.filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
+  const implying = sumTool ? names.slice() : [];
+  if (tool === 'gpg' || tool === 'gpg2' || tool === 'gpgv') {
+    const operands = gpgOperands(args, tool === 'gpgv');
+    const signature = operands[0];
+    if (operands.length === 1 && signature !== undefined) implying.push(key(signature));
+  }
+  const implied = implying.flatMap((name) => SIDECAR.exec(name)?.[1] ?? []);
+  return { names, lists, implied };
 }
 
 /**
@@ -3892,11 +3934,8 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
     // and only for the files it names (review round 3, item 3).
     const check = integrityCheckOf(statement, heads, cwd);
     if (check !== undefined) {
-      for (const name of check.names) {
-        if (downloads.has(name)) verified.set(name, k);
-        const signed = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/.exec(name)?.[1];
-        if (signed !== undefined) verified.set(signed, k);
-      }
+      for (const name of check.names) if (downloads.has(name)) verified.set(name, k);
+      for (const name of check.implied) verified.set(name, k);
       if (check.lists.some((list) => downloads.has(list))) listAt = k;
     }
     if (statement.end !== '&&') {
