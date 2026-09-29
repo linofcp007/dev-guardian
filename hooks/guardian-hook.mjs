@@ -774,7 +774,10 @@ async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   let added = [];
   try {
     const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
-    if (!guard.isClaudeSettingsPath(abs)) return;
+    // With CLAUDE_CONFIG_DIR set, the user's settings live there, not in
+    // ~/.claude (review round 2) — resolved the way the written path is.
+    const configDir = process.env.CLAUDE_CONFIG_DIR ? guardedPath(resolve(process.env.CLAUDE_CONFIG_DIR)) : undefined;
+    if (!guard.isClaudeSettingsPath(abs, configDir)) return;
     const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd, root));
     if (toolName === 'Write') {
       if (typeof input.content !== 'string') return;

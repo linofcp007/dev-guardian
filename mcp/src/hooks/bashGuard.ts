@@ -1295,6 +1295,31 @@ const USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 /** Claude Code's own settings, project or user level; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
 
+/** The same files through Claude Code's `CLAUDE_CONFIG_DIR`, spelled as a variable (bash, cmd, PowerShell). */
+const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
+
+/**
+ * Whether a path names Claude Code's settings (review round 2, ruling 3): under
+ * `.claude`, through the `CLAUDE_CONFIG_DIR` variable, or — when that is set
+ * (`scope.configDirName`, its last segment) — directly under a directory of that
+ * name, separators optional as in `HOOK_CONFIG_PATH` (`~/.claude-conta2/settings.json`).
+ */
+function isSettingsPath(path: string, configDirName: string | undefined): boolean {
+  if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path)) return true;
+  if (configDirName === undefined) return false;
+  const lower = path.toLowerCase();
+  for (const file of ['settings.json', 'settings.local.json']) {
+    if (lower.endsWith(`${configDirName}/${file}`) || lower.endsWith(`${configDirName}${file}`)) return true;
+  }
+  return false;
+}
+
+/** The last segment of `CLAUDE_CONFIG_DIR`, lower-cased, as {@link isSettingsPath} matches it; none when unset. */
+function configDirNameOf(dir: string | undefined): string | undefined {
+  const last = (dir ?? '').trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+  return last === '' ? undefined : last.toLowerCase();
+}
+
 /**
  * A key of Claude Code's settings that switches dev-guardian's hooks off:
  * `disableAllHooks`, the dispatcher's own environment switches, and
@@ -2446,11 +2471,14 @@ function literalsNameHookConfig(literals: readonly string[]): boolean {
 }
 
 /** The same for Claude Code's settings files. */
-function literalsNameClaudeSettings(literals: readonly string[]): boolean {
+function literalsNameClaudeSettings(literals: readonly string[], configDirName: string | undefined): boolean {
   const paths = literalPaths(literals);
-  if (paths.some((p) => CLAUDE_SETTINGS_PATH.test(p))) return true;
+  if (paths.some((p) => isSettingsPath(p, configDirName))) return true;
   const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
-  return has(/(?:^|\/)\.claude\/?$/i) && has(/^settings(?:\.local)?\.json$/i);
+  const inDir =
+    has(/(?:^|\/)\.claude\/?$/i) ||
+    (configDirName !== undefined && paths.some((p) => p.toLowerCase().replace(/\/+$/, '').endsWith(configDirName)));
+  return inDir && has(/^settings(?:\.local)?\.json$/i);
 }
 
 // ── .NET file calls in PowerShell
@@ -2630,7 +2658,7 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
-  if (e.writes.some((p) => CLAUDE_SETTINGS_PATH.test(p)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }
 
@@ -2663,7 +2691,7 @@ function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
   const out: MatchedRule[] = [];
   if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
-  if (literalsNameClaudeSettings(literals) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }
 
@@ -2677,6 +2705,8 @@ interface Scope {
   notes: Notes;
   /** The home directory, to recognise it named outright as a delete target. */
   home?: HomeDir | undefined;
+  /** The last segment of Claude Code's `CLAUDE_CONFIG_DIR`, lower-cased, when it is set. */
+  configDirName?: string | undefined;
 }
 
 /**
@@ -3512,6 +3542,8 @@ export interface AssessOptions {
   homeDir?: string;
   /** Decides whether paths compare case-insensitively (default `process.platform`; tests). */
   platform?: NodeJS.Platform;
+  /** Claude Code's `CLAUDE_CONFIG_DIR`, whose `settings*.json` are its settings (default: the environment's; `''` for none). */
+  claudeConfigDir?: string;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -3581,7 +3613,7 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
   const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
-  const where: Where = { home };
+  const where: Where = { home, configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']) };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
   // closing quote and swallows the rest of the command, with no warning.
@@ -3592,9 +3624,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
 }
 
-/** What the assessment knows of the machine: the home directory. */
+/** What the assessment knows of the machine: the home directory, and Claude Code's `CLAUDE_CONFIG_DIR`. */
 interface Where {
   home: HomeDir | undefined;
+  configDirName: string | undefined;
 }
 
 /**

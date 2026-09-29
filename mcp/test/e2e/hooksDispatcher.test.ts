@@ -1168,6 +1168,52 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review round 2, ruling 3: `$CLAUDE_CONFIG_DIR/settings*.json` are Claude
+  // Code's user settings when that variable is set, and were not guarded.
+  describe('Claude Code settings under CLAUDE_CONFIG_DIR (review round 2)', () => {
+    let configDir: string;
+    beforeEach(() => {
+      configDir = join(homeDir, '.claude-conta2');
+      mkdirSync(configDir, { recursive: true });
+    });
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const hook = (tool: string, input: Record<string, unknown>, env: Record<string, string> = {}): HookResult =>
+      runHook(preToolUse(tool, input, projectDir), { cwd: projectDir, homeDir, env: { CLAUDE_CONFIG_DIR: configDir, ...env } });
+
+    it('a Write of settings.json there with "disableAllHooks": true is denied', () => {
+      const r = hook('Write', { file_path: join(configDir, 'settings.json'), content: '{"disableAllHooks": true}' });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('a Write of settings.local.json there with env GUARDIAN_HOOKS=off is denied', () => {
+      const r = hook('Write', { file_path: join(configDir, 'settings.local.json'), content: '{"env":{"GUARDIAN_HOOKS":"off"}}' });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an Edit of an existing settings.json there adding GUARDIAN_PKG_VET=0 is denied', () => {
+      writeFileSync(join(configDir, 'settings.json'), '{\n  "env": {}\n}\n');
+      const r = hook('Edit', { file_path: join(configDir, 'settings.json'), old_string: '"env": {}', new_string: '"env": {"GUARDIAN_PKG_VET": "0"}' });
+      expect(decision(r)).toBe('deny');
+    });
+
+    it('an edit of permissions there is allowed', () => {
+      const r = hook('Write', { file_path: join(configDir, 'settings.json'), content: '{"permissions":{"allow":["Bash(ls)"]}}' });
+      expect(decision(r)).toBeUndefined();
+    });
+
+    it('the same file is not Claude Code settings when CLAUDE_CONFIG_DIR is not set', () => {
+      const r = hook('Write', { file_path: join(configDir, 'settings.json'), content: '{"disableAllHooks": true}' }, { CLAUDE_CONFIG_DIR: '' });
+      expect(decision(r)).toBeUndefined();
+    });
+
+    it.runIf(process.platform === 'win32')('through ::$DATA too', () => {
+      const r = hook('Write', { file_path: `${join(configDir, 'settings.json')}::$DATA`, content: '{"disableAllHooks": true}' });
+      expect(decision(r)).toBe('deny');
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

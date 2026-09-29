@@ -2376,6 +2376,32 @@ describe('assessBashCommand — an interpreter running a download (review round 
   ])('%j stays ok', (command) => expect(assessBashCommand(command).level).toBe('ok'));
 });
 
+// Ruling 3, the shell half: a shell write of `$CLAUDE_CONFIG_DIR/settings.json`
+// that names a loosening key is judged like one of `~/.claude/settings.json`.
+describe('assessBashCommand — Claude Code settings under CLAUDE_CONFIG_DIR (review round 2, ruling 3)', () => {
+  const dir = process.platform === 'win32' ? 'C:\\Users\\me\\.claude-conta2' : '/home/me/.claude-conta2';
+  it.each([
+    [`echo '{"disableAllHooks": true}' > "$CLAUDE_CONFIG_DIR/settings.json"`, 'bash'],
+    [`echo '{"disableAllHooks": true}' > \${CLAUDE_CONFIG_DIR}/settings.local.json`, 'bash'],
+    [`echo '{"disableAllHooks": true}' > ~/.claude-conta2/settings.json`, 'bash'],
+    [`jq '.env.GUARDIAN_HOOKS="off"' s.json > "${dir}/settings.json"`, 'bash'],
+    [`Set-Content -Path "$env:CLAUDE_CONFIG_DIR\\settings.json" -Value '{"disableAllHooks": true}'`, 'powershell'],
+    [`echo {"disableAllHooks": true} > %CLAUDE_CONFIG_DIR%\\settings.json`, 'bash'],
+    [`node -e "require('fs').writeFileSync(process.env.HOME + '/.claude-conta2/settings.json', '{\\"disableAllHooks\\":true}')"`, 'bash'],
+  ] as const)('%s', (command, shell) => {
+    const a = assessBashCommand(command, { shell, claudeConfigDir: dir });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+  });
+
+  it('a write there that names no loosening key is allowed', () => {
+    expect(assessBashCommand(`jq '.permissions.allow += ["Bash(ls)"]' s.json > "$CLAUDE_CONFIG_DIR/settings.json"`, { claudeConfigDir: dir }).level).toBe('ok');
+  });
+
+  it('without CLAUDE_CONFIG_DIR a directory merely named like it is not settings', () => {
+    expect(assessBashCommand(`echo '{"disableAllHooks": true}' > ~/.claude-conta2/settings.json`, { claudeConfigDir: '' }).level).toBe('ok');
+  });
+});
+
 // Round 2: the PowerShell download checks must not fire on a file NAMED like
 // `iex`, nor on opening a downloaded document.
 describe('assessBashCommand — PowerShell near misses of the download checks (review round 2)', () => {
