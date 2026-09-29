@@ -346,7 +346,20 @@ actually makes.
   report — never `--time`, which only adds profiling (94 MB against 1.7 MB on
   LibreChat): the run is partial with the files named, type `Fixpoint
   timeout`, gated exactly like a per-rule `Timeout`, and on an engine without
-  the field the run carries a named note instead.
+  the field the run carries a named note instead. The exception is a timeout
+  whose only rule is one of the plugin's own packs' (`[rules: 1, first:
+  llm-…]`): that is the pack's gap — its JS rules have no literal to prefilter
+  on and time out on code with no model call in it — recorded as `Fixpoint
+  timeout (plugin pack)`, noted, never the run's partial verdict nor the gate's.
+  The **eighth** mode leaves no trace anywhere: semgrep-core tracks a fixed
+  number of tainted l-values per function (`Flag_semgrep.max_tainted_vars`;
+  its log says "Already tracking too many tainted l-values, will not track
+  …"), and past it the flow is dropped — no finding, `errors: []`,
+  `fixpoint_timeouts: []`, independent of load. Measured on 1.176.1 and
+  1.86.0: a straight chain `v0 = llm.invoke(q); v1 = v0 + 'x'; …; exec(vN)`
+  fires at N = 50 and reports nothing at N = 51 (carried through a loop, it
+  drops at 50). No report field says so, so the judge cannot see it; the
+  `llm` pack's blind spots record the reproduction.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather

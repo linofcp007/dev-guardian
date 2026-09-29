@@ -29,7 +29,9 @@ version bump.
   it, and the guard's exit must be unconditional and its own), and inverted the process sinks: model
   text anywhere in an argv fires unless the program is a fixed literal that is not an interpreter,
   shell or wrapper and no shell is involved; `os.exec*`/`os.spawn*` and
-  `asyncio.create_subprocess_exec` are sinks.
+  `asyncio.create_subprocess_exec` are sinks. Its third review added container and `find`
+  wrappers (`docker`, `podman`, `nerdctl`, `kubectl`, `oc`, `find`, `nsenter`) and, in JS, an argv
+  array held in a variable (`const args = ['-c', t]; spawn('bash', args)` was silent).
 - `local_only` with no project rules is still reported as no scan, and a `local_only` run whose
   every project rule failed to load is still failed with `rule_config_error`: the LLM pack alone is
   not a SAST ruleset, whatever it found (its findings are recorded). The Docker fallback mounts the
@@ -43,23 +45,38 @@ version bump.
 
 ### Fixed
 
-- **A Semgrep run whose taint analysis gave up on a function no longer reads as complete.** When a
-  taint rule's analysis of one function runs past its budget, Semgrep drops that function and
-  reports it only under `time.fixpoint_timeouts` — `errors[]` empty, every file scanned — so every
-  such run read `ok`, coverage full. Measured: 644 on LibreChat and 77 on this repo's `mcp/src`
-  under `p/default` and the plugin's packs, and one true positive of the LLM pack
+- **A Semgrep taint fixpoint timeout no longer reads as a complete run.** When a taint rule's
+  analysis of one function runs past its budget, Semgrep drops that function and reports it only
+  under `time.fixpoint_timeouts` — `errors[]` empty, every file scanned — so every such run read
+  `ok`, coverage full. Measured: 644 on LibreChat and 77 on this repo's `mcp/src` under `p/default`
+  and the plugin's packs, and one true positive of the LLM pack
   (`langchain_experimental/sql/base.py:178`) dropped out of 3 scans in 17 on a loaded machine. The
   shared Semgrep judge now reads the field from the plain report (never `--time`, which grows
   LibreChat's report from 1.7 MB to 94 MB) on every Semgrep run: `scan_sast` native, scoped and
-  Docker, `review_pr`, `bug_hunt`, `scan_wordpress`. The run is partial — "taint analysis
-  incomplete (Semgrep fixpoint timeout) in N function(s) across M file(s): a.py, +K more" — and the
-  files are stored in `partially_parsed` (type `Fixpoint timeout`, one entry per file): a finding
-  missing from one of them is not re-measured, never fixed (`diff_scans` and `regression_alert` now
-  name a few of a scan's partly measured files, then count the rest), and the CI gate treats it exactly as a
-  per-file `Timeout` (exit 2, never accepted by `--accept-partial-parse`). Under load most real
-  JS/Python scans now read partial; that is what they are. Semgrep before 1.170 does not emit the
-  field (1.86.0 through 1.120.1, measured): the run carries a named note that incomplete taint
-  analysis cannot be detected, said once beside the LLM pack's version note.
+  Docker, `review_pr`, `bug_hunt`, `scan_wordpress`. A timeout of a registry or project rule — or
+  one Semgrep names ambiguously — makes the run partial, "taint analysis incomplete (Semgrep
+  fixpoint timeout) in N function(s) across M file(s): a.py, +K more", the files stored in
+  `partially_parsed` (type `Fixpoint timeout`): a finding missing from one of them is not
+  re-measured, never fixed, and the CI gate treats it exactly as a per-file `Timeout` (exit 2,
+  never accepted by `--accept-partial-parse`). A timeout of the plugin's LLM pack alone is the
+  pack's gap, not the scan's: its JS rules have no literal to prefilter on and time out on code
+  with no model call in it (6 to 22 per run on `mcp/src`), which made CI red on most loaded runs
+  with nothing to accept. It is recorded (`Fixpoint timeout (plugin pack)`, so history still reads
+  those files as not re-measured), named in a note and in `plugin_packs.llm: partial`, and never
+  makes the run partial or reaches the gate. Semgrep before 1.170 does not emit the field (1.86.0
+  through 1.120.1, measured): the run carries a named note instead, said once beside the LLM
+  pack's version note. This makes fixpoint timeouts visible, not every loss of taint analysis:
+  semgrep-core also stops tracking a function past a fixed number of tainted variables (a chain of
+  51 copies from a model call to `exec` reports nothing, with no error and no timeout, on 1.176.1
+  and 1.86.0) — no report field says so, and the pack's blind spots record it.
+- A tool response no longer carries every partly analysed file: the row keeps them all, and the
+  response carries the first 20 of each `partially_parsed` list with `partially_parsed_total` and
+  `partially_parsed_by_type` (a 1000-file report: 8.5 KB instead of over 240 KB). Every reason that
+  names files names five, then "+N more" — parse errors included — and so do `diff_scans` and
+  `regression_alert`.
+- `create_fix_pr`: a Semgrep autofix pass that wrote the fix but whose report is incomplete now
+  says "applied, then discarded: the verification scan would be incomplete (…)" instead of "the
+  fix could not be applied"; the outcome is still `apply_failed`, and the worktree is discarded.
 
 ## [3.0.0] - 2026-09-28
 
