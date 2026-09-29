@@ -62,6 +62,7 @@ describe('remoteReasonOf: local', () => {
 describe('remoteReasonOf: special schemes without //', () => {
   it.each([
     ['https: with no slashes', entry('npx', ['mcp-remote', 'https:evil.example/mcp'])],
+    ['https:/ with one slash (the review\'s shape)', entry('npx', ['mcp-remote', 'https:/api.example.com/sse'])],
     ['upper-case HTTPS:', entry('npx', ['mcp-remote', 'HTTPS:evil.example/mcp'])],
     ['ws: with no slashes', entry('node', ['server.js', '--cdp=ws:evil.example:9222'])],
     ['ftp: with no slashes', entry('node', ['server.js'], { SOURCE: 'ftp:evil.example/x' })],
@@ -111,6 +112,7 @@ describe('remoteReasonOf: loopback look-alikes stay remote', () => {
     ['a query on a database URL (libpq host=)', 'postgres://localhost/app?host=evil.example'],
     ['a multi-host database URL', 'postgres://localhost,evil.example/app'],
     ['a multi-host URL with ports (does not parse)', 'mongodb://localhost:27017,evil.example:27017/db'],
+    ["the review's multi-host postgresql URL", 'postgresql://localhost:5432,other:5432/db'],
     ['an IPv4-mapped IPv6 loopback', 'http://[::ffff:127.0.0.1]/'],
     ['a DNS name that resolves to loopback', 'http://localtest.me/'],
     ['a 127.1 on a non-special scheme (opaque host)', 'postgres://127.1/app'],
@@ -136,6 +138,9 @@ describe('remoteReasonOf: a remote-shell or remote-engine command anywhere in th
     ['ssh inside cmd /c', entry('cmd', ['/c', 'ssh host mcp-server'])],
     ['ssh inside sh -c', entry('sh', ['-c', 'exec ssh -T host mcp-server'])],
     ['ssh after a shell operator', entry('sh', ['-c', 'cd /tmp&&ssh host mcp-server'])],
+    ['ssh inside bash -c', entry('bash', ['-c', 'ssh -T host "mcp-server --stdio"'])],
+    ['ssh through wsl', entry('wsl', ['ssh', 'host', 'mcp-server'])],
+    ['kubectl inside $( )', entry('sh', ['-c', 'exec $(kubectl get pod -o name)'])],
     ['sshpass', entry('sshpass', ['-p', 'x', 'ssh', 'host'])],
     ['plink.exe by path', entry('C:\\Program Files\\PuTTY\\plink.exe', ['host', 'mcp-server'])],
     ['kubectl', entry('kubectl', ['exec', '-i', 'pod', '--', 'mcp-server'])],
