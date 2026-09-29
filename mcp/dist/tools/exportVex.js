@@ -35,11 +35,10 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, win32 } from 'node:path';
 import { z } from 'zod';
-import { findLatestUsable } from '../history/openSet.js';
+import { vexSourceScan } from '../vex/scope.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { ProjectPath } from '../schemas.js';
-import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { prepareDependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
@@ -97,7 +96,7 @@ async function handler(input, ctx) {
     catch (e) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
-    const found = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' });
+    const found = vexSourceScan(ctx.storage, projectPath);
     const depsScan = found.scan;
     if (depsScan === null) {
         return nothingWritten(format, null, {

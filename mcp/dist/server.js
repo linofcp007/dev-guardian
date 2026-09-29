@@ -58444,6 +58444,11 @@ function failDomain8(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
 
+// src/vex/scope.ts
+function vexSourceScan(storage, projectPath) {
+  return findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
+}
+
 // src/validate/dependencyProvider.ts
 import { isBuiltin } from "node:module";
 
@@ -59947,8 +59952,9 @@ async function handler8(input, ctx) {
       vex: null
     };
   }
-  const exportable = dependencyCoordinates(located.finding) !== null;
-  const { statements, others } = otherOpenCopies(ctx, projectPath, located);
+  const scope = exportScopeOf(ctx, projectPath, located);
+  const exportable = scope.copy !== null;
+  const { statements, others } = scope.copy === null ? { statements: [], others: [] } : otherOpenCopies(ctx, projectPath, scope);
   const warning = others.length === 0 ? null : `${others.length} other open finding(s) are copies of the same VEX statement (${statements.join(", ")}): ${others.slice(0, MAX_NAMED_COPIES2).map((o2) => `${o2.file_path ?? "(no file)"} [${o2.fingerprint.slice(0, 12)}]`).join(", ")}${others.length > MAX_NAMED_COPIES2 ? ` and ${others.length - MAX_NAMED_COPIES2} more` : ""}. export_vex states not_affected only when every copy in a statement carries a VEX justification \u2014 suppress those with vex_status too, or it stays under_investigation.`;
   return {
     ok: true,
@@ -59960,9 +59966,7 @@ async function handler8(input, ctx) {
       ...vex,
       vulnerability_ids: vulnIds,
       exportable,
-      ...exportable ? {} : {
-        note: "not exportable to VEX (no package coordinates): export_vex states a vulnerability per package version, and this finding names none. The suppression is recorded and hides it."
-      },
+      ...scope.whyNot !== null ? { note: `${scope.whyNot} The suppression is recorded and hides it.` } : {},
       other_open_findings: others.slice(0, MAX_LISTED_COPIES)
     },
     ...warning !== null ? { warning } : {}
@@ -59970,13 +59974,52 @@ async function handler8(input, ctx) {
 }
 var MAX_NAMED_COPIES2 = 5;
 var MAX_LISTED_COPIES = 50;
-function otherOpenCopies(ctx, projectPath, located) {
+function exportScopeOf(ctx, projectPath, located) {
+  const source = vexSourceScan(ctx.storage, projectPath).scan;
+  const type = ctx.storage.scans.getById(located.scan_id)?.scan_type;
+  if (type !== void 0 && !CVE_SOURCE_SCAN_TYPES.includes(type)) {
+    const what = type === "containers" ? "container images are not in export_vex's scope" : `a ${type} scan is not in export_vex's scope`;
+    return {
+      copy: null,
+      scanId: null,
+      whyNot: `not exportable to VEX: ${what}; export_vex states the vulnerabilities of the project's latest dependency scan (scan_deps, deps_audit or security_scan_full).`
+    };
+  }
+  if (dependencyCoordinates(located.finding) === null) {
+    return {
+      copy: null,
+      scanId: null,
+      whyNot: "not exportable to VEX (no package coordinates): export_vex states a vulnerability per package version, and this finding names none."
+    };
+  }
+  if (source === null) {
+    return {
+      copy: null,
+      scanId: null,
+      whyNot: "not exportable to VEX yet: this project has no usable dependency scan for export_vex to read."
+    };
+  }
+  const same = (f) => f.fingerprint === located.finding.fingerprint || f.identity !== void 0 && f.identity === located.finding.identity;
+  const copy = ctx.storage.findings.listByScan(source.scan_id).find(same) ?? null;
+  if (copy === null || dependencyCoordinates(copy) === null) {
+    return {
+      copy: null,
+      scanId: source.scan_id,
+      whyNot: `not exportable to VEX now: export_vex reads the latest dependency scan (${source.scan_id}), which does not report this finding.`
+    };
+  }
+  return { copy, scanId: source.scan_id, whyNot: null };
+}
+function otherOpenCopies(ctx, projectPath, scope) {
+  const { copy, scanId } = scope;
+  if (copy === null || scanId === null) return { statements: [], others: [] };
+  const scanFindings = ctx.storage.findings.listByScan(scanId);
   const keys = vexStatementKeys({
-    cves: ctx.storage.cves.listActive(located.scan_id),
-    findings: ctx.storage.findings.listByScan(located.scan_id)
-  }).filter((key) => isVexCopyIn(located.finding, key));
+    cves: ctx.storage.cves.listActive(scanId),
+    findings: scanFindings
+  }).filter((key) => isVexCopyIn(copy, key));
   if (keys.length === 0) return { statements: [], others: [] };
-  const others = openSetForProject(ctx.storage, projectPath).findings.filter((f) => f.fingerprint !== located.finding.fingerprint && keys.some((key) => isVexCopyIn(f, key))).map((f) => {
+  const others = partitionSuppressed(ctx.storage, projectPath, scanFindings).visible.filter((f) => f.fingerprint !== copy.fingerprint && keys.some((key) => isVexCopyIn(f, key))).map((f) => {
     const coordinates = dependencyCoordinates(f);
     return {
       fingerprint: f.fingerprint,
@@ -84113,7 +84156,7 @@ async function handler46(input, ctx) {
   } catch (e) {
     return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
   }
-  const found = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
+  const found = vexSourceScan(ctx.storage, projectPath);
   const depsScan = found.scan;
   if (depsScan === null) {
     return nothingWritten(format2, null, {

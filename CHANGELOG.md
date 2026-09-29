@@ -57,6 +57,12 @@ version bump.
   those files as not re-measured, keeping it open. History now leaves a file under that type
   unmeasured only for findings of the pack's own rules (named `semgrep (LLM pack partly measured:
   …)`); every other reader ignores it.
+- `suppress_finding` judges `vex.exportable` and the other open copies over exactly what
+  `export_vex` reads — the project's latest usable dependency scan. A container image's CVE
+  (`scan_containers`' trivy-image) was promised `exportable: true` and never exported; it now says
+  "container images are not in export_vex's scope". A dependency copy suppressed beside an image's
+  copy no longer gets a "copies" warning about it, and a finding the latest dependency scan no
+  longer reports is not promised to be exported.
 - `regression_alert` and `diff_scans` honour suppressions the way the open set does (per project,
   unexpired, by fingerprint or identity). After `suppress_finding`, `regression_alert` still said
   `regressed: true, score_delta: 10` for the suppressed critical while the dashboard and

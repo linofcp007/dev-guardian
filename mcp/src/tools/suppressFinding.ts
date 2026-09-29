@@ -30,11 +30,12 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
-import { openSetForProject } from '../history/openSet.js';
+import { partitionSuppressed } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
+  CVE_SOURCE_SCAN_TYPES,
   OPENVEX_JUSTIFICATIONS,
   type DomainError,
   type Finding,
@@ -42,6 +43,7 @@ import {
   type ToolResult,
   type VexSuppressionStatus,
 } from '../types.js';
+import { vexSourceScan } from '../vex/scope.js';
 import { isVexCopyIn, vexStatementKeys } from '../vex/statements.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -200,14 +202,18 @@ async function handler(
     };
   }
 
-  // What export_vex will make of it (final review, M-b and M-d). A statement
-  // is about a package version, so a finding naming none — a nuclei template,
-  // a scanner's CVE on a URL — is recorded but never exported. And a
-  // statement is not_affected only when EVERY copy of the vulnerability
-  // carries a VEX justification, so the copies still open are named here,
-  // where the caller can act on them, rather than only in the document.
-  const exportable = dependencyCoordinates(located.finding) !== null;
-  const { statements, others } = otherOpenCopies(ctx, projectPath, located);
+  // What export_vex will make of it (final review, M-b and M-d), judged over
+  // exactly what export_vex reads — the project's latest usable dependency
+  // scan (`vex/scope.ts`): a container image's CVE was promised
+  // `exportable: true` and never exported. A statement is about a package
+  // version, so a finding naming none — a nuclei template, a scanner's CVE on
+  // a URL — is recorded but never exported. And a statement is not_affected
+  // only when EVERY copy of the vulnerability carries a VEX justification, so
+  // the copies still open IN THAT SCAN are named here, where the caller can
+  // act on them, rather than only in the document.
+  const scope = exportScopeOf(ctx, projectPath, located);
+  const exportable = scope.copy !== null;
+  const { statements, others } = scope.copy === null ? { statements: [], others: [] } : otherOpenCopies(ctx, projectPath, scope);
   const warning =
     others.length === 0
       ? null
@@ -228,13 +234,7 @@ async function handler(
       ...vex,
       vulnerability_ids: vulnIds,
       exportable,
-      ...(exportable
-        ? {}
-        : {
-            note:
-              'not exportable to VEX (no package coordinates): export_vex states a vulnerability per ' +
-              'package version, and this finding names none. The suppression is recorded and hides it.',
-          }),
+      ...(scope.whyNot !== null ? { note: `${scope.whyNot} The suppression is recorded and hides it.` } : {}),
       other_open_findings: others.slice(0, MAX_LISTED_COPIES),
     },
     ...(warning !== null ? { warning } : {}),
@@ -254,25 +254,87 @@ interface OpenCopy {
 }
 
 /**
- * The project's OTHER open findings that are copies in a VEX statement the
- * suppressed finding is a copy in — `export_vex`'s own membership rule
- * (`vex/statements.ts#isVexCopyIn`), over the statements the finding's scan
- * makes (`vexStatementKeys`), so the two can never disagree about which
- * findings one statement needs. Read after the suppression is inserted, so
- * the one just suppressed is not among them.
+ * The suppressed finding as `export_vex` would read it: its copy in the scan
+ * export_vex states (`vex/scope.ts#vexSourceScan`) — same identity, or same
+ * fingerprint — when that copy names a package version; else null, with the
+ * reason it will not be exported.
+ */
+function exportScopeOf(
+  ctx: PluginContext,
+  projectPath: string,
+  located: { finding: Finding; scan_id: string },
+): { copy: Finding | null; scanId: string | null; whyNot: string | null } {
+  const source = vexSourceScan(ctx.storage, projectPath).scan;
+  const type = ctx.storage.scans.getById(located.scan_id)?.scan_type;
+  if (type !== undefined && !CVE_SOURCE_SCAN_TYPES.includes(type)) {
+    const what =
+      type === 'containers'
+        ? "container images are not in export_vex's scope"
+        : `a ${type} scan is not in export_vex's scope`;
+    return {
+      copy: null,
+      scanId: null,
+      whyNot:
+        `not exportable to VEX: ${what}; export_vex states the vulnerabilities of the project's latest ` +
+        'dependency scan (scan_deps, deps_audit or security_scan_full).',
+    };
+  }
+  if (dependencyCoordinates(located.finding) === null) {
+    return {
+      copy: null,
+      scanId: null,
+      whyNot:
+        'not exportable to VEX (no package coordinates): export_vex states a vulnerability per ' +
+        'package version, and this finding names none.',
+    };
+  }
+  if (source === null) {
+    return {
+      copy: null,
+      scanId: null,
+      whyNot: 'not exportable to VEX yet: this project has no usable dependency scan for export_vex to read.',
+    };
+  }
+  const same = (f: Finding): boolean =>
+    f.fingerprint === located.finding.fingerprint ||
+    (f.identity !== undefined && f.identity === located.finding.identity);
+  const copy = ctx.storage.findings.listByScan(source.scan_id).find(same) ?? null;
+  if (copy === null || dependencyCoordinates(copy) === null) {
+    return {
+      copy: null,
+      scanId: source.scan_id,
+      whyNot:
+        `not exportable to VEX now: export_vex reads the latest dependency scan (${source.scan_id}), ` +
+        'which does not report this finding.',
+    };
+  }
+  return { copy, scanId: source.scan_id, whyNot: null };
+}
+
+/**
+ * The OTHER open findings, in the scan `export_vex` states, that are copies
+ * in a VEX statement the suppressed finding is a copy in — `export_vex`'s own
+ * membership rule (`vex/statements.ts#isVexCopyIn`) over the statements that
+ * scan makes (`vexStatementKeys`), so the two can never disagree about which
+ * findings one statement needs. "Open" by the project's active suppressions,
+ * read after this one is inserted, so the one just suppressed is not among
+ * them. A copy in another scan type (an image's) is in no statement.
  */
 function otherOpenCopies(
   ctx: PluginContext,
   projectPath: string,
-  located: { finding: Finding; scan_id: string },
+  scope: { copy: Finding | null; scanId: string | null },
 ): { statements: string[]; others: OpenCopy[] } {
+  const { copy, scanId } = scope;
+  if (copy === null || scanId === null) return { statements: [], others: [] };
+  const scanFindings = ctx.storage.findings.listByScan(scanId);
   const keys = vexStatementKeys({
-    cves: ctx.storage.cves.listActive(located.scan_id),
-    findings: ctx.storage.findings.listByScan(located.scan_id),
-  }).filter((key) => isVexCopyIn(located.finding, key));
+    cves: ctx.storage.cves.listActive(scanId),
+    findings: scanFindings,
+  }).filter((key) => isVexCopyIn(copy, key));
   if (keys.length === 0) return { statements: [], others: [] };
-  const others = openSetForProject(ctx.storage, projectPath)
-    .findings.filter((f) => f.fingerprint !== located.finding.fingerprint && keys.some((key) => isVexCopyIn(f, key)))
+  const others = partitionSuppressed(ctx.storage, projectPath, scanFindings)
+    .visible.filter((f) => f.fingerprint !== copy.fingerprint && keys.some((key) => isVexCopyIn(f, key)))
     .map((f) => {
       const coordinates = dependencyCoordinates(f);
       return {
