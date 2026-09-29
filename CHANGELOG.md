@@ -8,6 +8,11 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- The shell guard denies every download-and-run shape, official installers included, as it already denied `curl … | bash`. A pipeline member is judged by the command it resolves to, through `VAR=x`, `env`, `command`, `exec`, `sudo` and its options, quotes and an absolute path: `| /bin/bash`, `| env PNPM_VERSION=10 sh -` (pnpm's installer), `| "bash"`, `| command bash`, `| ksh`, `| sudo -u root bash` and `| source /dev/stdin` ran with no answer, or only the sudo warning. Also denied: `source <(curl …)`, `. <(wget …)`, `bash <<< "$(curl …)"`; PowerShell's `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's installer), `(irm …) | iex`, `iex "& { $(irm …) }"` (the PowerShell installer's), and a file saved by `DownloadFile`, `Invoke-WebRequest -OutFile` or `Start-BitsTransfer` then run in the same command. `curl … | jq`, `curl … | tee file`, `cat script.sh | bash` and `iex $script` are unchanged. The script handed to `iex` is now assessed like one handed to `eval`.
+- A runner's options are read per runner. One table for all of them made `-n`, `-i`, `-s` and `-k` take a value, so `sudo -n rm -rf /` (and `-i`, `-s`, `-k`) only warned as sudo, and `env -i rm -rf /` was ok.
+
 ## [3.0.0] - 2026-09-29
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

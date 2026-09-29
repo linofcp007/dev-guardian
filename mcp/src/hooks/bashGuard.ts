@@ -206,8 +206,10 @@ export const BASH_RULES: BashRule[] = [
     // this file, so scope:'command' (which sees the un-split text) is enough
     // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
     // where the whole thing sits inside quotes and is handled separately, by
-    // `isBareRemoteFetch` on the extracted `-c` script text.
-    pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+    // `isBareRemoteFetch` on the extracted `-c` script text. `source <(curl
+    // …)` and `. <(wget …)` run the download in the current shell — the same
+    // hazard (review I1); `.` counts only where a command starts.
+    pattern: /(?:\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s))[^\n]*<\(\s*(?:curl|wget)\b/im,
     scope: 'command',
     test: processSubstitutionFetch,
   },
@@ -342,7 +344,7 @@ function anyOf(...tests: Array<(text: string) => boolean>): (text: string) => bo
  */
 function processSubstitutionFetch(text: string): boolean {
   for (const line of text.split('\n')) {
-    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s)/i.exec(line);
     if (shell === null) continue;
     const shellEnd = shell.index + shell[0].length;
     for (const fetch of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
@@ -885,17 +887,58 @@ const RUNNERS = new Set([
   'start',
 ]);
 
-/** Runner flags that consume the next word, so it is not the command. */
-const FLAG_TAKES_VALUE = new Set(['-u', '-g', '-n', '-C', '-k', '-s', '-I', '-i', '--user', '--group']);
+/**
+ * Each runner's own options that consume a value — short letters (also at the
+ * end of a cluster: `-Eu root`) and long names (`--user root`, `--user=root`).
+ * Per runner, never one table for all: a shared set made `-n`, `-i`, `-s` and
+ * `-k` take a value, which they do for `nice`, `xargs` or `timeout` but not
+ * for `sudo` or `env` — so `sudo -n rm -rf /` read `rm` as the value of `-n`
+ * and only warned as sudo, and `env -i rm -rf /` was ok (review I1). Options
+ * whose value is optional and attached (`xargs -i[R]`, `-e[EOF]`) take none.
+ */
+const RUNNER_VALUED: Readonly<Record<string, { short: string; long: ReadonlySet<string> }>> = {
+  sudo: {
+    short: 'CDgpRrTtUu',
+    long: new Set(['user', 'group', 'host', 'prompt', 'close-from', 'chdir', 'chroot', 'role', 'type', 'other-user', 'command-timeout']),
+  },
+  doas: { short: 'uC', long: new Set() },
+  env: { short: 'uCSa', long: new Set(['unset', 'chdir', 'split-string', 'argv0']) },
+  exec: { short: 'a', long: new Set() },
+  nice: { short: 'n', long: new Set(['adjustment']) },
+  time: { short: 'fo', long: new Set(['format', 'output']) },
+  timeout: { short: 'sk', long: new Set(['signal', 'kill-after']) },
+  stdbuf: { short: 'ioe', long: new Set(['input', 'output', 'error']) },
+  xargs: {
+    short: 'adEILnPs',
+    long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
+  },
+  watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
+};
+
+/** How many words a runner's option takes: 1 for a switch or an attached value, 2 when the value is the next word. */
+function runnerOptionWords(runner: string, option: string): number {
+  const valued = RUNNER_VALUED[runner];
+  if (valued === undefined) return 1;
+  if (option.startsWith('--')) {
+    return !option.includes('=') && valued.long.has(option.slice(2)) ? 2 : 1;
+  }
+  // A short cluster: the first letter that takes a value takes the rest of the
+  // cluster, or — when it is the last letter — the next word.
+  for (let k = 1; k < option.length; k += 1) {
+    if (valued.short.includes(option.charAt(k))) return k === option.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /**
  * Walks past `VAR=x` assignments and runner prefixes (`sudo`, `env`, `xargs`,
  * `timeout 30`, …) to the index of the word that actually names the command,
- * reporting on the way whether privilege was elevated.
+ * reporting on the way whether privilege was elevated. `through`, when given,
+ * limits the runners walked past to those named (the rest end the walk).
  */
-function resolveCommand(words: ShellWord[]): { index: number; elevated: boolean } {
+function resolveCommand(words: readonly ShellWord[], through?: ReadonlySet<string>): { index: number; elevated: boolean } {
   let i = 0;
   let elevated = false;
   // No hop cap: every pass consumes at least one word, so this is linear —
@@ -915,7 +958,7 @@ function resolveCommand(words: ShellWord[]): { index: number; elevated: boolean 
       continue;
     }
     const name = basename(word.value);
-    if (!RUNNERS.has(name)) break;
+    if (!RUNNERS.has(name) || (through !== undefined && !through.has(name))) break;
     if (name === 'sudo' || name === 'doas') elevated = true;
     i += 1;
     if (name === 'start') {
@@ -939,8 +982,17 @@ function resolveCommand(words: ShellWord[]): { index: number; elevated: boolean 
         i += 1;
         continue;
       }
+      if (arg.value === '--') {
+        i += 1;
+        break;
+      }
       if (arg.value.startsWith('-') && arg.value.length > 1) {
-        i += FLAG_TAKES_VALUE.has(arg.value) ? 2 : 1;
+        i += runnerOptionWords(name, arg.value);
+        continue;
+      }
+      // `env -` is `env -i`.
+      if (name === 'env' && arg.value === '-') {
+        i += 1;
         continue;
       }
       if ((name === 'timeout' || name === 'watch') && /^\d+(?:\.\d+)?[smhd]?$/.test(arg.value)) {
@@ -2594,6 +2646,8 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'su',
 interface NestedScript {
   text: string;
   powershell: boolean;
+  /** Handed to `Invoke-Expression` (`iex`), which runs it as PowerShell. */
+  iex?: boolean;
 }
 
 function shellScript(text: string): NestedScript {
@@ -2630,6 +2684,16 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
       .join(' ')
       .trim();
     return script.length > 0 ? [shellScript(script)] : [];
+  }
+  // PowerShell's `eval`: `iex "& { $(irm …) }"` runs its argument — quoted or
+  // not — as PowerShell (review I1).
+  if (launcher === 'iex' || launcher === 'invoke-expression') {
+    const script = words
+      .slice(start + 1)
+      .map((w) => w.value)
+      .join(' ')
+      .trim();
+    return script.length > 0 ? [{ text: script, powershell: true, iex: true }] : [];
   }
   let sawShell = false;
   for (let i = start; i < words.length; i += 1) {
@@ -2714,6 +2778,260 @@ function fedScripts(
   return scripts;
 }
 
+// ─────────────────────────────────────────────── download, then run it
+
+/** Commands that fetch a URL: `curl`, `wget` and PowerShell's web cmdlets and their aliases. */
+const DOWNLOADERS = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod']);
+
+/**
+ * The runners a pipeline member is looked through to find what reads the
+ * pipe — never `xargs`, `watch` or cmd's `start`, which do not hand the
+ * command their stdin as a script.
+ */
+const PIPE_RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
+
+/** Shells that run what arrives on their stdin. */
+const STDIN_SHELLS = new Set([...SHELLS, 'fish', 'csh', 'tcsh']);
+
+/** The paths through which `source` / `.` read their stdin. */
+const STDIN_PATHS = new Set(['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
+
+const RULE_PIPE_TO_SHELL: MatchedRule = {
+  id: 'remote-pipe-to-shell',
+  level: 'block',
+  reason: 'Pipes a downloaded script directly into a shell (curl|wget … | sh/bash)',
+};
+
+const RULE_FETCH_EXEC: MatchedRule = {
+  id: 'remote-pipe-to-shell',
+  level: 'block',
+  reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
+};
+
+const RULE_IEX_DOWNLOAD: MatchedRule = {
+  id: 'powershell-iex-download',
+  level: 'block',
+  reason: 'Downloads and executes remote code via Invoke-Expression',
+};
+
+const RULE_DOWNLOAD_RUN: MatchedRule = {
+  id: 'download-then-run',
+  level: 'block',
+  reason: 'Downloads a file and runs it in the same command (DownloadFile / -OutFile, then &, ., Start-Process, …)',
+};
+
+/** Whether a command reads its stdin as a script: a shell, or `source` / `.` of `/dev/stdin`. */
+function readsStdinAsScript(words: readonly ShellWord[], at: number): boolean {
+  const name = commandName(words[at]?.value ?? '');
+  if (STDIN_SHELLS.has(name)) return true;
+  return (name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? '');
+}
+
+/**
+ * `curl … | bash`, judged on the pipeline's structure rather than its text
+ * (review I1): a member that downloads, and after it a member whose command —
+ * resolved through `VAR=x`, `env`, `command`, `exec`, `sudo` and its options,
+ * quotes and an absolute path — is a shell. The text rule only knew a bare
+ * shell name right after the `|` (and `sudo`), so `| /bin/bash`, `| env
+ * PNPM_VERSION=10 sh -`, `| "bash"` and `| command bash` all ran unassessed.
+ */
+function pipesDownloadIntoShell(statement: ShellStatement): boolean {
+  let downloaded = false;
+  for (const words of statement.commands) {
+    const at = resolveCommand(words, PIPE_RUNNERS).index;
+    if (downloaded && readsStdinAsScript(words, at)) return true;
+    if (DOWNLOADERS.has(commandName(words[at]?.value ?? ''))) downloaded = true;
+  }
+  return false;
+}
+
+/** `bash <<< "$(curl …)"`, `source /dev/stdin <<< "$(wget …)"`: a download handed to a shell as a here-string. */
+function hereStringFetchIntoShell(words: readonly ShellWord[], at: number): boolean {
+  if (!readsStdinAsScript(words, at) && !['source', '.'].includes(commandName(words[at]?.value ?? ''))) return false;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === undefined || !w.value.startsWith('<<<') || w.redirectAt?.[0] !== 0) continue;
+    const inline = w.value.slice(3);
+    if (isBareRemoteFetch(inline.length > 0 ? inline : (words[i + 1]?.value ?? ''))) return true;
+  }
+  return false;
+}
+
+/** A download in PowerShell program text: a web cmdlet, or a `WebClient` / `HttpClient` fetch. */
+const PS_DOWNLOAD =
+  /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|start-bitstransfer)(?![\w-])|\.\s*(?:downloadstring|downloaddata|downloadfile|openread|getstringasync|getbytearrayasync|getstreamasync)\s*\(/i;
+
+/**
+ * The tokens {@link powershellDownloadExecution} reads: `iex`, a download,
+ * parentheses, pipes and statement separators.
+ */
+const PS_EXEC_TOKENS =
+  /(?<![\w$-])(?:iex|invoke-expression)(?![\w-])|(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b|&&|\|\||[()|;\n]/gi;
+
+/**
+ * `Invoke-Expression` over a download, on the masked command text (review I1):
+ * `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's official
+ * installer), `iex $wc.DownloadString(…)`, and a download piped into `iex`
+ * from inside a group — `(irm …) | iex` — where the `(` that ends a statement
+ * everywhere else had separated the download from the pipe. One pass over the
+ * tokens, so linear: a stack says which open parentheses hold `iex`'s
+ * argument, and a download seen in the current `;`/newline segment is armed by
+ * the next `|` for an `iex` after it.
+ */
+function powershellDownloadExecution(text: string): boolean {
+  if (!/iex|invoke-expression/i.test(text)) return false;
+  const opens: boolean[] = [];
+  let inIex = 0;
+  let pendingIex = false;
+  let downloaded = false;
+  let piped = false;
+  for (const m of text.matchAll(PS_EXEC_TOKENS)) {
+    const t = m[0].toLowerCase();
+    if (t === '(') {
+      opens.push(pendingIex);
+      if (pendingIex) inIex += 1;
+      pendingIex = false;
+    } else if (t === ')') {
+      if (opens.pop() === true) inIex -= 1;
+      pendingIex = false;
+    } else if (t === '|') {
+      if (downloaded) piped = true;
+      pendingIex = false;
+    } else if (t === ';' || t === '\n' || t === '&&' || t === '||') {
+      downloaded = false;
+      piped = false;
+      pendingIex = false;
+    } else if (t === 'iex' || t === 'invoke-expression') {
+      if (piped) return true;
+      pendingIex = true;
+    } else {
+      if (inIex > 0 || pendingIex) return true;
+      downloaded = true;
+    }
+  }
+  return false;
+}
+
+/** A path as compared between a download's destination and a command that runs it. */
+function runKey(path: string): string {
+  return stripQuotes(path.trim())
+    .replace(/\\/g, '/')
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/\/{2,}/g, '/')
+    .toLowerCase();
+}
+
+/** `.DownloadFile(url, path)` and its async forms. */
+const DOWNLOAD_FILE_CALL = /\.\s*DownloadFile(?:Async|TaskAsync)?\s*\(/gi;
+
+/** PowerShell's web cmdlets (and 5.1's `curl` / `wget` aliases) that can save to a file. */
+const SAVING_CMDLETS = new Set(['iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer', 'curl', 'wget']);
+
+/** `-OutFile` (from `-OutF`) and BITS's `-Destination` (from `-Dest`), with an attached `:value` or not. */
+const SAVE_PARAM = /^-(?:outf(?:i(?:le?)?)?|dest(?:i(?:n(?:a(?:t(?:i(?:on?)?)?)?)?)?)?)(?::(.*))?$/i;
+
+/** Commands that run a file named anywhere in their arguments. */
+const RUNS_ARGUMENT = new Set([
+  'start', 'start-process', 'saps', 'invoke-item', 'ii', 'msiexec', 'cscript', 'wscript', 'rundll32', 'sh', 'bash', 'zsh',
+  'iex', 'invoke-expression',
+]);
+
+/** Commands that print a file, so `gc x | iex` runs it. */
+const READERS = new Set(['get-content', 'gc', 'cat', 'type']);
+
+/**
+ * The files a command line downloads — `.DownloadFile(url, path)` (outside a
+ * quoted span), and `Invoke-WebRequest … -OutFile path` / `Start-BitsTransfer
+ * … -Destination path` — as {@link runKey}s. In the POSIX reading of a
+ * PowerShell command an unquoted comma is a space, so a call's arguments may
+ * arrive as one: its last string literal is then the destination.
+ */
+function downloadedFiles(text: string, statements: readonly ShellStatement[]): Set<string> {
+  const out = new Set<string>();
+  if (/downloadfile/i.test(text)) {
+    const unquotedAt = quoteTracker(text);
+    for (const m of text.matchAll(DOWNLOAD_FILE_CALL)) {
+      if (!unquotedAt(m.index)) continue;
+      const { args } = callArgs(text, m.index + m[0].length);
+      const second = args[1];
+      const literals = codeLiterals(args[0] ?? '', 'other');
+      const dest = second !== undefined ? argPath(second) : literals.length >= 2 ? literals[literals.length - 1] : undefined;
+      if (dest !== undefined && dest.trim() !== '') out.add(runKey(dest));
+    }
+  }
+  for (const statement of statements) {
+    for (const words of statement.commands) {
+      const at = resolveCommand(words).index;
+      if (!SAVING_CMDLETS.has(commandName(words[at]?.value ?? ''))) continue;
+      for (let i = at + 1; i < words.length; i += 1) {
+        const m = SAVE_PARAM.exec(words[i]?.value ?? '');
+        if (m === null) continue;
+        const dest = m[1] !== undefined && m[1] !== '' ? m[1] : words[i + 1]?.value;
+        if (dest !== undefined && dest.trim() !== '') out.add(runKey(dest));
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The files a command line runs, as {@link runKey}s: a command named by its
+ * path (`.\i.ps1`, `& "$env:TEMP\i.ps1"` — the `&` is a separator here),
+ * `. file`, `powershell -File file`, `cmd /c file`, `Start-Process file`,
+ * `msiexec /i file`, and `Get-Content file | iex` or `iex (gc file)`.
+ */
+function ranFiles(statements: readonly ShellStatement[]): Set<string> {
+  const out = new Set<string>();
+  const add = (v: string | undefined): void => {
+    if (v !== undefined && v !== '' && !v.startsWith('-')) out.add(runKey(v));
+  };
+  statements.forEach((statement, k) => {
+    const heads = statement.commands.map((words) => resolveCommand(words).index);
+    statement.commands.forEach((words, c) => {
+      const at = heads[c] ?? 0;
+      const head = words[at];
+      if (head === undefined) return;
+      const name = commandName(head.value);
+      out.add(runKey(head.value));
+      const rest = words.slice(at + 1).map((w) => w.value);
+      if (name === '.' || name === 'source') add(rest[0]);
+      else if (name === 'powershell' || name === 'pwsh') {
+        const file = rest.findIndex((v) => /^-f(?:i(?:le?)?)?$/i.test(v));
+        if (file >= 0) add(rest[file + 1]);
+        else rest.forEach(add);
+      } else if (name === 'cmd') {
+        const run = rest.findIndex((v) => /^\/[ck]$/i.test(v));
+        if (run >= 0) add(rest[run + 1]);
+      } else if (RUNS_ARGUMENT.has(name)) {
+        // Not cmd-style switches (`msiexec /i x.msi /qn`).
+        for (const v of rest) if (!/^\/[A-Za-z]+$/.test(v)) add(v);
+      } else if (READERS.has(name)) {
+        const piped = statement.commands.slice(c + 1).some((w, d) => {
+          const n = commandName(w[heads[c + 1 + d] ?? 0]?.value ?? '');
+          return n === 'iex' || n === 'invoke-expression';
+        });
+        if (piped) rest.forEach(add);
+      }
+    });
+    // `iex (Get-Content file -Raw)`: the `(` ended the statement holding `iex`.
+    const only = statement.commands.length === 1 ? statement.commands[0] : undefined;
+    const lone = only !== undefined && only.length === 1 ? commandName(only[0]?.value ?? '') : '';
+    if (lone === 'iex' || lone === 'invoke-expression') {
+      const next = statements[k + 1]?.commands[0];
+      if (next !== undefined && READERS.has(commandName(next[0]?.value ?? ''))) next.slice(1).forEach((w) => add(w.value));
+    }
+  });
+  return out;
+}
+
+/** A file downloaded and run by the same command line (review I1: PowerShell's `DownloadFile` then run). */
+function downloadsThenRuns(text: string, statements: readonly ShellStatement[]): boolean {
+  const downloaded = downloadedFiles(text, statements);
+  if (downloaded.size === 0) return false;
+  for (const ran of ranFiles(statements)) if (downloaded.has(ran)) return true;
+  return false;
+}
+
 // ──────────────────────────────────────────────────────────── assessment
 
 const MAX_NESTING = 3;
@@ -2749,6 +3067,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   // `[IO.File]::WriteAllText(…)`: the `(` that opens its arguments is a
   // statement boundary to `splitShell`, so it is judged on the command text.
   pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd, scope.notes), scope));
+  // PowerShell running a download (review I1): through `iex` across the `(`
+  // that splits statements, and a file downloaded then run.
+  if (powershellDownloadExecution(commandText)) out.push(RULE_IEX_DOWNLOAD);
+  if (downloadsThenRuns(cmd, statements)) out.push(RULE_DOWNLOAD_RUN);
 
   for (const statement of statements) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
@@ -2765,6 +3087,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
+    if (pipesDownloadIntoShell(statement)) out.push(RULE_PIPE_TO_SHELL);
     for (const words of statement.commands) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).
@@ -2778,6 +3101,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index);
       if (find !== null) out.push(find);
+      if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
       const scripts = nestedScripts(words, resolved.index);
       const cmdHead = words[resolved.index];
@@ -2789,20 +3113,17 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // warning, never a silent ok (fix round 3, I-4).
       if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined)) scope.notes.depth = true;
       if (depth < MAX_NESTING) {
-        for (const { text: script, powershell } of scripts) {
+        for (const { text: script, powershell, iex } of scripts) {
           // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
           // script IS a download, executed without ever spelling `| sh`.
           // Recursing alone would not catch this: the extracted script is
           // just "curl …" with no pipe to a shell inside it, so nothing in
           // BASH_RULES fires on it at the next depth. Checked directly, in
           // addition to (not instead of) recursing.
-          if (isBareRemoteFetch(script)) {
-            out.push({
-              id: 'remote-pipe-to-shell',
-              level: 'block',
-              reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
-            });
-          }
+          if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
+          // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
+          // download anywhere in it — quoted or not — is run (review I1).
+          if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           collect(script, depth + 1, out, { ...scope });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope });

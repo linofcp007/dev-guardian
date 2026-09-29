@@ -80751,8 +80751,10 @@ var BASH_RULES = [
     // this file, so scope:'command' (which sees the un-split text) is enough
     // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
     // where the whole thing sits inside quotes and is handled separately, by
-    // `isBareRemoteFetch` on the extracted `-c` script text.
-    pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+    // `isBareRemoteFetch` on the extracted `-c` script text. `source <(curl
+    // …)` and `. <(wget …)` run the download in the current shell — the same
+    // hazard (review I1); `.` counts only where a command starts.
+    pattern: /(?:\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s))[^\n]*<\(\s*(?:curl|wget)\b/im,
     scope: "command",
     test: processSubstitutionFetch
   },
@@ -80869,7 +80871,7 @@ function anyOf(...tests) {
 }
 function processSubstitutionFetch(text2) {
   for (const line of text2.split("\n")) {
-    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s)/i.exec(line);
     if (shell === null) continue;
     const shellEnd = shell.index + shell[0].length;
     for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
@@ -80878,6 +80880,8 @@ function processSubstitutionFetch(text2) {
   }
   return false;
 }
+var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
+var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var MAX_STATEMENT_LENGTH = 16 * 1024;
 var MAX_COMMAND_LENGTH = 512 * 1024;
 
