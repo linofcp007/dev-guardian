@@ -510,6 +510,15 @@ version bump.
   denied as `rm -rf /` — and `find … -exec dev-guardian db adopt --yes \;` joined the direct forms. The other
   indirect launches (`npm run`, `make`, aliases, program text, `ssh`, `docker run`, `--yes` in a variable, …) are
   listed in docs/hooks.md as not recognised; docs/hooks.md no longer says "however the CLI is launched".
+- **dev-guardian's registry of trusted databases is guarded like the hook configuration.** The entry `db adopt --yes`
+  writes, `<data dir>/registry/<db_id>.json`, could be written by the assistant directly — with the Write tool, or
+  from the shell. The registry (under `GUARDIAN_DATA_DIR`, `%LOCALAPPDATA%\dev-guardian`, `$XDG_DATA_HOME/dev-guardian`
+  or `~/.local/share/dev-guardian`) is now refused to an assistant's `Write` / `Edit` / `MultiEdit` / `NotebookEdit`
+  — NTFS stream spellings, trailing dots, 8.3 names, links and hard links to an entry included — and to the shell
+  writes the shell guard models (rule `guardian-registry-write`): redirections, `tee`, `cp` / `mv` / `install` /
+  `rsync`, PowerShell and cmd copies, `[IO.File]` writes, links in it, hard links to an entry, the registry or the
+  data directory replaced, and program text naming it. Reading it, removing an entry and the rest of the data
+  directory stay allowed. SessionStart names the guard when its module cannot be loaded.
 
 ## [3.0.0] - 2026-09-29
 

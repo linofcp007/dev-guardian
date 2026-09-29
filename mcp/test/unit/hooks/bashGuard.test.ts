@@ -3253,3 +3253,59 @@ describe('assessBashCommand — db adopt --yes through Start-Process, env -S and
     expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
   });
 });
+
+// Review of 3.0, wave 2, round 2, item 1(c): the stronger defence. The entry
+// `db adopt --yes` writes, `<data dir>/registry/<db_id>.json`, written from the
+// shell by any command the guard models, is refused the way the hook
+// configuration is.
+describe("assessBashCommand — dev-guardian's registry of trusted databases (review 3.0 wave 2, round 2)", () => {
+  const POSIX_DATA = '/home/u/.local/share/dev-guardian';
+  const judge = (command: string, shell: 'bash' | 'powershell', dataDir: string): { command: string; level: string; rules: string[] } => {
+    const a = assessBashCommand(command, { shell, dataDir });
+    return { command, level: a.level, rules: a.rules.filter((r) => r === 'guardian-registry-write') };
+  };
+
+  it.each([
+    ['echo "{}" > /home/u/.local/share/dev-guardian/registry/abc.json', 'bash', POSIX_DATA],
+    ['echo "{}" > ~/.local/share/dev-guardian/registry/abc.json', 'bash', POSIX_DATA],
+    ['cp evil.json ~/.local/share/dev-guardian/registry/', 'bash', POSIX_DATA],
+    ['mv evil.json "$HOME/.local/share/dev-guardian/registry/abc.json"', 'bash', POSIX_DATA],
+    ['tee "$XDG_DATA_HOME/dev-guardian/registry/abc.json" < evil.json', 'bash', POSIX_DATA],
+    ['install -m 600 evil.json "$GUARDIAN_DATA_DIR/registry/abc.json"', 'bash', POSIX_DATA],
+    ['cd ~/.local/share/dev-guardian && echo "{}" > registry/abc.json', 'bash', POSIX_DATA],
+    ['cd /srv/gdata && cp evil.json registry/abc.json', 'bash', '/srv/gdata'],
+    ['echo "{}" > /srv/gdata/registry/abc.json', 'bash', '/srv/gdata'],
+    ['ln evil.json ~/.local/share/dev-guardian/registry/abc.json', 'bash', POSIX_DATA],
+    ['ln -s /tmp/evil ~/.local/share/dev-guardian/registry', 'bash', POSIX_DATA],
+    ['ln ~/.local/share/dev-guardian/registry/abc.json mine.json', 'bash', POSIX_DATA],
+    ['cp -r evil-registry ~/.local/share/dev-guardian/registry', 'bash', POSIX_DATA],
+    ['rsync -a evil-data/ ~/.local/share/dev-guardian/', 'bash', POSIX_DATA],
+    ['mv evil-data ~/.local/share/dev-guardian', 'bash', POSIX_DATA],
+    [`node -e "require('fs').writeFileSync(require('path').join(require('os').homedir(), '.local', 'share', 'dev-guardian', 'registry', 'abc.json'), '{}')"`, 'bash', POSIX_DATA],
+    [`python3 -c "open('/home/u/.local/share/dev-guardian/registry/abc.json', 'w').write('{}')"`, 'bash', POSIX_DATA],
+    ['Set-Content -Path "$env:LOCALAPPDATA\\dev-guardian\\registry\\abc.json" -Value "{}"', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+    ['Copy-Item evil.json C:\\Users\\u\\AppData\\Local\\dev-guardian\\registry\\', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+    ['New-Item -ItemType HardLink -Path mine.json -Target $env:LOCALAPPDATA\\dev-guardian\\registry\\abc.json', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+    ['cmd /c copy evil.json %LOCALAPPDATA%\\dev-guardian\\registry\\abc.json', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+    ['"{}" | Out-File D:\\gdata\\registry\\abc.json', 'powershell', 'D:/gdata'],
+    ['[IO.File]::WriteAllText("$env:GUARDIAN_DATA_DIR\\registry\\abc.json", "{}")', 'powershell', 'D:/gdata'],
+  ] as const)('%s is denied', (command, shell, dataDir) => {
+    expect(judge(command, shell, dataDir)).toEqual({ command, level: 'block', rules: ['guardian-registry-write'] });
+  });
+
+  it.each([
+    ['ls -l ~/.local/share/dev-guardian/registry', 'bash', POSIX_DATA],
+    ['cat ~/.local/share/dev-guardian/registry/abc.json', 'bash', POSIX_DATA],
+    ['cp ~/.local/share/dev-guardian/registry/abc.json /tmp/', 'bash', POSIX_DATA],
+    ['rm ~/.local/share/dev-guardian/registry/abc.json', 'bash', POSIX_DATA],
+    ['echo x > ~/.local/share/dev-guardian/notes.txt', 'bash', POSIX_DATA],
+    ['echo x > ~/.local/share/other-tool/registry/x.json', 'bash', POSIX_DATA],
+    ['echo x > ./registry/x.json', 'bash', POSIX_DATA],
+    ['cp packages.json registry/packages.json', 'bash', POSIX_DATA],
+    ['npm config get registry', 'bash', POSIX_DATA],
+    ['Get-ChildItem $env:LOCALAPPDATA\\dev-guardian\\registry', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+    ['Remove-Item $env:LOCALAPPDATA\\dev-guardian\\registry\\abc.json', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
+  ] as const)('%s stays ok', (command, shell, dataDir) => {
+    expect(judge(command, shell, dataDir)).toEqual({ command, level: 'ok', rules: [] });
+  });
+});

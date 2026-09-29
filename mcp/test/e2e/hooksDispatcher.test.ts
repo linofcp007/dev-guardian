@@ -1478,6 +1478,79 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review of 3.0, wave 2, round 2, item 1(c): the entry `db adopt --yes`
+  // writes, written by the assistant itself — with Write, or from the shell.
+  describe("dev-guardian's registry of trusted databases is the user's to write (review 3.0 wave 2, round 2)", () => {
+    let data: string;
+    beforeEach(() => {
+      data = join(homeDir, 'gdata');
+    });
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput?.permissionDecision;
+    const hook = (tool: string, input: Record<string, unknown>, env: Record<string, string> = {}): HookResult =>
+      runHook(preToolUse(tool, input, projectDir), {
+        cwd: projectDir,
+        homeDir,
+        env: { GUARDIAN_OFFLINE: '1', GUARDIAN_DATA_DIR: data, ...env },
+      });
+
+    it('a Write, an Edit or a MultiEdit of an entry is denied', () => {
+      const entry = join(data, 'registry', 'abc.json');
+      const w = hook('Write', { file_path: entry, content: '{"project":"/evil"}' });
+      expect(decision(w)).toBe('deny');
+      expect(JSON.stringify(w.stdout)).toMatch(/registry of trusted databases/);
+      mkdirSync(join(data, 'registry'), { recursive: true });
+      writeFileSync(entry, '{"project":"/a"}');
+      expect(decision(hook('Edit', { file_path: entry, old_string: '/a', new_string: '/evil' }))).toBe('deny');
+      expect(decision(hook('MultiEdit', { file_path: entry, edits: [{ old_string: '/a', new_string: '/b' }] }))).toBe('deny');
+    });
+
+    it('a Write elsewhere in the data directory, or of a project file named registry, is not', () => {
+      expect(decision(hook('Write', { file_path: join(data, 'notes.json'), content: '{}' }))).toBeUndefined();
+      expect(decision(hook('Write', { file_path: join(projectDir, 'registry', 'x.json'), content: '{}' }))).toBeUndefined();
+    });
+
+    it('a Write through a hard link to an entry is denied', () => {
+      mkdirSync(join(data, 'registry'), { recursive: true });
+      writeFileSync(join(data, 'registry', 'abc.json'), '{}');
+      linkSync(join(data, 'registry', 'abc.json'), join(projectDir, 'notes.json'));
+      expect(decision(hook('Write', { file_path: join(projectDir, 'notes.json'), content: '{}' }))).toBe('deny');
+    });
+
+    it.runIf(process.platform === 'win32')('in the spellings Windows opens as the same file', () => {
+      mkdirSync(join(data, 'registry'), { recursive: true });
+      for (const path of [`${join(data, 'registry', 'abc.json')}::$DATA`, `${join(data, 'registry', 'abc.json')}.`]) {
+        expect(decision(hook('Write', { file_path: path, content: '{}' }))).toBe('deny');
+      }
+    });
+
+    it('without GUARDIAN_DATA_DIR, the default location is the one guarded', () => {
+      const env: Record<string, string> =
+        process.platform === 'win32'
+          ? { GUARDIAN_DATA_DIR: '', LOCALAPPDATA: join(homeDir, 'AppData', 'Local') }
+          : { GUARDIAN_DATA_DIR: '', XDG_DATA_HOME: '' };
+      const base = process.platform === 'win32' ? join(homeDir, 'AppData', 'Local') : join(homeDir, '.local', 'share');
+      const entry = join(base, 'dev-guardian', 'registry', 'abc.json');
+      expect(decision(hook('Write', { file_path: entry, content: '{}' }, env))).toBe('deny');
+    });
+
+    it.each([
+      ['Bash', (d: string) => `echo '{}' > "${d}/registry/abc.json"`],
+      ['Bash', (d: string) => `cp evil.json "${d}/registry/"`],
+      ['Bash', (d: string) => `mv evil.json "${d}/registry/abc.json"`],
+      ['Bash', () => 'echo "{}" > "$GUARDIAN_DATA_DIR/registry/abc.json"'],
+      ['PowerShell', (d: string) => `Set-Content -Path "${d}\\registry\\abc.json" -Value '{}'`],
+    ] as const)('%s: a shell write into it is denied', (tool, make) => {
+      const command = make(data.replace(/\\/g, tool === 'Bash' ? '/' : '\\'));
+      expect(decision(hook(tool, { command }))).toBe('deny');
+    });
+
+    it('reading it, or removing an entry, is not', () => {
+      expect(decision(hook('Bash', { command: `cat "${data.replace(/\\/g, '/')}/registry/abc.json"` }))).toBeUndefined();
+      expect(decision(hook('Bash', { command: `rm "${data.replace(/\\/g, '/')}/registry/abc.json"` }))).toBeUndefined();
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

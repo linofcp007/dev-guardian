@@ -97,6 +97,7 @@
  * Pure functions. No I/O. No dependencies.
  */
 import { homedir } from 'node:os';
+import { userDataDir } from './dataRegistry.js';
 import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 /**
@@ -1266,6 +1267,41 @@ function isSettingsPath(path, configDirName) {
     }
     return false;
 }
+/** A path as the registry checks compare it: `/` separators, no doubled or trailing one, lower-cased. */
+function normalizedPath(path) {
+    return path.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+/**
+ * dev-guardian's data directory as a command spells its default locations and
+ * its variable (review 3.0 wave 2, round 2): `%LOCALAPPDATA%` / `$env:LOCALAPPDATA`
+ * / `…/AppData/Local`, `$XDG_DATA_HOME`, `~/.local/share` — each followed by
+ * `dev-guardian` — and `$GUARDIAN_DATA_DIR` / `%GUARDIAN_DATA_DIR%`. Matched
+ * at the end of a normalised path.
+ */
+const DATA_DIR_SPELLED = /(?:(?:\$\{?(?:env:)?(?:localappdata|xdg_data_home)\}?|%(?:localappdata|xdg_data_home)%|appdata\/local|\.local\/share)\/dev-guardian|\$\{?(?:env:)?guardian_data_dir\}?|%guardian_data_dir%)$/;
+/** Whether `path` names dev-guardian's data directory: its actual path (`dataDir`, normalised) or a spelling of it. */
+function isDataDirPath(path, dataDir) {
+    const p = normalizedPath(path);
+    return (dataDir !== undefined && p === dataDir) || DATA_DIR_SPELLED.test(p);
+}
+/**
+ * Whether `path` is dev-guardian's registry of trusted databases,
+ * `<data dir>/registry`, or a path below it — the data directory as it
+ * actually is (`dataDir`, normalised) or as {@link DATA_DIR_SPELLED} spells it.
+ * A `registry` of any other directory (a project's, npm's) is not it.
+ */
+function isRegistryPath(path, dataDir) {
+    const p = normalizedPath(path);
+    for (let at = p.indexOf('/registry'); at >= 0; at = p.indexOf('/registry', at + 1)) {
+        const next = p.charAt(at + '/registry'.length);
+        if (next !== '' && next !== '/')
+            continue;
+        const parent = p.slice(0, at);
+        if ((dataDir !== undefined && parent === dataDir) || DATA_DIR_SPELLED.test(parent))
+            return true;
+    }
+    return false;
+}
 /** The last segment of `CLAUDE_CONFIG_DIR`, lower-cased, as {@link isSettingsPath} matches it; none when unset. */
 function configDirNameOf(dir) {
     const last = (dir ?? '').trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
@@ -1336,7 +1372,7 @@ const CD_RETURNS = new Set(['popd', 'pop-location']);
  * `popd` and `Pop-Location` go back somewhere this does not track, which reads
  * as where the command started (`''`).
  */
-function cwdAfter(name, args, cwd) {
+function cwdAfter(name, args, cwd, dataDir) {
     if (CD_RETURNS.has(name))
         return '';
     if (!CD_COMMANDS.has(name))
@@ -1348,10 +1384,15 @@ function cwdAfter(name, args, cwd) {
         return '';
     const next = resolveFrom(cwd, dir);
     // Only a directory a later relative path could need is tracked: one that
-    // names a configuration directory or a parent of one. Any other
-    // relative target still names its own config path in full. And never one
-    // longer than a real directory: a chain of `cd`s built to be slow.
-    return next.length > MAX_CWD || !/\.guardian|dev-guardian|\.config|\.claude/i.test(next) ? '' : next;
+    // names a configuration directory or a parent of one — or dev-guardian's
+    // data directory, whose registry is guarded too (review 3.0 wave 2, round
+    // 2). Any other relative target still names its own path in full. And
+    // never one longer than a real directory: a chain of `cd`s built to be slow.
+    if (next.length > MAX_CWD)
+        return '';
+    const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) ||
+        (dataDir !== undefined && normalizedPath(next).startsWith(dataDir));
+    return tracked ? next : '';
 }
 const GLOB = /[*?[]/;
 /** The configuration files a directory holds, by the directory's kind. */
@@ -2759,6 +2800,25 @@ const RULE_HARD_LINK = {
 };
 /** The directory that holds Claude Code's project or user settings; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_DIR = /\.claude\/?$/i;
+/**
+ * dev-guardian's registry of trusted databases written from the shell (review
+ * 3.0 wave 2, round 2): what `db adopt --yes` writes, and so the user's
+ * decision whichever command writes it.
+ */
+const RULE_REGISTRY = {
+    id: 'guardian-registry-write',
+    level: 'block',
+    reason: "Writes dev-guardian's registry of trusted databases (<data dir>/registry) — which database to trust is the " +
+        "user's decision: they run `dev-guardian db adopt` themselves, in a terminal",
+};
+/** Program text naming the registry: a literal path in it, or its parts (`'dev-guardian', 'registry'`). */
+function literalsNameRegistry(literals, dataDir) {
+    const paths = literalPaths(literals);
+    if (paths.some((p) => isRegistryPath(p, dataDir)))
+        return true;
+    const has = (re) => paths.some((p) => re.test(p));
+    return has(/(?:^|\/)dev-guardian\/?$/i) && has(/^registry\/?$/i);
+}
 const RULE_SPECIAL = {
     id: 'guard-config-special-file',
     level: 'block',
@@ -2825,6 +2885,18 @@ function judgeEffects(effects, scope) {
     const linksGuarded = (p) => isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
     if (e.hardLinkSources.some(linksGuarded))
         out.push({ ...RULE_HARD_LINK });
+    // dev-guardian's registry of trusted databases (round 2): an entry written,
+    // linked or copied into it, a hard link to one, or the registry or the whole
+    // data directory replaced. Removing one only un-trusts a database.
+    const inRegistry = (p) => isRegistryPath(p, scope.dataDir);
+    const registryOrData = (p) => inRegistry(p) || isDataDirPath(p, scope.dataDir);
+    if (e.writes.some(inRegistry) ||
+        e.special.some(inRegistry) ||
+        e.hardLinkSources.some(inRegistry) ||
+        e.links.some(registryOrData) ||
+        e.dirs.some(registryOrData)) {
+        out.push({ ...RULE_REGISTRY });
+    }
     if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope))
         out.push({ ...RULE_SETTINGS });
     return out;
@@ -3063,6 +3135,8 @@ function judgeCode(code, lang, scope) {
         out.push({ ...RULE_INLINE });
     if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope))
         out.push({ ...RULE_SETTINGS });
+    if (literalsNameRegistry(literals, scope.dataDir))
+        out.push({ ...RULE_REGISTRY });
     return out;
 }
 /**
@@ -4538,7 +4612,7 @@ function collect(command, depth, out, scope) {
             const head = words[resolved.index];
             if (head !== undefined) {
                 const args = withoutRedirections(words.slice(resolved.index + 1));
-                scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd) ?? scope.cwd;
+                scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd, scope.dataDir) ?? scope.cwd;
             }
         }
         // Finding 4: text a shell actually reads as its script — `bash <<EOF …
@@ -4622,7 +4696,12 @@ export function assessBashCommand(command, opts = {}) {
     const cut = whole.length > MAX_COMMAND_LENGTH;
     const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
     const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
-    const where = { home, configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']) };
+    const dataDir = normalizedPath(opts.dataDir ?? safeUserDataDir());
+    const where = {
+        home,
+        configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']),
+        dataDir: dataDir === '' ? undefined : dataDir,
+    };
     if (opts.shell !== 'powershell')
         return assessReadings([text], cut, now, deadline, where);
     // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -4632,6 +4711,15 @@ export function assessBashCommand(command, opts = {}) {
     // needs no second reading. The POSIX reading sees here-strings and block
     // comments for what they are: nothing else can be meant by them.
     return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+}
+/** {@link userDataDir}, or `''` when it cannot be worked out. */
+function safeUserDataDir() {
+    try {
+        return userDataDir();
+    }
+    catch {
+        return '';
+    }
 }
 /**
  * The readings of one command, assessed into one verdict: every rule any
