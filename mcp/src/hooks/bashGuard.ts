@@ -2816,6 +2816,8 @@ interface Scope {
   home?: HomeDir | undefined;
   /** The last segment of Claude Code's `CLAUDE_CONFIG_DIR`, lower-cased, when it is set. */
   configDirName?: string | undefined;
+  /** These statements are a `cmd /c` line: cmd.exe runs a bare name from the working directory. */
+  cmdLine?: boolean;
 }
 
 /**
@@ -3041,6 +3043,15 @@ const RULE_DOWNLOAD_RUN: MatchedRule = {
   id: 'download-then-run',
   level: 'block',
   reason: 'Downloads a file and runs it in the same command (DownloadFile / -OutFile, then &, ., Start-Process, …)',
+};
+
+/** The same, for a POSIX download — named for what it is (review round 3, item 7). */
+const RULE_POSIX_DOWNLOAD_RUN: MatchedRule = {
+  id: 'download-then-run',
+  level: 'block',
+  reason:
+    'Downloads a file (curl -o / -O, wget, > file) and runs it in the same command (sh f, ./f, source f, python3 f, …) ' +
+    'with no checksum or signature check of that file in between',
 };
 
 /**
@@ -3411,9 +3422,9 @@ function runsStdin(words: readonly ShellWord[], at: number): boolean {
 }
 
 /**
- * The files one simple command runs: itself when it is named by its path
- * (`./f`, `.\i.ps1`, `& "$env:TEMP\i.ps1"` — the `&` is a separator here),
- * `. file` / `source file`, a shell's or interpreter's script (`sh f`,
+ * The files one simple command runs through its arguments — the command's own
+ * name is judged by the caller (a path runs that file, a bare name what PATH
+ * finds): `. file` / `source file`, a shell's or interpreter's script (`sh f`,
  * `python3 f.py`), `powershell -File file`, `cmd /c file`, a program an opener
  * starts (`Start-Process setup.exe`, `ii i.ps1`, `Start-Process msiexec
  * -ArgumentList '/i x.msi'` — never a document), `msiexec /i file`, and a
@@ -3425,7 +3436,7 @@ function commandRuns(statement: ShellStatement, c: number, heads: readonly numbe
   const head = words?.[at];
   if (words === undefined || head === undefined) return [];
   const name = commandName(head.value);
-  const out: string[] = [head.value];
+  const out: string[] = [];
   const rest = withoutRedirections(words.slice(at + 1));
   const operands = rest.filter((v) => v !== '' && !v.startsWith('-') && !/^\/[A-Za-z]+$/.test(v));
   if (name === '.' || name === 'source') {
@@ -3500,41 +3511,137 @@ function cwdFor(name: string, args: readonly string[], cwd: string): string {
   return next.length > MAX_CWD ? '' : next;
 }
 
+/** Which kind of command saved the file that was run — it decides how the deny names the shape. */
+type DownloadKind = 'posix' | 'powershell';
+
+/** Commands that move or copy a file, so a download keeps its mark under the new name (review round 3, item 3). */
+const TRANSFERS = new Set(['mv', 'cp', 'install', 'copy-item', 'cpi', 'copy', 'move-item', 'mi', 'move']);
+
+/** Directories a bare command name is found in on PATH: a marked file placed there runs by its name alone. */
+const PATH_DIRS = /^(?:\/usr\/local\/s?bin|\/usr\/s?bin|\/s?bin|\/opt\/homebrew\/bin|\/opt\/local\/bin|(?:~|\$\{?home\}?)\/(?:\.local\/)?bin)$/i;
+
+/**
+ * What an `mv` / `cp` / `install` / `Copy-Item` / `Move-Item` puts where: each
+ * source, and the paths it may now be at — the destination itself, and a file
+ * of the source's name inside it when the destination may be a directory.
+ */
+function transfersOf(name: string, words: readonly ShellWord[], at: number): Array<{ from: string; to: string[] }> {
+  if (!TRANSFERS.has(name)) return [];
+  const args = withoutRedirections(words.slice(at + 1));
+  if (name === 'install' && args.some((a) => a === '-d' || a === '--directory')) return [];
+  const t = parseTransfer(args, name === 'copy' || name === 'move');
+  const dest = t.dest;
+  if (dest === undefined) return [];
+  return t.sources.map((from) => {
+    const inside = `${dest.replace(/[\\/]+$/, '')}/${lastSegment(from)}`;
+    return { from, to: t.into ? [inside] : [dest, inside] };
+  });
+}
+
+/**
+ * An integrity check at the end of a statement's pipeline, and what it names
+ * (review round 3, item 3): `names`, every word of every member (`echo "<sha>
+ * f" | sha256sum -c` names `f`), split on blanks; `lists`, the checksum lists a
+ * `sha256sum -c` is handed as operands. Paths as {@link runKey}s.
+ */
+function integrityCheckOf(
+  statement: ShellStatement,
+  heads: readonly number[],
+  cwd: string,
+): { names: string[]; lists: string[] } | undefined {
+  const last = statement.commands.length - 1;
+  const words = statement.commands[last];
+  const at = heads[last] ?? 0;
+  if (words === undefined || !isIntegrityCheck(words, at)) return undefined;
+  const key = (token: string): string => runKey(resolveFrom(cwd, token));
+  const names: string[] = [];
+  statement.commands.forEach((member, c) => {
+    for (const w of member.slice((heads[c] ?? 0) + 1)) {
+      for (const token of w.value.split(/\s+/)) if (token !== '' && !token.startsWith('-')) names.push(key(token));
+    }
+  });
+  const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(commandName(words[at]?.value ?? ''));
+  const lists = sumTool ? withoutRedirections(words.slice(at + 1)).filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
+  return { names, lists };
+}
+
 /**
  * A file downloaded and run by the same command line (review I1, PowerShell's
  * `DownloadFile` / `-OutFile` then run; round 2, ruling 1, POSIX `curl -o f
- * && sh f` and the like). Paths are compared after the `cd`s before them. A run
- * is not counted when a checksum or signature check lies between the latest
- * download of that file and the run and every statement from the check to the
- * run is joined by `&&` — the run is then conditional on the check. A run in a
- * later, separate command is not seen at all: that is download, inspect, run.
+ * && sh f` and the like). Paths are compared after the `cd`s before them, and
+ * a download keeps its mark through `mv` / `cp` / `install` (round 3, item 3).
+ * The command's own name runs the file when it is a path (`./tool`); a bare
+ * name only under cmd.exe (`bareRunsCwd`), or when the marked file was placed
+ * in a PATH directory in the same command (round 3, item 4). A run is not
+ * counted when a check OF THAT FILE — naming it, its `.sha256` / `.asc` /
+ * `.sig` / `.minisig`, or a checksum list downloaded in the command — lies
+ * between its latest download and the run, and every statement from the check
+ * to the run is joined by `&&`: the run is then conditional on the check. A run
+ * in a later, separate command is not seen at all: that is download, inspect,
+ * run. Returns what saved the file that ran, which names the shape in the deny.
  */
-function downloadsThenRuns(text: string, statements: readonly ShellStatement[]): boolean {
-  if (!MAY_DOWNLOAD.test(text)) return false;
-  /** Per file, the statement of its latest download so far; `.DownloadFile` calls come before every statement. */
-  const downloads = new Map<string, number>();
-  for (const dest of downloadFileCalls(text)) downloads.set(runKey(resolveFrom('', dest)), -1);
+function downloadsThenRuns(text: string, statements: readonly ShellStatement[], bareRunsCwd: boolean): DownloadKind | null {
+  if (!MAY_DOWNLOAD.test(text)) return null;
+  /** Per file, its latest download so far (`.DownloadFile` calls come before every statement), carried by mv / cp / install. */
+  const downloads = new Map<string, { at: number; kind: DownloadKind }>();
+  for (const dest of downloadFileCalls(text)) downloads.set(runKey(resolveFrom('', dest)), { at: -1, kind: 'powershell' });
+  /** Bare command names that PATH now resolves to a marked file: placed by mv / cp / install into a PATH directory. */
+  const pathBins = new Map<string, string>();
   /**
-   * The latest integrity check joined to the current statement by `&&` all
-   * the way (-2 for none), carried forward so that each run is judged in
+   * Per file, the latest integrity check of it joined to the current statement
+   * by `&&` all the way; `listAt`, the latest check against a checksum list
+   * downloaded in the chain, which may cover every download. Both are carried
+   * forward and cleared at any other separator, so each run is judged in
    * constant time.
    */
-  let chainedCheck = -2;
+  const verified = new Map<string, number>();
+  let listAt = -2;
   let cwd = '';
   for (let k = 0; k < statements.length; k += 1) {
     const statement = statements[k];
     if (statement === undefined) continue;
     const heads = statement.commands.map((words) => resolveCommand(words).index);
     const ran: string[] = [];
-    const saved: string[] = [];
+    const saved: Array<{ key: string; kind: DownloadKind }> = [];
     // Nothing downloaded yet: nothing a run could match, so runs are not read.
     const reading = downloads.size > 0;
     const piped = reading ? pipedIntoRunners(statement, heads) : [];
     statement.commands.forEach((words, c) => {
       const at = heads[c] ?? 0;
-      const name = commandName(words[at]?.value ?? '');
-      for (const dest of [...posixSaves(name, words, at), ...powershellSaves(name, words, at)]) saved.push(runKey(resolveFrom(cwd, dest)));
-      if (reading) for (const file of commandRuns(statement, c, heads, piped[c] === true)) ran.push(runKey(resolveFrom(cwd, file)));
+      const head = words[at]?.value ?? '';
+      const name = commandName(head);
+      for (const dest of posixSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
+      for (const dest of powershellSaves(name, words, at)) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+      if (reading) {
+        for (const file of commandRuns(statement, c, heads, piped[c] === true)) ran.push(runKey(resolveFrom(cwd, file)));
+        // The command itself: a path runs that file. A bare name is looked up
+        // on PATH by a POSIX shell and by PowerShell — only cmd.exe searches
+        // the working directory first (review round 3, item 4).
+        if (/[\\/]/.test(head)) ran.push(runKey(resolveFrom(cwd, head)));
+        else if (head !== '') {
+          const onPath = pathBins.get(head.toLowerCase());
+          if (onPath !== undefined) ran.push(onPath);
+          if (bareRunsCwd) {
+            for (const ext of /\.[A-Za-z0-9]+$/.test(head) ? [''] : ['', '.exe', '.cmd', '.bat', '.com']) {
+              ran.push(runKey(resolveFrom(cwd, `${head}${ext}`)));
+            }
+          }
+        }
+        // A marked file moved or copied keeps its mark (review round 3, item 3).
+        for (const { from, to } of transfersOf(name, words, at)) {
+          const src = runKey(resolveFrom(cwd, from));
+          const mark = downloads.get(src);
+          if (mark === undefined) continue;
+          for (const dest of to) {
+            const key = runKey(resolveFrom(cwd, dest));
+            downloads.set(key, mark);
+            const check = verified.get(src);
+            if (check !== undefined) verified.set(key, check);
+            const bin = lastSegment(key);
+            if (PATH_DIRS.test(dirOf(key)) && bin !== '') pathBins.set(bin, key);
+          }
+        }
+      }
       cwd = cwdFor(name, withoutRedirections(words.slice(at + 1)), cwd);
     });
     // `iex (Get-Content file -Raw)`: the `(` ended the statement holding `iex`.
@@ -3546,16 +3653,30 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[]):
     }
     for (const file of ran) {
       const d = downloads.get(file);
-      // Run after its download, and not behind a check made after that download.
-      if (d !== undefined && d < k && !(chainedCheck > d)) return true;
+      // Run after its download, and not behind a check of it made after that download.
+      if (d !== undefined && d.at < k && !((verified.get(file) ?? -3) > d.at) && !(listAt > d.at)) return d.kind;
     }
-    for (const file of saved) downloads.set(file, k);
-    // A pipeline's status is its last member's: only a check there decides.
-    const last = statement.commands.length - 1;
-    const checks = isIntegrityCheck(statement.commands[last] ?? [], heads[last] ?? 0);
-    chainedCheck = statement.end !== '&&' ? -2 : checks ? k : chainedCheck;
+    for (const { key, kind } of saved) {
+      downloads.set(key, { at: k, kind });
+      verified.delete(key);
+    }
+    // A pipeline's status is its last member's: only a check there decides —
+    // and only for the files it names (review round 3, item 3).
+    const check = integrityCheckOf(statement, heads, cwd);
+    if (check !== undefined) {
+      for (const name of check.names) {
+        if (downloads.has(name)) verified.set(name, k);
+        const signed = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/.exec(name)?.[1];
+        if (signed !== undefined) verified.set(signed, k);
+      }
+      if (check.lists.some((list) => downloads.has(list))) listAt = k;
+    }
+    if (statement.end !== '&&') {
+      verified.clear();
+      listAt = -2;
+    }
   }
-  return false;
+  return null;
 }
 
 // ──────────────────────────────────────────────────────────── assessment
@@ -3596,7 +3717,8 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   // PowerShell running a download (review I1): through `iex` across the `(`
   // that splits statements, and a file downloaded then run.
   if (powershellDownloadExecution(commandText)) out.push(RULE_IEX_DOWNLOAD);
-  if (downloadsThenRuns(cmd, statements)) out.push(RULE_DOWNLOAD_RUN);
+  const ranDownload = downloadsThenRuns(cmd, statements, scope.cmdLine === true);
+  if (ranDownload !== null) out.push(ranDownload === 'posix' ? RULE_POSIX_DOWNLOAD_RUN : RULE_DOWNLOAD_RUN);
   // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).
   if (/<\(\s*(?:curl|wget)/i.test(commandText) && statements.some((_s, k) => interpreterRunsFetch(statements, k))) {
     out.push(RULE_PROCESS_FETCH);
@@ -3657,14 +3779,14 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
-          collect(script, depth + 1, out, { ...scope });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false });
         }
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
-        if (line !== undefined) collect(line, depth + 1, out, { ...scope });
+        if (line !== undefined) collect(line, depth + 1, out, { ...scope, cmdLine: true });
       }
       const head = words[resolved.index];
       if (head !== undefined) {
@@ -3683,7 +3805,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // text, like `python -c`.
     const fed = fedScripts(statement, isBareShellStdin);
     if (depth < MAX_NESTING) {
-      for (const { text } of fed) collect(text, depth + 1, out, { ...scope });
+      for (const { text } of fed) collect(text, depth + 1, out, { ...scope, cmdLine: false });
     } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text, reader } of fedScripts(statement, isBareInterpreterStdin)) {
       pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
