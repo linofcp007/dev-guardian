@@ -45673,7 +45673,8 @@ var REPO_CONFIG = {
     { file: ".gitleaks.toml", decides: "its rules and allowlists decide what is reported" },
     { file: ".gitleaksignore", decides: "its fingerprints are not reported" }
   ],
-  // The root one only, passed with `--ini` (scanSast.ts): one below it is kept out.
+  // The root one only, passed with `--ini` (scanSast.ts), whole-project and
+  // scoped runs alike: one below it is kept out.
   bandit: [{ file: ".bandit", decides: "its skips and tests decide what is reported" }],
   // Passed with `--config` (scanContainers.ts); hadolint runs outside the project.
   hadolint: [
@@ -47228,7 +47229,7 @@ function banditOnFiles(args) {
   return scanFileBatches({
     name: "bandit",
     command: "bandit",
-    args: ["-f", "json", "-q"],
+    args: ["-f", "json", "-q", ...args.ini !== void 0 ? ["--ini", args.ini] : []],
     reportArgs: (f) => ["-o", f],
     files: args.files,
     cwd: args.cwd,
@@ -48037,8 +48038,14 @@ async function runBanditOnScope(args) {
     missing_tools.push("bandit");
     return;
   }
+  const ini = banditIni(ctx.projectPath, reportDir);
+  if ("error" in ini) {
+    tools_run.push({ name: "bandit", status: "failed", reason: ini.error });
+    return;
+  }
   const run = await banditOnFiles({
     files,
+    ini: ini.path,
     cwd: ctx.projectPath,
     reportDir,
     env: ctx.scriptEnv,
@@ -48046,7 +48053,7 @@ async function runBanditOnScope(args) {
     ...ctx.onLog ? { onLog: ctx.onLog } : {}
   });
   for (const raw of run.reports) parser_inputs.push({ parser: banditParser, input: raw });
-  tools_run.push(run.toolRun);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, "bandit") : run.toolRun);
 }
 function dotnetNotApplicableToScope(args) {
   const { ctx, files, tools_run, missing_tools } = args;

@@ -38,7 +38,8 @@ export const REPO_CONFIG = {
         { file: '.gitleaks.toml', decides: 'its rules and allowlists decide what is reported' },
         { file: '.gitleaksignore', decides: 'its fingerprints are not reported' },
     ],
-    // The root one only, passed with `--ini` (scanSast.ts): one below it is kept out.
+    // The root one only, passed with `--ini` (scanSast.ts), whole-project and
+    // scoped runs alike: one below it is kept out.
     bandit: [{ file: '.bandit', decides: 'its skips and tests decide what is reported' }],
     // Passed with `--config` (scanContainers.ts); hadolint runs outside the project.
     hadolint: [

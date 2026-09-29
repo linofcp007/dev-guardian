@@ -147,6 +147,7 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'runners/trivyRun.ts|trivy': 'trivy',
   'runners/gitleaksScan.ts|gitleaks': 'gitleaks',
   'tools/scanSast.ts|bandit': 'bandit',
+  // The --ini a caller passes (scan_sast's, the whole-project run's) is named by that caller, in tools/scanSast.ts.
   'runners/fileBatchScan.ts|bandit': 'reads none here: explicit file targets — Bandit looks for a .bandit only below a directory target',
   'tools/scanContainers.ts|hadolint': 'hadolint',
   'tools/scanIac.ts|zizmor': 'zizmor',

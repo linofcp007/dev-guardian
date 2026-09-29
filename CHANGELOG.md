@@ -277,6 +277,12 @@ version bump.
   applies — a pnpm-workspace.yaml without `packages` fails before 10.5 (measured on 9.15.9 and 10.4.1), so no
   single place works everywhere. The e2e runs pnpm 10.4.1 and 12.8.1 through corepack in a private cache,
   applies each named fix and checks it works.
+- A scoped `scan_sast` now reads the project's root `.bandit`, as a whole-project run does, and names it the same
+  way. Bandit handed explicit files looks for no `.bandit` at all (its search walks directory targets only), so
+  the scoped run — every `guardian-diff` / `-file` / `-branch` pass — ignored it: measured on Bandit 1.9.4, with a
+  root `.bandit` skipping B101, the same `a.py` read B404 and B602 whole-project and B101, B404 and B602 scoped.
+  A scoped run now gets the whole-project run's `--ini` (the root `.bandit`, or the empty `[bandit]` file), and
+  `honoured_config: [".bandit"]` with the same reason. `review_pr` still passes none.
 
 ### Security
 

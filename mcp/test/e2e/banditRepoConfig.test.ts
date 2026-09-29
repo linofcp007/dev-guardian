@@ -54,13 +54,13 @@ function project(files: Record<string, string>): string {
   return dir;
 }
 
-async function sast(dir: string): Promise<{ bandit: ToolRun | undefined; ids: string[] }> {
+async function sast(dir: string, scope?: { paths: string[] }): Promise<{ bandit: ToolRun | undefined; ids: string[] }> {
   const tool = TOOLS.find((t) => t.name === 'scan_sast');
   if (!tool) throw new Error('scan_sast not registered');
   const db = new Database(':memory:');
   runMigrations(db);
   const p: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
-  const r = await tool.handler({ project_path: dir, force: true, local_only: true }, p);
+  const r = await tool.handler({ project_path: dir, force: true, local_only: true, ...(scope !== undefined ? { scope } : {}) }, p);
   if (!r.ok) throw new Error(JSON.stringify(r.error));
   const out = r as unknown as { scan_id: string; tools_run: ToolRun[] };
   const ids = p.storage.findings
@@ -87,5 +87,19 @@ describe(".bandit files never steer the scan in silence (real Bandit)", () => {
     expect(own.ids).toEqual(['B404', 'B602']);
     expect(own.bandit?.honoured_config).toEqual(['.bandit']);
     expect(own.bandit?.reason).toMatch(/honoured the project's \.bandit/);
+  });
+
+  // Review 3.0, wave 2 (a): Bandit handed explicit files looks for no
+  // `.bandit` at all, so a scoped scan_sast ignored the root one the
+  // whole-project run honours — the same file, two answers.
+  it.skipIf(!BANDIT_INSTALLED)('a scoped run honours the same root .bandit: the same a.py, the same findings', async () => {
+    const dir = project({ '.bandit': '[bandit]\nskips: B101\n' });
+    const whole = await sast(dir);
+    const scoped = await sast(dir, { paths: ['a.py'] });
+    expect(whole.ids).toEqual(['B404', 'B602']);
+    expect(scoped.bandit?.status).toBe('ok');
+    expect(scoped.ids).toEqual(whole.ids);
+    expect(scoped.bandit?.honoured_config).toEqual(['.bandit']);
+    expect(scoped.bandit?.reason).toMatch(/honoured the project's \.bandit/);
   });
 });

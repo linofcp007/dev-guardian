@@ -212,12 +212,19 @@ export function semgrepOnFiles(args) {
             : {}),
     });
 }
-/** `scanFileBatches` for Bandit: `-f json -o <f> -q -- files`. */
+/**
+ * `scanFileBatches` for Bandit: `-f json -o <f> -q [--ini <ini>] -- files`.
+ *
+ * Bandit handed explicit files looks for no `.bandit` at all — its search
+ * walks directory targets only — so a configuration reaches it here only as
+ * `ini`, and the caller that passes one names it (scan_sast passes the one
+ * its whole-project run uses; review_pr passes none).
+ */
 export function banditOnFiles(args) {
     return scanFileBatches({
         name: 'bandit',
         command: 'bandit',
-        args: ['-f', 'json', '-q'],
+        args: ['-f', 'json', '-q', ...(args.ini !== undefined ? ['--ini', args.ini] : [])],
         reportArgs: (f) => ['-o', f],
         files: args.files,
         cwd: args.cwd,
