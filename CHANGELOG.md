@@ -464,6 +464,12 @@ version bump.
   installed hooks there. `.dev-guardian/configs.json`'s `source` and `target` are read contained in `configs/`
   and the project: a committed manifest naming `/dev/zero` was read by every scan's drift check, and one naming
   a file outside was hashed.
+- The CLI's reads and writes of the checkout it gates go through the same layer. `baseline update` over a dangling
+  `.guardian/baseline.json` link created the link's target outside the project (measured); it now refuses, exit 3.
+  `scan` refuses a baseline that resolves outside the checkout, is a FIFO or a device, or is over 64 MiB, rather
+  than reading it or reading it as "no baseline". `.guardian/ci.json` (the `start_command`, `accept_partial_parse`
+  and `attest` refusals) and `check`'s `.guardian/hooks-allowlist.json` are read bounded: a FIFO at any of those
+  names blocked the CI job until its own timeout.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.
