@@ -2329,7 +2329,7 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
 const PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
 const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
 /** `X run … python -c …`: tools that run an interpreter in a managed environment. */
-const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba']);
+const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba', 'pixi']);
 
 function isInterpreter(name: string): boolean {
   return PYTHON.test(name) || INTERPRETERS.has(name);
@@ -3309,29 +3309,34 @@ function readsStdinAsScript(words: readonly ShellWord[], at: number): boolean {
   if (STDIN_SHELLS.has(name)) return true;
   if ((name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? '')) return true;
   if (name === 'xargs') return xargsRunsStdin(words, at);
-  if (RUN_WRAPPERS.has(name) && words[at + 1]?.value === 'run') return runWrapperReadsStdin(withoutRedirectWords(words.slice(at)));
-  return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
+  const plain = withoutRedirectWords(words.slice(at));
+  if (RUN_WRAPPERS.has(name) && words[at + 1]?.value === 'run') return runWrapperReadsStdin(plain, 2, name === 'uv');
+  // `uvx python -`, `uv tool run python -` (review 3.0 wave 2, round 2).
+  if (name === 'uvx') return runWrapperReadsStdin(plain, 1, false);
+  if (name === 'uv' && words[at + 1]?.value === 'tool' && words[at + 2]?.value === 'run') return runWrapperReadsStdin(plain, 3, false);
+  return isInterpreter(name) && isBareInterpreterStdin(plain);
 }
 
-/** `uv run` / `poetry run` / `conda run` … options that take the next word as their value. */
+/** `uv run`, `uvx`, `pixi run`, `poetry run`, `conda run` … options that take the next word as their value. */
 const RUN_WRAPPER_VALUED = new Set([
   '--with', '--with-editable', '--with-requirements', '-p', '--python', '--project', '--directory', '--env-file',
   '--extra', '--group', '--only-group', '--no-group', '--package', '--index', '--default-index', '-i', '--index-url',
   '--extra-index-url', '-f', '--find-links', '--config-file', '--cache-dir', '-C', '--config-setting', '-n', '--name',
-  '--prefix', '--cwd', '-e', '--environment',
+  '--prefix', '--cwd', '-e', '--environment', '--from', '--manifest-path',
 ]);
 
 /**
- * `uv run python -`, `poetry run python`, `uv run -` (review 3.0, wave 2): a
- * run wrapper whose program — the first word after `run` and the wrapper's
- * own options — is an interpreter reading its program from stdin, or, for
- * uv, `-` itself (`uv run -` runs a Python script read from stdin).
- * `uv run python script.py` and `uv run parse.py -` read stdin as data.
+ * `uv run python -`, `poetry run python`, `uv run -` (review 3.0, wave 2), and
+ * `pixi run python -`, `uvx python -` (round 2): a wrapper whose program — the
+ * first word at `from` past the wrapper's own options — is an interpreter
+ * reading its program from stdin, or, where `dashIsProgram` (`uv run`), `-`
+ * itself: `uv run -` runs a Python script read from stdin. `uv run python
+ * script.py` and `uv run parse.py -` read stdin as data.
  */
-function runWrapperReadsStdin(words: readonly ShellWord[]): boolean {
-  for (let i = 2; i < words.length; i += 1) {
+function runWrapperReadsStdin(words: readonly ShellWord[], from: number, dashIsProgram: boolean): boolean {
+  for (let i = from; i < words.length; i += 1) {
     const v = words[i]?.value ?? '';
-    if (v === '-') return commandName(words[0]?.value ?? '') === 'uv';
+    if (v === '-') return dashIsProgram;
     if (v === '--') continue;
     if (v.startsWith('-')) {
       i += !v.includes('=') && RUN_WRAPPER_VALUED.has(v) ? 1 : 0;
