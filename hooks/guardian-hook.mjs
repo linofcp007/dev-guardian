@@ -495,10 +495,46 @@ function projectRootOf(cwd) {
 
 async function loadDetectors() {
   // Dynamic import so a missing/un-built dist fails open rather than throwing
-  // at module load. File URLs keep this correct on Windows.
-  const secret = await import(new URL('secretScan.js', `file://${DIST_HOOKS}/`));
-  const bash = await import(new URL('bashGuard.js', `file://${DIST_HOOKS}/`));
+  // at module load. `pathToFileURL`, never `file://${…}` by concatenation: a
+  // `#` in the install path read as a URL fragment, the import failed, and the
+  // shell guard and the secret scan failed open (review M2).
+  const secret = await import(pathToFileURL(join(DIST_HOOKS, 'secretScan.js')).href);
+  const bash = await import(pathToFileURL(join(DIST_HOOKS, 'bashGuard.js')).href);
   return { scanForSecrets: secret.scanForSecrets, assessBashCommand: bash.assessBashCommand };
+}
+
+/** The guards whose compiled modules the hooks load, and what each one is called in a notice. */
+const GUARD_MODULES = [
+  { file: join(DIST_HOOKS, 'bashGuard.js'), name: 'the shell guard', export: 'assessBashCommand' },
+  { file: join(DIST_HOOKS, 'secretScan.js'), name: 'the secret scan', export: 'scanForSecrets' },
+  { file: join(DIST_PKGVET, 'hookDecision.js'), name: 'package vetting', export: 'decideInstallCommand' },
+  { file: join(DIST_HOOKS, 'settingsGuard.js'), name: "the Claude Code settings guard", export: 'newlyLoosened' },
+];
+
+/**
+ * SessionStart's check that every guard can actually run (review M2): each
+ * one fails open when its module cannot be loaded, and until now the briefing
+ * said "active" all the same. `null` when all load.
+ */
+async function unloadableGuardsNotice() {
+  const broken = [];
+  let reason = '';
+  for (const g of GUARD_MODULES) {
+    try {
+      const mod = await import(pathToFileURL(g.file).href);
+      if (typeof mod[g.export] !== 'function') throw new Error(`${g.export} missing`);
+    } catch (err) {
+      broken.push(g.name);
+      reason = reason || (err instanceof Error ? (err.code ?? err.message) : String(err));
+    }
+  }
+  if (broken.length === 0) return null;
+  const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
+  return (
+    `⚠️ dev-guardian: ${list} could not be loaded (${reason}) — ${broken.length === 1 ? 'it is' : 'they are'} OFF for this ` +
+    `session (fail-open): nothing is checked by ${broken.length === 1 ? 'it' : 'them'}. The plugin's mcp/dist is missing or ` +
+    'damaged; ask the user to reinstall or rebuild it.'
+  );
 }
 
 // ─────────────────────────────── handlers ──────────────────────────────────
@@ -527,8 +563,12 @@ function ignoredSettingsNotice(cfg) {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
-function handleSessionStart(root, cfg) {
-  const notice = ignoredSettingsNotice(cfg);
+async function handleSessionStart(root, cfg) {
+  // What the model must hear even when the project turned the briefing off:
+  // settings it asked for that were ignored, and guards that are not running.
+  const off = await unloadableGuardsNotice();
+  const guardsOff = off !== null;
+  const notice = [ignoredSettingsNotice(cfg), off].filter(Boolean).join('\n') || null;
   if (!cfg.sessionStart) {
     // The briefing is advisory and a project may turn it off — but not the
     // notice that the same project asked to loosen the guardrails.
@@ -547,7 +587,8 @@ function handleSessionStart(root, cfg) {
   const status = git(root, ['status', '--porcelain']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
 
-  const head = `🛡️ dev-guardian active (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
+  const state = guardsOff ? 'running with guards OFF (see below)' : 'active';
+  const head = `🛡️ dev-guardian ${state} (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
   lines.push(head);
   if (changed > 0) lines.push(`${changed} uncommitted change(s) in the working tree.`);
 

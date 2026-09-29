@@ -4,7 +4,7 @@ With the plugin enabled, Claude Code loads [`hooks/hooks.json`](../hooks/hooks.j
 
 Two rules hold for all of them:
 
-- **Fail open.** Any error inside a hook exits 0 with no output. A guardrail that breaks must not break your session. `GUARDIAN_HOOKS_DEBUG=1` prints what went wrong on stderr.
+- **Fail open.** Any error inside a hook exits 0 with no output. A guardrail that breaks must not break your session. `GUARDIAN_HOOKS_DEBUG=1` prints what went wrong on stderr. It is not silent, though: when the shell guard, the secret scan, package vetting or the settings guard cannot be loaded (a missing or damaged `mcp/dist`), SessionStart says which ones are off for the session.
 - **Only what just happened.** A hook assesses the text just written or the command about to run — it never scans the repository. It does read a little around it: SessionStart runs `git status` and checks `.guardian/`, and the install hook reads registry configuration (`.npmrc`, `pip.conf`, `package.json` workspaces, … — listed below). The authoritative scans stay in the MCP tools (`scan_secrets`, `vet_packages`, …).
 
 Each hook has a 15 s timeout in `hooks.json`.

@@ -15,11 +15,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
@@ -52,10 +52,12 @@ interface HookResult {
 
 function runHook(
   payload: Record<string, unknown>,
-  opts: { cwd: string; env?: Record<string, string>; homeDir?: string; projectDir?: string } = { cwd: process.cwd() },
+  opts: { cwd: string; env?: Record<string, string>; homeDir?: string; projectDir?: string; hook?: string } = {
+    cwd: process.cwd(),
+  },
 ): HookResult {
   const home = opts.homeDir ?? opts.cwd;
-  const r = spawnSync(process.execPath, [HOOK], {
+  const r = spawnSync(process.execPath, [opts.hook ?? HOOK], {
     cwd: opts.cwd,
     input: JSON.stringify(payload),
     encoding: 'utf8',
@@ -1082,6 +1084,68 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it.runIf(process.platform !== 'win32')('elsewhere a colon is part of the name: `hooks.config.json::$DATA` is another file', () => {
       expect(decision(write(`${join(projectDir, '.guardian', 'hooks.config.json')}::$DATA`))).toBeUndefined();
     });
+  });
+
+  // Review of 3.0.0, M2: `file://${DIST_HOOKS}/` built by concatenation reads
+  // a `#` in the install path as a URL fragment — ERR_MODULE_NOT_FOUND, and
+  // the shell guard and the secret scan failed open while SessionStart still
+  // said "active".
+  describe('a plugin installed under a path with # in it (review M2)', () => {
+    let base: string;
+    let plug: string;
+    const install = (into: string): void => {
+      for (const part of ['hooks', '.claude-plugin', join('configs', 'popular-packages'), join('mcp', 'dist')]) {
+        cpSync(join(REPO_ROOT, part), join(into, part), { recursive: true });
+      }
+    };
+    beforeAll(() => {
+      base = mkdtempSync(join(tmpdir(), 'guardian-plug-'));
+      plug = join(base, 'plug#1');
+      install(plug);
+    }, 120_000);
+    afterAll(() => rmSync(base, { recursive: true, force: true }));
+
+    it('the shell guard still denies rm -rf /', () => {
+      const r = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+        hook: join(plug, 'hooks', 'guardian-hook.mjs'),
+      });
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+
+    it('the secret scan still warns after a write', () => {
+      const r = runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir, hook: join(plug, 'hooks', 'guardian-hook.mjs') },
+      );
+      expect(JSON.stringify(r.stdout)).toMatch(/AWS access key/);
+    });
+
+    it('SessionStart says the guards are off when their modules cannot be loaded — fail-open, not silent', () => {
+      const broken = join(base, 'broken');
+      install(broken);
+      rmSync(join(broken, 'mcp', 'dist', 'hooks', 'bashGuard.js'));
+      const r = runHook(
+        { hook_event_name: 'SessionStart', cwd: projectDir },
+        { cwd: projectDir, homeDir, hook: join(broken, 'hooks', 'guardian-hook.mjs') },
+      );
+      const context = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
+        ?.additionalContext;
+      expect(context).toMatch(/could not be loaded/);
+      expect(context).toMatch(/shell guard/);
+      // And the healthy install says nothing of the kind.
+      const ok = runHook(
+        { hook_event_name: 'SessionStart', cwd: projectDir },
+        { cwd: projectDir, homeDir, hook: join(plug, 'hooks', 'guardian-hook.mjs') },
+      );
+      expect(JSON.stringify(ok.stdout)).not.toMatch(/could not be loaded/);
+    }, 120_000);
   });
 
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
