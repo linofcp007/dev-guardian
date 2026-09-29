@@ -180,7 +180,16 @@ export function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     if (unreadable.length > 0) {
         clauses.push(`${unreadable.join(', ')} ran but read no dependency manifest — ${manifestAdvice(manifestGaps)}`);
     }
-    for (const [base, parts] of partsOf) {
+    for (const [base, allParts] of partsOf) {
+        // `trivy:manifest-walk` (runners/trivyRun.ts#judgeTrivyFs): not a part
+        // Trivy missed, but the check of which manifests it read cut short.
+        const parts = allParts.filter((part) => part !== 'manifest-walk');
+        if (parts.length < allParts.length) {
+            clauses.push(`${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run ` +
+                'reason) — manifests beyond it were not checked');
+        }
+        if (parts.length === 0)
+            continue;
         const named = parts.map((part) => {
             const gap = manifestGaps.find((g) => g.ecosystem === part);
             return gap === undefined ? part : nameOf(gap);

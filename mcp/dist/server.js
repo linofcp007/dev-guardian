@@ -45323,7 +45323,14 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
       `${unreadable.join(", ")} ran but read no dependency manifest \u2014 ${manifestAdvice(manifestGaps)}`
     );
   }
-  for (const [base, parts] of partsOf) {
+  for (const [base, allParts] of partsOf) {
+    const parts = allParts.filter((part) => part !== "manifest-walk");
+    if (parts.length < allParts.length) {
+      clauses.push(
+        `${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run reason) \u2014 manifests beyond it were not checked`
+      );
+    }
+    if (parts.length === 0) continue;
     const named2 = parts.map((part) => {
       const gap = manifestGaps.find((g) => g.ecosystem === part);
       return gap === void 0 ? part : nameOf(gap);
@@ -46610,6 +46617,7 @@ function withHonoured(run, honoured) {
   const reason = run.reason !== void 0 && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
   return { ...run, reason, honoured_config: [...honoured] };
 }
+var TRIVY_MANIFEST_WALK_GAP = "trivy:manifest-walk";
 function judgeTrivyFs(args) {
   const { projectPath, raw, run, exclusions } = args;
   if (run.outcome !== "completed") {
@@ -46620,14 +46628,16 @@ function judgeTrivyFs(args) {
     };
   }
   const coverage = assessManifestCoverage(projectPath, raw ?? "", {
-    ignores: exclusions === null ? null : (rel2, isDir) => exclusions.ignores(rel2, isDir)
+    ignores: exclusions === null ? null : (rel2, isDir) => exclusions.ignores(rel2, isDir),
+    ...args.maxDirs !== void 0 ? { maxDirs: args.maxDirs } : {}
   });
   const note = coverage.walkIncomplete !== void 0 ? `${coverage.walkIncomplete} \u2014 manifests below were not checked` : null;
+  const walkGap = note !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
   const withNote2 = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== void 0 ? `${r.reason}; ${note}` : note }, run.honoured);
   if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
     return {
       toolRun: withNote2({ name: "trivy", status: "ok", reason: "no_supported_manifest" }),
-      missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
+      missing: [...coverage.gaps.map((g) => `trivy:${g.ecosystem}`), ...walkGap],
       gaps: coverage.gaps
     };
   }
@@ -46638,7 +46648,7 @@ function judgeTrivyFs(args) {
       gaps: coverage.gaps
     };
   }
-  return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: [], gaps: [] };
+  return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: walkGap, gaps: [] };
 }
 
 // src/tools/scanHelpers.ts
@@ -53939,6 +53949,10 @@ var RUN_NAMES = {
   "trivy:gradle": scanner(trivyFsKey("gradle")),
   "trivy:python": scanner(trivyFsKey("python")),
   "trivy:go": scanner(trivyFsKey("go")),
+  // The manifest walk stopped early (runners/trivyRun.ts#judgeTrivyFs):
+  // coverage cannot be full, but Trivy read the whole tree — no finding of
+  // its is left unmeasured by this, only the check of which manifests it read.
+  "trivy:manifest-walk": scanner(),
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
   // `dotnet list package --vulnerable`, whose findings say

@@ -172,6 +172,10 @@ export const RUN_NAMES = {
   'trivy:gradle': scanner(trivyFsKey('gradle')),
   'trivy:python': scanner(trivyFsKey('python')),
   'trivy:go': scanner(trivyFsKey('go')),
+  // The manifest walk stopped early (runners/trivyRun.ts#judgeTrivyFs):
+  // coverage cannot be full, but Trivy read the whole tree — no finding of
+  // its is left unmeasured by this, only the check of which manifests it read.
+  'trivy:manifest-walk': scanner(),
 
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's

@@ -176,6 +176,9 @@ export function withHonoured(run, honoured) {
     const reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
     return { ...run, reason, honoured_config: [...honoured] };
 }
+// ---------------------------------------------------------------- the dependency pass, judged
+/** Listed missing when the manifest walk stopped early: see {@link judgeTrivyFs}. */
+export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk';
 /**
  * The `trivy` entry of a dependency pass (`trivy fs --scanners vuln[,license]`)
  * — the ONE judgement scan_deps, deps_audit and scan_wordpress share (review
@@ -192,8 +195,14 @@ export function withHonoured(run, honoured) {
  *   - none were, and Trivy reported nothing at all → `skipped`,
  *     `no_supported_manifest`, `trivy` missing.
  *
- * `trivy.ts#assessManifestCoverage` walks the tree (review I1); a walk that
- * stopped early says so in the reason.
+ * `trivy.ts#assessManifestCoverage` walks the tree (review I1). A walk that
+ * stopped early (its 20 000-directory ceiling, an unreadable directory)
+ * cannot say every manifest was read, so the run cannot be full (round 2,
+ * item 7 — the rule `frameworks/projectLanguages.ts` applies to an
+ * incomplete listing): the reason says why, and {@link TRIVY_MANIFEST_WALK_GAP}
+ * is listed missing beside a `trivy` that stays ok. It measures no finding
+ * (`history/runNames.ts`): Trivy itself read the whole tree; only this check
+ * of it is short.
  */
 export function judgeTrivyFs(args) {
     const { projectPath, raw, run, exclusions } = args;
@@ -206,13 +215,15 @@ export function judgeTrivyFs(args) {
     }
     const coverage = assessManifestCoverage(projectPath, raw ?? '', {
         ignores: exclusions === null ? null : (rel, isDir) => exclusions.ignores(rel, isDir),
+        ...(args.maxDirs !== undefined ? { maxDirs: args.maxDirs } : {}),
     });
     const note = coverage.walkIncomplete !== undefined ? `${coverage.walkIncomplete} — manifests below were not checked` : null;
+    const walkGap = note !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
     const withNote = (r) => withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run.honoured);
     if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
         return {
             toolRun: withNote({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }),
-            missing: coverage.gaps.map((g) => `trivy:${g.ecosystem}`),
+            missing: [...coverage.gaps.map((g) => `trivy:${g.ecosystem}`), ...walkGap],
             gaps: coverage.gaps,
         };
     }
@@ -223,6 +234,6 @@ export function judgeTrivyFs(args) {
             gaps: coverage.gaps,
         };
     }
-    return { toolRun: withNote({ name: 'trivy', status: 'ok' }), missing: [], gaps: [] };
+    return { toolRun: withNote({ name: 'trivy', status: 'ok' }), missing: walkGap, gaps: [] };
 }
 //# sourceMappingURL=trivyRun.js.map

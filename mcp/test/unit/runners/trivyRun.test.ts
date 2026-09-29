@@ -8,7 +8,7 @@
  * `src/` outside the helper fails it.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,7 @@ import { execa } from 'execa';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import {
   honouredNote,
+  judgeTrivyFs,
   NEUTRAL_TRIVY_CONFIG,
   resetTrivyVersionCache,
   runTrivy,
@@ -106,7 +107,6 @@ describe('runTrivy', () => {
     const project = makeTempDir('trivy-run-project-');
     const work = makeTempDir('trivy-run-work-');
     // A directory by that name.
-    const { mkdirSync } = await import('node:fs');
     mkdirSync(join(project, '.trivyignore'));
     const r = await runTrivy({ args: ['fs'], target: project, workDir: work, ignoreFrom: project });
     expect(mockedRun.mock.calls[0]?.[0].args).not.toContain('--ignorefile');
@@ -213,6 +213,36 @@ const TRIVY_SPAWN = /command:\s*['"`]trivy['"`]|\b(?:execa|execaSync|spawn|spawn
  * server's own directory, never a scanned one.
  */
 const PROBE_LINE = /probe:\s*\{\s*command:\s*'trivy',\s*args:\s*\['--version'\][^}]*\}/;
+
+/**
+ * Round 2, item 7: the manifest walk stops at 20 000 directories. Cut, it
+ * cannot say every manifest was read, so coverage cannot be full — the same
+ * rule as `frameworks/projectLanguages.ts` (an incomplete listing claims
+ * nothing as tested). Named, `trivy` stays ok, `trivy:manifest-walk` missing.
+ */
+describe('judgeTrivyFs: a manifest walk that stopped early', () => {
+  const completed = { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false, honoured: [] };
+  function deepTree(): string {
+    const dir = makeTempDir('trivy-walk-');
+    for (const d of ['a/b/c', 'd/e/f']) mkdirSync(join(dir, ...d.split('/')), { recursive: true });
+    writeFileSync(join(dir, 'package.json'), '{"dependencies":{"lodash":"4.17.4"}}');
+    writeFileSync(join(dir, 'package-lock.json'), '{}');
+    return dir;
+  }
+  const RAW = JSON.stringify({ Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }] });
+
+  it('is partial, named, never full', () => {
+    const j = judgeTrivyFs({ projectPath: deepTree(), raw: RAW, run: completed, exclusions: null, maxDirs: 2 });
+    expect(j.toolRun.status).toBe('ok');
+    expect(j.toolRun.reason).toMatch(/manifest walk stopped after 2 directories — manifests below were not checked/);
+    expect(j.missing).toEqual(['trivy:manifest-walk']);
+  });
+
+  it('a walk that read everything adds nothing', () => {
+    const j = judgeTrivyFs({ projectPath: deepTree(), raw: RAW, run: completed, exclusions: null });
+    expect(j).toEqual({ toolRun: { name: 'trivy', status: 'ok' }, missing: [], gaps: [] });
+  });
+});
 
 describe('every Trivy spawn in src/ goes through runners/trivyRun.ts', () => {
   it('no file but the helper spawns Trivy', () => {

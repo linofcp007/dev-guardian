@@ -10,6 +10,19 @@ const skipped = (name: string, reason = 'not_installed'): ToolRun => ({
 });
 const failed = (name: string): ToolRun => ({ name, status: 'failed' });
 
+describe('assessCoverage — the manifest walk gap (round 2, item 7)', () => {
+  it('trivy ok beside trivy:manifest-walk is partial, worded as a check cut short', () => {
+    const a = assessCoverage(
+      'deps',
+      [{ name: 'trivy', status: 'ok', reason: 'the manifest walk stopped after 20000 directories — manifests below were not checked' }],
+      ['trivy:manifest-walk'],
+    );
+    expect(a.coverage).toBe('partial');
+    expect(a.warning).toMatch(/trivy ran, but the check of which dependency manifests it read stopped early/);
+    expect(a.warning).not.toMatch(/manifest-walk was not covered/);
+  });
+});
+
 describe('computeCoverage', () => {
   it('is full when every attempted scanner ran ok and nothing is missing', () => {
     expect(computeCoverage([ok('semgrep'), ok('bandit')], [])).toBe('full');

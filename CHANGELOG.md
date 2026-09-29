@@ -38,7 +38,9 @@ version bump.
   skips one without a lock file in silence: `web/package.json` (lodash 4.17.4, no lock) and `api/pyproject.toml`
   (django 2.2.0) read trivy ok, coverage full, 0 findings, where the same package.json at the root read none. The
   project is walked now (bounded like detect_stack's walk: 20 000 directories; `node_modules`, `vendor`, build
-  output, hidden directories and `.guardianignore` entries are not entered), and each manifest's directory is
+  output, hidden directories and `.guardianignore` entries are not entered — a walk cut at that ceiling, or by an
+  unreadable directory, cannot be full: `trivy` stays ok with the reason, `trivy:manifest-walk` is listed missing,
+  coverage partial, as `frameworks/projectLanguages.ts` treats an incomplete listing), and each manifest's directory is
   compared with the directories of its ecosystem's Results — never the Type alone, which a root lock file
   already satisfied. A workspace member (npm / yarn `workspaces`, `pnpm-workspace.yaml`, Cargo `[workspace]`,
   uv `[tool.uv.workspace]`, their exclusions honoured) is covered by its root's lock file. A `.sln` is no

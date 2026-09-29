@@ -103,6 +103,8 @@ function bookkeepingNames(): string[] {
     ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
+    // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
+    ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
     ...collect(/const [A-Z_]*SUB_TOOLS\s*=\s*\[([^\]]+)\]/g).flatMap((x) =>
       [...x.value.matchAll(/'([^']+)'/g)].flatMap((m) => (m[1] === undefined ? [] : [{ file: x.file, value: m[1] }])),
