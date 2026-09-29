@@ -89,10 +89,10 @@
  * could not be undone), and a path through a link; an exclusion file that IS
  * a link is unlinked and replaced, never written through.
  */
-import { execa } from 'execa';
 import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
+import { execGitBuffer } from '../platform/gitSafety.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
 import { git, repoState, resolveCommit, showPrefix, splitNul } from '../runners/git.js';
@@ -206,25 +206,14 @@ async function blobBytes(cwd, object, maxBytes, label) {
         throw new CiRefError(`${label}: git cat-file -s failed: ${firstLine(size.stderr)}`);
     if (n > maxBytes)
         throw new CiRefError(`${label} is ${n} bytes, over the ${maxBytes}-byte limit — not read`);
-    try {
-        const r = await execa('git', ['-C', cwd, 'cat-file', 'blob', object], {
-            encoding: 'buffer',
-            // The bytes as git stored them: execa would drop a final newline.
-            stripFinalNewline: false,
-            reject: false,
-            timeout: 60_000,
-            maxBuffer: maxBytes + 1,
-        });
-        if (r.exitCode !== 0 || !(r.stdout instanceof Uint8Array)) {
-            throw new CiRefError(`${label}: git cat-file blob failed`);
-        }
-        return Buffer.from(r.stdout);
-    }
-    catch (e) {
-        if (e instanceof CiRefError)
-            throw e;
-        throw new CiRefError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    // The bytes as git stored them — `cat-file blob` runs no filter or
+    // textconv driver — hardened like every git (`platform/gitSafety.ts`).
+    const r = await execGitBuffer(cwd, ['cat-file', 'blob', object], { timeoutMs: 60_000, maxBuffer: maxBytes + 1 });
+    if (r.failure !== null)
+        throw new CiRefError(`${label}: ${r.failure.message}`);
+    if (r.status !== 0)
+        throw new CiRefError(`${label}: git cat-file blob failed`);
+    return r.stdout;
 }
 /**
  * The bytes of the regular file at `rel` (project-relative) in the ref's

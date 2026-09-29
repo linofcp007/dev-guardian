@@ -96,7 +96,10 @@
  * outcome is bucketed under `push_failed`, indistinguishable from a real
  * failure.
  */
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND, gitSafetyFor, localReceivePackCommand } from '../platform/gitSafety.js';
 /** Excludes dev-guardian's own scan-report artifacts from both staging and
  *  the "did anything real change" check — see the module comment (C1). At
  *  ANY depth: a project in a subdirectory of its repository has its re-scan
@@ -200,7 +203,7 @@ export async function openPr(opts) {
     // `git status --porcelain` needs no `--quiet`/exit-code interpretation:
     // empty stdout IS "nothing staged, nothing unstaged, nothing untracked".
     const status = await run({
-        command: 'git',
+        command: GIT_COMMAND,
         args: ['status', '--porcelain', '--', EXCLUDE_GUARDIAN_DIR],
         cwd: worktreePath,
     });
@@ -221,7 +224,7 @@ export async function openPr(opts) {
         };
     }
     const add = await run({
-        command: 'git',
+        command: GIT_COMMAND,
         args: ['add', '-A', '--', EXCLUDE_GUARDIAN_DIR],
         cwd: worktreePath,
     });
@@ -232,22 +235,54 @@ export async function openPr(opts) {
             detail: `Could not stage the fix on branch '${branch}': ${describeFailure(add, 'git add')}`,
         };
     }
-    const commit = await run({ command: 'git', args: ['commit', '-m', title], cwd: worktreePath });
+    // `--no-verify`: no pre-commit or commit-msg hook. It is not enough on its
+    // own — git still runs prepare-commit-msg, post-commit and
+    // reference-transaction (measured) — so `runProcess` also points
+    // core.hooksPath where no hook can exist (`platform/gitSafety.ts`).
+    const commit = await run({ command: GIT_COMMAND, args: ['commit', '--no-verify', '-m', title], cwd: worktreePath });
+    const notApplied = new Set([...(add.gitNotApplied ?? []), ...(commit.gitNotApplied ?? [])]);
+    const withNotApplied = (outcome) => notApplied.size > 0 ? { ...outcome, git_config_not_applied: [...notApplied].sort() } : outcome;
     if (hasFailed(commit)) {
-        return {
+        return withNotApplied({
             status: 'push_failed',
             url: null,
             detail: `Could not commit the fix on branch '${branch}': ${describeFailure(commit, 'git commit')}`,
-        };
+        });
     }
-    const push = await run({ command: 'git', args: ['push', '-u', 'origin', branch], cwd: worktreePath });
+    // `--receive-pack`: the repository's own `remote.origin.receivepack` is the
+    // FIRST value git finds and wins over any configuration appended after it
+    // (measured), and on a local-path or ssh remote it is a command git runs —
+    // only a command-line option outranks it. To a repository on this machine,
+    // the receive-pack is a git started IN that repository, with git's
+    // configuration variables stripped from its environment: its hooks would
+    // run — so it gets the hardening on its own command line.
+    const receivePack = await receivePackFor(worktreePath, run);
+    if ('refused' in receivePack) {
+        return withNotApplied({
+            status: 'push_failed',
+            url: null,
+            detail: `Did not push branch '${branch}': ${receivePack.refused}. The commit exists locally on that branch; it was not pushed.`,
+        });
+    }
+    const push = await run({
+        command: GIT_COMMAND,
+        args: ['push', '--no-verify', `--receive-pack=${receivePack.program}`, '-u', 'origin', branch],
+        cwd: worktreePath,
+    });
+    for (const k of push.gitNotApplied ?? [])
+        notApplied.add(k);
     if (hasFailed(push)) {
-        return {
+        return withNotApplied({
             status: 'push_failed',
             url: null,
             detail: `Push to origin failed for branch '${branch}': ${describeFailure(push, 'git push')}. ` +
-                `The commit exists locally on that branch; it was not pushed.`,
-        };
+                `The commit exists locally on that branch; it was not pushed.` +
+                (notApplied.size > 0
+                    ? ` The repository's own git configuration was not applied for ${[...notApplied].sort().join(', ')} ` +
+                        '(dev-guardian never runs a command a scanned repository configures) — set what the push needs in ' +
+                        'your own git configuration or environment instead.'
+                    : ''),
+        });
     }
     // cwd: projectPath, per the brief — see the module comment.
     const create = await run({
@@ -256,14 +291,76 @@ export async function openPr(opts) {
         cwd: projectPath,
     });
     if (hasFailed(create)) {
-        return {
+        return withNotApplied({
             status: 'create_failed',
             url: null,
             detail: `Branch '${branch}' was pushed to origin, but 'gh pr create' failed: ` +
                 `${describeFailure(create, 'gh pr create')}. Open the pull request by hand from that branch.`,
-        };
+        });
     }
-    return { status: 'created', url: firstUrlLine(create.stdout), detail: null };
+    return withNotApplied({ status: 'created', url: firstUrlLine(create.stdout), detail: null });
+}
+/**
+ * The `--receive-pack` for `git push origin`: git's own `git-receive-pack` for
+ * a network remote (on its server, the server's command), and — for a
+ * repository on this machine (a path, a `file://` URL) — `git -c … receive-pack`
+ * with the hardening for THAT repository (`gitSafety.ts#localReceivePackCommand`).
+ * Refused, and named, when origin pushes both to this machine and over the
+ * network (one `--receive-pack` cannot suit both), or the destination's
+ * configuration cannot be read safely. `get-url --push --all` applies
+ * `pushurl`, `insteadOf` and `pushInsteadOf` — the URLs the push itself
+ * will use — and runs nothing.
+ */
+async function receivePackFor(worktreePath, run) {
+    const standard = { program: 'git-receive-pack' };
+    const r = await run({ command: GIT_COMMAND, args: ['remote', 'get-url', '--push', '--all', 'origin'], cwd: worktreePath });
+    if (hasFailed(r))
+        return standard;
+    const local = [];
+    let network = 0;
+    for (const line of r.stdout.split(/\r?\n/)) {
+        const url = line.trim();
+        if (url === '')
+            continue;
+        const path = localPath(worktreePath, url);
+        if (path === null)
+            network += 1;
+        else
+            local.push(path);
+    }
+    if (local.length === 0)
+        return standard;
+    if (network > 0) {
+        return { refused: "origin pushes both to a repository on this machine and over the network, and dev-guardian hardens only the former's receive-pack" };
+    }
+    const safety = await gitSafetyFor(local);
+    if (safety.refused !== null)
+        return { refused: `the push destination's git configuration: ${safety.refused}` };
+    const program = localReceivePackCommand(safety);
+    if (program === null)
+        return { refused: "the push destination's git configuration has a key that cannot be passed on a command line" };
+    return { program };
+}
+/**
+ * The directory a push URL names on this machine, or null for one that
+ * leaves it: `transport::address` (a remote helper), `scheme://` (http, https,
+ * ssh, git) and scp-like `[user@]host:path` — a Windows drive letter (`C:/…`,
+ * `C:\…`) is the one colon that does not.
+ */
+function localPath(worktreePath, url) {
+    if (/^file:\/\//i.test(url)) {
+        try {
+            return fileURLToPath(url);
+        }
+        catch {
+            return null;
+        }
+    }
+    if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(url) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url))
+        return null;
+    if (!/^[A-Za-z]:[\\/]/.test(url) && /^[^/\\]*:/.test(url))
+        return null;
+    return resolve(worktreePath, url);
 }
 /**
  * Deletes the local branch `createWorktree` made (task-7-review.md C2).
@@ -293,7 +390,7 @@ export async function openPr(opts) {
 export async function deleteLocalBranch(opts) {
     const run = opts.run ?? runProcess;
     const result = await run({
-        command: 'git',
+        command: GIT_COMMAND,
         args: ['branch', '-D', opts.branch],
         cwd: opts.projectPath,
     });

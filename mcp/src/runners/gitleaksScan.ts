@@ -95,6 +95,7 @@ import {
   shallowBoundary,
   uncommittedFiles,
 } from './git.js';
+import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -456,6 +457,10 @@ async function historyPass(
     reasons.push(truncation);
     result.missing_tools.push(GITLEAKS_HISTORY);
   }
+  // `git log -p` ran without the repository's own textconv driver (or gpg
+  // program, …): gitleaks read the history as stored, which is named.
+  const notApplied = describeNotApplied(run.gitNotApplied ?? []);
+  if (notApplied !== null) reasons.push(notApplied);
   result.tools_run.push({
     name: GITLEAKS_HISTORY,
     status: problems.length === 0 ? 'ok' : 'failed',

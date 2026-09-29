@@ -24,6 +24,7 @@ import { execa } from 'execa';
 import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync, } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative } from 'node:path';
+import { execGit } from '../platform/gitSafety.js';
 const MAX_FILES = 4000;
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -106,14 +107,14 @@ function looksLikeGitHost(url) {
 }
 async function ingestGit(url) {
     const dir = mkdtempSync(join(tmpdir(), 'guardian-scanskill-git-'));
-    try {
-        // `--`: a target that merely ends in `.git` may start with `-`
-        // (`--upload-pack=<command>;.git`), and git would run it as an option.
-        await execa('git', ['clone', '--depth', '1', '--quiet', '--', url, dir], { timeout: 120000 });
-    }
-    catch (e) {
+    // `--`: a target that merely ends in `.git` may start with `-`
+    // (`--upload-pack=<command>;.git`), and git would run it as an option.
+    // Run from the (empty) temp directory, hardened (`platform/gitSafety.ts`):
+    // no hook runs on the checkout, and the `ext::` transport is refused.
+    const r = await execGit(dir, ['clone', '--depth', '1', '--quiet', '--', url, dir], { timeoutMs: 120000 });
+    if (r.failure !== null || r.status !== 0) {
         safeRm(dir);
-        const msg = e instanceof Error ? e.message : 'git clone failed';
+        const msg = r.failure?.message ?? (r.stderr.split(/\r?\n/).find((l) => l.trim() !== '')?.trim() || `git exited ${r.status}`);
         return {
             ok: false,
             code: 'unsupported_target',

@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
+import { gitSafetyFor } from '../platform/gitSafety.js';
 import { git, splitNul } from '../runners/git.js';
 import { runProcess } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
@@ -64,6 +65,7 @@ export async function invokeSemgrep(options) {
             outFileHost: outFile,
             image,
             configs: [containerRules],
+            git: await gitSafetyFor([projectPath]),
         }),
         cwd: projectPath,
     });

@@ -2999,7 +2999,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve30.call(this, root, ref);
+      let _sch = resolve31.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3026,7 +3026,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve30(root, ref) {
+    function resolve31(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3856,7 +3856,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve30(baseURI, relativeURI, options) {
+    function resolve31(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4225,7 +4225,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize2,
-      resolve: resolve30,
+      resolve: resolve31,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -8285,12 +8285,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve30, reject) {
+        return new Promise(function(resolve31, reject) {
           isexe(path8, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve30(is);
+              resolve31(is);
             }
           });
         });
@@ -8356,27 +8356,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve30, reject) => {
+      const step = (i2) => new Promise((resolve31, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve30(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve31(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path8.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve30(subStep(p, i2, 0));
+        resolve31(subStep(p, i2, 0));
       });
-      const subStep = (p, i2, ii) => new Promise((resolve30, reject) => {
+      const subStep = (p, i2, ii) => new Promise((resolve31, reject) => {
         if (ii === pathExt.length)
-          return resolve30(step(i2 + 1));
+          return resolve31(step(i2 + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found.push(p + ext);
             else
-              return resolve30(p + ext);
+              return resolve31(p + ext);
           }
-          return resolve30(subStep(p, i2, ii + 1));
+          return resolve31(subStep(p, i2, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -8668,7 +8668,7 @@ var require_cross_spawn = __commonJS({
     var cp = __require("child_process");
     var parse9 = require_parse();
     var enoent = require_enoent();
-    function spawn4(command, args, options) {
+    function spawn5(command, args, options) {
       const parsed = parse9(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
@@ -8680,8 +8680,8 @@ var require_cross_spawn = __commonJS({
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
     }
-    module.exports = spawn4;
-    module.exports.spawn = spawn4;
+    module.exports = spawn5;
+    module.exports.spawn = spawn5;
     module.exports.sync = spawnSync3;
     module.exports._parse = parse9;
     module.exports._enoent = enoent;
@@ -9456,8 +9456,8 @@ var init_deferred = __esm({
   "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
-      const promise = new Promise((resolve30, reject) => {
-        Object.assign(methods, { resolve: resolve30, reject });
+      const promise = new Promise((resolve31, reject) => {
+        Object.assign(methods, { resolve: resolve31, reject });
       });
       return Object.assign(promise, methods);
     };
@@ -14755,11 +14755,11 @@ var init_concurrent = __esm({
       const promises = weakMap.get(stream);
       const promise = createDeferred();
       promises.push(promise);
-      const resolve30 = promise.resolve.bind(promise);
-      return { resolve: resolve30, promises };
+      const resolve31 = promise.resolve.bind(promise);
+      return { resolve: resolve31, promises };
     };
-    waitForConcurrentStreams = async ({ resolve: resolve30, promises }, subprocess) => {
-      resolve30();
+    waitForConcurrentStreams = async ({ resolve: resolve31, promises }, subprocess) => {
+      resolve31();
       const [isSubprocessExit] = await Promise.race([
         Promise.allSettled([true, subprocess]),
         Promise.all([false, ...promises])
@@ -35195,7 +35195,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve30) => setTimeout(resolve30, pollInterval));
+        await new Promise((resolve31) => setTimeout(resolve31, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -35212,7 +35212,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve30, reject) => {
+    return new Promise((resolve31, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -35290,7 +35290,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve30(parseResult.data);
+            resolve31(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -35551,12 +35551,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve30, reject) => {
+    return new Promise((resolve31, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve30, interval);
+      const timeoutId = setTimeout(resolve31, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -36869,7 +36869,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve30) => setTimeout(resolve30, pollInterval));
+      await new Promise((resolve31) => setTimeout(resolve31, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -37557,19 +37557,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message3) {
-    return new Promise((resolve30) => {
+    return new Promise((resolve31) => {
       const json = serializeMessage(message3);
       if (this._stdout.write(json)) {
-        resolve30();
+        resolve31();
       } else {
-        this._stdout.once("drain", resolve30);
+        this._stdout.once("drain", resolve31);
       }
     });
   }
 };
 
 // src/server.ts
-import { resolve as resolve29 } from "node:path";
+import { resolve as resolve30 } from "node:path";
 
 // src/gitignoreGuard.ts
 import { existsSync } from "node:fs";
@@ -38448,10 +38448,446 @@ function reasonOf(error2) {
 }
 
 // src/storage/dbProvenance.ts
-import { spawnSync as spawnSync2 } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync as existsSync4, lstatSync as lstatSync6 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join8, relative as relative3 } from "node:path";
+
+// src/platform/gitSafety.ts
+import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
+var GIT_COMMAND = "git";
+var PROBE_TIMEOUT_MS = 1e4;
+var PROBE_MAX_BYTES = 1024 * 1024;
+var MAX_REPOSITORY_KEYS = 200;
+function noHooksPath(platform2 = process.platform, execPath2 = process.execPath) {
+  if (platform2 === "win32") return `${execPath2.replace(/\\/g, "/")}/no-git-hooks`;
+  return "/dev/null/no-git-hooks";
+}
+function staticConfig(hooksPath) {
+  return [
+    ["core.fsmonitor", "false"],
+    ["core.hooksPath", hooksPath],
+    ["protocol.ext.allow", "never"],
+    ["log.showSignature", "false"],
+    ["gc.auto", "0"],
+    ["maintenance.auto", "false"]
+  ];
+}
+var STATIC_VARS = { GIT_PAGER: "cat", GIT_EDITOR: ":", GIT_SEQUENCE_EDITOR: ":" };
+function withoutHooksPath(safety) {
+  return { ...safety, config: safety.config.filter(([key]) => key !== "core.hooksPath") };
+}
+function staticGitSafety(platform2 = process.platform) {
+  return { config: staticConfig(noHooksPath(platform2)), vars: STATIC_VARS, notApplied: [], refused: null };
+}
+var COMMAND_KEYS_REGEX = "^(" + [
+  "filter\\..+\\.(clean|smudge|process)",
+  "diff\\..+\\.(textconv|command)",
+  "diff\\.external",
+  "merge\\..+\\.driver",
+  "core\\.(sshcommand|askpass|gitproxy|alternaterefscommand|fsmonitor|hookspath|pager|editor)",
+  "sequence\\.editor",
+  "pager\\..+",
+  "credential\\.(.+\\.)?helper",
+  "gpg\\.(program|.+\\.program|ssh\\.defaultkeycommand)",
+  "alias\\..+",
+  "remote\\..+\\.(uploadpack|receivepack)",
+  "devguardian\\.envprobe"
+].join("|") + ")$";
+var PROBE_KEY = "devguardian.envprobe";
+var TRUSTED_SCOPES = /* @__PURE__ */ new Set(["system", "global", "command"]);
+var STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+function parseConfigListing(bytes) {
+  const entries2 = [];
+  const tokens = [];
+  let start = 0;
+  for (let i2 = 0; i2 < bytes.length; i2++) {
+    if (bytes[i2] === 0) {
+      tokens.push(bytes.subarray(start, i2));
+      start = i2 + 1;
+    }
+  }
+  for (let i2 = 0; i2 + 1 < tokens.length; i2 += 2) {
+    const scopeBytes = tokens[i2];
+    const kv = tokens[i2 + 1];
+    if (scopeBytes === void 0 || kv === void 0) break;
+    const lf = kv.indexOf(10);
+    const keyBytes = lf < 0 ? kv : kv.subarray(0, lf);
+    let key;
+    try {
+      key = STRICT_UTF8.decode(keyBytes);
+    } catch {
+      return {
+        refused: `the repository's git configuration has a key that is not UTF-8 (${JSON.stringify(keyBytes.toString("latin1"))}), which cannot be overridden from the environment`
+      };
+    }
+    let value = null;
+    if (lf >= 0) {
+      try {
+        value = STRICT_UTF8.decode(kv.subarray(lf + 1));
+      } catch {
+        value = null;
+      }
+    }
+    entries2.push({ scope: scopeBytes.toString("utf8"), key, value });
+  }
+  return { entries: entries2 };
+}
+var FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process)$/;
+var CREDENTIAL_HELPER = /^credential\.(?:.+\.)?helper$/;
+var STATIC_KEYS = /* @__PURE__ */ new Set(["core.fsmonitor", "core.hookspath", "core.pager", "core.editor", "sequence.editor"]);
+function neutralValue(key, env) {
+  if (FILTER_KEY.test(key)) return "";
+  if (/^diff\..+\.textconv$/.test(key)) return "cat";
+  if (key === "core.sshcommand") {
+    const gitSsh = envValue(env, "GIT_SSH");
+    return gitSsh !== void 0 && gitSsh !== "" ? shellQuote(gitSsh) : "ssh";
+  }
+  if (key === "gpg.program" || key === "gpg.openpgp.program") return "gpg";
+  if (key === "gpg.x509.program") return "gpgsm";
+  if (key === "gpg.ssh.program") return "ssh-keygen";
+  return "";
+}
+function shellQuote(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function neutraliseListing(entries2, env) {
+  const trusted = entries2.filter((e) => TRUSTED_SCOPES.has(e.scope));
+  const untrusted = entries2.filter((e) => !TRUSTED_SCOPES.has(e.scope) && e.key !== PROBE_KEY);
+  const probeSeen = entries2.some((e) => e.scope === "command" && e.key === PROBE_KEY);
+  const config2 = [];
+  const vars = {};
+  const notApplied = /* @__PURE__ */ new Set();
+  const drivers = /* @__PURE__ */ new Set();
+  let credentials = false;
+  const trustedValue = (key) => {
+    let v = null;
+    for (const e of trusted) if (e.key === key) v = e.value;
+    return v;
+  };
+  for (const { key } of untrusted) {
+    notApplied.add(key);
+    if (STATIC_KEYS.has(key) || /^pager\./.test(key)) continue;
+    if (CREDENTIAL_HELPER.test(key)) {
+      credentials = true;
+      continue;
+    }
+    if (key === "core.gitproxy") {
+      if (envValue(env, "GIT_PROXY_COMMAND") === void 0) vars["GIT_PROXY_COMMAND"] = "";
+      continue;
+    }
+    if (/^remote\..+\.(uploadpack|receivepack)$/.test(key)) {
+      if (key.endsWith(".uploadpack")) vars["GIT_NO_LAZY_FETCH"] = "1";
+      continue;
+    }
+    const mine = trustedValue(key);
+    const value = mine ?? neutralValue(key, env);
+    config2.push([key, value]);
+    const filter = FILTER_KEY.exec(key);
+    if (filter?.[1] !== void 0 && mine === null) drivers.add(filter[1]);
+  }
+  for (const driver of drivers) config2.push([`filter.${driver}.required`, "false"]);
+  if (credentials) {
+    config2.push(["credential.helper", ""]);
+    for (const e of trusted) {
+      if (CREDENTIAL_HELPER.test(e.key) && e.value !== null) config2.push([e.key, e.value]);
+    }
+  }
+  return { config: config2, vars, notApplied: [...notApplied].sort(), probeSeen };
+}
+function probeArgs(dir) {
+  return ["-c", "safe.directory=*", "-C", dir, "config", "--includes", "--show-scope", "-z", "--get-regexp", COMMAND_KEYS_REGEX];
+}
+function probeEnv(base, platform2) {
+  const env = { ...base };
+  for (const name of Object.keys(env)) if (sameName(name, "GIT_CONFIG", platform2)) delete env[name];
+  const stat3 = staticGitSafety(platform2);
+  return applyGitSafety({ ...stat3, config: [...stat3.config, [PROBE_KEY, "1"]] }, env, platform2);
+}
+function countProblem(env, platform2) {
+  const raw = envValue(env, "GIT_CONFIG_COUNT", platform2) ?? "";
+  const t = raw.trim();
+  if (t === "" || /^\+?\d+$/.test(t)) return null;
+  return `GIT_CONFIG_COUNT in the environment is ${JSON.stringify(raw)}, not a number, and git refuses to run with it`;
+}
+var GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth/i;
+function interpretExit(status, stdout, stderr, dir) {
+  if (status === 0) return { kind: "listing", bytes: stdout };
+  if (status === 1) return { kind: "listing", bytes: Buffer.alloc(0) };
+  if (status === 3) return { kind: "none" };
+  if (status === 128 && GIT_CANNOT_READ.test(stderr)) return { kind: "none" };
+  return {
+    kind: "refused",
+    message: `could not read the git configuration of ${dir}: git config exited ${status ?? "on a signal"}${firstLine(stderr) !== "" ? ` (${firstLine(stderr)})` : ""}`
+  };
+}
+function combine(probes, env, platform2) {
+  const base = staticGitSafety(platform2);
+  const config2 = [...base.config];
+  const vars = { ...base.vars };
+  const notApplied = /* @__PURE__ */ new Set();
+  const refusals = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const { dir, probe: probe2 } of probes) {
+    if (probe2.kind === "refused") refusals.push(probe2.message);
+    if (probe2.kind !== "listing") continue;
+    const parsed = parseConfigListing(probe2.bytes);
+    if ("refused" in parsed) {
+      refusals.push(`${parsed.refused} (${dir})`);
+      continue;
+    }
+    const n2 = neutraliseListing(parsed.entries, env);
+    if (!n2.probeSeen) {
+      refusals.push(
+        "the git on PATH does not take configuration from the environment (GIT_CONFIG_COUNT needs git 2.31 or later), so a scanned repository's own git configuration could not be kept from running commands"
+      );
+      continue;
+    }
+    if (n2.notApplied.length > MAX_REPOSITORY_KEYS) {
+      refusals.push(`the git configuration of ${dir} names ${n2.notApplied.length} commands, more than ${MAX_REPOSITORY_KEYS}`);
+      continue;
+    }
+    for (const pair of n2.config) {
+      const id = `${pair[0]}\0${pair[1]}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      config2.push(pair);
+    }
+    Object.assign(vars, n2.vars);
+    for (const k of n2.notApplied) notApplied.add(k);
+  }
+  return {
+    config: config2,
+    vars,
+    notApplied: [...notApplied].sort(),
+    refused: refusals.length > 0 ? [...new Set(refusals)].join("; ") : null
+  };
+}
+async function gitSafetyFor(dirs, opts = {}) {
+  const platform2 = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const problem = countProblem(env, platform2);
+  if (problem !== null) return { ...staticGitSafety(platform2), refused: problem };
+  const penv = probeEnv(env, platform2);
+  const unique4 = [...new Set(dirs)];
+  const probes = await Promise.all(
+    unique4.map(async (dir) => ({ dir, probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS) }))
+  );
+  return combine(probes, env, platform2);
+}
+function gitSafetyForSync(dirs, opts = {}) {
+  const platform2 = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const problem = countProblem(env, platform2);
+  if (problem !== null) return { ...staticGitSafety(platform2), refused: problem };
+  const penv = probeEnv(env, platform2);
+  const probes = [...new Set(dirs)].map((dir) => ({
+    dir,
+    probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS)
+  }));
+  return combine(probes, env, platform2);
+}
+var PROBE_REUSE_MS = 2e3;
+var PROBE_CACHE_MAX = 64;
+var probeCache = /* @__PURE__ */ new Map();
+function probeCacheKey(git2, dir, env) {
+  const relevant = Object.keys(env).filter((k) => /^(GIT_|HOME$|USERPROFILE$|XDG_CONFIG_HOME$|PATH$|PROGRAMDATA$|APPDATA$)/i.test(k)).sort().map((k) => `${k}=${env[k] ?? ""}`);
+  return JSON.stringify([git2, dir, relevant]);
+}
+function cachedProbe(key) {
+  const hit = probeCache.get(key);
+  if (hit === void 0) return null;
+  if (Date.now() - hit.at > PROBE_REUSE_MS) {
+    probeCache.delete(key);
+    return null;
+  }
+  return hit.probe;
+}
+function rememberProbe(key, probe2) {
+  if (probe2.kind === "refused") return probe2;
+  if (probeCache.size >= PROBE_CACHE_MAX) probeCache.clear();
+  probeCache.set(key, { at: Date.now(), probe: probe2 });
+  return probe2;
+}
+function probeSync(git2, dir, env, timeoutMs) {
+  const key = probeCacheKey(git2, dir, env);
+  return cachedProbe(key) ?? rememberProbe(key, probeSyncUncached(git2, dir, env, timeoutMs));
+}
+async function probeAsync(git2, dir, env, timeoutMs) {
+  const key = probeCacheKey(git2, dir, env);
+  return cachedProbe(key) ?? rememberProbe(key, await probeAsyncUncached(git2, dir, env, timeoutMs));
+}
+function probeSyncUncached(git2, dir, env, timeoutMs) {
+  const r = spawnSync2(git2, probeArgs(dir), {
+    env,
+    timeout: timeoutMs,
+    maxBuffer: PROBE_MAX_BYTES,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (r.error !== void 0) return probeError(r.error, dir, timeoutMs);
+  return interpretExit(r.status, Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.alloc(0), String(r.stderr ?? ""), dir);
+}
+async function probeAsyncUncached(git2, dir, env, timeoutMs) {
+  const r = await collect(git2, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
+  if (r.error !== void 0) return probeError(r.error, dir, timeoutMs);
+  return interpretExit(r.status, r.stdout, r.stderr.toString("utf8"), dir);
+}
+function probeError(error2, dir, timeoutMs) {
+  if (error2.code === "ENOENT") return { kind: "none" };
+  if (error2.code === "ETIMEDOUT") {
+    return { kind: "refused", message: `reading the git configuration of ${dir} took longer than ${timeoutMs} ms` };
+  }
+  if (error2.code === "ENOBUFS") {
+    return { kind: "refused", message: `the git configuration of ${dir} is larger than ${PROBE_MAX_BYTES} bytes of command settings` };
+  }
+  return { kind: "refused", message: `could not read the git configuration of ${dir}: ${error2.message}` };
+}
+function applyGitSafety(safety, base, platform2 = process.platform) {
+  const env = { ...base };
+  for (const [name, value] of Object.entries(safety.vars)) setVar(env, name, value, platform2);
+  if (countProblem(env, platform2) !== null) return env;
+  const countName = Object.keys(env).find((name) => sameName(name, "GIT_CONFIG_COUNT", platform2));
+  const trimmed = (countName === void 0 ? "" : env[countName] ?? "").trim();
+  let n2 = trimmed === "" ? 0 : Number(trimmed);
+  for (const [key, value] of safety.config) {
+    setVar(env, `GIT_CONFIG_KEY_${n2}`, key, platform2);
+    setVar(env, `GIT_CONFIG_VALUE_${n2}`, value, platform2);
+    n2 += 1;
+  }
+  setVar(env, countName ?? "GIT_CONFIG_COUNT", String(n2), platform2);
+  return env;
+}
+function dockerGitEnvArgs(safety) {
+  const hooks = noHooksPath("linux");
+  const config2 = safety.config.map(([k, v]) => k === "core.hooksPath" ? [k, hooks] : [k, v]);
+  const args = [];
+  config2.forEach(([k, v], i2) => {
+    args.push("-e", `GIT_CONFIG_KEY_${i2}=${k}`, "-e", `GIT_CONFIG_VALUE_${i2}=${v}`);
+  });
+  args.push("-e", `GIT_CONFIG_COUNT=${config2.length}`);
+  for (const [name, value] of Object.entries(safety.vars)) args.push("-e", `${name}=${value}`);
+  return args;
+}
+function localReceivePackCommand(safety) {
+  const words = [GIT_COMMAND];
+  for (const [key, value] of safety.config) {
+    if (key.includes("=")) return null;
+    words.push("-c", shellQuote(`${key}=${value}`));
+  }
+  words.push("receive-pack");
+  return words.join(" ");
+}
+function describeNotApplied(keys) {
+  if (keys.length === 0) return null;
+  const shown = keys.slice(0, 6).join(", ");
+  const more = keys.length > 6 ? ` and ${keys.length - 6} more` : "";
+  return `the repository's own git configuration was not applied for ${shown}${more} \u2014 dev-guardian never runs a command a scanned repository configures (files were read as stored in git)`;
+}
+var DEFAULT_MAX_BUFFER = 1e8;
+var DEFAULT_TIMEOUT_MS = 6e4;
+async function execGit(dir, args, opts = {}) {
+  const r = await execGitBuffer(dir, args, opts);
+  return { ...r, stdout: r.stdout.toString("utf8") };
+}
+async function execGitBuffer(dir, args, opts = {}) {
+  const safety = await gitSafetyFor([dir, ...opts.alsoRepos ?? []], opts);
+  if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
+  const r = await collect(opts.git ?? GIT_COMMAND, ["-C", dir, ...args], {
+    env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
+    timeoutMs,
+    maxBuffer
+  });
+  return {
+    status: r.error === void 0 ? r.status : null,
+    stdout: r.stdout,
+    stderr: r.stderr.toString("utf8"),
+    failure: r.error === void 0 ? null : execFailure(r.error, timeoutMs, maxBuffer),
+    notApplied: safety.notApplied
+  };
+}
+function execGitSync(dir, args, opts = {}) {
+  const safety = gitSafetyForSync([dir, ...opts.alsoRepos ?? []], opts);
+  if (safety.refused !== null) return refusedResult(safety, "");
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
+  const r = spawnSync2(opts.git ?? GIT_COMMAND, ["-C", dir, ...args], {
+    env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
+    encoding: "utf8",
+    timeout: timeoutMs,
+    maxBuffer,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  return {
+    status: r.error === void 0 ? r.status : null,
+    stdout: typeof r.stdout === "string" ? r.stdout : "",
+    stderr: typeof r.stderr === "string" ? r.stderr : "",
+    failure: r.error === void 0 ? null : execFailure(r.error, timeoutMs, maxBuffer),
+    notApplied: safety.notApplied
+  };
+}
+function refusedResult(safety, empty) {
+  const message3 = `dev-guardian did not run git: ${safety.refused ?? ""}`;
+  return { status: null, stdout: empty, stderr: message3, failure: { code: "refused", message: message3 }, notApplied: safety.notApplied };
+}
+function execFailure(error2, timeoutMs, maxBuffer) {
+  if (error2.code === "ENOENT") return { code: "not-found", message: "git is not installed" };
+  if (error2.code === "ETIMEDOUT") return { code: "timeout", message: `git took longer than ${timeoutMs} ms` };
+  if (error2.code === "ENOBUFS") return { code: "too-large", message: `git printed more than ${maxBuffer} bytes` };
+  return { code: "spawn", message: `git failed to run (${error2.code ?? error2.message})` };
+}
+function collect(command, args, opts) {
+  return new Promise((resolveRun) => {
+    let settled = false;
+    const out = [];
+    const err = [];
+    let outBytes = 0;
+    let errBytes = 0;
+    let error2;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error2 !== void 0 ? { error: error2 } : {} });
+    };
+    const fail4 = (code, message3) => {
+      if (error2 === void 0) error2 = Object.assign(new Error(message3), { code });
+      child.kill("SIGKILL");
+    };
+    const child = spawn2(command, args, { env: opts.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const timer = setTimeout(() => fail4("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      outBytes += chunk.length;
+      if (outBytes > opts.maxBuffer) fail4("ENOBUFS", "stdout maxBuffer exceeded");
+      else out.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      errBytes += chunk.length;
+      if (errBytes <= 1024 * 1024) err.push(chunk);
+    });
+    child.on("error", (e) => {
+      error2 ??= e;
+      finish(null);
+    });
+    child.on("close", (code) => finish(code));
+  });
+}
+function setVar(env, name, value, platform2) {
+  for (const other of Object.keys(env)) if (other !== name && sameName(other, name, platform2)) delete env[other];
+  env[name] = value;
+}
+function envValue(env, name, platform2 = process.platform) {
+  for (const key of Object.keys(env)) if (sameName(key, name, platform2)) return env[key];
+  return void 0;
+}
+function sameName(a2, b, platform2) {
+  return platform2 === "win32" ? a2.toUpperCase() === b.toUpperCase() : a2 === b;
+}
+function firstLine(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+}
 
 // src/storage/dbRegistry.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
@@ -38676,21 +39112,15 @@ var GIT_TIMEOUT_MS = 3e3;
 var DATABASE_FILES = ["guardian.db", "guardian.db-wal", "guardian.db-shm", "guardian.db-journal"];
 var TRACKED_FILE = /^\.guardian\/guardian\.db(?:-wal|-shm|-journal)?$/i;
 function gitIndexAt(projectPath, opts = {}) {
-  const r = spawnSync2(
-    opts.git ?? "git",
-    ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ":(icase).guardian"],
-    {
-      cwd: projectPath,
-      encoding: "utf8",
-      timeout: opts.timeoutMs ?? GIT_TIMEOUT_MS,
-      windowsHide: true,
-      env: gitEnvironment(),
-      maxBuffer: 4 * 1024 * 1024
-    }
-  );
-  if (r.error !== void 0) {
-    const code = r.error.code;
-    const detail = code === "ENOENT" ? "git is not installed" : code === "ETIMEDOUT" ? `git took longer than ${opts.timeoutMs ?? GIT_TIMEOUT_MS} ms` : `git failed to run (${code ?? r.error.message})`;
+  const timeoutMs = opts.timeoutMs ?? GIT_TIMEOUT_MS;
+  const r = execGitSync(projectPath, ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ":(icase).guardian"], {
+    timeoutMs,
+    env: gitEnvironment(),
+    maxBuffer: 4 * 1024 * 1024,
+    ...opts.git !== void 0 ? { git: opts.git } : {}
+  });
+  if (r.failure !== null) {
+    const detail = r.failure.code === "not-found" ? "git is not installed" : r.failure.code === "timeout" ? `git took longer than ${timeoutMs} ms` : r.failure.message;
     return { state: "unavailable", tracked: [], gitlink: false, detail };
   }
   const stderr = typeof r.stderr === "string" ? r.stderr : "";
@@ -42211,7 +42641,6 @@ import { readdirSync as readdirSync6 } from "node:fs";
 import { join as join13 } from "node:path";
 
 // src/treeHash/computeTreeHash.ts
-init_execa();
 import { createHash as createHash5 } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { join as join12, relative as relative5, resolve as resolve9, sep as sep4 } from "node:path";
@@ -42249,23 +42678,17 @@ async function computeTreeHash(projectPath, options = {}) {
 var TOOL_OUTPUT_DIR = ".guardian";
 async function tryGitListFiles(root) {
   const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
-  try {
-    const result = await execa(
-      "git",
-      ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", ...excludes],
-      { reject: false, timeout: 3e4 }
-    );
-    if (result.exitCode !== 0) return null;
-    const files = /* @__PURE__ */ new Set();
-    for (const entry of result.stdout.split("\0")) {
-      if (entry.length === 0) continue;
-      if (entry.split("/").includes(TOOL_OUTPUT_DIR)) continue;
-      files.add(entry);
-    }
-    return [...files];
-  } catch {
-    return null;
+  const result = await execGit(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", ...excludes], {
+    timeoutMs: 3e4
+  });
+  if (result.failure !== null || result.status !== 0) return null;
+  const files = /* @__PURE__ */ new Set();
+  for (const entry of result.stdout.split("\0")) {
+    if (entry.length === 0) continue;
+    if (entry.split("/").includes(TOOL_OUTPUT_DIR)) continue;
+    files.add(entry);
   }
+  return [...files];
 }
 async function walkFiles(root) {
   const out = [];
@@ -43502,8 +43925,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine6 = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine6 && firstLine6.length > 0 ? firstLine6 : null;
+    const firstLine7 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine7 && firstLine7.length > 0 ? firstLine7 : null;
   } catch {
     return null;
   }
@@ -43633,10 +44056,11 @@ async function taskkillTree(roots) {
 var FIVE_MB = 5 * 1024 * 1024;
 var KILL_GRACE_MS = 5e3;
 var PIPE_ABANDON_MS = 1e3;
-var DEFAULT_TIMEOUT_MS = 10 * 60 * 1e3;
+var DEFAULT_TIMEOUT_MS2 = 10 * 60 * 1e3;
 var MAX_TIMER_MS = 2147483647;
 async function runProcess(options) {
-  const timeoutMs = options.timeoutMs ?? (Number(process.env["GUARDIAN_SCAN_TIMEOUT_MS"]) || DEFAULT_TIMEOUT_MS);
+  const started = Date.now();
+  const timeoutMs = options.timeoutMs ?? (Number(process.env["GUARDIAN_SCAN_TIMEOUT_MS"]) || DEFAULT_TIMEOUT_MS2);
   const cap = options.stdoutCapBytes ?? FIVE_MB;
   const posixGroup = process.platform !== "win32";
   const treeToken = posixGroup ? null : randomUUID();
@@ -43644,13 +44068,30 @@ async function runProcess(options) {
   let stderrBuf = "";
   let truncated = false;
   let outcome = "completed";
+  let env = options.env;
+  let extendEnv = options.extendEnv ?? true;
+  let gitNotApplied = [];
+  if (options.gitHardening !== false) {
+    const base = extendEnv ? { ...process.env, ...options.env ?? {} } : { ...options.env ?? {} };
+    const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: base });
+    const safety = options.gitHardening === "except-hooks-path" ? withoutHooksPath(full) : full;
+    if (safety.refused !== null) {
+      return {
+        outcome: "failed",
+        exitCode: null,
+        stdout: "",
+        stderr: `dev-guardian did not run ${basename(options.command)}: ${safety.refused}`,
+        truncated: false
+      };
+    }
+    env = applyGitSafety(safety, base);
+    extendEnv = false;
+    gitNotApplied = safety.notApplied;
+  }
   const child = execa(options.command, options.args ?? [], {
     cwd: options.cwd,
-    env: envFor(options.command, options.env, treeToken),
-    // `?? true` restates execa's own default explicitly rather than relying
-    // on `undefined` meaning it, so the merge behaviour is visible here
-    // instead of only in execa's docs.
-    extendEnv: options.extendEnv ?? true,
+    env: envFor(options.command, env, treeToken),
+    extendEnv,
     shell: false,
     encoding: "utf8",
     // Own process group on POSIX, so `killTree` can signal the whole group.
@@ -43701,7 +44142,8 @@ async function runProcess(options) {
         if (outcome === "completed") outcome = "timed_out";
         stopTree();
       },
-      Math.min(timeoutMs, MAX_TIMER_MS)
+      // What is left of the budget after the configuration read (at least 1 ms).
+      Math.min(Math.max(1, timeoutMs - (Date.now() - started)), MAX_TIMER_MS)
     );
   }
   let abortListener = null;
@@ -43730,7 +44172,8 @@ async function runProcess(options) {
     exitCode: result.exitCode ?? null,
     stdout: stdoutBuf,
     stderr: stderrBuf,
-    truncated
+    truncated,
+    ...gitNotApplied.length > 0 ? { gitNotApplied } : {}
   };
 }
 function envFor(command, env, treeToken) {
@@ -43803,7 +44246,7 @@ function signalGroup(pid, signal) {
 }
 
 // src/runners/toolProbe.ts
-var PROBE_TIMEOUT_MS = 3e4;
+var PROBE_TIMEOUT_MS2 = 3e4;
 function extractVersion(text2) {
   const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text2);
   if (line?.[1] !== void 0) return line[1];
@@ -43827,16 +44270,16 @@ async function runVersionProbe(probe2, cwd) {
     cwd,
     // Merged over the server's own environment (runProcess extends it).
     ...probe2.env !== void 0 ? { env: { ...probe2.env } } : {},
-    timeoutMs: PROBE_TIMEOUT_MS,
+    timeoutMs: PROBE_TIMEOUT_MS2,
     stdoutCapBytes: 256 * 1024
   });
   if (r.outcome === "timed_out") {
-    return { installed: false, version: "", error: `version probe timed out after ${PROBE_TIMEOUT_MS / 1e3} s` };
+    return { installed: false, version: "", error: `version probe timed out after ${PROBE_TIMEOUT_MS2 / 1e3} s` };
   }
   if (r.outcome !== "completed") {
     const onPath = await resolveBinary(probe2.command);
     if (!onPath) return { installed: false, version: "" };
-    const why = firstLine(r.stderr) ?? firstLine(r.stdout) ?? r.outcome;
+    const why = firstLine2(r.stderr) ?? firstLine2(r.stdout) ?? r.outcome;
     let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
     if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
       error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
@@ -43849,9 +44292,9 @@ ${r.stderr}`;
     const sdk = highestDotnetSdk(r.stdout);
     return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
   }
-  return { installed: true, version: extractVersion(text2) ?? (firstLine(text2) ?? "").slice(0, 80) };
+  return { installed: true, version: extractVersion(text2) ?? (firstLine2(text2) ?? "").slice(0, 80) };
 }
-function firstLine(text2) {
+function firstLine2(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 
@@ -43860,7 +44303,6 @@ import { readdirSync as readdirSync9, readFileSync as readFileSync8, statSync as
 import { join as join17 } from "node:path";
 
 // src/runners/git.ts
-init_execa();
 import { createHash as createHash6 } from "node:crypto";
 import { existsSync as existsSync10, mkdtempSync, readdirSync as readdirSync8, readFileSync as readFileSync7, rmSync as rmSync3 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43868,22 +44310,11 @@ import { isAbsolute as isAbsolute7, join as join16 } from "node:path";
 var GIT_TIMEOUT_MS2 = 6e4;
 var CHECKOUT_TIMEOUT_MS = 10 * 6e4;
 async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
-  try {
-    const r = await execa("git", ["-C", cwd, ...args], {
-      reject: false,
-      timeout: timeoutMs,
-      encoding: "utf8",
-      stripFinalNewline: false
-    });
-    if (r.exitCode === void 0) return { exitCode: 127, stdout: "", stderr: "git could not be run" };
-    return {
-      exitCode: r.exitCode,
-      stdout: typeof r.stdout === "string" ? r.stdout : "",
-      stderr: typeof r.stderr === "string" ? r.stderr : ""
-    };
-  } catch (e) {
-    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
-  }
+  const r = await execGit(cwd, args, { timeoutMs });
+  const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
+  if (r.failure?.code === "refused") return { exitCode: 126, stdout: "", stderr: r.stderr, ...notApplied };
+  if (r.status === null) return { exitCode: 127, stdout: "", stderr: r.failure?.message ?? "git could not be run", ...notApplied };
+  return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 function splitNul(text2) {
   return text2.split("\0").filter((s) => s.length > 0);
@@ -43892,7 +44323,7 @@ async function repoState(cwd) {
   const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
   if (top.exitCode !== 0) {
     if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
-    return { kind: "error", message: firstLine2(top.stderr) || `git exited ${top.exitCode}` };
+    return { kind: "error", message: firstLine3(top.stderr) || `git exited ${top.exitCode}` };
   }
   const toplevel = top.stdout.trim();
   const head2 = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
@@ -43962,7 +44393,7 @@ async function changedFiles(cwd, base, head2) {
     "--"
   ]);
   if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base}...${head2} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+    throw new Error(`git diff ${base}...${head2} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
   }
   return splitNul(r.stdout);
 }
@@ -43970,7 +44401,7 @@ async function countCommits(cwd, range) {
   const r = await git(cwd, ["rev-list", "--count", range, "--"]);
   const n2 = Number(r.stdout.trim());
   if (r.exitCode !== 0 || !Number.isInteger(n2)) {
-    throw new Error(`git rev-list --count ${range} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+    throw new Error(`git rev-list --count ${range} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
   }
   return n2;
 }
@@ -43978,11 +44409,11 @@ async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
   const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
   const untracked2 = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
   if (untracked2.exitCode !== 0) {
-    throw new Error(`git ls-files failed: ${firstLine2(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
+    throw new Error(`git ls-files failed: ${firstLine3(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
   }
   const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
   if (tracked.exitCode !== 0) {
-    throw new Error(`git failed listing changed files: ${firstLine2(tracked.stderr) || `exit ${tracked.exitCode}`}`);
+    throw new Error(`git failed listing changed files: ${firstLine3(tracked.stderr) || `exit ${tracked.exitCode}`}`);
   }
   return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked2.stdout)])];
 }
@@ -43990,23 +44421,29 @@ async function historyState(cwd) {
   const head2 = await resolveCommit(cwd, "HEAD");
   if (head2 === null) return {};
   const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
-  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine2(refs.stderr)}`);
+  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine3(refs.stderr)}`);
   return { head: head2, refs: createHash6("sha256").update(refs.stdout).digest("hex") };
 }
 async function showPrefix(cwd) {
   const r = await git(cwd, ["rev-parse", "--show-prefix"]);
-  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine2(r.stderr)}`);
+  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine3(r.stderr)}`);
   return r.stdout.trim();
 }
 async function materialiseCommit(cwd, sha) {
   const holder = mkdtempSync(join16(tmpdir(), "guardian-review-"));
   const root = join16(holder, "head");
   const noHooks = join16(holder, "no-hooks");
-  const r = await git(cwd, ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--quiet", root, sha], CHECKOUT_TIMEOUT_MS);
+  const add = await git(
+    cwd,
+    ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--no-checkout", "--quiet", root, sha],
+    CHECKOUT_TIMEOUT_MS
+  );
+  const r = add.exitCode === 0 ? await git(root, ["reset", "--hard", "--quiet"], CHECKOUT_TIMEOUT_MS) : add;
+  const notApplied = [.../* @__PURE__ */ new Set([...add.notApplied ?? [], ...r === add ? [] : r.notApplied ?? []])].sort();
   const remove = async () => {
     const problems = [];
     const rm = await git(cwd, ["worktree", "remove", "--force", root]);
-    if (rm.exitCode !== 0 && existsSync10(root)) problems.push(firstLine2(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
+    if (rm.exitCode !== 0 && existsSync10(root)) problems.push(firstLine3(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
     try {
       rmSync3(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch (e) {
@@ -44017,11 +44454,12 @@ async function materialiseCommit(cwd, sha) {
   };
   if (r.exitCode !== 0) {
     await remove();
-    throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+    const step = r === add ? "git worktree add" : "git reset --hard (the checkout)";
+    throw new Error(`${step} ${sha.slice(0, 12)} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
   }
-  return { root, remove };
+  return { root, remove, notApplied };
 }
-function firstLine2(text2) {
+function firstLine3(text2) {
   return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 
@@ -48441,7 +48879,7 @@ function skippedFor(skipped2, languages) {
   const kept = Object.entries(skipped2).filter(([lang]) => !languages.includes(lang));
   return kept.length > 0 ? Object.fromEntries(kept) : void 0;
 }
-function combine(snapshot, files) {
+function combine2(snapshot, files) {
   const how = files.listing === "git" ? "file extensions (git's listing)" : "file extensions (a walk of the directory)";
   if (files.languages === null) {
     if (snapshot === null) return { languages: null, source: "could not be determined (the project directory could not be read)" };
@@ -48475,7 +48913,7 @@ function combine(snapshot, files) {
   return out;
 }
 async function resolveProjectLanguagesAsync(stack, projectPath, opts = {}) {
-  return combine(readSnapshot(stack, projectPath), await languagesFromFilesAsync(opts.walkRoot ?? projectPath, opts.walk));
+  return combine2(readSnapshot(stack, projectPath), await languagesFromFilesAsync(opts.walkRoot ?? projectPath, opts.walk));
 }
 var PROJECT_LANGUAGES_META_KEY = "project_languages";
 function readPeripheral(raw) {
@@ -49262,7 +49700,7 @@ var Semaphore = class {
       this.active += 1;
       return;
     }
-    await new Promise((resolve30) => this.waiting.push(resolve30));
+    await new Promise((resolve31) => this.waiting.push(resolve31));
     this.active += 1;
   }
   release() {
@@ -49423,35 +49861,21 @@ function surfaceCacheKey(parts) {
 }
 
 // src/tools/gitState.ts
-init_execa();
 async function workingTreeState(projectPath) {
-  try {
-    const result = await execa("git", ["-C", projectPath, "status", "--porcelain"], {
-      reject: false,
-      timeout: 1e4
-    });
-    if (result.exitCode !== 0) {
-      const line = firstLine3(result.stderr) ?? `git status exited ${String(result.exitCode)}`;
-      return { state: "unknown", reason: line };
-    }
-    const changed = result.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
-    return changed === 0 ? { state: "clean" } : { state: "dirty", changed };
-  } catch (e) {
-    return { state: "unknown", reason: e instanceof Error ? e.message : String(e) };
+  const result = await execGit(projectPath, ["status", "--porcelain"], { timeoutMs: 1e4 });
+  if (result.failure !== null) return { state: "unknown", reason: result.failure.message };
+  if (result.status !== 0) {
+    const line = firstLine4(result.stderr) ?? `git status exited ${String(result.status)}`;
+    return { state: "unknown", reason: line };
   }
+  const changed = result.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+  return changed === 0 ? { state: "clean" } : { state: "dirty", changed };
 }
 async function isGitRepo(projectPath) {
-  try {
-    const result = await execa("git", ["-C", projectPath, "rev-parse", "--is-inside-work-tree"], {
-      reject: false,
-      timeout: 5e3
-    });
-    return result.exitCode === 0 && result.stdout.trim() === "true";
-  } catch {
-    return false;
-  }
+  const result = await execGit(projectPath, ["rev-parse", "--is-inside-work-tree"], { timeoutMs: 5e3 });
+  return result.status === 0 && result.stdout.trim() === "true";
 }
-function firstLine3(text2) {
+function firstLine4(text2) {
   for (const line of text2.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length > 0) return trimmed;
@@ -50205,11 +50629,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine6 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine6)?.[1] ?? "restore_failed";
+  const firstLine7 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine7)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine6.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine7.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message3 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message3})` };
 }
@@ -50673,6 +51097,7 @@ function buildSemgrepDockerArgs(opts) {
     `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
     ...(opts.readOnlyMounts ?? []).flatMap((m) => ["--mount", `type=bind,source=${m.source},target=${m.target},readonly`]),
     ...Object.entries(SEMGREP_NO_VERSION_CHECK_ENV).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
+    ...dockerGitEnvArgs(opts.git ?? staticGitSafety("linux")),
     "-w",
     CONTAINER_PROJECT_ROOT,
     image,
@@ -50808,8 +51233,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message3, checkId) {
   if (message3 && message3.length > 0) {
-    const firstLine6 = message3.split(/\r?\n/)[0] ?? message3;
-    return firstLine6.length > 140 ? firstLine6.slice(0, 137) + "\u2026" : firstLine6;
+    const firstLine7 = message3.split(/\r?\n/)[0] ?? message3;
+    return firstLine7.length > 140 ? firstLine7.slice(0, 137) + "\u2026" : firstLine7;
   }
   return checkId;
 }
@@ -51018,7 +51443,8 @@ async function runSemgrep2(args) {
       image,
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
-      ...packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}
+      ...packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {},
+      git: await gitSafetyFor([ctx.projectPath])
     }),
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,
@@ -52036,6 +52462,8 @@ async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix
     reasons.push(truncation);
     result.missing_tools.push(GITLEAKS_HISTORY);
   }
+  const notApplied = describeNotApplied(run.gitNotApplied ?? []);
+  if (notApplied !== null) reasons.push(notApplied);
   result.tools_run.push({
     name: GITLEAKS_HISTORY,
     status: problems.length === 0 ? "ok" : "failed",
@@ -52661,7 +53089,7 @@ function providerHost(p) {
 }
 
 // src/secrets/verify/verify.ts
-var DEFAULT_TIMEOUT_MS2 = 5e3;
+var DEFAULT_TIMEOUT_MS3 = 5e3;
 var DEFAULT_MAX_SECRETS = 50;
 var MAX_IN_FLIGHT = 4;
 var MAX_BODY_BYTES = 64 * 1024;
@@ -52728,7 +53156,7 @@ async function checkOne(provider, secret, opts) {
   if (opts.signal?.aborted === true) return notSent(provider, "not verified: the scan was cancelled");
   const fetchImpl = opts.fetchImpl ?? (typeof globalThis.fetch === "function" ? globalThis.fetch : void 0);
   if (fetchImpl === void 0) return notSent(provider, "not verified: no fetch implementation in this runtime");
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS2;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS3;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal !== void 0 ? AbortSignal.any([opts.signal, timeout]) : timeout;
   const base = { provider: provider.name, host, sent: true, rotate: provider.rotate };
@@ -56260,7 +56688,7 @@ function record3(out, name, run, okExitCodes, report, reportOk, parser, gaps = [
   if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
     problems.push(`did not finish (${run.outcome})`);
   } else if (run.exitCode === null || !okExitCodes.includes(run.exitCode)) {
-    problems.push(`exit ${String(run.exitCode)}${firstLine4(run.stderr) ? `: ${firstLine4(run.stderr)}` : ""}`);
+    problems.push(`exit ${String(run.exitCode)}${firstLine5(run.stderr) ? `: ${firstLine5(run.stderr)}` : ""}`);
   }
   if (problems.length === 0 && (report === null || !reportOk(parseInputAsJson(report)))) {
     problems.push("no readable report was written");
@@ -56365,7 +56793,7 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
   const errors = staticcheckErrors(run.stdout);
   const finished8 = run.outcome !== "cancelled" && run.outcome !== "timed_out" && run.outcome !== "output_too_large";
   if (finished8 && run.exitCode !== 0 && entries2 === 0) {
-    const detail = firstLine4(run.stderr);
+    const detail = firstLine5(run.stderr);
     out.tools_run.push({
       name: "staticcheck",
       status: "failed",
@@ -56472,7 +56900,7 @@ async function runJscpdOnFiles(ctx, reportDir, out, files) {
     if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
       problems.push(`${label}did not finish (${run.outcome})`);
     } else if (run.exitCode !== 0 && run.exitCode !== 1) {
-      problems.push(`${label}exit ${String(run.exitCode)}${firstLine4(run.stderr) ? `: ${firstLine4(run.stderr)}` : ""}`);
+      problems.push(`${label}exit ${String(run.exitCode)}${firstLine5(run.stderr) ? `: ${firstLine5(run.stderr)}` : ""}`);
     } else if (report === null || !isObject3(parseInputAsJson(report))) {
       problems.push(`${label}no readable report was written`);
     } else {
@@ -56545,7 +56973,7 @@ function localEslint(projectPath) {
 function isObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function firstLine4(text2) {
+function firstLine5(text2) {
   return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 function qualityCategoryOf(f) {
@@ -56666,6 +57094,8 @@ var reviewPr = makeScanTool({
     }
     const preexisting = preexistingNote(out.preexistingGaps);
     if (preexisting !== null) warnings.push(preexisting);
+    const notApplied = tree === null ? null : describeNotApplied(tree.notApplied);
+    if (notApplied !== null) warnings.push(`Head checkout: ${notApplied}.`);
     return {
       outcome: out.cancelled ? "cancelled" : "completed",
       tools_run: out.tools_run,
@@ -57895,7 +58325,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve30 = (name, ecosystem, file, version2) => {
+  const resolve31 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -57952,7 +58382,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve30(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve31(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -57962,7 +58392,7 @@ function readDependencyEvidence(projectPath) {
     if (n2?.[1]) cargoName = n2[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve30(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve31(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -57970,10 +58400,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve30(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve31(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText4("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve30(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve31(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -57985,7 +58415,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve30(name, "dotnet", relative17(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve31(name, "dotnet", relative17(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -58021,12 +58451,7 @@ function listActiveCves(ctx, projectPath) {
 async function runNpmOutdated(projectPath, cves) {
   const manager = detectNpmPackageManager(projectPath);
   if (manager.name !== "npm") return planForNonNpmManager(projectPath, cves, manager);
-  const result = await execa("npm", ["outdated", "--json"], {
-    ...packageManagerEnvOptions(),
-    cwd: projectPath,
-    reject: false,
-    timeout: 6e4
-  });
+  const result = await execPackageManager("npm", ["outdated", "--json"], { cwd: projectPath, timeout: 6e4 });
   const steps = [];
   const unplanned = [];
   const failures = [];
@@ -58302,10 +58727,8 @@ async function pnpmVersionOf(root) {
     }
   }
   try {
-    const r = await execa("pnpm", ["--version"], {
-      ...packageManagerEnvOptions(),
+    const r = await execPackageManager("pnpm", ["--version"], {
       cwd: root,
-      reject: false,
       timeout: 15e3,
       env: { ...process.env, COREPACK_ENABLE_NETWORK: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" }
     });
@@ -58429,7 +58852,7 @@ function listNodeModulesPackages(projectPath) {
     }
     out.push({ name, version: version2, topLevel });
   };
-  const collect = (dir, topLevel) => {
+  const collect2 = (dir, topLevel) => {
     for (const { name } of listProjectDir(projectPath, dir)) {
       if (name.startsWith(".")) continue;
       if (!isDir(join44(dir, name))) continue;
@@ -58442,9 +58865,9 @@ function listNodeModulesPackages(projectPath) {
       push(dir, name, topLevel);
     }
   };
-  collect(nodeModulesDir, true);
+  collect2(nodeModulesDir, true);
   for (const storeEntry of listProjectDir(projectPath, join44(nodeModulesDir, ".pnpm"))) {
-    collect(join44(nodeModulesDir, ".pnpm", storeEntry.name, "node_modules"), false);
+    collect2(join44(nodeModulesDir, ".pnpm", storeEntry.name, "node_modules"), false);
   }
   return out;
 }
@@ -58476,6 +58899,13 @@ function buildOverrideStep(input) {
     // do not reflect the override until a plain reinstall re-resolves them.
     follow_up_command: "npm install --ignore-scripts"
   };
+}
+async function execPackageManager(command, args, opts) {
+  const pm = packageManagerEnvOptions();
+  const base = opts.env ?? ("env" in pm ? pm.env : { ...process.env });
+  const safety = await gitSafetyFor([opts.cwd], { env: base });
+  if (safety.refused !== null) return { code: "git_config_refused", shortMessage: safety.refused, stdout: "", stderr: "" };
+  return execa(command, args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env: applyGitSafety(safety, base), extendEnv: false });
 }
 function describeExecFailure(label, result, okCodes) {
   if (typeof result.exitCode === "number") {
@@ -58658,12 +59088,7 @@ function parseRunnerJson(ecosystem, label, stdout, failures) {
   }
 }
 async function runComposerOutdated(projectPath, cves) {
-  const result = await execa("composer", ["outdated", "--locked", "--format=json"], {
-    ...packageManagerEnvOptions(),
-    cwd: projectPath,
-    reject: false,
-    timeout: 9e4
-  });
+  const result = await execPackageManager("composer", ["outdated", "--locked", "--format=json"], { cwd: projectPath, timeout: 9e4 });
   const failures = [];
   const exitFailure = describeExecFailure("composer outdated --locked", result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: "composer", ...exitFailure }] };
@@ -58704,12 +59129,7 @@ async function runComposerOutdated(projectPath, cves) {
   return { steps: out, unplanned: [], failures };
 }
 async function runCargoOutdated(projectPath, cves) {
-  const result = await execa("cargo", ["outdated", "--format", "json"], {
-    ...packageManagerEnvOptions(),
-    cwd: projectPath,
-    reject: false,
-    timeout: 9e4
-  });
+  const result = await execPackageManager("cargo", ["outdated", "--format", "json"], { cwd: projectPath, timeout: 9e4 });
   const failures = [];
   const exitFailure = describeExecFailure("cargo outdated (needs cargo-outdated)", result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: "cargo", ...exitFailure }] };
@@ -58743,12 +59163,7 @@ async function runCargoOutdated(projectPath, cves) {
   return { steps: out, unplanned: [], failures };
 }
 async function runGoOutdated(projectPath, cves) {
-  const result = await execa("go", ["list", "-m", "-u", "-json", "all"], {
-    ...packageManagerEnvOptions(),
-    cwd: projectPath,
-    reject: false,
-    timeout: 9e4
-  });
+  const result = await execPackageManager("go", ["list", "-m", "-u", "-json", "all"], { cwd: projectPath, timeout: 9e4 });
   const exitFailure = describeExecFailure("go list -m -u -json all", result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: "go", ...exitFailure }] };
   const out = [];
@@ -58780,12 +59195,7 @@ async function runGoOutdated(projectPath, cves) {
   return { steps: out, unplanned: [] };
 }
 async function runBundlerOutdated(projectPath, cves) {
-  const result = await execa("bundle", ["outdated", "--parseable"], {
-    ...packageManagerEnvOptions(),
-    cwd: projectPath,
-    reject: false,
-    timeout: 9e4
-  });
+  const result = await execPackageManager("bundle", ["outdated", "--parseable"], { cwd: projectPath, timeout: 9e4 });
   const text2 = typeof result.stdout === "string" ? result.stdout : "";
   const out = [];
   for (const line of text2.split(/\r?\n/)) {
@@ -58822,12 +59232,7 @@ async function runDotnetOutdated(projectPath, cves) {
       failures.push({ ecosystem: "dotnet", target: rel2, code: plan.blocked.code, reason: plan.blocked.reason });
       continue;
     }
-    const restore = await execa("dotnet", plan.args, {
-      ...packageManagerEnvOptions(),
-      cwd: projectPath,
-      reject: false,
-      timeout: 5 * 6e4
-    });
+    const restore = await execPackageManager("dotnet", plan.args, { cwd: projectPath, timeout: 5 * 6e4 });
     const created = removeCreatedLockFiles(plan);
     if (created.length > 0) {
       failures.push({
@@ -58839,18 +59244,16 @@ async function runDotnetOutdated(projectPath, cves) {
       continue;
     }
     if (restore.exitCode !== 0) {
-      const execFailure = describeExecFailure("dotnet restore", restore, [0]);
-      const failure = restore.exitCode === void 0 && execFailure ? execFailure : classifyRestoreFailure(
+      const execFailure2 = describeExecFailure("dotnet restore", restore, [0]);
+      const failure = restore.exitCode === void 0 && execFailure2 ? execFailure2 : classifyRestoreFailure(
         typeof restore.stdout === "string" ? restore.stdout : "",
         typeof restore.stderr === "string" ? restore.stderr : ""
       );
       failures.push({ ecosystem: "dotnet", target: rel2, code: failure.code, reason: failure.reason });
       continue;
     }
-    const r = await execa("dotnet", ["list", target, "package", "--outdated", "--format", "json", "--no-restore"], {
-      ...packageManagerEnvOptions(),
+    const r = await execPackageManager("dotnet", ["list", target, "package", "--outdated", "--format", "json", "--no-restore"], {
       cwd: projectPath,
-      reject: false,
       timeout: 9e4
     });
     const listed = typeof r.stdout === "string" ? r.stdout : "";
@@ -58858,10 +59261,8 @@ async function runDotnetOutdated(projectPath, cves) {
       steps.push(...parseDotnetJson(listed, cves));
       continue;
     }
-    const fallback = await execa("dotnet", ["list", target, "package", "--outdated", "--no-restore"], {
-      ...packageManagerEnvOptions(),
+    const fallback = await execPackageManager("dotnet", ["list", target, "package", "--outdated", "--no-restore"], {
       cwd: projectPath,
-      reject: false,
       timeout: 9e4
     });
     const text2 = typeof fallback.stdout === "string" ? fallback.stdout : "";
@@ -64649,12 +65050,12 @@ function recommendation(score, open, cves, hasBaseline) {
 
 // src/intel/kev.ts
 var KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
-var DEFAULT_TIMEOUT_MS3 = 8e3;
+var DEFAULT_TIMEOUT_MS4 = 8e3;
 async function fetchKevCatalog(opts = {}) {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
   if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS3);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -64739,7 +65140,7 @@ function parseStoredCatalog(raw) {
 
 // src/intel/epss.ts
 var EPSS_URL = "https://api.first.org/data/v1/epss";
-var DEFAULT_TIMEOUT_MS4 = 6e3;
+var DEFAULT_TIMEOUT_MS5 = 6e3;
 var CHUNK = 100;
 async function queryEpss(cveIds, opts = {}) {
   const ids2 = [...new Set(cveIds)];
@@ -64758,7 +65159,7 @@ async function queryEpss(cveIds, opts = {}) {
 }
 async function fetchOneBatch(url2, fetchImpl, opts) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS4);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS5);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -65655,7 +66056,8 @@ async function handler19(input, _ctx) {
     command: "pre-commit",
     args: ["install"],
     cwd: projectPath,
-    timeoutMs: 6e4
+    timeoutMs: 6e4,
+    gitHardening: "except-hooks-path"
   });
   if (result.outcome !== "completed") {
     return failDomain15(
@@ -65670,13 +66072,14 @@ async function handler19(input, _ctx) {
       command: "pre-commit",
       args: ["install", "--hook-type", stage],
       cwd: projectPath,
-      timeoutMs: 3e4
+      timeoutMs: 3e4,
+      gitHardening: "except-hooks-path"
     });
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine6 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine6?.trim() ?? r.outcome });
+      const firstLine7 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine7?.trim() ?? r.outcome });
     }
   }
   return {
@@ -67332,7 +67735,7 @@ async function listExistingTags(cwd) {
     timeoutMs: 3e4
   });
   if (r.outcome !== "completed") {
-    return { ok: false, error: firstLine5(r.stderr) ?? `gh exited ${r.outcome}` };
+    return { ok: false, error: firstLine6(r.stderr) ?? `gh exited ${r.outcome}` };
   }
   let parsed;
   try {
@@ -67397,7 +67800,7 @@ async function ensureLabels(cwd, labels) {
   }
   return { applied, omitted: omitted2 };
 }
-function firstLine5(text2) {
+function firstLine6(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 async function createIssue(cwd, title, body, labels) {
@@ -67410,7 +67813,7 @@ async function createIssue(cwd, title, body, labels) {
   }
   return {
     ok: false,
-    error: firstLine5(r.stderr) ?? `gh exited ${r.outcome}`
+    error: firstLine6(r.stderr) ?? `gh exited ${r.outcome}`
   };
 }
 function failDomain18(code, message3) {
@@ -68875,7 +69278,7 @@ var WP_ORG_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
 var TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1e3;
 var WP_ORG_TOOL_NAME = "wp-plugin-api";
 var WP_ORG_URL = "https://api.wordpress.org/plugins/info/1.2/";
-var DEFAULT_TIMEOUT_MS5 = 8e3;
+var DEFAULT_TIMEOUT_MS6 = 8e3;
 var CACHE_KEY_PREFIX = "intel:wporg_plugin:";
 async function checkWpOrgPlugin(storage, slug, opts = {}) {
   const now = opts.now ?? Date.now();
@@ -68947,7 +69350,7 @@ async function fetchWpOrgPluginInfo(slug, opts) {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
   if (fetchImpl === void 0) return { ok: false, reason: "no fetch implementation available" };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS5);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS6);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -71012,7 +71415,7 @@ import { join as join72 } from "node:path";
 
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
-var DEFAULT_TIMEOUT_MS6 = 6e3;
+var DEFAULT_TIMEOUT_MS7 = 6e3;
 var MAX_QUERIES = 200;
 var CHUNK2 = 100;
 async function queryOsv(packages, opts = {}) {
@@ -71065,7 +71468,7 @@ async function queryOsv(packages, opts = {}) {
 }
 async function postJson(url2, body, opts, fetchImpl) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS6);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS7);
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -72258,12 +72661,12 @@ var HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
 var CONTEXT_LINES = 4;
 function citationContext(lines, code) {
   const blockOf = /* @__PURE__ */ new Map();
-  const firstLine6 = /* @__PURE__ */ new Map();
+  const firstLine7 = /* @__PURE__ */ new Map();
   for (const u2 of code) {
     if (u2.block === null) continue;
     blockOf.set(u2.line, u2.block);
-    const first = firstLine6.get(u2.block);
-    if (first === void 0 || u2.line < first) firstLine6.set(u2.block, u2.line);
+    const first = firstLine7.get(u2.block);
+    if (first === void 0 || u2.line < first) firstLine7.set(u2.block, u2.line);
   }
   const lastLine = /* @__PURE__ */ new Map();
   for (const u2 of code) {
@@ -72281,7 +72684,7 @@ function citationContext(lines, code) {
     if (block !== void 0) {
       let yes = announced.get(block);
       if (yes === void 0) {
-        const first = firstLine6.get(block) ?? line;
+        const first = firstLine7.get(block) ?? line;
         const last = lastLine.get(block) ?? line;
         yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first))) && !directsUse(followingParagraph(lines, last - 1, isBlockLine));
         announced.set(block, yes);
@@ -73291,11 +73694,10 @@ function looksLikeGitHost(url2) {
 }
 async function ingestGit(url2) {
   const dir = mkdtempSync6(join71(tmpdir6(), "guardian-scanskill-git-"));
-  try {
-    await execa("git", ["clone", "--depth", "1", "--quiet", "--", url2, dir], { timeout: 12e4 });
-  } catch (e) {
+  const r = await execGit(dir, ["clone", "--depth", "1", "--quiet", "--", url2, dir], { timeoutMs: 12e4 });
+  if (r.failure !== null || r.status !== 0) {
     safeRm(dir);
-    const msg = e instanceof Error ? e.message : "git clone failed";
+    const msg = r.failure?.message ?? (r.stderr.split(/\r?\n/).find((l) => l.trim() !== "")?.trim() || `git exited ${r.status}`);
     return {
       ok: false,
       code: "unsupported_target",
@@ -74439,7 +74841,8 @@ async function invokeSemgrep(options) {
       projectPath,
       outFileHost: outFile,
       image,
-      configs: [containerRules]
+      configs: [containerRules],
+      git: await gitSafetyFor([projectPath])
     }),
     cwd: projectPath
   });
@@ -74450,8 +74853,8 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
+  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine7 ?? "fallback failed"}` : firstLine7 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 var SEMGREP_DEFAULT_IGNORED_DIRS = [
@@ -76284,8 +76687,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine6 ?? `nuclei ${run.outcome}` };
+  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine7 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts
@@ -78136,6 +78539,8 @@ function severityHint(shortfall2) {
 }
 
 // src/fixpr/pr.ts
+import { resolve as resolve23 } from "node:path";
+import { fileURLToPath as fileURLToPath8 } from "node:url";
 var EXCLUDE_GUARDIAN_DIR = ":(exclude,glob)**/.guardian/**";
 var BRANCH_PREFIX = "dev-guardian/fix-";
 function branchName(_source, key, hash) {
@@ -78191,7 +78596,7 @@ async function openPr(opts) {
     return existsOutcome(branch);
   }
   const status = await run({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["status", "--porcelain", "--", EXCLUDE_GUARDIAN_DIR],
     cwd: worktreePath
   });
@@ -78210,7 +78615,7 @@ async function openPr(opts) {
     };
   }
   const add = await run({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["add", "-A", "--", EXCLUDE_GUARDIAN_DIR],
     cwd: worktreePath
   });
@@ -78221,21 +78626,36 @@ async function openPr(opts) {
       detail: `Could not stage the fix on branch '${branch}': ${describeFailure3(add, "git add")}`
     };
   }
-  const commit = await run({ command: "git", args: ["commit", "-m", title], cwd: worktreePath });
+  const commit = await run({ command: GIT_COMMAND, args: ["commit", "--no-verify", "-m", title], cwd: worktreePath });
+  const notApplied = /* @__PURE__ */ new Set([...add.gitNotApplied ?? [], ...commit.gitNotApplied ?? []]);
+  const withNotApplied = (outcome) => notApplied.size > 0 ? { ...outcome, git_config_not_applied: [...notApplied].sort() } : outcome;
   if (hasFailed(commit)) {
-    return {
+    return withNotApplied({
       status: "push_failed",
       url: null,
       detail: `Could not commit the fix on branch '${branch}': ${describeFailure3(commit, "git commit")}`
-    };
+    });
   }
-  const push = await run({ command: "git", args: ["push", "-u", "origin", branch], cwd: worktreePath });
-  if (hasFailed(push)) {
-    return {
+  const receivePack = await receivePackFor(worktreePath, run);
+  if ("refused" in receivePack) {
+    return withNotApplied({
       status: "push_failed",
       url: null,
-      detail: `Push to origin failed for branch '${branch}': ${describeFailure3(push, "git push")}. The commit exists locally on that branch; it was not pushed.`
-    };
+      detail: `Did not push branch '${branch}': ${receivePack.refused}. The commit exists locally on that branch; it was not pushed.`
+    });
+  }
+  const push = await run({
+    command: GIT_COMMAND,
+    args: ["push", "--no-verify", `--receive-pack=${receivePack.program}`, "-u", "origin", branch],
+    cwd: worktreePath
+  });
+  for (const k of push.gitNotApplied ?? []) notApplied.add(k);
+  if (hasFailed(push)) {
+    return withNotApplied({
+      status: "push_failed",
+      url: null,
+      detail: `Push to origin failed for branch '${branch}': ${describeFailure3(push, "git push")}. The commit exists locally on that branch; it was not pushed.` + (notApplied.size > 0 ? ` The repository's own git configuration was not applied for ${[...notApplied].sort().join(", ")} (dev-guardian never runs a command a scanned repository configures) \u2014 set what the push needs in your own git configuration or environment instead.` : "")
+    });
   }
   const create = await run({
     command: "gh",
@@ -78243,18 +78663,53 @@ async function openPr(opts) {
     cwd: projectPath
   });
   if (hasFailed(create)) {
-    return {
+    return withNotApplied({
       status: "create_failed",
       url: null,
       detail: `Branch '${branch}' was pushed to origin, but 'gh pr create' failed: ${describeFailure3(create, "gh pr create")}. Open the pull request by hand from that branch.`
-    };
+    });
   }
-  return { status: "created", url: firstUrlLine(create.stdout), detail: null };
+  return withNotApplied({ status: "created", url: firstUrlLine(create.stdout), detail: null });
+}
+async function receivePackFor(worktreePath, run) {
+  const standard = { program: "git-receive-pack" };
+  const r = await run({ command: GIT_COMMAND, args: ["remote", "get-url", "--push", "--all", "origin"], cwd: worktreePath });
+  if (hasFailed(r)) return standard;
+  const local = [];
+  let network = 0;
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const url2 = line.trim();
+    if (url2 === "") continue;
+    const path8 = localPath(worktreePath, url2);
+    if (path8 === null) network += 1;
+    else local.push(path8);
+  }
+  if (local.length === 0) return standard;
+  if (network > 0) {
+    return { refused: "origin pushes both to a repository on this machine and over the network, and dev-guardian hardens only the former's receive-pack" };
+  }
+  const safety = await gitSafetyFor(local);
+  if (safety.refused !== null) return { refused: `the push destination's git configuration: ${safety.refused}` };
+  const program = localReceivePackCommand(safety);
+  if (program === null) return { refused: "the push destination's git configuration has a key that cannot be passed on a command line" };
+  return { program };
+}
+function localPath(worktreePath, url2) {
+  if (/^file:\/\//i.test(url2)) {
+    try {
+      return fileURLToPath8(url2);
+    } catch {
+      return null;
+    }
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(url2) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url2)) return null;
+  if (!/^[A-Za-z]:[\\/]/.test(url2) && /^[^/\\]*:/.test(url2)) return null;
+  return resolve23(worktreePath, url2);
 }
 async function deleteLocalBranch(opts) {
   const run = opts.run ?? runProcess;
   const result = await run({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["branch", "-D", opts.branch],
     cwd: opts.projectPath
   });
@@ -78453,7 +78908,7 @@ async function prepareTestEnvironment(opts) {
   const hasLock = existsSync42(join83(treePath, "package-lock.json")) || existsSync42(join83(treePath, "npm-shrinkwrap.json"));
   if (!hasLock) return { ok: true, command: null };
   const run = opts.run ?? runProcess;
-  const ignored = await run({ command: "git", args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
+  const ignored = await run({ command: GIT_COMMAND, args: ["-C", treePath, "check-ignore", "-q", "node_modules"], cwd: treePath });
   if (ignored.outcome !== "completed") return { ok: true, command: null };
   const command = "npm ci --ignore-scripts";
   const result = await run({
@@ -78473,7 +78928,7 @@ async function prepareTestEnvironment(opts) {
 
 // src/fixpr/repoPackageConfig.ts
 import { mkdtempSync as mkdtempSync8, renameSync as renameSync4, rmSync as rmSync12 } from "node:fs";
-import { dirname as dirname21, join as join84, relative as relative25, resolve as resolve23, sep as sep15 } from "node:path";
+import { dirname as dirname21, join as join84, relative as relative25, resolve as resolve24, sep as sep15 } from "node:path";
 var TOP_LEVEL = /* @__PURE__ */ new Set([".npmrc", ".pnpmrc", ".yarnrc", ".yarnrc.yml", "pip.conf", "pip.ini", ".pip", "nuget.config"]);
 var NESTED = {
   ".cargo": /* @__PURE__ */ new Set(["config.toml", "config"]),
@@ -78481,8 +78936,8 @@ var NESTED = {
 };
 function dirsUpToRoot(root, projectDir) {
   const out = [];
-  const top = resolve23(root);
-  for (let dir = resolve23(projectDir); isWithinDir(top, dir); dir = dirname21(dir)) {
+  const top = resolve24(root);
+  for (let dir = resolve24(projectDir); isWithinDir(top, dir); dir = dirname21(dir)) {
     out.push(dir);
     if (dir === top || dirname21(dir) === dir) break;
   }
@@ -78506,7 +78961,7 @@ function repoPackageConfigPaths(root, projectDir) {
 }
 function setAsidePackageConfig(root, projectDir) {
   const paths = repoPackageConfigPaths(root, projectDir);
-  const holding = paths.length > 0 ? mkdtempSync8(join84(dirname21(resolve23(root)), ".guardian-fixpr-config-")) : null;
+  const holding = paths.length > 0 ? mkdtempSync8(join84(dirname21(resolve24(root)), ".guardian-fixpr-config-")) : null;
   const moves = [];
   try {
     paths.forEach((from, i2) => {
@@ -78522,7 +78977,7 @@ function setAsidePackageConfig(root, projectDir) {
   }
   let restored = false;
   return {
-    moved: moves.map((m) => relative25(resolve23(root), m.from).split(sep15).join("/")),
+    moved: moves.map((m) => relative25(resolve24(root), m.from).split(sep15).join("/")),
     restore: () => {
       if (restored) return;
       restored = true;
@@ -78556,7 +79011,7 @@ function requirementsChooseIndex(projectDir, extra = []) {
   const queue = [.../* @__PURE__ */ new Set([...rootRequirementFiles(projectDir), ...extra])];
   const seen = /* @__PURE__ */ new Set();
   for (let file = queue.shift(); file !== void 0; file = queue.shift()) {
-    const key = resolve23(projectDir, file);
+    const key = resolve24(projectDir, file);
     if (seen.has(key) || seen.size > 200) continue;
     seen.add(key);
     const text2 = readProjectTextOrUndefined(projectDir, file, MAX_REQUIREMENTS_BYTES2);
@@ -78569,7 +79024,7 @@ function requirementsChooseIndex(projectDir, extra = []) {
         return `${file.split(sep15).join("/")}: ${name.startsWith("--") ? name : name.slice(0, 2)}`;
       }
       const include = INCLUDE.exec(line);
-      if (include?.[1] !== void 0) queue.push(relative25(projectDir, resolve23(dirname21(key), include[1])));
+      if (include?.[1] !== void 0) queue.push(relative25(projectDir, resolve24(dirname21(key), include[1])));
     }
   }
   return null;
@@ -78596,7 +79051,7 @@ function installRefusal(opts) {
 // src/fixpr/treeState.ts
 async function projectTreeState(projectPath, run = runProcess) {
   const prefix = await run({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["--no-optional-locks", "-C", projectPath, "rev-parse", "--show-prefix"],
     cwd: projectPath
   });
@@ -78604,7 +79059,7 @@ async function projectTreeState(projectPath, run = runProcess) {
     return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
   }
   const status = await run({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["--no-optional-locks", "-C", projectPath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
     cwd: projectPath
   });
@@ -78736,6 +79191,7 @@ async function judgeTests(opts) {
     cwd: worktreePath,
     env,
     extendEnv: false,
+    gitHardening: false,
     timeoutMs
   });
   if (!hasFailed2(worktreeResult)) {
@@ -78760,6 +79216,7 @@ ${head2}` : ""}`
       cwd: baseTree.path,
       env,
       extendEnv: false,
+      gitHardening: false,
       timeoutMs
     });
   } finally {
@@ -78789,7 +79246,7 @@ function headOf(stdout, stderr) {
 // src/fixpr/worktree.ts
 import { existsSync as existsSync43, mkdtempSync as mkdtempSync9, realpathSync as realpathSync8, rmSync as rmSync13 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { join as join85, resolve as resolve24 } from "node:path";
+import { join as join85, resolve as resolve25 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
 async function createWorktree(opts) {
   let dir;
@@ -78799,15 +79256,15 @@ async function createWorktree(opts) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage3(e)}` };
   }
   const add = await runProcess({
-    command: "git",
-    args: opts.branch === null ? ["-C", opts.projectPath, "worktree", "add", "--detach", dir, "HEAD"] : ["-C", opts.projectPath, "worktree", "add", "-b", opts.branch, dir, "HEAD"],
+    command: GIT_COMMAND,
+    args: opts.branch === null ? ["-C", opts.projectPath, "worktree", "add", "--no-checkout", "--detach", dir, "HEAD"] : ["-C", opts.projectPath, "worktree", "add", "--no-checkout", "-b", opts.branch, dir, "HEAD"],
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs
   });
   if (add.outcome !== "completed") {
     safeRmDir(dir);
     await runProcess({
-      command: "git",
+      command: GIT_COMMAND,
       args: ["-C", opts.projectPath, "worktree", "prune"],
       cwd: opts.projectPath,
       timeoutMs: opts.timeoutMs
@@ -78815,16 +79272,31 @@ async function createWorktree(opts) {
     return { ok: false, reason: describeFailure4(add, "git worktree add") };
   }
   const canonicalPath3 = await resolveRegisteredPath(opts.projectPath, opts.branch, dir, opts.timeoutMs) ?? dir;
-  return {
-    ok: true,
-    worktree: makeWorktree(opts.projectPath, canonicalPath3, opts.branch, opts.timeoutMs)
-  };
+  const checkout = await runProcess({
+    command: GIT_COMMAND,
+    args: ["-C", canonicalPath3, "reset", "--hard", "--quiet"],
+    cwd: canonicalPath3,
+    timeoutMs: opts.timeoutMs
+  });
+  const worktree = makeWorktree(opts.projectPath, canonicalPath3, opts.branch, opts.timeoutMs, [
+    ...add.gitNotApplied ?? [],
+    ...checkout.gitNotApplied ?? []
+  ]);
+  if (checkout.outcome !== "completed") {
+    const removed = await worktree.remove();
+    return {
+      ok: false,
+      reason: describeFailure4(checkout, "git reset --hard (the worktree checkout)") + (removed.warning !== null ? `; ${removed.warning}` : "")
+    };
+  }
+  return { ok: true, worktree };
 }
-function makeWorktree(projectPath, path8, branch, timeoutMs) {
+function makeWorktree(projectPath, path8, branch, timeoutMs, notApplied) {
   let removePromise = null;
   return {
     path: path8,
     branch,
+    notApplied: [...new Set(notApplied)].sort(),
     remove: () => {
       removePromise ??= removeWorktree(projectPath, path8, timeoutMs);
       return removePromise;
@@ -78833,13 +79305,13 @@ function makeWorktree(projectPath, path8, branch, timeoutMs) {
 }
 async function removeWorktree(projectPath, path8, timeoutMs) {
   const removeResult = await runProcess({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["-C", projectPath, "worktree", "remove", "--force", path8],
     cwd: projectPath,
     timeoutMs
   });
   await runProcess({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["-C", projectPath, "worktree", "prune"],
     cwd: projectPath,
     timeoutMs
@@ -78855,7 +79327,7 @@ async function removeWorktree(projectPath, path8, timeoutMs) {
 }
 async function resolveRegisteredPath(projectPath, branch, dir, timeoutMs) {
   const list2 = await runProcess({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["-C", projectPath, "worktree", "list", "--porcelain"],
     cwd: projectPath,
     timeoutMs
@@ -78879,7 +79351,7 @@ function samePathKey(path8) {
   try {
     real = realpathSync8.native(path8);
   } catch {
-    real = resolve24(path8);
+    real = resolve25(path8);
   }
   const posix2 = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix2.toLowerCase() : posix2;
@@ -79210,6 +79682,7 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
+  if (worktree.notApplied.length > 0) base.git_config_not_applied = [...worktree.notApplied];
   let keepBranch = !apply;
   let semgrepFix;
   let setAside = null;
@@ -79356,7 +79829,7 @@ async function processGroup(opts) {
 }
 async function localBranchExists(projectPath, branch) {
   const r = await runProcess({
-    command: "git",
+    command: GIT_COMMAND,
     args: ["-C", projectPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
     cwd: projectPath
   });
@@ -80438,7 +80911,7 @@ import { homedir as homedir5 } from "node:os";
 import { dirname as dirname22, isAbsolute as isAbsolute20, join as join88, relative as relative27 } from "node:path";
 
 // src/hostsetup/mcpConfig.ts
-import { join as join87, resolve as resolve25 } from "node:path";
+import { join as join87, resolve as resolve26 } from "node:path";
 var SERVER_ID = "dev-guardian";
 function claudeDesktopConfigPath(env) {
   switch (env.os) {
@@ -81866,7 +82339,7 @@ async function analyzeServerListingAsync(listing, others, options = {}) {
       break;
     }
     if (steps.next().done === true) break;
-    await new Promise((resolve30) => setImmediate(resolve30));
+    await new Promise((resolve31) => setImmediate(resolve31));
   }
   return finishRun(run, others);
 }
@@ -84208,7 +84681,7 @@ var SSEClientTransport = class {
   }
   _startOrAuth() {
     const fetchImpl = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
-    return new Promise((resolve30, reject) => {
+    return new Promise((resolve31, reject) => {
       this._eventSource = new EventSource(this._url.href, {
         ...this._eventSourceInit,
         fetch: async (url2, init) => {
@@ -84229,7 +84702,7 @@ var SSEClientTransport = class {
       this._abortController = new AbortController();
       this._eventSource.onerror = (event) => {
         if (event.code === 401 && this._authProvider) {
-          this._authThenStart().then(resolve30, reject);
+          this._authThenStart().then(resolve31, reject);
           return;
         }
         const error2 = new SseError(event.code, event.message, event);
@@ -84251,7 +84724,7 @@ var SSEClientTransport = class {
           void this.close();
           return;
         }
-        resolve30();
+        resolve31();
       });
       this._eventSource.onmessage = (event) => {
         const messageEvent = event;
@@ -84780,9 +85253,9 @@ var StreamableHTTPClientTransport = class {
 };
 
 // src/mcpaudit/launch.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter, extname as extname2, isAbsolute as isAbsolute21, resolve as resolve26 } from "node:path";
+import { delimiter, extname as extname2, isAbsolute as isAbsolute21, resolve as resolve27 } from "node:path";
 var SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
 var ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
 var URL_END = /[\s"'<>|`]/;
@@ -84922,7 +85395,7 @@ function remoteReasonOf(entry) {
   }
   return null;
 }
-function envValue(env, name) {
+function envValue2(env, name) {
   const key = Object.keys(env).find((k) => k.toUpperCase() === name);
   return key === void 0 ? void 0 : env[key];
 }
@@ -84945,7 +85418,7 @@ function raceDeadline(p, deadline, onTimeout) {
 }
 function reachableFromChild(path8, deadline) {
   return new Promise((done) => {
-    const child = spawn2(process.execPath, ["-e", 'process.exit(require("fs").statSync(process.argv[1]).isFile() ? 0 : 1)', path8], {
+    const child = spawn3(process.execPath, ["-e", 'process.exit(require("fs").statSync(process.argv[1]).isFile() ? 0 : 1)', path8], {
       stdio: "ignore",
       windowsHide: true
     });
@@ -84970,21 +85443,21 @@ async function resolveCommand(command, env, cwd, deadline) {
     return reachable ? { ok: true, command } : { ok: false, reason: "its command is on a network path that could not be reached within its time budget" };
   }
   if (process.platform !== "win32") return { ok: true, command };
-  const exts = (envValue(env, "PATHEXT") ?? process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e !== "");
+  const exts = (envValue2(env, "PATHEXT") ?? process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e !== "");
   const withExts = (base) => extname2(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
   let candidates2;
   const skipped2 = [];
   if (/[\\/]/.test(command) || isAbsolute21(command)) {
-    candidates2 = withExts(resolve26(cwd, command));
+    candidates2 = withExts(resolve27(cwd, command));
   } else {
-    const dirs = (envValue(env, "PATH") ?? "").split(delimiter).filter((d) => d !== "");
+    const dirs = (envValue2(env, "PATH") ?? "").split(delimiter).filter((d) => d !== "");
     candidates2 = [];
     for (const dir of dirs) {
       if (isRemoteOrDeviceTarget(dir)) {
         skipped2.push(dir);
         continue;
       }
-      candidates2.push(...withExts(resolve26(dir, command)));
+      candidates2.push(...withExts(resolve27(dir, command)));
     }
   }
   const search2 = (async () => {
@@ -85150,7 +85623,7 @@ var ProbeStdioTransport = class {
       this.resumeLater(child.stderr);
     });
     child.stdin?.on("error", (e) => this.onerror?.(e));
-    const spawned = new Promise((resolve30) => child.once("spawn", () => resolve30("spawned")));
+    const spawned = new Promise((resolve31) => child.once("spawn", () => resolve31("spawned")));
     this.done = child.then((result) => {
       this.exited = {
         exitCode: result.exitCode ?? null,
@@ -85191,14 +85664,14 @@ var ProbeStdioTransport = class {
     void this.close();
   }
   send(message3) {
-    return new Promise((resolve30, reject) => {
+    return new Promise((resolve31, reject) => {
       const stdin = this.child?.stdin;
       if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
         reject(new Error("Not connected"));
         return;
       }
-      if (stdin.write(serializeMessage(message3))) resolve30();
-      else stdin.once("drain", () => resolve30());
+      if (stdin.write(serializeMessage(message3))) resolve31();
+      else stdin.once("drain", () => resolve31());
     });
   }
   /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
@@ -85262,8 +85735,8 @@ function signalGroup2(pid, signal) {
 }
 async function settlesWithin(p, ms) {
   let timer;
-  const timeout = new Promise((resolve30) => {
-    timer = setTimeout(() => resolve30(false), ms);
+  const timeout = new Promise((resolve31) => {
+    timer = setTimeout(() => resolve31(false), ms);
     timer.unref();
   });
   const settled = await Promise.race([p.then(() => true, () => true), timeout]);
@@ -85568,7 +86041,7 @@ function planTargets(requested, entries2) {
 }
 
 // src/tools/auditMcpTools.ts
-var DEFAULT_TIMEOUT_MS7 = 2e4;
+var DEFAULT_TIMEOUT_MS8 = 2e4;
 var DEFAULT_AUDIT_BUDGET_MS = 10 * 60 * 1e3;
 function auditBudgetMs() {
   const raw = Number(process.env["GUARDIAN_MCP_AUDIT_BUDGET_MS"]);
@@ -85585,7 +86058,7 @@ var inputSchema28 = {
   allow_remote: external_exports.boolean().optional().default(false).describe(
     "Contact servers that reach another machine: a url entry (even at localhost), a command on a network path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it carries a backslash, more than one @, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is not seen. Off by default: they are skipped."
   ),
-  timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS7).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
+  timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS8).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
 };
 var tool47 = {
   name: "audit_mcp_tools",
@@ -85620,7 +86093,7 @@ async function handler44(input, ctx, callMeta) {
   }
   const includeUserConfig = inp.include_user_config === true;
   const allowRemote = inp.allow_remote === true;
-  const timeoutMs = typeof inp.timeout_ms === "number" ? inp.timeout_ms : DEFAULT_TIMEOUT_MS7;
+  const timeoutMs = typeof inp.timeout_ms === "number" ? inp.timeout_ms : DEFAULT_TIMEOUT_MS8;
   const collected = collectMcpEntries(readConfigSources(projectPath, includeUserConfig), { onlyProject: projectPath });
   const scanId = randomUUID20();
   ctx.storage.scans.insert({ scan_id: scanId, scan_type: "mcp_tool_audit", project_path: projectPath, tree_hash: "" });
@@ -85906,7 +86379,7 @@ function countBySeverity6(findings) {
 
 // src/tools/vetPackages.ts
 import { existsSync as existsSync44, statSync as statSync15 } from "node:fs";
-import { resolve as resolve28 } from "node:path";
+import { resolve as resolve29 } from "node:path";
 
 // src/hooks/bashGuard.ts
 var BASH_RULES = [
@@ -87183,7 +87656,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync16, readdirSync as readdirSync19 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { dirname as dirname23, isAbsolute as isAbsolute22, join as join90, parse as parse7, relative as relative28, resolve as resolve27 } from "node:path";
+import { dirname as dirname23, isAbsolute as isAbsolute22, join as join90, parse as parse7, relative as relative28, resolve as resolve28 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -87206,12 +87679,12 @@ function isInside3(dir, path8) {
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute22(rel2);
 }
 function walkRoot2(path8, ctx, under) {
-  const abs = resolve27(path8);
+  const abs = resolve28(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
   const holds = (dir2, base) => samePath3(dir2, base) || isInside3(dir2, base);
-  const project = ctx.projectDir === void 0 ? void 0 : resolve27(ctx.projectDir);
-  const home = resolve27(homeOf(ctx));
+  const project = ctx.projectDir === void 0 ? void 0 : resolve28(ctx.projectDir);
+  const home = resolve28(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside3(project, abs)) return project;
   const dir = dirname23(abs);
@@ -87268,14 +87741,14 @@ function listDir(dir, ctx) {
   }
 }
 function samePath3(a2, b) {
-  const norm = (p) => resolve27(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve28(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a2).toLowerCase() === norm(b).toLowerCase() : norm(a2) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
   const stops = [ctx.homeDir, homedir6()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve27(ctx.projectDir);
+  let dir = resolve28(ctx.projectDir);
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
@@ -87292,7 +87765,7 @@ function envOf(ctx) {
 function homeOf(ctx) {
   return ctx.homeDir ?? homedir6();
 }
-function envValue2(env, name) {
+function envValue3(env, name) {
   const v = env[name] ?? env[name.toLowerCase()];
   return v !== void 0 && v.trim() !== "" ? v.trim() : void 0;
 }
@@ -87393,10 +87866,10 @@ function npmConfigFiles(ctx) {
       if (dirname23(dir) === dir) break;
     }
   }
-  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join90(home, ".config");
-  const localAppData = envValue2(env, "LOCALAPPDATA") ?? join90(home, "AppData", "Local");
+  const xdg = envValue3(env, "XDG_CONFIG_HOME") ?? join90(home, ".config");
+  const localAppData = envValue3(env, "LOCALAPPDATA") ?? join90(home, "AppData", "Local");
   files.push(
-    { path: envValue2(env, "NPM_CONFIG_USERCONFIG") ?? join90(home, ".npmrc"), parse: fromNpmrc },
+    { path: envValue3(env, "NPM_CONFIG_USERCONFIG") ?? join90(home, ".npmrc"), parse: fromNpmrc },
     { path: join90(home, ".yarnrc.yml"), parse: fromYarnrcYml },
     { path: join90(home, ".yarnrc"), parse: fromYarnrc },
     { path: join90(home, ".bunfig.toml"), parse: fromBunfig },
@@ -87405,9 +87878,9 @@ function npmConfigFiles(ctx) {
     { path: join90(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
     { path: join90(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
-  const globalConfig2 = envValue2(env, "NPM_CONFIG_GLOBALCONFIG");
+  const globalConfig2 = envValue3(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue2(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join90(envValue2(env, "APPDATA") ?? join90(home, "AppData", "Roaming"), "npm") : dirname23(dirname23(ctx.nodeExecPath ?? process.execPath)));
+  const prefix = envValue3(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join90(envValue3(env, "APPDATA") ?? join90(home, "AppData", "Roaming"), "npm") : dirname23(dirname23(ctx.nodeExecPath ?? process.execPath)));
   files.push({ path: join90(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
@@ -87575,23 +88048,23 @@ function pypiRegistry(name, ctx) {
   const home = homeOf(ctx);
   const etc = ctx.etcDir ?? "/etc";
   const confs = [];
-  const explicit = envValue2(env, "PIP_CONFIG_FILE");
+  const explicit = envValue3(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue2(env, "XDG_CONFIG_HOME") ?? join90(home, ".config");
+  const xdg = envValue3(env, "XDG_CONFIG_HOME") ?? join90(home, ".config");
   confs.push(
     join90(xdg, "pip", "pip.conf"),
     join90(home, ".pip", "pip.conf"),
     join90(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue2(env, "APPDATA") ?? join90(home, "AppData", "Roaming");
+  const appdata = envValue3(env, "APPDATA") ?? join90(home, "AppData", "Roaming");
   confs.push(join90(appdata, "pip", "pip.ini"), join90(home, "pip", "pip.ini"));
-  for (const prefix of [envValue2(env, "VIRTUAL_ENV"), envValue2(env, "CONDA_PREFIX")]) {
+  for (const prefix of [envValue3(env, "VIRTUAL_ENV"), envValue3(env, "CONDA_PREFIX")]) {
     if (prefix !== void 0) confs.push(join90(prefix, "pip.conf"), join90(prefix, "pip.ini"));
   }
   confs.push(join90(etc, "pip.conf"), join90(etc, "xdg", "pip", "pip.conf"));
   confs.push(join90(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue2(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join90(d, "pip", "pip.conf"));
-  const programData = envValue2(env, "ProgramData") ?? envValue2(env, "PROGRAMDATA");
+  for (const d of (envValue3(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join90(d, "pip", "pip.conf"));
+  const programData = envValue3(env, "ProgramData") ?? envValue3(env, "PROGRAMDATA");
   if (programData !== void 0) confs.push(join90(programData, "pip", "pip.ini"));
   for (const path8 of confs) {
     const text2 = read(path8, ctx);
@@ -87599,7 +88072,7 @@ function pypiRegistry(name, ctx) {
     if (url2 !== void 0) return { kind: "registry", source: path8, url: url2 };
   }
   const uvConfs = [];
-  const uvExplicit = envValue2(env, "UV_CONFIG_FILE");
+  const uvExplicit = envValue3(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
   uvConfs.push(join90(xdg, "uv", "uv.toml"), join90(appdata, "uv", "uv.toml"), join90(etc, "uv", "uv.toml"));
   for (const path8 of uvConfs) {
@@ -87643,8 +88116,8 @@ function composerRegistry(ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const composerHome = envValue2(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join90(composerHome, "config.json")] : [join90(home, ".composer", "config.json"), join90(home, ".config", "composer", "config.json"), join90(envValue2(env, "APPDATA") ?? join90(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const composerHome = envValue3(env, "COMPOSER_HOME");
+  const globals = composerHome !== void 0 ? [join90(composerHome, "config.json")] : [join90(home, ".composer", "config.json"), join90(home, ".config", "composer", "config.json"), join90(envValue3(env, "APPDATA") ?? join90(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path8 of globals) if (hasRepositories(read(path8, ctx))) return { kind: "registry", source: path8 };
   return null;
 }
@@ -87666,9 +88139,9 @@ function isLocalFolderSource(source) {
 }
 function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
-  const expanded = folder.replace(/%([^%]+)%/g, (whole2, name) => envValue2(env, name) ?? whole2);
+  const expanded = folder.replace(/%([^%]+)%/g, (whole2, name) => envValue3(env, name) ?? whole2);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve27(dirname23(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve28(dirname23(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -87691,7 +88164,7 @@ function nugetRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve27(ctx.projectDir);
+    let dir = resolve28(ctx.projectDir);
     for (let i2 = 0; i2 < 64; i2 += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
@@ -87702,7 +88175,7 @@ function nugetRegistry(name, ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue2(env, "APPDATA") ?? join90(home, "AppData", "Roaming");
+  const appdata = envValue3(env, "APPDATA") ?? join90(home, "AppData", "Roaming");
   for (const dir of [join90(appdata, "NuGet"), join90(home, ".nuget", "NuGet"), join90(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
@@ -87712,7 +88185,7 @@ function nugetRegistry(name, ctx) {
     join90(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
     join90(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
-  const programFilesX86 = envValue2(env, "ProgramFiles(x86)");
+  const programFilesX86 = envValue3(env, "ProgramFiles(x86)");
   if (programFilesX86 !== void 0) machineDirs.push(join90(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
@@ -88589,7 +89062,7 @@ async function handler45(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve28(inp.project_path);
+    projectDir = resolve29(inp.project_path);
     if (!existsSync44(projectDir) || !statSync15(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
@@ -89426,7 +89899,7 @@ async function main() {
 `);
     process.exit(1);
   }
-  const projectPath = resolve29(process.cwd());
+  const projectPath = resolve30(process.cwd());
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);

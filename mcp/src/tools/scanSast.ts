@@ -95,6 +95,7 @@ import {
   projectsForTarget,
   removeCreatedLockFiles,
 } from '../deps/dotnetRestore.js';
+import { gitSafetyFor } from '../platform/gitSafety.js';
 import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
@@ -376,6 +377,7 @@ async function runSemgrep(args: Collect & {
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
       ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
+      git: await gitSafetyFor([ctx.projectPath]),
     }),
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,

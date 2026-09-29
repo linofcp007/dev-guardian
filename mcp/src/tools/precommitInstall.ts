@@ -68,11 +68,15 @@ async function handler(
     );
   }
 
+  // Hardened for git like every child (`platform/gitSafety.ts`) — all but
+  // the core.hooksPath redirect: installing hooks where git says they go is
+  // this tool's job, and pre-commit refuses to install with core.hooksPath set.
   const result = await runProcess({
     command: 'pre-commit',
     args: ['install'],
     cwd: projectPath,
     timeoutMs: 60_000,
+    gitHardening: 'except-hooks-path',
   });
   if (result.outcome !== 'completed') {
     return failDomain(
@@ -93,6 +97,7 @@ async function handler(
       args: ['install', '--hook-type', stage],
       cwd: projectPath,
       timeoutMs: 30_000,
+      gitHardening: 'except-hooks-path',
     });
     if (r.outcome === 'completed') {
       stagesInstalled.push(stage);

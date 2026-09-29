@@ -78,10 +78,10 @@
  * async listing: on a large tree `git ls-files --others` takes seconds.
  */
 
-import { spawnSync } from 'node:child_process';
 import { readdirSync, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { git, splitNul } from '../runners/git.js';
@@ -378,18 +378,10 @@ function parseGitList(stdout: string): string[] {
   return out;
 }
 
+/** Hardened (`platform/gitSafety.ts`); refused or failed, the caller walks the directory instead. */
 function gitListSync(root: string): string[] | null {
-  try {
-    const r = spawnSync('git', ['-C', root, ...GIT_LIST_ARGS], {
-      encoding: 'utf8',
-      timeout: 30_000,
-      maxBuffer: 512 * 1024 * 1024,
-      windowsHide: true,
-    });
-    return r.status === 0 && typeof r.stdout === 'string' ? parseGitList(r.stdout) : null;
-  } catch {
-    return null;
-  }
+  const r = execGitSync(root, GIT_LIST_ARGS, { timeoutMs: 30_000, maxBuffer: 512 * 1024 * 1024 });
+  return r.failure === null && r.status === 0 ? parseGitList(r.stdout) : null;
 }
 
 async function gitListAsync(root: string): Promise<string[] | null> {

@@ -4,6 +4,12 @@
  *   - 10-minute default timeout (override via `GUARDIAN_SCAN_TIMEOUT_MS`)
  *   - AbortSignal → SIGTERM, then SIGKILL after 5 s
  *   - stderr line streaming via `onLog`
+ *   - git hardening in the child's environment (`platform/gitSafety.ts`):
+ *     no git the child starts — a scanner's `git ls-files`, gitleaks'
+ *     `git log -p`, a package manager's clone — runs a command the scanned
+ *     repository's own git configuration or hooks name. A repository whose
+ *     configuration cannot be read safely is not run at all: outcome
+ *     `failed`, the reason in stderr.
  *
  * `runShellScript` builds on this — direct scanner invocations (Semgrep,
  * Trivy CLI, gitleaks) call `runProcess` straight.
@@ -42,6 +48,7 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { execa, type ResultPromise } from 'execa';
 import { onExit } from 'signal-exit';
+import { applyGitSafety, gitSafetyFor, withoutHooksPath } from '../platform/gitSafety.js';
 import { killWindowsTree, PROC_TREE_ENV } from './windowsTreeKill.js';
 
 const FIVE_MB = 5 * 1024 * 1024;
@@ -85,6 +92,25 @@ export interface ProcessRunOptions {
    * legitimately large reports (Trivy fs on a monorepo, for instance).
    */
   stdoutCapBytes?: number;
+  /**
+   * Git hardening for this child and everything it starts
+   * (`platform/gitSafety.ts`): git's configuration overrides in its
+   * environment, so no git it runs — directly, or inside a scanner or a
+   * package manager — executes a command the scanned repository's own git
+   * configuration or hooks name. On by default, for every child. `false`
+   * only for a child that runs the project's own code BY DESIGN (the test
+   * command create_fix_pr verifies with): that code can do anything git
+   * could, and the overrides would change how its own tests use git.
+   * `'except-hooks-path'` keeps all of it but the `core.hooksPath` redirect,
+   * for the child whose job is installing hooks (`gitSafety.ts#withoutHooksPath`).
+   */
+  gitHardening?: boolean | 'except-hooks-path';
+  /**
+   * Further directories whose repository configuration this child's git
+   * reaches, beyond `cwd` — a push to a local-path remote, a scanner handed a
+   * repository elsewhere.
+   */
+  gitRepos?: readonly string[];
 }
 
 export interface ProcessRunResult {
@@ -93,9 +119,18 @@ export interface ProcessRunResult {
   stdout: string;
   stderr: string;
   truncated: boolean;
+  /**
+   * Keys of the repository's own git configuration the hardening overrode
+   * for this child (`filter.lfs.smudge`, `diff.x.textconv`, …). Present only
+   * when there were some — a caller whose result depends on them names them.
+   */
+  gitNotApplied?: readonly string[];
 }
 
 export async function runProcess(options: ProcessRunOptions): Promise<ProcessRunResult> {
+  // The timeout covers the whole call — the git configuration read below
+  // included — so a caller's budget is the time it waits.
+  const started = Date.now();
   const timeoutMs =
     options.timeoutMs ??
     (Number(process.env['GUARDIAN_SCAN_TIMEOUT_MS']) || DEFAULT_TIMEOUT_MS);
@@ -109,13 +144,37 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   let truncated = false;
   let outcome: ProcessOutcome = 'completed';
 
+  // `?? true` restates execa's own default explicitly rather than relying on
+  // `undefined` meaning it, so the merge behaviour is visible here instead of
+  // only in execa's docs.
+  let env = options.env;
+  let extendEnv = options.extendEnv ?? true;
+  let gitNotApplied: readonly string[] = [];
+  if (options.gitHardening !== false) {
+    // The environment the child would have had, hardened — merged here, so
+    // the child is handed exactly this (extendEnv false) and the user's own
+    // GIT_CONFIG_COUNT entries are counted before ours are appended.
+    const base: NodeJS.ProcessEnv = extendEnv ? { ...process.env, ...(options.env ?? {}) } : { ...(options.env ?? {}) };
+    const full = await gitSafetyFor([options.cwd, ...(options.gitRepos ?? [])], { env: base });
+    const safety = options.gitHardening === 'except-hooks-path' ? withoutHooksPath(full) : full;
+    if (safety.refused !== null) {
+      return {
+        outcome: 'failed',
+        exitCode: null,
+        stdout: '',
+        stderr: `dev-guardian did not run ${basename(options.command)}: ${safety.refused}`,
+        truncated: false,
+      };
+    }
+    env = applyGitSafety(safety, base);
+    extendEnv = false;
+    gitNotApplied = safety.notApplied;
+  }
+
   const child = execa(options.command, options.args ?? [], {
     cwd: options.cwd,
-    env: envFor(options.command, options.env, treeToken),
-    // `?? true` restates execa's own default explicitly rather than relying
-    // on `undefined` meaning it, so the merge behaviour is visible here
-    // instead of only in execa's docs.
-    extendEnv: options.extendEnv ?? true,
+    env: envFor(options.command, env, treeToken),
+    extendEnv,
     shell: false,
     encoding: 'utf8',
     // Own process group on POSIX, so `killTree` can signal the whole group.
@@ -176,7 +235,8 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
         if (outcome === 'completed') outcome = 'timed_out';
         stopTree();
       },
-      Math.min(timeoutMs, MAX_TIMER_MS),
+      // What is left of the budget after the configuration read (at least 1 ms).
+      Math.min(Math.max(1, timeoutMs - (Date.now() - started)), MAX_TIMER_MS),
     );
   }
 
@@ -210,6 +270,7 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
     stdout: stdoutBuf,
     stderr: stderrBuf,
     truncated,
+    ...(gitNotApplied.length > 0 ? { gitNotApplied } : {}),
   };
 }
 

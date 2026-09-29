@@ -31,6 +31,7 @@ import { PROJECT_LANGUAGES_META_KEY, resolveProjectLanguagesAsync, } from '../fr
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
+import { describeNotApplied } from '../platform/gitSafety.js';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
@@ -186,6 +187,11 @@ const reviewPr = makeScanTool({
         const preexisting = preexistingNote(out.preexistingGaps);
         if (preexisting !== null)
             warnings.push(preexisting);
+        // A head checkout made without the repository's own filter drivers (or
+        // anything else its git configuration names) says so.
+        const notApplied = tree === null ? null : describeNotApplied(tree.notApplied);
+        if (notApplied !== null)
+            warnings.push(`Head checkout: ${notApplied}.`);
         return {
             outcome: out.cancelled ? 'cancelled' : 'completed',
             tools_run: out.tools_run,

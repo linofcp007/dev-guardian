@@ -5,6 +5,7 @@ import {
   DEFAULT_SEMGREP_IMAGE,
   toContainerPath,
 } from '../runners/dockerScanner.js';
+import { gitSafetyFor } from '../platform/gitSafety.js';
 import { git, splitNul } from '../runners/git.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
@@ -87,6 +88,7 @@ export async function invokeSemgrep(options: SemgrepRunOptions): Promise<Semgrep
       outFileHost: outFile,
       image,
       configs: [containerRules],
+      git: await gitSafetyFor([projectPath]),
     }),
     cwd: projectPath,
   });

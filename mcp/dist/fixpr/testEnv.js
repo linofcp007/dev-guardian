@@ -22,6 +22,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { packageManagerEnv } from './testCommandEnv.js';
 /** How long one dependency install may take. */
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -33,7 +34,7 @@ export async function prepareTestEnvironment(opts) {
     if (!hasLock)
         return { ok: true, command: null };
     const run = opts.run ?? runProcess;
-    const ignored = await run({ command: 'git', args: ['-C', treePath, 'check-ignore', '-q', 'node_modules'], cwd: treePath });
+    const ignored = await run({ command: GIT_COMMAND, args: ['-C', treePath, 'check-ignore', '-q', 'node_modules'], cwd: treePath });
     if (ignored.outcome !== 'completed')
         return { ok: true, command: null };
     const command = 'npm ci --ignore-scripts';

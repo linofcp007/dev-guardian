@@ -198,6 +198,10 @@ export async function judgeTests(opts: {
   // The project's own code (`scripts.test`, `conftest.py`, `build.rs`), on a
   // dry run too: never with this server's environment, only the allowlisted
   // one (`testCommandEnv.ts`) — no token or cloud credential reaches it.
+  // Without git hardening (`platform/gitSafety.ts`): this IS the project's
+  // code, which can run anything a git hook could, and git's overrides in its
+  // environment would change how the project's own tests use git — the same
+  // on the base tree and the fix's, so the differential stays fair.
   const env = testCommandEnv();
   const worktreeResult = await run({
     command: derived.command,
@@ -205,6 +209,7 @@ export async function judgeTests(opts: {
     cwd: worktreePath,
     env,
     extendEnv: false,
+    gitHardening: false,
     timeoutMs,
   });
   if (!hasFailed(worktreeResult)) {
@@ -236,6 +241,7 @@ export async function judgeTests(opts: {
       cwd: baseTree.path,
       env,
       extendEnv: false,
+      gitHardening: false,
       timeoutMs,
     });
   } finally {

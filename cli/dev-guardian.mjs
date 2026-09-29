@@ -129,13 +129,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
+import { execGitSync } from '../mcp/dist/platform/gitSafety.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
 import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
@@ -1888,16 +1889,12 @@ function resolveDevGuardianCommitSha(repoUrl, tag) {
  * "unknown".
  */
 function resolveTagLocally(tag) {
-  try {
-    const sha = execFileSync(
-      'git',
-      ['-C', ROOT, 'rev-parse', '--verify', `refs/tags/${tag}^{commit}`],
-      { encoding: 'utf8', timeout: 10_000, windowsHide: true },
-    ).trim();
-    return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
+  // Hardened like every git dev-guardian starts (`platform/gitSafety.ts`),
+  // though ROOT is dev-guardian's own checkout.
+  const r = execGitSync(ROOT, ['rev-parse', '--verify', `refs/tags/${tag}^{commit}`], { timeoutMs: 10_000 });
+  if (r.failure !== null || r.status !== 0) return null;
+  const sha = r.stdout.trim();
+  return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
 }
 
 /**
@@ -1916,16 +1913,13 @@ function resolveTagLocally(tag) {
  * answer not shaped like a commit SHA — never throws.
  */
 function resolveTagRemotely(repoUrl, tag) {
-  let out;
-  try {
-    out = execFileSync('git', ['ls-remote', '--tags', repoUrl], {
-      encoding: 'utf8',
-      timeout: 20_000,
-      windowsHide: true,
-    });
-  } catch {
-    return null;
-  }
+  // From the temp directory, not the working directory: `ci-init` runs in the
+  // user's project, whose own git configuration (`url.<x>.insteadOf`, a
+  // credential helper, core.sshCommand) would otherwise apply to this URL.
+  // Hardened as well (`platform/gitSafety.ts`).
+  const r = execGitSync(tmpdir(), ['ls-remote', '--tags', repoUrl], { timeoutMs: 20_000 });
+  if (r.failure !== null || r.status !== 0) return null;
+  const out = r.stdout;
   let plain;
   let peeled;
   for (const line of out.split('\n')) {

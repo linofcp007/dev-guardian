@@ -158,6 +158,7 @@ import { enrichCveIntel } from '../intel/enrich.js';
 import { findingCveIds } from '../intel/rank.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { passes } from '../severity/filter.js';
@@ -246,6 +247,15 @@ interface GroupResult {
    * before anything was committed. Absent when there was none.
    */
   package_config_set_aside?: string[];
+  /**
+   * Keys of the repository's own git configuration that were NOT applied to
+   * the worktree's checkout, commit or push (`platform/gitSafety.ts`): a
+   * filter driver, a hook path, an ssh command, a credential helper … — no
+   * command a scanned repository's git configuration names is ever run. A
+   * filter driver's `smudge` here means the fix was applied to, and
+   * committed as, the content stored in git. Absent when there was none.
+   */
+  git_config_not_applied?: string[];
 }
 
 const tool: ToolModule = {
@@ -645,6 +655,7 @@ async function processGroup(opts: {
     branch: string;
     findings: Finding[];
     package_config_set_aside?: string[];
+    git_config_not_applied?: string[];
   } = { key: group.key, source: group.source, severity: group.severity, branch, findings };
 
   // A dry run changes nothing outside its worktree (Task 11 item 1): its
@@ -703,6 +714,7 @@ async function processGroup(opts: {
     };
   }
   const { worktree } = created;
+  if (worktree.notApplied.length > 0) base.git_config_not_applied = [...worktree.notApplied];
 
   // Set true only at the one point below where openPr's own status says the
   // branch should survive — see the module comment (C2) and KEEPS_BRANCH.
@@ -896,7 +908,7 @@ async function processGroup(opts: {
 /** Whether `refs/heads/<branch>` exists in the user's repository. A read. */
 async function localBranchExists(projectPath: string, branch: string): Promise<boolean> {
   const r = await runProcess({
-    command: 'git',
+    command: GIT_COMMAND,
     args: ['-C', projectPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`],
     cwd: projectPath,
   });

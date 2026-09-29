@@ -143,6 +143,7 @@ import { enrichCveIntel } from '../intel/enrich.js';
 import { findingCveIds } from '../intel/rank.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { passes } from '../severity/filter.js';
@@ -541,6 +542,8 @@ async function processGroup(opts) {
         };
     }
     const { worktree } = created;
+    if (worktree.notApplied.length > 0)
+        base.git_config_not_applied = [...worktree.notApplied];
     // Set true only at the one point below where openPr's own status says the
     // branch should survive — see the module comment (C2) and KEEPS_BRANCH.
     // A dry run's worktree is detached: there is no branch to delete at all.
@@ -720,7 +723,7 @@ async function processGroup(opts) {
 /** Whether `refs/heads/<branch>` exists in the user's repository. A read. */
 async function localBranchExists(projectPath, branch) {
     const r = await runProcess({
-        command: 'git',
+        command: GIT_COMMAND,
         args: ['-C', projectPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`],
         cwd: projectPath,
     });
