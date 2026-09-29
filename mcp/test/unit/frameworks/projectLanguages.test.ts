@@ -172,7 +172,7 @@ describe('languagesFromFiles — the files the scanners would read', () => {
     execFileSync('git', ['update-index', '--skip-worktree', 'tools/b.py'], { cwd: dir });
     rmSync(join(dir, 'tools'), { recursive: true });
     expect(languagesFromFiles(dir)).toEqual({ languages: ['c'], listing: 'git' });
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): five synchronous git calls, 12.7 s under load.
 
   // N2: 20 050 empty directories used to hide a Rust file and read complete.
   it('a walk stopped at its directory limit is incomplete, and says so', () => {

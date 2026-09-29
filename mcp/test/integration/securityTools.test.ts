@@ -412,7 +412,7 @@ describe('scan_secrets (gitleaks)', () => {
     const commit = (await git('commit-tree', tree, '-m', 'fetched')).stdout.trim();
     await git('update-ref', 'refs/remotes/origin/main', commit);
     expect((await run()).cached).toBeUndefined();
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): real git and three scans, 8.7 s under coverage, past 10 s under load.
 
   it('a history pass whose report was never written is failed even on exit 0', async () => {
     const project = tempProject();

@@ -927,7 +927,9 @@ describe('assessBashCommand — the 16 KB cap applies per statement, never silen
     expect(assessBashCommand(command).level).toBe('block');
   }, 30_000);
   // Typical, idle, at 19 000: 230 ms.
-  timeShape('a command of short statements', (n) => assessBashCommand(shortStatements(n)), 4_750, 5000);
+  // Measured at 2 400 against 9 600 statements (the ratio needs no more); the
+  // strict bound scaled with it.
+  timeShape('a command of short statements', (n) => assessBashCommand(shortStatements(n)), 2_400, 2500);
 
   // Fix round 2: the whole command is read to 512 KB (the corpus's longest
   // real command is 58 KB), and the warning names the cap that cut it — never
@@ -1908,8 +1910,8 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     });
     // Two 512 KB commands, each read twice: about 2 s on an idle machine,
     // 3 s under load. Quadratic, each unclosed opener rescanned the rest —
-    // 170 000 × 512 KB, hours. Measured at a quarter of that (10 625 against
-    // 42 500 openers, ~0.5 s idle): the ratio tells the two shapes apart at
+    // 170 000 × 512 KB, hours. Measured at an eighth of that (5 300 against
+    // 21 200 openers, ~0.25 s idle): the ratio tells the two shapes apart at
     // any size, and the strict bound is scaled with it.
     timeShape(
       'unclosed here-string openers',
@@ -1917,8 +1919,8 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
         ps(`${"@'\n".repeat(n)}; rm -rf /`);
         ps(`${'x @"\n'.repeat(Math.floor((n * 10) / 17))}`);
       },
-      10_625,
-      2500,
+      5_300,
+      1250,
     );
 
     // Caps that ended in a silent ok.
@@ -2058,13 +2060,13 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
       expect(assessBashCommand('case $1 in (a) echo hi ;; esac # the user\'s note').level).toBe('ok');
     });
 
-    // Typical, idle, at 40 000 statements: 1.1 s. Measured at a quarter of
-    // that (2 500 against 10 000); the strict bound is scaled with it.
+    // Typical, idle, at 40 000 statements: 1.1 s. Measured at an eighth of
+    // that (1 250 against 5 000); the strict bound is scaled with it.
     timeShape(
       'nested PowerShell text read at every level',
       (n) => assessBashCommand(`pwsh -c "pwsh -c 'pwsh -c ${'Get-Item x; '.repeat(n)}'"`, { shell: 'powershell' }),
-      2_500,
-      1500,
+      1_250,
+      750,
     );
   });
 
@@ -2405,13 +2407,14 @@ describe('assessBashCommand — a POSIX download run on the same command line (r
 
   // Each run is judged in constant time: the latest download per file, and
   // the latest check chained by `&&`, are carried forward — never searched.
-  // Typical, idle, at 20 000 / 2 285: 16-350 ms.
+  // Typical, idle, at 20 000 / 2 285: 16-350 ms. Measured at 2 500 against
+  // 10 000 (the strict bound halved with it) and 571 against 2 285.
   const downloadShapes: Array<[string, (n: number) => string, number]> = [
-    ['verified runs of a download', (n) => `curl -o x https://x.test/x && sha256sum -c x.sha256${' && ./x'.repeat(n)}`, 5_000],
-    ['downloads of one file', (n) => `${'curl -o x https://x.test/x; '.repeat(n)}echo done`, 5_000],
+    ['verified runs of a download', (n) => `curl -o x https://x.test/x && sha256sum -c x.sha256${' && ./x'.repeat(n)}`, 2_500],
+    ['downloads of one file', (n) => `${'curl -o x https://x.test/x; '.repeat(n)}echo done`, 2_500],
     ['a pipeline of cat (16 KB)', (n) => 'cat x |'.repeat(n), Math.floor(16_000 / 28)],
   ];
-  for (const [label, make, n] of downloadShapes) timeShape(label, (size) => assessBashCommand(make(size)), n, 2000);
+  for (const [label, make, n] of downloadShapes) timeShape(label, (size) => assessBashCommand(make(size)), n, 1000);
 });
 
 // Ruling 2: an interpreter that reads its program from stdin, or from a
@@ -3246,8 +3249,9 @@ describe('assessBashCommand — a download extracted into a PATH directory, then
   it('20 000 extractions, then runs, are assessed to the end: denied', () => {
     expect(assessBashCommand(extractThenRun(10_000)).level).toBe('block');
   }, 30_000);
-  // Typical, idle, at 10 000 each: under 1 s.
-  timeShape('extractions, then runs', (n) => assessBashCommand(extractThenRun(n)), 2_500, 3000);
+  // Typical, idle, at 10 000 each: under 1 s. Measured at 1 250 against 5 000
+  // (the strict bound halved with it).
+  timeShape('extractions, then runs', (n) => assessBashCommand(extractThenRun(n)), 1_250, 1500);
 });
 
 // Review of 3.0, wave 2, round 2, item 1(b): the cheap indirect launches of
