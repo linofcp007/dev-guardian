@@ -667,7 +667,8 @@ function sqliteErrorCode(error) {
     // Extended result codes carry the primary code in their low byte.
     return typeof code === 'number' ? code & 0xff : undefined;
 }
-function sleepSync(ms) {
+/** Blocks this thread for `ms` without spinning. */
+export function sleepSync(ms) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function ensureDir(dir) {

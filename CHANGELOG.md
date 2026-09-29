@@ -48,6 +48,13 @@ version bump.
   directory and differ only in spelling; a path through a link or junction, which may point at
   another project by now, is left alone. Moving or renaming a repository still starts its history,
   suppressions and baselines afresh; the READMEs say so.
+- A large scan no longer locks other processes out of the database. Its findings were inserted in
+  one transaction — 30,000 on a 300 MB database held the write lock for 8.8 s, and another
+  process's `scans.insert` failed with `database is locked` after its 5 s busy timeout. They are
+  now inserted 2,000 per transaction while the scan row is still `running`, with a pause of half
+  the last transaction's lock time (20–120 ms) between two, so a process waiting on the lock
+  gets it; a scan of up to 2,000 findings pays nothing. No reader shows a running scan's findings:
+  `guardian://scans/{id}` lists none for one and says why.
 - `stack_snapshots` is kept to the newest 10 per project (on insert, and a backlog in the
   background after startup, 500 rows per start) and indexed by project (migration 015); it grew
   with every `detect_stack` run, and every reader's per-project lookup scanned and sorted all of it.

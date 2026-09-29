@@ -64,6 +64,16 @@ function enrich(scanId, ctx) {
     const record = ctx.storage.scans.getById(scanId);
     if (!record)
         return { last_run: null };
+    // A running scan's findings are inserted in chunks: counting them now
+    // would report whichever chunks are in as the scan's result.
+    if (record.status === 'running') {
+        return {
+            ...record,
+            findings_count_by_severity: null,
+            top_findings: [],
+            note: 'This scan is still running: its findings are not all stored yet. Read it again once it completes.',
+        };
+    }
     const findings = ctx.storage.findings.listByScan(scanId);
     const counts = countBySeverity(findings);
     const top = topFindings(findings, 10);

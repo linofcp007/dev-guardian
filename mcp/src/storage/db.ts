@@ -758,7 +758,8 @@ function sqliteErrorCode(error: unknown): number | undefined {
   return typeof code === 'number' ? code & 0xff : undefined;
 }
 
-function sleepSync(ms: number): void {
+/** Blocks this thread for `ms` without spinning. */
+export function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
