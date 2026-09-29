@@ -24,7 +24,7 @@
  * Pure functions. No I/O. Imports only `hooks/bashGuard.js`, which is itself
  * dependency-free — the hook loads this file from `mcp/dist`.
  */
-import { splitShell } from '../hooks/bashGuard.js';
+import { commandWordIndex, splitShell } from '../hooks/bashGuard.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
 export { powershellAsPosix };
 // ───────────────────────────────────────────────────────────── names
@@ -273,6 +273,88 @@ const FLAGS = {
         registry: set('-s', '--source'),
     },
 };
+const UV_VALUED = [
+    '--python', '-p', '--index', '--index-url', '--default-index', '--extra-index-url', '--find-links', '-f',
+    '--index-strategy', '--keyring-provider', '--resolution', '--prerelease', '--exclude-newer', '--link-mode',
+    '--directory', '--project', '--config-file', '--cache-dir', '--constraints', '--overrides', '--env-file',
+    '--with-requirements', '--with-editable', '--python-preference', '--color',
+];
+const UV_BOOL = [
+    '--isolated', '--offline', '-q', '--quiet', '-v', '--verbose', '--no-cache', '-n', '--refresh', '--reinstall',
+    '--upgrade', '-U', '--native-tls', '--no-config', '--no-progress', '--no-python-downloads', '--force',
+    '--no-index', '--compile-bytecode',
+];
+const UV_REGISTRY = ['--index', '--index-url', '--default-index', '--extra-index-url', '--find-links', '-f'];
+/**
+ * The launchers that download a package and run it (review of 3.0.0, P1):
+ * `npx`, `npm exec`, `pnpm dlx` / `pnpx`, `yarn dlx`, `bunx` / `bun x`,
+ * `uvx` / `uv tool run`, `uv tool install`, `pipx run` and `pipx install`.
+ * Keyed by the `Detected.flags` name.
+ */
+const LAUNCH_FLAGS = {
+    npx: {
+        value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '--workspace', '-w', '--loglevel', '--node-options'),
+        bool: set('--yes', '-y', '--no', '--no-install', '--ignore-existing', '--quiet', '-q', '--silent', '--prefer-offline', '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose'),
+        registry: set('--registry'),
+        workspace: set('--workspace', '-w', '--workspaces'),
+        packageFlags: set('--package', '-p'),
+        shellFlags: set('--call', '-c'),
+        noFetchFlags: set('--no', '--no-install', '--offline'),
+    },
+    'pnpm-dlx': {
+        value: set('--package', '--allow-build', '--registry', '--dir', '-C', '--reporter'),
+        bool: set('--silent', '-s', '--shell-mode', '-c'),
+        registry: set('--registry'),
+        dir: set('--dir', '-C'),
+        packageFlags: set('--package'),
+        shellFlags: set('--shell-mode', '-c'),
+    },
+    'yarn-dlx': {
+        value: set('--package', '-p'),
+        bool: set('--quiet', '-q'),
+        registry: set(),
+        packageFlags: set('--package', '-p'),
+    },
+    bunx: {
+        value: set('--package', '-p'),
+        bool: set('--bun', '--silent', '--verbose'),
+        registry: set(),
+        packageFlags: set('--package', '-p'),
+    },
+    uvx: {
+        value: set(...UV_VALUED, '--from', '--with', '-w'),
+        bool: set(...UV_BOOL),
+        registry: set(...UV_REGISTRY),
+        registryBool: set('--no-index'),
+        dir: set('--directory', '--project'),
+        packageFlags: set('--from'),
+        extraPackageFlags: set('--with', '-w'),
+    },
+    'uv-tool-install': {
+        value: set(...UV_VALUED, '--with', '-w', '--editable', '-e'),
+        bool: set(...UV_BOOL),
+        registry: set(...UV_REGISTRY),
+        registryBool: set('--no-index'),
+        dir: set('--directory', '--project'),
+        extraPackageFlags: set('--with', '-w'),
+        reported: new Map([
+            ['--editable', 'editable install (-e) — local or VCS source, not looked up'],
+            ['-e', 'editable install (-e) — local or VCS source, not looked up'],
+        ]),
+    },
+    'pipx-install': {
+        value: set('--index-url', '-i', '--suffix', '--python', '--preinstall', '--spec'),
+        bool: set('--force', '-f', '--include-deps', '--editable', '-e', '--system-site-packages', '--global', '--quiet', '-q', '--verbose', '-v', '--fetch-missing-python'),
+        registry: set('--index-url', '-i'),
+        extraPackageFlags: set('--preinstall', '--spec'),
+    },
+    'pipx-run': {
+        value: set('--spec', '--index-url', '-i', '--python', '--path'),
+        bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python'),
+        registry: set('--index-url', '-i'),
+        packageFlags: set('--spec'),
+    },
+};
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 /**
  * Separates flags (and their values) from positional words.
@@ -290,7 +372,9 @@ function walk(words, table) {
     const uncertain = [];
     let customRegistry;
     const registries = [];
+    const flags = [];
     const note = (flag, value) => {
+        flags.push(value === undefined ? { flag } : { flag, value });
         if (table.registry.has(flag) && value !== undefined) {
             registries.push(value);
             customRegistry = customRegistry ?? value;
@@ -359,53 +443,33 @@ function walk(words, table) {
         if (v.startsWith('--') && !v.startsWith('--no-'))
             i += 1;
     }
-    const out = { positionals, skipped, uncertain, registries };
+    const out = { positionals, skipped, uncertain, registries, flags };
     if (customRegistry !== undefined)
         out.customRegistry = customRegistry;
     return out;
 }
 // ─────────────────────────────────────────────────────────── commands
-const RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
-const RUNNER_VALUE_FLAGS = new Set(['-u', '-g', '-n', '-C', '-k', '-s', '--user', '--group']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function base(word) {
     const last = word.split(/[\\/]/).pop() ?? word;
     return last.toLowerCase().replace(/\.(?:exe|cmd|bat|ps1)$/, '');
 }
-/** Index of the word that names the command, past `VAR=x`, `sudo -E`, `env`, `timeout 30`… */
+/**
+ * Index of the word that names the command, past `VAR=x`, `sudo -E`, `env`,
+ * `timeout 30`… — the shell guard's own resolver, each runner read with its
+ * own options: a table shared by every runner made `sudo -n npm i x` read
+ * `npm` as the value of `-n`, and vet nothing (review of 3.0.0).
+ */
 function commandStart(words) {
-    let i = 0;
-    for (let guard = 0; guard < 32 && i < words.length; guard += 1) {
-        const w = words[i];
-        if (w === undefined)
-            break;
-        if (ASSIGNMENT.test(w.value)) {
-            i += 1;
-            continue;
-        }
-        const name = base(w.value);
-        if (!RUNNERS.has(name))
-            break;
-        i += 1;
-        while (i < words.length) {
-            const a = words[i];
-            if (a === undefined)
-                break;
-            if (ASSIGNMENT.test(a.value))
-                i += 1;
-            else if (a.value.startsWith('-') && a.value.length > 1)
-                i += RUNNER_VALUE_FLAGS.has(a.value) ? 2 : 1;
-            else if ((name === 'timeout' || name === 'nice') && /^[+-]?\d+(?:\.\d+)?[smhd]?$/.test(a.value))
-                i += 1;
-            else
-                break;
-        }
-    }
-    return i;
+    return commandWordIndex(words);
 }
 const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
 const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
 const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
+/** A launcher as `detect` returns it. */
+function launcher(manager, ecosystem, args, pre, launch) {
+    return { manager, ecosystem, args, pre, uncertain: [], launch };
+}
 /** First positional (non-flag) index at or after `from`, honouring the table's value flags. */
 function nextPositional(words, from, table) {
     for (let i = from; i < words.length; i += 1) {
@@ -446,12 +510,55 @@ function detect(words) {
         head = 'pip';
     if (head === 'composer.phar')
         head = 'composer';
+    // The launchers named by themselves (review P1).
+    const rest = words.slice(i);
+    if (head === 'npx')
+        return launcher('npx', 'npm', rest, [], { style: 'run', flags: 'npx', localFirst: true });
+    if (head === 'pnpx')
+        return launcher('pnpm', 'npm', rest, [], { style: 'run', flags: 'pnpm-dlx' });
+    if (head === 'bunx')
+        return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true });
+    if (head === 'uvx')
+        return launcher('uv', 'pypi', rest, [], { style: 'run', flags: 'uvx' });
+    if (head === 'pipx') {
+        const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() });
+        const subWord = sub < 0 ? '' : (words[sub]?.value ?? '');
+        if (subWord === 'install')
+            return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'install', flags: 'pipx-install' });
+        if (subWord === 'run')
+            return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'run', flags: 'pipx-run' });
+        return null;
+    }
     const table = FLAGS[head];
     if (table === undefined)
         return null;
     const sub = nextPositional(words, i, table);
     if (sub < 0)
         return null;
+    // The launchers that are a package manager's subcommand (review P1).
+    const subName = words[sub]?.value ?? '';
+    const after = words.slice(sub + 1);
+    const before = words.slice(i, sub);
+    if (head === 'npm' && (subName === 'exec' || subName === 'x')) {
+        return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npx', localFirst: true });
+    }
+    if (head === 'pnpm' && subName === 'dlx')
+        return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx' });
+    if (head === 'yarn' && subName === 'dlx')
+        return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx' });
+    if (head === 'bun' && subName === 'x')
+        return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true });
+    if (head === 'uv' && subName === 'tool') {
+        const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
+        const verb = nextPositional(words, sub + 1, toolTable);
+        const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
+        const tail = words.slice(verb + 1);
+        if (verbName === 'run')
+            return launcher('uv', 'pypi', tail, before, { style: 'run', flags: 'uvx' });
+        if (verbName === 'install')
+            return launcher('uv', 'pypi', tail, before, { style: 'install', flags: 'uv-tool-install' });
+        return null;
+    }
     const subWord = words[sub]?.value ?? '';
     const pre = words.slice(i, sub);
     switch (head) {
@@ -515,7 +622,68 @@ function detect(words) {
 }
 /** Composer lets a constraint follow its package as a separate word: `vendor/pkg "^2.0"`. */
 const COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
+/**
+ * A launcher's packages (review P1): the values of its package flags, else —
+ * unless it runs shell text (`npx -c`) or may fetch nothing (`npx
+ * --no-install`) — its positional words: for `run`, only the first, the rest
+ * being the program's own arguments; for `install`, all. Plus the packages a
+ * flag adds (`uvx --with x`).
+ */
+function collectLaunch(d, launch, context) {
+    const table = LAUNCH_FLAGS[launch.flags] ?? { value: set(), bool: set(), registry: set() };
+    const pre = walk(d.pre, table);
+    let body = d.args;
+    if (launch.style === 'run') {
+        const at = nextPositional(d.args, 0, table);
+        if (at >= 0)
+            body = d.args.slice(0, at + 1);
+    }
+    const w = walk(body, table);
+    const flags = [...pre.flags, ...w.flags];
+    const has = (names) => names !== undefined && flags.some((f) => names.has(f.flag));
+    const values = (names) => names === undefined
+        ? []
+        : flags
+            .filter((f) => names.has(f.flag))
+            .flatMap((f) => (f.value ?? '').split(','))
+            .map((v) => v.trim())
+            .filter((v) => v !== '');
+    const raws = [];
+    if (!has(table.noFetchFlags)) {
+        const named = values(table.packageFlags);
+        if (named.length > 0)
+            raws.push(...named);
+        else if (!has(table.shellFlags))
+            raws.push(...w.positionals.map((p) => p.value));
+        raws.push(...values(table.extraPackageFlags));
+    }
+    const packages = [];
+    const skipped = [...pre.skipped, ...w.skipped];
+    for (const raw of raws) {
+        const spec = d.ecosystem === 'npm' ? parseNpm(raw) : parsePython(raw, false);
+        if ('name' in spec)
+            packages.push(spec);
+        else
+            skipped.push(spec);
+    }
+    const out = {
+        ecosystem: d.ecosystem,
+        manager: d.manager,
+        packages,
+        skipped,
+        uncertain: [...new Set([...context, ...pre.uncertain, ...w.uncertain])],
+        registries: [...pre.registries, ...w.registries],
+    };
+    const registry = pre.customRegistry ?? w.customRegistry;
+    if (registry !== undefined)
+        out.customRegistry = registry;
+    if (launch.localFirst === true)
+        out.localFirst = true;
+    return out;
+}
 function collect(d, context) {
+    if (d.launch !== undefined)
+        return collectLaunch(d, d.launch, context);
     const table = FLAGS[d.manager === 'uv-pip' ? 'pip' : d.manager] ?? FLAGS['npm'];
     const flagTable = table ?? { value: set(), bool: set(), registry: set() };
     const preWalk = walk(d.pre, flagTable);
@@ -764,6 +932,17 @@ const ALLOW = {
         value: set(),
     },
     dotnet: { bool: set('--prerelease'), value: set('-v', '--version', '-f', '--framework') },
+    // The launchers (review P1): consent and verbosity only. A package flag
+    // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
+    // out of the confident shape.
+    npx: { bool: set('-y', '--yes', '-q', '--quiet', '--silent'), value: set() },
+    'pnpm-dlx': { bool: set('--silent', '-s'), value: set() },
+    'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
+    bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
+    uvx: { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
+    'uv-tool-install': { bool: set('-q', '--quiet', '-v', '--verbose', '--force', '--upgrade', '-U'), value: set() },
+    'pipx-install': { bool: set('--force', '-f', '-q', '--quiet', '-v', '--verbose', '--include-deps'), value: set() },
+    'pipx-run': { bool: set('-q', '--quiet', '-v', '--verbose', '--no-cache'), value: set() },
 };
 /**
  * Characters that, outside quotes, make a command something other than ONE
@@ -841,19 +1020,50 @@ export function confidentShape(text) {
     const at = (k) => rest[k] ?? '';
     let key;
     let args;
+    // A launcher (review P1): its first positional word is the package, and
+    // every word after it the program's own — never judged here.
+    let launch = false;
     switch (tool) {
+        case 'npx':
+        case 'bunx':
+        case 'uvx':
+            [key, args, launch] = [tool, rest, true];
+            break;
+        case 'pnpx':
+            [key, args, launch] = ['pnpm-dlx', rest, true];
+            break;
+        case 'pipx':
+            if (at(0) === 'install')
+                [key, args] = ['pipx-install', rest.slice(1)];
+            else if (at(0) === 'run')
+                [key, args, launch] = ['pipx-run', rest.slice(1), true];
+            else
+                return notPlain(`'pipx ${at(0)}'`);
+            break;
         case 'npm':
+            if (at(0) === 'exec' || at(0) === 'x') {
+                [key, args, launch] = ['npx', rest.slice(1), true];
+                break;
+            }
             if (!NPM_INSTALL.has(at(0)))
                 return notPlain(`'npm ${at(0)}'`);
             [key, args] = ['npm', rest.slice(1)];
             break;
         case 'pnpm':
         case 'yarn':
+            if (at(0) === 'dlx') {
+                [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
+                break;
+            }
             if (at(0) !== 'add')
                 return notPlain(`'${tool} ${at(0)}'`);
             [key, args] = [tool, rest.slice(1)];
             break;
         case 'bun':
+            if (at(0) === 'x') {
+                [key, args, launch] = ['bunx', rest.slice(1), true];
+                break;
+            }
             if (!BUN_ADD.has(at(0)))
                 return notPlain(`'bun ${at(0)}'`);
             [key, args] = ['bun', rest.slice(1)];
@@ -876,6 +1086,10 @@ export function confidentShape(text) {
                 [key, args] = ['uv', rest.slice(1)];
             else if (at(0) === 'pip' && at(1) === 'install')
                 [key, args] = ['uv-pip', rest.slice(2)];
+            else if (at(0) === 'tool' && at(1) === 'run')
+                [key, args, launch] = ['uvx', rest.slice(2), true];
+            else if (at(0) === 'tool' && at(1) === 'install')
+                [key, args] = ['uv-tool-install', rest.slice(2)];
             else
                 return notPlain(`'uv ${at(0)}'`);
             break;
@@ -903,7 +1117,12 @@ export function confidentShape(text) {
     let positionals = 0;
     for (let k = 0; k < args.length; k += 1) {
         const w = args[k] ?? '';
+        // `npm exec -- pkg`: the end of the launcher's own options.
+        if (launch && w === '--')
+            continue;
         if (!w.startsWith('-') || w === '-') {
+            if (launch)
+                return null;
             positionals += 1;
             continue;
         }

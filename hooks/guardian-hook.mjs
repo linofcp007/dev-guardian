@@ -642,7 +642,9 @@ async function handlePostToolUse(toolName, input, cwd, root, cfg, allowlist) {
 /**
  * Install-time package vetting for `npm i|install|add`, `pnpm add`, `yarn
  * add`, `bun add`, `pip install`, `uv add`, `uv pip install`, `poetry add`,
- * `composer require` and `dotnet add package`. The logic — command parsing,
+ * `composer require` and `dotnet add package`, and for the launchers that
+ * download a package to run it (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`,
+ * `bunx`, `uvx`, `uv tool install|run`, `pipx install|run`). The logic — command parsing,
  * the registry/OSV lookups under a 3 s total network budget and one 8 s
  * deadline for the whole hook call, the verdict and
  * the wording — lives in `mcp/dist/pkgvet/hookDecision.js`; this only calls

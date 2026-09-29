@@ -29,6 +29,9 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
+import { lstatSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { walkLinksUnder } from '../hooks/configFile.js';
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { loadPopularIndex } from './popular.js';
 import { registryCache } from './privateRegistry.js';
@@ -116,9 +119,14 @@ function boundedInstalls(
   command: string,
   shell: CommandShell,
   isPopular: (pkg: PackageSpec) => boolean,
+  runsLocally: (pkg: PackageSpec) => boolean,
 ): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell });
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell }).map((c) =>
+    // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
+    // fetch nothing: there is nothing to vet (review P1).
+    c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p)) } : c,
+  );
   const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
   const seen = new Set<string>();
   const unique: PackageSpec[] = [];
@@ -165,6 +173,41 @@ function popularTest(opts: HookVetOptions): (pkg: PackageSpec) => boolean {
   };
 }
 
+/** Whether `path` exists — `lstat`, never following a link at it — below `under`, with no link on the way to a network or device path. */
+function presentBelow(under: string, path: string): boolean {
+  if (!walkLinksUnder(under, path).ok) return false;
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `npx` / `npm exec` / `bunx` would run `name` from the project
+ * rather than fetch it (review P1): a `node_modules/<name>` package, or a
+ * `node_modules/.bin/<bin>` (the name without its scope; `.cmd` on Windows),
+ * in the working directory or an ancestor up to the repository root. Not
+ * found — or behind a link to a network path — means it would be fetched,
+ * and is vetted.
+ */
+function installedLocally(name: string, cwd: string): boolean {
+  const bin = name.replace(/^@[^/]+\//, '');
+  let dir = resolve(cwd);
+  for (let i = 0; i < 32; i += 1) {
+    const modules = join(dir, 'node_modules');
+    for (const candidate of [join(modules, name, 'package.json'), join(modules, '.bin', bin), join(modules, '.bin', `${bin}.cmd`)]) {
+      if (presentBelow(dir, candidate)) return true;
+    }
+    if (presentBelow(dir, join(dir, '.git'))) return false;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  return false;
+}
+
 /** The note for a command read only to its first 512 KB. */
 const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 
@@ -174,7 +217,7 @@ const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command w
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
   const shell = opts.shell ?? 'bash';
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts));
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg) => installedLocally(pkg.name, opts.cwd));
   // A cut command whose start installs nothing still says what was not read.
   if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
 
@@ -257,6 +300,8 @@ const NOT_FOUND = 'not found on the public registry — if it is private or loca
 /** The flag that names a registry, per package manager (`InstallCommand.manager`). */
 const REGISTRY_FLAG: Readonly<Record<string, string>> = {
   npm: '`--registry <url>`',
+  npx: '`--registry <url>`',
+  pipx: '`--index-url <url>`',
   pnpm: '`--registry <url>`',
   bun: '`--registry <url>`',
   pip: '`--index-url <url>`',

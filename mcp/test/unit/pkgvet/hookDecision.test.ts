@@ -612,6 +612,77 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
   });
 });
 
+// Review of 3.0.0, P1: `npx -y`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`,
+// `uvx`, `pipx install|run` and `uv tool install|run` download a package and
+// run it, and the hook said nothing — while `npm i -g` of the same missing
+// name was denied.
+describe('decideInstallCommand — launchers are vetted like installs (review P1)', () => {
+  it.each([
+    ['npx -y zz-no-such-pkg', /`--registry <url>`/],
+    ['npx zz-no-such-pkg --help', /`--registry <url>`/],
+    ['npm exec zz-no-such-pkg', /`--registry <url>`/],
+    ['pnpm dlx zz-no-such-pkg', /`--registry <url>`/],
+    ['yarn dlx zz-no-such-pkg', /GUARDIAN_PKG_VET=0/],
+    ['bunx zz-no-such-pkg', /`--registry <url>`/],
+    ['bun x zz-no-such-pkg', /`--registry <url>`/],
+    ['uvx zz-no-such-pkg', /`--index <url>`/],
+    ['uv tool run zz-no-such-pkg', /`--index <url>`/],
+    ['uv tool install zz-no-such-pkg', /`--index <url>`/],
+    ['pipx install zz-no-such-pkg', /`--index-url <url>`/],
+    ['pipx run zz-no-such-pkg', /`--index-url <url>`/],
+  ])('DENIES %s — a name the registry does not have', async (command, hatch) => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }));
+    expect(d?.deny).toMatch(/zz-no-such-pkg/);
+    expect(d?.deny).toMatch(/does not exist/);
+    expect(d?.deny).toMatch(hatch);
+  });
+
+  it.each(['npx -y lodash', 'npx express --version', 'pnpm dlx express', 'uvx requests', 'pipx install requests'])(
+    '%s — a real, clean package — stays allowed',
+    async (command) => {
+      const f = fakeRegistry();
+      expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }))).toBeNull();
+    },
+  );
+
+  it('a malicious package through npx is denied', async () => {
+    const f = fakeFetch({
+      'https://registry.npmjs.org/evil-cli': npmDoc('1.0.0'),
+      [OSV]: (body) => ({ body: { results: (body as { queries: unknown[] }).queries.map(() => ({ vulns: [{ id: 'MAL-2026-7' }] })) } }),
+    });
+    const d = await decideInstallCommand('npx -y evil-cli', opts(f.fetchImpl));
+    expect(d?.deny).toMatch(/MAL-2026-7/);
+  });
+
+  it('npx of a bin installed in the project runs it locally: nothing is fetched, nothing is looked up', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-local-tool'), '#!/bin/sh\n');
+    mkdirSync(join(project, 'node_modules', 'zz-local-pkg'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'zz-local-pkg', 'package.json'), '{"name":"zz-local-pkg"}');
+    const f = fakeFetch({});
+    for (const command of ['npx zz-local-tool --fix', 'npm exec zz-local-pkg', 'bunx zz-local-tool']) {
+      expect(await decideInstallCommand(command, opts(f.fetchImpl))).toBeNull();
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  it('…but pnpm dlx and yarn dlx always fetch, so they are vetted all the same', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-no-such-pkg'), '#!/bin/sh\n');
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('pnpm dlx zz-no-such-pkg', opts(f.fetchImpl, { popular: {} }));
+    expect(d?.deny).toMatch(/zz-no-such-pkg/);
+  });
+
+  it('a launcher with a package flag or a registry is warned about, never denied, for a missing name', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('npx -p zz-no-such-pkg tool', opts(f.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry/s);
+  });
+});
+
 // Review of 3.0.0, I4: whether a local workspace explains a 404 was computed
 // for EVERY package, before the network, by walking up to 3000 workspace
 // directories each time — 17 packages in a 3000-directory monorepo took

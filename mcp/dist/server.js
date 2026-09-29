@@ -81577,6 +81577,160 @@ var FLAGS = {
     registry: set("-s", "--source")
   }
 };
+var UV_VALUED = [
+  "--python",
+  "-p",
+  "--index",
+  "--index-url",
+  "--default-index",
+  "--extra-index-url",
+  "--find-links",
+  "-f",
+  "--index-strategy",
+  "--keyring-provider",
+  "--resolution",
+  "--prerelease",
+  "--exclude-newer",
+  "--link-mode",
+  "--directory",
+  "--project",
+  "--config-file",
+  "--cache-dir",
+  "--constraints",
+  "--overrides",
+  "--env-file",
+  "--with-requirements",
+  "--with-editable",
+  "--python-preference",
+  "--color"
+];
+var UV_BOOL = [
+  "--isolated",
+  "--offline",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "--no-cache",
+  "-n",
+  "--refresh",
+  "--reinstall",
+  "--upgrade",
+  "-U",
+  "--native-tls",
+  "--no-config",
+  "--no-progress",
+  "--no-python-downloads",
+  "--force",
+  "--no-index",
+  "--compile-bytecode"
+];
+var UV_REGISTRY = ["--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"];
+var LAUNCH_FLAGS = {
+  npx: {
+    value: set(
+      "--package",
+      "-p",
+      "--call",
+      "-c",
+      "--registry",
+      "--cache",
+      "--userconfig",
+      "--prefix",
+      "--workspace",
+      "-w",
+      "--loglevel",
+      "--node-options"
+    ),
+    bool: set(
+      "--yes",
+      "-y",
+      "--no",
+      "--no-install",
+      "--ignore-existing",
+      "--quiet",
+      "-q",
+      "--silent",
+      "--prefer-offline",
+      "--prefer-online",
+      "--offline",
+      "--workspaces",
+      "--include-workspace-root",
+      "--verbose"
+    ),
+    registry: set("--registry"),
+    workspace: set("--workspace", "-w", "--workspaces"),
+    packageFlags: set("--package", "-p"),
+    shellFlags: set("--call", "-c"),
+    noFetchFlags: set("--no", "--no-install", "--offline")
+  },
+  "pnpm-dlx": {
+    value: set("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
+    bool: set("--silent", "-s", "--shell-mode", "-c"),
+    registry: set("--registry"),
+    dir: set("--dir", "-C"),
+    packageFlags: set("--package"),
+    shellFlags: set("--shell-mode", "-c")
+  },
+  "yarn-dlx": {
+    value: set("--package", "-p"),
+    bool: set("--quiet", "-q"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  bunx: {
+    value: set("--package", "-p"),
+    bool: set("--bun", "--silent", "--verbose"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  uvx: {
+    value: set(...UV_VALUED, "--from", "--with", "-w"),
+    bool: set(...UV_BOOL),
+    registry: set(...UV_REGISTRY),
+    registryBool: set("--no-index"),
+    dir: set("--directory", "--project"),
+    packageFlags: set("--from"),
+    extraPackageFlags: set("--with", "-w")
+  },
+  "uv-tool-install": {
+    value: set(...UV_VALUED, "--with", "-w", "--editable", "-e"),
+    bool: set(...UV_BOOL),
+    registry: set(...UV_REGISTRY),
+    registryBool: set("--no-index"),
+    dir: set("--directory", "--project"),
+    extraPackageFlags: set("--with", "-w"),
+    reported: /* @__PURE__ */ new Map([
+      ["--editable", "editable install (-e) \u2014 local or VCS source, not looked up"],
+      ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"]
+    ])
+  },
+  "pipx-install": {
+    value: set("--index-url", "-i", "--suffix", "--python", "--preinstall", "--spec"),
+    bool: set(
+      "--force",
+      "-f",
+      "--include-deps",
+      "--editable",
+      "-e",
+      "--system-site-packages",
+      "--global",
+      "--quiet",
+      "-q",
+      "--verbose",
+      "-v",
+      "--fetch-missing-python"
+    ),
+    registry: set("--index-url", "-i"),
+    extraPackageFlags: set("--preinstall", "--spec")
+  },
+  "pipx-run": {
+    value: set("--spec", "--index-url", "-i", "--python", "--path"),
+    bool: set("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python"),
+    registry: set("--index-url", "-i"),
+    packageFlags: set("--spec")
+  }
+};
 var NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
 var ALLOW = {
   npm: {
@@ -81700,7 +81854,18 @@ var ALLOW = {
     ),
     value: set()
   },
-  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") }
+  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") },
+  // The launchers (review P1): consent and verbosity only. A package flag
+  // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
+  // out of the confident shape.
+  npx: { bool: set("-y", "--yes", "-q", "--quiet", "--silent"), value: set() },
+  "pnpm-dlx": { bool: set("--silent", "-s"), value: set() },
+  "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
+  bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
+  uvx: { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
+  "uv-tool-install": { bool: set("-q", "--quiet", "-v", "--verbose", "--force", "--upgrade", "-U"), value: set() },
+  "pipx-install": { bool: set("--force", "-f", "-q", "--quiet", "-v", "--verbose", "--include-deps"), value: set() },
+  "pipx-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--no-cache"), value: set() }
 };
 
 // src/pkgvet/popular.ts

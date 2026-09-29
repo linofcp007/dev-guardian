@@ -1007,6 +1007,16 @@ function resolveCommand(words: readonly ShellWord[], through?: ReadonlySet<strin
   return { index: i, elevated };
 }
 
+/**
+ * The index of the word that names the command, past `VAR=x` and runner
+ * prefixes read with their own options (`sudo -n`, `env -i`, `timeout 30`,
+ * …) — for the install parser, which must find the same command the shell
+ * guard does.
+ */
+export function commandWordIndex(words: readonly ShellWord[]): number {
+  return resolveCommand(words).index;
+}
+
 function stripQuotes(token: string): string {
   // Loops, not `/['"`]+$/`: that regex restarts at every quote of a long run.
   const q = (c: string): boolean => c === "'" || c === '"' || c === '`';

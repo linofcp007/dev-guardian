@@ -891,6 +891,15 @@ function resolveCommand(words, through) {
     }
     return { index: i, elevated };
 }
+/**
+ * The index of the word that names the command, past `VAR=x` and runner
+ * prefixes read with their own options (`sudo -n`, `env -i`, `timeout 30`,
+ * …) — for the install parser, which must find the same command the shell
+ * guard does.
+ */
+export function commandWordIndex(words) {
+    return resolveCommand(words).index;
+}
 function stripQuotes(token) {
     // Loops, not `/['"`]+$/`: that regex restarts at every quote of a long run.
     const q = (c) => c === "'" || c === '"' || c === '`';

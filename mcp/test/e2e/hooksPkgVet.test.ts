@@ -437,6 +437,42 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/GUARDIAN_OFFLINE/);
   });
 
+  // Review of 3.0.0, P1: the launchers that download a package and run it
+  // passed with no answer at all.
+  describe('launchers through the real hook (review P1)', () => {
+    it.each(['npx -y react-form-autopilot-helperz', 'pnpm dlx react-form-autopilot-helperz', 'bunx react-form-autopilot-helperz'])(
+      'DENIES %s — a name the registry does not have',
+      (command) => {
+        const r = runHook(command, {
+          'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+          [OSV]: { osv: {} },
+        });
+        expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/react-form-autopilot-helperz.*does not exist/);
+      },
+    );
+
+    it.each(['uvx pyproject-autopilot-helperz', 'pipx install pyproject-autopilot-helperz'])('DENIES %s', (command) => {
+      const r = runHook(command, { 'https://pypi.org/pypi/pyproject-autopilot-helperz/json': { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    });
+
+    it('a popular, clean package through npx stays allowed, silently', () => {
+      const r = runHook('npx -y express --version', { 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      expect(r.output).toBeUndefined();
+    });
+
+    it('a malicious version through npx is denied', () => {
+      const r = runHook('npx -y evil-cli-zz', {
+        'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+        [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
+    });
+  });
+
   // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s
   // through the hook with GUARDIAN_OFFLINE=1 — past Claude Code's 15 s, after
   // which the command runs with no verdict.
