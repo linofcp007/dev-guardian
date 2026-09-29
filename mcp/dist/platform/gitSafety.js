@@ -440,7 +440,10 @@ export async function gitSafetyFor(dirs, opts = {}) {
         return { ...staticGitSafety(platform), refused: problem };
     const penv = probeEnv(env, platform);
     const unique = [...new Set(dirs)];
-    const probes = await Promise.all(unique.map(async (dir) => ({ dir, probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS) })));
+    const probes = await Promise.all(unique.map(async (dir) => ({
+        dir,
+        probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
+    })));
     return combine(probes, env, platform);
 }
 /** {@link gitSafetyFor}, synchronously — for the CLI, the hook and the synchronous readers. */
@@ -453,7 +456,7 @@ export function gitSafetyForSync(dirs, opts = {}) {
     const penv = probeEnv(env, platform);
     const probes = [...new Set(dirs)].map((dir) => ({
         dir,
-        probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS),
+        probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
     }));
     return combine(probes, env, platform);
 }
@@ -480,11 +483,11 @@ function probeCacheKey(git, dir, env) {
         .map((k) => `${k}=${env[k] ?? ''}`);
     return JSON.stringify([git, dir, relevant]);
 }
-function cachedProbe(key) {
+function cachedProbe(key, reuseMs) {
     const hit = probeCache.get(key);
     if (hit === undefined)
         return null;
-    if (Date.now() - hit.at > PROBE_REUSE_MS) {
+    if (Date.now() - hit.at > reuseMs) {
         probeCache.delete(key);
         return null;
     }
@@ -502,13 +505,13 @@ function rememberProbe(key, probe) {
 export function forgetGitConfigReads() {
     probeCache.clear();
 }
-function probeSync(git, dir, env, timeoutMs) {
+function probeSync(git, dir, env, timeoutMs, reuseMs) {
     const key = probeCacheKey(git, dir, env);
-    return cachedProbe(key) ?? rememberProbe(key, probeSyncUncached(git, dir, env, timeoutMs));
+    return cachedProbe(key, reuseMs) ?? rememberProbe(key, probeSyncUncached(git, dir, env, timeoutMs));
 }
-async function probeAsync(git, dir, env, timeoutMs) {
+async function probeAsync(git, dir, env, timeoutMs, reuseMs) {
     const key = probeCacheKey(git, dir, env);
-    return cachedProbe(key) ?? rememberProbe(key, await probeAsyncUncached(git, dir, env, timeoutMs));
+    return cachedProbe(key, reuseMs) ?? rememberProbe(key, await probeAsyncUncached(git, dir, env, timeoutMs));
 }
 function probeSyncUncached(git, dir, env, timeoutMs) {
     const r = spawnSync(git, probeArgs(dir), {

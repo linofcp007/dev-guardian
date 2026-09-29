@@ -479,6 +479,8 @@ export interface GitSafetyOptions {
   git?: string;
   timeoutMs?: number;
   platform?: NodeJS.Platform;
+  /** How long an earlier reading of the same directory may be reused ({@link PROBE_REUSE_MS} by default). */
+  reuseMs?: number;
 }
 
 /**
@@ -495,7 +497,10 @@ export async function gitSafetyFor(dirs: readonly string[], opts: GitSafetyOptio
   const penv = probeEnv(env, platform);
   const unique = [...new Set(dirs)];
   const probes = await Promise.all(
-    unique.map(async (dir) => ({ dir, probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS) })),
+    unique.map(async (dir) => ({
+      dir,
+      probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
+    })),
   );
   return combine(probes, env, platform);
 }
@@ -509,7 +514,7 @@ export function gitSafetyForSync(dirs: readonly string[], opts: GitSafetyOptions
   const penv = probeEnv(env, platform);
   const probes = [...new Set(dirs)].map((dir) => ({
     dir,
-    probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS),
+    probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
   }));
   return combine(probes, env, platform);
 }
@@ -539,10 +544,10 @@ function probeCacheKey(git: string, dir: string, env: NodeJS.ProcessEnv): string
   return JSON.stringify([git, dir, relevant]);
 }
 
-function cachedProbe(key: string): Probe | null {
+function cachedProbe(key: string, reuseMs: number): Probe | null {
   const hit = probeCache.get(key);
   if (hit === undefined) return null;
-  if (Date.now() - hit.at > PROBE_REUSE_MS) {
+  if (Date.now() - hit.at > reuseMs) {
     probeCache.delete(key);
     return null;
   }
@@ -561,14 +566,14 @@ export function forgetGitConfigReads(): void {
   probeCache.clear();
 }
 
-function probeSync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number): Probe {
+function probeSync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number, reuseMs: number): Probe {
   const key = probeCacheKey(git, dir, env);
-  return cachedProbe(key) ?? rememberProbe(key, probeSyncUncached(git, dir, env, timeoutMs));
+  return cachedProbe(key, reuseMs) ?? rememberProbe(key, probeSyncUncached(git, dir, env, timeoutMs));
 }
 
-async function probeAsync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<Probe> {
+async function probeAsync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number, reuseMs: number): Promise<Probe> {
   const key = probeCacheKey(git, dir, env);
-  return cachedProbe(key) ?? rememberProbe(key, await probeAsyncUncached(git, dir, env, timeoutMs));
+  return cachedProbe(key, reuseMs) ?? rememberProbe(key, await probeAsyncUncached(git, dir, env, timeoutMs));
 }
 
 function probeSyncUncached(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number): Probe {

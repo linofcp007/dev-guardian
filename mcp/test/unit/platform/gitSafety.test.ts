@@ -339,20 +339,26 @@ describe('gitSafetyFor against a real git', () => {
     expect(repo.markersWritten()).toEqual([]);
   });
 
-  it('a reading is reused for two seconds in the same environment, never across environments', async () => {
+  it('a reading is reused inside its window in the same environment — never past it, never across environments', async () => {
     const repo = buildHostileRepo();
     for (const [k, v] of Object.entries(repo.env)) vi.stubEnv(k, v);
     forgetGitConfigReads();
-    const before = await gitSafetyFor([repo.root]);
+    // The window fixed per call, so the test does not race the 2 s default.
+    const hour = { reuseMs: 3_600_000 };
+    const before = await gitSafetyFor([repo.root], hour);
     repo.plainGit(['config', 'diff.later.textconv', 'evil']);
     // Same environment, inside the window: the same reading.
-    expect((await gitSafetyFor([repo.root])).notApplied).toEqual(before.notApplied);
-    // Another environment is another reading.
-    vi.stubEnv('GIT_CONFIG_COUNT', '0');
-    expect((await gitSafetyFor([repo.root])).notApplied).toContain('diff.later.textconv');
-    vi.stubEnv('GIT_CONFIG_COUNT', undefined);
+    expect((await gitSafetyFor([repo.root], hour)).notApplied).toEqual(before.notApplied);
+    expect(gitSafetyForSync([repo.root], hour).notApplied).toEqual(before.notApplied);
+    // Past the window: read again.
+    expect((await gitSafetyFor([repo.root], { reuseMs: -1 })).notApplied).toContain('diff.later.textconv');
     forgetGitConfigReads();
-    expect((await gitSafetyFor([repo.root])).notApplied).toContain('diff.later.textconv');
+    const fresh = await gitSafetyFor([repo.root], hour);
+    repo.plainGit(['config', 'diff.later2.textconv', 'evil']);
+    // Another environment — here one more directory git will not cross into — is another reading.
+    vi.stubEnv('GIT_CEILING_DIRECTORIES', join(repo.base, 'nowhere'));
+    expect((await gitSafetyFor([repo.root], hour)).notApplied).toContain('diff.later2.textconv');
+    expect(fresh.notApplied).not.toContain('diff.later2.textconv');
   });
 
   it('GIT_CONFIG — which redirects `git config` alone — does not hide the repository from the read', async () => {
