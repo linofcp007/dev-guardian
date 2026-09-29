@@ -17,6 +17,14 @@ export default defineConfig({
     // override is why those files can run long without needing this default
     // raised for everything else.
     testTimeout: 10_000,
+    // Hooks, unlike tests, get 30 s (review 3.0, R7). Sixty files load the
+    // tool under test in a `beforeAll(async () => { await import(...) })`,
+    // and in the first wave of a coverage run — every worker starting at
+    // once, each import transforming and instrumenting the tool's whole
+    // module graph — two such hooks measured 10.2 s and 10.3 s and failed
+    // their files (55 tests skipped) with nothing wrong. A hook that is
+    // genuinely hung is still reported, 20 s later.
+    hookTimeout: 30_000,
     // Task 19 (EPSS/KEV intel): `intel/enrich.ts` calls the network for any
     // CVE it has not cached in the last 24h, and several PRE-EXISTING tests
     // exercise real trivy-sourced CVEs (e.g. `test/integration/createFixPr.test.ts`'s
