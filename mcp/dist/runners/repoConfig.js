@@ -71,6 +71,11 @@ export const REPO_CONFIG = {
         { file: '.github/zizmor.yml', decides: 'its rules can disable or ignore audits' },
     ],
     // A directory target only: explicit file targets ignore it (measured on 1.176.1).
+    // `.gitignore` is not named, because it cannot hide committed code (measured
+    // on 1.176.1, review of 3.0, W2E): in a git work tree a file tracked before
+    // it was ignored, one under an ignored directory and one force-added were
+    // all scanned — only an untracked ignored file was not; in a plain
+    // directory the `.gitignore` was not applied at all.
     semgrep: [{ file: '.semgrepignore', decides: 'its patterns decide which files are scanned', nested: true }],
     // npm audit reads the project's .npmrc (registry, omit=dev, audit-level).
     npm: [{ file: '.npmrc', decides: 'its registry and settings decide what npm audit reads and reports' }],

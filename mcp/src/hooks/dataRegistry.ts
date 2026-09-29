@@ -8,24 +8,23 @@
  * the directory itself, refused to an assistant's Write / Edit and to the shell
  * writes the shell guard can see, the way the hook configuration is.
  *
- * {@link userDataDir} mirrors the storage module's own (`storage/userData.ts`),
- * which owns the directory and is not a dependency here: the hooks load only
- * the pre-compiled files in `mcp/dist/hooks/`. Node built-ins and
- * `guardedPath.ts` only.
+ * {@link userDataDir} is the storage module's own resolution
+ * (`storage/userData.ts`, which owns the directory), imported rather than
+ * mirrored: the two had drifted into separate copies. That file imports only
+ * Node built-ins and `dbError.js` — the SessionStart hook already loads
+ * `dist/storage/dbRegistry.js` the same way — so the hooks still run from the
+ * compiled `mcp/dist/` alone, with no `node_modules`
+ * (`test/unit/hooks/hooksDistImports.test.ts` holds that).
  */
 
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { userDataDir as storageUserDataDir, type DataDirContext } from '../storage/userData.js';
 import { walkLinksUnder } from './configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo } from './guardedPath.js';
 
-/** Where the data directory comes from; each defaults to this process's. */
-export interface DataDirContext {
-  env?: Readonly<Record<string, string | undefined>>;
-  platform?: NodeJS.Platform;
-  home?: string;
-}
+export type { DataDirContext };
 
 function safeHome(): string {
   try {
@@ -36,22 +35,12 @@ function safeHome(): string {
 }
 
 /**
- * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
- * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
- * `$XDG_DATA_HOME/dev-guardian` (an absolute one only) or
- * `~/.local/share/dev-guardian` elsewhere. Pure path arithmetic.
+ * dev-guardian's per-user data directory, as `storage/userData.ts` resolves
+ * it — except that a missing home is `''` here rather than a throw: a hook
+ * never fails for it.
  */
 export function userDataDir(ctx: DataDirContext = {}): string {
-  const env = ctx.env ?? process.env;
-  const override = env['GUARDIAN_DATA_DIR']?.trim();
-  if (override !== undefined && override !== '') return resolve(override);
-  const home = ctx.home ?? safeHome();
-  if ((ctx.platform ?? process.platform) === 'win32') {
-    const local = env['LOCALAPPDATA']?.trim();
-    return join(local !== undefined && isAbsolute(local) ? local : join(home, 'AppData', 'Local'), 'dev-guardian');
-  }
-  const xdg = env['XDG_DATA_HOME']?.trim();
-  return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(home, '.local', 'share'), 'dev-guardian');
+  return storageUserDataDir({ ...ctx, home: ctx.home ?? safeHome() });
 }
 
 /** The registry directory: `<user data dir>/registry`. */

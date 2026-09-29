@@ -55,6 +55,16 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Changed
 
+- The hooks' database-registry guard now resolves dev-guardian's per-user data directory with the storage
+  module's own function (`storage/userData.ts`) instead of a copy of it that could drift; a missing home is
+  still `''` there, never a throw. A new test walks every compiled module the hook dispatcher loads, and
+  everything they import, and holds each import to a Node built-in or a relative file — the hooks run from
+  `mcp/dist/` with no `node_modules`, and one that cannot load fails open. `docs/env.md` lists
+  `GUARDIAN_DATA_DIR` once, for the server, the CLI and the hooks alike.
+- `.gitignore` stays off the list of files `tools_run` names as deciding what Semgrep scans, now measured
+  rather than assumed (1.176.1): in a git work tree, a file tracked before it was ignored, one under an ignored
+  directory and one force-added were all scanned, and only an untracked ignored file was not; in a plain
+  directory the `.gitignore` was not applied at all. It cannot hide committed code.
 - **An argument a tool does not take is now an error, not a wrong answer.**
   Every tool's input schema was handed to the SDK as a raw shape, which it
   wraps in a *stripping* object: a misspelt or misnamed key was removed

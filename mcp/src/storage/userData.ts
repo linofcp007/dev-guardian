@@ -22,22 +22,36 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { GuardianDbError } from './dbError.js';
 
+/** Where the data directory comes from; each defaults to this process's. */
+export interface DataDirContext {
+  env?: Readonly<Record<string, string | undefined>>;
+  platform?: NodeJS.Platform;
+  /** The home directory. Default: `os.homedir()`, which throws when there is none. */
+  home?: string;
+}
+
 /**
  * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
  * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
  * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts, as
  * the XDG spec says) or `~/.local/share/dev-guardian` elsewhere. Read at call
- * time. Pure path arithmetic, no I/O.
+ * time. Pure path arithmetic, no I/O. The one resolution: the hooks' registry
+ * guard (`hooks/dataRegistry.ts`) imports it — this file's imports are Node
+ * built-ins and `dbError.js`, so the compiled hooks still run from `dist/`
+ * with no `node_modules`.
  */
-export function userDataDir(): string {
-  const override = process.env['GUARDIAN_DATA_DIR']?.trim();
+export function userDataDir(ctx: DataDirContext = {}): string {
+  const env = ctx.env ?? process.env;
+  const override = env['GUARDIAN_DATA_DIR']?.trim();
   if (override !== undefined && override !== '') return resolve(override);
-  if (process.platform === 'win32') {
-    const local = process.env['LOCALAPPDATA']?.trim();
-    return join(local !== undefined && isAbsolute(local) ? local : join(homedir(), 'AppData', 'Local'), 'dev-guardian');
+  // Only when needed: an override or an absolute LOCALAPPDATA / XDG_DATA_HOME needs no home.
+  const home = (): string => ctx.home ?? homedir();
+  if ((ctx.platform ?? process.platform) === 'win32') {
+    const local = env['LOCALAPPDATA']?.trim();
+    return join(local !== undefined && isAbsolute(local) ? local : join(home(), 'AppData', 'Local'), 'dev-guardian');
   }
-  const xdg = process.env['XDG_DATA_HOME']?.trim();
-  return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), '.local', 'share'), 'dev-guardian');
+  const xdg = env['XDG_DATA_HOME']?.trim();
+  return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(home(), '.local', 'share'), 'dev-guardian');
 }
 
 /** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */

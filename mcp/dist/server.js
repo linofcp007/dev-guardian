@@ -38556,15 +38556,17 @@ import { join as join8 } from "node:path";
 import { chmodSync, lstatSync as lstatSync4, mkdirSync as mkdirSync2, statSync as statSync4 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { isAbsolute as isAbsolute4, join as join7, resolve as resolve7 } from "node:path";
-function userDataDir() {
-  const override = process.env["GUARDIAN_DATA_DIR"]?.trim();
+function userDataDir(ctx = {}) {
+  const env = ctx.env ?? process.env;
+  const override = env["GUARDIAN_DATA_DIR"]?.trim();
   if (override !== void 0 && override !== "") return resolve7(override);
-  if (process.platform === "win32") {
-    const local = process.env["LOCALAPPDATA"]?.trim();
-    return join7(local !== void 0 && isAbsolute4(local) ? local : join7(homedir3(), "AppData", "Local"), "dev-guardian");
+  const home = () => ctx.home ?? homedir3();
+  if ((ctx.platform ?? process.platform) === "win32") {
+    const local = env["LOCALAPPDATA"]?.trim();
+    return join7(local !== void 0 && isAbsolute4(local) ? local : join7(home(), "AppData", "Local"), "dev-guardian");
   }
-  const xdg = process.env["XDG_DATA_HOME"]?.trim();
-  return join7(xdg !== void 0 && isAbsolute4(xdg) ? xdg : join7(homedir3(), ".local", "share"), "dev-guardian");
+  const xdg = env["XDG_DATA_HOME"]?.trim();
+  return join7(xdg !== void 0 && isAbsolute4(xdg) ? xdg : join7(home(), ".local", "share"), "dev-guardian");
 }
 function notPrivate(path8, why) {
   return new GuardianDbError("data-dir", path8, `'${path8}' ${why}`);
@@ -44125,6 +44127,11 @@ var REPO_CONFIG = {
     { file: ".github/zizmor.yml", decides: "its rules can disable or ignore audits" }
   ],
   // A directory target only: explicit file targets ignore it (measured on 1.176.1).
+  // `.gitignore` is not named, because it cannot hide committed code (measured
+  // on 1.176.1, review of 3.0, W2E): in a git work tree a file tracked before
+  // it was ignored, one under an ignored directory and one force-added were
+  // all scanned — only an untracked ignored file was not; in a plain
+  // directory the `.gitignore` was not applied at all.
   semgrep: [{ file: ".semgrepignore", decides: "its patterns decide which files are scanned", nested: true }],
   // npm audit reads the project's .npmrc (registry, omit=dev, audit-level).
   npm: [{ file: ".npmrc", decides: "its registry and settings decide what npm audit reads and reports" }],
