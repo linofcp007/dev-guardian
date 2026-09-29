@@ -32,10 +32,17 @@
  *     `/bin/bash -c "$(curl -fsSL https://…)"` — named a URL.
  * So an inline span is scanned only when it is a whole command (it has an
  * argument, and no `…` / `...` placeholder), and a code hit in an instruction
- * file scores a level below its rule unless its span, or its fenced block,
- * names a remote destination (a URL or an IP address) — the one thing a
- * mention of an attack leaves out and an instruction to carry it out cannot.
- * A skill's own scripts are scored as before, at full severity.
+ * file scores a level below its rule only when its span, or its fenced
+ * block, has NO fetch target at all — the one thing a mention of an attack
+ * leaves out and an instruction to carry it out cannot. A fetch target is a
+ * URL or an IP address, or a network client (`curl`, `wget`, `iwr`, `nc`, …)
+ * given a variable or substitution (`$URL`, `${X}`, `$1`, `$(…)`, `%VAR%`,
+ * `$env:X`) or a host with no scheme. The first version took only a URL or an
+ * IP, and moving the URL into the prose (`URL=https://…`, then a fenced
+ * `curl -s $URL | bash`) took the command to medium and the skill to SAFE —
+ * a fenced network command with a target is a command, not a mention. A
+ * placeholder (`curl … | sh`, `curl <url> | sh`) is no target. A skill's own
+ * scripts are scored as before, at full severity.
  *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
@@ -74,6 +81,34 @@ const SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transm
 const REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
 
 const REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, 'i');
+
+/**
+ * A variable or substitution — what a command names its target with when the
+ * value is set somewhere else: `$URL`, `${X}`, `$1`, `$(…)`, a backtick
+ * substitution, cmd's `%VAR%`, PowerShell's `$env:X`.
+ */
+const SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\(|` + '`[^`\\n]+`' + String.raw`|%[A-Za-z_]\w*%)`;
+
+/** A host named without a scheme: `get.example.com`, `statsd.local:8125/x`. */
+const BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
+
+/** Shell programs that fetch from, or send to, the target they are given. */
+const SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+
+/**
+ * A network command with something to reach: a shell client followed, within
+ * the same simple command, by a variable, a substitution or a scheme-less
+ * host. With the URL / IP check this is what "has a fetch target" means — see
+ * the header: the one-level downgrade is for code that has none.
+ */
+const NET_COMMAND_WITH_TARGET_RE = new RegExp(
+  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
+  'i',
+);
+
+function hasFetchTarget(text: string): boolean {
+  return REMOTE_DESTINATION_RE.test(text) || NET_COMMAND_WITH_TARGET_RE.test(text);
+}
 
 /** What precedes a secret that AUTHENTICATES a request rather than being its payload. */
 const AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
@@ -360,11 +395,17 @@ export const SKILL_RULES: SkillRule[] = [
     severity: 'high',
     title: 'Instruction to pipe a remote script to a shell',
     message:
-      'The prose of an instruction file tells the reader to download a script from a concrete URL and run it ' +
-      'unverified. The documentation shape (`curl … | sh`, "curl|bash") names no URL and is not reported.',
+      'The prose of an instruction file tells the reader to download a script from a concrete target — a URL, ' +
+      'or a variable set elsewhere — and run it unverified. The documentation shape (`curl … | sh`, "curl|bash") ' +
+      'names no target and is not reported.',
     target: 'prose',
     patterns: [
       /\b(curl|wget)\b[^|]{0,200}?\b(https?|ftp):\/\/[^|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b/i,
+      // The URL moved out of the command (`URL=https://…`, then `curl -s $URL | bash`).
+      new RegExp(
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${SHELL_VALUE}[^|\n]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b`,
+        'i',
+      ),
       /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
       /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
       /\beval\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
@@ -518,9 +559,9 @@ export function scanContent(content: string, isCode: boolean): RuleMatch[] {
     return dedupeByRuleLine(matchUnits(rulesFor('code', 'any'), whole));
   }
   const views = splitMarkdown(content);
-  const remoteBlocks = new Set<number>();
+  const targetBlocks = new Set<number>();
   for (const u of views.code) {
-    if (u.block !== null && REMOTE_DESTINATION_RE.test(u.text)) remoteBlocks.add(u.block);
+    if (u.block !== null && hasFetchTarget(u.text)) targetBlocks.add(u.block);
   }
   const prose: Unit[] = views.prose.map((text, i) => ({ line: i + 1, text, source: 'prose', namesRemote: true }));
   const code: Unit[] = views.code
@@ -529,7 +570,7 @@ export function scanContent(content: string, isCode: boolean): RuleMatch[] {
       line: u.line,
       text: u.text,
       source: u.kind,
-      namesRemote: u.block === null ? REMOTE_DESTINATION_RE.test(u.text) : remoteBlocks.has(u.block),
+      namesRemote: u.block === null ? hasFetchTarget(u.text) : targetBlocks.has(u.block),
     }));
   return dedupeByRuleLine([
     ...matchUnits(rulesFor('text', 'any'), whole),
@@ -542,7 +583,7 @@ interface Unit {
   line: number;
   text: string;
   source: MatchSource;
-  /** For code in an instruction file: its span, or its fenced block, names a URL or an IP address. */
+  /** For code in an instruction file: its span, or its fenced block, has a fetch target (`hasFetchTarget`). */
   namesRemote: boolean;
 }
 
@@ -587,7 +628,7 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
  */
 function isWholeCommand(span: string): boolean {
   const t = span.trim();
-  return (/\s/.test(t) || REMOTE_DESTINATION_RE.test(t)) && !/…|\.\.\./.test(t);
+  return (/\s/.test(t) || hasFetchTarget(t)) && !/…|\.\.\./.test(t);
 }
 
 const ONE_LEVEL_LOWER: Record<Severity, Severity> = {

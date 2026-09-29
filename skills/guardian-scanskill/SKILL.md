@@ -60,9 +60,10 @@ The instructions of a skill are what the model runs, so the commands in its
 `SKILL.md` count as much as its scripts: the code rules also read every fenced
 block (any language tag, or none) and every inline code span, and two prose
 rules read a remote script piped to a shell, and a credential file sent to a
-URL, written as sentences. Code in an instruction file that names no URL or IP
-address scores one level lower — a skill that *documents* a destructive command
-or a detection pattern is not one that runs it.
+URL, written as sentences. Code in an instruction file with no fetch target at
+all — no URL, IP or host, and no variable given to a network client — scores
+one level lower: a skill that *documents* a destructive command or a detection
+pattern is not one that runs it.
 
 ## Risk score & verdict
 

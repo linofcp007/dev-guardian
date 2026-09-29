@@ -67675,6 +67675,16 @@ var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebR
 var SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
 var REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
 var REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, "i");
+var SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\(|` + "`[^`\\n]+`" + String.raw`|%[A-Za-z_]\w*%)`;
+var BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
+var SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+var NET_COMMAND_WITH_TARGET_RE = new RegExp(
+  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
+  "i"
+);
+function hasFetchTarget(text2) {
+  return REMOTE_DESTINATION_RE.test(text2) || NET_COMMAND_WITH_TARGET_RE.test(text2);
+}
 var AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 var SKILL_RULES = [
   // ───────────────────────────── prompt_injection ─────────────────────────
@@ -67903,10 +67913,15 @@ var SKILL_RULES = [
     category: "supply_chain",
     severity: "high",
     title: "Instruction to pipe a remote script to a shell",
-    message: 'The prose of an instruction file tells the reader to download a script from a concrete URL and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no URL and is not reported.',
+    message: 'The prose of an instruction file tells the reader to download a script from a concrete target \u2014 a URL, or a variable set elsewhere \u2014 and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no target and is not reported.',
     target: "prose",
     patterns: [
       /\b(curl|wget)\b[^|]{0,200}?\b(https?|ftp):\/\/[^|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b/i,
+      // The URL moved out of the command (`URL=https://…`, then `curl -s $URL | bash`).
+      new RegExp(
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${SHELL_VALUE}[^|\n]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b`,
+        "i"
+      ),
       /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
       /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
       /\beval\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
@@ -68047,16 +68062,16 @@ function scanContent(content, isCode) {
     return dedupeByRuleLine(matchUnits(rulesFor("code", "any"), whole));
   }
   const views = splitMarkdown(content);
-  const remoteBlocks = /* @__PURE__ */ new Set();
+  const targetBlocks = /* @__PURE__ */ new Set();
   for (const u2 of views.code) {
-    if (u2.block !== null && REMOTE_DESTINATION_RE.test(u2.text)) remoteBlocks.add(u2.block);
+    if (u2.block !== null && hasFetchTarget(u2.text)) targetBlocks.add(u2.block);
   }
   const prose = views.prose.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "prose", namesRemote: true }));
   const code = views.code.filter((u2) => u2.kind === "fenced" || isWholeCommand(u2.text)).map((u2) => ({
     line: u2.line,
     text: u2.text,
     source: u2.kind,
-    namesRemote: u2.block === null ? REMOTE_DESTINATION_RE.test(u2.text) : remoteBlocks.has(u2.block)
+    namesRemote: u2.block === null ? hasFetchTarget(u2.text) : targetBlocks.has(u2.block)
   }));
   return dedupeByRuleLine([
     ...matchUnits(rulesFor("text", "any"), whole),
@@ -68090,7 +68105,7 @@ function matchUnits(rules2, units) {
 }
 function isWholeCommand(span) {
   const t = span.trim();
-  return (/\s/.test(t) || REMOTE_DESTINATION_RE.test(t)) && !/…|\.\.\./.test(t);
+  return (/\s/.test(t) || hasFetchTarget(t)) && !/…|\.\.\./.test(t);
 }
 var ONE_LEVEL_LOWER = {
   critical: "high",
@@ -68468,7 +68483,7 @@ function whereFound(m) {
   if (m.source !== "fenced" && m.source !== "inline") return "";
   const where = m.source === "fenced" ? " Found in a fenced code block of an instruction file, which the model may run as written." : " Found in inline code of an instruction file, which the model may run as written.";
   const lowered = m.severity !== severityOfRule(m.rule);
-  return lowered ? `${where} Scored one level below the rule: it names no URL or IP address, and such code is as often a mention of the command as an instruction to run it.` : where;
+  return lowered ? `${where} Scored one level below the rule: nothing in it, or in its block, is a fetch target (no URL, IP, host, or variable given to a network client), and such code is as often a mention of the command as an instruction to run it.` : where;
 }
 function emptyBreakdown() {
   const out = {};
@@ -69014,7 +69029,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced blocks, inline code and prose) are scored like the skill's own scripts; code there that names no URL or IP scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced blocks, inline code and prose) are scored like the skill's own scripts; code there with no fetch target (no URL, IP, host, or variable given to a network client) scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };

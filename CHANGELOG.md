@@ -138,6 +138,17 @@ version bump.
     took its skill to DO_NOT_INSTALL.
   - One hit per (rule, pattern) is now the most severe one, not the first: a
     mention early in a file no longer hides the real command below it.
+  - The one-level downgrade applies only to code with **no fetch target at
+    all**. A first version keyed it on a URL or IP address in the span or
+    block, so moving the URL into the prose (`URL=https://…`, then a fenced
+    `curl -s $URL | bash`) took the command to medium and the skill to SAFE.
+    A network client given a variable or substitution (`$URL`, `${X}`, `$1`,
+    `$(…)`, `%VAR%`, `$env:X`) or a host with no scheme now counts as a
+    target, and the prose curl-pipe rule reads a variable target too; a
+    placeholder (`curl … | sh`, `curl <url> | sh`) still does not. Re-measured
+    on the same 75 skills: `writing-rules` stays 40 and `mcp-integration` 20;
+    plugin-dev's `hook-development`, already DO_NOT_INSTALL from its own
+    scripts, gains a high for a real `nc … statsd.local 8125` line.
 
 ## [3.0.0] - 2026-09-29
 

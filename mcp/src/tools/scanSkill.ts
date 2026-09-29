@@ -91,8 +91,9 @@ const tool: ToolModule = {
     'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
     'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
     'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced blocks, ' +
-    'inline code and prose) are scored like the skill\'s own scripts; code there that names no URL or IP ' +
-    'scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation ' +
+    'inline code and prose) are scored like the skill\'s own scripts; code there with no fetch target (no URL, ' +
+    'IP, host, or variable given to a network client) scores one level lower, as it may be a mention. ' +
+    'Returns a 0-100 risk score and an install recommendation ' +
     '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),

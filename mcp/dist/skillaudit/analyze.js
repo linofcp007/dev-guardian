@@ -192,8 +192,9 @@ function whereFound(m) {
         : ' Found in inline code of an instruction file, which the model may run as written.';
     const lowered = m.severity !== severityOfRule(m.rule);
     return lowered
-        ? `${where} Scored one level below the rule: it names no URL or IP address, and such code is as ` +
-            'often a mention of the command as an instruction to run it.'
+        ? `${where} Scored one level below the rule: nothing in it, or in its block, is a fetch target ` +
+            '(no URL, IP, host, or variable given to a network client), and such code is as often a mention of ' +
+            'the command as an instruction to run it.'
         : where;
 }
 function emptyBreakdown() {
