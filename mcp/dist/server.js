@@ -69430,7 +69430,7 @@ var SENSITIVE_DIR = String.raw`(?<![\w.-])\.(?:ssh|aws|gnupg)(?=$|[\s"'|;&)\x60]
 var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 var ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:Get-ChildItem|gci|dir|ls)\s+env:\\?)`;
 var SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;
-var AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
+var AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]{0,200}?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json|\.mcp\.json|\.claude\.json)`;
 var AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]{0,200}?${AGENT_CONFIG}[^\s"'|;&<>]{0,200}["']?`;
 var LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
 var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
@@ -69558,9 +69558,9 @@ var SKILL_RULES = [
     category: "memory_poisoning",
     severity: "high",
     title: "Write into the agent\u2019s persistent instructions or settings",
-    message: "A command appends to or replaces a file the agent re-reads every session \u2014 CLAUDE.md, AGENTS.md, a rules file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there outlives this skill and steers every later session.",
+    message: "A command appends to or replaces a file the agent re-reads every session \u2014 CLAUDE.md, AGENTS.md, a rules file, its memory, its settings (where hooks live), its skills and agents directories, or the MCP servers it starts (.mcp.json, ~/.claude.json). What lands there outlives this skill and steers every later session.",
     target: "any",
-    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor/i,
+    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor|mcp\.json/i,
     patterns: [
       // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
       // after a word, a quote or a bracket — not a Markdown `> quote`, not

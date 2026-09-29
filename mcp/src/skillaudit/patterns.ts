@@ -119,12 +119,13 @@ const SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-
  * What an agent re-reads every session, so what a write makes permanent: its
  * instructions (CLAUDE.md, AGENTS.md, GEMINI.md, the Cursor / Windsurf /
  * Cline / Copilot rules), its memory, its settings — where the hooks live —
- * and the skills and agents whose descriptions it loads. Not
+ * the skills and agents whose descriptions it loads, and the MCP servers it
+ * starts (`.mcp.json`, `~/.claude.json`). Not
  * `.claude/commands/`: a command runs only when the user types it, and
  * writing one is what plugin-dev's command-development skill teaches
  * (`cat > .claude/commands/test-bash.md << 'EOF'`, measured).
  */
-const AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
+const AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]{0,200}?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json|\.mcp\.json|\.claude\.json)`;
 
 /**
  * One argument that is, or lies under, an agent-config path. Every run in the
@@ -374,10 +375,11 @@ export const SKILL_RULES: SkillRule[] = [
     title: 'Write into the agent’s persistent instructions or settings',
     message:
       'A command appends to or replaces a file the agent re-reads every session — CLAUDE.md, AGENTS.md, a rules ' +
-      'file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there ' +
+      'file, its memory, its settings (where hooks live), its skills and agents directories, or the MCP servers it ' +
+      'starts (.mcp.json, ~/.claude.json). What lands there ' +
       'outlives this skill and steers every later session.',
     target: 'any',
-    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor/i,
+    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor|mcp\.json/i,
     patterns: [
       // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
       // after a word, a quote or a bracket — not a Markdown `> quote`, not

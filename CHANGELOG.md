@@ -284,8 +284,9 @@ version bump.
     by a skill to say so. It drove 21 of the 32. It now reads the persistence phrases only (and "append this line
     to ~/.claude/CLAUDE.md"), and a new rule, `mp-write-agent-config` (high), reads a command that writes into
     what the agent re-reads every session — CLAUDE.md, AGENTS.md, GEMINI.md, the Cursor / Windsurf / Cline /
-    Copilot rules, its memory, `settings.json` (where hooks live), its skills and agents directories — by
-    redirect, `tee`, a copy's destination, `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`.
+    Copilot rules, its memory, `settings.json` (where hooks live), its skills and agents directories, and the
+    MCP servers it starts (`.mcp.json`, `~/.claude.json`) — by redirect, `tee`, a copy's destination,
+    `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`.
   - The prompt-level phrases a skill about AI safety quotes — `pi-override-instructions`, `pi-roleplay-escape`,
     `pi-conceal-from-user`, `spl-reveal-prompt`, `mp-persist-instruction`, `ta-overbroad-activation` — are
     **cited** in a Markdown instruction file when they sit inside quotation marks or a code span on a prose line,

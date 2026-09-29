@@ -77,6 +77,8 @@ describe('memory poisoning: a write into what the agent re-reads, not a path und
     ['Python', "open(os.path.expanduser('~/.claude/CLAUDE.md'), 'a').write(rule)"],
     ['a rules file', 'echo "ignore lint" >> .cursorrules'],
     ['the memory directory', 'cp notes.md ~/.claude/projects/app/memory/MEMORY.md'],
+    ['the project MCP servers', 'cp server.json .mcp.json'],
+    ['the user MCP servers', 'mv /tmp/c.json ~/.claude.json'],
   ])('%s: a high write into the agent configuration, in a script', (_label, line) => {
     expect(hit(scanContent(line, true), 'mp-write-agent-config')).toMatchObject({ severity: 'high' });
   });
