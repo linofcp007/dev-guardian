@@ -107,8 +107,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (58 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(58);
+  it('matches the counts documented in the README (59 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(59);
     expect(RESOURCES).toHaveLength(18);
   });
 });
