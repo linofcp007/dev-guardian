@@ -741,3 +741,258 @@ describe('ci-init: --force replaces the file in one step (write to a temp file, 
     expect(readdirSync(outPath)).toEqual(['occupied']);
   });
 });
+
+// `ci-init github --attest`: the pipeline attests dev-guardian's own scan
+// outputs — the JSON report and the SARIF — with GitHub's build-provenance
+// attestations. The signing capability (`id-token: write`) sits on a job of
+// its own that runs none of the project's code; the scan job, which builds
+// the project and runs the scanners on it, keeps exactly the permissions it
+// had. argv only, like --start-command; GitHub only.
+interface RenderedWorkflow {
+  permissions?: Record<string, string>;
+  jobs: Record<
+    string,
+    {
+      needs?: string | string[];
+      if?: string;
+      permissions?: Record<string, string>;
+      steps: { name?: string; uses?: string; run?: string; if?: string; with?: Record<string, string> }[];
+    }
+  >;
+}
+
+function pinnedAction(key: string): { repo: string; version: string; sha: string } {
+  const pinned = JSON.parse(readFileSync(resolve(REPO_ROOT, 'configs', 'ci', 'pinned.json'), 'utf8')) as {
+    actions: Record<string, { repo: string; version: string; sha: string }>;
+  };
+  const entry = pinned.actions[key];
+  if (entry === undefined) throw new Error(`pinned.json has no action ${key}`);
+  return entry;
+}
+
+function renderGithub(extra: string[] = []): { body: string; doc: RenderedWorkflow } {
+  const project = makeProject();
+  const r = runCli(['ci-init', 'github', '--project', project, ...extra]);
+  expect(r.status, r.stderr).toBe(0);
+  const body = r.stdout.split('\n').slice(2, -2).join('\n');
+  return { body, doc: parseYaml(body) as RenderedWorkflow };
+}
+
+describe('ci-init --attest (GitHub build-provenance attestations of the scan outputs)', () => {
+  it('adds an attest job holding ONLY id-token: write and attestations: write, after the scan job, on push only', () => {
+    const { doc } = renderGithub(['--attest']);
+    const attest = doc.jobs['attest'];
+    expect(attest).toBeDefined();
+    expect(attest?.permissions).toEqual({ 'id-token': 'write', attestations: 'write' });
+    expect(attest?.needs).toBe('scan');
+    expect(attest?.if).toMatch(/github\.event_name == 'push'/);
+    expect(attest?.if).toMatch(/!cancelled\(\)/);
+  });
+
+  it('the scan job — which runs the project and its scanners — gains no permission', () => {
+    const plain = renderGithub().doc;
+    const attested = renderGithub(['--attest']).doc;
+    // With two jobs, nothing is granted at the workflow level (zizmor's
+    // excessive-permissions flags a workflow-level write once there is more
+    // than one job): each job states what it holds, and the scan job holds
+    // exactly what the one-job pipeline gave it.
+    expect(attested.permissions).toEqual({});
+    expect(attested.jobs['scan']?.permissions).toEqual(plain.permissions);
+    expect(plain.permissions).toEqual({ contents: 'read', 'security-events': 'write', actions: 'read' });
+  });
+
+  it('attests both outputs with attest-build-provenance, downloaded from the scan job, every action pinned by SHA', () => {
+    const { doc } = renderGithub(['--attest']);
+    const provenance = pinnedAction('attest_build_provenance');
+    const upload = pinnedAction('upload_artifact');
+    const download = pinnedAction('download_artifact');
+    const steps = doc.jobs['attest']?.steps ?? [];
+    expect(steps.map((s) => s.uses ?? 'run')).toEqual([
+      `actions/download-artifact@${download.sha}`,
+      'run',
+      `actions/attest-build-provenance@${provenance.sha}`,
+    ]);
+    const subjects = (steps[2]?.with?.['subject-path'] ?? '').trim().split('\n');
+    expect(subjects).toEqual(['dev-guardian-report.json', 'dev-guardian-results.sarif']);
+
+    const keep = doc.jobs['scan']?.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
+    expect(keep?.uses).toBe(`actions/upload-artifact@${upload.sha}`);
+    expect(keep?.with?.['name']).toBe(steps[0]?.with?.['name']);
+    expect((keep?.with?.['path'] ?? '').trim().split('\n')).toEqual(subjects);
+    expect(keep?.with?.['if-no-files-found']).toBe('error');
+  });
+
+  it('the scan step writes the JSON report, and its exit code still gates the job (pipefail)', () => {
+    const { doc } = renderGithub(['--attest']);
+    const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan');
+    expect(scan?.run).toMatch(/^set -euo pipefail\n/);
+    expect(scan?.run).toMatch(/--format json/);
+    expect(scan?.run).toMatch(/--sarif dev-guardian-results\.sarif/);
+    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\s*$/);
+  });
+
+  it('without --attest nothing of it is rendered', () => {
+    const { body } = renderGithub();
+    expect(body).not.toMatch(/attest|id-token|upload-artifact|download-artifact|dev-guardian-report\.json/);
+    expect(body).toMatch(/--format human/);
+  });
+
+  it.each(['gitlab', 'bitbucket'] as const)('%s --attest is refused (exit 3) and writes nothing', (target) => {
+    const project = makeProject();
+    const r = runCli(['ci-init', target, '--project', project, '--attest', '--write']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--attest is GitHub-only/);
+    expect(readdirSync(project)).toEqual([]);
+  });
+
+  it('a repository file declaring "attest" is refused, whatever argv says — command line only', () => {
+    for (const argv of [[], ['--attest']]) {
+      const project = makeProject();
+      mkdirSync(join(project, '.guardian'));
+      writeFileSync(join(project, '.guardian', 'ci.json'), JSON.stringify({ attest: true }));
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...argv]);
+      expect(r.status, argv.join(' ')).toBe(3);
+      expect(r.stderr).toMatch(/declares "attest"/);
+      expect(r.stderr).toMatch(/command line/);
+      expect(existsSync(join(project, '.github'))).toBe(false);
+    }
+  });
+
+  it('--help and the --write message both say how to verify an attestation (gh attestation verify)', () => {
+    const help = runCli(['--help']);
+    const section = help.stdout.slice(help.stdout.indexOf('ci-init <github|gitlab|bitbucket> —'));
+    expect(section).toMatch(/--attest/);
+    expect(section).toMatch(/gh attestation verify/);
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/gh attestation verify dev-guardian-results\.sarif/);
+  });
+
+  // Review M6: --signer-workflow names the workflow FILE, and a copy of it on
+  // any branch — edited to run on a push there — signs as that same path.
+  it('the verify hint pins the branch the pipeline triggers on (--source-ref), in --help, the write message and the workflow', () => {
+    const help = runCli(['--help']);
+    const section = help.stdout.slice(help.stdout.indexOf('ci-init <github|gitlab|bitbucket> —'));
+    expect(section).toMatch(/--source-ref refs\/heads\/<branch>/);
+    for (const [argv, branch] of [[[], 'main'], [['--branch', 'release/2'], 'release/2']] as const) {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest', ...argv]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`--source-ref refs/heads/${branch}`);
+      const workflow = readFileSync(join(project, '.github', 'workflows', 'dev-guardian.yml'), 'utf8');
+      expect(workflow).toContain(`--source-ref refs/heads/${branch}`);
+    }
+  });
+
+  // Review M5: an attestation proves where a file came from, not that it is
+  // a report — and `tee` creates the file even when the scan crashed first.
+  it('the attest job refuses an empty or unreadable report before attesting it', () => {
+    const { doc } = renderGithub(['--attest']);
+    const steps = doc.jobs['attest']?.steps ?? [];
+    const check = steps.find((s) => s.uses === undefined);
+    expect(steps.indexOf(check ?? {})).toBeLessThan(steps.findIndex((s) => s.uses?.startsWith('actions/attest-build-provenance@')));
+    expect(check?.run).toMatch(/^set -euo pipefail\n/);
+  });
+
+  it.skipIf(PROBE_BASH === null)(`the report check fails an empty report, broken JSON or a missing SARIF, and passes real ones${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const { doc } = renderGithub(['--attest']);
+    const script = doc.jobs['attest']?.steps.find((s) => s.uses === undefined)?.run ?? '';
+    const REPORT = JSON.stringify({ exit_code: 1, coverage: 'full', coverage_gaps: [], new_findings: [] });
+    const SARIF = JSON.stringify({ version: '2.1.0', $schema: 'https://json.schemastore.org/sarif-2.1.0.json', runs: [] });
+    const cases: Array<[string, Record<string, string>, boolean]> = [
+      ['both real', { 'dev-guardian-report.json': REPORT, 'dev-guardian-results.sarif': SARIF }, true],
+      ['an empty report (the scan crashed; tee created the file)', { 'dev-guardian-report.json': '', 'dev-guardian-results.sarif': SARIF }, false],
+      ['broken JSON', { 'dev-guardian-report.json': '{"exit_code": 1,', 'dev-guardian-results.sarif': SARIF }, false],
+      ['JSON that is not a report', { 'dev-guardian-report.json': '[]', 'dev-guardian-results.sarif': SARIF }, false],
+      ['no SARIF', { 'dev-guardian-report.json': REPORT }, false],
+      ['a SARIF that is not SARIF 2.1.0', { 'dev-guardian-report.json': REPORT, 'dev-guardian-results.sarif': '{"runs": []}' }, false],
+    ];
+    for (const [name, files, pass] of cases) {
+      const dir = makeProject();
+      for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content);
+      writeFileSync(join(dir, 'check.sh'), script);
+      const r = spawnSync(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+      expect(r.status === 0, `${name}: exit ${r.status}\n${r.stderr}`).toBe(pass);
+    }
+  }, 120_000); // six bash + node spawns: seconds each on a loaded Windows machine
+
+  it('--help, the write message and the workflow say the attestation runs whatever the gate said, and what a public repository exposes', () => {
+    const help = runCli(['--help']);
+    const section = help.stdout.slice(help.stdout.indexOf('ci-init <github|gitlab|bitbucket> —'));
+    expect(section).toMatch(/even when the gate failed/);
+    expect(section).toMatch(/public repository/);
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
+    expect(r.stdout).toMatch(/proves where the reports came from, not that the gate passed/);
+    expect(r.stdout).toMatch(/public repository/);
+    const workflow = readFileSync(join(project, '.github', 'workflows', 'dev-guardian.yml'), 'utf8');
+    expect(workflow).toMatch(/even when the gate failed/);
+    expect(workflow).toMatch(/printed to the job log/);
+  });
+
+  it('renders exactly as expected (snapshot)', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--attest']);
+    expect(r.status).toBe(0);
+    expect(r.stdout.split('\n').slice(2).join('\n')).toMatchSnapshot();
+  });
+
+  it.skipIf(!ACTIONLINT_INSTALLED)('actionlint accepts the --attest workflow with zero errors', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
+    expect(r.status).toBe(0);
+    const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+    expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+  });
+
+  // Part E review, round 2: a release-like --branch made zizmor raise a
+  // cache-poisoning error on actions/setup-node (its automatic npm cache),
+  // with or without --attest — the linter matrix now holds those renderings.
+  const MATRIX: readonly (readonly string[])[] = [
+    ['--branch', 'release/v2'],
+    ['--branch', 'release/v2', '--attest'],
+    ['--branch', 'releases/2026.09'],
+  ];
+
+  describe.skipIf(!ZIZMOR_INSTALLED)('zizmor on the release-branch renderings', () => {
+    it.each(MATRIX.map((flags) => [flags.join(' '), flags] as const))('zero findings with %s', (_label, flags) => {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
+      expect(r.status).toBe(0);
+      const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
+      expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+    });
+  });
+
+  describe.skipIf(!ACTIONLINT_INSTALLED)('actionlint on the release-branch renderings', () => {
+    it.each(MATRIX.map((flags) => [flags.join(' '), flags] as const))('zero errors with %s', (_label, flags) => {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
+      expect(r.status).toBe(0);
+      const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+    });
+  });
+
+  it('no rendering lets setup-node cache dependencies (a poisoned cache would reach a release branch)', () => {
+    for (const flags of [[], ['--attest'], ...MATRIX]) {
+      const { doc } = renderGithub([...flags]);
+      const setup = doc.jobs['scan']?.steps.find((s) => s.uses?.startsWith('actions/setup-node@'));
+      expect(setup?.with?.['package-manager-cache'], flags.join(' ')).toBe(false);
+      expect(setup?.with?.['cache'], flags.join(' ')).toBeUndefined();
+    }
+  });
+
+  it.skipIf(!ZIZMOR_INSTALLED)('zizmor accepts the --attest workflow with zero findings', () => {
+    const project = makeProject();
+    const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
+    expect(r.status).toBe(0);
+    const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+      encoding: 'utf8',
+    });
+    const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
+    expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+  });
+});

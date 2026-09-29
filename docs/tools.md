@@ -42,7 +42,7 @@ The dev-guardian MCP server registers **58 tools** and **18 resources**. This pa
 | [`review_pr`](#review_pr) | Pre-PR diff review | `project_path`, `base_ref`, `head_ref`, `local_only`, `severity_min`, `force` |
 | [`risk_score`](#risk_score) | Risk score (0-100) | `project_path` |
 | [`sbom_diff`](#sbom_diff) | SBOM diff (added / removed / changed components) | `project_path`, `from_scan_id`, `to_scan_id`, `use_full_file` |
-| [`scan_containers`](#scan_containers) | Container scan (Dockerfile + image + compose) | `project_path`, `severity_min`, `dockerfile_path`, `image`, `force` |
+| [`scan_containers`](#scan_containers) | Container scan (Dockerfile + image + compose) | `project_path`, `severity_min`, `dockerfile_path`, `image`, `signer_identity`, `signer_identity_regexp`, `signer_issuer`, `signer_issuer_regexp`, `force` |
 | [`scan_dast`](#scan_dast) | Probe a running application against its route inventory | `project_path`, `base_url`, `authorized_target`, `allow_write_methods`, `probe_rate_limit`, `rate_limit_path`, `auth_header_env`, `auth_header`, `use_nuclei`, `max_requests`, `timeout_ms`, `wall_clock_ms` |
 | [`scan_deps`](#scan_deps) | Dependency vuln + license scan | `project_path`, `severity_min`, `force`, `packages` |
 | [`scan_dotnet_secrets`](#scan_dotnet_secrets) | .NET-specific secret scan | `project_path` |
@@ -423,7 +423,7 @@ Compare two generate\_sbom scans, full component list, keyed by (ecosystem, name
 
 ### `scan_containers`
 
-Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile\_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags.
+Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile\_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless GUARDIAN\_OFFLINE=1): with signer\_identity (or signer\_identity\_regexp) AND signer\_issuer (or signer\_issuer\_regexp), a real cosign verify — a confirmed rejection is a high finding; without them, only whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and image\_signature says an existing signature was NOT verified. Only a network or registry failure withholds a verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry failure, even one cosign skips in silence, is unknown, never absent — except a referrers API answering with no index at all (400, 406, HTML): see SECURITY.md. cosign missing, older than 3.0 or offline: skipped and in missing\_tools, never a pass.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -431,6 +431,10 @@ Run Trivy against a Dockerfile (config check) and/or a container image (vuln + s
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 | `dockerfile_path` | string | no | — | Path to a Dockerfile to scan with `trivy config`. |
 | `image` | string | no | — | Container image reference to scan with `trivy image`. |
+| `signer_identity` | string | no | — | The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as `https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main`, or an e-mail. Needs signer\_issuer (or signer\_issuer\_regexp); runs cosign verify. |
+| `signer_identity_regexp` | string | no | — | signer\_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every release workflow of one repository. Not with signer\_identity. |
+| `signer_issuer` | string | no | — | The OIDC issuer of that identity, e.g. `https://token.actions.githubusercontent.com` (GitHub Actions) or `https://accounts.google.com`. |
+| `signer_issuer_regexp` | string | no | — | signer\_issuer as a regular expression (Go RE2 syntax). Not with signer\_issuer. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache and force a fresh scan. |
 
 ### `scan_dast`

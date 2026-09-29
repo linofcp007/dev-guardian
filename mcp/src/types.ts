@@ -118,6 +118,15 @@ export interface ToolRun {
    */
   target?: string;
   /**
+   * `cosign-verify` only: the signer the image was verified against, in
+   * canonical form (`runners/cosignCheck.ts#canonicalSignerPolicy`). Part of
+   * the pass's target with `target`: a rejection for one signer is
+   * re-measured only by a verification against the same signer
+   * (`history/runCompare.ts#targetOf`) — a later `.*` that accepts anyone
+   * never resolves it.
+   */
+  signer?: string;
+  /**
    * A Semgrep run the shared judge (`runners/semgrepReport.ts`) found
    * `partial`: `ok`, and also listed in `missing_tools`, because these files
    * were only partly parsed (project-relative). What the CI gate's

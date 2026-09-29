@@ -11,13 +11,13 @@ Scan profundo de segurança. Combina vários scanners open-source e contextualiz
 
 Pergunta ao utilizador qual (ou corre tudo se ele disser "tudo"). Cada tipo é uma tool MCP:
 
-| Tipo                | O que faz                                                      | Tool MCP (o que corre)                                                 |
-| ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| **SAST**            | Análise estática de código aplicacional                        | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)      |
-| **Secrets**         | API keys, tokens, passwords no código e no histórico Git       | `scan_secrets` (gitleaks)                                              |
-| **Dependencies**    | CVEs em bibliotecas/packages                                   | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit     |
-| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm      | `scan_containers` (Trivy + hadolint), `scan_iac` (Trivy)               |
-| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                        | `scan_dast` (+ nuclei)                                                 |
+| Tipo                | O que faz                                                 | Tool MCP (o que corre)                                                                       |
+| ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **SAST**            | Análise estática de código aplicacional                   | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)                            |
+| **Secrets**         | API keys, tokens, passwords no código e no histórico Git  | `scan_secrets` (gitleaks)                                                                    |
+| **Dependencies**    | CVEs em bibliotecas/packages                              | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit                           |
+| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm | `scan_containers` (Trivy + hadolint; cosign para a assinatura da imagem), `scan_iac` (Trivy) |
+| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                   | `scan_dast` (+ nuclei)                                                                       |
 
 Não há brakeman, gosec nem Checkov no que as tools correm — não os anuncies como corridos.
 

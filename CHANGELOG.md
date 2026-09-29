@@ -80,6 +80,50 @@ version bump.
   by the SBOM's purl only when that SBOM describes the same tree (`generate_sbom` now records its
   tree). Written under `.guardian/reports/vex-*`; `unknowns` names what was missing, and nothing is
   written when no vulnerability was measured.
+- `cosign` in the toolchain catalogue (`check_toolchain` probes `cosign version`; `install_toolchain`
+  installs v3.1.3 — winget and scoop pinned to it, Linux and macOS from the release binary checked
+  against its sha256, Homebrew on macOS).
+- `scan_containers` checks the image's Sigstore signature with cosign (3.0+), on the digest it pins
+  the tag to (`image_signature.checked`). With `signer_identity` (or `signer_identity_regexp`) and
+  `signer_issuer` (or `signer_issuer_regexp`): a real `cosign verify`, a confirmed rejection is a high
+  finding, and the answer says what cosign accepted (an image signature or a signed attestation).
+  Without them: whether a signature and a signed SLSA provenance attestation exist (`image-unsigned`
+  low, `image-no-provenance` info), and `image_signature` says an existing signature's signer was NOT
+  verified. cosign swallows some registry errors, so every "absent" and every rejection is checked
+  against the registry's own answers: the downloads that decide one run with cosign's `-d` request log,
+  and what is attached is the referrers index the registry generated, read from that log (`cosign tree`
+  is not used — it prints a pusher's annotation as it finds it). A registry failure, even one cosign
+  skips in silence, or a log cut at its cap, is `unknown`, never absent. A bundle the registry served
+  that cosign did not return is junk or a transfer that broke mid-body: the existence check asks twice,
+  then says `unknown`; a verification rejects and names both causes — a bundle `download signature`
+  returned as a signature is never a doubt about provenance. On a registry with no referrers API the
+  `sha256-<hex>` fallback tag is written by whoever can push, and cosign is silent about what it cannot
+  use: a served tag that holds no index, or entries cosign never fetched, is nothing attached (the tag
+  is read as go-containerregistry reads it); only the registry failing to serve it withholds. cosign
+  missing, older than 3.0 or
+  `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network, registry or
+  Sigstore-service failure withholds a verdict — a Rekor answer only as a 5xx, a 429 or a network
+  failure (Rekor answers 400 for a signature that does not verify: a rejection). A junk, unparseable or
+  non-Sigstore artifact anyone can attach (an OCI index included) is no signature, and a signature that
+  does not verify is a rejection; echoed identities never decide either way. A rejection is re-measured
+  only by a verification against the same signer (`ToolRun.signer`), and a rejection for another signer
+  is a new finding. An unanchored signer regexp is warned about. All of one image's cosign calls share
+  one deadline (the tool's timeout, `GUARDIAN_SCAN_TIMEOUT_MS`); what it cuts is no verdict. Text a
+  pusher chose is escaped, and URL query strings are cut, in every reason, finding and log line. One
+  registry fault no request reveals (a referrers API answering with no index at all: 400, 406, HTML)
+  makes a signed image read unsigned — see `SECURITY.md`. New bookkeeping names `cosign-verify`,
+  `cosign-referrers`, `cosign`.
+- `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
+  `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
+  (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in
+  `configs/ci/pinned.json`). Only that job holds `id-token: write` and `attestations: write`; the
+  scan job keeps exactly its permissions (stated per job in this rendering, `permissions: {}` above).
+  Verify with `gh attestation verify --signer-workflow … --source-ref refs/heads/<branch>` (see
+  `docs/ci.md`). The attest job refuses an empty or unreadable report and runs even when the gate
+  failed (it proves origin, not a pass); on a public repository the JSON report is in the public log
+  and the reports artifact is downloadable. Command line only — a `.guardian/ci.json` declaring
+  `attest` is refused; GitLab and Bitbucket refuse `--attest`. A malformed template section marker
+  (`# {{#attest}}`, `# {{ #ATTEST }}`) makes `ci-init` throw.
 
 ### Changed
 
@@ -99,6 +143,12 @@ version bump.
   `create_fix_pr` breaks its severity ties by KEV/EPSS the same way, so its order shifts with them.
   A finding stored before migration 014 has no aliases, so an older pip-audit or npm audit finding
   counts as `uncorrelated` until the next scan.
+
+### Fixed
+
+- `ci-init github`: `actions/setup-node` no longer caches dependencies (`package-manager-cache:
+  false`) — with a release-like `--branch` (`release/v2`) zizmor raised a cache-poisoning error on the
+  generated workflow, with or without `--attest`.
 
 ## [3.0.0] - 2026-09-28
 

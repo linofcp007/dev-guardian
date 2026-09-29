@@ -20,6 +20,27 @@ import { compareSemver } from '../platform/semverCompare.js';
  * 2026-03-03); v0.74.0 was published 2026-08-14. Bump deliberately.
  */
 export const TRIVY_INSTALL_TAG = 'v0.74.0';
+/**
+ * The cosign release every pinned installer below fetches (winget, scoop and
+ * the release-binary download). v3.1.3 was published 2026-08-06; bump it and
+ * {@link COSIGN_RELEASE_SHA256} together, deliberately.
+ */
+export const COSIGN_VERSION = '3.1.3';
+/**
+ * sha256 of each POSIX release binary of {@link COSIGN_VERSION}. Each value
+ * was checked three ways on 2026-09-28 and all three agreed: the binary
+ * downloaded and hashed independently (`curl … | sha256sum`), the release's
+ * own `cosign_checksums.txt`, and the digest GitHub records for the release
+ * asset. The Windows binary is not listed: winget and scoop verify it against
+ * their own manifests, which carry the same hash
+ * (9fe59be0…33be, checked against both manifests the same day).
+ */
+export const COSIGN_RELEASE_SHA256 = {
+    'linux-amd64': '4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71',
+    'linux-arm64': 'c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a',
+    'darwin-amd64': '2347488e5d5b25336644024dfeca5601b190e91197a71a917bda44744aff106c',
+    'darwin-arm64': '5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76',
+};
 export const TOOL_CATALOG = {
     semgrep: {
         name: 'semgrep',
@@ -223,6 +244,42 @@ export const TOOL_CATALOG = {
             darwin: { brew: brewInstall('hadolint') },
         },
         default: false, // only when a Dockerfile is present
+    },
+    cosign: {
+        name: 'cosign',
+        // 3.0.0, and scan_containers enforces it (runners/cosignCheck.ts
+        // COSIGN_MIN_VERSION, the same value): cosign 2.x's `tree` does not list
+        // OCI referrers — where every v3 signature and every GitHub provenance
+        // attestation lives — so it reads a signed image as unsigned (measured:
+        // 2.6.5 on a signed ghcr.io/sigstore/cosign/cosign:v3.1.3 prints "No …
+        // Artifacts found", exit 0).
+        version_floor: '3.0.0',
+        probe: { command: 'cosign', args: ['version'] },
+        required_by: ['scan_containers'],
+        install: {
+            // Verified 2026-09-28: microsoft/winget-pkgs carries Sigstore.Cosign
+            // 3.1.3 and ScoopInstaller/Main carries cosign 3.1.3, both pointing
+            // at the official cosign-windows-amd64.exe with the release's sha256.
+            // Both take an exact version, so both are pinned.
+            win32: {
+                winget: {
+                    command: 'winget',
+                    args: [
+                        'install', '--id', 'Sigstore.Cosign', '--exact', '--version', COSIGN_VERSION,
+                        '--accept-source-agreements', '--accept-package-agreements',
+                    ],
+                    needs_elevation: false,
+                    description: `winget install Sigstore.Cosign --version ${COSIGN_VERSION}`,
+                },
+                scoop: scoopInstall(`cosign@${COSIGN_VERSION}`),
+            },
+            linux: { curl: cosignReleaseInstaller('linux') },
+            // Homebrew first, as for every other darwin entry: its formula follows
+            // upstream releases and brew verifies its own bottle, but it cannot be
+            // held at COSIGN_VERSION. Without brew, the pinned binary.
+            darwin: { brew: brewInstall('cosign'), curl: cosignReleaseInstaller('darwin') },
+        },
+        default: false, // only when an image is scanned
     },
     // ---------- GitHub Actions workflows ----------
     zizmor: {
@@ -473,6 +530,38 @@ function curlInstaller(url, tag) {
         args: ['-c', `curl -sSfL ${url} | sh -s -- -b "$HOME/.local/bin"${pinned}`],
         needs_elevation: false,
         description: `curl ${url} | sh${pinned}`,
+    };
+}
+/**
+ * cosign's pinned release binary for this CPU, checked against
+ * {@link COSIGN_RELEASE_SHA256} before it is installed to `~/.local/bin`.
+ * sigstore/cosign ships no install script — releases are bare binaries — so
+ * this is the download itself, not {@link curlInstaller}'s `curl | sh`. A CPU
+ * with no pinned checksum is refused rather than guessed, and `set -eu`
+ * stops at a failed download or a checksum mismatch, before `install`.
+ */
+function cosignReleaseInstaller(os) {
+    const url = `https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${os}-$arch`;
+    const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+    const script = [
+        'set -eu',
+        'case "$(uname -m)" in',
+        `  x86_64|amd64) arch=amd64; sum=${COSIGN_RELEASE_SHA256[`${os}-amd64`]} ;;`,
+        `  aarch64|arm64) arch=arm64; sum=${COSIGN_RELEASE_SHA256[`${os}-arm64`]} ;;`,
+        '  *) echo "cosign: no pinned release binary for this CPU ($(uname -m))" >&2; exit 1 ;;',
+        'esac',
+        'tmp="$(mktemp)"',
+        'trap \'rm -f "$tmp"\' EXIT',
+        `curl -sSfL -o "$tmp" "${url}"`,
+        `echo "$sum  $tmp" | ${check}`,
+        'mkdir -p "$HOME/.local/bin"',
+        'install -m 0755 "$tmp" "$HOME/.local/bin/cosign"',
+    ].join('\n');
+    return {
+        command: 'bash',
+        args: ['-c', script],
+        needs_elevation: false,
+        description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) → ~/.local/bin/cosign`,
     };
 }
 function uvInstall(pkg) {

@@ -48,6 +48,23 @@ describe('extractVersion', () => {
     expect(extractVersion(out)).toBe('1.9.4');
   });
 
+  it('cosign: the GitVersion line, past the ASCII banner and before GoVersion (real v3.1.3 output)', () => {
+    const out = [
+      '  ______   ______        _______. __    _______ .__   __.',
+      " /      | /  __  \\      /       ||  |  /  _____||  \\ |  |",
+      'cosign: A tool for Container Signing, Verification and Storage in an OCI registry',
+      '',
+      'GitVersion:    v3.1.3',
+      'GitCommit:     11926fa5bbbbde47e88fc006b625a17769b743b2',
+      'GitTreeState:  clean',
+      'BuildDate:     2026-08-05T23:43:27Z',
+      'GoVersion:     go1.26.4',
+      'Compiler:      gc',
+      'Platform:      windows/amd64',
+    ].join('\n');
+    expect(extractVersion(out)).toBe('3.1.3');
+  });
+
   it('returns null when there is no version at all', () => {
     expect(extractVersion('usage: tool [options]')).toBeNull();
   });

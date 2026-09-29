@@ -278,6 +278,20 @@ describe('runNames: the pairs that do not share a name', () => {
     expect(keysOfRun('radon', false)).toEqual(['radon', 'budgets']);
   });
 
+  it("cosign's two passes each measure their own findings, on the image they were given, only on request", () => {
+    // A verification and an existence check are different measurements: a
+    // later existence-only scan that finds a signature must never resolve an
+    // earlier "signed by the wrong identity" finding.
+    expect(keysOfRun('cosign-verify', true)).toEqual(['cosign-verify']);
+    expect(keysOfRun('cosign-referrers', true)).toEqual(['cosign-referrers']);
+    // `cosign` is only ever skipped (not installed, offline): neither pass ran.
+    expect(keysOfRun('cosign', false)).toEqual(['cosign-verify', 'cosign-referrers']);
+    for (const name of ['cosign-verify', 'cosign-referrers']) {
+      expect(runNameEntry(name)?.ownTarget, name).toBe(true);
+      expect(runNameEntry(name)?.onRequest, name).toBe(true);
+    }
+  });
+
   it('`trivy-image` looks at a target no other pass does; the Dockerfile and IaC passes do not', () => {
     expect(runNameEntry('trivy-image')?.ownTarget).toBe(true);
     expect(runNameEntry('trivy-dockerfile')?.ownTarget).toBeUndefined();

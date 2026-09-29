@@ -44,6 +44,9 @@
  *                             --force             overwrite an existing pipeline file (with --write);
  *                                                 never one that is a symlink out of the project
  *                                                 or a broken one
+ *                             --attest            github only, CLI ARGV ONLY: attest the JSON report
+ *                                                 and the SARIF (actions/attest-build-provenance)
+ *                                                 in a job of their own
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
  *                             Exit codes: 0 done, 1 missing/unknown target or
@@ -309,6 +312,28 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
                         that resolves outside the project, or a broken one;
                         replaced in one step (temp file + rename), never
                         written through a link
+  --attest              GitHub only (refused for gitlab/bitbucket, exit 3). The
+                        pipeline also writes the JSON report and, on a push,
+                        signs a SLSA build-provenance attestation of it and of
+                        the SARIF (actions/attest-build-provenance, pinned by
+                        SHA) in a separate job that alone holds id-token: write
+                        and attestations: write. Needs a public repository, or
+                        GitHub Enterprise Cloud for a private one. CLI ARGV ONLY,
+                        like scan's --start-command: a .guardian/ci.json
+                        declaring "attest" is refused.
+                        It attests even when the gate failed (an attestation
+                        proves origin, not a pass), after refusing an empty or
+                        unreadable report. On a public repository the full JSON
+                        report is printed to the public job log and the reports
+                        artifact is downloadable by any signed-in GitHub user.
+                        Verify a report: download the run's dev-guardian-reports
+                        artifact, then
+                          gh attestation verify dev-guardian-results.sarif \\
+                            --repo OWNER/REPO \\
+                            --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \\
+                            --source-ref refs/heads/<branch>
+                        (--signer-workflow names the file; a copy of it on
+                        another branch signs as the same path.)
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
@@ -1427,11 +1452,12 @@ const CI_TARGETS = {
 };
 
 function parseCiInitArgs(argv) {
-  const out = { _: [], project: process.cwd(), write: false, force: false, branch: DEFAULT_CI_BRANCH };
+  const out = { _: [], project: process.cwd(), write: false, force: false, attest: false, branch: DEFAULT_CI_BRANCH };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--write') out.write = true;
     else if (a === '--force') out.force = true;
+    else if (a === '--attest') out.attest = true;
     else if (a === '--project') {
       const r = takeOperand(argv, i, a);
       if (r.error) return { error: r.error };
@@ -1470,8 +1496,61 @@ function parseCiInitArgs(argv) {
  */
 const PLACEHOLDER_TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
 
-export function renderCiTemplate(text, vars) {
-  const rendered = text.replace(PLACEHOLDER_TOKEN, (whole, key) => {
+/**
+ * A section marker: a line holding only `# {{#NAME}}` (keep what follows
+ * when NAME is on), `# {{^NAME}}` (keep it when NAME is off) or
+ * `# {{/NAME}}` (end), indented freely. A YAML comment, so the template stays
+ * readable as YAML around it; the marker lines themselves never reach the
+ * output.
+ */
+const SECTION_LINE = /^\s*# \{\{([#^/])([A-Z0-9_]+)\}\}\s*$/;
+/**
+ * Anything that STARTS like a marker — `{{` then `#`, `^` or `/`, spaces
+ * allowed — on a line that is not exactly one. A near-miss (`# {{#attest}}`,
+ * `# {{ #ATTEST }}`, `#{{#ATTEST}}`) would otherwise pass as a plain YAML
+ * comment and keep its block whatever the flag said. No GitHub Actions
+ * expression starts that way (`${{ !cancelled() }}`, `${{ github.ref }}`).
+ */
+const SECTION_TOKEN = /\{\{\s*[#^/]/;
+
+/**
+ * Keeps or drops each marked block of `text` by `sections[NAME]` (see
+ * `SECTION_LINE`). Refuses — throws — a section the caller did not declare
+ * (so a typo is never silently kept or dropped), an unclosed, unopened or
+ * nested one, and any malformed marker, including one sharing its line with
+ * anything else.
+ */
+function applyCiSections(text, sections) {
+  const out = [];
+  let open = null;
+  for (const line of text.split('\n')) {
+    const m = SECTION_LINE.exec(line);
+    if (m === null) {
+      if (SECTION_TOKEN.test(line)) {
+        throw new Error(
+          `ci-init: malformed section marker (a marker is a line holding only "# {{#NAME}}", "# {{^NAME}}" or "# {{/NAME}}", NAME in A-Z0-9_): ${line.trim()}`,
+        );
+      }
+      if (open === null || open.keep) out.push(line);
+      continue;
+    }
+    const [, kind, name] = m;
+    if (kind === '/') {
+      if (open === null || open.name !== name) throw new Error(`ci-init: section end {{/${name}}} without an opening`);
+      open = null;
+      continue;
+    }
+    if (open !== null) throw new Error(`ci-init: nested section ${name} inside ${open.name}`);
+    if (!Object.hasOwn(sections, name)) throw new Error(`ci-init: template references unknown section ${name}`);
+    const on = sections[name] === true;
+    open = { name, keep: kind === '#' ? on : !on };
+  }
+  if (open !== null) throw new Error(`ci-init: unclosed section ${open.name}`);
+  return out.join('\n');
+}
+
+export function renderCiTemplate(text, vars, sections = {}) {
+  const rendered = applyCiSections(text, sections).replace(PLACEHOLDER_TOKEN, (whole, key) => {
     if (!Object.hasOwn(vars, key)) throw new Error(`ci-init: template references unknown placeholder {{${key}}}`);
     return String(vars[key]);
   });
@@ -1882,6 +1961,71 @@ function createFile(outPath, content) {
   }
 }
 
+/**
+ * `ci-init --attest` is argv-only, by the same rule as `--start-command`: it
+ * adds a job that can mint an OIDC token and sign in this repository's name,
+ * so a repository file — which a pull request can edit — must never be able
+ * to turn it on. A `.guardian/ci.json` declaring `attest` is refused outright,
+ * loudly, rather than read or silently ignored; lenient on everything else,
+ * like `findStartCommandInRepoConfig`. The config path when it declares the
+ * key, else null.
+ */
+function findAttestInRepoConfig(projectPath) {
+  const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
+  if (!existsSync(configPath)) return null;
+  let data;
+  try {
+    data = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data) && data.attest !== undefined) return configPath;
+  return null;
+}
+
+/**
+ * Why `--attest` is refused on GitLab and Bitbucket. GitHub's artifact
+ * attestations bind a file's digest to the workflow, commit and run that
+ * produced it, signed by Sigstore with the job's own OIDC identity and
+ * stored where `gh attestation verify` finds them. Bitbucket Pipelines' OIDC
+ * tokens are not a Sigstore (Fulcio) identity at all. GitLab's are on
+ * gitlab.com, so `cosign sign-blob` could sign the reports there — but that
+ * is a signature with no provenance and nothing that stores or looks it up,
+ * and a self-managed instance needs its own Sigstore setup; emitting it as
+ * if it were the same guarantee would overstate what the pipeline proves.
+ */
+const ATTEST_GITHUB_ONLY =
+  '--attest is GitHub-only: it uses GitHub artifact attestations (actions/attest-build-provenance), ' +
+  "signed with the workflow's own OIDC identity and verified with `gh attestation verify`. GitLab and " +
+  'Bitbucket have no equivalent this generator can emit soundly — Bitbucket\'s OIDC is not a Sigstore ' +
+  "identity, and on GitLab a cosign keyless signature of the reports would carry no provenance and no " +
+  'store to verify it against. Generate the pipeline without --attest.';
+
+/**
+ * How to check a report `--attest` attested — the same words in --help, the
+ * write message, the workflow's header and docs/ci.md. `--source-ref` pins
+ * the branch the pipeline triggers on: `--signer-workflow` names the workflow
+ * FILE, and a copy of it on any other branch — edited to run on a push there
+ * — signs as the same path.
+ */
+function attestVerifyHint(branch) {
+  return (
+    'Verify a report the attest job signed: download the `dev-guardian-reports` artifact of that run ' +
+    '(gh run download <run-id> --repo OWNER/REPO --name dev-guardian-reports), then\n' +
+    '  gh attestation verify dev-guardian-results.sarif --repo OWNER/REPO \\\n' +
+    '    --signer-workflow OWNER/REPO/.github/workflows/dev-guardian.yml \\\n' +
+    `    --source-ref refs/heads/${branch}\n` +
+    '  (and the same for dev-guardian-report.json). --source-ref matters: --signer-workflow names the ' +
+    'workflow file, and a copy of it on another branch signs as the same path.'
+  );
+}
+
+/** What `--attest` proves and exposes — said on every write. */
+const ATTEST_SCOPE_NOTE =
+  'The attest job runs even when the gate failed: an attestation proves where the reports came from, not that ' +
+  'the gate passed. On a public repository the full JSON report is printed to the public job log, and the ' +
+  'reports artifact can be downloaded by any signed-in GitHub user while it is retained.';
+
 function cmdCiInit(argv) {
   const parsed = parseCiInitArgs(argv);
   if (parsed.error) return usageError(parsed.error);
@@ -1897,6 +2041,7 @@ function cmdCiInit(argv) {
     usage();
     process.exit(1);
   }
+  if (args.attest && targetArg !== 'github') return usageError(`ci-init ${targetArg}: ${ATTEST_GITHUB_ONLY}`);
 
   const projectPath = resolveProjectOrExit(args.project);
   if (isDevGuardianOwnRepo(projectPath)) {
@@ -1904,6 +2049,17 @@ function cmdCiInit(argv) {
       "ci-init generates a pipeline for the PROJECT BEING SCANNED, never for dev-guardian's own " +
         'repository (it ships no GitHub Actions of its own). Pass --project pointing at the project ' +
         'you want a CI pipeline for.',
+    );
+  }
+  // Checked whatever argv says: a repository file never turns --attest on,
+  // and one that tries is refused rather than ignored.
+  const attestConfig = findAttestInRepoConfig(projectPath);
+  if (attestConfig) {
+    return usageError(
+      `ci-init: refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "attest" (found at ${attestConfig}). ` +
+        '--attest may only be given on the command line, never from a file inside the repository — a pull ' +
+        'request could otherwise edit that file and give a pipeline job the right to sign in this ' +
+        `repository's name. Remove attest from ${CI_CONFIG_RELATIVE_PATH} and pass --attest to ci-init instead.`,
     );
   }
 
@@ -1916,7 +2072,10 @@ function cmdCiInit(argv) {
     return usageError(`ci-init: template missing: ${templatePath}`);
   }
   const templateText = readFileSync(templatePath, 'utf8');
-  const rendered = renderCiTemplate(templateText, vars);
+  // Only the GitHub template has an ATTEST section (--attest is refused for
+  // the others above); declaring it for every target keeps a stray marker in
+  // any template a loud error rather than an unknown section.
+  const rendered = renderCiTemplate(templateText, vars, { ATTEST: args.attest });
 
   const outPath = resolve(projectPath, target.outputPath);
 
@@ -1964,6 +2123,14 @@ function cmdCiInit(argv) {
   if (targetArg === 'github') {
     process.stdout.write(
       'Enable "security-events: write" / code scanning for this repository so the SARIF upload step can run.\n',
+    );
+  }
+  if (args.attest) {
+    process.stdout.write(
+      'The attest job needs artifact attestations: any public repository, or GitHub Enterprise Cloud for a ' +
+        'private one — elsewhere it fails.\n' +
+        `${ATTEST_SCOPE_NOTE}\n` +
+        `${attestVerifyHint(args.branch)}\n`,
     );
   }
   process.stdout.write(
