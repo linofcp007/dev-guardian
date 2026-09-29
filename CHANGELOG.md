@@ -286,7 +286,9 @@ version bump.
     what the agent re-reads every session — CLAUDE.md, AGENTS.md, GEMINI.md, the Cursor / Windsurf / Cline /
     Copilot rules, its memory, `settings.json` (where hooks live), its skills and agents directories, and the
     MCP servers it starts (`.mcp.json`, `~/.claude.json`) — by redirect, `tee`, a copy's destination,
-    `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`.
+    `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`. A write into `.claude/commands/` is a medium of its
+    own, `mp-write-agent-command`: a command runs only when typed, but a committed one persists for the team and
+    can shadow a familiar name.
   - The prompt-level phrases a skill about AI safety quotes — `pi-override-instructions`, `pi-roleplay-escape`,
     `pi-conceal-from-user`, `spl-reveal-prompt`, `mp-persist-instruction`, `ta-overbroad-activation` — are
     **cited** in a Markdown instruction file, reported at low, when they sit inside a closed quotation (straight,
@@ -301,15 +303,17 @@ version bump.
     who quotes his injection under an attack label with no directive.
   - "Jailbreak" as a noun ("jailbreak taxonomy") is no longer a role escape; "show the prompt and the output"
     of a test case is no longer a system-prompt leak; "for every task" that names no skill is no longer trigger
-    abuse; `regex.exec(…)` or `/…/.exec(…)` is not dynamic execution (a short name such as `re.exec(…)` still
+    abuse in the body (in the frontmatter `description:`, which is the activation, "use before any request" is,
+    as `ta-description-activation`); `regex.exec(…)` or `/…/.exec(…)` is not dynamic execution (a short name such as `re.exec(…)` still
     is: it is as easily `child_process`); `generate_design_system(` and "design system (ignored …)"
     are not `system(`; `nc` to a loopback or LAN host (`statsd.local`) is not covert egress; `"command": "rm -rf
     /"` in a validator's JSON test input is not a destructive command; and an install from a URL needs the URL
-    among the install's own arguments, not three CSV columns further on.
-  On the same 162 skills, SAFE / REVIEW / CAUTION / DO_NOT_INSTALL went from 107 / 21 / 2 / 32 to 156 / 4 / 2 /
-  0, with recall on the positive set of attack shapes (see Security) unchanged. The two CAUTION are superpowers'
-  brainstorming server, which runs `cp.exec(process.env.BRAINSTORM_OPEN_CMD + …)`. dev-guardian's own `skills/`
-  and `commands/` are now held to SAFE by their test, not "SAFE or REVIEW".
+    among the install's own first 64 arguments, not three CSV columns further on.
+  On the same 162 skills, SAFE / REVIEW / CAUTION / DO_NOT_INSTALL went from 107 / 21 / 2 / 32 to 151 / 8 / 3 /
+  0, with recall on the positive set of attack shapes (see Security) kept whole. The CAUTION are superpowers'
+  brainstorming server (×2), which runs `cp.exec(process.env.BRAINSTORM_OPEN_CMD + …)`, and dev-guardian 2.0.0's
+  own scanskill, whose table quotes attack phrases; dev-spec-driven reads REVIEW 25 on its cited catalogue.
+  dev-guardian's own `skills/` and `commands/` are now held to SAFE by their test, not "SAFE or REVIEW".
 - `scan_skill` took time quadratic in the length of a line of Markdown with code spans — 42 s for a 1 MB line,
   and it reads files of up to 2 MB, which a minified or generated file fills in one line. The line is now
   blanked in one pass, and a test holds every rule under a budget on 1 MB lines built to be slow for it.

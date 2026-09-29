@@ -131,13 +131,38 @@ const SHELL_SENDER = String.raw `\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke
  */
 const AGENT_CONFIG = String.raw `(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]{0,200}?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json|\.mcp\.json|\.claude\.json)`;
 /**
- * One argument that is, or lies under, an agent-config path. Every run in the
- * patterns built on it is bounded: a skill's file can be a 2 MB minified
- * line, and an unbounded `[^…]*` before an alternation is quadratic on it
- * (cubic with two of them — measured, a `sed -i` pattern did not finish on
- * 50 KB).
+ * The project's and the user's slash commands. Not a file the agent reads
+ * every session — a command runs when someone types it — but a committed
+ * one persists for the whole team and can shadow a familiar name, so a
+ * write into it is medium (`mp-write-agent-command`), not ignored (round 2).
  */
-const AGENT_CONFIG_ARG = String.raw `["']?[^\s"'|;&<>]{0,200}?${AGENT_CONFIG}[^\s"'|;&<>]{0,200}["']?`;
+const AGENT_COMMANDS = String.raw `\.claude[\/\\]commands(?![\w-])`;
+/**
+ * Every way a command writes into `path` (a pattern source): a redirect,
+ * `tee`, the destination of a copy, move or link, the PowerShell content
+ * cmdlets, `sed -i`, and a script's file writes. `arg` is one argument that
+ * is, or lies under, that path. Every run is bounded: a skill's file can be
+ * a 2 MB minified line, and an unbounded `[^…]*` before an alternation is
+ * quadratic on it (cubic with two of them — measured, a `sed -i` pattern did
+ * not finish on 50 KB).
+ */
+function writesInto(path) {
+    const arg = String.raw `["']?[^\s"'|;&<>]{0,200}?${path}[^\s"'|;&<>]{0,200}["']?`;
+    return [
+        // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
+        // after a word, a quote or a bracket — not a Markdown `> quote`, not
+        // `=>` or `->`.
+        new RegExp(String.raw `(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${arg}`, 'i'),
+        new RegExp(String.raw `\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${arg}`, 'i'),
+        // As the destination — the last argument — of a copy, move or link.
+        new RegExp(String.raw `\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${arg}\s*(?:$|[|;&)#])`, 'i'),
+        new RegExp(String.raw `\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${path}`, 'i'),
+        new RegExp(String.raw `\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${path}`, 'i'),
+        new RegExp(String.raw `\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${path}`, 'i'),
+        new RegExp(String.raw `\bopen\s*\([^\n]{0,160}${path}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, 'i'),
+        new RegExp(String.raw `${path}[^\n]{0,80}\.write_text\s*\(`, 'i'),
+    ];
+}
 /**
  * A local or LAN destination: loopback, a private address, a `.local` /
  * `.internal` / `.lan` name. What reaches one has not left the network — the
@@ -302,20 +327,19 @@ export const SKILL_RULES = [
             'outlives this skill and steers every later session.',
         target: 'any',
         requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor|mcp\.json/i,
-        patterns: [
-            // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
-            // after a word, a quote or a bracket — not a Markdown `> quote`, not
-            // `=>` or `->`.
-            new RegExp(String.raw `(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, 'i'),
-            new RegExp(String.raw `\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${AGENT_CONFIG_ARG}`, 'i'),
-            // As the destination — the last argument — of a copy, move or link.
-            new RegExp(String.raw `\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, 'i'),
-            new RegExp(String.raw `\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${AGENT_CONFIG}`, 'i'),
-            new RegExp(String.raw `\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${AGENT_CONFIG}`, 'i'),
-            new RegExp(String.raw `\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, 'i'),
-            new RegExp(String.raw `\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, 'i'),
-            new RegExp(String.raw `${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, 'i'),
-        ],
+        patterns: writesInto(AGENT_CONFIG),
+    },
+    {
+        id: 'mp-write-agent-command',
+        category: 'memory_poisoning',
+        severity: 'medium',
+        title: 'Write into the project’s or the user’s slash commands',
+        message: 'A command writes a file into .claude/commands/. A command runs only when someone types it, but a committed ' +
+            'one persists for the whole team, and one named like a familiar command shadows it. Confirm the skill is ' +
+            'meant to install commands, and read what it writes.',
+        target: 'any',
+        requires: /\.claude[\/\\]commands/i,
+        patterns: writesInto(AGENT_COMMANDS),
     },
     // ─────────────────────────────── rogue_agent ────────────────────────────
     {
@@ -349,6 +373,20 @@ export const SKILL_RULES = [
             /\bthis\s+skill\s+(must|should|shall|is\s+to)\s+(always\s+)?(be\s+)?(used|invoked|loaded|run|activated|triggered|applied)\b[^.\n]{0,40}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?)\b/i,
             /use\s+this\s+skill\s+for\s+everything/i,
             /regardless\s+of\s+(what\s+)?the\s+user\s+(asks|says|wants)/i,
+        ],
+    },
+    {
+        id: 'ta-description-activation',
+        category: 'trigger_abuse',
+        title: 'Over-broad activation in the skill’s description',
+        message: 'The frontmatter description — the text the host reads to decide when to load the skill — asks for it on ' +
+            'every request, task or message. There the skill needs no naming: the description is its activation.',
+        target: 'description',
+        patterns: [
+            /\b(for|before|on|with|in|at|to|after|during)\s+(any|every|all|each)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?|replies|turns?|sessions?)\b/i,
+            /\balways\s+(use|invoke|run|load|activate|trigger|apply)\b/i,
+            /\bregardless\s+of\s+(what\s+)?the\s+user\b/i,
+            /\bfor\s+everything\b/i,
         ],
     },
     // ────────────────────────────── data_exfiltration ───────────────────────
@@ -564,10 +602,12 @@ export const SKILL_RULES = [
         // The URL is one of the install's own arguments, not any URL further along
         // the line: in a CSV of framework tips (ui-ux-pro-max) "pnpm i
         // @iconify-json/lucide for reliable server rendering,…,https://ui.nuxt.com/…"
-        // is a registry package, then a docs link three columns on.
+        // is a registry package, then a docs link three columns on. Up to 64 of
+        // them (round 2: 8 was a window twenty flags could step over); no argument
+        // crosses a comma, `;`, `&` or `|`.
         patterns: [
-            /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,8}?["']?(git\+https?|https?:\/\/)/i,
-            /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,8}?["']?(git\+|https?:\/\/|github:)/i,
+            /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,64}?["']?(git\+https?|https?:\/\/)/i,
+            /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,64}?["']?(git\+|https?:\/\/|github:)/i,
             /"(preinstall|postinstall|install)"\s*:/i,
         ],
     },
@@ -746,10 +786,37 @@ export function scanContent(content, isCode, opts = {}) {
     }));
     return finalize([
         ...matchUnits(rulesFor('text', 'any'), whole),
+        ...matchUnits(rulesFor('description'), frontmatterDescription(lines)),
         ...matchUnits(rulesFor('prose'), prose),
         ...matchUnits(rulesFor('code'), code),
         ...downloadThenRun([...code, ...prose].sort((a, b) => a.line - b.line), true),
     ]);
+}
+/**
+ * The `description:` of the file's YAML frontmatter (a `---` block on its
+ * first line), as one unit at its key's line: a plain value, or a folded or
+ * literal block (`>`, `|`) and any indented continuation, joined.
+ */
+function frontmatterDescription(lines) {
+    if ((lines[0] ?? '').trim() !== '---')
+        return [];
+    for (let i = 1; i < Math.min(lines.length, 200); i += 1) {
+        const text = lines[i] ?? '';
+        if (text.trim() === '---')
+            break;
+        const key = /^description\s*:\s*(.*)$/i.exec(text);
+        if (!key)
+            continue;
+        const parts = [/^[>|][+-]?\s*$/.test(key[1] ?? '') ? '' : (key[1] ?? '')];
+        for (let j = i + 1; j < lines.length; j += 1) {
+            const next = lines[j] ?? '';
+            if (!/^\s+\S/.test(next))
+                break;
+            parts.push(next.trim());
+        }
+        return [{ line: i + 1, text: `description: ${parts.join(' ').trim()}`, source: 'line', noTarget: false, placeholder: false }];
+    }
+    return [];
 }
 const NOT_CITING = { prose: false, announced: false, quoteOpenAtStart: false, quoteClosesAfter: false };
 /** How far a quotation may run across the lines of one paragraph and still count as closed. */

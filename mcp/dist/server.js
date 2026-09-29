@@ -69592,7 +69592,24 @@ var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 var ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:Get-ChildItem|gci|dir|ls)\s+env:\\?)`;
 var SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;
 var AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]{0,200}?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json|\.mcp\.json|\.claude\.json)`;
-var AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]{0,200}?${AGENT_CONFIG}[^\s"'|;&<>]{0,200}["']?`;
+var AGENT_COMMANDS = String.raw`\.claude[\/\\]commands(?![\w-])`;
+function writesInto(path8) {
+  const arg = String.raw`["']?[^\s"'|;&<>]{0,200}?${path8}[^\s"'|;&<>]{0,200}["']?`;
+  return [
+    // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
+    // after a word, a quote or a bracket — not a Markdown `> quote`, not
+    // `=>` or `->`.
+    new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${arg}`, "i"),
+    new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${arg}`, "i"),
+    // As the destination — the last argument — of a copy, move or link.
+    new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${arg}\s*(?:$|[|;&)#])`, "i"),
+    new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${path8}`, "i"),
+    new RegExp(String.raw`\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${path8}`, "i"),
+    new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${path8}`, "i"),
+    new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${path8}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, "i"),
+    new RegExp(String.raw`${path8}[^\n]{0,80}\.write_text\s*\(`, "i")
+  ];
+}
 var LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
 var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
@@ -69722,20 +69739,17 @@ var SKILL_RULES = [
     message: "A command appends to or replaces a file the agent re-reads every session \u2014 CLAUDE.md, AGENTS.md, a rules file, its memory, its settings (where hooks live), its skills and agents directories, or the MCP servers it starts (.mcp.json, ~/.claude.json). What lands there outlives this skill and steers every later session.",
     target: "any",
     requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor|mcp\.json/i,
-    patterns: [
-      // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
-      // after a word, a quote or a bracket — not a Markdown `> quote`, not
-      // `=>` or `->`.
-      new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, "i"),
-      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${AGENT_CONFIG_ARG}`, "i"),
-      // As the destination — the last argument — of a copy, move or link.
-      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, "i"),
-      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${AGENT_CONFIG}`, "i"),
-      new RegExp(String.raw`\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${AGENT_CONFIG}`, "i"),
-      new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, "i"),
-      new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, "i"),
-      new RegExp(String.raw`${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, "i")
-    ]
+    patterns: writesInto(AGENT_CONFIG)
+  },
+  {
+    id: "mp-write-agent-command",
+    category: "memory_poisoning",
+    severity: "medium",
+    title: "Write into the project\u2019s or the user\u2019s slash commands",
+    message: "A command writes a file into .claude/commands/. A command runs only when someone types it, but a committed one persists for the whole team, and one named like a familiar command shadows it. Confirm the skill is meant to install commands, and read what it writes.",
+    target: "any",
+    requires: /\.claude[\/\\]commands/i,
+    patterns: writesInto(AGENT_COMMANDS)
   },
   // ─────────────────────────────── rogue_agent ────────────────────────────
   {
@@ -69769,6 +69783,19 @@ var SKILL_RULES = [
       /\bthis\s+skill\s+(must|should|shall|is\s+to)\s+(always\s+)?(be\s+)?(used|invoked|loaded|run|activated|triggered|applied)\b[^.\n]{0,40}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?)\b/i,
       /use\s+this\s+skill\s+for\s+everything/i,
       /regardless\s+of\s+(what\s+)?the\s+user\s+(asks|says|wants)/i
+    ]
+  },
+  {
+    id: "ta-description-activation",
+    category: "trigger_abuse",
+    title: "Over-broad activation in the skill\u2019s description",
+    message: "The frontmatter description \u2014 the text the host reads to decide when to load the skill \u2014 asks for it on every request, task or message. There the skill needs no naming: the description is its activation.",
+    target: "description",
+    patterns: [
+      /\b(for|before|on|with|in|at|to|after|during)\s+(any|every|all|each)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?|replies|turns?|sessions?)\b/i,
+      /\balways\s+(use|invoke|run|load|activate|trigger|apply)\b/i,
+      /\bregardless\s+of\s+(what\s+)?the\s+user\b/i,
+      /\bfor\s+everything\b/i
     ]
   },
   // ────────────────────────────── data_exfiltration ───────────────────────
@@ -69987,10 +70014,12 @@ var SKILL_RULES = [
     // The URL is one of the install's own arguments, not any URL further along
     // the line: in a CSV of framework tips (ui-ux-pro-max) "pnpm i
     // @iconify-json/lucide for reliable server rendering,…,https://ui.nuxt.com/…"
-    // is a registry package, then a docs link three columns on.
+    // is a registry package, then a docs link three columns on. Up to 64 of
+    // them (round 2: 8 was a window twenty flags could step over); no argument
+    // crosses a comma, `;`, `&` or `|`.
     patterns: [
-      /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,8}?["']?(git\+https?|https?:\/\/)/i,
-      /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,8}?["']?(git\+|https?:\/\/|github:)/i,
+      /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,64}?["']?(git\+https?|https?:\/\/)/i,
+      /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,64}?["']?(git\+|https?:\/\/|github:)/i,
       /"(preinstall|postinstall|install)"\s*:/i
     ]
   },
@@ -70163,10 +70192,28 @@ function scanContent(content, isCode, opts = {}) {
   }));
   return finalize([
     ...matchUnits(rulesFor("text", "any"), whole2),
+    ...matchUnits(rulesFor("description"), frontmatterDescription(lines)),
     ...matchUnits(rulesFor("prose"), prose),
     ...matchUnits(rulesFor("code"), code),
     ...downloadThenRun([...code, ...prose].sort((a2, b) => a2.line - b.line), true)
   ]);
+}
+function frontmatterDescription(lines) {
+  if ((lines[0] ?? "").trim() !== "---") return [];
+  for (let i2 = 1; i2 < Math.min(lines.length, 200); i2 += 1) {
+    const text2 = lines[i2] ?? "";
+    if (text2.trim() === "---") break;
+    const key = /^description\s*:\s*(.*)$/i.exec(text2);
+    if (!key) continue;
+    const parts = [/^[>|][+-]?\s*$/.test(key[1] ?? "") ? "" : key[1] ?? ""];
+    for (let j = i2 + 1; j < lines.length; j += 1) {
+      const next = lines[j] ?? "";
+      if (!/^\s+\S/.test(next)) break;
+      parts.push(next.trim());
+    }
+    return [{ line: i2 + 1, text: `description: ${parts.join(" ").trim()}`, source: "line", noTarget: false, placeholder: false }];
+  }
+  return [];
 }
 var NOT_CITING = { prose: false, announced: false, quoteOpenAtStart: false, quoteClosesAfter: false };
 var QUOTE_SPAN_LINES = 12;

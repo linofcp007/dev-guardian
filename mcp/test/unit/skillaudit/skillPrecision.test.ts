@@ -58,9 +58,11 @@ describe('memory poisoning: a write into what the agent re-reads, not a path und
     expect(ids(scanContent(content, false)).filter((id) => id.startsWith('mp-'))).toEqual([]);
   });
 
-  it('plugin-dev command-development: a project command written to test it is not persistence', () => {
+  // Round 2: excluded in round 1, medium now — a committed command persists
+  // for the team and can shadow a familiar name (see round2Minors.test.ts).
+  it('plugin-dev command-development: a project command written to test it is medium, not high persistence', () => {
     const content = md('```bash', "cat > .claude/commands/test-bash.md << 'EOF'", '```');
-    expect(ids(scanContent(content, false)).filter((id) => id.startsWith('mp-'))).toEqual([]);
+    expect(ids(scanContent(content, false)).filter((id) => id.startsWith('mp-'))).toEqual(['mp-write-agent-command:medium']);
   });
 
   it('a script that prints a path under ~/.claude/skills does not write to it', () => {
