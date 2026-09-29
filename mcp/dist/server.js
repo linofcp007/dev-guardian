@@ -69584,9 +69584,10 @@ var SEVERITY_POINTS = {
 var EXECUTABLE_MULTIPLIER = 1.3;
 
 // src/skillaudit/patterns.ts
-var SENSITIVE_FILE_STRONG = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+var AGENT_AND_CLOUD_CREDENTIALS = String.raw`\.claude[\/\\]\.credentials\.json|(?<![\w-])\.claude\.json|gh[\/\\]hosts\.ya?ml|gcloud[\/\\](?:[^\s"'|;&<>]{0,80}[\/\\])?(?:credentials\.db|access_tokens\.db|legacy_credentials)|application_default_credentials\.json|\.azure[\/\\](?:accessTokens\.json|msal_token_cache\.(?:json|bin)|service_principal_entries\.json)`;
+var SENSITIVE_FILE_STRONG = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|${AGENT_AND_CLOUD_CREDENTIALS})`;
 var ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
-var SENSITIVE_DIR = String.raw`(?<![\w.-])\.(?:ssh|aws|gnupg)(?=$|[\s"'|;&)\x60])`;
+var SENSITIVE_DIR = String.raw`(?:(?<![\w.-])\.(?:ssh|aws|gnupg|azure)|\.config[\/\\]gcloud)(?=$|[\s"'|;&)\x60])`;
 var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 var ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:Get-ChildItem|gci|dir|ls)\s+env:\\?)`;
 var SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;

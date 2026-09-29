@@ -44,7 +44,7 @@ seria, com razão, apanhada pelas próprias regras que descreve.
 | Categoria | O que apanha |
 | --- | --- |
 | `prompt_injection` | Texto que tenta sobrepor-se às instruções do anfitrião ou às regras anteriores, ou que manda esconder ações do utilizador |
-| `data_exfiltration` | Variáveis de ambiente, segredos, chaves SSH ou dados do browser enviados para um destino na rede |
+| `data_exfiltration` | Variáveis de ambiente, segredos, chaves SSH, credenciais do Claude Code e das CLIs de cloud (GitHub, gcloud, Azure) ou dados do browser enviados para um destino na rede |
 | `privilege_escalation` | Elevação de privilégios, permissões abertas a todos, escrita em caminhos do sistema, desligar antivírus / SIP / firewall |
 | `supply_chain` | Um script remoto descarregado e entregue a uma shell, instalações a partir de um URL ou sem versão fixada, hooks de ciclo de vida |
 | `excessive_agency` | Apagamentos recursivos sem confirmação, force-push, remoção de tabelas ou bases de dados, ciclos sem limite, código que se altera a si próprio |

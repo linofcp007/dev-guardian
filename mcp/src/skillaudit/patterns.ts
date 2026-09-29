@@ -86,11 +86,22 @@ import { THREAT_CATEGORY_META } from './taxonomy.js';
 export type RuleTarget = 'text' | 'code' | 'prose' | 'any';
 
 /**
+ * The credentials of the agent and of the cloud CLIs beside it: Claude
+ * Code's OAuth tokens (`~/.claude/.credentials.json` on Linux), `~/.claude.json`
+ * (the env of every user-scoped MCP server, API keys included), the GitHub
+ * CLI's token, gcloud's credential stores and application default
+ * credentials, Azure's token caches. Round 2 of wave 2: narrowing
+ * `mp-persist-instruction` took away the only signal on these — a bare
+ * `~/.claude/` path used to read high as a side effect.
+ */
+const AGENT_AND_CLOUD_CREDENTIALS = String.raw`\.claude[\/\\]\.credentials\.json|(?<![\w-])\.claude\.json|gh[\/\\]hosts\.ya?ml|gcloud[\/\\](?:[^\s"'|;&<>]{0,80}[\/\\])?(?:credentials\.db|access_tokens\.db|legacy_credentials)|application_default_credentials\.json|\.azure[\/\\](?:accessTokens\.json|msal_token_cache\.(?:json|bin)|service_principal_entries\.json)`;
+
+/**
  * A credential file, named as a path. A public key (`*.pub`) is not a
  * credential — sending one to a server is how you register it.
  */
 const SENSITIVE_FILE_STRONG =
-  String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data)`;
+  String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|${AGENT_AND_CLOUD_CREDENTIALS})`;
 
 /**
  * A `.env` file as a FILE: not `process.env` (a property), and not a
@@ -100,13 +111,14 @@ const SENSITIVE_FILE_STRONG =
 const ENV_FILE = String.raw`(?<![\w$)\]])\.env(?:\.(?!(?:example|sample|template|dist|defaults|tmpl)\b)[\w-]+)?(?![\w.-])`;
 
 /**
- * A credential DIRECTORY named whole — `~/.ssh`, `$HOME/.aws`, `~/.gnupg` —
- * the way an archive ships it: `tar czf - ~/.ssh | curl -T - https://…`.
- * Only the send-over-network rules read it (wave 2 of the 3.0 review: that
- * line read SAFE, because `.ssh/` needed its slash). `chmod 700 ~/.ssh` reads
- * no secret, and setup scripts do it all the time.
+ * A credential DIRECTORY named whole — `~/.ssh`, `$HOME/.aws`, `~/.gnupg`,
+ * `~/.azure`, `~/.config/gcloud` — the way an archive ships it: `tar czf -
+ * ~/.ssh | curl -T - https://…`. Only the send-over-network rules read it
+ * (wave 2 of the 3.0 review: that line read SAFE, because `.ssh/` needed its
+ * slash). `chmod 700 ~/.ssh` reads no secret, and setup scripts do it all
+ * the time.
  */
-const SENSITIVE_DIR = String.raw`(?<![\w.-])\.(?:ssh|aws|gnupg)(?=$|[\s"'|;&)\x60])`;
+const SENSITIVE_DIR = String.raw`(?:(?<![\w.-])\.(?:ssh|aws|gnupg|azure)|\.config[\/\\]gcloud)(?=$|[\s"'|;&)\x60])`;
 
 const SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 
