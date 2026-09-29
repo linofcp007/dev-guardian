@@ -13,6 +13,7 @@
  */
 import { MCP_DESCRIPTION_POISONING } from '../skillaudit/analyze.js';
 import { SKILL_RULES } from '../skillaudit/patterns.js';
+import { isLegitimateInvisible, subdivisionFlagTags } from '../platform/invisibleChars.js';
 /**
  * The `scan_skill` prompt-level rules that apply to a description: text an
  * attacker writes to steer the model. Its code rules (`target: 'code'`) look
@@ -234,8 +235,6 @@ export const TEXT_RULES = [
  * U+206A–206F, U+FFF9–FFFB and U+1D173–1D17A.
  */
 const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u{FFF9}-\u{FFFB}]/u;
-const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
-const IDEOGRAPHIC = /\p{Ideographic}/u;
 export function invisibleKind(code) {
     const ch = String.fromCodePoint(code);
     if (!INVISIBLE.test(ch))
@@ -248,26 +247,6 @@ export function invisibleKind(code) {
         return 'bidi controls';
     return 'zero-width and other invisible characters';
 }
-/**
- * The invisible code points that belong where they are: one VS15/VS16 after
- * an emoji (❤️) or on a keycap (1️⃣), a zero-width joiner inside an emoji
- * sequence (👨‍👩‍👧), and one ideographic variation selector after a CJK
- * ideograph (葛󠄀). Anything else invisible is reported.
- */
-function isLegitimate(code, prev, next) {
-    const prevCh = prev === undefined ? '' : String.fromCodePoint(prev);
-    const nextCh = next === undefined ? '' : String.fromCodePoint(next);
-    if (code === 0xfe0e || code === 0xfe0f) {
-        return PICTOGRAPHIC.test(prevCh) || (/[0-9#*]/.test(prevCh) && next === 0x20e3);
-    }
-    if (code === 0x200d) {
-        const prevIsEmoji = PICTOGRAPHIC.test(prevCh) || prev === 0xfe0f || (prev !== undefined && prev >= 0x1f3fb && prev <= 0x1f3ff);
-        return prevIsEmoji && PICTOGRAPHIC.test(nextCh);
-    }
-    if (code >= 0xe0100 && code <= 0xe01ef)
-        return IDEOGRAPHIC.test(prevCh);
-    return false;
-}
 function readable(text) {
     if (text.length === 0)
         return false;
@@ -278,31 +257,6 @@ function readable(text) {
             printable += 1;
     }
     return printable / [...text].length >= 0.9;
-}
-/**
- * The only tag sequences Unicode recommends for general interchange (RGI):
- * the England, Scotland and Wales flags — 🏴 U+1F3F4, the tag letters of
- * `gbeng`/`gbsct`/`gbwls`, and CANCEL TAG U+E007F (fix round 4). Any other
- * use of tag characters, a flag or not, stays reported.
- */
-const RGI_SUBDIVISION_FLAGS = new Set(['gbeng', 'gbsct', 'gbwls']);
-function subdivisionFlagTags(points) {
-    const exempt = new Set();
-    for (let i = 0; i < points.length; i += 1) {
-        if (points[i] !== 0x1f3f4)
-            continue;
-        let j = i + 1;
-        let tag = '';
-        for (let c = points[j]; c !== undefined && c >= 0xe0020 && c <= 0xe007e; c = points[j]) {
-            tag += String.fromCharCode(c - 0xe0000);
-            j += 1;
-        }
-        if (points[j] === 0xe007f && RGI_SUBDIVISION_FLAGS.has(tag)) {
-            for (let k = i + 1; k <= j; k += 1)
-                exempt.add(k);
-        }
-    }
-    return exempt;
 }
 export function scanInvisible(text) {
     const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
@@ -316,7 +270,7 @@ export function scanInvisible(text) {
     for (let i = 0; i < points.length; i += 1) {
         const code = points[i] ?? 0;
         const kind = invisibleKind(code);
-        if (kind !== null && !flagTags.has(i) && !isLegitimate(code, points[i - 1], points[i + 1])) {
+        if (kind !== null && !flagTags.has(i) && !isLegitimateInvisible(code, points[i - 1], points[i + 1])) {
             kinds.add(kind);
             count += 1;
             if (index < 0)

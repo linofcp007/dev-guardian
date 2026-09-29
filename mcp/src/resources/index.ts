@@ -17,6 +17,7 @@ import {
   ResourceTemplate,
 } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PluginContext } from '../context.js';
+import { untrustedValue } from '../platform/untrustedText.js';
 import { QueryTolerantUriTemplate } from './paging.js';
 
 export type ResourceHandler = (
@@ -52,6 +53,15 @@ export function registerResourceModule(resource: ResourceModule): void {
   RESOURCES.push(resource);
 }
 
+/**
+ * A resource payload as the host receives it: every string in it — keys
+ * included — passed through `untrustedValue` (`platform/untrustedText.ts`),
+ * like every tool result, since a resource serves the same stored findings.
+ */
+export function resourceText(json: unknown): string {
+  return JSON.stringify(untrustedValue(json));
+}
+
 export function attachAllResources(server: McpServer, ctx: PluginContext): void {
   for (const resource of RESOURCES) {
     const mimeType = resource.mimeType ?? 'application/json';
@@ -70,7 +80,7 @@ export function attachAllResources(server: McpServer, ctx: PluginContext): void 
         async (uri, params) => {
           const { json } = await resource.handler(uri, params, ctx);
           return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
+            contents: [{ uri: uri.href, mimeType, text: resourceText(json) }],
           };
         },
       );
@@ -82,7 +92,7 @@ export function attachAllResources(server: McpServer, ctx: PluginContext): void 
         async (uri) => {
           const { json } = await resource.handler(uri, {}, ctx);
           return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }],
+            contents: [{ uri: uri.href, mimeType, text: resourceText(json) }],
           };
         },
       );

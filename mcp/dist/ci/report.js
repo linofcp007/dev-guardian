@@ -28,6 +28,7 @@
  * general coverage-gap prose (tool names, "not installed" reasons) still
  * out of it entirely.
  */
+import { untrustedText } from '../platform/untrustedText.js';
 import { toSarif } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
 import { CI_EXIT } from './types.js';
@@ -99,7 +100,10 @@ export function renderHuman(v) {
         for (const s of v.suppressedByRepoConfig)
             lines.push(`  - ${s.step}: ${s.tool}: ${suppressionNote(s)}`);
     }
-    return `${lines.join('\n')}\n`;
+    // Titles, paths and gap reasons come from the scanned repository and its
+    // scanners: control, bidi and zero-width characters are written as visible
+    // `\u{XXXX}` before they reach a terminal (`platform/untrustedText.ts`).
+    return `${untrustedText(lines.join('\n'))}\n`;
 }
 function describeFinding(f) {
     const location = f.file_path !== undefined

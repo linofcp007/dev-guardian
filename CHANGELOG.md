@@ -489,6 +489,18 @@ version bump.
   whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
   `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
   descend links.
+- **Repository text reached the model and the terminal with its invisible characters intact.** A rule message, a
+  snippet, a file name, a reason or a title from the scanned repository can carry a right-to-left override
+  (`invoice<U+202E>sj.exe` reads as `invoiceexe.js`), a zero-width space or ESC; JSON escapes the C0 controls and
+  nothing else, and only `dev-guardian status` stripped terminal escapes. A new `untrustedText`
+  (`platform/untrustedText.ts`) is applied at the MCP response boundary to every string of every tool result —
+  keys, the error message and content-only payloads included — and of every resource: C0 and C1 controls (`\n`
+  and `\t` kept, except in a path, name, id, title or URL), the bidi controls, zero-width and every other
+  default-ignorable code point, U+2028/2029 and U+FFF9–FFFB are written as a visible `\u{XXXX}`. The emoji, keycap,
+  CJK-variation and subdivision-flag sequences `audit_mcp_tools` already exempts pass unchanged (the rule now lives
+  in `platform/invisibleChars.ts`, shared by both), and so does every other character — `日本.py` stays `日本.py`.
+  Stored findings keep their bytes. The CLI's human output is escaped too: `scan`'s report, `baseline update`'s gap
+  list and `check --file`'s file name, rule and preview.
 - **`create_fix_pr`'s dry run ran the project's code with every secret the server had.** To judge a fix it runs
   the project's own test command — `npm test` (`scripts.test`), `pytest` (every `conftest.py`), `cargo test`
   (`build.rs`), `go test` — in its worktrees, on a dry run too, and it inherited the server's whole environment:

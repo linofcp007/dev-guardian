@@ -10,6 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { ToolResult } from '../types.js';
+import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
 
 /**
@@ -160,6 +161,14 @@ export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): z.ZodO
  * A handler's result as the MCP host receives it. Per-file gap lists are cut
  * here and only here (`tools/responseBounds.ts`): the row and every internal
  * caller keep them whole. Exported for the response-size tests.
+ *
+ * Every string of the result — keys included, the error message and the
+ * content-only keys too — is passed through `untrustedValue`
+ * (`platform/untrustedText.ts`) here and only here: a rule message, a
+ * snippet, a file name or a title from the scanned repository reaches the
+ * model with its control, bidi and zero-width characters written as visible
+ * `\u{XXXX}`. The handler's own object — and so the stored row — keeps its
+ * bytes.
  */
 export function toCallToolResult<T extends Record<string, unknown>>(
   result: ToolResult<T>,
@@ -171,7 +180,7 @@ export function toCallToolResult<T extends Record<string, unknown>>(
 } {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
-    const payload = boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>);
+    const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>));
     const structured: Record<string, unknown> = { ...payload };
     for (const key of contentOnlyKeys) delete structured[key];
     // A tool with a bulky content-only payload is serialised compactly too:
@@ -182,13 +191,14 @@ export function toCallToolResult<T extends Record<string, unknown>>(
       structuredContent: structured,
     };
   }
-  const errorPayload = { ok: false, error: result.error } as Record<string, unknown>;
+  const error = untrustedValue(result.error);
+  const errorPayload = { ok: false, error } as Record<string, unknown>;
   return {
     isError: true,
     content: [
       {
         type: 'text',
-        text: `Error (${result.error.code}): ${result.error.message}`,
+        text: `Error (${error.code}): ${error.message}`,
       },
     ],
     structuredContent: errorPayload,

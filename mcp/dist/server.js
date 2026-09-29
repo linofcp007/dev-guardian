@@ -8555,7 +8555,7 @@ var require_parse = __commonJS({
     "use strict";
     var path8 = __require("path");
     var resolveCommand2 = require_resolveCommand();
-    var escape2 = require_escape();
+    var escape3 = require_escape();
     var readShebang = require_readShebang();
     var isWin = process.platform === "win32";
     var isExecutableRegExp = /\.(?:com|exe)$/i;
@@ -8579,8 +8579,8 @@ var require_parse = __commonJS({
       if (parsed.options.forceShell || needsShell) {
         const needsDoubleEscapeMetaChars = isCmdShimRegExp.test(commandFile);
         parsed.command = path8.normalize(parsed.command);
-        parsed.command = escape2.command(parsed.command);
-        parsed.args = parsed.args.map((arg) => escape2.argument(arg, needsDoubleEscapeMetaChars));
+        parsed.command = escape3.command(parsed.command);
+        parsed.args = parsed.args.map((arg) => escape3.argument(arg, needsDoubleEscapeMetaChars));
         const shellCommand = [parsed.command].concat(parsed.args).join(" ");
         parsed.args = ["/d", "/s", "/c", `"${shellCommand}"`];
         parsed.command = process.env.comspec || "cmd.exe";
@@ -37686,8 +37686,8 @@ function readText(path8, maxBytes) {
 }
 function readSmallText(path8, maxBytes, under) {
   if (under !== void 0) {
-    const walk4 = walkLinksUnder(under, path8);
-    if (!walk4.ok) return { status: "refused", reason: walk4.reason };
+    const walk5 = walkLinksUnder(under, path8);
+    if (!walk5.ok) return { status: "refused", reason: walk5.reason };
   }
   return readText(path8, maxBytes);
 }
@@ -37725,8 +37725,8 @@ function realRoot(root) {
 function locate(root, path8) {
   const abs = resolve2(root, path8);
   if (!isWithinDir(root, abs)) return { ok: false, read: { status: "refused", reason: "outside-project" } };
-  const walk4 = walkLinksUnder(root, abs);
-  if (!walk4.ok) return { ok: false, read: { status: "refused", reason: walk4.reason } };
+  const walk5 = walkLinksUnder(root, abs);
+  if (!walk5.ok) return { ok: false, read: { status: "refused", reason: walk5.reason } };
   let real;
   try {
     real = realpathSync.native(abs);
@@ -41206,6 +41206,108 @@ function describe(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
 
+// src/platform/invisibleChars.ts
+var PICTOGRAPHIC = new RegExp("\\p{Extended_Pictographic}", "u");
+var IDEOGRAPHIC = new RegExp("\\p{Ideographic}", "u");
+function isLegitimateInvisible(code, prev, next) {
+  const prevCh = prev === void 0 ? "" : String.fromCodePoint(prev);
+  const nextCh = next === void 0 ? "" : String.fromCodePoint(next);
+  if (code === 65038 || code === 65039) {
+    return PICTOGRAPHIC.test(prevCh) || /[0-9#*]/.test(prevCh) && next === 8419;
+  }
+  if (code === 8205) {
+    const prevIsEmoji = PICTOGRAPHIC.test(prevCh) || prev === 65039 || prev !== void 0 && prev >= 127995 && prev <= 127999;
+    return prevIsEmoji && PICTOGRAPHIC.test(nextCh);
+  }
+  if (code >= 917760 && code <= 917999) return IDEOGRAPHIC.test(prevCh);
+  return false;
+}
+var RGI_SUBDIVISION_FLAGS = /* @__PURE__ */ new Set(["gbeng", "gbsct", "gbwls"]);
+function subdivisionFlagTags(points) {
+  const exempt = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 < points.length; i2 += 1) {
+    if (points[i2] !== 127988) continue;
+    let j = i2 + 1;
+    let tag = "";
+    for (let c3 = points[j]; c3 !== void 0 && c3 >= 917536 && c3 <= 917630; c3 = points[j]) {
+      tag += String.fromCharCode(c3 - 917504);
+      j += 1;
+    }
+    if (points[j] === 917631 && RGI_SUBDIVISION_FLAGS.has(tag)) {
+      for (let k = i2 + 1; k <= j; k += 1) exempt.add(k);
+    }
+  }
+  return exempt;
+}
+
+// src/platform/untrustedText.ts
+var UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u{FFF9}-\u{FFFB}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/gu;
+var UNSAFE_TEST = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u{FFF9}-\u{FFFB}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u;
+var MAYBE_LEGITIMATE = /[\u200D\uFE0E\uFE0F\u{E0020}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
+function escape2(code) {
+  return `\\u{${code.toString(16).toUpperCase().padStart(4, "0")}}`;
+}
+function codePointBefore(s, end) {
+  if (end <= 0) return void 0;
+  const low = s.charCodeAt(end - 1);
+  if (low >= 56320 && low <= 57343 && end >= 2) {
+    const high = s.charCodeAt(end - 2);
+    if (high >= 55296 && high <= 56319) return s.codePointAt(end - 2);
+  }
+  return low;
+}
+function exemptFlagOffsets(s) {
+  const out = /* @__PURE__ */ new Set();
+  if (!s.includes("\u{1F3F4}")) return out;
+  const points = [];
+  const offsets = [];
+  let offset = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) ?? 0;
+    points.push(cp);
+    offsets.push(offset);
+    offset += ch.length;
+  }
+  for (const index of subdivisionFlagTags(points)) {
+    const o2 = offsets[index];
+    if (o2 !== void 0) out.add(o2);
+  }
+  return out;
+}
+function untrustedText(text2, options = {}) {
+  if (!UNSAFE_TEST.test(text2)) return text2;
+  const multiline = options.multiline !== false;
+  let flags = null;
+  return text2.replace(UNSAFE, (ch, offset) => {
+    const code = ch.codePointAt(0) ?? 0;
+    if (multiline && (code === 10 || code === 9)) return ch;
+    if (MAYBE_LEGITIMATE.test(ch)) {
+      flags ??= exemptFlagOffsets(text2);
+      if (flags.has(offset)) return ch;
+      if (isLegitimateInvisible(code, codePointBefore(text2, offset), text2.codePointAt(offset + ch.length))) return ch;
+    }
+    return escape2(code);
+  });
+}
+var SINGLE_LINE_KEY = /(?:^|_)(?:paths?|files?|names?|ids?|titles?|urls?|uris?|targets?|packages?|fingerprints?)$/i;
+function untrustedValue(value) {
+  return walk(value, true);
+}
+function walk(value, multiline) {
+  if (typeof value === "string") return untrustedText(value, { multiline });
+  if (Array.isArray(value)) return value.map((v) => walk(v, multiline));
+  if (value !== null && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[untrustedText(k, { multiline: false })] = walk(v, !SINGLE_LINE_KEY.test(k));
+    }
+    return out;
+  }
+  return value;
+}
+
 // src/platform/projectPath.ts
 import { existsSync as existsSync6, realpathSync as realpathSync3, statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
@@ -41307,6 +41409,9 @@ function registerResourceModule(resource) {
   }
   RESOURCES.push(resource);
 }
+function resourceText(json) {
+  return JSON.stringify(untrustedValue(json));
+}
 function attachAllResources(server, ctx) {
   for (const resource of RESOURCES) {
     const mimeType = resource.mimeType ?? "application/json";
@@ -41322,7 +41427,7 @@ function attachAllResources(server, ctx) {
         async (uri, params) => {
           const { json } = await resource.handler(uri, params, ctx);
           return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
+            contents: [{ uri: uri.href, mimeType, text: resourceText(json) }]
           };
         }
       );
@@ -41334,7 +41439,7 @@ function attachAllResources(server, ctx) {
         async (uri) => {
           const { json } = await resource.handler(uri, {}, ctx);
           return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
+            contents: [{ uri: uri.href, mimeType, text: resourceText(json) }]
           };
         }
       );
@@ -41422,7 +41527,7 @@ function strictInputSchema(tool50) {
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
-    const payload = boundResponsePayload({ ok: true, ...rest });
+    const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest }));
     const structured = { ...payload };
     for (const key of contentOnlyKeys) delete structured[key];
     const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
@@ -41431,13 +41536,14 @@ function toCallToolResult(result, contentOnlyKeys) {
       structuredContent: structured
     };
   }
-  const errorPayload = { ok: false, error: result.error };
+  const error2 = untrustedValue(result.error);
+  const errorPayload = { ok: false, error: error2 };
   return {
     isError: true,
     content: [
       {
         type: "text",
-        text: `Error (${result.error.code}): ${result.error.message}`
+        text: `Error (${error2.code}): ${error2.message}`
       }
     ],
     structuredContent: errorPayload
@@ -41709,17 +41815,17 @@ var SEMGREP_SEVERITIES = [
 ];
 function yamlFilesUnder2(dir) {
   const out = [];
-  const walk4 = (d, depth) => {
+  const walk5 = (d, depth) => {
     if (depth > 8) return;
     const entries2 = listProjectDir(dir, d).sort((a2, b) => a2.name < b.name ? -1 : a2.name > b.name ? 1 : 0);
     for (const { name, kind } of entries2) {
       if (name === ".git" || name === "node_modules") continue;
       const abs = join9(d, name);
-      if (kind === "directory") walk4(abs, depth + 1);
+      if (kind === "directory") walk5(abs, depth + 1);
       else if ((kind === "file" || kind === "link") && /\.ya?ml$/i.test(name)) out.push(abs);
     }
   };
-  walk4(dir, 0);
+  walk5(dir, 0);
   return out;
 }
 function registeredEntries(ctx, projectPath) {
@@ -43411,10 +43517,10 @@ async function tryGitListFiles(root) {
 }
 async function walkFiles(root) {
   const out = [];
-  await walk(root, root, out);
+  await walk2(root, root, out);
   return out;
 }
-async function walk(root, dir, out) {
+async function walk2(root, dir, out) {
   let entries2;
   try {
     entries2 = await readdir(dir, { withFileTypes: true });
@@ -43426,7 +43532,7 @@ async function walk(root, dir, out) {
     if (FS_EXCLUDE.has(entry.name)) continue;
     const abs = join12(dir, entry.name);
     if (entry.isDirectory()) {
-      await walk(root, abs, out);
+      await walk2(root, abs, out);
     } else if (entry.isFile()) {
       try {
         const s = await stat(abs);
@@ -44521,17 +44627,17 @@ function expandGlob(root, pattern) {
   const re = globToRegExp(pattern);
   const out = [];
   let visited = 0;
-  const walk4 = (dir) => {
+  const walk5 = (dir) => {
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (visited++ > MAX_VISITED) return;
       const abs = join16(dir, name);
       const rel2 = relative6(root, abs).split(sep6).join("/");
       if (kind === "link" && projectPathKind(root, abs) === "outside") continue;
       if (re.test(rel2)) out.push(abs);
-      if (kind === "directory" && !SKIP_DIRS.has(name)) walk4(abs);
+      if (kind === "directory" && !SKIP_DIRS.has(name)) walk5(abs);
     }
   };
-  walk4(root);
+  walk5(root);
   return out.sort();
 }
 function escapeRegExp2(text2) {
@@ -45098,7 +45204,7 @@ function hashInput(input) {
 }
 function listFilesRecursive(dir) {
   const out = [];
-  const walk4 = (current) => {
+  const walk5 = (current) => {
     let entries2;
     try {
       entries2 = readdirSync8(current, { withFileTypes: true });
@@ -45107,11 +45213,11 @@ function listFilesRecursive(dir) {
     }
     for (const entry of entries2) {
       const abs = join18(current, entry.name);
-      if (entry.isDirectory()) walk4(abs);
+      if (entry.isDirectory()) walk5(abs);
       else if (entry.isFile()) out.push(relative8(dir, abs).split(sep7).join("/"));
     }
   };
-  walk4(dir);
+  walk5(dir);
   return out.sort();
 }
 function describePack(entry) {
@@ -47288,17 +47394,17 @@ function findDotnetTargets(projectPath) {
 }
 function findProjectFiles(projectPath) {
   const out = [];
-  const walk4 = (dir, depth) => {
+  const walk5 = (dir, depth) => {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
     const entries2 = listProjectDir(projectPath, dir).sort((a2, b) => a2.name.localeCompare(b.name));
     for (const entry of entries2) {
       if (SKIP_DIRS2.has(entry.name)) continue;
       const abs = join23(dir, entry.name);
-      if (entry.kind === "directory") walk4(abs, depth + 1);
+      if (entry.kind === "directory") walk5(abs, depth + 1);
       else if (entry.kind === "file" && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
     }
   };
-  walk4(projectPath, 0);
+  walk5(projectPath, 0);
   return out;
 }
 function resolveFromFile(file, written) {
@@ -54006,17 +54112,17 @@ function scopeManifestGaps(judged, touched) {
     if (mine.length > 0) gaps.push({ ecosystem: g.ecosystem, files: mine });
     if (theirs.length > 0) preexisting.push({ ecosystem: g.ecosystem, files: theirs });
   }
-  const walk4 = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP);
+  const walk5 = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP);
   let toolRun = judged.toolRun;
   let missing;
   if (gaps.length > 0) {
-    missing = judged.toolRun.status === "skipped" ? ["trivy", ...walk4] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk4];
+    missing = judged.toolRun.status === "skipped" ? ["trivy", ...walk5] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk5];
   } else {
     const reason = judged.toolRun.reason?.replace(/^no_supported_manifest(; )?/, "");
     toolRun = { ...judged.toolRun, status: "ok" };
     if (reason !== void 0 && reason.length > 0) toolRun.reason = reason;
     else delete toolRun.reason;
-    missing = walk4;
+    missing = walk5;
   }
   return { toolRun, missing, gaps, preexisting };
 }
@@ -57486,10 +57592,10 @@ function detectPolicyDocs(projectPath) {
 }
 function listShallowFiles(root, maxDepth) {
   const out = [];
-  walk2(root, root, 0, maxDepth, out);
+  walk3(root, root, 0, maxDepth, out);
   return out;
 }
-function walk2(root, dir, depth, maxDepth, out) {
+function walk3(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   for (const { name: entry, kind } of listProjectDir(root, dir)) {
     if (entry.startsWith(".") && entry !== ".github" && entry !== ".gitlab") continue;
@@ -57497,7 +57603,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join40(dir, entry);
     if (kind === "directory") {
-      if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
+      if (depth + 1 <= maxDepth) walk3(root, abs, depth + 1, maxDepth, out);
     } else if (kind === "file" || kind === "link" && projectPathKind(root, abs) === "file") {
       out.push(abs.slice(root.length + 1).replace(/\\/g, "/"));
     }
@@ -58207,16 +58313,16 @@ function anyDeepMatching(root, suffix, maxDepth) {
     "build",
     "packages"
   ]);
-  function walk4(dir, depth) {
+  function walk5(dir, depth) {
     if (depth > maxDepth) return false;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name) || name.startsWith(".")) continue;
       if (name.endsWith(suffix)) return true;
-      if (kind === "directory" && walk4(join44(dir, name), depth + 1)) return true;
+      if (kind === "directory" && walk5(join44(dir, name), depth + 1)) return true;
     }
     return false;
   }
-  return walk4(root, 0);
+  return walk5(root, 0);
 }
 
 // src/tools/initProject.ts
@@ -68301,19 +68407,19 @@ async function handler33(input, ctx) {
 var MAX_FILE_BYTES2 = 2e6;
 function collectConfigFiles(root, maxDepth) {
   const out = [];
-  function walk4(dir, depth) {
+  function walk5(dir, depth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS3.has(name)) continue;
       const abs = join61(dir, name);
       if (kind === "directory") {
-        walk4(abs, depth + 1);
+        walk5(abs, depth + 1);
       } else if ((kind === "file" || kind === "link") && TARGET_FILES.some((re) => re.test(name))) {
         out.push(abs);
       }
     }
   }
-  walk4(root, 0);
+  walk5(root, 0);
   return out;
 }
 
@@ -68427,16 +68533,16 @@ function unknownStatus(tfm) {
 var SKIP_DIRS4 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 function collectCsprojFiles(root, maxDepth) {
   const out = [];
-  function walk4(dir, depth) {
+  function walk5(dir, depth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS4.has(name)) continue;
       const abs = join62(dir, name);
-      if (kind === "directory") walk4(abs, depth + 1);
+      if (kind === "directory") walk5(abs, depth + 1);
       else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
     }
   }
-  walk4(root, 0);
+  walk5(root, 0);
   return out;
 }
 function failDomain23(code, message3) {
@@ -68567,7 +68673,7 @@ async function handler35(input, ctx) {
 function findMigrationsDirs(root) {
   const out = [];
   const SKIP = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
-  function walk4(dir, depth) {
+  function walk5(dir, depth) {
     if (depth > 6) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name)) continue;
@@ -68576,11 +68682,11 @@ function findMigrationsDirs(root) {
       if (name === "Migrations") {
         out.push(abs);
       } else {
-        walk4(abs, depth + 1);
+        walk5(abs, depth + 1);
       }
     }
   }
-  walk4(root, 0);
+  walk5(root, 0);
   return out;
 }
 
@@ -72219,7 +72325,7 @@ var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
 function discoverSpecs(projectPath, explicit) {
   const root = resolve17(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
-  const candidates2 = isExplicit ? dedupeResolved(explicit) : walk3(root, root).sort();
+  const candidates2 = isExplicit ? dedupeResolved(explicit) : walk4(root, root).sort();
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
   const outcome = readCandidates(isExplicit ? null : root, selected);
@@ -72247,7 +72353,7 @@ function readCandidates(root, paths) {
   }
   return { specs, oversized, truncated: false };
 }
-function walk3(root, dir) {
+function walk4(root, dir) {
   let entries2;
   try {
     entries2 = readdirSync17(dir, { withFileTypes: true });
@@ -72258,7 +72364,7 @@ function walk3(root, dir) {
   for (const entry of entries2) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk3(root, join70(dir, entry.name)));
+      out.push(...walk4(root, join70(dir, entry.name)));
     } else if (entry.isFile()) {
       if (isSpecCandidate(root, dir, entry.name)) {
         out.push(join70(dir, entry.name));
@@ -78482,8 +78588,6 @@ var TEXT_RULES = [
   }
 ];
 var INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u{FFF9}-\u{FFFB}]/u;
-var PICTOGRAPHIC = new RegExp("\\p{Extended_Pictographic}", "u");
-var IDEOGRAPHIC = new RegExp("\\p{Ideographic}", "u");
 function invisibleKind(code) {
   const ch = String.fromCodePoint(code);
   if (!INVISIBLE.test(ch)) return null;
@@ -78491,19 +78595,6 @@ function invisibleKind(code) {
   if (code >= 65024 && code <= 65039 || code >= 917760 && code <= 917999) return "variation selectors";
   if (new RegExp("\\p{Bidi_Control}", "u").test(ch)) return "bidi controls";
   return "zero-width and other invisible characters";
-}
-function isLegitimate(code, prev, next) {
-  const prevCh = prev === void 0 ? "" : String.fromCodePoint(prev);
-  const nextCh = next === void 0 ? "" : String.fromCodePoint(next);
-  if (code === 65038 || code === 65039) {
-    return PICTOGRAPHIC.test(prevCh) || /[0-9#*]/.test(prevCh) && next === 8419;
-  }
-  if (code === 8205) {
-    const prevIsEmoji = PICTOGRAPHIC.test(prevCh) || prev === 65039 || prev !== void 0 && prev >= 127995 && prev <= 127999;
-    return prevIsEmoji && PICTOGRAPHIC.test(nextCh);
-  }
-  if (code >= 917760 && code <= 917999) return IDEOGRAPHIC.test(prevCh);
-  return false;
 }
 function readable2(text2) {
   if (text2.length === 0) return false;
@@ -78513,23 +78604,6 @@ function readable2(text2) {
     if (c3 >= 32 && c3 !== 127 && c3 !== 65533) printable += 1;
   }
   return printable / [...text2].length >= 0.9;
-}
-var RGI_SUBDIVISION_FLAGS = /* @__PURE__ */ new Set(["gbeng", "gbsct", "gbwls"]);
-function subdivisionFlagTags(points) {
-  const exempt = /* @__PURE__ */ new Set();
-  for (let i2 = 0; i2 < points.length; i2 += 1) {
-    if (points[i2] !== 127988) continue;
-    let j = i2 + 1;
-    let tag = "";
-    for (let c3 = points[j]; c3 !== void 0 && c3 >= 917536 && c3 <= 917630; c3 = points[j]) {
-      tag += String.fromCharCode(c3 - 917504);
-      j += 1;
-    }
-    if (points[j] === 917631 && RGI_SUBDIVISION_FLAGS.has(tag)) {
-      for (let k = i2 + 1; k <= j; k += 1) exempt.add(k);
-    }
-  }
-  return exempt;
 }
 function scanInvisible(text2) {
   const points = [...text2].map((ch) => ch.codePointAt(0) ?? 0);
@@ -78543,7 +78617,7 @@ function scanInvisible(text2) {
   for (let i2 = 0; i2 < points.length; i2 += 1) {
     const code = points[i2] ?? 0;
     const kind = invisibleKind(code);
-    if (kind !== null && !flagTags.has(i2) && !isLegitimate(code, points[i2 - 1], points[i2 + 1])) {
+    if (kind !== null && !flagTags.has(i2) && !isLegitimateInvisible(code, points[i2 - 1], points[i2 + 1])) {
       kinds.add(kind);
       count2 += 1;
       if (index < 0) index = offset;

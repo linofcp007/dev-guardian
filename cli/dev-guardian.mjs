@@ -121,6 +121,7 @@ import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
 import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
+import { untrustedText } from '../mcp/dist/platform/untrustedText.js';
 import {
   describeReadRefusal,
   describeWriteRefusal,
@@ -634,7 +635,7 @@ function cmdCheck(argv) {
     } else {
       const icon = a.level === 'block' ? '⛔' : a.level === 'warn' ? '⚠️ ' : '✅';
       process.stdout.write(`${icon} ${a.level.toUpperCase()}\n`);
-      for (const r of a.reasons) process.stdout.write(`  • ${r}\n`);
+      for (const r of a.reasons) process.stdout.write(`  • ${untrustedText(r)}\n`);
     }
     process.exit(a.level === 'ok' ? 0 : 1);
   }
@@ -660,11 +661,16 @@ function cmdCheck(argv) {
     if (opts.json) {
       process.stdout.write(JSON.stringify({ file: filePath, hits }) + '\n');
     } else if (hits.length === 0) {
-      process.stdout.write(`✅ No secrets detected in ${opts.file}\n`);
+      process.stdout.write(`✅ No secrets detected in ${untrustedText(opts.file, { multiline: false })}\n`);
     } else {
-      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${opts.file}:\n`);
+      // The file's name and what matched in it are the repository's text:
+      // control, bidi and zero-width characters are written as visible
+      // `\u{XXXX}` before they reach the terminal (`platform/untrustedText.ts`).
+      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${untrustedText(opts.file, { multiline: false })}:\n`);
       for (const h of hits) {
-        process.stdout.write(`  • ${h.title} (${h.confidence}) — line ${h.line}: ${h.preview}\n`);
+        process.stdout.write(
+          `  • ${untrustedText(h.title)} (${h.confidence}) — line ${h.line}: ${untrustedText(h.preview, { multiline: false })}\n`,
+        );
       }
     }
     process.exit(hits.length > 0 ? 1 : 0);
@@ -1460,7 +1466,7 @@ async function cmdBaseline(argv) {
         "and whoever's change triggers that run will look responsible for debt this baseline " +
         'never actually captured. Gaps:\n',
     );
-    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${gap}\n`);
+    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${untrustedText(gap)}\n`);
   }
 
   // Never CI_EXIT.GATE_FAILED: this command has no gate. Full coverage is a
