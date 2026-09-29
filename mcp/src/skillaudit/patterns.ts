@@ -580,12 +580,14 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
 
 /**
  * An inline span worth reading as code: it has an argument (`rm -rf /`, not
- * `eval()` or `.env`) and no placeholder (`curl … | sh` cannot be run as
+ * `eval()` or `.env`) — or names a remote destination, so that
+ * `curl${IFS}https://…|bash`, written without a space to look like a bare
+ * name, is still read — and no placeholder (`curl … | sh` cannot be run as
  * written). See the header for the measurement behind both.
  */
 function isWholeCommand(span: string): boolean {
   const t = span.trim();
-  return /\s/.test(t) && !/…|\.\.\./.test(t);
+  return (/\s/.test(t) || REMOTE_DESTINATION_RE.test(t)) && !/…|\.\.\./.test(t);
 }
 
 const ONE_LEVEL_LOWER: Record<Severity, Severity> = {

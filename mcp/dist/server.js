@@ -68090,7 +68090,7 @@ function matchUnits(rules2, units) {
 }
 function isWholeCommand(span) {
   const t = span.trim();
-  return /\s/.test(t) && !/…|\.\.\./.test(t);
+  return (/\s/.test(t) || REMOTE_DESTINATION_RE.test(t)) && !/…|\.\.\./.test(t);
 }
 var ONE_LEVEL_LOWER = {
   critical: "high",

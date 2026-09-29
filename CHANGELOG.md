@@ -20,8 +20,8 @@ version bump.
   validated every open finding instead of the one named. Every schema is now
   registered strict: such a call fails with MCP error -32602 naming the key,
   and nothing runs. A caller that relied on extra keys being ignored gets an
-  error it can read. `check_toolchain` and the other parameterless tools,
-  which the SDK did not validate at all, now reject any argument too.
+  error it can read. `check_toolchain`, which takes no parameters and which
+  the SDK therefore did not validate at all, now rejects any argument too.
 - `validate_finding` accepts `finding_fingerprint`, the name `suppress_finding`
   and `suggest_fix` use, as an alias of `fingerprint`; both with different
   values is an error.
@@ -119,8 +119,8 @@ version bump.
   - Precision, measured on this repo's own docs (82 code hits, every one a
     mention: `eval()`, `.env`, `curl … | sh`, the hook's block list) and on 75
     legitimate third-party skills installed on the development machine: an
-    inline span is read only when it is a whole command (an argument, no `…`
-    placeholder), and code in an instruction file scores one level below its
+    inline span is read only when it is a whole command (an argument or a
+    URL, no `…` placeholder), and code in an instruction file scores one level below its
     rule unless its span or its fenced block names a URL or an IP address. At
     full severity a skill teaching how to write hook rules read +100 from
     fenced YAML patterns; it now reads 40. dev-guardian's own skills and
