@@ -3216,3 +3216,40 @@ describe('assessBashCommand — a download extracted into a PATH directory, then
     expect(performance.now() - t0).toBeLessThan(ceiling(3000, 10_000));
   }, 30_000);
 });
+
+// Review of 3.0, wave 2, round 2, item 1(b): the cheap indirect launches of
+// `db adopt --yes` — the rule is a speed bump, and these are on the road.
+describe('assessBashCommand — db adopt --yes through Start-Process, env -S and find -exec (review 3.0 wave 2, round 2)', () => {
+  it.each([
+    ["Start-Process node -ArgumentList 'cli/dev-guardian.mjs db adopt --yes'", 'powershell'],
+    ["Start-Process -FilePath node -ArgumentList 'cli/dev-guardian.mjs','db','adopt','--yes'", 'powershell'],
+    ['start node -ArgumentList "C:\\dg\\cli\\dev-guardian.mjs db adopt --yes" -Wait', 'powershell'],
+    ["saps dev-guardian 'db adopt --yes --project .'", 'powershell'],
+    ["Start-Process -Args 'db adopt --project . --yes' -FilePath dev-guardian.cmd -NoNewWindow", 'powershell'],
+    ["env -S 'dev-guardian db adopt --yes'", 'bash'],
+    ['env -S "node cli/dev-guardian.mjs db adopt" --yes', 'bash'],
+    ["env --split-string='dev-guardian db adopt --yes'", 'bash'],
+    ["env -iS 'dev-guardian db adopt --yes'", 'bash'],
+    ['find . -maxdepth 0 -exec dev-guardian db adopt --yes \\;', 'bash'],
+    ['find . -name .guardian -execdir node /opt/dg/cli/dev-guardian.mjs db adopt --project {} --yes +', 'bash'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('db-adopt-yes');
+  });
+
+  it('env -S hands its string to the command it runs, whatever that command is', () => {
+    expect(assessBashCommand("env -S 'rm -rf /'").rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ["Start-Process node -ArgumentList 'cli/dev-guardian.mjs db adopt --project .'", 'powershell'],
+    ["Start-Process notepad -ArgumentList 'db adopt --yes'", 'powershell'],
+    ["env -S 'dev-guardian db adopt'", 'bash'],
+    ["env -S 'npm test'", 'bash'],
+    ["find . -name '*.db' -exec ls -l {} \\;", 'bash'],
+    ['find . -exec dev-guardian db adopt --project {} \\;', 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
+  });
+});

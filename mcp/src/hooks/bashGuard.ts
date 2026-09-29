@@ -3029,13 +3029,137 @@ function cliArgs(words: readonly ShellWord[], at: number): string[] | undefined 
   return undefined;
 }
 
-/** `dev-guardian db adopt … --yes` (or `--yes=…`), its options in any order, however the CLI is launched. */
+/**
+ * `dev-guardian db adopt … --yes` (or `--yes=…`), its options in any order,
+ * when the command at `at` runs the CLI directly ({@link cliArgs}) — a
+ * speed bump, not a wall: the indirect launches are in docs/hooks.md's known
+ * limits, and the registry the command writes is guarded by path.
+ */
 function adoptsDatabase(words: readonly ShellWord[], at: number): boolean {
   const args = cliArgs(words, at);
   if (args === undefined) return false;
   const db = args.findIndex((a) => !a.startsWith('-'));
   if (args[db] !== 'db' || !args.slice(db + 1).includes('adopt')) return false;
   return args.some((a) => a === '--yes' || a.startsWith('--yes='));
+}
+
+/**
+ * The same, launched one step removed (review 3.0 wave 2, round 2): by
+ * PowerShell's `Start-Process` / `saps` / `start` (its program and
+ * `-ArgumentList`), or by `find … -exec` / `-execdir` / `-ok`. (`env -S` is
+ * read as a nested script instead: it can hand on any command.)
+ */
+function adoptsDatabaseThroughLauncher(words: readonly ShellWord[], at: number): boolean {
+  const started = startProcessArgv(words, at);
+  if (started !== undefined && adoptsDatabase(started, 0)) return true;
+  return findExecCommands(words, at).some((cmd) => adoptsDatabase(cmd, resolveCommand(cmd).index));
+}
+
+const START_PROCESS = new Set(['start-process', 'saps', 'start']);
+
+/** As plain words. */
+function plainWords(values: readonly string[]): ShellWord[] {
+  return values.map((value) => ({ value, quoted: false }));
+}
+
+/**
+ * The command line `Start-Process` starts: its `-FilePath` (or first
+ * positional) and every word of its `-ArgumentList` (or second positional) —
+ * a list's items and a single string's words alike. None when the command at
+ * or before `at` is not Start-Process.
+ */
+function startProcessArgv(words: readonly ShellWord[], at: number): ShellWord[] | undefined {
+  const sp = words.findIndex((w, i) => i <= at && START_PROCESS.has(commandName(w.value)));
+  if (sp < 0) return undefined;
+  let file: string | undefined;
+  const list: string[] = [];
+  const positional: string[] = [];
+  let inList = false;
+  for (let i = sp + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    const param = /^-([A-Za-z]+)(?::([\s\S]*))?$/.exec(v);
+    if (param !== null) {
+      inList = false;
+      const name = `-${param[1] ?? ''}`;
+      const inline = param[2];
+      if (PS_FILE_PATH.test(name)) file = inline ?? words[(i += 1)]?.value;
+      else if (PS_ARGUMENT_LIST.test(name)) {
+        inList = true;
+        if (inline !== undefined) list.push(inline);
+      } else if (inline === undefined && /^-(?:verb|wo\w*|windowstyle|w|redirect\w*|credential|cred|environment)$/i.test(name)) i += 1;
+      continue;
+    }
+    if (inList) list.push(v);
+    else positional.push(v);
+  }
+  file ??= positional.shift();
+  if (list.length === 0 && positional[0] !== undefined) list.push(positional[0]);
+  if (file === undefined) return undefined;
+  return plainWords([file, ...list.flatMap((a) => a.split(/\s+/).filter((s) => s !== ''))]);
+}
+
+/** The commands `find` runs for what it finds: each `-exec` / `-execdir` / `-ok` / `-okdir` to its `;` or `{} +`. */
+function findExecCommands(words: readonly ShellWord[], at: number): ShellWord[][] {
+  if (commandName(words[at]?.value ?? '') !== 'find') return [];
+  const out: ShellWord[][] = [];
+  let cmd: ShellWord[] | undefined;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === undefined) continue;
+    if (cmd === undefined) {
+      if (/^-(?:exec|execdir|ok|okdir)$/.test(w.value)) cmd = [];
+      continue;
+    }
+    if (w.value === ';' || (w.value === '+' && words[i - 1]?.value === '{}')) {
+      out.push(cmd);
+      cmd = undefined;
+    } else cmd.push(w);
+  }
+  if (cmd !== undefined && cmd.length > 0) out.push(cmd);
+  return out;
+}
+
+/**
+ * The command line `env -S STRING [args…]` (`--split-string`, `-S` in a
+ * cluster) runs: the string split into words, then the rest — read as a
+ * nested script, since it can hand on any command (`env -S 'rm -rf /'`).
+ * `end` is where the command after the runners starts.
+ */
+function envSplitScript(words: readonly ShellWord[], end: number): string | undefined {
+  for (let i = 0; i < Math.min(end, words.length); i += 1) {
+    if (commandName(words[i]?.value ?? '') !== 'env') continue;
+    for (let j = i + 1; j < words.length; j += 1) {
+      const a = words[j]?.value ?? '';
+      let value: string | undefined;
+      let next = j + 1;
+      const long = /^--split-string(?:=([\s\S]*))?$/.exec(a);
+      // `-S` in a short cluster, unless a letter before it takes the value (`-uS` is `-u S`).
+      const valued = /^-[^-]/.test(a) ? /[uCSa]/.exec(a.slice(1)) : null;
+      if (long !== null) {
+        if (long[1] !== undefined) value = long[1];
+        else {
+          value = words[j + 1]?.value;
+          next = j + 2;
+        }
+      } else if (valued !== null && valued[0] === 'S') {
+        const rest = a.slice(valued.index + 2);
+        if (rest !== '') value = rest;
+        else {
+          value = words[j + 1]?.value;
+          next = j + 2;
+        }
+      } else if (/^-[^-]/.test(a) || a.startsWith('--')) {
+        j += runnerOptionWords('env', a) - 1;
+        continue;
+      } else if (ASSIGNMENT.test(a) || a === '-') {
+        continue;
+      } else return undefined;
+      if (value === undefined) return undefined;
+      return [value, ...words.slice(next).map((w) => w.value)].join(' ');
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 /** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
@@ -4421,8 +4545,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
-      if (adoptsDatabase(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
+      if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
       const scripts = nestedScripts(words, resolved.index);
+      const split = envSplitScript(words, resolved.index);
+      if (split !== undefined) scripts.push(shellScript(split));
       const cmdHead = words[resolved.index];
       const line =
         cmdHead !== undefined && commandName(cmdHead.value) === 'cmd'

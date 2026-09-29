@@ -470,7 +470,7 @@ version bump.
 - **The shell guard denies `dev-guardian db adopt --yes`.** Adopting a project's database makes it trusted, and a
   hostile repository can ship one that hides findings — so it is the user's decision, taken after reading the
   summary `db adopt` prints without `--yes`. Nothing stopped the assistant from running it through Bash or
-  PowerShell. It is denied now however the CLI is launched (`dev-guardian`, `node …/cli/dev-guardian.mjs`, `npx`,
+  PowerShell. It is denied now when the CLI is run directly (`dev-guardian`, `node …/cli/dev-guardian.mjs`, `npx`,
   through `env`, `sudo`, `bash -c`, `cmd /c`, `pwsh -Command`) and wherever `--yes` (or `--yes=…`) stands, with its
   own message: "db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt`
   without --yes". `db adopt` without `--yes` and every other CLI command stay allowed.
@@ -504,6 +504,12 @@ version bump.
   (`chmod`, `ls`, `which`, `echo`, …), since the archive's names are unknown. Extracting into another directory,
   listing (`tar tz`), or extracting a checked archive stays allowed. An archive extracted into the working directory
   and run from there (`./configure`) is still not judged.
+- **`db adopt --yes` through `Start-Process`, `env -S` and `find -exec` is denied too, and the rule is documented as
+  what it is: a speed bump.** `Start-Process node -ArgumentList '…dev-guardian.mjs db adopt --yes'` (its program
+  and argument list, list or string), `env -S '…'` — now read as a nested command line, so `env -S 'rm -rf /'` is
+  denied as `rm -rf /` — and `find … -exec dev-guardian db adopt --yes \;` joined the direct forms. The other
+  indirect launches (`npm run`, `make`, aliases, program text, `ssh`, `docker run`, `--yes` in a variable, …) are
+  listed in docs/hooks.md as not recognised; docs/hooks.md no longer says "however the CLI is launched".
 
 ## [3.0.0] - 2026-09-29
 

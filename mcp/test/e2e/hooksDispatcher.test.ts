@@ -1449,6 +1449,10 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       ['Bash', 'npx dev-guardian db adopt --yes=true'],
       ['PowerShell', '& node "C:\\Users\\me\\.claude\\plugins\\dev-guardian\\cli\\dev-guardian.mjs" db adopt --yes --project .'],
       ['PowerShell', 'cmd /c "node C:\\dg\\cli\\dev-guardian.mjs db adopt --yes"'],
+      // Round 2, item 1(b).
+      ['PowerShell', "Start-Process node -ArgumentList 'C:\\dg\\cli\\dev-guardian.mjs','db','adopt','--yes' -Wait"],
+      ['Bash', "env -S 'dev-guardian db adopt --yes'"],
+      ['Bash', 'find . -maxdepth 0 -exec dev-guardian db adopt --yes \\;'],
     ])('%s: %s is denied, with its own message', (tool, command) => {
       expect(hook(tool, command).stdout).toEqual({
         hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: MESSAGE },
