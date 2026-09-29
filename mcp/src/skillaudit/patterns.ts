@@ -739,10 +739,11 @@ export const SKILL_RULES: SkillRule[] = [
     patterns: [
       /\beval\s*\(/,
       // Not `RegExp#exec`: a regex literal (`/…/i.exec(hex)`) or a receiver
-      // named as one (`regex.exec(md)`, `LINE_RE.exec`, `lineRe.exec`).
+      // spelled out as one (`regex.exec(md)`, `LINE_RE.exec`, `lineRegex.exec`).
       // Measured: superpowers' render-graphs.js and ui-ux-pro-max's
-      // extract-colors.cjs, both high for a regular expression.
-      /(?<!(?:\/[dgimsuyv]*|\b(?:re|rx|regex|regexp|pattern|matcher)|[a-z0-9](?:Re|RE|Rx|Regex|RegExp|Regexp|Pattern)|_(?:re|RE|rx|RX|regex|REGEX|pattern|PATTERN))\.)\bexec\s*\(/,
+      // extract-colors.cjs, both high for a regular expression. Not a short
+      // name like `re` or `rx`: that is as easily `require('child_process')`.
+      /(?<!(?:\/[dgimsuyv]*|\b(?:regex|regexp|pattern)|[a-z0-9](?:Regex|RegExp|Regexp|Pattern)|_(?:RE|REGEX|regex|PATTERN|pattern))\.)\bexec\s*\(/,
       /\bnew\s+Function\s*\(/,
       /os\.system\s*\(/,
       /child_process\.(exec|execSync)\s*\(/,

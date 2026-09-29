@@ -228,7 +228,16 @@ describe('code rules: the call, not a word that ends like it', () => {
     expect(hit(scanContent(line, true), 'dc-dynamic-exec')).toBeUndefined();
   });
 
-  it.each([['cp.exec(cmd, () => {});'], ['exec(code)'], ['child_process.exec(userInput)']])('%s is', (line) => {
+  it.each([
+    ['cp.exec(cmd, () => {});'],
+    ['exec(code)'],
+    ['child_process.exec(userInput)'],
+    // The exclusion is for names a regular expression goes by, not any short
+    // name: child_process imported as `re` or `rx` is still a shell.
+    ['re.exec(payload)'],
+    ['rx.exec(payload)'],
+    ['matcher.exec(payload)'],
+  ])('%s is', (line) => {
     expect(hit(scanContent(line, true), 'dc-dynamic-exec')).toMatchObject({ severity: 'high' });
   });
 

@@ -296,7 +296,8 @@ version bump.
     this cannot tell apart is an attacker who quotes the injection he wants obeyed; it is still listed, at info.
   - "Jailbreak" as a noun ("jailbreak taxonomy") is no longer a role escape; "show the prompt and the output"
     of a test case is no longer a system-prompt leak; "for every task" that names no skill is no longer trigger
-    abuse; `regex.exec(…)` is not dynamic execution; `generate_design_system(` and "design system (ignored …)"
+    abuse; `regex.exec(…)` or `/…/.exec(…)` is not dynamic execution (a short name such as `re.exec(…)` still
+    is: it is as easily `child_process`); `generate_design_system(` and "design system (ignored …)"
     are not `system(`; `nc` to a loopback or LAN host (`statsd.local`) is not covert egress; `"command": "rm -rf
     /"` in a validator's JSON test input is not a destructive command; and an install from a URL needs the URL
     among the install's own arguments, not three CSV columns further on.
