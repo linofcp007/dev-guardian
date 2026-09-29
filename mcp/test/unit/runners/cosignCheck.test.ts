@@ -107,7 +107,7 @@ const LEGACY_LINE = '{"Base64Signature":"MEUCIBaf","Payload":"eyJjcml0aWNhbCI6e3
 
 describe('classifySignatureDownload — the loud half of "no signature", and what each signature IS', () => {
   it('a legacy signature: present (no bundle counted)', () => {
-    expect(classifySignatureDownload(result({ stdout: `${LEGACY_LINE}\n` }))).toEqual({ state: 'present', attestationTypes: [], bundles: 0 });
+    expect(classifySignatureDownload(result({ stdout: `${LEGACY_LINE}\n` }))).toEqual({ state: 'present', attestationTypes: [], bundles: 0, bundleTypes: [] });
   });
 
   it('a v3 signing bundle (DSSE, predicate type https://sigstore.dev/cosign/sign/v1): present', () => {
@@ -124,7 +124,18 @@ describe('classifySignatureDownload — the loud half of "no signature", and wha
       state: 'attestation_only',
       attestationTypes: ['https://slsa.dev/provenance/v1'],
       bundles: 1,
+      bundleTypes: ['https://slsa.dev/provenance/v1'],
     });
+  });
+
+  it('round 5, M7: says what each returned bundle is — so a signature is never counted as possible provenance', () => {
+    const message = JSON.stringify({ mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', verificationMaterial: {}, messageSignature: { signature: 'TUVZ' } });
+    const stdout = [bundleLine('https://sigstore.dev/cosign/sign/v1'), message, bundleLine('https://slsa.dev/provenance/v1'), ''].join(String.fromCharCode(10));
+    expect(classifySignatureDownload(result({ stdout })).bundleTypes).toEqual([
+      'https://sigstore.dev/cosign/sign/v1',
+      'message signature',
+      'https://slsa.dev/provenance/v1',
+    ]);
   });
 
   it('round 4, I6: counts every bundle cosign returned — what the index lists beyond it was not returned', () => {
@@ -479,7 +490,7 @@ const fullExchange = (blob: number | string = 200, eol = '\r\n', chunks = 1): st
 describe('parseRegistryTrace — the referrer set is the registry\'s own index (round 4, I4/I5)', () => {
   it('reads the index the registry generated, from the chunked body the log dumped — digests, artifact types, annotations', () => {
     const t = parseRegistryTrace(fullExchange());
-    expect(t.index).toEqual({ state: 'listed', referrers: [{ digest: ART, artifactType: BUNDLE_TYPE, predicateType: SIGN, sigstore: true }] });
+    expect(t.index).toEqual({ state: 'listed', referrers: [{ digest: ART, artifactType: BUNDLE_TYPE, predicateType: SIGN, sigstore: true, fromTag: false }] });
     expect(t.manifests.get(ART)?.outcome).toBe('served');
     expect(t.blobs.get(LAYER)?.outcome).toBe('served');
     expect(t.manifests.get(`sha256-${IMG_HEX}.sig`)?.outcome).toBe('missing');
@@ -644,6 +655,82 @@ describe('referrerFaults — what the index lists and cosign did not return is n
     expect(fault).toContain('\\u001b');
     expect(fault).not.toContain(String.fromCharCode(0x202e));
     expect(fault).not.toContain(String.fromCharCode(0x1b));
+  });
+});
+
+describe('the fallback tag is the pusher\'s, not the registry\'s (round 5, ruling 1 and I7)', () => {
+  // No referrers API (404): go-containerregistry reads the `sha256-<hex>` tag,
+  // which whoever can push writes. cosign 3.1.3 is silent about any tag it
+  // cannot use (measured by the reviewer): "no signatures associated", exit 10.
+  const viaTag = (body: string, rest: Step[] = []): string =>
+    traceOf([{ url: `${H}/referrers/${IMG}`, answer: 404 }, { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 200, body }, ...rest]);
+
+  it.each([
+    ['an image manifest', JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', layers: [] })],
+    ['{"schemaVersion":2,"hello":…}', '{"schemaVersion":2,"hello":"world"}'],
+    ['manifests: "nope"', '{"schemaVersion":2,"manifests":"nope"}'],
+    ['something that is not JSON', 'not json at all'],
+  ])('ruling 1: a fallback tag the registry served holding %s is an answer — nothing attached via referrers', (_name, body) => {
+    const t = parseRegistryTrace(viaTag(body));
+    expect(t.index).toMatchObject({ state: 'listed', referrers: [] });
+    expect(referrerFaults(t)).toBeNull();
+  });
+
+  const junk = { mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: ART, size: 757, artifactType: BUNDLE_TYPE };
+  it.each([
+    ['{"manifests":[<a bundle>],"Manifests":[]} (Go: case-insensitive, the last key wins)', `{"schemaVersion":2,"manifests":[${JSON.stringify(junk)}],"Manifests":[]}`],
+    ['an entry whose digest is sha256:zz', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, digest: 'sha256:zz' }] })],
+    ['"Digest" beside "digest"', `{"schemaVersion":2,"manifests":[{"mediaType":"x","digest":"${ART}","Digest":"sha256:zz","size":1,"artifactType":"${BUNDLE_TYPE}"}]}`],
+    ['"size":"x" (Go fails the whole index)', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, size: 'x' }] })],
+    ['a non-string annotation value', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, annotations: { 'dev.sigstore.bundle.predicateType': 7 } }] })],
+    ['a child that does not exist', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, digest: `sha256:${'a'.repeat(64)}` }] })],
+  ])('I7: at the fallback tag, %s — an entry cosign never fetched is not attached: no fault', (_name, body) => {
+    expect(referrerFaults(parseRegistryTrace(viaTag(body)))).toBeNull();
+  });
+
+  it('I7: an entry the fallback tag lists and cosign DID fetch is judged by the registry\'s answers — a 500 on its bundle withholds', () => {
+    const t = parseRegistryTrace(
+      viaTag(indexBody([bundleEntry()]), [
+        { url: `${H}/manifests/${ART}`, answer: 200, body: bundleManifest() },
+        { url: `${H}/blobs/${LAYER}`, answer: 500 },
+      ]),
+    );
+    expect(referrerFaults(t)).toMatch(/500/);
+  });
+
+  it('I7: the fallback tag is read as go-containerregistry reads it — "Manifests" (any case) is the field, so what cosign fetched from it is judged', () => {
+    const t = parseRegistryTrace(
+      viaTag(`{"schemaVersion":2,"Manifests":[${JSON.stringify(bundleEntry())}]}`, [
+        { url: `${H}/manifests/${ART}`, answer: 200, body: bundleManifest() },
+        { url: `${H}/blobs/${LAYER}`, answer: 503 },
+      ]),
+    );
+    expect(t.index).toMatchObject({ state: 'listed', referrers: [{ digest: ART }] });
+    expect(referrerFaults(t)).toMatch(/503/);
+  });
+
+  it.each([
+    ['answering 500', { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 500 } satisfies Step],
+    ['answering 429', { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 429 } satisfies Step],
+    ['cut by a transport error', { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 'read tcp 1.2.3.4:5->6.7.8.9:443: read: connection reset by peer' } satisfies Step],
+  ])('ruling 1: only the registry\'s own failure on the fallback tag withholds — %s', (_name, tag) => {
+    const t = parseRegistryTrace(traceOf([{ url: `${H}/referrers/${IMG}`, answer: 404 }, tag]));
+    expect(t.index.state).toBe('failed');
+  });
+
+  it('ruling 1: a fallback tag whose body could not be read ("Failed to dump response") withholds', () => {
+    const log = `${traceOf([{ url: `${H}/referrers/${IMG}`, answer: 404 }, { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 200 }])}${T} Failed to dump response GET ${H}/manifests/sha256-${IMG_HEX}: unexpected EOF\n`;
+    expect(parseRegistryTrace(log).index.state).toBe('failed');
+  });
+
+  it('ruling 2 keeps the registry\'s own index strict: an entry of the referrers API\'s index cosign never fetched still cannot be probed', () => {
+    const t = parseRegistryTrace(
+      traceOf([
+        { url: `${H}/referrers/${IMG}`, answer: 200, body: indexBody([bundleEntry()]), chunks: 1 },
+        { url: `${H}/manifests/sha256-${IMG_HEX}`, answer: 404 },
+      ]),
+    );
+    expect(referrerFaults(t)).toMatch(/could not be probed/);
   });
 });
 

@@ -108,6 +108,15 @@ export interface FakeImageOptions {
    */
   noReferrersApi?: boolean;
   /**
+   * The `sha256-<hex>` fallback tag's raw body, built from the referrers'
+   * descriptors — whatever a pusher wrote there, valid index or not (round
+   * 5). Implies `noReferrersApi`. `mediaType`: its Content-Type (default: the
+   * OCI index type).
+   */
+  fallbackTag?: { body: (referrers: ReadonlyArray<Record<string, unknown>>) => string; mediaType?: string };
+  /** Bundle referrers without the `dev.sigstore.*` annotations — a tool that omits them (round 5, M7). */
+  omitBundleAnnotations?: boolean;
+  /**
    * HTTP status to answer instead, per artifact kind (500, 429, …).
    * `referrer-blob`: the layer of every bundle referrer — what `tree` never
    * fetches and cosign's `GetBundles` skips in silence when it fails.
@@ -258,7 +267,7 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
   ];
   for (const { layer, predicateType } of bundles) {
     bundleBlobs.add(blob(layer));
-    const annotations = { 'dev.sigstore.bundle.content': 'dsse-envelope', 'dev.sigstore.bundle.predicateType': predicateType };
+    const annotations = opts.omitBundleAnnotations === true ? undefined : { 'dev.sigstore.bundle.content': 'dsse-envelope', 'dev.sigstore.bundle.predicateType': predicateType };
     const stored = putManifest(
       {
         schemaVersion: 2,
@@ -267,12 +276,12 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
         config: descriptor(OCI_EMPTY, emptyConfig),
         layers: [descriptor(BUNDLE, layer)],
         subject: { mediaType: OCI_MANIFEST, digest: image.digest, size: image.body.length },
-        annotations,
+        ...(annotations === undefined ? {} : { annotations }),
       },
       [],
       'referrer-manifest',
     );
-    referrers.push({ mediaType: OCI_MANIFEST, digest: stored.digest, size: stored.body.length, artifactType: BUNDLE, annotations });
+    referrers.push({ mediaType: OCI_MANIFEST, digest: stored.digest, size: stored.body.length, artifactType: BUNDLE, ...(annotations === undefined ? {} : { annotations }) });
   }
 
   for (const artifactType of opts.indexReferrers ?? []) {
@@ -284,8 +293,14 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
     referrers.push({ mediaType: OCI_INDEX, digest: stored.digest, size: stored.body.length, artifactType });
   }
 
-  // The tag-schema fallback: the referrers index stored as a manifest.
-  if (opts.noReferrersApi === true) {
+  // The tag-schema fallback: the referrers index stored as a manifest — or,
+  // with `fallbackTag`, whatever bytes a pusher put there.
+  const noReferrersApi = opts.noReferrersApi === true || opts.fallbackTag !== undefined;
+  if (opts.fallbackTag !== undefined) {
+    const body = Buffer.from(opts.fallbackTag.body(referrers));
+    manifests.set(`sha256-${hex}`, { mediaType: opts.fallbackTag.mediaType ?? OCI_INDEX, body, digest: sha256(body) });
+    kindOf.set(`sha256-${hex}`, 'referrers');
+  } else if (noReferrersApi) {
     putManifest({ schemaVersion: 2, mediaType: OCI_INDEX, manifests: referrers }, [`sha256-${hex}`], 'referrers');
   }
 
@@ -315,7 +330,7 @@ export async function startFakeRegistry(opts: FakeImageOptions = {}): Promise<Fa
     }
     const [, what, ref] = m;
     if (what === 'referrers') {
-      if (opts.noReferrersApi === true) {
+      if (noReferrersApi) {
         fail(res, 404, 'referrers API not supported');
         return 404;
       }

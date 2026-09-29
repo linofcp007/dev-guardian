@@ -87,6 +87,26 @@ const EVIL_PREDICATE = `https://evil.example/${RLO}${ESC}[0m`;
 const RAW = new RegExp(`[${RLO}${ESC}]`);
 const ESCAPED_RLO = `${String.fromCharCode(0x5c)}u202e`;
 const ESCAPED_ESC = `${String.fromCharCode(0x5c)}u001b`;
+/**
+ * Round 5 (ruling 1, I7): what a pusher can put at the `sha256-<hex>`
+ * fallback tag of a registry with no referrers API — each measured by the
+ * reviewer to leave cosign 3.1.3 silent ("no signatures associated", verify
+ * exit 10). `referrers[0]` is a junk signing bundle that does exist.
+ */
+type Descriptors = ReadonlyArray<Record<string, unknown>>;
+const first = (referrers: Descriptors): Record<string, unknown> => referrers[0] ?? {};
+const FALLBACK_SHAPES: ReadonlyArray<readonly [string, { body: (r: Descriptors) => string; mediaType?: string }]> = [
+  ['an image manifest', { body: () => JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: {}, layers: [] }), mediaType: 'application/vnd.oci.image.manifest.v1+json' }],
+  ['{"schemaVersion":2,"hello":…}', { body: () => '{"schemaVersion":2,"hello":"world"}' }],
+  ['manifests: "nope"', { body: () => '{"schemaVersion":2,"manifests":"nope"}' }],
+  ['something that is not JSON', { body: () => 'not json at all' }],
+  ['{"manifests":[<junk bundle>],"Manifests":[]}', { body: (r) => `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[${JSON.stringify(first(r))}],"Manifests":[]}` }],
+  ['an entry whose digest is sha256:zz', { body: (r) => JSON.stringify({ schemaVersion: 2, manifests: [{ ...first(r), digest: 'sha256:zz' }] }) }],
+  ['"Digest" beside "digest"', { body: (r) => JSON.stringify({ schemaVersion: 2, manifests: [{ ...first(r), Digest: 'sha256:zz' }] }) }],
+  ['"size":"x"', { body: (r) => JSON.stringify({ schemaVersion: 2, manifests: [{ ...first(r), size: 'x' }] }) }],
+  ['a non-string annotation value', { body: (r) => JSON.stringify({ schemaVersion: 2, manifests: [{ ...first(r), annotations: { 'dev.sigstore.bundle.predicateType': 7 } }] }) }],
+  ['a child that does not exist', { body: (r) => JSON.stringify({ schemaVersion: 2, manifests: [{ ...first(r), digest: `sha256:${'a'.repeat(64)}` }] }) }],
+];
 /** A blob answering 500 costs go-containerregistry's retries on every call that fetches it. */
 const E2E_TIMEOUT_SLOW = 240_000;
 
@@ -321,6 +341,32 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
     });
   }, E2E_TIMEOUT);
 
+  // Round 5, ruling 1 + I7: the fallback tag is the pusher's. What it holds
+  // that cosign cannot use — or entries cosign never fetched — is nothing
+  // attached, not a registry failure.
+  it.each(FALLBACK_SHAPES)('fallback tag holding %s — cosign is silent (raw); the check says unsigned', async (_name, fallbackTag) => {
+    await withRegistry({ referrerBundles: [SIGN], fallbackTag }, async (reg) => {
+      const dl = await raw(['download', 'signature', reg.image]);
+      expect(dl.stderr).toMatch(/no signatures associated/);
+
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.run.status).toBe('ok');
+      expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent' });
+      expect(c.findings.map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
+    });
+  }, E2E_TIMEOUT);
+
+  // Round 5, M7: a signing bundle from a tool that omits the predicate-type
+  // annotation, returned by `download signature`, is a signature — never a
+  // doubt about provenance.
+  it('M7: a real signing bundle with no annotation — present, and provenance ABSENT (not unknown)', async () => {
+    await withRegistry({ realBundles: [REAL_BUNDLE], omitBundleAnnotations: true }, async (reg) => {
+      const c = await detectImageSupplyChain(reg.image, ctx);
+      expect(c.summary).toMatchObject({ signature: 'present_unverified', provenance: 'absent' });
+      expect(c.run.status).toBe('ok');
+    });
+  }, E2E_TIMEOUT);
+
   it('an image the registry does not have: failed, and the reason says cosign reads the registry only', async () => {
     await withRegistry({}, async (reg) => {
       const c = await detectImageSupplyChain(`${reg.host}/app:never-pushed`, ctx);
@@ -447,6 +493,18 @@ describe.skipIf(NOT_READY !== null || !TUF_READY)(
         expect(message).toContain(ESCAPED_RLO);
         expect(message).toContain(ESCAPED_ESC);
         for (const text of [message, c.run.reason ?? '', c.summary.note]) expect(text).not.toMatch(RAW);
+      });
+    }, E2E_TIMEOUT);
+
+    it.each(FALLBACK_SHAPES)('round 5: a fallback tag holding %s — "no signatures found" is REJECTED (HIGH), never "could not be probed"', async (_name, fallbackTag) => {
+      await withRegistry({ referrerBundles: [SIGN], fallbackTag }, async (reg) => {
+        const v = await raw(['verify', `--certificate-identity=${policy.identity}`, `--certificate-oidc-issuer=${policy.issuer}`, reg.image]);
+        expect(v.exit).toBe(10);
+
+        const c = await verifyImage(reg.image, policy, ctx);
+        expect(c.run).toMatchObject({ name: 'cosign-verify', status: 'ok' });
+        expect(c.findings.map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
+        expect(c.run.reason).not.toMatch(/could not be probed/);
       });
     }, E2E_TIMEOUT);
 

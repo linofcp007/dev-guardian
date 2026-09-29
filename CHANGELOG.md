@@ -25,7 +25,12 @@ version bump.
   is not used — it prints a pusher's annotation as it finds it). A registry failure, even one cosign
   skips in silence, or a log cut at its cap, is `unknown`, never absent. A bundle the registry served
   that cosign did not return is junk or a transfer that broke mid-body: the existence check asks twice,
-  then says `unknown`; a verification rejects and names both causes. cosign missing, older than 3.0 or
+  then says `unknown`; a verification rejects and names both causes — a bundle `download signature`
+  returned as a signature is never a doubt about provenance. On a registry with no referrers API the
+  `sha256-<hex>` fallback tag is written by whoever can push, and cosign is silent about what it cannot
+  use: a served tag that holds no index, or entries cosign never fetched, is nothing attached (the tag
+  is read as go-containerregistry reads it); only the registry failing to serve it withholds. cosign
+  missing, older than 3.0 or
   `GUARDIAN_OFFLINE=1`: `cosign` skipped, in `missing_tools`. Only a network, registry or
   Sigstore-service failure withholds a verdict — a Rekor answer only as a 5xx, a 429 or a network
   failure (Rekor answers 400 for a signature that does not verify: a rejection). A junk, unparseable or

@@ -78,6 +78,15 @@
  *     referrer never fetched makes the answer unknown — never "absent", never
  *     a rejection. A 404, or a manifest served and judged no bundle (its blob
  *     never asked for), is the registry answering.
+ *   - The fallback tag is not the registry's: whoever can push writes it,
+ *     and cosign 3.1.3 is silent about any tag it cannot use (measured,
+ *     round 5). Served and holding no index cosign reads, it is nothing
+ *     attached; an entry of it cosign never fetched is not attached. It is
+ *     read as go-containerregistry reads it (Go's encoding/json: field names
+ *     case-insensitive, the last key wins), so what cosign did fetch from it
+ *     is judged like any referrer. Only the registry failing to serve the tag
+ *     withholds. "Never fetched" stays a fault for the index the registry's
+ *     referrers API generates.
  *   - A log cut at its size cap is "could not be probed".
  *
  * One fault the log cannot show: a blob answered 200 whose body broke
@@ -346,17 +355,22 @@ function outcomeOf(status) {
  * The referrers the registry listed, per subject looked up: its referrers
  * API's index when that answered with one; otherwise — 404, 400, 406, or a
  * 2xx holding no index, go-containerregistry's fallback cases — the tag
- * schema's index, 404 there meaning none. Any other answer is a registry
- * failure; a fallback never read is a lookup never finished.
+ * schema's index, 404 there meaning none. The fallback tag is whatever a
+ * pusher wrote: served, and no index cosign reads, it is nothing attached
+ * (cosign 3.1.3 is silent about it, measured) — round 5, ruling 1. Only the
+ * registry's own failure withholds: a 5xx, a 429, a refusal, a transport
+ * error, a body that could not be read. A fallback never read is a lookup
+ * never finished.
  */
 function referrerIndex(apis, tags) {
     const subjects = new Set([...apis.keys(), ...tags.keys()]);
     if (subjects.size === 0)
         return { state: 'unprobed', detail: "cosign's request log shows no referrers lookup" };
     const referrers = [];
+    let tagHeldNoIndex = false;
     for (const subject of subjects) {
         const api = apis.get(subject);
-        const fromApi = api?.outcome === 'served' ? readIndex(api.body) : null;
+        const fromApi = api?.outcome === 'served' ? readIndex(api.body, false) : null;
         if (fromApi !== null) {
             referrers.push(...fromApi);
             continue;
@@ -370,46 +384,76 @@ function referrerIndex(apis, tags) {
         }
         if (tag.outcome === 'missing')
             continue;
-        const fromTag = tag.outcome === 'served' ? readIndex(tag.body) : null;
-        if (fromTag === null) {
-            return {
-                state: 'failed',
-                detail: tag.outcome === 'served' ? `the referrers fallback tag holds no OCI index (${tag.detail})` : `the referrers fallback tag answered ${tag.detail}`,
-            };
-        }
-        referrers.push(...fromTag);
+        if (tag.outcome === 'failed')
+            return { state: 'failed', detail: `the referrers fallback tag answered ${tag.detail}` };
+        const fromTag = readIndex(tag.body, true);
+        if (fromTag === null)
+            tagHeldNoIndex = true;
+        else
+            referrers.push(...fromTag);
     }
     const seen = new Set();
-    return {
-        state: 'listed',
-        referrers: referrers.filter((r) => {
-            if (seen.has(r.digest))
-                return false;
-            seen.add(r.digest);
-            return true;
-        }),
-    };
+    const unique = referrers.filter((r) => {
+        if (seen.has(r.digest))
+            return false;
+        seen.add(r.digest);
+        return true;
+    });
+    return tagHeldNoIndex ? { state: 'listed', referrers: unique, tagHeldNoIndex } : { state: 'listed', referrers: unique };
 }
-/** An OCI index's `manifests`, or null when `body` holds no index. */
-function readIndex(body) {
+/**
+ * An OCI index's `manifests`, or null when `body` holds no index — its
+ * fields found as go-containerregistry finds them ({@link goField}), so that
+ * what cosign fetched from a pusher's fallback tag is what this reads. Loose
+ * otherwise: an entry this lists and cosign never fetched is harmless from
+ * the fallback tag (it is not attached), and the registry's own index is
+ * well formed.
+ */
+function readIndex(body, fromTag) {
     const index = body === null ? undefined : firstJsonObject(body);
-    if (!isRecord(index) || !Array.isArray(index['manifests']))
+    const manifests = isRecord(index) ? goField(index, 'manifests') : undefined;
+    if (!Array.isArray(manifests))
         return null;
     const out = [];
-    for (const entry of index['manifests']) {
-        if (!isRecord(entry) || typeof entry['digest'] !== 'string')
+    for (const entry of manifests) {
+        if (!isRecord(entry))
             continue;
-        const artifactType = typeof entry['artifactType'] === 'string' ? entry['artifactType'] : '';
-        const annotations = isRecord(entry['annotations']) ? entry['annotations'] : {};
-        const predicate = annotations[PREDICATE_ANNOTATION];
+        const digest = goField(entry, 'digest');
+        if (typeof digest !== 'string')
+            continue;
+        const type = goField(entry, 'artifacttype');
+        const artifactType = typeof type === 'string' ? type : '';
+        const annotations = goField(entry, 'annotations');
+        const predicate = isRecord(annotations) ? annotations[PREDICATE_ANNOTATION] : undefined;
         out.push({
-            digest: entry['digest'],
+            digest,
             artifactType,
             predicateType: typeof predicate === 'string' ? predicate : null,
             sigstore: BUNDLE_MEDIA_TYPE.test(artifactType),
+            fromTag,
         });
     }
     return out;
+}
+/**
+ * A JSON object's field as Go's encoding/json fills a struct field from it
+ * (go-containerregistry parses an index that way): the key matches the
+ * field's name case-insensitively — Unicode simple folding, so `ſ` is `s`
+ * and the Kelvin sign is `k` — and the last matching key wins (measured by
+ * the round-5 review: `{"manifests":[…],"Manifests":[]}` is an empty index
+ * to cosign). `name` is lower case.
+ */
+function goField(obj, name) {
+    let value;
+    for (const key of Object.keys(obj))
+        if (goFold(key) === name)
+            value = obj[key];
+    return value;
+}
+const LONG_S = String.fromCharCode(0x17f);
+const KELVIN = String.fromCharCode(0x212a);
+function goFold(key) {
+    return key.split(LONG_S).join('s').split(KELVIN).join('k').toLowerCase();
 }
 /** A manifest's layer digests, from its dumped body. */
 function layersOf(body) {
@@ -495,10 +539,12 @@ function firstJsonObject(text) {
  * Why what the registry's referrers index lists may hold a signature cosign
  * could not read — the index itself not read, a manifest or bundle blob the
  * registry failed to serve (5xx, 429, any refusal but 404, a transport error,
- * a body that could not be read), or a referrer never fetched — or null when
- * the registry answered for every one (served, or 404). cosign's `GetBundles`
- * skips a referrer it cannot fetch in silence, so without this a registry
- * failure reads as "no signature" (round 3, I3).
+ * a body that could not be read), or a referrer of the registry's own index
+ * never fetched — or null when the registry answered for every one (served,
+ * or 404). cosign's `GetBundles` skips a referrer it cannot fetch in silence,
+ * so without this a registry failure reads as "no signature" (round 3, I3).
+ * An entry of the FALLBACK TAG cosign never fetched is no fault: a pusher
+ * wrote it, cosign did not read it, and it is not attached (round 5, I7).
  */
 export function referrerFaults(trace) {
     if (trace.index.state !== 'listed')
@@ -509,7 +555,8 @@ export function referrerFaults(trace) {
         const name = `${describeReferrer(ref)} referrer ${say(ref.digest)}`;
         const manifest = trace.manifests.get(ref.digest);
         if (manifest === undefined) {
-            unprobed += 1;
+            if (!ref.fromTag)
+                unprobed += 1;
             continue;
         }
         if (manifest.outcome === 'failed') {
@@ -531,6 +578,27 @@ export function referrerFaults(trace) {
         return `${unprobed} referrer(s) the registry's referrers index lists could not be probed (never fetched in cosign's request log)`;
     return null;
 }
+/**
+ * What counts as attached: every referrer of the registry's own index; of the
+ * fallback tag's — which whoever can push writes — only what cosign fetched.
+ */
+function attachedReferrers(trace) {
+    if (trace.index.state !== 'listed')
+        return [];
+    return trace.index.referrers.filter((r) => !r.fromTag || trace.manifests.has(r.digest));
+}
+/** What the fallback tag held that is nothing attached, in words — or '' when it held nothing of the kind. */
+function fallbackNote(trace) {
+    if (trace.index.state !== 'listed')
+        return '';
+    const unread = trace.index.referrers.filter((r) => r.fromTag && !trace.manifests.has(r.digest)).length;
+    const held = [];
+    if (trace.index.tagHeldNoIndex === true)
+        held.push('holds no OCI index cosign reads');
+    if (unread > 0)
+        held.push(`lists ${unread} ${unread === 1 ? 'entry' : 'entries'} cosign never read`);
+    return held.length === 0 ? '' : `the referrers fallback tag, which anyone who can push writes, ${held.join(' and ')}: nothing attached`;
+}
 /** A referrer in words: a bundle by the predicate type its annotation names, anything else by its artifactType. */
 function describeReferrer(ref) {
     if (ref.sigstore)
@@ -551,15 +619,16 @@ function describeListed(referrers) {
  * not answer.
  */
 export function classifySignatureDownload(r) {
-    const none = { state: 'unknown', attestationTypes: [], bundles: 0 };
+    const none = { state: 'unknown', attestationTypes: [], bundles: 0, bundleTypes: [] };
     if (r.outcome === 'failed') {
-        return /^Error: .*no signatures associated/m.test(r.stderr) ? { state: 'absent', attestationTypes: [], bundles: 0 } : none;
+        return /^Error: .*no signatures associated/m.test(r.stderr) ? { state: 'absent', attestationTypes: [], bundles: 0, bundleTypes: [] } : none;
     }
     if (r.outcome !== 'completed' && r.outcome !== 'output_too_large')
         return none;
     let signature = false;
     let bundles = 0;
     const types = [];
+    const bundleTypes = [];
     for (const line of r.stdout.split(/\r?\n/)) {
         if (line.trim() === '')
             continue;
@@ -584,21 +653,23 @@ export function classifySignatureDownload(r) {
         bundles += 1;
         if (item['messageSignature'] !== undefined) {
             signature = true;
+            bundleTypes.push('message signature');
             continue;
         }
         const type = dssePredicateType(item['dsseEnvelope']) ?? 'a Sigstore bundle of unknown predicate type';
+        bundleTypes.push(type);
         if (type === SIGN_PREDICATE)
             signature = true;
         else if (!types.includes(say(type)))
             types.push(say(type));
     }
     if (signature)
-        return { state: 'present', attestationTypes: types, bundles };
+        return { state: 'present', attestationTypes: types, bundles, bundleTypes };
     // Past the cap, what was cut off may have been the signature.
     if (r.outcome === 'output_too_large')
         return none;
     if (types.length > 0)
-        return { state: 'attestation_only', attestationTypes: types, bundles };
+        return { state: 'attestation_only', attestationTypes: types, bundles, bundleTypes };
     return none;
 }
 function dssePredicateType(envelope) {
@@ -983,11 +1054,11 @@ function aborted(ctx) {
  * blob cosign never asked for (it judged the manifest no bundle), is an
  * answer; only a 2xx can hide a body that broke mid-transfer (round 4, I6).
  */
-function servedBundles(trace, relevant = () => true) {
+function servedBundles(trace) {
     if (trace.index.state !== 'listed')
         return [];
     return trace.index.referrers.filter((r) => {
-        if (!r.sigstore || !relevant(r))
+        if (!r.sigstore)
             return false;
         const manifest = trace.manifests.get(r.digest);
         if (manifest?.outcome !== 'served')
@@ -997,8 +1068,8 @@ function servedBundles(trace, relevant = () => true) {
     });
 }
 /** How many bundles the registry served whole beyond the `returned` cosign printed, or 0. */
-function sigstoreShortfall(trace, returned, relevant) {
-    return Math.max(0, servedBundles(trace, relevant).length - returned);
+function sigstoreShortfall(trace, returned) {
+    return Math.max(0, servedBundles(trace).length - returned);
 }
 /** Why a bundle listed and served but not returned is not "absent" — the two causes the log cannot tell apart. */
 const UNREADABLE_BUNDLE = 'listed and served, but cosign could not use it — not a bundle it can parse, or the transfer failed mid-body; ' +
@@ -1011,21 +1082,25 @@ const UNREADABLE_BUNDLE = 'listed and served, but cosign could not use it — no
  */
 async function settleNoSignature(ref, policy, claim, run) {
     const unconfirmed = (why) => ({ verdict: 'error', detail: `cosign verify said "${claim}", which could not be confirmed: ${why}` });
-    const nothing = () => ({
-        verdict: 'rejected',
-        reason: 'no_signature',
-        detail: `${claim} — nothing is attached to this digest (the registry's referrers index lists nothing, and the .sig tag holds none)`,
-    });
+    const nothing = (trace) => {
+        const note = fallbackNote(trace);
+        return {
+            verdict: 'rejected',
+            reason: 'no_signature',
+            detail: `${claim} — nothing is attached to this digest (the registry's referrers index lists nothing` +
+                `${note === '' ? '' : `; ${note}`}, and the .sig tag holds none)`,
+        };
+    };
     const probe = await cosign(['download', 'signature', ref], run, true);
     const first = classifySignatureDownload(probe);
     if (first.state === 'unknown')
         return unconfirmed(`cosign download signature did not answer — ${callWhy(probe)}`);
     if (first.state === 'absent') {
-        const index = parseRegistryTrace(probe.stderr).index;
-        if (index.state !== 'listed')
-            return unconfirmed(index.detail);
-        if (index.referrers.length === 0)
-            return nothing();
+        const trace = parseRegistryTrace(probe.stderr);
+        if (trace.index.state !== 'listed')
+            return unconfirmed(trace.index.detail);
+        if (attachedReferrers(trace).length === 0)
+            return nothing(trace);
     }
     // Something is attached: verify once more — a referrers call that failed
     // the first time reads the same as one that found nothing usable.
@@ -1051,9 +1126,9 @@ async function settleNoSignature(ref, policy, claim, run) {
     const fault = referrerFaults(trace);
     if (fault !== null)
         return { verdict: 'error', detail: `cosign verify said "${claim}", but ${fault} — not a verdict` };
-    const listed = trace.index.state === 'listed' ? trace.index.referrers : [];
+    const listed = attachedReferrers(trace);
     if (listed.length === 0)
-        return nothing();
+        return nothing(trace);
     const served = servedBundles(trace).length > 0;
     return {
         verdict: 'rejected',
@@ -1160,30 +1235,37 @@ export async function verifyImage(image, policy, ctx) {
  * short is unknown, never "absent".
  */
 async function readSignature(ref, run) {
-    const unknown = (why) => ({ state: 'unknown', attestationTypes: [], why, listed: [] });
+    const unknown = (why, bundleTypes) => ({ state: 'unknown', attestationTypes: [], why, listed: [], note: '', bundleTypes });
     for (let attempt = 1;; attempt++) {
         const dl = await cosign(['download', 'signature', ref], run, true);
         const answer = classifySignatureDownload(dl);
         if (answer.state === 'present')
-            return { state: 'present', attestationTypes: answer.attestationTypes, listed: [] };
+            return { state: 'present', attestationTypes: answer.attestationTypes, listed: [], note: '', bundleTypes: answer.bundleTypes };
         if (answer.state === 'unknown')
-            return unknown(`cosign download signature did not answer — ${callWhy(dl)}`);
+            return unknown(`cosign download signature did not answer — ${callWhy(dl)}`, []);
         const trace = parseRegistryTrace(dl.stderr);
         const fault = referrerFaults(trace);
         if (fault !== null)
-            return unknown(fault);
+            return unknown(fault, answer.bundleTypes);
         const short = sigstoreShortfall(trace, answer.bundles);
-        const listed = trace.index.state === 'listed' ? trace.index.referrers : [];
-        if (short === 0)
-            return { state: answer.state, attestationTypes: answer.attestationTypes, listed };
+        if (short === 0) {
+            return { state: answer.state, attestationTypes: answer.attestationTypes, listed: attachedReferrers(trace), note: fallbackNote(trace), bundleTypes: answer.bundleTypes };
+        }
         if (attempt >= 2) {
             return unknown(`the registry served ${short} Sigstore bundle(s) its referrers index lists that cosign did not return, twice — ` +
-                `${UNREADABLE_BUNDLE}; the one it did not return may be the signature`);
+                `${UNREADABLE_BUNDLE}; the one it did not return may be the signature`, answer.bundleTypes);
         }
     }
 }
-/** detect's provenance of one predicate type, by the same rules as {@link readSignature}. */
-async function readAttestation(ref, type, run) {
+/**
+ * detect's provenance of one predicate type, by the same rules as
+ * {@link readSignature}. A bundle served whole and not returned may hold
+ * this provenance when its annotation names this type — or names none, unless
+ * `download signature` returned it as something else (`returnedTypes`: what
+ * each bundle it returned is). A signature is never a doubt about
+ * provenance (round 5, M7).
+ */
+async function readAttestation(ref, type, run, returnedTypes) {
     for (let attempt = 1;; attempt++) {
         const r = await cosign(['download', 'attestation', `--predicate-type=${type}`, ref], run, true);
         const answer = classifyAttestationDownload(r);
@@ -1197,8 +1279,14 @@ async function readAttestation(ref, type, run) {
         const fault = referrerFaults(trace);
         if (fault !== null)
             return { state: 'unknown', why: fault };
-        // A bundle whose annotation names this predicate type, or none.
-        const short = sigstoreShortfall(trace, 0, (x) => x.predicateType === null || x.predicateType === type);
+        const served = servedBundles(trace);
+        const named = served.filter((x) => x.predicateType === type).length;
+        const unannotated = served.filter((x) => x.predicateType === null).length;
+        const namedElse = served.length - named - unannotated;
+        // What `download signature` returned as something else accounts first
+        // for the bundles annotated as something else, then for the unannotated.
+        const returnedElse = returnedTypes.filter((t) => t !== type).length;
+        const short = named + unannotated - Math.min(unannotated, Math.max(0, returnedElse - namedElse));
         if (short === 0)
             return { state: 'absent' };
         if (attempt >= 2) {
@@ -1225,7 +1313,7 @@ export async function detectImageSupplyChain(image, ctx) {
     for (const type of PROVENANCE_PREDICATE_TYPES) {
         if (run.cancelled)
             break;
-        const one = await readAttestation(pinned.ref, type, run);
+        const one = await readAttestation(pinned.ref, type, run, sig.bundleTypes);
         if (one.state === 'unknown')
             provenanceWhy = one.why;
         answers.push(one.state);
@@ -1242,9 +1330,9 @@ export async function detectImageSupplyChain(image, ctx) {
         provenanceWhy = 'cancelled';
     const findings = [];
     if (signature === 'absent') {
-        const listed = sig.listed.length > 0
+        const listed = (sig.listed.length > 0
             ? ` What is attached (${describeListed(sig.listed)}) is no Sigstore bundle — anyone who can push to the repository can attach such an artifact.`
-            : '';
+            : '') + (sig.note === '' ? '' : ` Note: ${sig.note}.`);
         const legacyProvenance = provenance === 'present'
             ? ' A signed SLSA provenance attestation IS attached as a legacy .att tag, which `cosign verify-attestation` checks — `cosign verify` does not accept it as the image\'s signature.'
             : ' Nothing ties it to who built it.';

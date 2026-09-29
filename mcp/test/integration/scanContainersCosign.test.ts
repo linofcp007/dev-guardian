@@ -117,9 +117,11 @@ function bundleLine(predicateType: string): string {
  * dumped, chunked body; then each referrer's manifest (its body dumped) and
  * its bundle blob, answered as `answers` says (`m:` for a manifest; `never
  * fetched` leaves it out of the log) — by default, every one served.
- * `lookup`: the referrers API's own answer.
+ * `lookup`: the referrers API's own answer. `fallback`: the referrers API
+ * answers 404 and the `sha256-<hex>` fallback tag serves this body instead;
+ * `referrers` are then only what cosign fetched.
  */
-function traceOf(referrers: Referrer[], answers: Array<[string, number | string]> = [], lookup: number | string = 200): string {
+function traceOf(referrers: Referrer[], answers: Array<[string, number | string]> = [], lookup: number | string = 200, fallback?: string): string {
   const T = '2026/09/28 23:03:02';
   const H = 'https://ghcr.io/v2/org/app';
   const lines: string[] = [];
@@ -148,8 +150,14 @@ function traceOf(referrers: Referrer[], answers: Array<[string, number | string]
       ...(r.predicateType === undefined ? {} : { annotations: { 'dev.sigstore.bundle.predicateType': r.predicateType } }),
     })),
   };
-  exchange(`${H}/referrers/${DIGEST}`, lookup, JSON.stringify(index));
-  if (lookup !== 200) return `${lines.join('\n')}\n`;
+  if (fallback !== undefined) {
+    // No referrers API: go-containerregistry reads the fallback tag, which whoever can push writes.
+    exchange(`${H}/referrers/${DIGEST}`, 404, '{"errors":[{"code":"NOT_FOUND"}]}');
+    exchange(`${H}/manifests/sha256-${DIGEST.slice('sha256:'.length)}`, 200, fallback);
+  } else {
+    exchange(`${H}/referrers/${DIGEST}`, lookup, JSON.stringify(index));
+    if (lookup !== 200) return `${lines.join('\n')}\n`;
+  }
   for (const r of referrers) {
     const manifest = answerFor(`m:${r.digest}`, 200);
     if (manifest === 'never fetched') continue;
@@ -192,6 +200,8 @@ interface Answers {
   answers?: Array<[string, number | string]>;
   /** The referrers API's own answer (default 200, with the index). */
   lookup?: number | string;
+  /** The fallback tag's body (the referrers API answering 404) — `referrers` are then what cosign fetched. */
+  fallback?: string;
   /** A whole request log instead of the one built from the above. */
   trace?: string;
   /** Called before each cosign call answers — to abort the scan, or move the clock. */
@@ -224,7 +234,7 @@ function fakeCosign(answers: Answers): void {
             ? next('v1', answers.v1, NO_V1)
             : next('v02', answers.v02, NO_V02);
       if (!args.includes('-d')) return base;
-      const trace = answers.trace ?? traceOf(answers.referrers ?? [], answers.answers, answers.lookup);
+      const trace = answers.trace ?? traceOf(answers.referrers ?? [], answers.answers, answers.lookup, answers.fallback);
       return { ...base, stderr: `${trace}${base.stderr}` };
     }
     throw new Error(`unexpected cosign call: ${args.join(' ')}`);
@@ -922,6 +932,96 @@ describe('scan_containers + cosign: the signer arguments are checked before anyt
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.message).toMatch(/image/);
     expect(vi.mocked(runProcess)).not.toHaveBeenCalled();
+  });
+});
+
+describe('scan_containers + cosign: the referrers fallback tag is written by whoever can push (round 5)', () => {
+  const signer = {
+    signer_identity: 'https://github.com/org/app/.github/workflows/release.yml@refs/heads/main',
+    signer_issuer: 'https://token.actions.githubusercontent.com',
+  };
+  const junk = { mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: SIGN_BUNDLE.digest, size: 700, artifactType: BUNDLE_TYPE };
+  // Each measured by the reviewer to leave cosign 3.1.3 silent: "no
+  // signatures associated", verify exit 10 — cosign fetched nothing from it.
+  const SHAPES: ReadonlyArray<readonly [string, string]> = [
+    ['an image manifest', JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', layers: [] })],
+    ['{"schemaVersion":2,"hello":…}', '{"schemaVersion":2,"hello":"world"}'],
+    ['manifests: "nope"', '{"schemaVersion":2,"manifests":"nope"}'],
+    ['something that is not JSON', 'not json at all'],
+    ['{"manifests":[<junk bundle>],"Manifests":[]}', `{"schemaVersion":2,"manifests":[${JSON.stringify(junk)}],"Manifests":[]}`],
+    ['an entry whose digest is sha256:zz', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, digest: 'sha256:zz' }] })],
+    ['"Digest" beside "digest"', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, Digest: 'sha256:zz' }] })],
+    ['"size":"x"', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, size: 'x' }] })],
+    ['a non-string annotation value', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, annotations: { 'dev.sigstore.bundle.predicateType': 7 } }] })],
+    ['a child that does not exist', JSON.stringify({ schemaVersion: 2, manifests: [{ ...junk, digest: `sha256:${'a'.repeat(64)}` }] })],
+  ];
+
+  it.each(SHAPES)('verify: a fallback tag holding %s — REJECTED (HIGH), never "could not be probed"', async (_name, fallback) => {
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), fallback });
+    const r = await scan(signer);
+    expect(cosignFindings(r).map((f) => [f.rule_id, f.severity])).toEqual([['image-signature-not-verified', 'high']]);
+    const run = r.tools_run.find((t) => t.name === 'cosign-verify');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).not.toMatch(/could not be probed|holds no OCI index \(/);
+  });
+
+  it.each(SHAPES)('detect: a fallback tag holding %s — unsigned, and no provenance', async (_name, fallback) => {
+    fakeCosign({ fallback });
+    const r = await scan({});
+    expect(r.image_signature).toMatchObject({ signature: 'absent', provenance: 'absent' });
+    expect(cosignFindings(r).map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
+  });
+
+  it('the answer says whose tag it is: a fallback tag listing entries cosign never read is nothing attached', async () => {
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), fallback: SHAPES[5]?.[1] ?? '' });
+    const r = await scan(signer);
+    expect(cosignFindings(r)[0]?.message).toMatch(/the referrers fallback tag, which anyone who can push writes, lists 1 entry cosign never read/);
+  });
+
+  it('a fallback tag entry cosign DID fetch is judged by the registry: its blob answering 500 withholds', async () => {
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), fallback: JSON.stringify({ schemaVersion: 2, manifests: [junk] }), referrers: [SIGN_BUNDLE], answers: [[SIGN_BUNDLE.layer ?? '', 500]] });
+    const r = await scan(signer);
+    expect(cosignFindings(r)).toEqual([]);
+    expect(r.tools_run.find((t) => t.name === 'cosign-verify')?.reason).toMatch(/500/);
+  });
+
+  it('a fallback tag the registry fails on (503) withholds — that one is the registry\'s', async () => {
+    const trace = traceOf([], [], 200, '{}').replace(/<-- 200 (\S+\/manifests\/sha256-)/, '<-- 503 $1');
+    fakeCosign({ verify: exit(10, 'Error: no signatures found\n'), trace });
+    const r = await scan(signer);
+    expect(cosignFindings(r)).toEqual([]);
+    expect(r.tools_run.find((t) => t.name === 'cosign-verify')?.reason).toMatch(/fallback tag answered 503/);
+  });
+});
+
+describe('scan_containers + cosign: a signature is never a doubt about provenance (round 5, M7)', () => {
+  /** A signing bundle from a tool that puts no predicate-type annotation on its referrer. */
+  const UNANNOTATED_SIGN: Referrer = {
+    digest: 'sha256:7d0f35c4822c49b5dd8e8fc6810e6edaa602febe7ac7469b2306b30dfed0c19d',
+    artifactType: BUNDLE_TYPE,
+    layer: 'sha256:2c7c785bf5657d810a98b5a27d3f2ae49069fb0adc732b836d1f0b1b7e87c9ad',
+  };
+
+  it('returned by download signature as a signature: provenance ABSENT — one attestation download per type, no retry', async () => {
+    fakeCosign({ referrers: [UNANNOTATED_SIGN], signature: out(`${bundleLine(SIGN)}\n`) });
+    const r = await scan({});
+    expect(r.image_signature).toMatchObject({ signature: 'present_unverified', provenance: 'absent' });
+    expect(cosignFindings(r).map((f) => f.rule_id)).toEqual(['image-no-provenance']);
+    expect(cosignCalls().filter((c) => c[1] === 'attestation')).toHaveLength(2);
+  });
+
+  it('returned by no download: it may be provenance — unknown, as before', async () => {
+    fakeCosign({ referrers: [UNANNOTATED_SIGN] });
+    const r = await scan({});
+    expect(r.image_signature).toMatchObject({ signature: 'unknown', provenance: 'unknown' });
+    expect(cosignFindings(r)).toEqual([]);
+  });
+
+  it('two annotation-less bundles, one returned as a signature: the other still may be provenance — unknown', async () => {
+    const other: Referrer = { digest: `sha256:${'b'.repeat(64)}`, artifactType: BUNDLE_TYPE, layer: `sha256:${'c'.repeat(64)}` };
+    fakeCosign({ referrers: [UNANNOTATED_SIGN, other], signature: out(`${bundleLine(SIGN)}\n`) });
+    const r = await scan({});
+    expect(r.image_signature?.provenance).toBe('unknown');
   });
 });
 
