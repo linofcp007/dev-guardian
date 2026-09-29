@@ -76,7 +76,7 @@ export function llmPackVersionNote(version: string | undefined): string | null {
       return (
         `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version}, which does not ` +
         "resolve `import … from 'node:child_process'` in taint mode — the pack's child_process coverage is reduced " +
-        '(153 of 171 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)'
+        '(154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)'
       );
     }
   }

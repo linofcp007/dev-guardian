@@ -59,7 +59,7 @@
 # execução.
 #
 # VERSÃO DO SEMGREP. Medido com o 1.176.1 (o do PATH desta maquina). Nas
-# imagens 1.86.0, 1.120.1 e 1.170.1 o pack da 153 dos 171 resultados de hits/
+# imagens 1.86.0, 1.120.1 e 1.170.1 o pack da 154 dos 172 resultados de hits/
 # (revisao 2): as dezoito linhas cuja função vem de um `import ... from
 # 'node:child_process'` ficam mudas, porque essas versões nao resolvem o
 # prefixo `node:` em modo taint (ver a regra JS). Tudo o resto dispara nas
@@ -968,7 +968,7 @@ rules:
   # VERSÃO DO SEMGREP (revisao, medido): os `import` de `'node:child_process'`
   # so sao resolvidos a partir do Semgrep 1.176.1 (a versão medida); o 1.86.0,
   # o 1.99.0, o 1.120.1 e o 1.170.1 nao os resolvem, e as dezoito linhas de
-  # hits/ com um import `node:` ficam mudas neles (153 de 171, revisao 2) (o
+  # hits/ com um import `node:` ficam mudas neles (154 de 172, revisao 2) (o
   # `'child_process'` sem prefixo,
   # o `require` e os namespaces resolvem em todos). Tentou-se uma forma
   # alternativa (`$CP = require($MOD)` com o `$MOD` num regex): casa esses

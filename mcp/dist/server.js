@@ -40798,7 +40798,7 @@ function llmPackVersionNote(version2) {
     const b = need[i2] ?? 0;
     if (a2 !== b) {
       if (a2 > b) return null;
-      return `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version2}, which does not resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 the pack's child_process coverage is reduced (153 of 171 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
+      return `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}; this is ${version2}, which does not resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 the pack's child_process coverage is reduced (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
     }
   }
   return null;
