@@ -30,9 +30,10 @@
  */
 
 import type { Finding } from '../types.js';
-import { toSarif } from '../report/sarif.js';
+import { toSarif, type SarifSuppressed } from '../report/sarif.js';
+import { suppressionNote } from '../runners/trivyRun.js';
 import { CI_EXIT, type CiExitCode } from './types.js';
-import type { GateVerdict } from './gate.js';
+import type { GateVerdict, RepoSuppressionEntry } from './gate.js';
 
 const EXIT_LABEL: Record<CiExitCode, string> = {
   [CI_EXIT.PASS]: 'PASS',
@@ -104,6 +105,13 @@ export function renderHuman(v: GateVerdict): string {
     for (const f of v.blocking) lines.push(`  - ${describeFinding(f)}`);
   }
 
+  // Round 4, item 2: what the repository's own .trivyignore silenced left no
+  // trace here. Named — never counted, never a gap.
+  if (v.suppressedByRepoConfig.length > 0) {
+    lines.push("suppressed by the repository's own configuration (not counted by the gate):");
+    for (const s of v.suppressedByRepoConfig) lines.push(`  - ${s.step}: ${s.tool}: ${suppressionNote(s)}`);
+  }
+
   return `${lines.join('\n')}\n`;
 }
 
@@ -128,6 +136,7 @@ interface JsonVerdict {
   baseline_absent: boolean;
   accepted_gaps: string[];
   unused_partial_parse_acceptances: string[];
+  suppressed_by_repo_config: RepoSuppressionEntry[];
 }
 
 /**
@@ -147,6 +156,7 @@ export function renderJson(v: GateVerdict): string {
     baseline_absent: v.baselineAbsent,
     accepted_gaps: v.acceptedGaps,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
+    suppressed_by_repo_config: v.suppressedByRepoConfig,
   };
   return JSON.stringify(payload, null, 2);
 }
@@ -189,7 +199,10 @@ interface SarifDocument {
  * about the *run* that change how those findings should be read — not the
  * general coverage-gap prose (tool names, "semgrep not installed" reasons),
  * which has no home in a findings-shaped format and stays
- * exit-code-and-human/JSON-only.
+ * exit-code-and-human/JSON-only. The findings the repository's own
+ * `.trivyignore` suppressed follow the new ones as results carrying an
+ * `external` suppression that names the file (round 4, item 2): SARIF's
+ * own way to say "found, and dismissed outside this tool".
  *
  * 1. `invocation.executionSuccessful` is set to `v.coverage === 'full'`.
  *    This is the SARIF-native way to say "this run was incomplete" — a
@@ -228,11 +241,17 @@ export function renderSarif(v: GateVerdict, projectPath: string): string {
   // `locations` entirely, rather than emitting an empty URI. That is the
   // right outcome, not a gap: a finding about the whole project has no
   // single line to annotate, so no location is more honest than one.
-  const relocated: Finding[] = v.newFindings.map((f) =>
-    f.file_path === undefined ? f : { ...f, file_path: toProjectRelativeUri(f.file_path, projectPath) },
+  const relocate = (f: Finding): Finding =>
+    f.file_path === undefined ? f : { ...f, file_path: toProjectRelativeUri(f.file_path, projectPath) };
+  const relocated: Finding[] = v.newFindings.map(relocate);
+  // Round 4, item 2: what the repository's own configuration suppressed, as
+  // results carrying an `external` suppression that names the file — how
+  // SARIF says "found, and dismissed outside this tool".
+  const suppressed: SarifSuppressed[] = v.suppressedByRepoConfig.flatMap((s) =>
+    s.findings.map((f) => ({ finding: relocate(f), justification: `suppressed by the repository's ${s.file}` })),
   );
 
-  const parsed: unknown = JSON.parse(toSarif(relocated));
+  const parsed: unknown = JSON.parse(toSarif(relocated, { suppressed }));
   // Safe: this is JSON we just produced from `toSarif` on the line above,
   // not untrusted input — a full runtime re-validation of our own output
   // belongs in the schema-validation test, not here.

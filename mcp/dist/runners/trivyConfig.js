@@ -347,7 +347,7 @@ function readByTrivy(file, read, singleFile) {
 export function judgeTrivyConfig(args) {
     const { name, run, raw, iacFiles } = args;
     if (run.outcome !== 'completed') {
-        return { toolRun: withHonoured({ name, status: 'failed', reason: run.outcome }, run.honoured), missing: [] };
+        return { toolRun: withHonoured({ name, status: 'failed', reason: run.outcome }, run), missing: [] };
     }
     const log = parseTrivyConfigLog(run.stderr);
     const gaps = [];
@@ -371,7 +371,7 @@ export function judgeTrivyConfig(args) {
                 `${named(unrecognised)} (a templated manifest or a layout Trivy does not read) — not checked`);
     }
     if (gaps.length === 0)
-        return { toolRun: withHonoured({ name, status: 'ok' }, run.honoured), missing: [] };
-    return { toolRun: withHonoured({ name, status: 'ok', reason: gaps.join('; ') }, run.honoured), missing: [name] };
+        return { toolRun: withHonoured({ name, status: 'ok' }, run), missing: [] };
+    return { toolRun: withHonoured({ name, status: 'ok', reason: gaps.join('; ') }, run), missing: [name] };
 }
 //# sourceMappingURL=trivyConfig.js.map

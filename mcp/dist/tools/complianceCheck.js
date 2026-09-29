@@ -368,7 +368,7 @@ registerToolModule(makeScanTool({
                 parser_inputs.push({ parser: trivyParser, input: raw });
                 licensesSummary = summariseLicenses(raw);
             }
-            tools_run.push(withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured));
+            tools_run.push(withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result));
         }
         else {
             tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });

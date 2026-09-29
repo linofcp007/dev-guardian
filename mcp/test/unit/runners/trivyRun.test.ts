@@ -22,8 +22,10 @@ import {
   honouredNote,
   judgeTrivyFs,
   NEUTRAL_TRIVY_CONFIG,
+  repoSuppressionFrom,
   resetTrivyVersionCache,
   runTrivy,
+  suppressionNote,
   trivyArgv,
   withHonoured,
 } from '../../../src/runners/trivyRun.js';
@@ -96,11 +98,11 @@ describe('runTrivy', () => {
     );
     expect(r.honoured).toEqual(['.trivyignore']);
     expect(honouredNote(r.honoured)).toMatch(/\.trivyignore/);
-    const named = withHonoured({ name: 'trivy-image', status: 'ok', reason: 'image x' }, r.honoured);
+    const named = withHonoured({ name: 'trivy-image', status: 'ok', reason: 'image x' }, r);
     expect(named.reason).toMatch(/^image x; honoured the project's \.trivyignore/);
     expect(named.honoured_config).toEqual(['.trivyignore']);
     const plain = { name: 'trivy', status: 'ok' } as const;
-    expect(withHonoured(plain, [])).toBe(plain);
+    expect(withHonoured(plain, { honoured: [] })).toBe(plain);
   });
 
   it('a .trivyignore that is not a regular file is not passed', async () => {
@@ -189,6 +191,182 @@ describe('Trivy never phones home', () => {
     expect(probe?.[0]).toBe('trivy');
     expect(probe?.[1]).toEqual(['--version']);
     for (const c of mockedRun.mock.calls) expect(c[0].args).toEqual(expect.arrayContaining(['--skip-version-check', '--disable-telemetry']));
+  });
+});
+
+// ---------------------------------------------------------------- what .trivyignore suppressed
+
+/**
+ * Round 4, item 2: the repository's `.trivyignore` silenced findings with no
+ * trace in the CI gate. Trivy lists them with `--show-suppressed` (0.50.0 and
+ * later: absent in 0.49.1) under `Results[].ExperimentalModifiedFindings` —
+ * measured on 0.69.3, lodash 4.17.15 with two ids ignored. `trivy config`
+ * refuses the flag (an unknown flag on 0.69.3), so a config pass says what it
+ * cannot list instead.
+ */
+const SUPPRESSED_REPORT = JSON.stringify({
+  Results: [
+    {
+      Target: 'package-lock.json',
+      Class: 'lang-pkgs',
+      Type: 'npm',
+      Vulnerabilities: [],
+      ExperimentalModifiedFindings: [
+        {
+          Type: 'vulnerability',
+          Status: 'ignored',
+          Statement: '',
+          Source: 'C:/p/.trivyignore',
+          Finding: {
+            VulnerabilityID: 'CVE-2020-8203',
+            VendorIDs: ['GHSA-p6mc-m468-83gw'],
+            PkgName: 'lodash',
+            InstalledVersion: '4.17.15',
+            FixedVersion: '4.17.19',
+            Title: 'nodejs-lodash: prototype pollution in zipObjectDeep function',
+            Description: 'Prototype pollution attack when using _.zipObjectDeep in lodash before 4.17.20.',
+            Severity: 'HIGH',
+          },
+        },
+        {
+          Type: 'vulnerability',
+          Status: 'ignored',
+          Statement: '',
+          Source: 'C:/p/.trivyignore',
+          Finding: {
+            VulnerabilityID: 'NSWG-ECO-516',
+            PkgName: 'lodash',
+            InstalledVersion: '4.17.15',
+            FixedVersion: '>=4.17.19',
+            Title: 'Allocation of Resources Without Limits or Throttling',
+            Severity: 'HIGH',
+          },
+        },
+      ],
+    },
+  ],
+});
+
+describe("what the repository's .trivyignore suppressed", () => {
+  const FS = ['fs', '--scanners', 'vuln', '--format', 'json', '--output', '/r/deps.json'];
+
+  it('asks a Trivy 0.50.0 or newer to list it, on the subcommands that accept the flag', () => {
+    expect(trivyArgv({ args: FS, target: '/p' }, '/r/c.yaml', '/p/.trivyignore', '0.69.3')).toContain('--show-suppressed');
+    expect(trivyArgv({ args: FS, target: '/p' }, '/r/c.yaml', '/p/.trivyignore', '0.50.0')).toContain('--show-suppressed');
+    const image = ['image', '--format', 'json', '--output', '/r/i.json'];
+    expect(trivyArgv({ args: image, target: 'alpine' }, '/r/c.yaml', '/p/.trivyignore', '0.69.3')).toContain('--show-suppressed');
+  });
+
+  it.each([
+    ['an older Trivy (unknown flag, fatal)', FS, '0.49.1'],
+    ['a Trivy whose version is unknown', FS, null],
+    ['trivy config (refuses the flag on 0.69.3)', ['config', '--format', 'json', '--output', '/r/iac.json'], '0.69.3'],
+  ])('does not pass it to %s', (_label, args, version) => {
+    expect(trivyArgv({ args, target: '/p' }, '/r/c.yaml', '/p/.trivyignore', version)).not.toContain('--show-suppressed');
+  });
+
+  it('not without a .trivyignore', () => {
+    expect(trivyArgv({ args: FS, target: '/p' }, '/r/c.yaml', null, '0.69.3')).not.toContain('--show-suppressed');
+  });
+
+  it('reads the suppressed findings out of the report: counted, named, as they would have been reported', () => {
+    const s = repoSuppressionFrom(SUPPRESSED_REPORT, '/p');
+    expect(s.file).toBe('.trivyignore');
+    expect(s.count).toBe(2);
+    expect(s.ids).toEqual(['CVE-2020-8203', 'NSWG-ECO-516']);
+    expect(s.findings.map((f) => [f.rule_id, f.severity, f.file_path])).toEqual([
+      ['CVE-2020-8203', 'high', 'package-lock.json'],
+      ['NSWG-ECO-516', 'high', 'package-lock.json'],
+    ]);
+    // Bounded: an advisory's description is not carried.
+    expect(s.findings.every((f) => f.message === undefined)).toBe(true);
+  });
+
+  it('is bounded: every one counted, the first ids and findings kept', () => {
+    const many = {
+      Results: [
+        {
+          Target: 'package-lock.json',
+          Type: 'npm',
+          ExperimentalModifiedFindings: Array.from({ length: 60 }, (_, i) => ({
+            Type: 'vulnerability',
+            Status: 'ignored',
+            Finding: { VulnerabilityID: `CVE-2020-${1000 + i}`, PkgName: 'p', InstalledVersion: '1', Severity: 'LOW' },
+          })),
+        },
+      ],
+    };
+    const s = repoSuppressionFrom(JSON.stringify(many), '/p');
+    expect(s.count).toBe(60);
+    expect(s.ids.length).toBeLessThanOrEqual(50);
+    expect(s.findings.length).toBeLessThanOrEqual(25);
+    expect(suppressionNote(s)).toMatch(/^60 findings suppressed by the repository's \.trivyignore: CVE-2020-1000, .*CVE-2020-1009 and 50 more$/);
+  });
+
+  it('names them in the run: its reason and suppressed_by_repo_config', () => {
+    const suppressed = repoSuppressionFrom(SUPPRESSED_REPORT, '/p');
+    const run = withHonoured({ name: 'trivy', status: 'ok' }, { honoured: ['.trivyignore'], suppressed });
+    expect(run.reason).toMatch(
+      /2 findings suppressed by the repository's \.trivyignore: CVE-2020-8203, NSWG-ECO-516/,
+    );
+    expect(run.suppressed_by_repo_config).toEqual(suppressed);
+    // Nothing suppressed: the file is still named, no count is claimed.
+    const none = withHonoured(
+      { name: 'trivy', status: 'ok' },
+      { honoured: ['.trivyignore'], suppressed: { file: '.trivyignore', count: 0, ids: [], findings: [] } },
+    );
+    expect(none.honoured_config).toEqual(['.trivyignore']);
+    expect(none.suppressed_by_repo_config).toBeUndefined();
+    expect(none.reason).not.toMatch(/suppressed by/);
+  });
+
+  it('runTrivy passes the flag and reads the report it wrote', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
+    const project = makeTempDir('trivy-run-project-');
+    const work = makeTempDir('trivy-run-work-');
+    writeFileSync(join(project, '.trivyignore'), 'CVE-2020-8203\nNSWG-ECO-516\n');
+    const out = join(work, 'deps.json');
+    mockedRun.mockImplementation(async () => {
+      writeFileSync(out, SUPPRESSED_REPORT);
+      return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runTrivy({
+      args: ['fs', '--scanners', 'vuln', '--format', 'json', '--output', out, '--quiet'],
+      target: project,
+      workDir: work,
+      ignoreFrom: project,
+    });
+    expect(mockedRun.mock.calls[0]?.[0].args).toContain('--show-suppressed');
+    expect(r.suppressed?.count).toBe(2);
+    expect(r.suppressed?.ids).toEqual(['CVE-2020-8203', 'NSWG-ECO-516']);
+  });
+
+  it('a config pass, or a Trivy too old to list them, says so rather than claiming none', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
+    const project = makeTempDir('trivy-run-project-');
+    const work = makeTempDir('trivy-run-work-');
+    writeFileSync(join(project, '.trivyignore'), 'AVD-AWS-0107\n');
+    const config = await runTrivy({
+      args: ['config', '--format', 'json', '--output', join(work, 'iac.json')],
+      target: project,
+      workDir: work,
+      ignoreFrom: project,
+    });
+    expect(config.suppressed).toMatchObject({ file: '.trivyignore', count: null });
+    expect(suppressionNote(config.suppressed ?? { file: '', count: 0, ids: [], findings: [] })).toMatch(
+      /what the repository's \.trivyignore suppressed cannot be listed \(trivy config has no --show-suppressed\)/,
+    );
+
+    resetTrivyVersionCache();
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.49.1\n' } as never);
+    const old = await runTrivy({
+      args: ['fs', '--format', 'json', '--output', join(work, 'deps.json')],
+      target: project,
+      workDir: work,
+      ignoreFrom: project,
+    });
+    expect(old.suppressed?.count).toBeNull();
+    expect(old.suppressed?.unlisted_because).toMatch(/Trivy 0\.49\.1 predates --show-suppressed \(0\.50\.0\)/);
   });
 });
 

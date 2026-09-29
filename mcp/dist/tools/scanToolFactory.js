@@ -89,7 +89,7 @@ import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js'
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 /** Inputs that never enter the cache key — see the module comment. */
 const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
@@ -677,6 +677,7 @@ async function runScanBody(args) {
     if (excludedNote !== null)
         warnings.push(excludedNote);
     warnings.push(...(invocation.warnings ?? []));
+    warnings.push(...repoSuppressionWarnings(invocation.tools_run));
     if (view.warning)
         warnings.push(view.warning);
     if (floor?.warning)
@@ -880,6 +881,7 @@ function cachedResult(config, input, plugin, scanId, warnings) {
     if (excludedNote !== null)
         allWarnings.push(excludedNote);
     allWarnings.push(...runWarnings(meta?.['run_warnings']));
+    allWarnings.push(...repoSuppressionWarnings(record.tools_run));
     if (view.warning)
         allWarnings.push(view.warning);
     if (floor?.warning)

@@ -25,6 +25,18 @@ export interface SarifOptions {
    *  release the way this field's absence of any caller previously let it. */
   toolVersion?: string;
   informationUri?: string;
+  /**
+   * Findings a suppression outside this tool dismissed (the scanned
+   * repository's `.trivyignore`): emitted as results carrying
+   * `suppressions: [{ kind: 'external', justification }]`, after the others.
+   */
+  suppressed?: readonly SarifSuppressed[];
+}
+
+/** A finding emitted as suppressed, and why (`SarifOptions.suppressed`). */
+export interface SarifSuppressed {
+  finding: Finding;
+  justification: string;
 }
 
 // Resolved once per process, at module load — same "read once, reuse many
@@ -47,8 +59,9 @@ interface SarifRule {
 type SarifLevel = 'error' | 'warning' | 'note' | 'none';
 
 export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
+  const suppressed = opts.suppressed ?? [];
   const rulesById = new Map<string, SarifRule>();
-  for (const f of findings) {
+  for (const f of [...findings, ...suppressed.map((s) => s.finding)]) {
     const id = f.rule_id ?? `${f.tool}/${f.category}`;
     if (!rulesById.has(id)) {
       const rule: SarifRule = { id };
@@ -71,7 +84,7 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
     }
   }
 
-  const results = findings.map((f) => {
+  const toResult = (f: Finding): Record<string, unknown> => {
     const ruleId = f.rule_id ?? `${f.tool}/${f.category}`;
     const tags = sarifTaxonomyTags(f);
     const result: Record<string, unknown> = {
@@ -110,7 +123,11 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
       result.partialFingerprints = { devGuardian: f.fingerprint };
     }
     return result;
-  });
+  };
+  const results = [
+    ...findings.map(toResult),
+    ...suppressed.map((s) => ({ ...toResult(s.finding), suppressions: [{ kind: 'external', justification: s.justification }] })),
+  ];
 
   const sarif = {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',

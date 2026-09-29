@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessCoverage, computeCoverage } from '../../../src/tools/scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from '../../../src/tools/scanCoverage.js';
 import type { ToolRun } from '../../../src/types.js';
 
 const ok = (name: string): ToolRun => ({ name, status: 'ok' });
@@ -193,5 +193,43 @@ describe('assessCoverage: rules that did not load are not "install"', () => {
 
   it('control: a crashed scanner (no rule error) keeps the install advice', () => {
     expect(assessCoverage('sast', [failed('semgrep')], []).warning).toMatch(/Install semgrep/);
+  });
+});
+
+/**
+ * Round 4, item 2: findings the repository's own `.trivyignore` suppressed
+ * are named in the scan's warnings — counted, never a coverage gap.
+ */
+describe('repoSuppressionWarnings', () => {
+  it('names each run whose repository configuration suppressed findings; coverage untouched', () => {
+    const runs: ToolRun[] = [
+      {
+        name: 'trivy',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: { file: '.trivyignore', count: 2, ids: ['CVE-2020-8203', 'NSWG-ECO-516'], findings: [] },
+      },
+      {
+        name: 'trivy-config',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: {
+          file: '.trivyignore',
+          count: null,
+          ids: [],
+          findings: [],
+          unlisted_because: 'trivy config has no --show-suppressed',
+        },
+      },
+      ok('semgrep'),
+    ];
+    expect(repoSuppressionWarnings(runs)).toEqual([
+      "trivy: 2 findings suppressed by the repository's .trivyignore: CVE-2020-8203, NSWG-ECO-516 — not reported, " +
+        'not counted; remove the entries to see them',
+      "trivy-config: what the repository's .trivyignore suppressed cannot be listed (trivy config has no " +
+        '--show-suppressed) — its entries are not reported',
+    ]);
+    expect(assessCoverage('deps', runs, []).coverage).toBe('full');
+    expect(repoSuppressionWarnings([ok('trivy')])).toEqual([]);
   });
 });

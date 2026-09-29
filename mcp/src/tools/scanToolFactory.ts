@@ -125,7 +125,7 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
@@ -957,6 +957,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const excludedNote = exclusionWarning(exclusionReport);
   if (excludedNote !== null) warnings.push(excludedNote);
   warnings.push(...(invocation.warnings ?? []));
+  warnings.push(...repoSuppressionWarnings(invocation.tools_run));
   if (view.warning) warnings.push(view.warning);
   if (floor?.warning) warnings.push(floor.warning);
 
@@ -1187,6 +1188,7 @@ function cachedResult<TInput extends ScanToolBaseInput>(
   const excludedNote = exclusionWarning(meta?.['exclusions']);
   if (excludedNote !== null) allWarnings.push(excludedNote);
   allWarnings.push(...runWarnings(meta?.['run_warnings']));
+  allWarnings.push(...repoSuppressionWarnings(record.tools_run));
   if (view.warning) allWarnings.push(view.warning);
   if (floor?.warning) allWarnings.push(floor.warning);
 

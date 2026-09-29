@@ -178,12 +178,35 @@ export interface ToolRun {
    */
   honoured_config?: string[];
   /**
+   * What such a file suppressed in this run (`runners/trivyRun.ts`): counted
+   * and named — in the scan's warnings, the CI gate's output and its SARIF —
+   * and never a coverage gap. Absent: nothing was suppressed, or no such file
+   * was read.
+   */
+  suppressed_by_repo_config?: RepoSuppression;
+  /**
    * Responses only (`tools/responseBounds.ts`), never stored: when
    * `partially_parsed` was cut to its first entries for the MCP response,
    * how many the run named in all, and how many of each type.
    */
   partially_parsed_total?: number;
   partially_parsed_by_type?: Record<string, number>;
+}
+
+/** Findings the scanned repository's own configuration suppressed (`ToolRun.suppressed_by_repo_config`). */
+export interface RepoSuppression {
+  /** The project file whose entries suppressed them (`.trivyignore`). */
+  file: string;
+  /** How many findings it suppressed; null when the scanner cannot list them (`unlisted_because`). */
+  count: number | null;
+  /** Their ids, unique, in report order — the first 50. */
+  ids: string[];
+  /** How many distinct ids in all (`ids` holds the first 50). Absent: `ids.length`. */
+  id_count?: number;
+  /** The first 25, as they would have been reported, without the advisory's description. */
+  findings: Finding[];
+  /** Why `count` is null. */
+  unlisted_because?: string;
 }
 
 /** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */

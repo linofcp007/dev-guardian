@@ -22,6 +22,15 @@ version bump.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
+- What the repository's `.trivyignore` suppressed is counted and named. It left no trace: the CI gate on a project
+  ignoring every lodash 4.17.15 advisory read like a clean one. A Trivy 0.50.0 or newer is run with
+  `--show-suppressed` (on `fs`, `image` and the other subcommands that accept it — `trivy config` refuses it) and the
+  suppressed findings go into the run (`tools_run[].suppressed_by_repo_config`: file, count, ids, the first
+  findings), the scan's warnings ("trivy: 7 findings suppressed by the repository's .trivyignore: CVE-2020-8203, …
+  — not reported, not counted"), the CI gate's human output, its JSON (`suppressed_by_repo_config`) and its SARIF
+  (each as a result with `suppressions: [{kind: "external", justification: "suppressed by the repository's
+  .trivyignore"}]`). Not a coverage gap. A config pass, or an older Trivy, says it cannot list them instead of a
+  count.
 - Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
   anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
   Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and

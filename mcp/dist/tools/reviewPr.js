@@ -358,7 +358,7 @@ async function runTrivy(ctx, out, args) {
             name: 'trivy',
             status: 'failed',
             reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
-        }, run.honoured));
+        }, run));
     }
 }
 /**

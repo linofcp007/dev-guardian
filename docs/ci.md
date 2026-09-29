@@ -81,6 +81,17 @@ The fix is to fetch the whole history:
 
 The pipelines `ci-init` writes already do this. With the MCP tools rather than the CLI, a history scan limited to commits you did fetch is complete too: `scan_secrets` with `log_opts: "<base>..HEAD"` reads only that range, and a range that stays above the shallow boundary is not truncated (`--all`, or no `log_opts`, reaches the boundary and is).
 
+### What the repository's `.trivyignore` suppressed
+
+A `.trivyignore` in the scanned repository is honoured — accepted risks are the project's call — but never in silence. Trivy 0.50.0 or newer lists what it suppressed, and the gate names it without counting it:
+
+```text
+suppressed by the repository's own configuration (not counted by the gate):
+  - security_scan_full: trivy: 7 findings suppressed by the repository's .trivyignore: CVE-2020-8203, …
+```
+
+The JSON carries the same under `suppressed_by_repo_config` (step, scanner, file, count, ids and the first findings), and the SARIF carries each suppressed finding as a result with `suppressions: [{ "kind": "external", "justification": "suppressed by the repository's .trivyignore" }]`. They change neither the exit code nor coverage. `trivy config` (the IaC pass) cannot list what it suppressed; the line then says so instead of a count, as it does for a Trivy older than 0.50.0. Review changes to `.trivyignore` like code: `review_pr` warns when a diff edits it.
+
 ### Things a green pipeline does not tell you
 
 - **SARIF carries one bit of coverage.** `invocation.executionSuccessful` turns `false` when coverage is not full, but SARIF has no field for *which* scanner was missing. That is in exit code 2 and the human/JSON output. Treat an uploaded SARIF with zero results as inconclusive until you have checked the exit code.

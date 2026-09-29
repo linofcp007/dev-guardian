@@ -10,6 +10,26 @@
  * silent "0 findings" never reads as "all clear".
  */
 import { lockFileAdvice } from '../runners/scannerParsers/trivy.js';
+import { suppressionNote } from '../runners/trivyRun.js';
+/**
+ * One warning per run whose repository configuration suppressed findings
+ * (`ToolRun.suppressed_by_repo_config`, round 4, item 2) — counted and named,
+ * or said to be unlistable. Never a coverage gap: the repository decided it,
+ * and {@link computeCoverage} does not read it.
+ */
+export function repoSuppressionWarnings(toolsRun) {
+    const out = [];
+    for (const run of toolsRun) {
+        const s = run.suppressed_by_repo_config;
+        if (s === undefined)
+            continue;
+        const tail = s.count === null ? 'its entries are not reported' : 'not reported, not counted; remove the entries to see them';
+        const line = `${run.name}: ${suppressionNote(s)} — ${tail}`;
+        if (!out.includes(line))
+            out.push(line);
+    }
+    return out;
+}
 /**
  * Derive coverage from the per-scanner outcomes.
  *

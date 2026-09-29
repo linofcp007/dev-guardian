@@ -147,6 +147,60 @@ describe("a repository's trivy.yaml never reaches Trivy (real Trivy)", () => {
     expect(clean.out.tools_run.find((t) => t.name === 'trivy')?.reason ?? '').not.toMatch(/trivyignore/);
   });
 
+  /**
+   * Round 4, item 2: what the `.trivyignore` silenced left no trace — the
+   * CI gate on a project ignoring every lodash advisory read as clean.
+   * `--show-suppressed` lists them; they are counted and named, never a gap.
+   */
+  it.skipIf(!TRIVY_INSTALLED)("what the .trivyignore suppressed is counted and named in the scan's warnings", async () => {
+    const clean = await runTool('scan_deps', npmProject());
+    const ignored = clean.ruleIds.slice(0, 2);
+    expect(ignored).toHaveLength(2);
+    const dir = npmProject({ '.trivyignore': `# accepted risks\n${ignored.join('\n')}\n` });
+    const tool = TOOLS.find((t) => t.name === 'scan_deps');
+    if (!tool) throw new Error('scan_deps not registered');
+    const r = (await tool.handler({ project_path: dir, force: true }, plugin(dir))) as unknown as ScanOut & {
+      ok: boolean;
+      warnings: string[];
+    };
+    const trivy = r.tools_run.find((t) => t.name === 'trivy');
+    expect(trivy?.suppressed_by_repo_config).toMatchObject({ file: '.trivyignore', count: 2 });
+    expect([...(trivy?.suppressed_by_repo_config?.ids ?? [])].sort()).toEqual([...ignored].sort());
+    expect(r.coverage).toBe('full');
+    const warning = r.warnings.find((w) => /suppressed by the repository's \.trivyignore/.test(w)) ?? '';
+    expect(warning).toMatch(/^trivy: 2 findings suppressed by the repository's \.trivyignore: /);
+    for (const id of ignored) expect(warning).toContain(id);
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)('the CI gate names what the .trivyignore suppressed (JSON), and does not count it', () => {
+    const clean = spawnSync(process.execPath, [CLI, 'scan', '--project', npmProject(), '--local-only', '--format', 'json', '--fail-on', 'low'], {
+      encoding: 'utf8',
+      timeout: 280_000,
+      env: { ...process.env, GUARDIAN_OFFLINE: '1' },
+    });
+    const all = [
+      ...new Set(
+        (JSON.parse(clean.stdout) as { new_findings: Array<{ tool: string; rule_id?: string }> }).new_findings
+          .filter((f) => f.tool === 'trivy')
+          .map((f) => f.rule_id ?? ''),
+      ),
+    ];
+    expect(all.length).toBeGreaterThan(0);
+    const r = spawnSync(
+      process.execPath,
+      [CLI, 'scan', '--project', npmProject({ '.trivyignore': `${all.join('\n')}\n` }), '--local-only', '--format', 'json', '--fail-on', 'low'],
+      { encoding: 'utf8', timeout: 280_000, env: { ...process.env, GUARDIAN_OFFLINE: '1' } },
+    );
+    const o = JSON.parse(r.stdout) as {
+      new_findings: Array<{ tool: string }>;
+      suppressed_by_repo_config: Array<{ tool: string; file: string; count: number | null; ids: string[] }>;
+    };
+    expect(o.new_findings.filter((f) => f.tool === 'trivy')).toEqual([]);
+    const trivy = o.suppressed_by_repo_config.find((s) => s.tool === 'trivy');
+    expect(trivy).toMatchObject({ file: '.trivyignore', count: all.length });
+    expect([...(trivy?.ids ?? [])].sort()).toEqual([...all].sort());
+  });
+
   it.skipIf(!TRIVY_INSTALLED)('the CI gate (cli scan --local-only) still fails on the findings beside a hostile trivy.yaml', () => {
     const run = (dir: string): { status: number | null; stdout: string } => {
       const r = spawnSync(process.execPath, [CLI, 'scan', '--project', dir, '--local-only', '--format', 'json', '--fail-on', 'low'], {

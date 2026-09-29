@@ -435,7 +435,7 @@ registerToolModule(
           licensesSummary = summariseLicenses(raw);
         }
         tools_run.push(
-          withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured),
+          withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result),
         );
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });

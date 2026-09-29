@@ -22,8 +22,9 @@ import { resolveVersion } from '../platform/version.js';
 // one long-lived MCP server session).
 const DEFAULT_TOOL_VERSION = resolveVersion();
 export function toSarif(findings, opts = {}) {
+    const suppressed = opts.suppressed ?? [];
     const rulesById = new Map();
-    for (const f of findings) {
+    for (const f of [...findings, ...suppressed.map((s) => s.finding)]) {
         const id = f.rule_id ?? `${f.tool}/${f.category}`;
         if (!rulesById.has(id)) {
             const rule = { id };
@@ -46,7 +47,7 @@ export function toSarif(findings, opts = {}) {
             rule.properties = { tags: [...new Set([...(rule.properties?.tags ?? []), ...tags])].sort() };
         }
     }
-    const results = findings.map((f) => {
+    const toResult = (f) => {
         const ruleId = f.rule_id ?? `${f.tool}/${f.category}`;
         const tags = sarifTaxonomyTags(f);
         const result = {
@@ -86,7 +87,11 @@ export function toSarif(findings, opts = {}) {
             result.partialFingerprints = { devGuardian: f.fingerprint };
         }
         return result;
-    });
+    };
+    const results = [
+        ...findings.map(toResult),
+        ...suppressed.map((s) => ({ ...toResult(s.finding), suppressions: [{ kind: 'external', justification: s.justification }] })),
+    ];
     const sarif = {
         $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
         version: '2.1.0',

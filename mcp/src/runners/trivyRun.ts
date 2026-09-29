@@ -28,6 +28,18 @@
  *     never applied in silence. Trivy's other cwd lookups (`trivy-secret.yaml`,
  *     a default `.trivyignore`) find nothing in a report directory.
  *
+ * What the `.trivyignore` suppressed is counted and named (round 4, item 2):
+ * silenced findings left no trace — a CI gate on a project ignoring every
+ * lodash advisory read clean. A Trivy 0.50.0 or newer (absent in 0.49.1) is
+ * given `--show-suppressed` on a JSON pass of the subcommands that accept it,
+ * and lists them under `Results[].ExperimentalModifiedFindings` (measured on
+ * 0.69.3); `trivy config` refuses that flag as unknown, so a config pass —
+ * or a Trivy too old, or of unknown version — says it cannot list them
+ * instead of claiming none. The run carries them
+ * (`TrivyRunResult.suppressed`, then `ToolRun.suppressed_by_repo_config`):
+ * the scan's warnings, the CI gate's output and SARIF (`suppressions`, kind
+ * `external`) name them. Never a coverage gap: the repository decided it.
+ *
  * Measured on Trivy 0.69.3: the project's `trivy.yaml` above takes the scan
  * from 7 findings to 0 when Trivy runs in the project; run from a report
  * directory with `--config` pointing at an empty file, the same project
@@ -38,14 +50,15 @@
  */
 
 import { execa } from 'execa';
-import { existsSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareSemver } from '../platform/semverCompare.js';
 import { extractVersion } from './toolProbe.js';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
-import type { ToolRun } from '../types.js';
+import type { Finding, RepoSuppression, ToolRun } from '../types.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
-import { assessManifestCoverage, type ManifestCoverageGap } from './scannerParsers/trivy.js';
+import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
+import { assessManifestCoverage, trivyParser, type ManifestCoverageGap } from './scannerParsers/trivy.js';
 
 /** The project's own Trivy suppression file, honoured explicitly. */
 export const PROJECT_TRIVYIGNORE = '.trivyignore';
@@ -74,6 +87,11 @@ export interface TrivyInvocation {
 export interface TrivyRunResult extends ProcessRunResult {
   /** Project files that decided part of this run, by name (`.trivyignore`). Empty: none. */
   honoured: string[];
+  /**
+   * A completed run that honoured `.trivyignore`: what it suppressed, or why
+   * that cannot be listed (`count: null`). Absent otherwise.
+   */
+  suppressed?: RepoSuppression;
 }
 
 /** The project's `.trivyignore`, when it is a regular file; else null. */
@@ -99,8 +117,117 @@ export function trivyArgv(
     '--config',
     configPath,
     ...(ignoreFile !== null ? ['--ignorefile', ignoreFile] : []),
+    ...(ignoreFile !== null && unlistedBecause(inv.args, version) === null ? ['--show-suppressed'] : []),
     inv.target,
   ];
+}
+
+// ---------------------------------------------------------------- what .trivyignore suppressed
+
+/** The first Trivy with `--show-suppressed` (absent in 0.49.1). */
+export const SHOW_SUPPRESSED_SINCE = '0.50.0';
+/** Subcommands that accept it; `trivy config` refuses it as an unknown flag (measured on 0.69.3). */
+const SHOW_SUPPRESSED_COMMANDS: ReadonlySet<string> = new Set([
+  'fs',
+  'filesystem',
+  'image',
+  'i',
+  'repo',
+  'repository',
+  'rootfs',
+  'sbom',
+  'vm',
+]);
+const MAX_SUPPRESSED_IDS = 50;
+const MAX_SUPPRESSED_FINDINGS = 25;
+/** How many ids a note names before "and N more". */
+const NOTE_IDS = 10;
+
+/** The value of `--<flag> <v>` / `--<flag>=<v>` in `args`, or null. */
+function flagValue(args: readonly string[], flag: string): string | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === flag) return args[i + 1] ?? null;
+    if (a !== undefined && a.startsWith(`${flag}=`)) return a.slice(flag.length + 1);
+  }
+  return null;
+}
+
+/** Why this run cannot list what `.trivyignore` suppressed; null when it can. */
+function unlistedBecause(args: readonly string[], version: string | null): string | null {
+  const command = args[0] ?? '';
+  if (!SHOW_SUPPRESSED_COMMANDS.has(command)) return `trivy ${command} has no --show-suppressed`;
+  if (flagValue(args, '--format') !== 'json') return 'the report is not JSON';
+  if (version === null) return "the installed Trivy's version could not be read";
+  if ((compareSemver(version, SHOW_SUPPRESSED_SINCE) ?? -1) < 0) {
+    return `Trivy ${version} predates --show-suppressed (${SHOW_SUPPRESSED_SINCE})`;
+  }
+  return null;
+}
+
+/** Where each `ExperimentalModifiedFindings` Type goes in a report the parser reads. */
+const FINDING_ARRAY: Readonly<Record<string, string>> = {
+  vulnerability: 'Vulnerabilities',
+  misconfiguration: 'Misconfigurations',
+  secret: 'Secrets',
+  license: 'Licenses',
+};
+
+/**
+ * What the project's `.trivyignore` suppressed, from a report Trivy wrote
+ * with `--show-suppressed`: every entry of `ExperimentalModifiedFindings`
+ * counted, the findings rebuilt by the Trivy parser as they would have been
+ * reported (same rule ids, same fingerprints), bounded.
+ */
+export function repoSuppressionFrom(raw: string, projectPath: string): RepoSuppression {
+  let count = 0;
+  const distinct = new Set<string>();
+  const ids: string[] = [];
+  const findings: Finding[] = [];
+  let results: unknown[] = [];
+  try {
+    results = asArray(getProp(parseInputAsJson(raw), 'Results'));
+  } catch {
+    results = [];
+  }
+  for (const result of results) {
+    const modified = asArray(getProp(result, 'ExperimentalModifiedFindings'));
+    for (const entry of modified) {
+      count += 1;
+      const finding = getProp(entry, 'Finding');
+      const id =
+        getString(finding, 'VulnerabilityID') ??
+        getString(finding, 'ID') ??
+        getString(finding, 'AVDID') ??
+        getString(finding, 'RuleID') ??
+        getString(finding, 'Name');
+      if (id !== undefined && !distinct.has(id)) {
+        distinct.add(id);
+        if (ids.length < MAX_SUPPRESSED_IDS) ids.push(id);
+      }
+      const key = FINDING_ARRAY[getString(entry, 'Type') ?? ''];
+      if (key === undefined || findings.length >= MAX_SUPPRESSED_FINDINGS) continue;
+      const one = { Results: [{ Target: getString(result, 'Target') ?? '', [key]: [finding] }] };
+      for (const f of trivyParser.parse(one, { project_path: projectPath }).findings) {
+        const { message: _description, ...bounded } = f;
+        findings.push(bounded);
+      }
+    }
+  }
+  const bounded = findings.slice(0, MAX_SUPPRESSED_FINDINGS);
+  return { file: PROJECT_TRIVYIGNORE, count, ids, id_count: distinct.size, findings: bounded };
+}
+
+/** `N findings suppressed by the repository's .trivyignore: …`, or why they cannot be listed. */
+export function suppressionNote(s: RepoSuppression): string {
+  if (s.count === null) {
+    return `what the repository's ${s.file} suppressed cannot be listed (${s.unlisted_because ?? 'unknown'})`;
+  }
+  const named = s.ids.slice(0, NOTE_IDS).join(', ');
+  const idCount = s.id_count ?? s.ids.length;
+  const more = idCount > NOTE_IDS ? ` and ${idCount - NOTE_IDS} more` : '';
+  const noun = s.count === 1 ? 'finding' : 'findings';
+  return `${s.count} ${noun} suppressed by the repository's ${s.file}${named.length > 0 ? `: ${named}` : ''}${more}`;
 }
 
 // ---------------------------------------------------------------- no phoning home
@@ -193,7 +320,23 @@ export async function runTrivy(inv: TrivyInvocation): Promise<TrivyRunResult> {
     ...(inv.onLog !== undefined ? { onLog: inv.onLog } : {}),
     ...(inv.timeoutMs !== undefined ? { timeoutMs: inv.timeoutMs } : {}),
   });
-  return { ...run, honoured: ignoreFile !== null ? [PROJECT_TRIVYIGNORE] : [] };
+  if (ignoreFile === null || inv.ignoreFrom === undefined) return { ...run, honoured: [] };
+  const honoured = [PROJECT_TRIVYIGNORE];
+  if (run.outcome !== 'completed') return { ...run, honoured };
+  const why = unlistedBecause(inv.args, version);
+  const output = flagValue(inv.args, '--output');
+  if (why !== null || output === null) {
+    const unlisted_because = why ?? 'the report was not written to a file';
+    return { ...run, honoured, suppressed: { file: PROJECT_TRIVYIGNORE, count: null, ids: [], findings: [], unlisted_because } };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(output, 'utf8');
+  } catch {
+    const unlisted_because = 'Trivy wrote no report';
+    return { ...run, honoured, suppressed: { file: PROJECT_TRIVYIGNORE, count: null, ids: [], findings: [], unlisted_because } };
+  }
+  return { ...run, honoured, suppressed: repoSuppressionFrom(raw, inv.ignoreFrom) };
 }
 
 /** The words a `tools_run` reason carries for what a run honoured, or null. */
@@ -204,13 +347,26 @@ export function honouredNote(honoured: readonly string[]): string | null {
 
 /**
  * `run` naming what it honoured: the note appended to its reason, and the
- * files in `honoured_config`. Unchanged when nothing was.
+ * files in `honoured_config` — and what they suppressed, when anything was
+ * or when that cannot be listed (`suppressed_by_repo_config`, its note on
+ * the reason too). Unchanged when nothing was honoured.
  */
-export function withHonoured(run: ToolRun, honoured: readonly string[]): ToolRun {
-  const note = honouredNote(honoured);
+export function withHonoured(
+  run: ToolRun,
+  trivy: { readonly honoured: readonly string[]; readonly suppressed?: RepoSuppression | undefined },
+): ToolRun {
+  const note = honouredNote(trivy.honoured);
   if (note === null) return run;
-  const reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
-  return { ...run, reason, honoured_config: [...honoured] };
+  const s = trivy.suppressed;
+  const shown = s !== undefined && s.count !== 0 ? s : undefined;
+  const notes = shown !== undefined ? `${note}; ${suppressionNote(shown)}` : note;
+  const reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${notes}` : notes;
+  return {
+    ...run,
+    reason,
+    honoured_config: [...trivy.honoured],
+    ...(shown !== undefined ? { suppressed_by_repo_config: shown } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- the dependency pass, judged
@@ -263,7 +419,7 @@ export function judgeTrivyFs(args: {
   const { projectPath, raw, run, exclusions } = args;
   if (run.outcome !== 'completed') {
     return {
-      toolRun: withHonoured({ name: 'trivy', status: 'failed', reason: run.outcome }, run.honoured),
+      toolRun: withHonoured({ name: 'trivy', status: 'failed', reason: run.outcome }, run),
       missing: [],
       gaps: [],
     };
@@ -276,7 +432,7 @@ export function judgeTrivyFs(args: {
     coverage.walkIncomplete !== undefined ? `${coverage.walkIncomplete} — manifests below were not checked` : null;
   const walkGap = note !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
   const withNote = (r: ToolRun): ToolRun =>
-    withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run.honoured);
+    withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run);
   if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
     return {
       toolRun: withNote({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }),

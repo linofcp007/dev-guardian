@@ -430,7 +430,7 @@ async function runTrivy(
           status: 'failed',
           reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
         },
-        run.honoured,
+        run,
       ),
     );
   }

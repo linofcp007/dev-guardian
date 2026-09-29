@@ -552,3 +552,89 @@ describe('renderJson', () => {
     expect(empty.baseline_absent).toBe(false);
   });
 });
+
+/**
+ * Round 4, item 2: a step whose Trivy run the repository's own .trivyignore
+ * silenced — counted and named (`runners/trivyRun.ts`), never a gap.
+ */
+function suppressedStep(): ScanStepResult {
+  const suppressedFinding = (id: string): Finding => ({
+    fingerprint: `fp-${id}`,
+    tool: 'trivy',
+    rule_id: id,
+    severity: 'high',
+    category: 'security',
+    subcategory: 'cve',
+    title: `${id} in lodash`,
+    file_path: 'package-lock.json',
+    fix_available: true,
+  });
+  return step({
+    tool: 'security_scan_full',
+    tools_run: [
+      {
+        name: 'trivy',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: {
+          file: '.trivyignore',
+          count: 2,
+          ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+          findings: [suppressedFinding('CVE-2020-8203'), suppressedFinding('NSWG-ECO-516')],
+        },
+      },
+    ],
+  });
+}
+
+describe("findings the repository's own configuration suppressed (round 4, item 2)", () => {
+  const schema = JSON.parse(readFileSync('test/fixtures/sarif/sarif-schema-2.1.0.json', 'utf8')) as object;
+  const ajv = new Ajv({ strict: false, allErrors: true, logger: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+
+  it('human: named, counted, and said not to be counted by the gate', () => {
+    const text = renderHuman(evaluateGate(input({ steps: [suppressedStep()] })));
+    expect(text).toMatch(/PASS/);
+    expect(text).toMatch(/suppressed by the repository's own configuration \(not counted by the gate\):/);
+    expect(text).toMatch(
+      /  - security_scan_full: trivy: 2 findings suppressed by the repository's \.trivyignore: CVE-2020-8203, NSWG-ECO-516/,
+    );
+    expect(renderHuman(evaluateGate(input()))).not.toMatch(/suppressed by the repository/);
+  });
+
+  it('JSON: suppressed_by_repo_config', () => {
+    const o = JSON.parse(renderJson(evaluateGate(input({ steps: [suppressedStep()] }))));
+    expect(o.suppressed_by_repo_config).toHaveLength(1);
+    expect(o.suppressed_by_repo_config[0]).toMatchObject({
+      step: 'security_scan_full',
+      tool: 'trivy',
+      file: '.trivyignore',
+      count: 2,
+      ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+    });
+    expect(o.suppressed_by_repo_config[0].findings).toHaveLength(2);
+    expect(JSON.parse(renderJson(evaluateGate(input()))).suppressed_by_repo_config).toEqual([]);
+  });
+
+  it('SARIF: each as a result with an external suppression naming the file; still a valid document', () => {
+    const v = evaluateGate(input({ findings: [finding()], steps: [suppressedStep()] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    const ok = validate(doc);
+    expect(validate.errors ?? [], JSON.stringify(validate.errors, null, 2)).toEqual([]);
+    expect(ok).toBe(true);
+    const results = doc.runs[0].results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(3);
+    const suppressed = results.filter((r) => r['suppressions'] !== undefined);
+    expect(suppressed.map((r) => r['ruleId'])).toEqual(['CVE-2020-8203', 'NSWG-ECO-516']);
+    for (const r of suppressed) {
+      expect(r['suppressions']).toEqual([
+        { kind: 'external', justification: "suppressed by the repository's .trivyignore" },
+      ]);
+    }
+    // The new finding is not suppressed, and a rule exists for every result.
+    expect(results.filter((r) => r['suppressions'] === undefined)).toHaveLength(1);
+    const rules = (doc.runs[0].tool.driver.rules as Array<{ id: string }>).map((r) => r.id);
+    expect(rules).toEqual(expect.arrayContaining(['CVE-2020-8203', 'NSWG-ECO-516']));
+  });
+});

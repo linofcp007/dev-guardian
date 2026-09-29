@@ -233,7 +233,7 @@ const scanContainers = makeScanTool({
                         status: result.outcome === 'completed' ? 'ok' : 'failed',
                         reason: `image ${inp.image}`,
                         target: inp.image,
-                    }, result.honoured));
+                    }, result));
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }

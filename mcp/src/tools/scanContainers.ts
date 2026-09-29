@@ -271,7 +271,7 @@ const scanContainers = makeScanTool({
                   reason: `image ${inp.image}`,
                   target: inp.image,
                 },
-                result.honoured,
+                result,
               ),
             );
             if (result.outcome !== 'completed') anyOutcome = result.outcome;
