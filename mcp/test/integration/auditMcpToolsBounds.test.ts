@@ -29,6 +29,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { PERF_STRICT } from '../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 
 vi.setConfig({ testTimeout: 180_000 });
@@ -269,10 +270,15 @@ describe('I-3: the result is bounded', () => {
 });
 
 describe('C1 residual: the analysis is bounded, yields, and is never a clean pass when cut', () => {
+  // The event loop's longest stall. The defect stalled it 19-44 s; a yielding
+  // analysis stays under 1.5 s on a quiet machine — the bound under
+  // GUARDIAN_PERF_STRICT=1. By default it is 10 s: with the CPU at 100% (other
+  // suites running) the child that measures it is itself descheduled, and
+  // yielding runs measured 2.0, 4.0 and 7.5 s there (review 3.0, R7).
   const quick = (r: ChildAudit): void => {
     expect(r.killed, 'the audit never returned and was killed').toBe(false);
     expect(r.elapsed).toBeLessThan(60_000);
-    expect(r.maxGap).toBeLessThan(1500);
+    expect(r.maxGap).toBeLessThan(PERF_STRICT ? 1500 : 10_000);
   };
 
   it.each([
