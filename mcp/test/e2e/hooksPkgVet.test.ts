@@ -99,6 +99,9 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
       GUARDIAN_TEST_FETCH_LOG: logFile,
+      // As Claude Code sets it for every hook; and no real config directory.
+      CLAUDE_PROJECT_DIR: project,
+      CLAUDE_CONFIG_DIR: '',
       ...opts.env,
     },
   });
@@ -432,5 +435,82 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.requests).toEqual([]);
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/GUARDIAN_OFFLINE/);
+  });
+
+  // Review of 3.0.0, P1: the launchers that download a package and run it
+  // passed with no answer at all.
+  describe('launchers through the real hook (review P1)', () => {
+    it.each(['npx -y react-form-autopilot-helperz', 'pnpm dlx react-form-autopilot-helperz', 'bunx react-form-autopilot-helperz'])(
+      'DENIES %s — a name the registry does not have',
+      (command) => {
+        const r = runHook(command, {
+          'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+          [OSV]: { osv: {} },
+        });
+        expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/react-form-autopilot-helperz.*does not exist/);
+      },
+    );
+
+    it.each(['uvx pyproject-autopilot-helperz', 'pipx install pyproject-autopilot-helperz'])('DENIES %s', (command) => {
+      const r = runHook(command, { 'https://pypi.org/pypi/pyproject-autopilot-helperz/json': { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    });
+
+    it('a popular, clean package through npx stays allowed, silently', () => {
+      const r = runHook('npx -y express --version', { 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      expect(r.output).toBeUndefined();
+    });
+
+    it('a malicious version through npx is denied', () => {
+      const r = runHook('npx -y evil-cli-zz', {
+        'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+        [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
+    });
+  });
+
+  // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s
+  // through the hook with GUARDIAN_OFFLINE=1 — past Claude Code's 15 s, after
+  // which the command runs with no verdict.
+  describe('a 3000-directory monorepo (review I4)', () => {
+    const NAMES = Array.from({ length: 17 }, (_, i) => `zz-no-such-pkg-${String(i).padStart(2, '0')}`);
+    const monorepo = (): void => {
+      mkdirSync(join(project, '.git'));
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+      for (let i = 0; i < 3000; i += 1) {
+        const dir = join(project, 'packages', `p${String(i).padStart(4, '0')}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@mono/p${String(i).padStart(4, '0')}` }));
+      }
+    };
+
+    it('17 packages offline answer well inside the deadline', () => {
+      monorepo();
+      const r = runHook(`npm i ${NAMES.join(' ')}`, {}, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect(r.ms).toBeLessThan(8000);
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not verified/);
+    }, 120_000);
+
+    it('17 names the registry does not have are all answered, well inside the deadline', () => {
+      monorepo();
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes);
+      expect(r.ms).toBeLessThan(8000);
+      const said = `${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`;
+      for (const name of NAMES) expect(said).toContain(name);
+    }, 120_000);
+
+    it('GUARDIAN_PKG_VET_DEADLINE_MS=0: every package reads "time budget", never silence', () => {
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '0' } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/time budget/);
+    });
   });
 });

@@ -75119,8 +75119,19 @@ var SECRET_RULES = [
   // `'eyJ-'.repeat(50000)` (no dot anywhere in it) into ~27s of backtracking.
   // Bounding caps the work per candidate start at a constant instead of
   // letting it grow with input size — the other half of the fix is the 16KB
-  // per-line cap below, which bounds input size itself.
-  { id: "jwt", title: "JSON Web Token (JWT)", confidence: "medium", pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/ },
+  // window below, which bounds input size itself. Even so, every `eyJ` of a
+  // 16 KB run rescanned up to 2000 characters (~90 ms a window), so the
+  // scanner uses `findJwt`, which reads each run once (review I3).
+  {
+    id: "jwt",
+    title: "JSON Web Token (JWT)",
+    confidence: "medium",
+    pattern: /\beyJ[A-Za-z0-9_-]{8,2000}\.eyJ[A-Za-z0-9_-]{8,2000}\.[A-Za-z0-9_-]{8,2000}\b/,
+    find: (text2, from) => findJwt(text2, from),
+    // At most 3 + 2000 + 4 + 2000 + 1 + 2000 characters: 8 KB holds any of
+    // them, where the 2 KB every other rule shares did not (round 3, item 6).
+    overlap: 8 * 1024
+  },
   {
     id: "generic-assignment",
     title: "Hard-coded credential",
@@ -75161,16 +75172,90 @@ var SECRET_RULES = [
     // excludes `$`, `{`, `}`, `<`, `>`, `(`, `)` and whitespace, which is what
     // keeps `${VAR}`, `<your-key>` and `password = getPassword()` unmatched
     // without needing a placeholder check to catch them.
-    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i
+    //
+    // The value's run is rescanned from every key inside it when it does not
+    // end at whitespace (`token=token=…"`: ~250 ms a window), so the scanner
+    // uses `findEnvAssignment`, which reads each run once (review I3).
+    pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i,
+    find: (text2, from) => findEnvAssignment(text2, from)
   },
   {
     id: "uri-credentials",
     title: "Credentials embedded in a URI",
     confidence: "medium",
     // scheme://user:password@host — postgres://user:pass@host/db and the like.
-    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
+    // The scheme is at most 32 characters (`mongodb+srv` is 11): unbounded,
+    // every word start of a long `a-a-a-…` run rescanned the rest of it — up
+    // to 0.5 s a window (review I3).
+    pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
   }
 ];
+function isB64url(c3) {
+  return c3 >= 48 && c3 <= 57 || c3 >= 65 && c3 <= 90 || c3 >= 97 && c3 <= 122 || c3 === 95 || c3 === 45;
+}
+function isWordChar(c3) {
+  return c3 >= 48 && c3 <= 57 || c3 >= 65 && c3 <= 90 || c3 >= 97 && c3 <= 122 || c3 === 95;
+}
+function isBoundary(text2, at) {
+  const before = at > 0 && isWordChar(text2.charCodeAt(at - 1));
+  const after2 = at < text2.length && isWordChar(text2.charCodeAt(at));
+  return before !== after2;
+}
+function runEnds(text2, inClass) {
+  const ends = new Int32Array(text2.length + 1);
+  ends[text2.length] = text2.length;
+  for (let i2 = text2.length - 1; i2 >= 0; i2 -= 1) ends[i2] = inClass(text2.charCodeAt(i2)) ? ends[i2 + 1] ?? i2 : i2;
+  return (i2) => i2 >= text2.length ? text2.length : ends[i2] ?? i2;
+}
+function findJwt(text2, from) {
+  if (!text2.includes(".eyJ", from)) return null;
+  const end = runEnds(text2, isB64url);
+  let lastThird = -1;
+  let lastThirdEnd = -1;
+  for (let p = text2.indexOf("eyJ", from); p >= 0; p = text2.indexOf("eyJ", p + 1)) {
+    if (p > 0 && isWordChar(text2.charCodeAt(p - 1))) continue;
+    const e1 = end(p + 3);
+    const l1 = e1 - (p + 3);
+    if (l1 < 8 || l1 > 2e3 || !text2.startsWith(".eyJ", e1)) continue;
+    const q = e1 + 4;
+    const e2 = end(q);
+    const l2 = e2 - q;
+    if (l2 < 8 || l2 > 2e3 || text2.charCodeAt(e2) !== 46) continue;
+    const r = e2 + 1;
+    if (r !== lastThird) {
+      lastThird = r;
+      lastThirdEnd = -1;
+      const longest = Math.min(end(r) - r, 2e3);
+      for (let x = r + longest; x >= r + 8; x -= 1) {
+        if (isBoundary(text2, x)) {
+          lastThirdEnd = x;
+          break;
+        }
+      }
+    }
+    if (lastThirdEnd >= 0) return { index: p, text: text2.slice(p, lastThirdEnd) };
+  }
+  return null;
+}
+var ENV_KEY = /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*/gi;
+function isEnvValueChar(c3) {
+  return !(c3 === 32 || c3 >= 9 && c3 <= 13 || c3 === 160 || c3 === 5760 || c3 >= 8192 && c3 <= 8202 || c3 === 8232 || c3 === 8233 || c3 === 8239 || c3 === 8287 || c3 === 12288 || c3 === 65279 || c3 === 34 || c3 === 39 || c3 === 96 || c3 === 36 || c3 === 123 || c3 === 125 || c3 === 60 || c3 === 62 || c3 === 40 || c3 === 41);
+}
+function findEnvAssignment(text2, from) {
+  if (!text2.includes("=", from)) return null;
+  const end = runEnds(text2, isEnvValueChar);
+  const key = new RegExp(ENV_KEY.source, ENV_KEY.flags);
+  key.lastIndex = from;
+  for (let m = key.exec(text2); m !== null; m = key.exec(text2)) {
+    const v = m.index + m[0].length;
+    const e = end(v);
+    if (e - v >= 8 && (e === text2.length || /\s/.test(text2.charAt(e)))) {
+      return { index: m.index, text: text2.slice(m.index, e), value: text2.slice(v, e) };
+    }
+    key.lastIndex = m.index + 1;
+  }
+  return null;
+}
 var VALUE_CAPTURE_RULES = /* @__PURE__ */ new Set([
   "generic-assignment",
   "generic-assignment-camel",
@@ -75223,44 +75308,91 @@ function redact(secret) {
   const tail = trimmed.length >= 16 ? trimmed.slice(-2) : "";
   return `${head}\u2026${tail} (${trimmed.length})`;
 }
-var MAX_LINE_LENGTH = 16 * 1024;
+var WINDOW = 16 * 1024;
+var OVERLAP = 2 * 1024;
+function lineWindows(line, overlap = OVERLAP) {
+  if (line.length <= WINDOW) return [{ text: line, cutLeft: false, cutRight: false }];
+  const out = [];
+  for (let s = 0; ; s += WINDOW - overlap) {
+    const e = Math.min(line.length, s + WINDOW);
+    const from = Math.max(0, s - 1);
+    const to = Math.min(line.length, e + 1);
+    out.push({ text: line.slice(from, to), cutLeft: from > 0, cutRight: to < line.length });
+    if (e >= line.length) return out;
+  }
+}
+function firstMatch2(rule, re, w) {
+  let from = 0;
+  for (let tries = 0; tries < 2; tries += 1) {
+    let m;
+    if (rule.find !== void 0) m = rule.find(w.text, from);
+    else {
+      re.lastIndex = from;
+      const r = re.exec(w.text);
+      m = r === null ? null : { index: r.index, text: r[0], ...r[1] !== void 0 ? { value: r[1] } : {} };
+    }
+    if (m === null) return null;
+    if (w.cutRight && m.index + m.text.length >= w.text.length) return null;
+    if (w.cutLeft && m.index === 0) {
+      from = 1;
+      continue;
+    }
+    return m;
+  }
+  return null;
+}
 function scanForSecrets(text2, options = {}) {
   if (!text2) return [];
   const minRank = CONFIDENCE_RANK[options.minConfidence ?? "medium"];
   const allow = (options.allowlist ?? []).map((a2) => a2.toLowerCase()).filter(Boolean);
+  const rules2 = SECRET_RULES.filter((rule) => CONFIDENCE_RANK[rule.confidence] >= minRank).map((rule) => ({
+    rule,
+    re: new RegExp(rule.pattern.source, `${rule.pattern.flags.replace(/[gy]/g, "")}g`)
+  }));
+  const byOverlap = /* @__PURE__ */ new Map();
+  for (const r of rules2) {
+    const overlap = r.rule.overlap ?? OVERLAP;
+    byOverlap.set(overlap, [...byOverlap.get(overlap) ?? [], r]);
+  }
   const lines = text2.split(/\r?\n/);
   const hits = [];
-  const seen = /* @__PURE__ */ new Set();
   for (let i2 = 0; i2 < lines.length; i2++) {
     const rawLine = lines[i2];
     if (rawLine === void 0 || rawLine.length === 0) continue;
-    const line = rawLine.length > MAX_LINE_LENGTH ? rawLine.slice(0, MAX_LINE_LENGTH) : rawLine;
-    const lowerLine = line.toLowerCase();
-    if (allow.some((a2) => lowerLine.includes(a2))) continue;
-    for (const rule of SECRET_RULES) {
-      if (CONFIDENCE_RANK[rule.confidence] < minRank) continue;
-      const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace("g", ""));
-      const m = re.exec(line);
-      if (!m) continue;
-      if (VALUE_CAPTURE_RULES.has(rule.id)) {
-        const value = m[1] ?? "";
-        if (looksLikePlaceholder(value)) continue;
-        if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) continue;
+    const found = /* @__PURE__ */ new Map();
+    for (const [overlap, group] of byOverlap) {
+      for (const w of lineWindows(rawLine, overlap)) {
+        const lower = w.text.toLowerCase();
+        if (allow.some((a2) => lower.includes(a2))) continue;
+        for (const { rule, re } of group) {
+          if (found.has(rule)) continue;
+          const hit = judge3(rule, firstMatch2(rule, re, w), i2);
+          if (hit !== null) found.set(rule, hit);
+        }
       }
-      const dedupeKey = `${rule.id}:${i2}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
-      const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m[1] ?? m[0] : m[0];
-      hits.push({
-        ruleId: rule.id,
-        title: rule.title,
-        confidence: rule.confidence,
-        line: i2 + 1,
-        preview: redact(matched)
-      });
+    }
+    for (const { rule } of rules2) {
+      const hit = found.get(rule);
+      if (hit !== void 0) hits.push(hit);
     }
   }
   return hits;
+}
+function judge3(rule, m, i2) {
+  if (!m) return null;
+  if (VALUE_CAPTURE_RULES.has(rule.id)) {
+    const value = m.value ?? "";
+    if (looksLikePlaceholder(value)) return null;
+    if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) return null;
+  }
+  const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m.value ?? m.text : m.text;
+  return {
+    ruleId: rule.id,
+    title: rule.title,
+    confidence: rule.confidence,
+    line: i2 + 1,
+    preview: redact(matched)
+  };
 }
 
 // src/agentaudit/rules.ts
@@ -81379,8 +81511,10 @@ var BASH_RULES = [
     // this file, so scope:'command' (which sees the un-split text) is enough
     // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
     // where the whole thing sits inside quotes and is handled separately, by
-    // `isBareRemoteFetch` on the extracted `-c` script text.
-    pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+    // `isBareRemoteFetch` on the extracted `-c` script text. `source <(curl
+    // …)` and `. <(wget …)` run the download in the current shell — the same
+    // hazard (review I1); `.` counts only where a command starts.
+    pattern: /(?:\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s))[^\n]*<\(\s*(?:curl|wget)\b/im,
     scope: "command",
     test: processSubstitutionFetch
   },
@@ -81497,7 +81631,7 @@ function anyOf(...tests) {
 }
 function processSubstitutionFetch(text2) {
   for (const line of text2.split("\n")) {
-    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s)/i.exec(line);
     if (shell === null) continue;
     const shellEnd = shell.index + shell[0].length;
     for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
@@ -81506,6 +81640,68 @@ function processSubstitutionFetch(text2) {
   }
   return false;
 }
+var NODE_VALUED = /* @__PURE__ */ new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "-C",
+  "--conditions",
+  "--input-type",
+  "--env-file",
+  "--title",
+  "--cwd",
+  "--config",
+  "--preload"
+]);
+var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
+  ...NODE_VALUED,
+  "--max-old-space-size",
+  "--max-semi-space-size",
+  "--stack-size",
+  "--max-http-header-size",
+  "--inspect-port",
+  "--debug-port",
+  "--openssl-config",
+  "--icu-data-dir",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--diagnostic-dir",
+  "--heapsnapshot-signal",
+  "--heapsnapshot-near-heap-limit",
+  "--dns-result-order",
+  "--unhandled-rejections",
+  "--disable-warning",
+  "--watch-path",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-name-pattern",
+  "--test-concurrency",
+  "--experimental-policy",
+  "--policy-integrity",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--cpu-prof-dir",
+  "--cpu-prof-name",
+  "--cpu-prof-interval",
+  "--heap-prof-dir",
+  "--heap-prof-name",
+  "--heap-prof-interval",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--use-largepages",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--localstorage-file",
+  "--env-file-if-exists",
+  "--experimental-sea-config"
+]);
+var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
+var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var MAX_STATEMENT_LENGTH = 16 * 1024;
 var MAX_COMMAND_LENGTH = 512 * 1024;
 
@@ -82078,6 +82274,160 @@ var FLAGS = {
     registry: set("-s", "--source")
   }
 };
+var UV_VALUED = [
+  "--python",
+  "-p",
+  "--index",
+  "--index-url",
+  "--default-index",
+  "--extra-index-url",
+  "--find-links",
+  "-f",
+  "--index-strategy",
+  "--keyring-provider",
+  "--resolution",
+  "--prerelease",
+  "--exclude-newer",
+  "--link-mode",
+  "--directory",
+  "--project",
+  "--config-file",
+  "--cache-dir",
+  "--constraints",
+  "--overrides",
+  "--env-file",
+  "--with-requirements",
+  "--with-editable",
+  "--python-preference",
+  "--color"
+];
+var UV_BOOL = [
+  "--isolated",
+  "--offline",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "--no-cache",
+  "-n",
+  "--refresh",
+  "--reinstall",
+  "--upgrade",
+  "-U",
+  "--native-tls",
+  "--no-config",
+  "--no-progress",
+  "--no-python-downloads",
+  "--force",
+  "--no-index",
+  "--compile-bytecode"
+];
+var UV_REGISTRY = ["--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"];
+var LAUNCH_FLAGS = {
+  npx: {
+    value: set(
+      "--package",
+      "-p",
+      "--call",
+      "-c",
+      "--registry",
+      "--cache",
+      "--userconfig",
+      "--prefix",
+      "--workspace",
+      "-w",
+      "--loglevel",
+      "--node-options"
+    ),
+    bool: set(
+      "--yes",
+      "-y",
+      "--no",
+      "--no-install",
+      "--ignore-existing",
+      "--quiet",
+      "-q",
+      "--silent",
+      "--prefer-offline",
+      "--prefer-online",
+      "--offline",
+      "--workspaces",
+      "--include-workspace-root",
+      "--verbose"
+    ),
+    registry: set("--registry"),
+    workspace: set("--workspace", "-w", "--workspaces"),
+    packageFlags: set("--package", "-p"),
+    shellFlags: set("--call", "-c"),
+    noFetchFlags: set("--no", "--no-install", "--offline")
+  },
+  "pnpm-dlx": {
+    value: set("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
+    bool: set("--silent", "-s", "--shell-mode", "-c"),
+    registry: set("--registry"),
+    dir: set("--dir", "-C"),
+    packageFlags: set("--package"),
+    shellFlags: set("--shell-mode", "-c")
+  },
+  "yarn-dlx": {
+    value: set("--package", "-p"),
+    bool: set("--quiet", "-q"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  bunx: {
+    value: set("--package", "-p"),
+    bool: set("--bun", "--silent", "--verbose"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  uvx: {
+    value: set(...UV_VALUED, "--from", "--with", "-w"),
+    bool: set(...UV_BOOL),
+    registry: set(...UV_REGISTRY),
+    registryBool: set("--no-index"),
+    dir: set("--directory", "--project"),
+    packageFlags: set("--from"),
+    extraPackageFlags: set("--with", "-w")
+  },
+  "uv-tool-install": {
+    value: set(...UV_VALUED, "--with", "-w", "--editable", "-e"),
+    bool: set(...UV_BOOL),
+    registry: set(...UV_REGISTRY),
+    registryBool: set("--no-index"),
+    dir: set("--directory", "--project"),
+    extraPackageFlags: set("--with", "-w"),
+    reported: /* @__PURE__ */ new Map([
+      ["--editable", "editable install (-e) \u2014 local or VCS source, not looked up"],
+      ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"]
+    ])
+  },
+  "pipx-install": {
+    value: set("--index-url", "-i", "--suffix", "--python", "--preinstall", "--spec"),
+    bool: set(
+      "--force",
+      "-f",
+      "--include-deps",
+      "--editable",
+      "-e",
+      "--system-site-packages",
+      "--global",
+      "--quiet",
+      "-q",
+      "--verbose",
+      "-v",
+      "--fetch-missing-python"
+    ),
+    registry: set("--index-url", "-i"),
+    extraPackageFlags: set("--preinstall", "--spec")
+  },
+  "pipx-run": {
+    value: set("--spec", "--index-url", "-i", "--python", "--path"),
+    bool: set("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python"),
+    registry: set("--index-url", "-i"),
+    packageFlags: set("--spec")
+  }
+};
 var NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
 var ALLOW = {
   npm: {
@@ -82201,7 +82551,18 @@ var ALLOW = {
     ),
     value: set()
   },
-  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") }
+  dotnet: { bool: set("--prerelease"), value: set("-v", "--version", "-f", "--framework") },
+  // The launchers (review P1): consent and verbosity only. A package flag
+  // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
+  // out of the confident shape.
+  npx: { bool: set("-y", "--yes", "-q", "--quiet", "--silent"), value: set() },
+  "pnpm-dlx": { bool: set("--silent", "-s"), value: set() },
+  "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
+  bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
+  uvx: { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
+  "uv-tool-install": { bool: set("-q", "--quiet", "-v", "--verbose", "--force", "--upgrade", "-U"), value: set() },
+  "pipx-install": { bool: set("--force", "-f", "-q", "--quiet", "-v", "--verbose", "--include-deps"), value: set() },
+  "pipx-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--no-cache"), value: set() }
 };
 
 // src/pkgvet/popular.ts
@@ -82363,6 +82724,10 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 import { lstatSync as lstatSync8, readdirSync as readdirSync26 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname21, isAbsolute as isAbsolute16, join as join81, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
+function registryCache() {
+  return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
+}
+var MAX_WORKSPACE_DIRS = 3e3;
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -82403,8 +82768,20 @@ function takeUnread() {
   firstUnread = void 0;
   return unread;
 }
+var firstUnchecked;
+function takeUnchecked() {
+  const unchecked = firstUnchecked;
+  firstUnchecked = void 0;
+  return unchecked;
+}
 function read(path8, ctx, under, what = "configuration") {
-  const r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(path8, ctx, under));
+  const root = walkRoot2(path8, ctx, under);
+  const key = `${path8}\0${root ?? ""}`;
+  let r = ctx.cache?.reads.get(key);
+  if (r === void 0) {
+    r = readSmallText(path8, MAX_REGISTRY_CONFIG_BYTES, root);
+    ctx.cache?.reads.set(key, r);
+  }
   if (r.status === "refused") noteUnread(path8, what);
   return r.status === "ok" ? r.text : void 0;
 }
@@ -82611,18 +82988,32 @@ function npmRegistry(name, ctx) {
   return local === void 0 ? null : { kind: "workspace", source: local };
 }
 var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
-var MAX_SCAN_DIRS = 3e3;
+var MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS;
 var MAX_SCAN_DEPTH = 5;
-function findManifest(root, file, match, ctx) {
+function workspaceIndex(root, file, nameOf2, ctx) {
+  const key = `${file}\0${root}`;
+  const cached2 = ctx.cache?.workspaces.get(key);
+  if (cached2 !== void 0) return cached2;
+  const index = { names: /* @__PURE__ */ new Map() };
   const queue = [{ dir: root, depth: 0 }];
-  let visited = 0;
-  while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
-    const next = queue.shift();
+  for (let at = 0; at < queue.length; at += 1) {
+    if (at >= MAX_SCAN_DIRS) {
+      index.cut = "size";
+      break;
+    }
+    if (ctx.deadlineAt !== void 0 && Date.now() > ctx.deadlineAt) {
+      index.cut = "time";
+      break;
+    }
+    const next = queue[at];
     if (next === void 0) break;
-    visited += 1;
     const manifest = join81(next.dir, file);
-    const text2 = read(manifest, ctx, root, "workspace manifest");
-    if (text2 !== void 0 && match(text2)) return manifest;
+    const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(manifest, ctx, root));
+    if (r.status === "refused") index.unread = index.unread ?? { path: manifest, what: "workspace manifest" };
+    else if (r.status === "ok") {
+      const name = nameOf2(r.text);
+      if (name !== void 0 && !index.names.has(name)) index.names.set(name, manifest);
+    }
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
@@ -82632,7 +83023,29 @@ function findManifest(root, file, match, ctx) {
     }
     for (const e of entries2) queue.push({ dir: join81(next.dir, e), depth: next.depth + 1 });
   }
+  ctx.cache?.workspaces.set(key, index);
+  return index;
+}
+function findManifest(root, file, nameOf2, wanted, ctx) {
+  const index = workspaceIndex(root, file, nameOf2, ctx);
+  const hit = index.names.get(wanted);
+  if (hit !== void 0) return hit;
+  if (index.unread !== void 0) noteUnread(index.unread.path, index.unread.what);
+  if (index.cut !== void 0) firstUnchecked = firstUnchecked ?? { root, cut: index.cut };
   return void 0;
+}
+function npmManifestName(text2) {
+  try {
+    const name = JSON.parse(text2).name;
+    return typeof name === "string" ? name : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function pyprojectName(text2) {
+  const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
+  const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
+  return n2 === void 0 ? void 0 : pep503(n2);
 }
 function hasWorkspaces(packageJson) {
   if (packageJson === void 0) return false;
@@ -82648,13 +83061,7 @@ function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
     const isRoot = hasWorkspaces(read(join81(dir, "package.json"), ctx, void 0, "workspace manifest")) || present(join81(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
-    const hit = findManifest(dir, "package.json", (text2) => {
-      try {
-        return JSON.parse(text2).name === name;
-      } catch {
-        return false;
-      }
-    }, ctx);
+    const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -82671,11 +83078,7 @@ function uvWorkspacePackage(name, ctx) {
       if (pep503(m[1] ?? "") === wanted) return path8;
     }
     if (!/^\s*\[tool\.uv\.workspace\]/m.test(text2)) continue;
-    const hit = findManifest(dir, "pyproject.toml", (t) => {
-      const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? "";
-      const n2 = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
-      return n2 !== void 0 && pep503(n2) === wanted;
-    }, ctx);
+    const hit = findManifest(dir, "pyproject.toml", pyprojectName, wanted, ctx);
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -82870,6 +83273,7 @@ function nugetRegistry(name, ctx) {
 }
 function customRegistryFor(ecosystem, name, ctx = {}) {
   firstUnread = void 0;
+  firstUnchecked = void 0;
   let found;
   try {
     switch (ecosystem) {
@@ -82892,7 +83296,10 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
     found = null;
   }
   const unread = takeUnread();
-  return found === null && unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : found;
+  const unchecked = takeUnchecked();
+  if (found !== null) return found;
+  if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
+  return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
 
 // src/pkgvet/registry.ts
@@ -83378,6 +83785,7 @@ var REGISTRY_NAME = {
   packagist: "Packagist",
   nuget: "nuget.org"
 };
+var TIME_BUDGET = "vetting time budget exhausted";
 function popularIndexFor(ecosystem, opts) {
   const override = opts.popular?.[ecosystem];
   if (override === null) return null;
@@ -83493,14 +83901,15 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup.reason}`);
   } else if (lookup.kind === "not_found") {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
-    if (w.custom !== null) {
-      const where = `${w.custom.source}${w.custom.url !== void 0 ? `: ${w.custom.url}` : ""}`;
-      const why = w.custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : w.custom.kind === "workspace" ? `it is a local workspace package (${where})` : w.custom.kind === "unreadable" ? w.custom.what === "workspace manifest" ? `workspace manifest at ${w.custom.source} could not be read \u2014 possibly a local workspace package` : w.custom.what === "directory" ? `directory ${w.custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${w.custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
+    const custom3 = w.custom ?? null;
+    if (custom3 !== null) {
+      const where = `${custom3.source}${custom3.url !== void 0 ? `: ${custom3.url}` : ""}`;
+      const why = custom3.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom3.kind === "workspace" ? `it is a local workspace package (${where})` : custom3.kind === "unchecked" ? custom3.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom3.source} has more than ${MAX_WORKSPACE_DIRS} directories and was not read to its end \u2014 it may hold the package` : custom3.kind === "unreadable" ? custom3.what === "workspace manifest" ? `workspace manifest at ${custom3.source} could not be read \u2014 possibly a local workspace package` : custom3.what === "directory" ? `directory ${custom3.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom3.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? w.custom !== null && w.custom.kind !== "unreadable" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
+    malicious = malIds.length > 0 ? custom3 !== null && custom3.kind !== "unreadable" && custom3.kind !== "unchecked" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail3(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -83572,6 +83981,12 @@ function buildResult(w, osv, osvError, now, offlineReason) {
 async function vetPackages(specs, opts = {}) {
   const now = opts.now ?? Date.now();
   const offline = opts.offline ?? process.env["GUARDIAN_OFFLINE"] === "1";
+  const registry2 = {
+    ...opts.registry ?? {},
+    cache: opts.registry?.cache ?? registryCache(),
+    deadlineAt: opts.deadlineAt ?? opts.registry?.deadlineAt
+  };
+  const withCache = { ...opts, registry: registry2 };
   const indexes = /* @__PURE__ */ new Map();
   const work = specs.map((spec) => {
     if (!indexes.has(spec.ecosystem)) indexes.set(spec.ecosystem, popularIndexFor(spec.ecosystem, opts));
@@ -83579,8 +83994,7 @@ async function vetPackages(specs, opts = {}) {
     return {
       spec,
       typo: index === null ? null : findTyposquatTarget(index, spec.name),
-      popularLoaded: index !== null,
-      custom: customFor(spec, opts)
+      popularLoaded: index !== null
     };
   });
   if (offline) {
@@ -83590,19 +84004,31 @@ async function vetPackages(specs, opts = {}) {
   if (fetchImpl === void 0) {
     return work.map((w) => buildResult(w, void 0, void 0, now, "no fetch implementation available"));
   }
-  const budgetMs = opts.budgetMs ?? TOOL_BUDGET_MS;
+  const left = opts.deadlineAt === void 0 ? Number.POSITIVE_INFINITY : opts.deadlineAt - Date.now();
+  if (left <= 0) return work.map((w) => buildResult(w, void 0, void 0, now, TIME_BUDGET));
+  const budgetMs = Math.max(1, Math.min(opts.budgetMs ?? TOOL_BUDGET_MS, left));
   const deadline = Date.now() + budgetMs;
   const budget = new AbortController();
   const timer = setTimeout(() => budget.abort(new Error("network budget exhausted")), budgetMs);
   const signal = opts.signal === void 0 ? budget.signal : AbortSignal.any([opts.signal, budget.signal]);
   const http = { fetchImpl, signal };
   try {
-    return await networkRounds(work, http, signal, deadline, now);
+    return await networkRounds(work, http, signal, deadline, now, (w) => explain404(w, withCache));
   } finally {
     clearTimeout(timer);
   }
 }
-async function networkRounds(work, http, signal, deadline, now) {
+function explain404(w, opts) {
+  if (w.custom !== void 0) return;
+  const deadlineAt = opts.registry?.deadlineAt;
+  if (deadlineAt !== void 0 && Date.now() > deadlineAt) {
+    const onCommandLine = (opts.commandRegistries ?? []).find((u2) => !isPublicRegistryUrl(w.spec.ecosystem, u2));
+    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
+    return;
+  }
+  w.custom = customFor(w.spec, opts);
+}
+async function networkRounds(work, http, signal, deadline, now, explain) {
   const fetchImpl = http.fetchImpl;
   const lookups = /* @__PURE__ */ new Map();
   const pending = work.map((w) => {
@@ -83627,6 +84053,7 @@ async function networkRounds(work, http, signal, deadline, now) {
   });
   if (signal.aborted) {
     const why = "network budget exhausted before OSV was consulted";
+    for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
     return work.map((w) => buildResult(w, void 0, why, now, void 0));
   }
   let osvError;
@@ -83653,6 +84080,7 @@ async function networkRounds(work, http, signal, deadline, now) {
   if (signal.aborted && osv.online === false && osvError === void 0) {
     osvError = "network budget exhausted before OSV answered";
   }
+  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
   return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
 }
 function worstVerdict(results) {

@@ -120,6 +120,7 @@ import { detectOs } from '../mcp/dist/platform/osDetect.js';
 import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
+import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
 
 // `storage/*` and `dashboard/*` are NOT statically imported here (contrast
 // the five imports directly above, which are pure — no `node:sqlite`
@@ -227,15 +228,18 @@ mcp-config — wire the MCP server into an AI host
               2 usage error (e.g. --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
-  --file <path>        Scan a file for hard-coded secrets
+  --file <path>        Scan a file for hard-coded secrets (UTF-8, or UTF-16
+                        by byte-order mark or NUL-interleaving)
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
   --powershell         With --bash: also read it with PowerShell's quoting, as
                         the hook does for the PowerShell tool
-  --min high|medium    Minimum secret confidence to report (default: medium)
+  --min high|medium    With --file: minimum secret confidence (default: medium)
   --json               Machine-readable output
+  One of --file and --bash, never both.
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
-             2 = usage error (no --file/--bash given) or the --file path does
-             not exist / could not be read
+             2 = usage error (neither or both of --file/--bash, an unknown
+             argument, a bad --min) or the --file path does not exist /
+             could not be read
 
 scan — headless CI: run the scan pipeline, gate against the baseline, report
   --project <path>      Target project directory (default: current directory)
@@ -246,10 +250,16 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
-  --local-only          Semgrep runs only the rules on disk (the project's
-                         .semgrep.yml and registered custom rules) with
-                         --metrics=off: no registry download, no telemetry.
-                         Fewer rules than the default registry ruleset.
+  --local-only          Keeps Semgrep local: only rules on disk — the
+                         project's .semgrep.yml and registered custom rules,
+                         plus the plugin's own packs (the LLM-application
+                         pack still runs) — with --metrics=off and no
+                         registry download. Fewer rules than the default
+                         registry ruleset. It is NOT "nothing leaves the
+                         machine": Trivy still fetches its vulnerability
+                         database, a .NET project is still restored from its
+                         NuGet feeds, and Semgrep still checks for a newer
+                         version (SECURITY.md, network egress).
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
@@ -531,21 +541,44 @@ function cmdMcpConfig(argv) {
   }
 }
 
+/**
+ * `check`'s arguments, or `{ error }` — a usage error, exit 2 (review of
+ * 3.0.0, M3). Every argument is accounted for: `--file` together with
+ * `--bash` used to print the command's verdict and ignore the file (`check
+ * --file short.js --bash ls` read "OK", exit 0), `--min bogus` quietly became
+ * `medium`, and an unknown flag (`--jsn`) or a stray word was accepted.
+ */
 function parseCheckArgs(argv) {
-  const out = { file: undefined, bash: undefined, min: 'medium', json: false, powershell: false };
+  const out = { file: undefined, bash: undefined, min: undefined, json: false, powershell: false };
+  const valued = { '--file': 'file', '--bash': 'bash', '--min': 'min' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--file') out.file = argv[++i];
-    else if (a.startsWith('--file=')) out.file = a.slice('--file='.length);
-    else if (a === '--bash') out.bash = argv[++i];
-    else if (a.startsWith('--bash=')) out.bash = a.slice('--bash='.length);
-    else if (a === '--min') out.min = argv[++i];
-    else if (a.startsWith('--min=')) out.min = a.slice('--min='.length);
-    else if (a === '--json') out.json = true;
+    const eq = a.indexOf('=');
+    const flag = a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
+    const key = valued[flag];
+    if (key !== undefined) {
+      let value;
+      if (flag !== a) value = a.slice(eq + 1);
+      else {
+        value = argv[i + 1];
+        i += 1;
+      }
+      if (value === undefined) return { error: `${flag} needs a value` };
+      if (out[key] !== undefined) return { error: `${flag} was given twice` };
+      out[key] = value;
+    } else if (a === '--json') out.json = true;
     else if (a === '--powershell') out.powershell = true;
+    else return { error: `unknown argument: ${a}` };
   }
-  if (out.min !== 'high' && out.min !== 'medium') out.min = 'medium';
-  return out;
+  if (out.file !== undefined && out.bash !== undefined) {
+    return { error: '--file and --bash cannot be combined — run check once for each' };
+  }
+  if (out.min !== undefined && out.min !== 'high' && out.min !== 'medium') {
+    return { error: `--min must be high or medium (got '${out.min}')` };
+  }
+  if (out.min !== undefined && out.bash !== undefined) return { error: '--min applies to --file only' };
+  if (out.powershell && out.file !== undefined) return { error: '--powershell applies to --bash only' };
+  return { value: { ...out, min: out.min ?? 'medium' } };
 }
 
 function loadAllowlist(projectDir) {
@@ -562,7 +595,13 @@ function loadAllowlist(projectDir) {
 }
 
 function cmdCheck(argv) {
-  const opts = parseCheckArgs(argv);
+  const parsed = parseCheckArgs(argv);
+  if (parsed.error !== undefined) {
+    process.stderr.write(`check: ${parsed.error}\n\n`);
+    usage();
+    process.exit(2);
+  }
+  const opts = parsed.value;
 
   if (opts.bash != null) {
     const a = assessBashCommand(opts.bash, { shell: opts.powershell ? 'powershell' : 'bash' });
@@ -584,7 +623,10 @@ function cmdCheck(argv) {
     }
     let text = '';
     try {
-      text = readFileSync(filePath, 'utf8');
+      // UTF-16 by byte-order mark or NUL-interleaving (PowerShell 5.1's `>`
+      // and `Out-File` default), else UTF-8: read as UTF-8, a UTF-16 file
+      // put a NUL between every character and hid every key (review M3).
+      text = decodeText(readFileSync(filePath));
     } catch (e) {
       process.stderr.write(`Cannot read ${filePath}: ${e instanceof Error ? e.message : String(e)}\n`);
       process.exit(2);

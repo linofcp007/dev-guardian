@@ -27,6 +27,30 @@ describe('isClaudeSettingsPath', () => {
   ] as const)('%s -> %s', (path, expected) => {
     expect(isClaudeSettingsPath(path)).toBe(expected);
   });
+
+  // Review round 2, ruling 3: Claude Code reads its user settings from
+  // `$CLAUDE_CONFIG_DIR` when that is set — `~/.claude-conta2/settings.json` on
+  // the machine this was found on — and nothing guarded them there.
+  describe('under CLAUDE_CONFIG_DIR', () => {
+    const win = process.platform === 'win32';
+    const dir = win ? 'C:\\Users\\me\\.claude-conta2' : '/home/me/.claude-conta2';
+    const sep = win ? '\\' : '/';
+    it.each([
+      [`${dir}${sep}settings.json`, true],
+      [`${dir}${sep}settings.local.json`, true],
+      [`${dir}${sep}`.replace(/[\\/]$/, '/settings.json'), true],
+      [`${dir}${sep}other.json`, false],
+      [`${dir}${sep}sub${sep}settings.json`, false],
+      [`${dir}-other${sep}settings.json`, false],
+    ] as const)('%s -> %s', (path, expected) => {
+      expect(isClaudeSettingsPath(path, dir)).toBe(expected);
+      expect(isClaudeSettingsPath(path)).toBe(false);
+    });
+
+    it.runIf(win)('case-insensitively on Windows', () => {
+      expect(isClaudeSettingsPath('c:\\users\\ME\\.Claude-Conta2\\Settings.JSON', dir)).toBe(true);
+    });
+  });
 });
 
 describe('hookLooseningSettings', () => {

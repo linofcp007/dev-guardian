@@ -96,6 +96,8 @@
  *
  * Pure functions. No I/O. No dependencies.
  */
+import { homedir } from 'node:os';
+import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 /**
  * The pattern-matched rules.
@@ -169,8 +171,10 @@ export const BASH_RULES = [
         // this file, so scope:'command' (which sees the un-split text) is enough
         // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
         // where the whole thing sits inside quotes and is handled separately, by
-        // `isBareRemoteFetch` on the extracted `-c` script text.
-        pattern: /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b[^\n]*<\(\s*(?:curl|wget)\b/i,
+        // `isBareRemoteFetch` on the extracted `-c` script text. `source <(curl
+        // …)` and `. <(wget …)` run the download in the current shell — the same
+        // hazard (review I1); `.` counts only where a command starts.
+        pattern: /(?:\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s))[^\n]*<\(\s*(?:curl|wget)\b/im,
         scope: 'command',
         test: processSubstitutionFetch,
     },
@@ -292,7 +296,7 @@ function anyOf(...tests) {
  */
 function processSubstitutionFetch(text) {
     for (const line of text.split('\n')) {
-        const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh)\b/i.exec(line);
+        const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s)/i.exec(line);
         if (shell === null)
             continue;
         const shellEnd = shell.index + shell[0].length;
@@ -555,12 +559,14 @@ export function splitShell(command) {
         words = [];
         dashTail = true;
     };
-    const endStatement = () => {
+    const endStatement = (end) => {
         endCommand();
         const text = masked.trim();
         if (text.length > 0 || commands.length > 0) {
             currentStatement.masked = text;
             currentStatement.commands = commands;
+            if (end !== undefined)
+                currentStatement.end = end;
             statements.push(currentStatement);
         }
         masked = '';
@@ -623,7 +629,7 @@ export function splitShell(command) {
             continue;
         }
         if (ch === '\n') {
-            endStatement();
+            endStatement('\n');
             maskedCommand += '\n';
             // skipHeredocBodies attaches each body directly, via the statement
             // reference each PendingHeredoc recorded when its `<<` was parsed —
@@ -635,7 +641,7 @@ export function splitShell(command) {
             continue;
         }
         if (ch === ';') {
-            endStatement();
+            endStatement(';');
             maskedCommand += ';';
             i += 1;
             continue;
@@ -645,7 +651,7 @@ export function splitShell(command) {
         // POSIX shell reads it as part of a word; ending the statement there only
         // ever assesses more. Pending heredocs keep waiting for the real newline.
         if (ch === '\r' && command.charAt(i + 1) !== '\n') {
-            endStatement();
+            endStatement('\n');
             maskedCommand += '\n';
             i += 1;
             continue;
@@ -666,7 +672,7 @@ export function splitShell(command) {
                 closedWord = inBacktick;
                 inBacktick = !inBacktick;
             }
-            endStatement();
+            endStatement(ch === '(' ? '(' : ch === ')' ? ')' : '`');
             maskedCommand += ch;
             i += 1;
             continue;
@@ -674,7 +680,7 @@ export function splitShell(command) {
         if (ch === '&') {
             const next = command.charAt(i + 1);
             if (next === '&') {
-                endStatement();
+                endStatement('&&');
                 maskedCommand += '&&';
                 i += 2;
                 continue;
@@ -685,7 +691,7 @@ export function splitShell(command) {
                 i += 1;
                 continue;
             }
-            endStatement();
+            endStatement('&');
             maskedCommand += '&';
             i += 1;
             continue;
@@ -699,7 +705,7 @@ export function splitShell(command) {
             }
             const next = command.charAt(i + 1);
             if (next === '|') {
-                endStatement();
+                endStatement('||');
                 maskedCommand += '||';
                 i += 2;
                 continue;
@@ -763,15 +769,57 @@ const RUNNERS = new Set([
     // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
     'start',
 ]);
-/** Runner flags that consume the next word, so it is not the command. */
-const FLAG_TAKES_VALUE = new Set(['-u', '-g', '-n', '-C', '-k', '-s', '-I', '-i', '--user', '--group']);
+/**
+ * Each runner's own options that consume a value — short letters (also at the
+ * end of a cluster: `-Eu root`) and long names (`--user root`, `--user=root`).
+ * Per runner, never one table for all: a shared set made `-n`, `-i`, `-s` and
+ * `-k` take a value, which they do for `nice`, `xargs` or `timeout` but not
+ * for `sudo` or `env` — so `sudo -n rm -rf /` read `rm` as the value of `-n`
+ * and only warned as sudo, and `env -i rm -rf /` was ok (review I1). Options
+ * whose value is optional and attached (`xargs -i[R]`, `-e[EOF]`) take none.
+ */
+const RUNNER_VALUED = {
+    sudo: {
+        short: 'CDgpRrTtUu',
+        long: new Set(['user', 'group', 'host', 'prompt', 'close-from', 'chdir', 'chroot', 'role', 'type', 'other-user', 'command-timeout']),
+    },
+    doas: { short: 'uC', long: new Set() },
+    env: { short: 'uCSa', long: new Set(['unset', 'chdir', 'split-string', 'argv0']) },
+    exec: { short: 'a', long: new Set() },
+    nice: { short: 'n', long: new Set(['adjustment']) },
+    time: { short: 'fo', long: new Set(['format', 'output']) },
+    timeout: { short: 'sk', long: new Set(['signal', 'kill-after']) },
+    stdbuf: { short: 'ioe', long: new Set(['input', 'output', 'error']) },
+    xargs: {
+        short: 'adEILnPs',
+        long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
+    },
+    watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
+};
+/** How many words a runner's option takes: 1 for a switch or an attached value, 2 when the value is the next word. */
+function runnerOptionWords(runner, option) {
+    const valued = RUNNER_VALUED[runner];
+    if (valued === undefined)
+        return 1;
+    if (option.startsWith('--')) {
+        return !option.includes('=') && valued.long.has(option.slice(2)) ? 2 : 1;
+    }
+    // A short cluster: the first letter that takes a value takes the rest of the
+    // cluster, or — when it is the last letter — the next word.
+    for (let k = 1; k < option.length; k += 1) {
+        if (valued.short.includes(option.charAt(k)))
+            return k === option.length - 1 ? 2 : 1;
+    }
+    return 1;
+}
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /**
  * Walks past `VAR=x` assignments and runner prefixes (`sudo`, `env`, `xargs`,
  * `timeout 30`, …) to the index of the word that actually names the command,
- * reporting on the way whether privilege was elevated.
+ * reporting on the way whether privilege was elevated. `through`, when given,
+ * limits the runners walked past to those named (the rest end the walk).
  */
-function resolveCommand(words) {
+function resolveCommand(words, through) {
     let i = 0;
     let elevated = false;
     // No hop cap: every pass consumes at least one word, so this is linear —
@@ -792,7 +840,7 @@ function resolveCommand(words) {
             continue;
         }
         const name = basename(word.value);
-        if (!RUNNERS.has(name))
+        if (!RUNNERS.has(name) || (through !== undefined && !through.has(name)))
             break;
         if (name === 'sudo' || name === 'doas')
             elevated = true;
@@ -823,8 +871,17 @@ function resolveCommand(words) {
                 i += 1;
                 continue;
             }
+            if (arg.value === '--') {
+                i += 1;
+                break;
+            }
             if (arg.value.startsWith('-') && arg.value.length > 1) {
-                i += FLAG_TAKES_VALUE.has(arg.value) ? 2 : 1;
+                i += runnerOptionWords(name, arg.value);
+                continue;
+            }
+            // `env -` is `env -i`.
+            if (name === 'env' && arg.value === '-') {
+                i += 1;
                 continue;
             }
             if ((name === 'timeout' || name === 'watch') && /^\d+(?:\.\d+)?[smhd]?$/.test(arg.value)) {
@@ -835,6 +892,15 @@ function resolveCommand(words) {
         }
     }
     return { index: i, elevated };
+}
+/**
+ * The index of the word that names the command, past `VAR=x` and runner
+ * prefixes read with their own options (`sudo -n`, `env -i`, `timeout 30`,
+ * …) — for the install parser, which must find the same command the shell
+ * guard does.
+ */
+export function commandWordIndex(words) {
+    return resolveCommand(words).index;
 }
 function stripQuotes(token) {
     // Loops, not `/['"`]+$/`: that regex restarts at every quote of a long run.
@@ -859,10 +925,21 @@ function isCatastrophicTarget(raw) {
     const t = stripQuotes(raw);
     if (t === '/' || /^\/\*+$/.test(t))
         return true; // root, or everything under root
-    if (t === '~' || t === '~/' || t === '~/*')
-        return true; // home root, incl. everything under it
-    if (/^\$\{?HOME\}?(?:\/\*?)?$/.test(t))
-        return true; // $HOME, $HOME/, $HOME/*, ${HOME}, …
+    // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
+    // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
+    if (/^\\\*?$/.test(t))
+        return true;
+    // Home, and everything under it — with either separator, since PowerShell
+    // and Git Bash take both (review I2: `Remove-Item ~\* -Recurse -Force` and
+    // `$HOME\*` only warned). PowerShell's `$HOME` is `$home` too.
+    if (/^~(?:[\\/]\*?)?$/.test(t))
+        return true;
+    if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t))
+        return true; // $HOME, $HOME/, $HOME\*, ${HOME}, …
+    // Git Bash sees the Windows environment: `$USERPROFILE`, `$HOMEDRIVE$HOMEPATH`.
+    if (/^(?:\$\{?USERPROFILE\}?|\$\{?HOMEDRIVE\}?\$\{?HOMEPATH\}?|\$\{?env:HOMEDRIVE\}?\$\{?env:HOMEPATH\}?)(?:[\\/]\*?)?$/i.test(t)) {
+        return true;
+    }
     // Git Bash / WSL drive-root spellings: /c, /c/, /c/*, /mnt/c, /mnt/c/*.
     if (/^\/[a-z](?:\/\*?)?$/i.test(t))
         return true;
@@ -876,7 +953,7 @@ function isCatastrophicTarget(raw) {
     // directories named outright (fix round 2: `rmdir /s /q %USERPROFILE%`).
     // The POSIX tokenizer drops an unquoted `\`, so `C:\Windows` may arrive
     // as `C:Windows`.
-    if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
+    if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
         return true;
     }
     if (/^[A-Za-z]:[\\/]?(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]\*?)?$/i.test(t))
@@ -887,6 +964,34 @@ function isCatastrophicTarget(raw) {
         return true;
     }
     return false;
+}
+/**
+ * A delete target as a comparable path: quotes and a trailing `/`, `\`, `/*`
+ * or `\*` gone, `\` read as `/`, and — where paths fold case (Windows) — Git
+ * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased.
+ */
+function targetKey(raw, fold) {
+    const t = stripQuotes(raw.trim())
+        .replace(/\\/g, '/')
+        .replace(/\/{2,}/g, '/')
+        .replace(/\/+\*?$/, '');
+    return fold ? t.replace(/^(?:\/mnt)?\/([a-z])(?=\/|$)/i, '$1:').toLowerCase() : t;
+}
+/** `home` for {@link isHomeTarget}; none for an empty home or one that is a root. */
+function homeDirFor(home, platform) {
+    if (home === undefined)
+        return undefined;
+    const fold = platform === 'win32';
+    const key = targetKey(home, fold);
+    return key === '' || /^[a-z]:$/i.test(key) ? undefined : { key, fold };
+}
+/**
+ * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
+ * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
+ * Windows (review I2). A path below it is not the home directory.
+ */
+function isHomeTarget(raw, home) {
+    return home !== undefined && targetKey(raw, home.fold) === home.key;
 }
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
 const PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
@@ -903,7 +1008,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words, start) {
+function assessRecursiveDelete(words, start, home) {
     const head = words[start];
     if (head === undefined)
         return null;
@@ -982,7 +1087,7 @@ function assessRecursiveDelete(words, start) {
     }
     if (!((recursive && force) || noPreserve))
         return null;
-    if (noPreserve || targets.some(isCatastrophicTarget)) {
+    if (noPreserve || targets.some((t) => isCatastrophicTarget(t) || isHomeTarget(t, home))) {
         return {
             id: 'rm-rf-root',
             level: 'block',
@@ -1068,6 +1173,31 @@ function isHookConfigDir(arg) {
 const USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 /** Claude Code's own settings, project or user level; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
+/** The same files through Claude Code's `CLAUDE_CONFIG_DIR`, spelled as a variable (bash, cmd, PowerShell). */
+const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
+/**
+ * Whether a path names Claude Code's settings (review round 2, ruling 3): under
+ * `.claude`, through the `CLAUDE_CONFIG_DIR` variable, or — when that is set
+ * (`scope.configDirName`, its last segment) — directly under a directory of that
+ * name, separators optional as in `HOOK_CONFIG_PATH` (`~/.claude-conta2/settings.json`).
+ */
+function isSettingsPath(path, configDirName) {
+    if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path))
+        return true;
+    if (configDirName === undefined)
+        return false;
+    const lower = path.toLowerCase();
+    for (const file of ['settings.json', 'settings.local.json']) {
+        if (lower.endsWith(`${configDirName}/${file}`) || lower.endsWith(`${configDirName}${file}`))
+            return true;
+    }
+    return false;
+}
+/** The last segment of `CLAUDE_CONFIG_DIR`, lower-cased, as {@link isSettingsPath} matches it; none when unset. */
+function configDirNameOf(dir) {
+    const last = (dir ?? '').trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+    return last === '' ? undefined : last.toLowerCase();
+}
 /**
  * A key of Claude Code's settings that switches dev-guardian's hooks off:
  * `disableAllHooks`, the dispatcher's own environment switches, and
@@ -1203,7 +1333,7 @@ function wildcardMatch(pattern, name) {
     return pi === pat.length;
 }
 function noEffects() {
-    return { writes: [], removes: [], dirs: [], special: [], links: [] };
+    return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
 }
 /**
  * `into.push(...from)` without the spread: a spread passes every element as an
@@ -1221,6 +1351,7 @@ function mergeEffects(into, from) {
     pushAll(into.dirs, from.dirs);
     pushAll(into.special, from.special);
     pushAll(into.links, from.links);
+    pushAll(into.hardLinkSources, from.hardLinkSources);
 }
 /** `a/b/c` → `c`, for either separator. */
 function lastSegment(path) {
@@ -1271,8 +1402,33 @@ function lnDestinations(args) {
     return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
 /** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
+/** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
+function lnHardSources(args) {
+    if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a)))
+        return [];
+    let dir = false;
+    const rest = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i] ?? '';
+        if (/^--target-directory=/.test(a))
+            dir = true;
+        else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
+            dir = true;
+            i += 1;
+        }
+        else if (/^-t./.test(a))
+            dir = true;
+        else if (a === '-S' || a === '--suffix')
+            i += 1;
+        else
+            rest.push(a);
+    }
+    const names = operands(rest, new Set());
+    return dir || names.length < 2 ? names : names.slice(0, -1);
+}
 function newItemArgs(args) {
     let itemType = '';
+    let target;
     const paths = [];
     const positional = [];
     for (let i = 0; i < args.length; i++) {
@@ -1292,10 +1448,12 @@ function newItemArgs(args) {
             itemType = value;
         else if (name === 'path' || name === 'literalpath' || name === 'name')
             paths.push(value);
+        else if (name === 'target' || name === 'value')
+            target = value;
     }
     if (paths.length === 0 && positional.length > 0)
         paths.push(positional[0] ?? '');
-    return { itemType, paths };
+    return target === undefined ? { itemType, paths } : { itemType, paths, target };
 }
 /** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
 function mklinkDestinations(args) {
@@ -1812,15 +1970,35 @@ function effectsOf(name, args, cwd, depth = 0) {
             return e;
         case 'ln':
             pushAll(e.links, lnDestinations(args).map(at));
+            pushAll(e.hardLinkSources, lnHardSources(args).map(at));
             return e;
-        case 'mklink':
+        case 'link':
+            pushAll(e.hardLinkSources, operands(args, new Set()).slice(0, 1).map(at));
+            return e;
+        case 'fsutil':
+            // `fsutil hardlink create <new> <existing>`
+            if (/^hardlink$/i.test(args[0] ?? '') && /^create$/i.test(args[1] ?? '')) {
+                if (args[2] !== undefined)
+                    e.links.push(at(args[2]));
+                if (args[3] !== undefined)
+                    e.hardLinkSources.push(at(args[3]));
+            }
+            return e;
+        case 'mklink': {
             pushAll(e.links, mklinkDestinations(args).map(at));
+            // `mklink /H <link> <target>`: a hard link to the target.
+            const names = args.filter((a) => !a.startsWith('/'));
+            if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== undefined)
+                e.hardLinkSources.push(at(names[1]));
             return e;
+        }
         case 'new-item':
         case 'ni': {
             const item = newItemArgs(args);
             if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType))
                 pushAll(e.links, item.paths.map(at));
+            if (/^hardlink$/i.test(item.itemType) && item.target !== undefined)
+                e.hardLinkSources.push(at(item.target));
             else if (item.itemType === '' || /^file$/i.test(item.itemType))
                 pushAll(e.writes, item.paths.map(at));
             return e;
@@ -1838,6 +2016,9 @@ function effectsOf(name, args, cwd, depth = 0) {
             const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
             if (moves)
                 pushAll(e.removes, t.sources.map(at));
+            // `cp -l` / `--link` hard-links instead of copying.
+            if (name === 'cp' && args.some((a) => a === '--link' || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a)))
+                pushAll(e.hardLinkSources, t.sources.map(at));
             if (t.dest === undefined)
                 return e;
             const dest = t.dest;
@@ -2110,17 +2291,118 @@ function inlineCode(words, start) {
 }
 /**
  * True when `words` runs an interpreter that reads its program from stdin —
- * the interpreter and, at most, flags (or `-`); no `-c`/`-e` text, no module,
- * no script file. What `python - <<EOF … EOF` and `echo '…' | node` hand it is
- * its program.
+ * no `-c`/`-e` text, no module, no script file, whatever options come first
+ * ({@link interpreterProgram}). What `python - <<EOF … EOF` and `echo '…' |
+ * node` hand it is its program.
  */
 function isBareInterpreterStdin(words) {
-    const name = commandName(words[0]?.value ?? '');
-    if (!isInterpreter(name) || name === 'pwsh' || name === 'powershell' || name === 'deno')
-        return false;
-    if (!words.slice(1).every((w) => w.value.startsWith('-')))
-        return false;
-    return inlineCode(words, 0).length === 0 && !words.some((w) => /^-[A-Za-z]*m$/.test(w.value));
+    const program = interpreterProgram(withoutRedirectWords(words), 0);
+    return program.kind === 'dash' || (program.kind === 'none' && program.readsStdin);
+}
+/** Node's own options that take the next word as their value (besides `--opt=value`). */
+const NODE_OPTION_VALUED = new Set([
+    ...NODE_VALUED,
+    '--max-old-space-size', '--max-semi-space-size', '--stack-size', '--max-http-header-size', '--inspect-port',
+    '--debug-port', '--openssl-config', '--icu-data-dir', '--redirect-warnings', '--report-dir', '--report-directory',
+    '--report-filename', '--report-signal', '--diagnostic-dir', '--heapsnapshot-signal', '--heapsnapshot-near-heap-limit',
+    '--dns-result-order', '--unhandled-rejections', '--disable-warning', '--watch-path', '--test-reporter',
+    '--test-reporter-destination', '--test-name-pattern', '--test-concurrency', '--experimental-policy',
+    '--policy-integrity', '--secure-heap', '--secure-heap-min', '--cpu-prof-dir', '--cpu-prof-name', '--cpu-prof-interval',
+    '--heap-prof-dir', '--heap-prof-name', '--heap-prof-interval', '--trace-event-categories',
+    '--trace-event-file-pattern', '--use-largepages', '--tls-cipher-list', '--tls-keylog', '--localstorage-file',
+    '--env-file-if-exists', '--experimental-sea-config',
+]);
+/** deno run's and bun run's options that take the next word as their value. */
+const DENO_RUN_VALUED = new Set(['-c', '--config', '--import-map', '--lock', '--cert', '--location', '--seed', '--env-file', '--ext']);
+const BUN_RUN_VALUED = new Set([
+    '--cwd', '-c', '--config', '--env-file', '-r', '--preload', '--tsconfig-override', '-d', '--define', '-l', '--loader',
+    '--main-fields', '--conditions', '--filter', '-F', '--elide-lines', '--shell',
+]);
+/** The operand at `i`: `-` is stdin, anything else the program file. */
+function operandAt(words, i, readsStdin) {
+    const w = words[i];
+    if (w === undefined)
+        return { kind: 'none', readsStdin };
+    return w.value === '-' ? { kind: 'dash' } : { kind: 'file', index: i };
+}
+/**
+ * A POSIX-style option cluster (`-uW ignore`, `-Wignore`, `-e 'code'`): `inline`
+ * letters define the program, `valued` letters take the rest of the cluster or
+ * the next word. Returns how many words the option used, or `inline`.
+ */
+function clusterWords(word, inline, valued) {
+    for (let k = 1; k < word.length; k += 1) {
+        const c = word.charAt(k);
+        if (inline.includes(c))
+            return 'inline';
+        if (valued.includes(c))
+            return k === word.length - 1 ? 2 : 1;
+    }
+    return 1;
+}
+function interpreterProgram(words, at) {
+    const name = interpreterName(words[at]?.value ?? '');
+    const python = PYTHON.test(name);
+    const nodeLike = ['node', 'nodejs', 'tsx', 'ts-node'].includes(name);
+    if (!python && !nodeLike && !['perl', 'ruby', 'php', 'deno', 'bun'].includes(name))
+        return { kind: 'unknown' };
+    let i = at + 1;
+    if (name === 'deno' || name === 'bun') {
+        const sub = words[i]?.value ?? '';
+        if (sub === 'eval' || (name === 'bun' && /^(?:-e|-p|--eval|--print)$/.test(sub)))
+            return { kind: 'inline' };
+        if (sub === 'run')
+            i += 1;
+        else if (name === 'deno' || sub !== '-')
+            return { kind: 'unknown' };
+    }
+    const readsStdin = !['deno', 'bun', 'tsx', 'ts-node'].includes(name);
+    for (; i < words.length; i += 1) {
+        const v = words[i]?.value ?? '';
+        if (v === '--')
+            return operandAt(words, i + 1, readsStdin);
+        if (v === '-' || !v.startsWith('-'))
+            return operandAt(words, i, readsStdin);
+        if (python) {
+            if (v.startsWith('--')) {
+                if (v === '--check-hash-based-pycs')
+                    i += 1;
+                continue;
+            }
+            const used = clusterWords(v, 'cm', 'WXQ');
+            if (used === 'inline')
+                return { kind: 'inline' };
+            i += used - 1;
+        }
+        else if (nodeLike) {
+            if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v))
+                return { kind: 'inline' };
+            if (!v.includes('=') && NODE_OPTION_VALUED.has(v))
+                i += 1;
+        }
+        else if (name === 'deno' || name === 'bun') {
+            if (!v.includes('=') && (name === 'deno' ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v))
+                i += 1;
+        }
+        else if (name === 'php') {
+            if (/^-[rBRE]/.test(v))
+                return { kind: 'inline' };
+            if (v === '-f' || v === '-F')
+                return operandAt(words, i + 1, readsStdin);
+            if (/^-[dcz]$/.test(v))
+                i += 1;
+        }
+        else {
+            // perl and ruby: `-e` program text; the letters that take a value, as `perlLike` reads them.
+            if (v.startsWith('--'))
+                continue;
+            const used = clusterWords(v, name === 'perl' ? 'eE' : 'e', name === 'perl' ? 'IMm' : 'IrCEFx');
+            if (used === 'inline')
+                return { kind: 'inline' };
+            i += used - 1;
+        }
+    }
+    return { kind: 'none', readsStdin };
 }
 function codeLang(interpreter) {
     if (PYTHON.test(interpreter))
@@ -2177,7 +2459,7 @@ function codeLiterals(code, lang) {
 }
 /** Literals as paths: trimmed, every run of backslashes read as `/`. */
 function literalPaths(literals) {
-    return literals.map((l) => tail(l.trim()).replace(/\\+/g, '/'));
+    return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, '/')));
 }
 /**
  * The end of a path, which is all any pattern here is anchored to — so a
@@ -2186,6 +2468,22 @@ function literalPaths(literals) {
  */
 function tail(path) {
     return path.length > 1024 ? path.slice(-1024) : path;
+}
+/**
+ * Each path, and — when it differs — the name Windows opens for it: without
+ * an NTFS stream suffix or trailing dots and spaces (review M1:
+ * `hooks.config.json::$DATA` writes the file itself). Both are judged, so the
+ * second can only add a match; elsewhere a colon is part of a name, and
+ * refusing that odd name there costs nothing.
+ */
+function asWindowsOpens(paths) {
+    const out = [...paths];
+    for (const p of paths) {
+        const named = windowsName(p);
+        if (named !== p)
+            out.push(named);
+    }
+    return out;
 }
 /**
  * True when program text names a hook configuration path: a string literal
@@ -2204,12 +2502,14 @@ function literalsNameHookConfig(literals) {
     return has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i);
 }
 /** The same for Claude Code's settings files. */
-function literalsNameClaudeSettings(literals) {
+function literalsNameClaudeSettings(literals, configDirName) {
     const paths = literalPaths(literals);
-    if (paths.some((p) => CLAUDE_SETTINGS_PATH.test(p)))
+    if (paths.some((p) => isSettingsPath(p, configDirName)))
         return true;
     const has = (re) => paths.some((p) => re.test(p));
-    return has(/(?:^|\/)\.claude\/?$/i) && has(/^settings(?:\.local)?\.json$/i);
+    const inDir = has(/(?:^|\/)\.claude\/?$/i) ||
+        (configDirName !== undefined && paths.some((p) => p.toLowerCase().replace(/\/+$/, '').endsWith(configDirName)));
+    return inDir && has(/^settings(?:\.local)?\.json$/i);
 }
 // ── .NET file calls in PowerShell
 /**
@@ -2343,6 +2643,11 @@ function dotNetEffects(text, cwd, notes) {
     return e;
 }
 // ── the rules
+const RULE_HARD_LINK = {
+    id: 'guard-config-hard-link',
+    level: 'block',
+    reason: "Makes a hard link to the guardrail hooks' own configuration — a second name through which it can be rewritten",
+};
 const RULE_SPECIAL = {
     id: 'guard-config-special-file',
     level: 'block',
@@ -2384,11 +2689,12 @@ const RULE_SETTINGS = {
  */
 function judgeEffects(effects, scope) {
     const e = {
-        writes: effects.writes.map(tail),
-        removes: effects.removes.map(tail),
-        dirs: effects.dirs.map(tail),
-        special: effects.special.map(tail),
-        links: effects.links.map(tail),
+        writes: asWindowsOpens(effects.writes.map(tail)),
+        removes: asWindowsOpens(effects.removes.map(tail)),
+        dirs: asWindowsOpens(effects.dirs.map(tail)),
+        special: asWindowsOpens(effects.special.map(tail)),
+        links: asWindowsOpens(effects.links.map(tail)),
+        hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
     };
     const out = [];
     if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
@@ -2401,7 +2707,9 @@ function judgeEffects(effects, scope) {
         out.push({ ...RULE_REMOVE });
     if (e.dirs.some(isHookConfigDir))
         out.push({ ...RULE_DIR });
-    if (e.writes.some((p) => CLAUDE_SETTINGS_PATH.test(p)) && loosens(scope))
+    if (e.hardLinkSources.some(isHookConfigPath))
+        out.push({ ...RULE_HARD_LINK });
+    if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope))
         out.push({ ...RULE_SETTINGS });
     return out;
 }
@@ -2437,7 +2745,7 @@ function judgeCode(code, lang, scope) {
     const out = [];
     if (literalsNameHookConfig(literals))
         out.push({ ...RULE_INLINE });
-    if (literalsNameClaudeSettings(literals) && loosens(scope))
+    if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope))
         out.push({ ...RULE_SETTINGS });
     return out;
 }
@@ -2524,6 +2832,16 @@ function nestedScripts(words, start) {
             .trim();
         return script.length > 0 ? [shellScript(script)] : [];
     }
+    // PowerShell's `eval`: `iex "& { $(irm …) }"` runs its argument — quoted or
+    // not — as PowerShell (review I1).
+    if (launcher === 'iex' || launcher === 'invoke-expression') {
+        const script = words
+            .slice(start + 1)
+            .map((w) => w.value)
+            .join(' ')
+            .trim();
+        return script.length > 0 ? [{ text: script, powershell: true, iex: true }] : [];
+    }
     let sawShell = false;
     for (let i = start; i < words.length; i += 1) {
         const word = words[i];
@@ -2602,6 +2920,726 @@ function fedScripts(statement, reads) {
     }
     return scripts;
 }
+// ─────────────────────────────────────────────── download, then run it
+/** Commands that fetch a URL: `curl`, `wget` and PowerShell's web cmdlets and their aliases. */
+const DOWNLOADERS = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod']);
+/**
+ * The runners a pipeline member is looked through to find what reads the
+ * pipe — never `xargs`, `watch` or cmd's `start`, which do not hand the
+ * command their stdin as a script.
+ */
+const PIPE_RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
+/** Shells that run what arrives on their stdin. */
+const STDIN_SHELLS = new Set([...SHELLS, 'fish', 'csh', 'tcsh']);
+/** The paths through which `source` / `.` read their stdin. */
+const STDIN_PATHS = new Set(['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
+const RULE_PIPE_TO_SHELL = {
+    id: 'remote-pipe-to-shell',
+    level: 'block',
+    reason: 'Pipes a downloaded script directly into a shell (curl|wget … | sh/bash)',
+};
+const RULE_FETCH_EXEC = {
+    id: 'remote-pipe-to-shell',
+    level: 'block',
+    reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
+};
+const RULE_IEX_DOWNLOAD = {
+    id: 'powershell-iex-download',
+    level: 'block',
+    reason: 'Downloads and executes remote code via Invoke-Expression',
+};
+const RULE_DOWNLOAD_RUN = {
+    id: 'download-then-run',
+    level: 'block',
+    reason: 'Downloads a file and runs it in the same command (DownloadFile / -OutFile, then &, ., Start-Process, …)',
+};
+/** The same, for a POSIX download — named for what it is (review round 3, item 7). */
+const RULE_POSIX_DOWNLOAD_RUN = {
+    id: 'download-then-run',
+    level: 'block',
+    reason: 'Downloads a file (curl -o / -O, wget, > file) and runs it in the same command (sh f, ./f, source f, python3 f, …) ' +
+        'with no checksum or signature check of that file in between',
+};
+/**
+ * Whether a command reads its stdin as a script: a shell, `source` / `.` of
+ * `/dev/stdin`, or an interpreter given no program of its own — `python3 -`,
+ * bare `node`, `perl`, `ruby`, `php` (review round 2, ruling 2). An
+ * interpreter handed its program (`python3 -c '…'`, `python3 script.py`,
+ * `python3 -m json.tool`, `perl -ne '…'`) reads stdin as data.
+ */
+function readsStdinAsScript(words, at) {
+    const name = commandName(words[at]?.value ?? '');
+    if (STDIN_SHELLS.has(name))
+        return true;
+    if ((name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? ''))
+        return true;
+    if (name === 'xargs')
+        return xargsRunsStdin(words, at);
+    return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
+}
+/**
+ * `xargs [options] sh -c` with no script after `-c` (review round 3, item 2):
+ * xargs appends what it reads on stdin, so that text becomes the `-c` script —
+ * `curl … | xargs -0 sh -c` runs the download. Also an interpreter's `-c` /
+ * `-e` left without its program text.
+ */
+function xargsRunsStdin(words, at) {
+    const rest = withoutRedirectWords(words.slice(at));
+    const i = resolveCommand(rest).index;
+    const name = commandName(rest[i]?.value ?? '');
+    const last = rest[rest.length - 1]?.value ?? '';
+    if (i >= rest.length - 1)
+        return false;
+    if (SCRIPT_SHELLS.has(name) || name === 'su')
+        return DASH_C.test(last);
+    return isInterpreter(name) && /^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last);
+}
+/** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
+function withoutRedirectWords(words) {
+    const out = [];
+    for (let i = 0; i < words.length; i += 1) {
+        const word = words[i];
+        if (word === undefined)
+            continue;
+        const r = parseRedirect(word);
+        if (r === null)
+            out.push(word);
+        else if (r.inline === '')
+            i += 1;
+    }
+    return out;
+}
+/**
+ * An interpreter whose program is a process substitution that downloads:
+ * `python3 <(curl …)`, `node --max-old-space-size 4096 <(wget …)`. The `<(`
+ * ends statement `k` (`(` is a statement boundary), so its command's last word
+ * is the `<` and statement `k + 1` is what the substitution runs; the
+ * substitution is the program exactly when, without it, the interpreter has
+ * no program at all ({@link interpreterProgram}) — `python3 process.py <(curl
+ * …)` hands the download to a script as data.
+ */
+function interpreterRunsFetch(statements, k) {
+    const statement = statements[k];
+    if (statement === undefined || !statement.masked.endsWith('<'))
+        return false;
+    const words = statement.commands[statement.commands.length - 1];
+    const lastWord = words?.[words.length - 1];
+    if (words === undefined || lastWord === undefined || lastWord.value !== '<' || lastWord.redirectAt?.[0] !== 0)
+        return false;
+    const next = statements[k + 1]?.commands[0];
+    if (next === undefined || !['curl', 'wget'].includes(commandName(next[resolveCommand(next).index]?.value ?? '')))
+        return false;
+    const head = words.slice(0, -1);
+    const at = resolveCommand(head).index;
+    return interpreterProgram(head, at).kind === 'none';
+}
+const RULE_PROCESS_FETCH = {
+    id: 'process-substitution-remote-fetch',
+    level: 'block',
+    reason: 'Executes a downloaded script via process substitution (bash <(curl …))',
+};
+/**
+ * `curl … | bash`, judged on the pipeline's structure rather than its text
+ * (review I1): a member that downloads, and after it a member whose command —
+ * resolved through `VAR=x`, `env`, `command`, `exec`, `sudo` and its options,
+ * quotes and an absolute path — is a shell. The text rule only knew a bare
+ * shell name right after the `|` (and `sudo`), so `| /bin/bash`, `| env
+ * PNPM_VERSION=10 sh -`, `| "bash"` and `| command bash` all ran unassessed.
+ */
+function pipesDownloadIntoShell(statement) {
+    let downloaded = false;
+    for (const words of statement.commands) {
+        const at = resolveCommand(words, PIPE_RUNNERS).index;
+        if (downloaded && readsStdinAsScript(words, at))
+            return true;
+        if (DOWNLOADERS.has(commandName(words[at]?.value ?? '')))
+            downloaded = true;
+    }
+    return false;
+}
+/** `bash <<< "$(curl …)"`, `source /dev/stdin <<< "$(wget …)"`: a download handed to a shell as a here-string. */
+function hereStringFetchIntoShell(words, at) {
+    if (!readsStdinAsScript(words, at) && !['source', '.'].includes(commandName(words[at]?.value ?? '')))
+        return false;
+    for (let i = at + 1; i < words.length; i += 1) {
+        const w = words[i];
+        if (w === undefined || !w.value.startsWith('<<<') || w.redirectAt?.[0] !== 0)
+            continue;
+        const inline = w.value.slice(3);
+        if (isBareRemoteFetch(inline.length > 0 ? inline : (words[i + 1]?.value ?? '')))
+            return true;
+    }
+    return false;
+}
+/** A download in PowerShell program text: a web cmdlet, or a `WebClient` / `HttpClient` fetch. */
+const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|start-bitstransfer)(?![\w-])|\.\s*(?:downloadstring|downloaddata|downloadfile|openread|getstringasync|getbytearrayasync|getstreamasync)\s*\(/i;
+/**
+ * The tokens {@link powershellDownloadExecution} reads, one named group each:
+ *
+ *   - `run` — what runs its argument as PowerShell: `iex` / `Invoke-Expression`
+ *     (a command only as a word of its own — never a file's name or extension,
+ *     `x.iex`: review round 2), and the script-block builders and runners
+ *     `[scriptblock]::Create(…)`, `$ExecutionContext.InvokeCommand.InvokeScript(…)`
+ *     / `.NewScriptBlock(…)` and `-ScriptBlock (…)` (review round 3: Microsoft's
+ *     dotnet-install one-liner is `&([scriptblock]::Create((iwr …)))`);
+ *   - `dl` — a download;
+ *   - `assign` / `ref` — a variable assigned, and a variable read, so that
+ *     `$s = irm …; iex $s` is seen;
+ *   - parentheses, pipes and statement separators.
+ */
+const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
+/**
+ * `Invoke-Expression` over a download, on the masked command text (review I1):
+ * `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's official
+ * installer), `iex $wc.DownloadString(…)`, and a download piped into `iex`
+ * from inside a group — `(irm …) | iex` — where the `(` that ends a statement
+ * everywhere else had separated the download from the pipe. One pass over the
+ * tokens, so linear: a stack says which open parentheses hold `iex`'s
+ * argument, and a download seen in the current `;`/newline segment is armed by
+ * the next `|` for an `iex` after it.
+ */
+function powershellDownloadExecution(text) {
+    if (!/iex|invoke-expression|scriptblock|invokescript/i.test(text))
+        return false;
+    const opens = [];
+    let inIex = 0;
+    let pendingIex = false;
+    let downloaded = false;
+    let piped = false;
+    /** The variable being assigned in this `;`/newline segment, and the variables that hold a download. */
+    let assigning;
+    const tainted = new Set();
+    /** A download (or a variable holding one): run when it is `iex`'s argument, else armed for a pipe. */
+    const download = () => {
+        if (inIex > 0 || pendingIex)
+            return true;
+        downloaded = true;
+        if (assigning !== undefined)
+            tainted.add(assigning);
+        return false;
+    };
+    for (const m of text.matchAll(PS_EXEC_TOKENS)) {
+        const t = m[0].toLowerCase();
+        const g = m.groups ?? {};
+        if (g['run'] !== undefined) {
+            if (piped)
+                return true;
+            pendingIex = true;
+        }
+        else if (g['dl'] !== undefined) {
+            if (download())
+                return true;
+        }
+        else if (g['assign'] !== undefined) {
+            assigning = t.replace(/\s*=$/, '');
+        }
+        else if (g['ref'] !== undefined) {
+            if (tainted.has(t) && download())
+                return true;
+        }
+        else if (t === '(') {
+            opens.push(pendingIex);
+            if (pendingIex)
+                inIex += 1;
+            pendingIex = false;
+        }
+        else if (t === ')') {
+            if (opens.pop() === true)
+                inIex -= 1;
+            pendingIex = false;
+        }
+        else if (t === '|') {
+            if (downloaded)
+                piped = true;
+            pendingIex = false;
+        }
+        else {
+            // `;`, a newline, `&&`, `||`.
+            downloaded = false;
+            piped = false;
+            pendingIex = false;
+            assigning = undefined;
+        }
+    }
+    return false;
+}
+/** A path as compared between a download's destination and a command that runs it. */
+function runKey(path) {
+    return stripQuotes(path.trim())
+        .replace(/\\/g, '/')
+        .replace(/^(?:\.\/)+/, '')
+        .replace(/\/{2,}/g, '/')
+        .toLowerCase();
+}
+/** `.DownloadFile(url, path)` and its async forms. */
+const DOWNLOAD_FILE_CALL = /\.\s*DownloadFile(?:Async|TaskAsync)?\s*\(/gi;
+/** PowerShell's web cmdlets (and 5.1's `curl` / `wget` aliases) that can save to a file. */
+const SAVING_CMDLETS = new Set(['iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer', 'curl', 'wget']);
+/** `-OutFile` (from `-OutF`) and BITS's `-Destination` (from `-Dest`), with an attached `:value` or not. */
+const SAVE_PARAM = /^-(?:outf(?:i(?:le?)?)?|dest(?:i(?:n(?:a(?:t(?:i(?:on?)?)?)?)?)?)?)(?::(.*))?$/i;
+/** curl's short options that take a value: in a cluster, the first of them takes the rest of it, or the next word. */
+const CURL_SHORT_VALUED = 'AbcCdDeEFHKmoPQrtTuUwxXyYz';
+/** wget's short options that take a value (`-o` is its LOG file, not the download). */
+const WGET_SHORT_VALUED = 'OoPtTwUeiaBQlDIXRA';
+/** A URL argument. */
+const URL_ARG = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** The name curl `-O` / wget give a download: the URL path's last segment (wget: `index.html` when there is none). */
+function remoteName(url, fallback) {
+    const path = url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '').replace(/[?#].*$/, '');
+    const last = path.split('/').pop() ?? '';
+    return last !== '' ? last : fallback;
+}
+/**
+ * The files a POSIX `curl` or `wget` saves (review round 2, ruling 1):
+ * `curl -o f` / `--output f` / `-fsSLo f`, `curl -O URL` (named after the
+ * URL), `wget -O f` / `--output-document=f`, `wget URL` (named after the URL,
+ * under `-P dir`), and either with its stdout redirected (`curl URL > f`).
+ * `-O -` is stdout, not a file.
+ */
+function posixSaves(name, words, at) {
+    if (name !== 'curl' && name !== 'wget')
+        return [];
+    const wget = name === 'wget';
+    const valued = wget ? WGET_SHORT_VALUED : CURL_SHORT_VALUED;
+    const saved = [...redirectTargets(words.slice(at + 1))];
+    const urls = [];
+    let named = false;
+    let remote = false;
+    let dir = '';
+    const save = (f) => {
+        if (f === undefined || f === '' || f === '-') {
+            if (f === '-')
+                named = true;
+            return;
+        }
+        named = true;
+        saved.push(f);
+    };
+    const args = words.slice(at + 1).map((w) => w.value);
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        const long = /^--([a-z-]+)(?:=(.*))?$/i.exec(a);
+        if (long !== null) {
+            const flag = (long[1] ?? '').toLowerCase();
+            const value = () => (long[2] !== undefined ? long[2] : args[(i += 1)]);
+            if (!wget && flag === 'output')
+                save(value());
+            else if (wget && flag === 'output-document')
+                save(value());
+            else if (!wget && (flag === 'remote-name' || flag === 'remote-name-all'))
+                remote = true;
+            else if ((!wget && flag === 'output-dir') || (wget && flag === 'directory-prefix'))
+                dir = value() ?? '';
+            continue;
+        }
+        if (a.startsWith('-') && a.length > 1) {
+            for (let k = 1; k < a.length; k += 1) {
+                const c = a.charAt(k);
+                if (!wget && c === 'O')
+                    remote = true;
+                if (!valued.includes(c))
+                    continue;
+                const v = k < a.length - 1 ? a.slice(k + 1) : args[(i += 1)];
+                if ((wget && c === 'O') || (!wget && c === 'o'))
+                    save(v);
+                else if (wget && c === 'P')
+                    dir = v ?? '';
+                break;
+            }
+            continue;
+        }
+        if (URL_ARG.test(a))
+            urls.push(a);
+    }
+    if ((wget && !named) || (!wget && remote && !named)) {
+        for (const url of urls) {
+            const file = remoteName(url, wget ? 'index.html' : undefined);
+            if (file !== undefined)
+                saved.push(dir === '' ? file : `${dir.replace(/[\\/]+$/, '')}/${file}`);
+        }
+    }
+    else if (dir !== '') {
+        return saved.map((f) => (isAbsolutePath(f) ? f : `${dir.replace(/[\\/]+$/, '')}/${f}`));
+    }
+    return saved;
+}
+/** The files a PowerShell web cmdlet saves: `-OutFile path`, BITS's `-Destination path`. */
+function powershellSaves(name, words, at) {
+    if (!SAVING_CMDLETS.has(name))
+        return [];
+    const out = [];
+    for (let i = at + 1; i < words.length; i += 1) {
+        const m = SAVE_PARAM.exec(words[i]?.value ?? '');
+        if (m === null)
+            continue;
+        const dest = m[1] !== undefined && m[1] !== '' ? m[1] : words[i + 1]?.value;
+        if (dest !== undefined && dest.trim() !== '')
+            out.push(dest);
+    }
+    return out;
+}
+/** The destinations of `.DownloadFile(url, path)` calls outside a quoted span. */
+function downloadFileCalls(text) {
+    if (!/downloadfile/i.test(text))
+        return [];
+    const out = [];
+    const unquotedAt = quoteTracker(text);
+    for (const m of text.matchAll(DOWNLOAD_FILE_CALL)) {
+        if (!unquotedAt(m.index))
+            continue;
+        // In the POSIX reading of a PowerShell command an unquoted comma is a
+        // space, so the arguments may arrive as one: its last literal is the path.
+        const { args } = callArgs(text, m.index + m[0].length);
+        const second = args[1];
+        const literals = codeLiterals(args[0] ?? '', 'other');
+        const dest = second !== undefined ? argPath(second) : literals.length >= 2 ? literals[literals.length - 1] : undefined;
+        if (dest !== undefined && dest.trim() !== '')
+            out.push(dest);
+    }
+    return out;
+}
+/** Shells, which run their first operand as a script unless given one with `-c`. */
+const SCRIPT_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'fish', 'csh', 'tcsh']);
+/** Commands that open whatever they are given — a program runs, a document only opens. */
+const OPENERS = new Set(['start', 'start-process', 'saps', 'invoke-item', 'ii']);
+/** Commands that run a file named anywhere in their arguments. */
+const RUNS_ARGUMENT = new Set(['msiexec', 'cscript', 'wscript', 'rundll32', 'iex', 'invoke-expression']);
+/** Commands that print a file, so `gc x | iex` and `cat x | sh` run it. */
+const READERS = new Set(['get-content', 'gc', 'cat', 'type']);
+/**
+ * File types an opener RUNS rather than displays (review round 2: `Start-Process
+ * readme.txt` opens Notepad, and a downloaded document opened that way is no
+ * download-then-run). A name with no extension counts: it may be a program.
+ */
+const RUNNABLE_EXTENSIONS = new Set([
+    'exe', 'com', 'bat', 'cmd', 'msi', 'msp', 'msix', 'msixbundle', 'appx', 'appxbundle', 'ps1', 'psm1', 'vbs', 'vbe', 'js',
+    'jse', 'wsf', 'wsh', 'hta', 'scr', 'cpl', 'jar', 'reg', 'lnk', 'application', 'appref-ms', 'sh', 'bash', 'command', 'py',
+    'pyw', 'pl', 'rb', 'php', 'app', 'pkg',
+]);
+function isRunnableName(path) {
+    const last = stripQuotes(path).split(/[\\/]/).pop() ?? '';
+    const ext = /\.([A-Za-z0-9-]+)$/.exec(last)?.[1];
+    return ext === undefined || RUNNABLE_EXTENSIONS.has(ext.toLowerCase());
+}
+/** Start-Process's `-ArgumentList` (`-Args`, and its abbreviations) and `-FilePath` (`-Path`, `-PSPath`, `-LP`). */
+const PS_ARGUMENT_LIST = /^-(?:args|a(?:r(?:g(?:u(?:m(?:e(?:n(?:t(?:l(?:i(?:st?)?)?)?)?)?)?)?)?)?)?)$/i;
+const PS_FILE_PATH = /^-(?:f(?:i(?:l(?:e(?:p(?:a(?:th?)?)?)?)?)?)?|path|pspath|lp)$/i;
+/**
+ * The first operand of a shell or an interpreter — the script it runs — or
+ * none when it runs program text instead (`sh -c`, `python -c`, `node -e`,
+ * `python -m`).
+ */
+function scriptOperand(words, at, name) {
+    const rest = words.slice(at + 1);
+    if (SCRIPT_SHELLS.has(name)) {
+        if (rest.some((w) => !w.quoted && DASH_C.test(w.value)))
+            return undefined;
+        return withoutRedirections(rest).find((v) => !v.startsWith('-'));
+    }
+    // An interpreter's own options, read with its table of valued ones (round 3, item 2).
+    const plain = withoutRedirectWords(words.slice(at));
+    const program = interpreterProgram(plain, 0);
+    if (program.kind === 'file')
+        return plain[program.index]?.value;
+    if (program.kind !== 'unknown')
+        return undefined;
+    if (inlineCode(words, at).length > 0 || rest.some((w) => /^-[A-Za-z]*m$/.test(w.value)))
+        return undefined;
+    return withoutRedirections(rest).find((v) => !v.startsWith('-'));
+}
+/** Whether a pipeline member reads its stdin as a program: a shell, `source /dev/stdin`, or a bare interpreter. */
+function runsStdin(words, at) {
+    return readsStdinAsScript(words, at);
+}
+/**
+ * The files one simple command runs through its arguments — the command's own
+ * name is judged by the caller (a path runs that file, a bare name what PATH
+ * finds): `. file` / `source file`, a shell's or interpreter's script (`sh f`,
+ * `python3 f.py`), `powershell -File file`, `cmd /c file`, a program an opener
+ * starts (`Start-Process setup.exe`, `ii i.ps1`, `Start-Process msiexec
+ * -ArgumentList '/i x.msi'` — never a document), `msiexec /i file`, and a
+ * file printed into something that runs its stdin (`gc f | iex`, `cat f | sh`).
+ */
+function commandRuns(statement, c, heads, pipedIntoRunner) {
+    const words = statement.commands[c];
+    const at = heads[c] ?? 0;
+    const head = words?.[at];
+    if (words === undefined || head === undefined)
+        return [];
+    const name = commandName(head.value);
+    const out = [];
+    const rest = withoutRedirections(words.slice(at + 1));
+    const operands = rest.filter((v) => v !== '' && !v.startsWith('-') && !/^\/[A-Za-z]+$/.test(v));
+    if (name === '.' || name === 'source') {
+        if (rest[0] !== undefined)
+            out.push(rest[0]);
+    }
+    else if (name === 'powershell' || name === 'pwsh') {
+        const file = rest.findIndex((v) => /^-f(?:i(?:le?)?)?$/i.test(v));
+        if (file >= 0)
+            out.push(rest[file + 1] ?? '');
+        else
+            out.push(...operands);
+    }
+    else if (name === 'cmd') {
+        const run = rest.findIndex((v) => /^\/[ck]$/i.test(v));
+        if (run >= 0)
+            out.push(rest[run + 1] ?? '');
+    }
+    else if (SCRIPT_SHELLS.has(name) || isInterpreter(name)) {
+        const script = scriptOperand(words, at, name);
+        if (script !== undefined)
+            out.push(script);
+    }
+    else if (OPENERS.has(name)) {
+        const files = [];
+        for (let i = 0; i < rest.length; i += 1) {
+            const v = rest[i] ?? '';
+            if (PS_ARGUMENT_LIST.test(v))
+                files.push(...(rest[(i += 1)] ?? '').split(/[\s,]+/));
+            else if (PS_FILE_PATH.test(v))
+                files.push(rest[(i += 1)] ?? '');
+            else if (v.startsWith('-'))
+                i += /^-(?:verb|wo\w*|windowstyle|w|redirect\w*|credential|cred)$/i.test(v) ? 1 : 0;
+            else
+                files.push(v);
+        }
+        out.push(...files.filter((f) => f !== '' && !/^\/[A-Za-z]+$/.test(f) && isRunnableName(f)));
+    }
+    else if (RUNS_ARGUMENT.has(name)) {
+        out.push(...operands);
+    }
+    else if (READERS.has(name) && pipedIntoRunner) {
+        out.push(...operands);
+    }
+    return out.filter((f) => f !== '');
+}
+/** Per pipeline member: whether a LATER member runs its stdin (`iex`, a shell, a bare interpreter) — one pass from the end. */
+function pipedIntoRunners(statement, heads) {
+    const out = new Array(statement.commands.length).fill(false);
+    let later = false;
+    for (let c = statement.commands.length - 1; c >= 0; c -= 1) {
+        out[c] = later;
+        const words = statement.commands[c] ?? [];
+        const i = heads[c] ?? 0;
+        const n = commandName(words[i]?.value ?? '');
+        if (n === 'iex' || n === 'invoke-expression' || runsStdin(words, i))
+            later = true;
+    }
+    return out;
+}
+/** Whether a command line may download anything at all — the cheap test before the walk. */
+const MAY_DOWNLOAD = /curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer|downloadfile/i;
+/** Checksum and signature tools, as `(name, words) => whether this invocation checks`. */
+function isIntegrityCheck(words, at) {
+    const name = commandName(words[at]?.value ?? '');
+    const args = words.slice(at + 1).map((w) => w.value);
+    if (/^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(name)) {
+        return args.some((a) => a === '--check' || /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
+    }
+    if (name === 'gpg' || name === 'gpg2')
+        return args.includes('--verify');
+    if (name === 'gpgv')
+        return true;
+    if (name === 'minisign' || name === 'signify')
+        return args.some((a) => /^-[A-Za-z]*V/.test(a));
+    if (name === 'cosign')
+        return args.includes('verify-blob');
+    if (name === 'openssl')
+        return args.some((a) => a === '-verify' || a === '-prverify');
+    return false;
+}
+/** Where a directory change leaves relative paths: `cd`, `pushd`, `Set-Location` (a `popd` goes back to the start). */
+function cwdFor(name, args, cwd) {
+    if (CD_RETURNS.has(name))
+        return '';
+    if (!CD_COMMANDS.has(name))
+        return cwd;
+    const dir = psParam(args, ['path', 'literalpath']) ?? args.find((a) => !(a.startsWith('-') || /^\/d$/i.test(a)));
+    if (dir === undefined)
+        return '~';
+    const next = resolveFrom(cwd, dir);
+    return next.length > MAX_CWD ? '' : next;
+}
+/** Commands that move or copy a file, so a download keeps its mark under the new name (review round 3, item 3). */
+const TRANSFERS = new Set(['mv', 'cp', 'install', 'copy-item', 'cpi', 'copy', 'move-item', 'mi', 'move']);
+/** Directories a bare command name is found in on PATH: a marked file placed there runs by its name alone. */
+const PATH_DIRS = /^(?:\/usr\/local\/s?bin|\/usr\/s?bin|\/s?bin|\/opt\/homebrew\/bin|\/opt\/local\/bin|(?:~|\$\{?home\}?)\/(?:\.local\/)?bin)$/i;
+/**
+ * What an `mv` / `cp` / `install` / `Copy-Item` / `Move-Item` puts where: each
+ * source, and the paths it may now be at — the destination itself, and a file
+ * of the source's name inside it when the destination may be a directory.
+ */
+function transfersOf(name, words, at) {
+    if (!TRANSFERS.has(name))
+        return [];
+    const args = withoutRedirections(words.slice(at + 1));
+    if (name === 'install' && args.some((a) => a === '-d' || a === '--directory'))
+        return [];
+    const t = parseTransfer(args, name === 'copy' || name === 'move');
+    const dest = t.dest;
+    if (dest === undefined)
+        return [];
+    return t.sources.map((from) => {
+        const inside = `${dest.replace(/[\\/]+$/, '')}/${lastSegment(from)}`;
+        return { from, to: t.into ? [inside] : [dest, inside] };
+    });
+}
+/**
+ * An integrity check at the end of a statement's pipeline, and what it names
+ * (review round 3, item 3): `names`, every word of every member (`echo "<sha>
+ * f" | sha256sum -c` names `f`), split on blanks; `lists`, the checksum lists a
+ * `sha256sum -c` is handed as operands. Paths as {@link runKey}s.
+ */
+function integrityCheckOf(statement, heads, cwd) {
+    const last = statement.commands.length - 1;
+    const words = statement.commands[last];
+    const at = heads[last] ?? 0;
+    if (words === undefined || !isIntegrityCheck(words, at))
+        return undefined;
+    const key = (token) => runKey(resolveFrom(cwd, token));
+    const names = [];
+    statement.commands.forEach((member, c) => {
+        for (const w of member.slice((heads[c] ?? 0) + 1)) {
+            for (const token of w.value.split(/\s+/))
+                if (token !== '' && !token.startsWith('-'))
+                    names.push(key(token));
+        }
+    });
+    const sumTool = /^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(commandName(words[at]?.value ?? ''));
+    const lists = sumTool ? withoutRedirections(words.slice(at + 1)).filter((v) => !v.startsWith('-') && !/^\d+$/.test(v)).map(key) : [];
+    return { names, lists };
+}
+/**
+ * A file downloaded and run by the same command line (review I1, PowerShell's
+ * `DownloadFile` / `-OutFile` then run; round 2, ruling 1, POSIX `curl -o f
+ * && sh f` and the like). Paths are compared after the `cd`s before them, and
+ * a download keeps its mark through `mv` / `cp` / `install` (round 3, item 3).
+ * The command's own name runs the file when it is a path (`./tool`); a bare
+ * name only under cmd.exe (`bareRunsCwd`), or when the marked file was placed
+ * in a PATH directory in the same command (round 3, item 4). A run is not
+ * counted when a check OF THAT FILE — naming it, its `.sha256` / `.asc` /
+ * `.sig` / `.minisig`, or a checksum list downloaded in the command — lies
+ * between its latest download and the run, and every statement from the check
+ * to the run is joined by `&&`: the run is then conditional on the check. A run
+ * in a later, separate command is not seen at all: that is download, inspect,
+ * run. Returns what saved the file that ran, which names the shape in the deny.
+ */
+function downloadsThenRuns(text, statements, bareRunsCwd) {
+    if (!MAY_DOWNLOAD.test(text))
+        return null;
+    /** Per file, its latest download so far (`.DownloadFile` calls come before every statement), carried by mv / cp / install. */
+    const downloads = new Map();
+    for (const dest of downloadFileCalls(text))
+        downloads.set(runKey(resolveFrom('', dest)), { at: -1, kind: 'powershell' });
+    /** Bare command names that PATH now resolves to a marked file: placed by mv / cp / install into a PATH directory. */
+    const pathBins = new Map();
+    /**
+     * Per file, the latest integrity check of it joined to the current statement
+     * by `&&` all the way; `listAt`, the latest check against a checksum list
+     * downloaded in the chain, which may cover every download. Both are carried
+     * forward and cleared at any other separator, so each run is judged in
+     * constant time.
+     */
+    const verified = new Map();
+    let listAt = -2;
+    let cwd = '';
+    for (let k = 0; k < statements.length; k += 1) {
+        const statement = statements[k];
+        if (statement === undefined)
+            continue;
+        const heads = statement.commands.map((words) => resolveCommand(words).index);
+        const ran = [];
+        const saved = [];
+        // Nothing downloaded yet: nothing a run could match, so runs are not read.
+        const reading = downloads.size > 0;
+        const piped = reading ? pipedIntoRunners(statement, heads) : [];
+        statement.commands.forEach((words, c) => {
+            const at = heads[c] ?? 0;
+            const head = words[at]?.value ?? '';
+            const name = commandName(head);
+            for (const dest of posixSaves(name, words, at))
+                saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'posix' });
+            for (const dest of powershellSaves(name, words, at))
+                saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: 'powershell' });
+            if (reading) {
+                for (const file of commandRuns(statement, c, heads, piped[c] === true))
+                    ran.push(runKey(resolveFrom(cwd, file)));
+                // The command itself: a path runs that file. A bare name is looked up
+                // on PATH by a POSIX shell and by PowerShell — only cmd.exe searches
+                // the working directory first (review round 3, item 4).
+                if (/[\\/]/.test(head))
+                    ran.push(runKey(resolveFrom(cwd, head)));
+                else if (head !== '') {
+                    const onPath = pathBins.get(head.toLowerCase());
+                    if (onPath !== undefined)
+                        ran.push(onPath);
+                    if (bareRunsCwd) {
+                        for (const ext of /\.[A-Za-z0-9]+$/.test(head) ? [''] : ['', '.exe', '.cmd', '.bat', '.com']) {
+                            ran.push(runKey(resolveFrom(cwd, `${head}${ext}`)));
+                        }
+                    }
+                }
+                // A marked file moved or copied keeps its mark (review round 3, item 3).
+                for (const { from, to } of transfersOf(name, words, at)) {
+                    const src = runKey(resolveFrom(cwd, from));
+                    const mark = downloads.get(src);
+                    if (mark === undefined)
+                        continue;
+                    for (const dest of to) {
+                        const key = runKey(resolveFrom(cwd, dest));
+                        downloads.set(key, mark);
+                        const check = verified.get(src);
+                        if (check !== undefined)
+                            verified.set(key, check);
+                        const bin = lastSegment(key);
+                        if (PATH_DIRS.test(dirOf(key)) && bin !== '')
+                            pathBins.set(bin, key);
+                    }
+                }
+            }
+            cwd = cwdFor(name, withoutRedirections(words.slice(at + 1)), cwd);
+        });
+        // `iex (Get-Content file -Raw)`: the `(` ended the statement holding `iex`.
+        const only = statement.commands.length === 1 ? statement.commands[0] : undefined;
+        const lone = only !== undefined && only.length === 1 ? commandName(only[0]?.value ?? '') : '';
+        const next = statements[k + 1]?.commands[0];
+        if (reading && (lone === 'iex' || lone === 'invoke-expression') && next !== undefined && READERS.has(commandName(next[0]?.value ?? ''))) {
+            for (const w of next.slice(1))
+                if (!w.value.startsWith('-'))
+                    ran.push(runKey(resolveFrom(cwd, w.value)));
+        }
+        for (const file of ran) {
+            const d = downloads.get(file);
+            // Run after its download, and not behind a check of it made after that download.
+            if (d !== undefined && d.at < k && !((verified.get(file) ?? -3) > d.at) && !(listAt > d.at))
+                return d.kind;
+        }
+        for (const { key, kind } of saved) {
+            downloads.set(key, { at: k, kind });
+            verified.delete(key);
+        }
+        // A pipeline's status is its last member's: only a check there decides —
+        // and only for the files it names (review round 3, item 3).
+        const check = integrityCheckOf(statement, heads, cwd);
+        if (check !== undefined) {
+            for (const name of check.names) {
+                if (downloads.has(name))
+                    verified.set(name, k);
+                const signed = /^(.+)\.(?:sha(?:1|224|256|384|512)(?:sum)?|asc|sig|minisig)$/.exec(name)?.[1];
+                if (signed !== undefined)
+                    verified.set(signed, k);
+            }
+            if (check.lists.some((list) => downloads.has(list)))
+                listAt = k;
+        }
+        if (statement.end !== '&&') {
+            verified.clear();
+            listAt = -2;
+        }
+    }
+    return null;
+}
 // ──────────────────────────────────────────────────────────── assessment
 const MAX_NESTING = 3;
 /**
@@ -2634,6 +3672,17 @@ function collect(command, depth, out, scope) {
     // `[IO.File]::WriteAllText(…)`: the `(` that opens its arguments is a
     // statement boundary to `splitShell`, so it is judged on the command text.
     pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd, scope.notes), scope));
+    // PowerShell running a download (review I1): through `iex` across the `(`
+    // that splits statements, and a file downloaded then run.
+    if (powershellDownloadExecution(commandText))
+        out.push(RULE_IEX_DOWNLOAD);
+    const ranDownload = downloadsThenRuns(cmd, statements, scope.cmdLine === true);
+    if (ranDownload !== null)
+        out.push(ranDownload === 'posix' ? RULE_POSIX_DOWNLOAD_RUN : RULE_DOWNLOAD_RUN);
+    // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).
+    if (/<\(\s*(?:curl|wget)/i.test(commandText) && statements.some((_s, k) => interpreterRunsFetch(statements, k))) {
+        out.push(RULE_PROCESS_FETCH);
+    }
     for (const statement of statements) {
         // The total time budget: a hook that outlives Claude Code's 15 s timeout
         // lets the command run unassessed, so what is left is reported instead.
@@ -2649,6 +3698,8 @@ function collect(command, depth, out, scope) {
                 out.push({ id: rule.id, level: rule.level, reason: rule.reason });
             }
         }
+        if (pipesDownloadIntoShell(statement))
+            out.push(RULE_PIPE_TO_SHELL);
         for (const words of statement.commands) {
             // The budget is checked per command too: one statement can hold a
             // pipeline of thousands of commands (fix round 3, I-2).
@@ -2659,12 +3710,18 @@ function collect(command, depth, out, scope) {
             const resolved = resolveCommand(words);
             if (resolved.elevated)
                 out.push({ ...SUDO_RULE });
-            const del = assessRecursiveDelete(words, resolved.index);
+            const del = assessRecursiveDelete(words, resolved.index, scope.home);
             if (del !== null)
                 out.push(del);
             const find = assessFind(words, resolved.index);
             if (find !== null)
                 out.push(find);
+            if (hereStringFetchIntoShell(words, resolved.index))
+                out.push(RULE_FETCH_EXEC);
+            // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
+            // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
+            if (inlineCode(words, resolved.index).some(isBareRemoteFetch))
+                out.push(RULE_FETCH_EXEC);
             pushAll(out, assessGuardConfig(words, resolved.index, scope));
             const scripts = nestedScripts(words, resolved.index);
             const cmdHead = words[resolved.index];
@@ -2676,30 +3733,29 @@ function collect(command, depth, out, scope) {
             if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined))
                 scope.notes.depth = true;
             if (depth < MAX_NESTING) {
-                for (const { text: script, powershell } of scripts) {
+                for (const { text: script, powershell, iex } of scripts) {
                     // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
                     // script IS a download, executed without ever spelling `| sh`.
                     // Recursing alone would not catch this: the extracted script is
                     // just "curl …" with no pipe to a shell inside it, so nothing in
                     // BASH_RULES fires on it at the next depth. Checked directly, in
                     // addition to (not instead of) recursing.
-                    if (isBareRemoteFetch(script)) {
-                        out.push({
-                            id: 'remote-pipe-to-shell',
-                            level: 'block',
-                            reason: 'Executes the output of a remote download (curl/wget via $(…) or `…`)',
-                        });
-                    }
-                    collect(script, depth + 1, out, { ...scope });
+                    if (isBareRemoteFetch(script))
+                        out.push(RULE_FETCH_EXEC);
+                    // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
+                    // download anywhere in it — quoted or not — is run (review I1).
+                    if (iex === true && PS_DOWNLOAD.test(script))
+                        out.push(RULE_IEX_DOWNLOAD);
+                    collect(script, depth + 1, out, { ...scope, cmdLine: false });
                     const asPowerShell = powershell ? powershellAsPosix(script) : script;
                     if (asPowerShell !== script)
-                        collect(asPowerShell, depth + 1, out, { ...scope });
+                        collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false });
                 }
                 // Every command of a `cmd /c` line gets the full assessment, like a
                 // top-level statement: deletes, pattern rules, nested shells (fix
                 // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
                 if (line !== undefined)
-                    collect(line, depth + 1, out, { ...scope });
+                    collect(line, depth + 1, out, { ...scope, cmdLine: true });
             }
             const head = words[resolved.index];
             if (head !== undefined) {
@@ -2719,7 +3775,7 @@ function collect(command, depth, out, scope) {
         const fed = fedScripts(statement, isBareShellStdin);
         if (depth < MAX_NESTING) {
             for (const { text } of fed)
-                collect(text, depth + 1, out, { ...scope });
+                collect(text, depth + 1, out, { ...scope, cmdLine: false });
         }
         else if (fed.length > 0)
             scope.notes.depth = true;
@@ -2739,6 +3795,15 @@ const MAX_COMMAND_LENGTH = 512 * 1024;
  * only backs the caps up on a machine far slower or busier than expected.
  */
 const DEFAULT_BUDGET_MS = 2500;
+/** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
+function safeHomedir() {
+    try {
+        return homedir();
+    }
+    catch {
+        return undefined;
+    }
+}
 /** The warning for what a cap or the budget dropped — never a silent `ok` — naming which one. */
 function partialRule(notes) {
     const causes = [
@@ -2778,22 +3843,24 @@ export function assessBashCommand(command, opts = {}) {
     // respelled `'` is four characters (fix round 4).
     const cut = whole.length > MAX_COMMAND_LENGTH;
     const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
+    const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+    const where = { home, configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']) };
     if (opts.shell !== 'powershell')
-        return assessReadings([text], cut, now, deadline);
+        return assessReadings([text], cut, now, deadline, where);
     // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
     // closing quote and swallows the rest of the command, with no warning.
     // PowerShell's own reading goes first, so the one budget is never spent on
     // the POSIX reading before the reading that matches what will run; a block
     // needs no second reading. The POSIX reading sees here-strings and block
     // comments for what they are: nothing else can be meant by them.
-    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline);
+    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
 }
 /**
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
  */
-function assessReadings(readings, cut, now, deadline) {
+function assessReadings(readings, cut, now, deadline, where) {
     const notes = {
         statement: false,
         command: cut,
@@ -2815,7 +3882,7 @@ function assessReadings(readings, cut, now, deadline) {
         // 125 000 operands overflowed the stack). Whatever throws now, the answer
         // is at least a warning, and a block found before it still blocks.
         try {
-            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where });
         }
         catch {
             notes.failed = true;
