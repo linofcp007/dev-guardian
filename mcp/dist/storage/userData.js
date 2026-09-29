@@ -17,33 +17,19 @@
  * persist, and to set `GUARDIAN_DATA_DIR`.
  */
 import { chmodSync, lstatSync, mkdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { userDataDir } from '../hooks/userDataDir.js';
 import { GuardianDbError } from './dbError.js';
 /**
  * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
  * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
- * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts, as
- * the XDG spec says) or `~/.local/share/dev-guardian` elsewhere. Read at call
- * time. Pure path arithmetic, no I/O. The one resolution: the hooks' registry
- * guard (`hooks/dataRegistry.ts`) imports it — this file's imports are Node
- * built-ins and `dbError.js`, so the compiled hooks still run from `dist/`
- * with no `node_modules`.
+ * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts) or
+ * `~/.local/share/dev-guardian` elsewhere. The one resolution lives in
+ * `hooks/userDataDir.ts`, where the hooks' registry guard can load it
+ * without this storage layer; re-exported here, where the directory is
+ * owned.
  */
-export function userDataDir(ctx = {}) {
-    const env = ctx.env ?? process.env;
-    const override = env['GUARDIAN_DATA_DIR']?.trim();
-    if (override !== undefined && override !== '')
-        return resolve(override);
-    // Only when needed: an override or an absolute LOCALAPPDATA / XDG_DATA_HOME needs no home.
-    const home = () => ctx.home ?? homedir();
-    if ((ctx.platform ?? process.platform) === 'win32') {
-        const local = env['LOCALAPPDATA']?.trim();
-        return join(local !== undefined && isAbsolute(local) ? local : join(home(), 'AppData', 'Local'), 'dev-guardian');
-    }
-    const xdg = env['XDG_DATA_HOME']?.trim();
-    return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(home(), '.local', 'share'), 'dev-guardian');
-}
+export { userDataDir };
 /** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */
 export function notPrivate(path, why) {
     return new GuardianDbError('data-dir', path, `'${path}' ${why}`);

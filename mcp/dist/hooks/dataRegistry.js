@@ -8,20 +8,19 @@
  * the directory itself, refused to an assistant's Write / Edit and to the shell
  * writes the shell guard can see, the way the hook configuration is.
  *
- * {@link userDataDir} is the storage module's own resolution
- * (`storage/userData.ts`, which owns the directory), imported rather than
- * mirrored: the two had drifted into separate copies. That file imports only
- * Node built-ins and `dbError.js` — the SessionStart hook already loads
- * `dist/storage/dbRegistry.js` the same way — so the hooks still run from the
- * compiled `mcp/dist/` alone, with no `node_modules`
+ * {@link userDataDir} is the one resolution of the directory
+ * (`hooks/userDataDir.ts`), which the storage module that owns it
+ * re-exports; the two used to be separate copies. Node built-ins and sibling
+ * hook modules only: the hooks and the CLI's `check` load `mcp/dist/hooks/`
+ * without the storage layer or `node_modules`
  * (`test/unit/hooks/hooksDistImports.test.ts` holds that).
  */
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { userDataDir as storageUserDataDir } from '../storage/userData.js';
 import { walkLinksUnder } from './configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo } from './guardedPath.js';
+import { userDataDir as resolveUserDataDir } from './userDataDir.js';
 function safeHome() {
     try {
         return homedir();
@@ -31,12 +30,12 @@ function safeHome() {
     }
 }
 /**
- * dev-guardian's per-user data directory, as `storage/userData.ts` resolves
- * it — except that a missing home is `''` here rather than a throw: a hook
- * never fails for it.
+ * dev-guardian's per-user data directory, as `hooks/userDataDir.ts` resolves
+ * it for the storage module too — except that a missing home is `''` here
+ * rather than a throw: a hook never fails for it.
  */
 export function userDataDir(ctx = {}) {
-    return storageUserDataDir({ ...ctx, home: ctx.home ?? safeHome() });
+    return resolveUserDataDir({ ...ctx, home: ctx.home ?? safeHome() });
 }
 /** The registry directory: `<user data dir>/registry`. */
 export function registryDir(ctx = {}) {

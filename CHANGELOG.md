@@ -55,10 +55,12 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Changed
 
-- The hooks' database-registry guard now resolves dev-guardian's per-user data directory with the storage
-  module's own function (`storage/userData.ts`) instead of a copy of it that could drift; a missing home is
-  still `''` there, never a throw. A new test walks every compiled module the hook dispatcher loads, and
-  everything they import, and holds each import to a Node built-in or a relative file — the hooks run from
+- dev-guardian's per-user data directory is resolved in one place, `hooks/userDataDir.ts`, which the storage
+  module re-exports and the hooks' database-registry guard calls; they held two copies that could drift. It
+  sits under `hooks/` because the CLI's `check` and `--help` load the compiled hooks with `dist/storage/`
+  absent — the first attempt, the hook importing `storage/userData.js`, broke exactly that. A new test walks
+  every compiled module the hook dispatcher loads, and everything they import, and holds each import to a
+  Node built-in or a relative file, and every module under `dist/hooks/` to `dist/hooks/` — the hooks run from
   `mcp/dist/` with no `node_modules`, and one that cannot load fails open. `docs/env.md` lists
   `GUARDIAN_DATA_DIR` once, for the server, the CLI and the hooks alike.
 - `.gitignore` stays off the list of files `tools_run` names as deciding what Semgrep scans, now measured

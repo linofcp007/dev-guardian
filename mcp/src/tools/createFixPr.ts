@@ -252,11 +252,11 @@ const tool: ToolModule = {
   name: 'create_fix_pr',
   title: 'Apply scanner-produced fixes and open a pull request',
   description:
-    'Apply fixes the scanners themselves already produced — deps_update_plan pinned upgrade ' +
+    'Apply fixes the scanners already produced — deps_update_plan pinned upgrade ' +
     'steps (npm with --ignore-scripts, pip pins edited in place) and the target rules\' own ' +
     'Semgrep autofix (only those rules, --metrics=off) — inside an isolated git worktree, prove ' +
     'them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, ' +
-    'deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, ' +
+    'deps_audit or scan_deps) plus a lazy test differential against a base-commit tree, ' +
     'and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works ' +
     'in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan ' +
     'rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the ' +
@@ -264,11 +264,11 @@ const tool: ToolModule = {
     "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
     'environment that carries no token or credential of this server. Package managers get it plus ' +
     "your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs " +
-    'are set aside (package_config_set_aside), and a repo-chosen pip index or download URL (a direct ' +
-    'reference, a bare or VCS URL) or Composer repository refuses the fix. Every open finding ' +
-    'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
-    'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
-    '`filtered_reason`. ' +
+    'are set aside (package_config_set_aside), and a repo-chosen pip index or URL/VCS requirement ' +
+    'or Composer repository refuses the fix. Every open finding ' +
+    'that did NOT become a candidate is accounted for in `filtered` and `filtered_reason` (below ' +
+    'severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan ' +
+    'covers it). ' +
     'A cancelled call answers ok with cancelled: true and the groups it finished.',
   inputSchema: {
     project_path: ProjectPath,
