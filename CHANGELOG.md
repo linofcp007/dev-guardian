@@ -35,6 +35,14 @@ version bump.
 
 ### Fixed
 
+- Suppressions and baselines from 2.0.0 apply again. 2.0.0 stored a project as typed (`c:\Users\…`),
+  migration 011 scoped legacy suppressions to that spelling, and 3.0.0 stores scans under the
+  canonical `C:\Users\…`; every reader compares exactly, so they lapsed (reproduced by seeding the
+  database with the v2.0.0 tag's own storage code). At startup, `suppressions.project_path` and
+  `baselines.project_path` are rewritten to the canonical spelling when they name an existing
+  directory and differ only in spelling; a path through a link or junction, which may point at
+  another project by now, is left alone. Moving or renaming a repository still starts its history,
+  suppressions and baselines afresh; the READMEs say so.
 - A corrupt `guardian.db` stops the server with one line naming the file and saying to move it
   aside, instead of `Error: file is not a database` and a stack trace.
 - A database a 3.0 development build left at schema version 14 no longer stops the server, and the

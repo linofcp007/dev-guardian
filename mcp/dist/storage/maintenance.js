@@ -58,6 +58,9 @@
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
+import { lstatSync, statSync } from 'node:fs';
+import { isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { canonicalPath } from '../platform/projectPath.js';
 export const DEFAULT_RETENTION_SCANS = 50;
 /**
  * Scans deleted per write transaction. With every referencing column indexed
@@ -350,5 +353,99 @@ export function scheduleRetention(storage, log, options = {}) {
 }
 function describe(error) {
     return error instanceof Error ? error.message : String(error);
+}
+// ---- Stored project paths in their canonical spelling ---------------------
+/**
+ * Rewrites `suppressions.project_path` and `baselines.project_path` to the
+ * canonical spelling of the directory they name (`platform/projectPath.ts
+ * #canonicalPath`) — the spelling every scan has been stored under since
+ * 3.0.0. Returns how many rows changed. Idempotent: a second run finds
+ * nothing to do.
+ *
+ * 2.0.0 stored `resolve(input)`: `c:\Users\…`, with the drive letter as the
+ * host typed it. Migration 011 scoped each legacy suppression to the path of
+ * the scan that reported its finding, and 008 each baseline to its scan's:
+ * both got that spelling. Every reader compares a project exactly, so after
+ * the upgrade those suppressions stopped applying and those baselines were
+ * never found (reproduced with the v2.0.0 tag's own storage code seeding
+ * the database).
+ *
+ * A row is rewritten only when its path names an existing directory, the
+ * canonical spelling differs, and NO component of the path is a symbolic
+ * link or junction: case, the drive letter, an 8.3 short name, separators —
+ * spellings of one directory entry that cannot come to mean another. A link
+ * can: `~/work/current` repointed from project A to project B would move A's
+ * suppressions onto B. So no row is ever merged into a different project; a
+ * path that no longer exists, or goes through a link, is left as it is.
+ * Scan rows are not touched (history keeps the spelling it was measured
+ * under), and neither is anything else keyed by project.
+ */
+export function canonicalizeStoredProjectPaths(db) {
+    const stored = db
+        .prepare(`SELECT project_path AS p FROM suppressions WHERE project_path IS NOT NULL
+       UNION
+       SELECT project_path AS p FROM baselines WHERE project_path IS NOT NULL`)
+        .all()
+        .map((r) => r.p);
+    const renames = [];
+    for (const path of stored) {
+        const canonical = spellingOnlyCanonical(path);
+        if (canonical !== null)
+            renames.push([path, canonical]);
+    }
+    if (renames.length === 0)
+        return 0;
+    return db.transaction(() => {
+        let changed = 0;
+        for (const [from, to] of renames) {
+            changed += db.prepare('UPDATE suppressions SET project_path = ? WHERE project_path = ?').run(to, from).changes;
+            changed += db.prepare('UPDATE baselines SET project_path = ? WHERE project_path = ?').run(to, from).changes;
+        }
+        return changed;
+    })();
+}
+/**
+ * The canonical spelling of `path` when it names an existing directory,
+ * differs from it, and reaches it through no link; null otherwise.
+ */
+function spellingOnlyCanonical(path) {
+    if (!isAbsolute(path))
+        return null;
+    try {
+        if (!statSync(path).isDirectory())
+            return null;
+    }
+    catch {
+        return null;
+    }
+    const canonical = canonicalPath(path);
+    if (canonical === path)
+        return null;
+    // Every component, from the root down, must be a real directory entry.
+    const resolved = resolve(path);
+    const root = parse(resolved).root;
+    let current = root;
+    for (const part of resolved.slice(root.length).split(sep).filter((s) => s !== '')) {
+        current = join(current, part);
+        try {
+            if (lstatSync(current).isSymbolicLink())
+                return null;
+        }
+        catch {
+            return null;
+        }
+    }
+    return canonical;
+}
+/** Runs {@link canonicalizeStoredProjectPaths} at startup; logs, never throws. */
+export function canonicalizeProjectPathsAtStartup(storage, log) {
+    try {
+        const changed = canonicalizeStoredProjectPaths(storage.rawHandle());
+        if (changed > 0)
+            log(`rewrote ${changed} suppression/baseline row(s) to the canonical project path spelling`);
+    }
+    catch (error) {
+        log(`project path spelling step failed (continuing): ${describe(error)}`);
+    }
 }
 //# sourceMappingURL=maintenance.js.map

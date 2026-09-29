@@ -10,8 +10,10 @@
  *      fallback), apply migrations.
  *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
  *      still starts so resources and pure-SQL tools can serve data.
- *   4. Reap scans whose owning process died (storage/maintenance.ts).
- *      Best-effort: a failure is logged and never stops the server.
+ *   4. Reap scans whose owning process died (storage/maintenance.ts), and
+ *      rewrite suppressions and baselines stored under a 2.0.0 spelling of
+ *      a project path to the canonical one. Best-effort: a failure is
+ *      logged and never stops the server.
  *   5. Keep `.guardian/` out of git in the target project's `.gitignore`
  *      (every `.guardian` directory's contents, at any depth, with its
  *      `baseline.json` re-included — gitignoreGuard.ts).
@@ -39,7 +41,7 @@ import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { GuardianDbError, openDatabase, Storage } from './storage/index.js';
-import { reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
+import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
 import { RESOURCES } from './resources/index.js';
@@ -72,6 +74,9 @@ async function main(): Promise<void> {
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
   reapOrphanedScans(storage, logErr);
+  // Suppressions and baselines stored under a 2.0.0 spelling of a project
+  // path (`c:\…`) take the canonical one every scan uses. Never fatal.
+  canonicalizeProjectPathsAtStartup(storage, logErr);
 
   // Probe a usable shell once; tools read the choice from the cache later.
   const shell = await probeShell(storage.runtimeMeta);
