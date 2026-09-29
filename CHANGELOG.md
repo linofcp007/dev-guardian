@@ -452,7 +452,11 @@ version bump.
   include with `-r` / `-c` inside the project (by path and through links: the server reads nothing outside it) —
   that carries one is in `honoured_config`, and the reason says
   "honoured the project's requirements.txt (its package-index options decide which index pip-audit's resolution
-  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before.
+  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before. An include pip follows
+  and dev-guardian does not read — a URL (`-r https://…`), a path with an environment variable, a path or link out of
+  the project, a file over the size read — is named too, since one line of it picks the index (`requirements.txt
+  includes <target> (not read by dev-guardian): pip may take its index from it`), and the file holding the line is
+  in `honoured_config`. So is a handed requirements file that leads out of the project.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
@@ -492,6 +496,26 @@ version bump.
   (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
   findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
   and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
+- `install_toolchain` installs a pinned, checksummed Trivy and gitleaks too — and on Windows as well. The Linux
+  bootstrap (`scripts/install/install-linux.sh`, which `install_toolchain` runs for the Linux defaults and the
+  Windows WSL fallback) installed Trivy from aquasecurity's apt repository or, with `--no-sudo`, from
+  `releases/latest` with no checksum, and gitleaks from `releases/latest` with no checksum: the "install latest" route
+  that delivered the credential-stealing Trivy v0.69.4 on 2026-03-19. `TRIVY_INSTALL_TAG` protected only a per-tool
+  install, and not even that where apt was present — apt came first. Syft, Trivy (0.74.0, `TRIVY_INSTALL_TAG`) and
+  gitleaks (8.30.1) are now one table, `PINNED_RELEASES`: each archive for Linux and macOS on amd64 and arm64, and the
+  Windows x64 ZIP, with its sha256 — each checked against the release's checksums file, GitHub's asset digest and an
+  independent download (the Windows ZIPs also against scoop's Main bucket and winget-pkgs). Linux and macOS
+  (after Homebrew) use the Syft installer's shape; the script shares one function, `instala_fixado`, whose steps
+  each fail on their own, and a test holds its tags and sums to the table. Windows gets a new first choice,
+  `release`: the pinned ZIP fetched with PowerShell, checked with `Get-FileHash` before `Expand-Archive`, copied to
+  `%USERPROFILE%\.local\bin` (not added to PATH; a warning says so); winget, scoop and choco remain a fallback that
+  asks for the same version (`scoop install trivy@0.74.0`, `choco install -y trivy --version 0.74.0`, `winget
+  install --id AquaSecurity.Trivy --exact --version 0.74.0`). The apt entry for Trivy is gone, and gitleaks has a
+  Linux entry for the first time. Measured: on Windows the three installers put Trivy 0.74.0, Syft 1.52.0 and
+  gitleaks 8.30.1 in place through the server's own process runner, and a wrong sum stops before anything is
+  unpacked; in `node:22` the same for the catalogue's Linux installers and the script's function. The script's
+  `semgrep --version` runs with `SEMGREP_ENABLE_VERSION_CHECK=0`, and its `trivy --version` with Trivy's version
+  check and telemetry off.
 - `install_toolchain` installs a pinned, checksummed Syft. Its Linux entry piped `install.sh` from anchore/syft's
   `main` branch into `sh`, which installed whatever was "latest" when it ran — the route the 2026-03 Trivy compromise
   took (`TRIVY_INSTALL_TAG`), for a tool in the default profile; the default Linux bootstrap

@@ -531,34 +531,29 @@ async function runPipAudit(opts: {
 
   // The requirements files it read whose index options steered the
   // resolution, named (`runners/repoConfig.ts`): honoured — a private index
-  // is legitimate — never silently.
-  const steering = honouredHandedFiles(
-    ctx.projectPath,
-    'pip-audit',
-    requirementsFilesRead(ctx.projectPath, requirementsFiles),
-  );
+  // is legitimate — never silently. What pip reads and this server does not
+  // (a URL, an environment variable, a path or link out of the project) is
+  // named too: its index options are unknown, and one line of it picks the
+  // index.
+  const read = requirementsFilesRead(ctx.projectPath, requirementsFiles);
+  const steering = honouredHandedFiles(ctx.projectPath, 'pip-audit', read.read);
+  const named = (run: ToolRun): ToolRun => withUnreadRequirements(withProjectConfig(run, steering), read.unread);
   if (anyOk) {
     tools_run.push(
-      withProjectConfig(
-        {
-          name: 'pip-audit',
-          status: 'ok',
-          reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
-        },
-        steering,
-      ),
+      named({
+        name: 'pip-audit',
+        status: 'ok',
+        reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
+      }),
     );
     if (anyFailed) missing_tools.push('pip-audit');
   } else {
     tools_run.push(
-      withProjectConfig(
-        {
-          name: 'pip-audit',
-          status: 'failed',
-          reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
-        },
-        steering,
-      ),
+      named({
+        name: 'pip-audit',
+        status: 'failed',
+        reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
+      }),
     );
     missing_tools.push('pip-audit');
   }
@@ -570,16 +565,35 @@ const PIP_INCLUDE = /^[ \t]*(?:--requirement|--constraint|-r|-c)(?:[ \t]*=[ \t]*
 const MAX_REQUIREMENTS_FILES = 50;
 /** A requirements file is read up to this size. */
 const MAX_REQUIREMENTS_BYTES = 1024 * 1024;
+/** Most unread includes named in the reason; the files holding them are all in `honoured_config`. */
+const MAX_UNREAD_NAMED = 5;
+
+/**
+ * A file pip reads for pip-audit that this server does not: an include
+ * (`from`, the project file holding the line; `target` as written there), or
+ * a handed requirements file that leads out of the project (`from` null,
+ * `target` its project-relative path).
+ */
+interface UnreadRequirements {
+  from: string | null;
+  target: string;
+}
 
 /**
  * The requirements files pip reads when pip-audit is handed `handed`: those,
  * and every file they include (`-r` / `-c`, relative to the including file,
  * as pip resolves them), transitively and bounded — project-relative,
- * `/`-separated. An include that is a URL, holds an environment variable or
- * leaves the project — by its path or through a link — is not read (the
- * server reads within the project), so an index option there is not named.
+ * `/`-separated (`read`). What pip reads and the server does not (it reads
+ * within the project) is `unread`: an include that is a URL, holds an
+ * environment variable, or leaves the project by its path or through a
+ * link; a file that is not a regular one, or is over the size read; and
+ * whatever the bound left. An include that is not there is neither — pip
+ * fails on it.
  */
-function requirementsFilesRead(projectPath: string, handed: readonly string[]): string[] {
+function requirementsFilesRead(
+  projectPath: string,
+  handed: readonly string[],
+): { read: string[]; unread: UnreadRequirements[] } {
   const within = (root: string, abs: string): string | null => {
     const rel = relative(root, abs);
     if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null;
@@ -589,35 +603,92 @@ function requirementsFilesRead(projectPath: string, handed: readonly string[]): 
   try {
     realRoot = realpathSync(projectPath);
   } catch {
-    return [];
+    return { read: [], unread: [] };
   }
   const seen = new Set<string>();
-  const out: string[] = [];
-  const queue = [...handed];
-  while (queue.length > 0 && out.length < MAX_REQUIREMENTS_FILES) {
-    const abs = queue.shift();
-    if (abs === undefined) break;
-    const rel = within(projectPath, abs);
-    if (rel === null || seen.has(rel)) continue;
-    seen.add(rel);
-    let text: string;
-    try {
-      if (within(realRoot, realpathSync(abs)) === null) continue;
-      const st = statSync(abs);
-      if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) continue;
-      text = readFileSync(abs, 'utf8');
-    } catch {
+  const read: string[] = [];
+  const unread: UnreadRequirements[] = [];
+  const queue: Array<{ abs: string; from: string | null; target: string }> = handed.map((abs) => ({
+    abs,
+    from: null,
+    target: within(projectPath, abs) ?? abs,
+  }));
+  const notRead = (item: { from: string | null; target: string }): void => {
+    unread.push({ from: item.from, target: item.target });
+  };
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item === undefined) break;
+    const rel = within(projectPath, item.abs);
+    if (rel === null) {
+      notRead(item);
       continue;
     }
-    out.push(rel);
+    if (seen.has(rel)) continue;
+    if (read.length >= MAX_REQUIREMENTS_FILES) {
+      notRead(item);
+      continue;
+    }
+    seen.add(rel);
+    let real: string;
+    try {
+      real = realpathSync(item.abs);
+    } catch {
+      continue; // not there: pip fails on it, nothing is taken from it
+    }
+    if (within(realRoot, real) === null) {
+      notRead(item);
+      continue;
+    }
+    let text: string;
+    try {
+      const st = statSync(real);
+      if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) {
+        notRead(item);
+        continue;
+      }
+      text = readFileSync(real, 'utf8');
+    } catch {
+      notRead(item);
+      continue;
+    }
+    read.push(rel);
     // pip joins a line that ends in a backslash with the next.
     for (const line of text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
       const target = PIP_INCLUDE.exec(line)?.[1]?.replace(/^["']|["']$/g, '');
-      if (target === undefined || target === '' || /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes('$')) continue;
-      queue.push(resolve(dirname(abs), target));
+      if (target === undefined || target === '') continue;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes('$')) {
+        notRead({ from: rel, target });
+        continue;
+      }
+      queue.push({ abs: resolve(dirname(item.abs), target), from: rel, target });
     }
   }
-  return out;
+  return { read, unread };
+}
+
+/**
+ * `run` naming what pip read and this server did not: in the reason,
+ * "requirements.txt includes <x> (not read by dev-guardian): pip may take
+ * its index from it" (the first {@link MAX_UNREAD_NAMED}); the file holding
+ * each such line in `honoured_config`.
+ */
+function withUnreadRequirements(run: ToolRun, unread: readonly UnreadRequirements[]): ToolRun {
+  if (unread.length === 0) return run;
+  const notes = [
+    ...new Set(
+      unread.map((u) =>
+        u.from === null
+          ? `${u.target} leads out of the project (not read by dev-guardian): pip may take its index from it`
+          : `${u.from} includes ${u.target} (not read by dev-guardian): pip may take its index from it`,
+      ),
+    ),
+  ];
+  const shown = notes.slice(0, MAX_UNREAD_NAMED);
+  const more = notes.length > shown.length ? [`and ${notes.length - shown.length} more not read by dev-guardian`] : [];
+  const reason = [run.reason, ...shown, ...more].filter((s) => s !== undefined && s.length > 0).join('; ');
+  const holders = unread.map((u) => u.from ?? u.target);
+  return { ...run, reason, honoured_config: [...new Set([...(run.honoured_config ?? []), ...holders])].sort() };
 }
 
 
