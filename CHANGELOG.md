@@ -101,6 +101,14 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Fixed
 
+- **A scanner `install_toolchain` had just installed was reported missing.** The pinned release installers put
+  Syft, Trivy, gitleaks and cosign in `%USERPROFILE%\.local\bin` on Windows (`~/.local/bin` on Linux and macOS),
+  which no default Windows or macOS PATH holds, so the next scan and `check_toolchain` said `not_installed`.
+  The server now appends that directory to its own PATH — at startup, before every scanner lookup and version
+  probe, and after an install — last, so a tool installed anywhere else still wins and nothing is shadowed; the
+  user's PATH is not touched. `install_toolchain` names where each pinned binary went (`binary_path`, in a dry
+  run where it would go) and, when that directory is not on the user's own PATH, says a terminal will not find
+  it there (`path_note`).
 - **Nothing told a model to vet a package before installing it, outside
   Claude Code.** `vet_packages` was named by no skill, command or host rules
   file, and `guardian-deps` said "no tool detects typosquatting; that is your
@@ -952,6 +960,15 @@ them again. Scans made on the fallback meanwhile are not merged back.
   `--extra-index-url`, `--find-links`, `--trusted-host`) is refused when pip would install from them (a pip step,
   or a re-scan by `deps_audit`), with the new outcome `refused`; so is a Composer fix whose `composer.json`
   declares `repositories`, which is not planned either.
+- **On macOS, `install_toolchain` installed Trivy from the vendor's Homebrew tap, the one Trivy install left
+  unpinned.** Every other route fetches the pinned, sha256-checked Trivy 0.74.0 archive, but the per-tool macOS
+  install took `brew install aquasecurity/trivy/trivy` first — a tap that installs Aqua's own release binaries
+  rather than a Homebrew-built bottle, and that the review found serving 0.69.3, older than the pin; the route a
+  compromised release takes. The pinned archive now comes first for Trivy on macOS (a per-tool preference, ahead
+  of the general "Homebrew first" order), with homebrew-core's own `trivy` formula as the fallback, and
+  `install-macos.sh` installs the same archive, checked with `shasum -a 256` before it is unpacked, instead of
+  `brew install trivy`; a test holds it to the catalogue's sums. Syft and gitleaks keep Homebrew first on macOS,
+  and the `install_toolchain` description and `SECURITY.md` now say so instead of "always pinned".
 - **`create_fix_pr`: a pip requirement that names its own host is refused like an index.** A direct reference
   (`name @ https://…`), a bare URL, a VCS URL (`git+…`, `hg+…`, `svn+…`, `bzr+…`, after `-e` too) or an include
   from a URL (`-r https://…`, which pip downloads and reads) makes pip fetch — and build — from a host the

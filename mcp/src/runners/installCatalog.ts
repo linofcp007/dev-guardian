@@ -33,6 +33,13 @@ export interface InstallSpec {
   needs_elevation: boolean;
   /** Optional, human-readable. Shown when `install_toolchain` returns dry-run results. */
   description?: string;
+  /**
+   * The file this installer writes into the per-user tools directory
+   * (`platform/userBin.ts`: `~/.local/bin`, `%USERPROFILE%\.local\bin`), when
+   * it writes there: `install_toolchain` says where the binary went, and
+   * whether a terminal will find it.
+   */
+  user_bin?: string;
 }
 
 /**
@@ -62,13 +69,19 @@ export interface ToolMeta {
     linux: Partial<Record<PosixPkgManager, InstallSpec>>;
     darwin: Partial<Record<PosixPkgManager, InstallSpec>>;
   };
+  /**
+   * Installers tried first for this tool on an OS, in this order, when they
+   * are available — ahead of `install_toolchain`'s general order for that OS
+   * (Homebrew first on macOS). Trivy's pinned archive on macOS: see its entry.
+   */
+  prefer?: { darwin?: readonly PosixPkgManager[]; linux?: readonly PosixPkgManager[] };
   /** Whether this tool is part of the default install profile. */
   default: boolean;
 }
 
 /**
  * The Trivy release every Trivy install fetches: the pinned archive in
- * {@link PINNED_RELEASES} on Linux, macOS (after Homebrew) and Windows, and
+ * {@link PINNED_RELEASES} on Linux, macOS (before homebrew-core) and Windows, and
  * the version winget, scoop and choco are asked for. Pinned because the
  * installer used to be piped from the `main` branch into `sh` and then
  * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
@@ -233,8 +246,17 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
         winget: wingetInstall('AquaSecurity.Trivy', TRIVY_VERSION),
       },
       linux: { curl: releaseArchiveInstaller('trivy', 'linux') },
-      darwin: { brew: brewInstall('aquasecurity/trivy/trivy'), curl: releaseArchiveInstaller('trivy', 'darwin') },
+      // macOS: the pinned archive FIRST (`prefer` below), then homebrew-core's
+      // own `trivy` formula (built and bottled by Homebrew). Homebrew used to
+      // come first here through the vendor tap `aquasecurity/trivy/trivy`,
+      // which installs Aqua's own release binaries rather than a Homebrew
+      // bottle — found serving 0.69.3 by the 3.0 review, older than the pin
+      // and the route a compromised release would take — while every other
+      // install of Trivy was pinned. `scripts/install/install-macos.sh` takes
+      // the same archive.
+      darwin: { curl: releaseArchiveInstaller('trivy', 'darwin'), brew: brewInstall('trivy') },
     },
+    prefer: { darwin: ['curl'] },
     default: true,
   },
   gitleaks: {
@@ -685,6 +707,7 @@ function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
     args: ['-c', script],
     needs_elevation: false,
     description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) → ~/.local/bin/cosign`,
+    user_bin: 'cosign',
   };
 }
 
@@ -721,6 +744,7 @@ function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux'
     args: ['-c', script],
     needs_elevation: false,
     description: `${tool} v${r.version} release archive (${os}, sha256-checked) → ~/.local/bin/${tool}`,
+    user_bin: tool,
   };
 }
 
@@ -729,9 +753,11 @@ function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux'
  * release ZIP, downloaded with PowerShell (`powershell.exe`, in every
  * supported Windows), checked with `Get-FileHash` before `Expand-Archive`,
  * and its `<tool>.exe` copied to `%USERPROFILE%\.local\bin` — the per-user
- * directory the POSIX installers use as `~/.local/bin`. It is not added to
- * PATH (a warning says so when it is missing): `check_toolchain` finds the
- * tool once it is. x64 only; any other CPU is refused. Written with single
+ * directory the POSIX installers use as `~/.local/bin`. The user's PATH is
+ * not changed (a warning says when it lacks the directory): the server
+ * appends the directory to its own PATH (`platform/userBin.ts`), so its
+ * scans and `check_toolchain` find the tool, and `install_toolchain` names
+ * where it went. x64 only; any other CPU is refused. Written with single
  * quotes alone, so the Windows command line has no `"` to re-quote.
  */
 function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpec {
@@ -755,7 +781,7 @@ function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpe
     "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
     '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
     `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool}.exe') -Destination (Join-Path $bin '${tool}.exe') -Force`,
-    `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool}: ' + $bin + ' is not on PATH; add it there for dev-guardian to find ${tool}.exe') }`,
+    `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool}: ' + $bin + ' is not on PATH; dev-guardian looks there itself, but add it to PATH for a terminal to find ${tool}.exe') }`,
     '} finally {',
     '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
     '}',
@@ -765,6 +791,7 @@ function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpe
     args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
     needs_elevation: false,
     description: `${tool} v${r.version} release archive (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\${tool}.exe`,
+    user_bin: `${tool}.exe`,
   };
 }
 
@@ -867,8 +894,12 @@ export function pickInstallSpec(
           ? meta.install.linux
           : null;
   if (!candidates) return null;
-  for (const { name } of availableManagers) {
-    const spec = (candidates as Record<string, InstallSpec | undefined>)[name];
+  const byName = candidates as Record<string, InstallSpec | undefined>;
+  // The tool's own preference first ({@link ToolMeta.prefer}), then the OS's order.
+  const preferred: readonly string[] = os === 'darwin' ? (meta.prefer?.darwin ?? []) : os === 'linux' ? (meta.prefer?.linux ?? []) : [];
+  const available = new Set<string>(availableManagers.map((m) => m.name));
+  for (const name of [...preferred.filter((n) => available.has(n)), ...availableManagers.map((m) => m.name)]) {
+    const spec = byName[name];
     if (spec) return { manager: name, spec };
   }
   return null;

@@ -17,6 +17,7 @@
 
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { ensureUserBinOnPath } from '../platform/userBin.js';
 import { runProcess } from './processRunner.js';
 
 export interface VersionProbe {
@@ -85,6 +86,9 @@ export function highestDotnetSdk(text: string): string | null {
 }
 
 export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise<ProbeResult> {
+  // check_toolchain sees what the scans will: the per-user tools directory
+  // the pinned installers write to is on the PATH (`platform/userBin.ts`).
+  ensureUserBinOnPath();
   const r = await runProcess({
     command: probe.command,
     args: probe.args,

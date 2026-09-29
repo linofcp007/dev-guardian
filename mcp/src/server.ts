@@ -38,6 +38,7 @@ import type { PluginContext } from './context.js';
 import { ensureGuardianIgnored } from './gitignoreGuard.js';
 import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
+import { ensureUserBinOnPath } from './platform/userBin.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
@@ -81,6 +82,12 @@ async function main(): Promise<void> {
   // Suppressions and baselines stored under a 2.0.0 spelling of a project
   // path (`c:\…`) take the canonical one every scan uses. Never fatal.
   canonicalizeProjectPathsAtStartup(storage, logErr);
+
+  // The per-user tools directory install_toolchain's pinned installers write
+  // to, appended to this server's PATH when it is not there
+  // (platform/userBin.ts): every scanner lookup and spawn then finds them.
+  const userBin = ensureUserBinOnPath();
+  if (userBin.added && userBin.dir !== null) logErr(`PATH: appended ${userBin.dir} (the pinned installers' directory)`);
 
   // Probe a usable shell once; tools read the choice from the cache later.
   const shell = await probeShell(storage.runtimeMeta);

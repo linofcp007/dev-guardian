@@ -260,12 +260,21 @@ their respective projects.
   against the release's checksums file, GitHub's asset digest and an
   independent download) before unpacking it: `sha256sum` / `shasum` into
   `~/.local/bin` on Linux and macOS, `Get-FileHash` in PowerShell into
-  `%USERPROFILE%\.local\bin` on Windows (not added to PATH; a warning says
-  so). A CPU with no pinned archive is refused. On Windows, winget, scoop
-  and choco are a fallback that asks for that same version; on macOS,
-  Homebrew stays first (its bottles are its own) and the pinned archive is
-  the fallback. cosign's installer was already pinned this way. A test
-  holds the Linux script to the catalogue's versions and sums.
+  `%USERPROFILE%\.local\bin` on Windows. The user's PATH is not changed (the
+  Windows installer warns when it lacks the directory); the server appends
+  that directory to its own PATH, after every other entry, so its scans find
+  the tool without shadowing one installed elsewhere, and `install_toolchain`
+  names where each binary went. A CPU with no pinned archive is refused. On
+  Windows, winget, scoop and choco are a fallback that asks for that same
+  version. On macOS, Trivy is the pinned archive first — the per-tool
+  install used to take the vendor's Homebrew tap (`aquasecurity/trivy`),
+  which installs Aqua's own release binaries rather than a Homebrew bottle
+  and was found at 0.69.3 — with homebrew-core's `trivy` formula as the
+  fallback, and `install-macos.sh` takes the same archive; Syft and gitleaks
+  come from Homebrew first (homebrew-core bottles, built by Homebrew, not
+  pinned to a version) with the pinned archive as the fallback. cosign's
+  installer was already pinned this way. A test holds the Linux script and
+  the macOS script's Trivy to the catalogue's versions and sums.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -361,8 +370,8 @@ their respective projects.
   `composer.json` declares `repositories` (the manifest the fix edits cannot
   be set aside); the planner does not plan Composer there either. A
   lockfile's own `resolved` URLs still choose where npm fetches each locked
-  tarball from, but not where your token goes: measured with real npm (11.17
-  and the one `node:22` ships) and two local registries, `npm ci` and
+  tarball from, but not where your token goes: measured with real npm
+  (11.17.0 on Windows, 10.9.8 in `node:22`) and two local registries, `npm ci` and
   `npm install` fetched a tarball the lock placed on another host without
   any `Authorization` header, while the tarball on your own registry carried
   your token — npm scopes a token to the host it was configured for, and a
