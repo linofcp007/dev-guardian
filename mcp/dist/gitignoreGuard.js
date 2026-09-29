@@ -57,8 +57,9 @@
  * whichever appears first (`dominantEol`). A brand-new file (`created`) has
  * no existing convention to follow and keeps the plain `\n` it always used.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { describeReadRefusal, describeWriteRefusal, projectEntryKind, readProjectBytes, writeProjectFile, } from './platform/projectFs.js';
 const HEADER = '# dev-guardian outputs';
 const ENTRY = '**/.guardian/*';
 const BASELINE_NEGATION = '!**/.guardian/baseline.json';
@@ -75,17 +76,56 @@ const OLD_DIRECTORY_PATTERNS = new Set([
     '.guardian/*',
     '!.guardian/baseline.json',
 ]);
+/** The largest `.gitignore` this reads; a real one is a few KB. */
+export const MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
+function fromWriteFailure(w) {
+    return {
+        updated: false,
+        reason: w.reason === 'failed' ? 'unwritable' : 'refused',
+        detail: describeWriteRefusal(w.reason, w.detail),
+    };
+}
+/**
+ * Brings the project's `.gitignore` to the current block — see the module
+ * doc. It runs at server STARTUP, on whatever directory the host started the
+ * server in, before any tool call: a freshly cloned repository's
+ * `.gitignore` is the repository's to choose, link or FIFO or not. So the
+ * path is `lstat`ed first and a link — a dangling one, one to `/dev/zero`,
+ * one to `~/.gitconfig`, even one that stays inside the project — or
+ * anything but a regular file is left alone and reported `refused`; the file
+ * is read through `platform/projectFs.ts` (bounded, regular files only) and
+ * written back through a temp file renamed over it.
+ */
 export function ensureGuardianIgnored(projectPath) {
     const gitignorePath = join(projectPath, '.gitignore');
     if (!existsSync(join(projectPath, '.git'))) {
         return { updated: false, reason: 'not_a_repo' };
     }
+    const kind = projectEntryKind(gitignorePath);
+    if (kind === 'link') {
+        return { updated: false, reason: 'refused', detail: describeWriteRefusal('link') };
+    }
+    if (kind === 'directory' || kind === 'other') {
+        return { updated: false, reason: 'refused', detail: describeWriteRefusal('not-a-regular-file') };
+    }
     try {
-        if (!existsSync(gitignorePath)) {
-            writeFileSync(gitignorePath, `${HEADER}\n${ENTRY}\n${BASELINE_NEGATION}\n`, 'utf8');
-            return { updated: true, reason: 'created' };
+        if (kind === 'absent') {
+            const w = writeProjectFile(projectPath, '.gitignore', `${HEADER}\n${ENTRY}\n${BASELINE_NEGATION}\n`, {
+                mode: 'create',
+            });
+            return w.ok ? { updated: true, reason: 'created' } : fromWriteFailure(w);
         }
-        const original = readFileSync(gitignorePath, 'utf8');
+        const read = readProjectBytes(projectPath, '.gitignore', MAX_GITIGNORE_BYTES);
+        if (read.status !== 'ok') {
+            return {
+                updated: false,
+                reason: 'refused',
+                detail: read.status === 'absent' ? 'it disappeared while being read' : describeReadRefusal(read.reason),
+            };
+        }
+        // Bytes, not the text reader: a byte-order mark the file starts with is
+        // written back as it was.
+        const original = read.bytes.toString('utf8');
         const eol = dominantEol(original);
         const withEndings = splitLines(original);
         const lines = withEndings.map((l) => l.text);
@@ -128,11 +168,13 @@ export function ensureGuardianIgnored(projectPath) {
         }
         const next = body.map((l) => l.text + l.eol).join('') +
             (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : '');
-        writeFileSync(gitignorePath, next, 'utf8');
+        const w = writeProjectFile(projectPath, '.gitignore', next, { mode: 'replace' });
+        if (!w.ok)
+            return fromWriteFailure(w);
         return { updated: true, reason: hasOldPattern ? 'upgraded' : 'added' };
     }
-    catch {
-        return { updated: false, reason: 'unwritable' };
+    catch (e) {
+        return { updated: false, reason: 'unwritable', detail: e.message };
     }
 }
 /** `content.split(/\r?\n/)`, keeping each line's own ending. */

@@ -438,6 +438,20 @@ version bump.
   --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
   Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
   Semgrep with `PYTHONUTF8=1`.
+- **The server wrote through links in the project it was started in, before any tool call.** Startup keeps
+  `.guardian/` out of the project's `.gitignore`, and did it with `existsSync` + `readFileSync` / `writeFileSync`:
+  a dangling `.gitignore` symlink to `<outside>/planted.conf` made startup create that file outside the project
+  with the three-line block (pointed at `~/.gitconfig`, every git command would have broken), and
+  `.gitignore -> /dev/zero` OOM-killed the server in 21 s under a 768 MB limit, before it ever listened. A new
+  `platform/projectFs.ts` is now the one way a project file is read or written. A read refuses, with a typed
+  reason, a path that resolves outside the project, a link to a network or device path, anything but a regular
+  file (judged on a descriptor opened non-blocking, so a FIFO does not wait for a writer), and a file over its
+  cap, and reads at most cap + 1 bytes (`hooks/configFile.ts`'s reader, after a containment check). A write
+  `lstat`s the target and refuses a link (a junction or a dangling link included) or a non-regular file, refuses
+  a directory on the way that resolves outside the project, and goes through a temp file beside the target,
+  published with `link()` (create) or `rename()` (replace), so it never writes through a link or into an inode a
+  hard link shares. The `.gitignore` upkeep is `refused` for a link, a FIFO or a file over 4 MiB, and startup
+  logs why.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

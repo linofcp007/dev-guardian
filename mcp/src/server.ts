@@ -87,6 +87,9 @@ async function main(): Promise<void> {
   // Ensure .guardian/ is git-ignored in the target project (baseline.json excepted).
   const guard = ensureGuardianIgnored(projectPath);
   if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
+  else if (guard.reason === 'refused' || guard.reason === 'unwritable') {
+    logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? 'no detail'}`);
+  }
 
   // Build the MCP server.
   const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
