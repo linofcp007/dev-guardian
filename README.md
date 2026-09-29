@@ -90,7 +90,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A `guardian.db` your dev-guardian did not create (one that came with a clone or an archive, or that git tracks) is never opened — see [SECURITY.md](SECURITY.md).
+Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A `guardian.db` your dev-guardian did not create (one that came with a clone or an archive, or that git tracks) is never opened, and `db adopt` lets you register one of yours it cannot tell from a copy — see [SECURITY.md](SECURITY.md).
 
 ## What each stack gets
 
@@ -173,7 +173,7 @@ dev-guardian sends no telemetry of its own. Some tools do reach the network — 
 commands/         the 10 slash commands
 skills/           the 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt)
 mcp/              the MCP server: src/, test/, dist/ (committed)
 configs/          Semgrep packs, CI templates, gitleaks/Renovate/pre-commit configs, compliance templates
 host-rules/       rules templates for other hosts
