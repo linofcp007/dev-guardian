@@ -164,7 +164,7 @@ dev-guardian no envía telemetría propia. Algunas herramientas sí acceden a la
 
 **`install_toolchain` con `elevation_allowed: true` falla con "sudo: a terminal is required to read the password".** Los pasos de instalación se ejecutan desacoplados, sin terminal, así que en Linux y macOS la elevación solo funciona con sudo sin contraseña para esos comandos. Si no, ejecuta tú los comandos listados en `requires_elevation`. El SDK de .NET nunca se instala automáticamente.
 
-**Semgrep envía métricas.** `scan_sast` por defecto usa `--config=auto`, que Semgrep solo permite con las métricas activadas. Pasa `local_only: true` (o `--local-only` en la CLI) para ejecutar solo las reglas en disco con `--metrics=off`.
+**Semgrep envía métricas.** `scan_sast` por defecto usa `--config=auto`, que Semgrep solo permite con las métricas activadas. Pasa `local_only: true` (o `--local-only` en la CLI) para mantener Semgrep en local: solo reglas en disco — las del proyecto y los paquetes del plugin (el paquete para aplicaciones LLM sigue ejecutándose) — con `--metrics=off` y sin descargas del registro. No significa "nada sale de la máquina": Trivy sigue descargando su base de datos de vulnerabilidades, un proyecto .NET se sigue restaurando desde sus feeds de NuGet y Semgrep sigue comprobando si hay una versión más reciente ([SECURITY.md](SECURITY.md#network-egress)).
 
 ## Estructura del repositorio
 

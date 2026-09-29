@@ -14,7 +14,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,22 @@ describe('scan --help: what --local-only does and does not keep local', () => {
     expect(para).toMatch(/restored from its NuGet feeds/);
     expect(para).toMatch(/SECURITY\.md, network egress/);
   });
+});
+
+// Round 2: the three READMEs and docs/ci.md say the same as the help text, in
+// step with each other.
+describe('--local-only in the READMEs and docs/ci.md (review round 2)', () => {
+  it.each(['README.md', 'README.pt-PT.md', 'README.es.md', 'docs/ci.md'])(
+    '%s names the plugin packs that still run and the traffic that still goes out',
+    (rel) => {
+      const text = readFileSync(join(REPO_ROOT, rel), 'utf8');
+      const line = text.split('\n').find((l) => l.includes('--local-only') && l.includes('Trivy')) ?? '';
+      expect(line).toMatch(/LLM/);
+      expect(line).toMatch(/NuGet/);
+      expect(line).toMatch(/SECURITY\.md#network-egress/);
+      expect(line).toMatch(/Semgrep/);
+    },
+  );
 });
 
 describe('check --file — UTF-16 (review M3)', () => {

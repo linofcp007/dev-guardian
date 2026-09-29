@@ -25,6 +25,7 @@ version bump.
 - Two false positives of the PowerShell download checks: a file named `x.iex` read as `iex` (`irm … | Set-Content x.iex` was denied), and `Start-Process` / `Invoke-Item` of a downloaded document (`readme.txt`, `notes.pdf`) read as running it. An opener now runs only a program-like file (`.exe`, `.msi`, `.ps1`, `.bat`, `.cmd`, `.vbs`, …, or no extension), and `Start-Process msiexec -ArgumentList '/i x.msi'` is still denied.
 - Claude Code's settings under `CLAUDE_CONFIG_DIR` (`$CLAUDE_CONFIG_DIR/settings.json`, `settings.local.json`) are guarded like `~/.claude/settings*.json`: an assistant's `Write` / `Edit` that switches the hooks off is denied, compared through the same path resolution, and so is a shell write there that names a loosening key (`> "$CLAUDE_CONFIG_DIR/settings.json"`, `> ~/.claude-conta2/settings.json`).
 - The project root the hooks find without `CLAUDE_PROJECT_DIR` is never the home directory or one of its ancestors, nor the temp directory itself: a stray `.guardian` in either made every unmarked project below it take its configuration from there. Nothing qualifying leaves the working directory.
+- The READMEs and `docs/ci.md` say what `--local-only` keeps local — Semgrep's rules on disk, the project's and the plugin's packs — and that Trivy, NuGet and Semgrep's version check still go out.
 - A runner's options are read per runner. One table for all of them made `-n`, `-i`, `-s` and `-k` take a value, so `sudo -n rm -rf /` (and `-i`, `-s`, `-k`) only warned as sudo, and `env -i rm -rf /` was ok.
 
 ## [3.0.0] - 2026-09-29
