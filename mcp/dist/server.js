@@ -40895,7 +40895,10 @@ function attachAllTools(server, ctx) {
   }
 }
 function strictInputSchema(tool50) {
-  return external_exports.object(tool50.inputSchema).strict();
+  const schema = external_exports.object(tool50.inputSchema).strict();
+  const parse8 = schema.safeParseAsync.bind(schema);
+  schema.safeParseAsync = (data, params) => parse8(data ?? {}, params);
+  return schema;
 }
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
@@ -65839,7 +65842,10 @@ async function probeInstalled(probePath, slug) {
     cwd: probePath,
     timeoutMs: 3e4
   });
-  const failed = (reason) => unknown4({ name: "wp-cli", status: "failed", reason }, `The WP-CLI probe of ${probePath} failed: ${reason}.`);
+  const failed = (reason) => unknown4(
+    { name: "wp-cli", status: "failed", reason },
+    `The WP-CLI probe of ${probePath} failed: ${reason}${/[.!?]$/.test(reason) ? "" : "."}`
+  );
   if (r.outcome !== "completed") {
     const stderr = r.stderr.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
     return failed(`${r.outcome}, exit ${r.exitCode ?? "?"}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ""}`);

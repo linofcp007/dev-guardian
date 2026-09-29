@@ -243,8 +243,12 @@ async function probeInstalled(probePath: string, slug: string): Promise<InstallP
     cwd: probePath,
     timeoutMs: 30_000,
   });
+  // WP-CLI's own messages end in a full stop; the sentence gets one only when it has none.
   const failed = (reason: string): InstallProbe =>
-    unknown({ name: 'wp-cli', status: 'failed', reason }, `The WP-CLI probe of ${probePath} failed: ${reason}.`);
+    unknown(
+      { name: 'wp-cli', status: 'failed', reason },
+      `The WP-CLI probe of ${probePath} failed: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}`,
+    );
   if (r.outcome !== 'completed') {
     const stderr = r.stderr.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
     return failed(`${r.outcome}, exit ${r.exitCode ?? '?'}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ''}`);

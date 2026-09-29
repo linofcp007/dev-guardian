@@ -103,6 +103,47 @@ describe('an argument a tool does not take is an error', () => {
   });
 });
 
+// Review 3.0 round 3 (N7): the MCP spec makes `arguments` optional, but a
+// tools/call without it got -32602 "Required" from every tool — measured on
+// 430c797 too, before the schemas were strict — including check_toolchain,
+// which takes no parameters at all. A missing `arguments` is now `{}`.
+describe('a tools/call with no arguments', () => {
+  const allOptional = (t: ToolModule): boolean => Object.values(t.inputSchema).every((s) => s.isOptional());
+
+  it('check_toolchain, which takes no parameters, runs', async () => {
+    const client = await connect();
+    const spy = neverRuns(getTool('check_toolchain'));
+    const res = await client.callTool({ name: 'check_toolchain' });
+    expect(res.isError).toBeFalsy();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toEqual({});
+  });
+
+  it.each(TOOLS.filter(allOptional).map((t) => [t.name] as const))('%s (every parameter optional) runs', async (name) => {
+    const client = await connect();
+    const spy = neverRuns(getTool(name));
+    const res = await client.callTool({ name });
+    expect(res.isError, textOf(res)).toBeFalsy();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(TOOLS.filter((t) => !allOptional(t)).map((t) => [t.name] as const))(
+    '%s (a required parameter) is -32602 naming that parameter, not the whole object',
+    async (name) => {
+      const client = await connect();
+      const spy = neverRuns(getTool(name));
+      const res = await client.callTool({ name });
+      expect(res.isError).toBe(true);
+      const required = Object.entries(getTool(name).inputSchema)
+        .filter(([, s]) => !s.isOptional())
+        .map(([k]) => k);
+      expect(textOf(res)).toContain('-32602');
+      expect(required.some((k) => textOf(res).includes(k))).toBe(true);
+      expect(spy).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('every registered tool rejects an unknown key', () => {
   it('covers the registry', () => {
     expect(TOOLS.length).toBeGreaterThanOrEqual(59);

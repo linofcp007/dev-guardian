@@ -20,8 +20,12 @@ version bump.
   validated every open finding instead of the one named. Every schema is now
   registered strict: such a call fails with MCP error -32602 naming the key,
   and nothing runs. A caller that relied on extra keys being ignored gets an
-  error it can read. `check_toolchain`, which takes no parameters and which
-  the SDK therefore did not validate at all, now rejects any argument too.
+  error it can read.
+- A `tools/call` with no `arguments` — optional in the MCP spec — is now
+  read as `{}`, so a tool whose parameters are all optional runs, and one
+  with a required parameter names it. Measured on 3.0.0, it was rejected by
+  every tool with -32602 "Required", `check_toolchain` (no parameters at
+  all) included.
 - `validate_finding` accepts `finding_fingerprint`, the name `suppress_finding`
   and `suggest_fix` use, as an alias of `fingerprint`; both with different
   values is an error.
@@ -114,7 +118,8 @@ version bump.
   a `wp-cli` entry in `tools_run` that is `skipped` (and in `missing_tools`)
   or `failed` with the reason, and `coverage: "partial"`. A new `installed`
   field is `null` when unknown and `false` only when WP-CLI listed the
-  install's plugins without this one.
+  install's plugins without this one. The warning no longer doubles WP-CLI's
+  own full stop ("installation.. The").
 
 ### Security
 

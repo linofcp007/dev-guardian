@@ -222,6 +222,9 @@ describe('wp_plugin_check — what it says it does, and a probe that did not ans
     expect(r.active).toBeNull();
     expect(r.coverage).toBe('partial');
     expect(r.warnings).toEqual([expect.stringMatching(reason)]);
+    // Round 3 (N8): WP-CLI's own message ends in a full stop, and the warning
+    // added another — "installation.. The installed version…".
+    expect(r.warnings[0]).not.toMatch(/\.\.\s/);
     expect(wpCli(plugin, r)).toMatchObject({ status: 'failed', reason: expect.stringMatching(reason) });
     expect(r.tools_run).toContainEqual(expect.objectContaining({ name: 'wp-cli', status: 'failed' }));
   });

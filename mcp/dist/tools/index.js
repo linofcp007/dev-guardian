@@ -28,9 +28,12 @@ export function registerToolModule(tool) {
  * false`. A misnamed parameter therefore became the default instead of an
  * error — `scan_skill { project_path }` (it takes `target`) audited the
  * server's working directory and answered SAFE. Strict, the SDK answers
- * -32602 naming the key, before the handler runs. (A tool with no
- * parameters used to get no validation at all: the SDK skips an empty
- * shape.)
+ * -32602 naming the key, before the handler runs.
+ *
+ * A call with no `arguments` at all (the MCP spec makes the field optional)
+ * validates as `{}`. Measured on 430c797, before the schemas were strict, it
+ * was already rejected — -32602 "Required" from every tool, `check_toolchain`
+ * (no parameters at all) included — and an unknown key was stripped.
  */
 export function attachAllTools(server, ctx) {
     for (const tool of TOOLS) {
@@ -53,9 +56,21 @@ export function attachAllTools(server, ctx) {
         });
     }
 }
-/** The schema a tool is registered with: its shape, rejecting any other key. */
+/**
+ * The schema a tool is registered with: its shape, rejecting any other key,
+ * and reading an absent `arguments` as `{}`.
+ *
+ * The default is applied on THIS instance's `safeParseAsync`, the one call
+ * the SDK validates tool input with, rather than with `z.preprocess` or
+ * `.default({})`: the SDK lists a tool's JSON schema only when the schema it
+ * was given is an object (`.shape`), and either wrapper would turn every
+ * tool's advertised schema into an empty one.
+ */
 export function strictInputSchema(tool) {
-    return z.object(tool.inputSchema).strict();
+    const schema = z.object(tool.inputSchema).strict();
+    const parse = schema.safeParseAsync.bind(schema);
+    schema.safeParseAsync = (data, params) => parse(data ?? {}, params);
+    return schema;
 }
 /**
  * A handler's result as the MCP host receives it. Per-file gap lists are cut
