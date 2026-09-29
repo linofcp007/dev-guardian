@@ -460,6 +460,13 @@ version bump.
   string writes each line it reads into the `-c` script as well — and that was `ok`. A shell's `-c` script or an
   interpreter's program text holding the replacement string (`-I R`, `-i`, `--replace`, BSD's `-J`) now reads its
   stdin as a program; `xargs -n1 sh -c 'echo "$0"'`, which passes each line as an argument, does not.
+- **Three hard links the Write guard catches, the shell guard let through.** `ni -it HardLink … -Target
+  .guardian\hooks.config.json` (`-ItemType` abbreviated), `cp -al .guardian backup` (a hard-link copy of the whole
+  tree) and `ln .claude/settings.json s.json` (a hard link to Claude Code's settings, through which a later shell
+  write names neither file) were `ok`. `New-Item` now reads its parameters and its `-ItemType` in any abbreviation
+  PowerShell accepts (`-it`, `-ty`, `-va`; `h`, `Hard`, `sym`), and a hard link to the settings or a hard-link copy
+  of `.guardian`, `~/.config/dev-guardian` or `.claude` is denied. `ln -s`, `cp -a` without `-l`, and a hard link
+  between ordinary files are not.
 
 ## [3.0.0] - 2026-09-29
 

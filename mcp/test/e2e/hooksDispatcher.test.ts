@@ -1391,6 +1391,25 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     expect(hook('git ls-files -z | xargs -0 rm').stdout).toBeUndefined();
   });
 
+  // Review of 3.0, wave 2, item A.
+  describe('hard links the Write guard catches, refused by the shell guard too (review 3.0 wave 2)', () => {
+    const hook = (tool: string, command: string): HookResult =>
+      runHook(preToolUse(tool, { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
+    it.each([
+      ['PowerShell', 'ni -it HardLink -Path notes.json -Target .guardian\\hooks.config.json'],
+      ['Bash', 'cp -al .guardian backup'],
+      ['Bash', 'ln .claude/settings.json s.json'],
+    ])('%s: %s is denied', (tool, command) => {
+      expect(hook(tool, command).stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+    it.each([
+      ['Bash', 'cp -a .guardian backup'],
+      ['Bash', 'ln -s .claude/settings.json s.json'],
+    ])('%s: %s is not', (tool, command) => {
+      expect(hook(tool, command).stdout).toBeUndefined();
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

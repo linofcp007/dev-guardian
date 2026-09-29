@@ -1608,7 +1608,6 @@ function lnDestinations(args: readonly string[]): string[] {
   return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
 
-/** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
 /** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
 function lnHardSources(args: readonly string[]): string[] {
   if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
@@ -1628,8 +1627,43 @@ function lnHardSources(args: readonly string[]): string[] {
   return dir || names.length < 2 ? names : names.slice(0, -1);
 }
 
+/**
+ * `New-Item`'s parameters that take a value, by the name the code below uses,
+ * with every name and alias it may be spelled by. PowerShell takes any
+ * unambiguous prefix of one (review 3.0, wave 2: `ni -it HardLink` is
+ * `-ItemType`), so two letters or more name the parameter they begin — `-n`
+ * alone is `-Name`, the one parameter that letter can start.
+ */
+const NEW_ITEM_VALUED: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['type', ['itemtype', 'type']],
+  ['path', ['path', 'literalpath', 'pspath', 'lp']],
+  ['name', ['name']],
+  ['target', ['value', 'target']],
+  ['credential', ['credential']],
+];
+
+function newItemParam(spelled: string): string | undefined {
+  for (const [param, names] of NEW_ITEM_VALUED) {
+    if (names.some((n) => n === spelled || (spelled.length >= (param === 'name' ? 1 : 2) && n.startsWith(spelled)))) return param;
+  }
+  return undefined;
+}
+
+/**
+ * The item type a FileSystem `-ItemType` value names. The provider matches
+ * the value as a prefix, wildcards allowed, in this order — so `h` and
+ * `Hard` are `HardLink`, `s*` is `SymbolicLink` — and `''` is a file.
+ */
+function itemTypeOf(value: string): string {
+  if (value === '') return 'file';
+  const pattern = `${value.toLowerCase()}*`;
+  if (wildcardMatch(pattern, 'directory') || wildcardMatch(pattern, 'container')) return 'directory';
+  return ['file', 'symboliclink', 'junction', 'hardlink'].find((t) => wildcardMatch(pattern, t)) ?? 'unknown';
+}
+
+/** `New-Item`'s item type ({@link itemTypeOf}) and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
 function newItemArgs(args: readonly string[]): { itemType: string; paths: string[]; target?: string } {
-  let itemType = '';
+  let spelledType = '';
   let target: string | undefined;
   const paths: string[] = [];
   const positional: string[] = [];
@@ -1640,16 +1674,16 @@ function newItemArgs(args: readonly string[]): { itemType: string; paths: string
       positional.push(a);
       continue;
     }
-    const name = (param[1] ?? '').toLowerCase();
+    const name = newItemParam((param[1] ?? '').toLowerCase());
     const inline = param[2];
-    const takesValue = ['path', 'literalpath', 'name', 'itemtype', 'type', 'target', 'value', 'credential'].includes(name);
-    const value = inline !== undefined ? inline : takesValue ? (args[++i] ?? '') : undefined;
+    const value = inline !== undefined ? inline : name !== undefined ? (args[++i] ?? '') : undefined;
     if (value === undefined) continue;
-    if (name === 'itemtype' || name === 'type') itemType = value;
-    else if (name === 'path' || name === 'literalpath' || name === 'name') paths.push(value);
-    else if (name === 'target' || name === 'value') target = value;
+    if (name === 'type') spelledType = value;
+    else if (name === 'path' || name === 'name') paths.push(value);
+    else if (name === 'target') target = value;
   }
   if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? '');
+  const itemType = itemTypeOf(spelledType);
   return target === undefined ? { itemType, paths } : { itemType, paths, target };
 }
 
@@ -2186,9 +2220,9 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
     case 'new-item':
     case 'ni': {
       const item = newItemArgs(args);
-      if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType)) pushAll(e.links, item.paths.map(at));
-      if (/^hardlink$/i.test(item.itemType) && item.target !== undefined) e.hardLinkSources.push(at(item.target));
-      else if (item.itemType === '' || /^file$/i.test(item.itemType)) pushAll(e.writes, item.paths.map(at));
+      if (['symboliclink', 'hardlink', 'junction'].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
+      if (item.itemType === 'hardlink' && item.target !== undefined) e.hardLinkSources.push(at(item.target));
+      else if (item.itemType === 'file') pushAll(e.writes, item.paths.map(at));
       return e;
     }
     case 'cp':
@@ -2817,8 +2851,12 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
 const RULE_HARD_LINK: MatchedRule = {
   id: 'guard-config-hard-link',
   level: 'block',
-  reason: "Makes a hard link to the guardrail hooks' own configuration — a second name through which it can be rewritten",
+  reason:
+    "Makes a hard link to the guardrail hooks' own configuration or to Claude Code's settings — a second name through which it can be rewritten",
 };
+
+/** The directory that holds Claude Code's project or user settings; separators optional as in `HOOK_CONFIG_PATH`. */
+const CLAUDE_DIR = /\.claude\/?$/i;
 
 const RULE_SPECIAL: MatchedRule = {
   id: 'guard-config-special-file',
@@ -2878,7 +2916,13 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
-  if (e.hardLinkSources.some(isHookConfigPath)) out.push({ ...RULE_HARD_LINK });
+  // A hard link to a configuration file, to Claude Code's settings (the Write
+  // guard judges a write through one as that file; a shell write through one
+  // names neither), or — `cp -al` — to every file of a directory that holds
+  // them (review 3.0, wave 2).
+  const linksGuarded = (p: string): boolean =>
+    isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
+  if (e.hardLinkSources.some(linksGuarded)) out.push({ ...RULE_HARD_LINK });
   if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }

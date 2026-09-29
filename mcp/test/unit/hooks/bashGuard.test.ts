@@ -2866,3 +2866,59 @@ describe('assessBashCommand — xargs writing its input into program text (revie
     expect(verdict(command)).toEqual({ command, level: 'ok' });
   });
 });
+
+// Review of 3.0, wave 2, item A: three hard links the Write guard catches when
+// they are written through, and the shell guard let the command make.
+describe('assessBashCommand — hard links the Write guard catches, refused by the shell guard too (review 3.0 wave 2, item A)', () => {
+  it.each([
+    ['ni -it HardLink -Path notes.json -Target .guardian\\hooks.config.json', 'powershell'],
+    ['New-Item -ItemType Hard -Path notes.json -Target .guardian\\hooks.config.json', 'powershell'],
+    ['New-Item -ty h -Path notes.json -Va .guardian\\hooks.config.json', 'powershell'],
+    ['ni -Type HardLink notes.json -Target .guardian\\hooks-allowlist.json', 'powershell'],
+    ['cp -al .guardian backup', 'bash'],
+    ['cp -rl .guardian /tmp/g', 'bash'],
+    ['cp -a --link ~/.config/dev-guardian /tmp/dg', 'bash'],
+    ['ln .claude/settings.json s.json', 'bash'],
+    ['ln ~/.claude/settings.local.json s.json', 'bash'],
+    ['ln "$CLAUDE_CONFIG_DIR/settings.json" s.json', 'bash'],
+    ['cp -l .claude/settings.json s.json', 'bash'],
+    ['cp -al .claude /tmp/c', 'bash'],
+    ['New-Item -ItemType HardLink -Path s.json -Target .claude\\settings.json', 'powershell'],
+    ['cmd /c mklink /H s.json .claude\\settings.json', 'powershell'],
+    ['fsutil hardlink create s.json .claude\\settings.local.json', 'powershell'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('guard-config-hard-link');
+  });
+
+  it.each([
+    'ni -it SymbolicLink -Path .guardian\\hooks.config.json -Target C:\\elsewhere\\x.json',
+    'New-Item -ItemType sym -Path .guardian\\hooks.config.json -Value C:\\elsewhere\\x.json',
+    'ni -it Junction -Path .guardian -Target C:\\elsewhere',
+  ])('an abbreviated -ItemType still makes a link AT the configuration: %s', (command) => {
+    expect(assessBashCommand(command, { shell: 'powershell' }).rules).toContain('guard-config-special-file');
+  });
+
+  it('an abbreviated -ItemType File still writes it', () => {
+    expect(assessBashCommand('ni -it f -Path .guardian\\hooks.config.json -Va "{}"', { shell: 'powershell' }).rules).toContain(
+      'guard-config-shell-write',
+    );
+  });
+
+  it.each([
+    ['ln -s .claude/settings.json s.json', 'bash'],
+    ['cp .claude/settings.json backup.json', 'bash'],
+    ['cp -a .guardian backup', 'bash'],
+    ['cp -r .guardian /tmp/g', 'bash'],
+    ['cp -al src backup', 'bash'],
+    ['ln notes.txt other.txt', 'bash'],
+    ['ni -it Directory -Path build', 'powershell'],
+    ['ni -it d build', 'powershell'],
+    ['New-Item -it File -Path notes.txt', 'powershell'],
+    ['ni -ItemType SymbolicLink -Path b.json -Target .guardian\\hooks.config.json', 'powershell'],
+    ['New-Item -ItemType HardLink -Path b.txt -Target a.txt', 'powershell'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
+  });
+});
