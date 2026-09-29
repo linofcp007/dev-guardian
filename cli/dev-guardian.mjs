@@ -24,6 +24,10 @@
  *                             --accept-partial-parse <path>  repeatable, CLI ARGV
  *                                                      ONLY: accept that Semgrep
  *                                                      only partly parsed <path>
+ *                             --baseline-ref <ref>     read .guardian/baseline.json
+ *                                                      from that commit, never the tree
+ *                             --rules-ref <ref>        read the project's Semgrep rules
+ *                                                      and ignore files from that commit
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -296,6 +300,20 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          --base-url, DAST never probed routes in those spans.
                          CLI ARGV ONLY, like --start-command: a repository
                          file declaring it is refused.
+  --baseline-ref <ref>  Read .guardian/baseline.json from the commit <ref> names
+                         (git, never the working tree). For a pull request: its
+                         base (the ci-init pipelines pass it), so the pull request
+                         cannot add its own findings to the baseline it is gated
+                         against. None at <ref> is no baseline; a <ref> that names
+                         no commit (not fetched) is exit 3.
+  --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
+                         those .dev-guardian/configs.json records), .guardianignore,
+                         .trivyignore and .bandit from <ref> instead of the tree:
+                         a pull request cannot delete the rule that catches it.
+                         .semgrepignore, .gitleaks.toml, .gitleaksignore, actionlint
+                         and zizmor configuration and the .NET build's files are
+                         still read from the tree — each one the tree changes
+                         against <ref> is named in the report. See docs/ci.md.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines
@@ -720,7 +738,7 @@ async function loadCiModules() {
     );
     process.exit(USAGE_ERROR_EXIT);
   }
-  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types] = await Promise.all([
+  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig] = await Promise.all([
     import('../mcp/dist/ci/types.js'),
     import('../mcp/dist/ci/baseline.js'),
     import('../mcp/dist/ci/gate.js'),
@@ -728,6 +746,7 @@ async function loadCiModules() {
     import('../mcp/dist/ci/runScans.js'),
     import('../mcp/dist/ci/appRunner.js'),
     import('../mcp/dist/types.js'),
+    import('../mcp/dist/ci/refConfig.js'),
   ]);
   return {
     CI_EXIT: ciTypes.CI_EXIT,
@@ -743,6 +762,8 @@ async function loadCiModules() {
     runScans: runScansMod.runScans,
     startApp: appRunner.startApp,
     SEVERITIES: types.SEVERITIES,
+    resolveCiRef: refConfig.resolveCiRef,
+    readBaselineAtRef: refConfig.readBaselineAtRef,
   };
 }
 
@@ -949,10 +970,27 @@ function parseScanArgs(argv) {
     localOnly: false,
     startCommand: undefined,
     acceptPartialParse: [],
+    baselineRef: undefined,
+    rulesRef: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project') {
+    const ref = refFlag(a);
+    if (ref !== null) {
+      // requireNonEmpty: an unset CI variable (`--baseline-ref "$BASE"`) must
+      // not silently fall back to the tree's own baseline — exit 3 instead.
+      let value;
+      if (a === ref.flag) {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        value = r.value;
+        i = r.nextIndex;
+      } else {
+        value = a.slice(ref.flag.length + 1);
+        if (isMissingOperand(value, true)) return { error: `${ref.flag} requires a value` };
+      }
+      out[ref.key] = value;
+    } else if (a === '--project') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.project = r.value;
@@ -1014,6 +1052,21 @@ function parseScanArgs(argv) {
     } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
+}
+
+/**
+ * `--baseline-ref` / `--rules-ref` in either spelling (`--x v`, `--x=v`), or
+ * null. Both take a git ref and are read against the scanned project's
+ * repository (`mcp/src/ci/refConfig.ts`).
+ */
+function refFlag(a) {
+  for (const [flag, key] of [
+    ['--baseline-ref', 'baselineRef'],
+    ['--rules-ref', 'rulesRef'],
+  ]) {
+    if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
+  }
+  return null;
 }
 
 function parseBaselineUpdateArgs(argv) {
@@ -1222,6 +1275,8 @@ async function cmdScan(argv) {
     startApp,
     BASELINE_RELATIVE_PATH,
     SEVERITIES,
+    resolveCiRef,
+    readBaselineAtRef,
   } = ci;
 
   if (!SEVERITIES.includes(opts.failOn)) {
@@ -1237,6 +1292,23 @@ async function cmdScan(argv) {
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+
+  // --baseline-ref / --rules-ref (docs/ci.md): resolved, and the baseline
+  // read, before anything starts or scans — a ref that names no commit, or a
+  // baseline at it too large to read, is a usage error (exit 3), never "no
+  // baseline" and never the tree's own copy.
+  let baselineRef = null;
+  let rulesRef = null;
+  let baselineAtRef = null;
+  try {
+    if (opts.baselineRef !== undefined) {
+      baselineRef = await resolveCiRef(projectPath, opts.baselineRef, '--baseline-ref');
+      baselineAtRef = await readBaselineAtRef(projectPath, baselineRef);
+    }
+    if (opts.rulesRef !== undefined) rulesRef = await resolveCiRef(projectPath, opts.rulesRef, '--rules-ref');
+  } catch (e) {
+    return usageError(e instanceof Error ? e.message : String(e));
+  }
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -1270,6 +1342,7 @@ async function cmdScan(argv) {
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
+      ...(rulesRef !== null ? { rulesRef } : {}),
     });
   } catch (e) {
     pipelineError = e;
@@ -1288,8 +1361,23 @@ async function cmdScan(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-  const baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+  let baselineText;
+  let baselineSource;
+  if (baselineRef !== null && baselineAtRef !== null) {
+    baselineText = baselineAtRef.text;
+    baselineSource = {
+      from: 'ref',
+      path: BASELINE_RELATIVE_PATH,
+      ref: baselineRef.ref,
+      commit: baselineRef.commit,
+      present: baselineAtRef.text !== null,
+      tree_differs: baselineAtRef.treeDiffers,
+    };
+  } else {
+    const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
+    baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+    baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
+  }
   const parsedBaseline = parseBaseline(baselineText);
 
   const verdict = evaluateGate({
@@ -1300,6 +1388,8 @@ async function cmdScan(argv) {
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
+    baselineSource,
+    rulesSource: result.rulesSource,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human

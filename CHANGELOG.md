@@ -419,6 +419,37 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Security
 
+- **A pull request could gate itself.** `dev-guardian scan` read `.guardian/baseline.json`, the
+  project's Semgrep rules and its `.guardianignore` from the checkout it scanned — on a pull
+  request, the pull request's own. A fork adopted its new finding into the baseline, or deleted
+  the rule that caught it from `.semgrep.yml`, or listed the file in `.guardianignore`, and the
+  gate passed (reproduced: exit 0 each way). Two new flags take them from a commit the pull
+  request does not control:
+  - `--baseline-ref <ref>` reads the baseline with git from that commit (size-checked), never
+    from the working tree. None there is no baseline; a ref that names no commit, or an empty
+    value, is exit 3.
+  - `--rules-ref <ref>` copies `.semgrep.yml`/`.semgrep.yaml` and the rule files the ref's
+    `.dev-guardian/configs.json` records, `.guardianignore`, `.trivyignore` and `.bandit` from
+    that commit and hands the scanners the copy. Findings keep the rule id a scan of the checkout
+    stores, so the base's baseline still matches. A file the ref lacks is read from nowhere; one
+    it has but that cannot be copied stops the scan (exit 3); Semgrep's Docker fallback, which
+    would read the checkout's rules, is not used.
+  - What cannot come from a ref is named instead: `.semgrepignore` (Semgrep has only internal
+    flags for it), `.gitleaks.toml` and `.gitleaksignore` (gitleaks 8.30.1 reads the source's
+    `.gitleaksignore` whatever `--gitleaks-ignore-path` says — measured — so taking only the
+    config from the ref would protect nothing), actionlint's and zizmor's configuration, and the
+    .NET build's files. Each one the pull request adds, changes or deletes is listed in the report,
+    without changing the exit code.
+  - The human and JSON reports now say where the baseline and the rules came from
+    (`baseline_source`, `rules_source` with `tree_differences`) on every run.
+  - The `ci-init` pipelines pass both on pull-request pipelines — GitHub
+    `github.event.pull_request.base.sha` (through `env:`), GitLab
+    `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` or `CI_MERGE_REQUEST_DIFF_BASE_SHA` (a merge request
+    pipeline with neither stops), Bitbucket `origin/$BITBUCKET_PR_DESTINATION_BRANCH` (fetched
+    first) — and nothing on a push. Re-run `ci-init --write --force` to get them. The pipeline file
+    itself still comes from the pull request's branch on all three: protect it with a required
+    review. See docs/ci.md, "A pull request cannot gate itself".
+
 - **`scan_skill` read the commands in a SKILL.md as nothing.** Every
   exfiltration, supply-chain and dangerous-code rule was a `code` rule, and a
   `.md` file is not code: a skill whose fenced ```` ```bash ```` block, inline

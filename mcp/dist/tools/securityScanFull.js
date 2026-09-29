@@ -58,7 +58,7 @@ registerToolModule(makeScanTool({
     // scan_secrets reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
-    rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { projectPath, plugin, rulesProjectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     inputSchema: {
         project_path: ProjectPath,
         severity_min: SeverityMin,

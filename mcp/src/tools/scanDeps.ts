@@ -103,6 +103,8 @@ registerToolModule(
         target: ctx.projectPath,
         workDir: reportDir,
         ignoreFrom: ctx.projectPath,
+        // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+        ...(ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {}),
         env: ctx.scriptEnv,
         signal: ctx.signal,
         onLog: ctx.onLog,

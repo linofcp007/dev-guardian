@@ -167,7 +167,9 @@ For a pipeline, not a conversation: `node cli/dev-guardian.mjs scan` runs the sa
 scan pipeline as the MCP tools, gated against a committed `.guardian/baseline.json`;
 `node cli/dev-guardian.mjs baseline update` is the only command that writes it. Exit codes: `0`
 pass, `1` gate failed, `2` incomplete scan (a scanner didn't run — never read as a
-pass), `3` usage error. Distribution is `git clone --depth 1` at a pinned tag (not
+pass), `3` usage error. On a pull request, pass `--baseline-ref <base>` and
+`--rules-ref <base>` (the `ci-init` pipelines do): without them the pull request's own
+baseline and Semgrep rules gate it. Distribution is `git clone --depth 1` at a pinned tag (not
 `npx`) plus `npm ci` in `mcp/` — see the README's "Run scans in CI" section for a
 copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAST
 pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository

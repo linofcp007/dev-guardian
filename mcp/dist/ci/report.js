@@ -66,9 +66,16 @@ export function renderHuman(v) {
     const lines = [
         `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
         `coverage: ${v.coverage}`,
+        // Where the baseline and the rules came from, every run: on a pull
+        // request, "the scanned tree's own" is the pull request's (docs/ci.md).
+        describeBaselineSource(v.baselineSource),
+        describeRulesSource(v.rulesSource),
     ];
     if (v.baselineAbsent) {
-        lines.push('no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline');
+        lines.push(v.baselineSource.from === 'ref'
+            ? `no usable baseline at ${v.baselineSource.ref} — run \`dev-guardian baseline update\` on that branch and ` +
+                'commit .guardian/baseline.json there to adopt its findings'
+            : 'no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline');
     }
     lines.push(`new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`);
     if (v.coverageGaps.length > 0) {
@@ -99,7 +106,46 @@ export function renderHuman(v) {
         for (const s of v.suppressedByRepoConfig)
             lines.push(`  - ${s.step}: ${s.tool}: ${suppressionNote(s)}`);
     }
+    // --rules-ref: configuration the tree changes against the ref. What the
+    // gate read from the tree anyway comes first — a reviewer's to judge.
+    if (v.rulesSource.from === 'ref') {
+        const { ref, tree_differences: diffs } = v.rulesSource;
+        const applied = diffs.filter((d) => d.applied === 'tree');
+        const notApplied = diffs.filter((d) => d.applied === 'ref');
+        if (applied.length > 0) {
+            lines.push(`read from the scanned tree although it differs from ${ref} (no ref can supply it — review it):`);
+            for (const d of applied)
+                lines.push(`  - ${d.path} (${d.change}; read by ${d.read_by.join(', ')})`);
+        }
+        if (notApplied.length > 0) {
+            lines.push(`changed in the scanned tree, not applied (${ref}'s copy was read):`);
+            for (const d of notApplied)
+                lines.push(`  - ${d.path} (${d.change})`);
+        }
+    }
     return `${lines.join('\n')}\n`;
+}
+function shortCommit(commit) {
+    return commit.slice(0, 12);
+}
+/** The one line naming where the baseline came from. */
+function describeBaselineSource(b) {
+    if (b.from === 'tree')
+        return `baseline: ${b.path} in the scanned tree (no --baseline-ref)`;
+    const at = `${b.ref} (${shortCommit(b.commit)})`;
+    const differs = b.tree_differs ? " — the scanned tree's copy differs and was not read" : '';
+    return b.present
+        ? `baseline: ${b.path} at ${at}${differs}`
+        : `baseline: none at ${at}, so every finding is new${differs}`;
+}
+/** The one line naming where the rules and scanner configuration came from. */
+function describeRulesSource(r) {
+    if (r.from === 'tree')
+        return "rules and configuration: the scanned tree's own (no --rules-ref)";
+    const at = `${r.ref} (${shortCommit(r.commit)})`;
+    const read = r.copied.length > 0 ? r.copied.join(', ') : 'none — the ref has none of them';
+    const absent = r.absent.length > 0 ? `; not at the ref, so none read: ${r.absent.join(', ')}` : '';
+    return `rules and configuration: from ${at}: ${read}${absent}`;
 }
 function describeFinding(f) {
     const location = f.file_path !== undefined
@@ -125,6 +171,8 @@ export function renderJson(v) {
         accepted_gaps: v.acceptedGaps,
         unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
         suppressed_by_repo_config: v.suppressedByRepoConfig,
+        baseline_source: v.baselineSource,
+        rules_source: v.rulesSource,
     };
     return JSON.stringify(payload, null, 2);
 }

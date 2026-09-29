@@ -64,6 +64,17 @@
 #      `dev-guardian baseline update`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
+#      In a merge request pipeline the baseline, the project's Semgrep rules
+#      and its .guardianignore/.trivyignore/.bandit are read from the target
+#      branch's commit (`--baseline-ref`/`--rules-ref`:
+#      CI_MERGE_REQUEST_TARGET_BRANCH_SHA in a merged results pipeline, else
+#      the merge base, CI_MERGE_REQUEST_DIFF_BASE_SHA), never from the merge
+#      request's own tree, which could otherwise adopt its own findings or
+#      delete the rule that catches them (docs/ci.md). With GIT_DEPTH "0"
+#      that commit is already here; if not, the target branch is fetched.
+#      On a branch pipeline nothing is passed and the committed files are
+#      the gate. The pipeline file itself is the merge request's too:
+#      protect it (CODEOWNERS, a required approval).
 #   7. Archives the SARIF report as a job artifact either way (`when:
 #      always`), so it survives a failed gate. Unlike GitHub's code
 #      scanning, GitLab's own Security Dashboard does not ingest a plain
@@ -121,7 +132,18 @@ dev-guardian:
     - pipx install "semgrep=={{SEMGREP_VERSION}}"
     - pipx install "zizmor=={{ZIZMOR_VERSION}}"
     - export PATH="$HOME/.local/bin:$PATH"
-    - node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif
+    - |
+      set --
+      if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+        base="${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}}"
+        if [ -z "$base" ]; then
+          echo "merge request pipeline without CI_MERGE_REQUEST_DIFF_BASE_SHA: no base commit to gate against" >&2
+          exit 3
+        fi
+        git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        set -- --baseline-ref "$base" --rules-ref "$base"
+      fi
+      node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
   artifacts:
     when: always
     paths:

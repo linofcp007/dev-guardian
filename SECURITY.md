@@ -227,6 +227,19 @@ their respective projects.
   `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
   ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
   is named on every run of a scan it shapes.
+- **A pull request does not choose its own gate.** On a pull request, the
+  checkout's `.guardian/baseline.json`, Semgrep rules and ignore files are the
+  pull request's: read from there, a fork adopted its own finding into the
+  baseline, or deleted the rule that caught it, and passed. `scan
+  --baseline-ref <ref>` reads the baseline from a commit with git, and
+  `--rules-ref <ref>` copies the project's Semgrep rules, `.guardianignore`,
+  `.trivyignore` and `.bandit` from it (`mcp/src/ci/refConfig.ts`); the
+  `ci-init` pipelines pass the pull request's base. What no scanner can take
+  from a ref — `.semgrepignore`, gitleaks' two files, actionlint's and
+  zizmor's configuration, the .NET build's files — is named in the report
+  whenever the pull request changes it. The pipeline file itself runs from the
+  pull request's branch on every host: it needs a required review
+  ([docs/ci.md](docs/ci.md#a-pull-request-cannot-gate-itself)).
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).

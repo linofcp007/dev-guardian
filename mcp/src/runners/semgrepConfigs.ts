@@ -148,17 +148,24 @@ export interface SemgrepConfigPlan {
   nothingToRun: boolean;
 }
 
+/**
+ * `projectPath` is the project whose rule configuration runs (a worktree's
+ * origin for create_fix_pr, the CI gate's `--rules-ref` copy); `scannedPath`
+ * the tree Semgrep scans, which decides whether `p/csharp` joins the registry
+ * ruleset — the same tree, unless the rules come from elsewhere.
+ */
 export function planSemgrepConfigs(
   projectPath: string,
   plugin: PluginContext,
   localOnly: boolean,
+  scannedPath: string = projectPath,
 ): SemgrepConfigPlan {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
   const legacy = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, projectPath));
   const projectConfigs = inspection.usable.map((c) => c.path);
   const local = [...projectConfigs, ...custom.usable];
-  const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(projectPath) ? ['p/csharp'] : [])];
+  const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(scannedPath) ? ['p/csharp'] : [])];
   // Never pass a --config that does not resolve: Semgrep aborts the WHOLE
   // scan when one fails to load. A damaged install without the pack says so.
   const llmPack = llmRulesPath();

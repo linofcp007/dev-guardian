@@ -34,6 +34,8 @@ node dev-guardian.mjs baseline update --project .
 | `--base-url <url>` + `--authorized-target` | include `scan_dast` against a running app you are authorized to test |
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
 | `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. |
+| `--baseline-ref <ref>` | read `.guardian/baseline.json` from the commit `<ref>` names, never from the checkout — see [below](#a-pull-request-cannot-gate-itself) |
+| `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore` and `.bandit` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
 
 | Exit code | `scan` | `baseline update` |
 | ---: | --- | --- |
@@ -92,6 +94,46 @@ suppressed by the repository's own configuration (not counted by the gate):
 
 The JSON carries the same under `suppressed_by_repo_config` (step, scanner, file, count, ids and the first findings), and the SARIF carries each suppressed finding as a result with `suppressions: [{ "kind": "external", "justification": "suppressed by the repository's .trivyignore" }]`. They change neither the exit code nor coverage. `trivy config` (the IaC pass) cannot list what it suppressed; the line then says so instead of a count, as it does for a Trivy older than 0.50.0. Review changes to `.trivyignore` like code: `review_pr` warns when a diff edits it.
 
+### A pull request cannot gate itself
+
+A pull request's checkout holds the pull request's own `.guardian/baseline.json` and its own scanner configuration. Read from there, the change under review decides how it is judged: a fork adds its new finding to the baseline, deletes the rule that would catch it from `.semgrep.yml`, or lists the file in `.guardianignore` — and the gate passes. Two flags take those files from a commit the pull request does not control, its base:
+
+```text
+node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA"
+```
+
+- `--baseline-ref <ref>` reads `.guardian/baseline.json` with git from the commit `<ref>` names (size-checked first, at most 32 MiB), never from the working tree. None at that commit means no baseline: every finding is new. A `<ref>` that names no commit — a shallow clone, a base branch the checkout never fetched — is exit 3, never "no baseline" and never the checkout's copy. So is an empty value: `--baseline-ref "$BASE"` with `BASE` unset.
+- `--rules-ref <ref>` copies these files from `<ref>` into a temporary directory and hands the scanners that copy; the checkout's are not read. A file the ref does not have is read from nowhere — the scan runs as the project would without it.
+
+  | File | Read by | From the ref as |
+  | --- | --- | --- |
+  | `.semgrep.yml`, `.semgrep.yaml`, and the rule files the ref's `.dev-guardian/configs.json` records | Semgrep (`scan_sast`) | `--config=<copy>`; findings keep the rule id a scan of the checkout stores, so the baseline still matches |
+  | `.guardianignore` | every scan | the ref's patterns, applied to the checkout's files |
+  | `.trivyignore` | Trivy (`scan_deps`, `scan_iac`) | `--ignorefile <copy>` |
+  | `.bandit` | Bandit (`scan_sast`) | `--ini <copy>` (an empty one when the ref has none) |
+
+  A file the ref has but that cannot be copied — over 8 MiB, a directory, a link leaving the repository, a manifest entry outside the project — stops the scan (exit 3): leaving it out would run fewer rules than the ref says. Without Semgrep on `PATH` the Docker fallback is not used (it would read the checkout's rules): Semgrep is a named gap and the scan exits 2.
+
+- **The rest stays the checkout's, and is named.** Some configuration no flag can take from a ref:
+  - `.semgrepignore` — Semgrep reads every one in the tree it scans; the only flags that would change that are marked internal and unstable in Semgrep 1.176.1.
+  - `.gitleaks.toml` and `.gitleaksignore` — gitleaks 8.30.1 does take its config from `--config`, but reads `<source>/.gitleaksignore` whatever `--gitleaks-ignore-path` says (measured). A fingerprint there hides a secret as surely as an allowlist, so taking one file from the ref and not the other would protect nothing.
+  - actionlint's and zizmor's configuration — the workflows they audit are the pull request's own anyway.
+  - the .NET build's `.editorconfig`, `.globalconfig`, `Directory.Build.props`/`.targets` and NuGet configuration — the build reads them from the tree it compiles.
+
+  Every one of those the pull request adds, changes or deletes against `<ref>` is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
+
+The report always says where both came from — `baseline:` and `rules and configuration:` lines in the human output, `baseline_source` and `rules_source` in the JSON (with `tree_differences`: path, change, which copy was applied, and which scanners read it). A pull-request run that says `in the scanned tree (no --baseline-ref)` is gating the pull request against itself.
+
+The pipelines `ci-init` writes pass both flags on a pull-request pipeline and nothing on a push, where the committed files are the gate:
+
+| CI | Base passed | Fetch |
+| --- | --- | --- |
+| GitHub Actions | `github.event.pull_request.base.sha`, through the step's `env:` | none: `fetch-depth: 0` already fetched the base branch |
+| GitLab CI | `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` in a merged results pipeline, else `CI_MERGE_REQUEST_DIFF_BASE_SHA`; a merge request pipeline with neither stops (exit 3) | the target branch, only when that commit is missing |
+| Bitbucket Pipelines | `origin/$BITBUCKET_PR_DESTINATION_BRANCH` | that branch, first |
+
+**What this does not cover: the pipeline file itself.** GitHub's `pull_request` workflows, GitLab's merge request pipelines and Bitbucket's pull-request pipelines all run the pipeline definition from the pull request's own branch, so a pull request can edit it to drop the flags. Require review of that file (CODEOWNERS on `.github/workflows/`, `.gitlab-ci.yml` or `bitbucket-pipelines.yml`, and a required approval), and read the `baseline:` line of a pull request's report.
+
 ### Things a green pipeline does not tell you
 
 - **SARIF carries one bit of coverage.** `invocation.executionSuccessful` turns `false` when coverage is not full, but SARIF has no field for *which* scanner was missing. That is in exit code 2 and the human/JSON output. Treat an uploaded SARIF with zero results as inconclusive until you have checked the exit code.
@@ -127,7 +169,7 @@ What the generated pipeline does:
 - clones dev-guardian at the release tag named in `.claude-plugin/plugin.json`, **resolved to its commit SHA when you ran `ci-init`** and verified again with `git rev-parse HEAD` after cloning — a tag that moved since is refused. The clone goes to `$RUNNER_TEMP` / `/tmp`, outside the checkout, so dev-guardian's own source is never scanned as part of your project; then `npm ci --omit=dev` in its `mcp/`;
 - installs Trivy, gitleaks and actionlint pinned by version and sha256 (verified against each tool's GitHub release), and bandit, Semgrep and zizmor pinned by exact version through pipx — into a scratch directory, never the checkout. Every pinned value lives in [`configs/ci/pinned.json`](../configs/ci/pinned.json); every GitHub Action is pinned by full commit SHA;
 - on GitHub, installs the .NET SDK only when the project has a root `.csproj`, `.fsproj`, `.sln` or `.slnx`; the GitLab and Bitbucket templates document that requirement instead (without the SDK, a .NET project's scan exits 2);
-- runs `dev-guardian scan --fail-on high` against the committed baseline and uploads SARIF to code scanning on GitHub — only for a complete run (exit 0, or exit 1 with coverage full), never after an incomplete one — or keeps it as a build artifact on GitLab and Bitbucket (neither ingests raw SARIF).
+- runs `dev-guardian scan --fail-on high` against the committed baseline — on a pull request, the base commit's baseline and rules ([above](#a-pull-request-cannot-gate-itself)) — and uploads SARIF to code scanning on GitHub — only for a complete run (exit 0, or exit 1 with coverage full), never after an incomplete one — or keeps it as a build artifact on GitLab and Bitbucket (neither ingests raw SARIF).
 
 Resolving the tag needs `git`: from the local checkout's tags when they are there, otherwise over the network with `git ls-remote`.
 

@@ -234,9 +234,13 @@ function escapeRegExp(text) {
  * of the directory. Either way `PROJECT_WALK_EXCLUDE` (`node_modules`,
  * `.git`, `.guardian`, build output, …) is left out: no scan of the
  * project's own files reads those.
+ *
+ * `configRoot` is where the file itself is read — the project, unless the CI
+ * gate took it from `--rules-ref` (`ci/refConfig.ts`): the ref's copy is then
+ * applied to the project's files, and the project's own is never read.
  */
-export async function loadProjectExclusions(projectPath) {
-    const file = join(projectPath, GUARDIAN_IGNORE_FILE);
+export async function loadProjectExclusions(projectPath, configRoot = projectPath) {
+    const file = join(configRoot, GUARDIAN_IGNORE_FILE);
     let text;
     try {
         text = readFileSync(file, 'utf8');

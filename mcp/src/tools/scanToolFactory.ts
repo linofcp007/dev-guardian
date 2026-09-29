@@ -181,9 +181,17 @@ export interface InvokeContext extends ToolContext {
   /**
    * The project whose rule configuration this scan uses — `projectPath`
    * itself, unless `create_fix_pr` is re-scanning a worktree of another
-   * project (`ToolCallMeta.originProjectPath`).
+   * project (`ToolCallMeta.originProjectPath`), or the CI gate's `--rules-ref`
+   * copy of it (`PluginContext.repoConfigFromRef`): a rule file there is
+   * stored under the id it has from the project root either way.
    */
   rulesProjectPath: string;
+  /**
+   * Where the project's own `.guardianignore`, `.trivyignore` and `.bandit`
+   * are read: `projectPath`, or the CI gate's `--rules-ref` copy
+   * (`PluginContext.repoConfigFromRef.root`, `ci/refConfig.ts`).
+   */
+  configRoot: string;
   /**
    * The resolved `scope` of a scoped call (`supportsScope` tools only), or
    * null for a whole-project scan. The tool scans `scope.files` as explicit
@@ -381,8 +389,10 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
 
   // `.guardianignore`, then the scope (which it narrows) — both before any
   // scan row exists, so a scope that names nothing is an error, not a scan.
+  // The CI gate's `--rules-ref` reads it from the ref's copy (`ci/refConfig.ts`).
+  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
   let exclusions: ProjectExclusions | null = null;
-  const loadedExclusions = await loadProjectExclusions(projectPath);
+  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
   if (loadedExclusions !== null) {
     if ('error' in loadedExclusions) {
       warnings.push(
@@ -422,7 +432,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
+  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
   let cacheState: Record<string, string> = {};
   if (config.cacheState) {
     try {
@@ -536,6 +546,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
         ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
       },
       rulesProjectPath,
+      configRoot,
       scope,
       exclusions,
       ...(parentScanId !== undefined ? { parentScanId } : {}),
@@ -685,6 +696,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   progress: ProgressEmitter;
   childCallMeta: ToolCallMeta;
   rulesProjectPath: string;
+  configRoot: string;
   scope: ResolvedScope | null;
   exclusions: ProjectExclusions | null;
   /** Set when an orchestrator runs this scan as one of its children. */
@@ -725,6 +737,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     },
     childCallMeta: args.childCallMeta,
     rulesProjectPath: args.rulesProjectPath,
+    configRoot: args.configRoot,
     scope: args.scope,
     exclusions: args.exclusions,
   };
@@ -763,7 +776,8 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // each run that ran names it, as every runner names the project
   // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
   if (args.exclusions !== null) {
-    const ignore = honouredRootFiles(projectPath, 'guardian');
+    // Named where it was read: the CI gate's `--rules-ref` reads the ref's.
+    const ignore = honouredRootFiles(args.configRoot, 'guardian');
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),

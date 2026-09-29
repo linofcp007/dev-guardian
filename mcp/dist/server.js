@@ -43818,7 +43818,7 @@ async function runTrivy(inv) {
       honoured: []
     };
   }
-  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFrom) : null;
+  const ignoreFile = inv.ignoreFrom !== void 0 ? projectTrivyIgnore(inv.ignoreFileFrom ?? inv.ignoreFrom) : null;
   const version2 = await installedTrivyVersion(inv.workDir);
   const run = await runProcess({
     command: "trivy",
@@ -44628,13 +44628,13 @@ function withSemgrepEngineNote(run, raw) {
   if (note === null) return run;
   return { ...run, reason: [run.reason, note].filter((s) => s !== void 0).join("; ") };
 }
-function planSemgrepConfigs(projectPath, plugin, localOnly) {
+function planSemgrepConfigs(projectPath, plugin, localOnly, scannedPath = projectPath) {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom3 = inspectCustomSemgrepConfigs(plugin, projectPath);
   const legacy = legacyRegistrationNote(legacyRegistrationsNotApplied(plugin, projectPath));
   const projectConfigs = inspection.usable.map((c3) => c3.path);
   const local = [...projectConfigs, ...custom3.usable];
-  const registry2 = localOnly ? [] : ["auto", ...hasDotnetProject(projectPath) ? ["p/csharp"] : []];
+  const registry2 = localOnly ? [] : ["auto", ...hasDotnetProject(scannedPath) ? ["p/csharp"] : []];
   const llmPack = llmRulesPath();
   const pluginPacks = existsSync13(llmPack) ? [llmPack] : [];
   const rulePacks = [...registry2, ...local, ...pluginPacks];
@@ -47239,8 +47239,8 @@ function findClassEnd(pattern, start) {
 function escapeRegExp(text2) {
   return text2.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
-async function loadProjectExclusions(projectPath) {
-  const file = join22(projectPath, GUARDIAN_IGNORE_FILE);
+async function loadProjectExclusions(projectPath, configRoot = projectPath) {
+  const file = join22(configRoot, GUARDIAN_IGNORE_FILE);
   let text2;
   try {
     text2 = readFileSync15(file, "utf8");
@@ -48881,8 +48881,9 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   if (plugin.storageWarning) warnings.push(plugin.storageWarning);
   const driftAdvisory = configDriftAdvisory(plugin, projectPath);
   if (driftAdvisory) warnings.push(driftAdvisory);
+  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
   let exclusions = null;
-  const loadedExclusions = await loadProjectExclusions(projectPath);
+  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
   if (loadedExclusions !== null) {
     if ("error" in loadedExclusions) {
       warnings.push(
@@ -48909,7 +48910,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     }
   }
   const treeHash = callMeta?.parentScanId !== void 0 && callMeta.treeHash !== void 0 ? callMeta.treeHash : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
+  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
   let cacheState = {};
   if (config2.cacheState) {
     try {
@@ -48996,6 +48997,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
         ...callMeta?.originProjectPath !== void 0 ? { originProjectPath: callMeta.originProjectPath } : {}
       },
       rulesProjectPath,
+      configRoot,
       scope,
       exclusions,
       ...parentScanId !== void 0 ? { parentScanId } : {}
@@ -49113,6 +49115,7 @@ async function runScanBody(args) {
     },
     childCallMeta: args.childCallMeta,
     rulesProjectPath: args.rulesProjectPath,
+    configRoot: args.configRoot,
     scope: args.scope,
     exclusions: args.exclusions
   };
@@ -49142,7 +49145,7 @@ async function runScanBody(args) {
   }
   report("recording results");
   if (args.exclusions !== null) {
-    const ignore = honouredRootFiles(projectPath, "guardian");
+    const ignore = honouredRootFiles(args.configRoot, "guardian");
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run) => run.status === "skipped" ? run : withProjectConfig(run, ignore))
@@ -50249,7 +50252,7 @@ registerToolModule(
     // The cache key and the argv read the SAME plan (see the module comment).
     // `rulesProjectPath` is the scanned path, except when create_fix_pr
     // re-scans a worktree and needs the original project's rules.
-    rulePacks: (input, { rulesProjectPath, plugin }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { rulesProjectPath, plugin, projectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -50301,7 +50304,7 @@ registerToolModule(
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join32(reportDir, "sast.json");
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
       name: "semgrep",
@@ -50342,6 +50345,16 @@ async function runSemgrep2(args) {
   const dockerBin = await scannerAvailable("docker");
   if (!dockerBin) {
     tools_run.push({ name: "semgrep", status: "skipped", reason: "not_installed (no docker fallback available)" });
+    missing_tools.push("semgrep");
+    return;
+  }
+  const fromRef = ctx.plugin.repoConfigFromRef;
+  if (fromRef !== void 0) {
+    tools_run.push({
+      name: "semgrep",
+      status: "skipped",
+      reason: `semgrep is not installed, and its Docker fallback reads the project's rules from the tree it mounts \u2014 this scan takes them from ${fromRef.ref} (--rules-ref): install semgrep`
+    });
     missing_tools.push("semgrep");
     return;
   }
@@ -50530,7 +50543,7 @@ async function runBandit(args) {
     missing_tools.push("bandit");
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ("error" in ini) {
     tools_run.push({ name: "bandit", status: "failed", reason: ini.error });
     return;
@@ -50559,7 +50572,7 @@ async function runBandit(args) {
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   const check2 = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const run = check2.ok ? { name: "bandit", status: "ok" } : { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" };
-  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, "bandit") : run);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, "bandit") : run);
 }
 var NEUTRAL_BANDIT_INI = "bandit-neutral.ini";
 function banditIni(projectPath, reportDir) {
@@ -50584,7 +50597,7 @@ async function runSemgrepOnScope(args) {
     tools_run.push({ name: "semgrep", status: "skipped", reason: "the scope holds no file \u2014 nothing to scan" });
     return;
   }
-  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+  const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
       name: "semgrep",
@@ -52462,6 +52475,8 @@ registerToolModule(
         target: ctx.projectPath,
         workDir: reportDir,
         ignoreFrom: ctx.projectPath,
+        // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+        ...ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {},
         env: ctx.scriptEnv,
         signal: ctx.signal,
         onLog: ctx.onLog
@@ -52982,6 +52997,8 @@ registerToolModule(
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,
+          // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+          ...ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {},
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog
@@ -53071,7 +53088,7 @@ registerToolModule(
     // scan_secrets reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
     // The children's own rule packs: the cache key must move when a rule does.
-    rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { projectPath, plugin, rulesProjectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     inputSchema: {
       project_path: ProjectPath,
       severity_min: SeverityMin,

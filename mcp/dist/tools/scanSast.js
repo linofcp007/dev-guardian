@@ -137,7 +137,7 @@ registerToolModule(makeScanTool({
     // The cache key and the argv read the SAME plan (see the module comment).
     // `rulesProjectPath` is the scanned path, except when create_fix_pr
     // re-scans a worktree and needs the original project's rules.
-    rulePacks: (input, { rulesProjectPath, plugin }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true).rulePacks,
+    rulePacks: (input, { rulesProjectPath, plugin, projectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -196,7 +196,7 @@ registerToolModule(makeScanTool({
 async function runSemgrep(args) {
     const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
     const outFile = join(reportDir, 'sast.json');
-    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
     // local_only with nothing on disk to run is not a clean scan, it is no
     // scan at all. Saying so beats reporting zero findings from zero rules.
     if (plan.nothingToRun) {
@@ -241,6 +241,20 @@ async function runSemgrep(args) {
     const dockerBin = await scannerAvailable('docker');
     if (!dockerBin) {
         tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
+        missing_tools.push('semgrep');
+        return;
+    }
+    // The container sees the project through its mount, so it would read the
+    // tree's own rules: never with the CI gate's --rules-ref, which takes them
+    // from a ref (`ci/refConfig.ts`). A gap, named, rather than the tree's rules.
+    const fromRef = ctx.plugin.repoConfigFromRef;
+    if (fromRef !== undefined) {
+        tools_run.push({
+            name: 'semgrep',
+            status: 'skipped',
+            reason: `semgrep is not installed, and its Docker fallback reads the project's rules from the tree it mounts — ` +
+                `this scan takes them from ${fromRef.ref} (--rules-ref): install semgrep`,
+        });
         missing_tools.push('semgrep');
         return;
     }
@@ -453,7 +467,8 @@ async function runBandit(args) {
         missing_tools.push('bandit');
         return;
     }
-    const ini = banditIni(ctx.projectPath, reportDir);
+    // The project's root .bandit — the CI gate's --rules-ref copy of it when set (`ci/refConfig.ts`).
+    const ini = banditIni(ctx.configRoot, reportDir);
     if ('error' in ini) {
         tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
         return;
@@ -485,7 +500,7 @@ async function runBandit(args) {
     const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
     const run = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
     // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
-    tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, 'bandit') : run);
+    tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
 }
 /** An empty `[bandit]` section: Bandit reads it and nothing else. */
 export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
@@ -532,7 +547,7 @@ async function runSemgrepOnScope(args) {
         tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'the scope holds no file — nothing to scan' });
         return;
     }
-    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
+    const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
     if (plan.nothingToRun) {
         tools_run.push({
             name: 'semgrep',
