@@ -17,10 +17,15 @@
  * is a rule file on disk, so `local_only` runs it too. It is an ADDITION, not
  * a SAST ruleset: `local_only` with no project or registered rules is still
  * no scan (`nothingToRun`), because a run of a dozen LLM rules reported as a
- * clean SAST scan would be exactly the false clean this product refuses. Its
- * rule ids come out bare (`runners/semgrepRuleIds.ts`: a file directly in the
- * plugin's pack directory). The Docker fallback cannot see it — the container
- * mounts only the project — and `scan_sast` names that gap.
+ * clean SAST scan would be exactly the false clean this product refuses. For
+ * the same reason it cannot MAKE a SAST scan either: "no rule loaded" is
+ * judged over `ruleConfigs` (registry, project and registered configs), so a
+ * `local_only` run whose every project rule is broken stays failed whatever
+ * the pack found — its findings are still recorded. Its rule ids come out bare
+ * (`runners/semgrepRuleIds.ts`: a file directly in the plugin's pack
+ * directory). The Docker fallback mounts that directory read-only at
+ * {@link CONTAINER_PACKS_ROOT}. A damaged install without the pack runs
+ * without it, and the run is partial with the gap named (`packMissing`).
  */
 
 import { existsSync, readdirSync } from 'node:fs';
@@ -42,6 +47,9 @@ export function llmRulesPath(): string {
   return join(pluginPacksDir(), LLM_RULES_FILE);
 }
 
+/** Where the Docker fallback mounts the plugin's pack directory, read-only. */
+export const CONTAINER_PACKS_ROOT = '/guardian-packs';
+
 export interface SemgrepConfigPlan {
   /** `--config=…` for every rule source, and `--metrics=off` when local-only. */
   args: string[];
@@ -55,6 +63,14 @@ export interface SemgrepConfigPlan {
   /** The plugin's own packs this plan runs (absolute paths): the LLM-application
    *  pack, when it is on disk. Last in `rulePacks`. */
   pluginPacks: string[];
+  /** The plugin's pack directory on the host — what the Docker fallback mounts. */
+  pluginPacksDir: string;
+  /** The pack is not on disk (a damaged install): the run is partial, the gap in `notes`. */
+  packMissing: boolean;
+  /** The configs that make this a SAST scan — the registry, the project's and
+   *  the registered ones; never the plugin's pack. "No rule loaded" is judged
+   *  on these (`rulePacks` minus `pluginPacks`). */
+  ruleConfigs: string[];
   /** Local rule files that were refused, and why — the user's rules silently not running —
    *  and any 2.0.x registration outside the project that is no longer applied. */
   notes: string[];
@@ -85,6 +101,9 @@ export function planSemgrepConfigs(
     registry,
     projectConfigs,
     pluginPacks,
+    pluginPacksDir: pluginPacksDir(),
+    packMissing: pluginPacks.length === 0,
+    ruleConfigs: [...registry, ...local],
     notes: [
       ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
       ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),

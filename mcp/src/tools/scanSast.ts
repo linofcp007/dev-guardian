@@ -111,7 +111,7 @@ import {
 } from '../schemas.js';
 import type { ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
-import { hasDotnetProject, LLM_RULES_FILE, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConfigs } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
@@ -270,15 +270,19 @@ async function runSemgrep(args: Collect & {
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
-    recordSemgrepRun({ ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, tools_run, missing_tools, parser_inputs });
+    recordSemgrepRun({
+      ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
+      packMissing: plan.packMissing, tools_run, missing_tools, parser_inputs,
+    });
     return;
   }
 
   // Semgrep not on PATH — fall back to the official Docker image when a
   // daemon is reachable. The container cannot see host paths, so a project
   // config is named by where it sits inside the /src mount; registered
-  // custom rules (which may live anywhere on the host) are not passed, and
-  // neither is the plugin's LLM pack — a gap this run names (below).
+  // custom rules (which may live anywhere on the host) are not passed. The
+  // plugin's pack directory is mounted READ-ONLY at CONTAINER_PACKS_ROOT and
+  // the LLM pack run from there.
   const dockerBin = await scannerAvailable('docker');
   if (!dockerBin) {
     tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
@@ -299,6 +303,10 @@ async function runSemgrep(args: Collect & {
     missing_tools.push('semgrep');
     return;
   }
+  // The configs that make the scan; the pack rides along and never counts
+  // toward "a rule loaded" (runners/semgrepConfigs.ts).
+  const loadedFrom = [...dockerConfigs];
+  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename(p)}`);
   const result = await runProcess({
     command: 'docker',
     args: buildSemgrepDockerArgs({
@@ -307,27 +315,26 @@ async function runSemgrep(args: Collect & {
       hasCsproj: hasDotnetProject(ctx.projectPath) && !localOnly,
       autoFix,
       image,
-      configs: dockerConfigs,
+      configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
+      ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
     }),
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
-  // The plugin's own packs live outside the project mount: they did not run.
-  // Named on the run, and a run that is otherwise ok is partial — never a
-  // clean result that quietly left rules out.
-  const unseen = plan.pluginPacks.map((p) => `${basename(p)} (the plugin's LLM-application pack) did not run: the container mounts only the project`);
-  recordSemgrepRun({ ctx, result, outFile, notes: [...plan.notes, ...unseen], via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
-  if (unseen.length > 0 && tools_run.at(-1)?.status === 'ok' && !missing_tools.includes('semgrep')) missing_tools.push('semgrep');
+  recordSemgrepRun({
+    ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
+    packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir, tools_run, missing_tools, parser_inputs,
+  });
 }
 
 /**
  * One Semgrep run's `tools_run` entry, judged by its report (Global
  * Constraint 3) — never by the exit code alone. See the module comment.
  */
-function recordSemgrepRun(args: Collect & {
+interface SemgrepRunRecord extends Collect {
   ctx: InvokeContext;
   result: ProcessRunResult;
   outFile: string;
@@ -336,14 +343,32 @@ function recordSemgrepRun(args: Collect & {
   via: string | null;
   /** The `--config` values the run passed: a local rule is stored under its canonical id (runners/semgrepRuleIds.ts). */
   configs: readonly string[];
-}): void {
-  const { ctx, result, outFile, notes, via, configs, tools_run, missing_tools, parser_inputs } = args;
+  /** The configs "no rule loaded" is judged on: `configs` without the plugin's pack. */
+  loadedFrom: readonly string[];
+  /** The plugin's pack was not on disk: an otherwise-ok run is partial. */
+  packMissing: boolean;
+  /** Container runs: the host directory mounted at CONTAINER_PACKS_ROOT. */
+  packsHostDir?: string;
+}
+
+function recordSemgrepRun(args: SemgrepRunRecord): void {
+  judgeSemgrepRun(args);
+  // A damaged install ran without the pack: the note is on the run, and an
+  // otherwise-complete run is partial (review of the LLM pack, M-3).
+  if (args.packMissing && args.tools_run.at(-1)?.status === 'ok' && !args.missing_tools.includes('semgrep')) {
+    args.missing_tools.push('semgrep');
+  }
+}
+
+function judgeSemgrepRun(args: SemgrepRunRecord): void {
+  const { ctx, result, outFile, notes, via, configs, loadedFrom, packsHostDir, tools_run, missing_tools, parser_inputs } = args;
   const raw = readJsonSafe(outFile);
   // Whatever the verdict, the findings the report holds are real. The
-  // container's configs are named inside its /src mount, where it runs.
+  // container's configs are named inside its /src mount, where it runs, and
+  // the plugin's pack inside its read-only mount — whose rules come out bare.
   const rules =
     via !== null
-      ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT }
+      ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT, packsDir: CONTAINER_PACKS_ROOT }
       : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
   if (raw) parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
   const check = checkSemgrepReport({
@@ -389,11 +414,20 @@ function recordSemgrepRun(args: Collect & {
     return;
   }
   const notLoaded = check.rules_not_loaded;
-  // The container's configs are read on the host (`/src/…` is the project).
-  const readAt = (config: string): string => (via !== null ? fromContainerPath(ctx.projectPath, config) : config);
-  if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules, readAt)) {
-    // Every local rule failed and no registry pack ran: nothing was scanned
-    // for (M-1) — failed, the rules named, never "install semgrep".
+  // The container's configs are read on the host (`/src/…` is the project,
+  // CONTAINER_PACKS_ROOT the plugin's pack directory).
+  const readAt = (config: string): string => {
+    if (via === null) return config;
+    if (packsHostDir !== undefined && config.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
+      return join(packsHostDir, ...config.slice(CONTAINER_PACKS_ROOT.length + 1).split('/'));
+    }
+    return fromContainerPath(ctx.projectPath, config);
+  };
+  if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(loadedFrom, notLoaded, rules, readAt)) {
+    // Every rule of the scan's own configs failed and no registry pack ran:
+    // nothing was scanned for (M-1) — failed, the rules named, never
+    // "install semgrep". The plugin's LLM pack does not count: it alone is
+    // not a SAST scan, and its findings are recorded above either way.
     tools_run.push({
       name: 'semgrep',
       status: 'failed',
@@ -523,7 +557,11 @@ async function runSemgrepOnScope(args: Collect & {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
+    rules: {
+      configs: plan.rulePacks,
+      ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
+      loadedFrom: plan.ruleConfigs,
+    },
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
@@ -531,9 +569,9 @@ async function runSemgrepOnScope(args: Collect & {
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== undefined).join('; ');
   tools_run.push(entry);
   // No rule applied to any file in scope: a gap, not a clean result. Files
-  // only partly parsed, rules that did not load: ran, with a narrower gap
-  // inside it (`ok` + missing).
-  const narrower = run.partial.length > 0 || run.failedRules.length > 0;
+  // only partly parsed, rules that did not load, the plugin's pack missing
+  // from disk: ran, with a narrower gap inside it (`ok` + missing).
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
 }
 

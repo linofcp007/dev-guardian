@@ -189,7 +189,9 @@ export function semgrepOnFiles(args) {
             };
         },
         requireScanned: true,
-        ...(rules !== undefined ? { noRuleLoaded: (failed) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}),
+        ...(rules !== undefined
+            ? { noRuleLoaded: (failed) => noRuleLoaded(rules.loadedFrom ?? rules.configs, failed, rules.ctx) }
+            : {}),
     });
 }
 /** `scanFileBatches` for Bandit: `-f json -o <f> -q -- files`. */

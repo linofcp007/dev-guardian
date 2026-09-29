@@ -17,10 +17,15 @@
  * is a rule file on disk, so `local_only` runs it too. It is an ADDITION, not
  * a SAST ruleset: `local_only` with no project or registered rules is still
  * no scan (`nothingToRun`), because a run of a dozen LLM rules reported as a
- * clean SAST scan would be exactly the false clean this product refuses. Its
- * rule ids come out bare (`runners/semgrepRuleIds.ts`: a file directly in the
- * plugin's pack directory). The Docker fallback cannot see it — the container
- * mounts only the project — and `scan_sast` names that gap.
+ * clean SAST scan would be exactly the false clean this product refuses. For
+ * the same reason it cannot MAKE a SAST scan either: "no rule loaded" is
+ * judged over `ruleConfigs` (registry, project and registered configs), so a
+ * `local_only` run whose every project rule is broken stays failed whatever
+ * the pack found — its findings are still recorded. Its rule ids come out bare
+ * (`runners/semgrepRuleIds.ts`: a file directly in the plugin's pack
+ * directory). The Docker fallback mounts that directory read-only at
+ * {@link CONTAINER_PACKS_ROOT}. A damaged install without the pack runs
+ * without it, and the run is partial with the gap named (`packMissing`).
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,6 +38,8 @@ export const LLM_RULES_FILE = 'llm.yml';
 export function llmRulesPath() {
     return join(pluginPacksDir(), LLM_RULES_FILE);
 }
+/** Where the Docker fallback mounts the plugin's pack directory, read-only. */
+export const CONTAINER_PACKS_ROOT = '/guardian-packs';
 export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const inspection = inspectProjectSemgrepConfigs(projectPath);
     const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
@@ -51,6 +58,9 @@ export function planSemgrepConfigs(projectPath, plugin, localOnly) {
         registry,
         projectConfigs,
         pluginPacks,
+        pluginPacksDir: pluginPacksDir(),
+        packMissing: pluginPacks.length === 0,
+        ruleConfigs: [...registry, ...local],
         notes: [
             ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
             ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),

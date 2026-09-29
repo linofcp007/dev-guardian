@@ -40785,6 +40785,7 @@ var LLM_RULES_FILE = "llm.yml";
 function llmRulesPath() {
   return join10(pluginPacksDir(), LLM_RULES_FILE);
 }
+var CONTAINER_PACKS_ROOT = "/guardian-packs";
 function planSemgrepConfigs(projectPath, plugin, localOnly) {
   const inspection = inspectProjectSemgrepConfigs(projectPath);
   const custom3 = inspectCustomSemgrepConfigs(plugin, projectPath);
@@ -40801,6 +40802,9 @@ function planSemgrepConfigs(projectPath, plugin, localOnly) {
     registry: registry2,
     projectConfigs,
     pluginPacks,
+    pluginPacksDir: pluginPacksDir(),
+    packMissing: pluginPacks.length === 0,
+    ruleConfigs: [...registry2, ...local],
     notes: [
       ...inspection.unusable.map((u2) => `${u2.target} not loaded (${u2.reason})`),
       ...custom3.unusable.map((u2) => `${u2.path} not loaded (${u2.reason})`),
@@ -44208,7 +44212,7 @@ function semgrepOnFiles(args) {
       };
     },
     requireScanned: true,
-    ...rules !== void 0 ? { noRuleLoaded: (failed) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}
+    ...rules !== void 0 ? { noRuleLoaded: (failed) => noRuleLoaded(rules.loadedFrom ?? rules.configs, failed, rules.ctx) } : {}
   });
 }
 function banditOnFiles(args) {
@@ -44417,6 +44421,7 @@ function buildSemgrepDockerArgs(opts) {
     "--rm",
     "--mount",
     `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
+    ...(opts.readOnlyMounts ?? []).flatMap((m) => ["--mount", `type=bind,source=${m.source},target=${m.target},readonly`]),
     "-w",
     CONTAINER_PROJECT_ROOT,
     image,
@@ -44647,7 +44652,19 @@ async function runSemgrep(args) {
       signal: ctx.signal,
       onLog: ctx.onLog
     });
-    recordSemgrepRun({ ctx, result: result2, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, tools_run, missing_tools, parser_inputs });
+    recordSemgrepRun({
+      ctx,
+      result: result2,
+      outFile,
+      notes: plan.notes,
+      via: null,
+      configs: plan.rulePacks,
+      loadedFrom: plan.ruleConfigs,
+      packMissing: plan.packMissing,
+      tools_run,
+      missing_tools,
+      parser_inputs
+    });
     return;
   }
   const dockerBin = await scannerAvailable("docker");
@@ -44670,6 +44687,8 @@ async function runSemgrep(args) {
     missing_tools.push("semgrep");
     return;
   }
+  const loadedFrom = [...dockerConfigs];
+  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename3(p)}`);
   const result = await runProcess({
     command: "docker",
     args: buildSemgrepDockerArgs({
@@ -44678,22 +44697,40 @@ async function runSemgrep(args) {
       hasCsproj: hasDotnetProject(ctx.projectPath) && !localOnly,
       autoFix,
       image,
-      configs: dockerConfigs,
-      metricsOff: localOnly
+      configs: [...dockerConfigs, ...packConfigs],
+      metricsOff: localOnly,
+      ...packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}
     }),
     cwd: ctx.projectPath,
     env: ctx.scriptEnv,
     signal: ctx.signal,
     onLog: ctx.onLog
   });
-  const unseen = plan.pluginPacks.map((p) => `${basename3(p)} (the plugin's LLM-application pack) did not run: the container mounts only the project`);
-  recordSemgrepRun({ ctx, result, outFile, notes: [...plan.notes, ...unseen], via: `docker (${image})`, configs: dockerConfigs, tools_run, missing_tools, parser_inputs });
-  if (unseen.length > 0 && tools_run.at(-1)?.status === "ok" && !missing_tools.includes("semgrep")) missing_tools.push("semgrep");
+  recordSemgrepRun({
+    ctx,
+    result,
+    outFile,
+    notes: plan.notes,
+    via: `docker (${image})`,
+    configs: [...dockerConfigs, ...packConfigs],
+    loadedFrom,
+    packMissing: plan.packMissing,
+    packsHostDir: plan.pluginPacksDir,
+    tools_run,
+    missing_tools,
+    parser_inputs
+  });
 }
 function recordSemgrepRun(args) {
-  const { ctx, result, outFile, notes, via, configs, tools_run, missing_tools, parser_inputs } = args;
+  judgeSemgrepRun(args);
+  if (args.packMissing && args.tools_run.at(-1)?.status === "ok" && !args.missing_tools.includes("semgrep")) {
+    args.missing_tools.push("semgrep");
+  }
+}
+function judgeSemgrepRun(args) {
+  const { ctx, result, outFile, notes, via, configs, loadedFrom, packsHostDir, tools_run, missing_tools, parser_inputs } = args;
   const raw = readJsonSafe(outFile);
-  const rules = via !== null ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT } : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
+  const rules = via !== null ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT, packsDir: CONTAINER_PACKS_ROOT } : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
   if (raw) parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
   const check2 = checkSemgrepReport({
     raw,
@@ -44732,8 +44769,14 @@ function recordSemgrepRun(args) {
     return;
   }
   const notLoaded = check2.rules_not_loaded;
-  const readAt = (config2) => via !== null ? fromContainerPath(ctx.projectPath, config2) : config2;
-  if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(configs, notLoaded, rules, readAt)) {
+  const readAt = (config2) => {
+    if (via === null) return config2;
+    if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
+      return join24(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
+    }
+    return fromContainerPath(ctx.projectPath, config2);
+  };
+  if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(loadedFrom, notLoaded, rules, readAt)) {
     tools_run.push({
       name: "semgrep",
       status: "failed",
@@ -44830,14 +44873,18 @@ async function runSemgrepOnScope(args) {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...ctx.onLog ? { onLog: ctx.onLog } : {},
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } }
+    rules: {
+      configs: plan.rulePacks,
+      ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
+      loadedFrom: plan.ruleConfigs
+    }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry = { ...run.toolRun };
   if (plan.notes.length > 0) entry.reason = [entry.reason, ...plan.notes].filter((s) => s !== void 0).join("; ");
   tools_run.push(entry);
-  const narrower = run.partial.length > 0 || run.failedRules.length > 0;
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
 }
 async function runBanditOnScope(args) {
@@ -48996,12 +49043,12 @@ async function runSemgrep2(ctx, input, out, args) {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...ctx.onLog ? { onLog: ctx.onLog } : {},
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } }
+    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot }, loadedFrom: plan.ruleConfigs }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
   out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...gap !== null ? [gap] : []]));
-  const partial3 = run.toolRun.status === "ok" && (run.partial.length > 0 || run.failedRules.length > 0);
+  const partial3 = run.toolRun.status === "ok" && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial3) out.missing_tools.push("semgrep");
   out.cancelled ||= run.cancelled;
 }

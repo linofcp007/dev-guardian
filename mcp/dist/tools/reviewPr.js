@@ -211,7 +211,7 @@ async function runSemgrep(ctx, input, out, args) {
         env: ctx.scriptEnv,
         signal: ctx.signal,
         ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-        rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } },
+        rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot }, loadedFrom: plan.ruleConfigs },
     });
     // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
     // project's rules by their absolute path; stored canonical, as scan_sast's.
@@ -222,7 +222,8 @@ async function runSemgrep(ctx, input, out, args) {
     // Scanned nothing at all, not every changed file, or some only partly
     // parsed or rules that did not load (`ok` + missing, runners/semgrepReport.ts):
     // a gap, not a clean result.
-    const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0);
+    // The plugin's LLM pack missing from disk (runners/semgrepConfigs.ts) is a gap too.
+    const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
     if (run.nothingScanned || gap !== null || partial)
         out.missing_tools.push('semgrep');
     out.cancelled ||= run.cancelled;

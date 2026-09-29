@@ -50,6 +50,12 @@ export interface SemgrepDockerOptions {
    * not by ours. `scan_sast`'s `local_only` mode sets both together.
    */
   metricsOff?: boolean;
+  /**
+   * Further host directories to bind into the container, READ-ONLY — the
+   * plugin's pack directory, for scan_sast. A config inside one is named by
+   * its `target` path.
+   */
+  readOnlyMounts?: ReadonlyArray<{ source: string; target: string }>;
 }
 
 /**
@@ -67,6 +73,7 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
     '--rm',
     '--mount',
     `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
+    ...(opts.readOnlyMounts ?? []).flatMap((m) => ['--mount', `type=bind,source=${m.source},target=${m.target},readonly`]),
     '-w',
     CONTAINER_PROJECT_ROOT,
     image,

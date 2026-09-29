@@ -34,6 +34,7 @@ export function buildSemgrepDockerArgs(opts) {
         '--rm',
         '--mount',
         `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
+        ...(opts.readOnlyMounts ?? []).flatMap((m) => ['--mount', `type=bind,source=${m.source},target=${m.target},readonly`]),
         '-w',
         CONTAINER_PROJECT_ROOT,
         image,

@@ -233,9 +233,11 @@ export function semgrepOnFiles(args: {
   /**
    * The configs the run passed, and how its rule ids are stored
    * (`runners/semgrepRuleIds.ts`): a rule that did not load is named as its
-   * findings are, and a run in which none loaded is failed.
+   * findings are, and a run in which none loaded is failed. `loadedFrom`
+   * narrows "none loaded" to the configs that make the scan (scan_sast's
+   * project and registered rules — not the plugin's LLM pack); default: all.
    */
-  rules?: { configs: readonly string[]; ctx: RuleIdContext };
+  rules?: { configs: readonly string[]; ctx: RuleIdContext; loadedFrom?: readonly string[] };
 }): Promise<FileBatchScanResult> {
   const rules = args.rules;
   const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
@@ -273,7 +275,9 @@ export function semgrepOnFiles(args: {
       };
     },
     requireScanned: true,
-    ...(rules !== undefined ? { noRuleLoaded: (failed: readonly FailedRule[]) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}),
+    ...(rules !== undefined
+      ? { noRuleLoaded: (failed: readonly FailedRule[]) => noRuleLoaded(rules.loadedFrom ?? rules.configs, failed, rules.ctx) }
+      : {}),
   });
 }
 
