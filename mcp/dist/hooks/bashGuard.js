@@ -363,7 +363,7 @@ function scanQuote(source, start) {
  * {@link interpolatedVariables} reads. `${…}` is capped, so a run of unclosed
  * `${` cannot make each one rescan the rest.
  */
-const INTERPOLATION = /\$\{[^}\n]{0,256}\}|\$[\w:]+|\$\(|[()]/g;
+const INTERPOLATION = /\$\{[^}\n]{0,128}\}|\$[\w:]+|\$\(|[()]/g;
 /**
  * The variables a double-quoted string's text interpolates, as written: `$a`
  * and `${a}` in the string itself — its whole value, whatever follows
@@ -3316,9 +3316,10 @@ const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|c
  *     / `.NewScriptBlock(…)` and `-ScriptBlock (…)` (review round 3: Microsoft's
  *     dotnet-install one-liner is `&([scriptblock]::Create((iwr …)))`);
  *   - `dl` — a download;
- *   - `assign` / `ref` — a variable assigned, and a variable read, so that
+ *   - `ref`, and `assign` after it — a variable read, or assigned, so that
  *     `$s = irm …; iex $s` is seen — as `$s`, `${s}` or `$script:s`, one
- *     variable ({@link psVariable});
+ *     variable ({@link psVariable}). One group for both, so a run of unclosed
+ *     `${` is scanned for its capped name once per `$`, not twice;
  *   - the other ways a command puts a value in a variable, or reads one back
  *     (review 3.0, wave 2): `setvar` — `Set-Variable` / `New-Variable` (`sv`,
  *     `nv`), whose name {@link variableNamed} reads; `outvar` — the common
@@ -3327,7 +3328,7 @@ const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|c
  *     (`gv`), a read of the variable it names;
  *   - parentheses, pipes and statement separators.
  */
-const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$(?:\{[^}\n]{0,256}\}|[\w:]+)\s*\+?=(?!=))|(?<ref>\$(?:\{[^}\n]{0,256}\}|[\w:]+))|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_]\w*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_]\w*))?)|&&|\|\||[()|;\n]/gi;
+const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<ref>\$(?:\{[^}\n]{0,128}\}|[\w:]+))(?<assign>\s*\+?=(?!=))?|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_]\w*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_]\w*))?)|&&|\|\||[()|;\n]/gi;
 /**
  * A variable as one name: `$` and the name, lower-cased, without braces or a
  * scope — `${Script:S}`, `$script:s` and `$s` are all `$s` (`$env:x` stays
@@ -3472,11 +3473,11 @@ function powershellDownloadExecution(text) {
             if (download())
                 return true;
         }
-        else if (g['assign'] !== undefined) {
-            assigning = [psVariable(t.replace(/\s*\+?=$/, ''))];
-        }
         else if (g['ref'] !== undefined) {
-            if (holdsDownload(psVariable(t)) && download())
+            const v = psVariable(g['ref']);
+            if (g['assign'] !== undefined)
+                assigning = [v];
+            else if (holdsDownload(v) && download())
                 return true;
         }
         else if (g['setvar'] !== undefined) {
