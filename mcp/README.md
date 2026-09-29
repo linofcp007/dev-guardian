@@ -85,7 +85,7 @@ One SQLite file per project, `.guardian/guardian.db`, shared by every process th
 | `baselines` | baselines per project and scan type |
 | `suppressions` | suppressions by identity or fingerprint, per project, with optional expiry |
 | `tree_cache` | tree hash → scan, for the 5-minute scan cache |
-| `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results |
+| `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results, the newest 10 per project |
 | `finding_validations` | `validate_finding` verdicts |
 | `agent_config_hashes` | `audit_agent_config`'s per-server hashes, to flag a changed MCP entry |
 | `mcp_tool_pins`, `mcp_server_pins` | `audit_mcp_tools`'s per-tool definition hashes, to flag a tool that changed under the same name |

@@ -48,6 +48,9 @@ version bump.
   directory and differ only in spelling; a path through a link or junction, which may point at
   another project by now, is left alone. Moving or renaming a repository still starts its history,
   suppressions and baselines afresh; the READMEs say so.
+- `stack_snapshots` is kept to the newest 10 per project (on insert, and a backlog in the
+  background after startup, 500 rows per start) and indexed by project (migration 015); it grew
+  with every `detect_stack` run, and every reader's per-project lookup scanned and sorted all of it.
 - A corrupt `guardian.db` stops the server with one line naming the file and saying to move it
   aside, instead of `Error: file is not a database` and a stack trace.
 - A database a 3.0 development build left at schema version 14 no longer stops the server, and the

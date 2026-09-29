@@ -65,6 +65,7 @@ import { lstatSync, statSync } from 'node:fs';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { canonicalPath } from '../platform/projectPath.js';
 import type { DB } from './db.js';
+import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 
 export const DEFAULT_RETENTION_SCANS = 50;
 
@@ -347,6 +348,39 @@ export function pruneScans(db: DB, keep: number, budget: PruneBudget = {}): Prun
   return { deleted, remaining: pending.length, complete: pending.length === 0 };
 }
 
+/** Stack snapshots {@link pruneStackSnapshots} deletes per call. */
+export const STACK_PRUNE_BATCH = 500;
+
+/**
+ * Deletes up to `limit` stack snapshots beyond the newest
+ * {@link STACK_SNAPSHOTS_KEPT} per project, in one short write transaction,
+ * and says how many such rows are left. New rows are pruned on insert
+ * (`stackRepo.ts`); this clears what was written before that, a batch per
+ * server start.
+ */
+export function pruneStackSnapshots(db: DB, limit = STACK_PRUNE_BATCH): { deleted: number; remaining: number } {
+  return db.transaction(() => {
+    const excess = db
+      .prepare<[number], { id: number }>(
+        `SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY captured_at DESC, id DESC) AS rn
+           FROM stack_snapshots
+         ) WHERE rn > ? ORDER BY id`,
+      )
+      .all(STACK_SNAPSHOTS_KEPT)
+      .map((r) => r.id);
+    const batch = excess.slice(0, Math.max(0, limit));
+    let deleted = 0;
+    for (let i = 0; i < batch.length; i += 400) {
+      const chunk = batch.slice(i, i + 400);
+      deleted += db
+        .prepare<number[]>(`DELETE FROM stack_snapshots WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+        .run(...chunk).changes;
+    }
+    return { deleted, remaining: excess.length - deleted };
+  })();
+}
+
 /** The slice of `Storage` startup maintenance needs. */
 export interface MaintenanceTarget {
   scans: { reapRunning(): number };
@@ -426,6 +460,17 @@ export function scheduleRetention(
     let left: number;
     try {
       const db = storage.rawHandle();
+      if (pending === undefined) {
+        // Once per start, in the first tick: the stack snapshots written
+        // before they were pruned on insert, one bounded batch.
+        const stack = pruneStackSnapshots(db);
+        if (stack.deleted > 0) {
+          log(
+            `pruned ${stack.deleted} stack snapshot(s) beyond the newest ${STACK_SNAPSHOTS_KEPT} per project` +
+              (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : ''),
+          );
+        }
+      }
       pending ??= listPrunableScans(db, limit.keep);
       deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
       left = pending.length;

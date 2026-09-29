@@ -40580,15 +40580,21 @@ var RuntimeMetaRepo = class {
 };
 
 // src/storage/stackRepo.ts
+var STACK_SNAPSHOTS_KEPT = 10;
 var StackRepo = class {
-  insertStmt;
-  getLatestStmt;
-  listRecentStmt;
-  getLatestForProjectStmt;
   constructor(db) {
+    this.db = db;
     this.insertStmt = db.prepare(`
       INSERT INTO stack_snapshots (project_path, captured_at, json)
       VALUES (?, ?, ?)
+    `);
+    this.pruneStmt = db.prepare(`
+      DELETE FROM stack_snapshots
+      WHERE project_path = ?
+        AND id NOT IN (
+          SELECT id FROM stack_snapshots WHERE project_path = ?
+          ORDER BY captured_at DESC, id DESC LIMIT ?
+        )
     `);
     this.getLatestStmt = db.prepare(`
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT 1
@@ -40600,10 +40606,20 @@ var StackRepo = class {
       SELECT * FROM stack_snapshots ORDER BY captured_at DESC LIMIT ?
     `);
   }
+  db;
+  insertStmt;
+  getLatestStmt;
+  listRecentStmt;
+  getLatestForProjectStmt;
+  pruneStmt;
   insert(input) {
     const capturedAt = nowIso();
     const json = JSON.stringify(input.snapshot);
-    const info = this.insertStmt.run(input.project_path, capturedAt, json);
+    const info = this.db.transaction(() => {
+      const inserted = this.insertStmt.run(input.project_path, capturedAt, json);
+      this.pruneStmt.run(input.project_path, input.project_path, STACK_SNAPSHOTS_KEPT);
+      return inserted;
+    })();
     return {
       id: Number(info.lastInsertRowid),
       project_path: input.project_path,
@@ -41277,6 +41293,24 @@ function deleteRows(db, eligible) {
   ).run(...eligible, ...eligible);
   return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
 }
+var STACK_PRUNE_BATCH = 500;
+function pruneStackSnapshots(db, limit = STACK_PRUNE_BATCH) {
+  return db.transaction(() => {
+    const excess = db.prepare(
+      `SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY captured_at DESC, id DESC) AS rn
+           FROM stack_snapshots
+         ) WHERE rn > ? ORDER BY id`
+    ).all(STACK_SNAPSHOTS_KEPT).map((r) => r.id);
+    const batch = excess.slice(0, Math.max(0, limit));
+    let deleted = 0;
+    for (let i2 = 0; i2 < batch.length; i2 += 400) {
+      const chunk = batch.slice(i2, i2 + 400);
+      deleted += db.prepare(`DELETE FROM stack_snapshots WHERE id IN (${chunk.map(() => "?").join(", ")})`).run(...chunk).changes;
+    }
+    return { deleted, remaining: excess.length - deleted };
+  })();
+}
 function reapOrphanedScans(storage, log) {
   try {
     const reaped = storage.scans.reapRunning();
@@ -41317,6 +41351,14 @@ function scheduleRetention(storage, log, options = {}) {
     let left;
     try {
       const db = storage.rawHandle();
+      if (pending === void 0) {
+        const stack = pruneStackSnapshots(db);
+        if (stack.deleted > 0) {
+          log(
+            `pruned ${stack.deleted} stack snapshot(s) beyond the newest ${STACK_SNAPSHOTS_KEPT} per project` + (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : "")
+          );
+        }
+      }
       pending ??= listPrunableScans(db, limit.keep);
       deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
       left = pending.length;
