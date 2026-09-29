@@ -1410,6 +1410,42 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review of 3.0, wave 2, item B: `db adopt --yes` is the user's decision.
+  describe('dev-guardian db adopt --yes is denied from the shell (review 3.0 wave 2, item B)', () => {
+    const MESSAGE = 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes';
+    const hook = (tool: string, command: string, env: Record<string, string> = {}): HookResult =>
+      runHook(preToolUse(tool, { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1', ...env } });
+    it.each([
+      ['Bash', 'dev-guardian db adopt --yes'],
+      ['Bash', 'node cli/dev-guardian.mjs db adopt --project . --yes --rehome'],
+      ['Bash', 'npx dev-guardian db adopt --yes=true'],
+      ['PowerShell', '& node "C:\\Users\\me\\.claude\\plugins\\dev-guardian\\cli\\dev-guardian.mjs" db adopt --yes --project .'],
+      ['PowerShell', 'cmd /c "node C:\\dg\\cli\\dev-guardian.mjs db adopt --yes"'],
+    ])('%s: %s is denied, with its own message', (tool, command) => {
+      expect(hook(tool, command).stdout).toEqual({
+        hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: MESSAGE },
+      });
+    });
+    it.each([
+      ['Bash', 'dev-guardian db adopt --project p'],
+      ['Bash', 'node cli/dev-guardian.mjs db adopt'],
+      ['Bash', 'dev-guardian check --bash "dev-guardian db adopt --yes"'],
+      ['PowerShell', 'node C:\\dg\\cli\\dev-guardian.mjs db adopt --project .'],
+    ])('%s: %s is not', (tool, command) => {
+      expect(hook(tool, command).stdout).toBeUndefined();
+    });
+    it('beside another catastrophic command, the standard message names both', () => {
+      const r = hook('Bash', 'dev-guardian db adopt --yes && rm -rf /');
+      const reason = (r.stdout as { hookSpecificOutput: { permissionDecisionReason: string } }).hookSpecificOutput.permissionDecisionReason;
+      expect(reason).toMatch(/^dev-guardian blocked a catastrophic command: /);
+      expect(reason).toContain(MESSAGE);
+    });
+    it('the user-level switch that turns the shell block into a warning covers it too', () => {
+      const r = hook('Bash', 'dev-guardian db adopt --yes', { GUARDIAN_HOOKS_BASH_BLOCK: '0' });
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { additionalContext: expect.stringContaining(MESSAGE) } });
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

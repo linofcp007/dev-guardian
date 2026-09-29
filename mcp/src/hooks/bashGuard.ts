@@ -134,6 +134,13 @@ export interface BashAssessment {
   reasons: string[];
   /** Matched rule ids, for telemetry / allowlisting. */
   rules: string[];
+  /**
+   * The whole deny message, when the one rule that blocks words its own —
+   * `db-adopt-yes`, whose reason already says what to do instead — for the
+   * hook to send in place of its standard wording. Absent otherwise, and
+   * whenever another rule blocks too.
+   */
+  denyMessage?: string;
 }
 
 /**
@@ -2951,6 +2958,62 @@ function turnsPluginOff(words: readonly ShellWord[], start: number): boolean {
   return rest.some((a) => /dev-guardian/i.test(a));
 }
 
+/**
+ * `dev-guardian db adopt --yes` makes a project's database trusted. That is a
+ * person's decision, taken after reading the summary `db adopt` prints without
+ * `--yes`: a hostile repository can ship a database that hides its findings,
+ * and its text can talk an assistant into adopting it (review 3.0, wave 2).
+ * The reason is the whole deny message ({@link BashAssessment.denyMessage}).
+ */
+const RULE_DB_ADOPT: MatchedRule = {
+  id: 'db-adopt-yes',
+  level: 'block',
+  reason: 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes',
+};
+
+/** The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`, `dev-guardian.cmd`, `dev-guardian@3.0.1`. */
+const CLI_NAME = /^dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?$/i;
+/** What runs the CLI named as its program: node and the other runtimes, and the package runners. */
+const CLI_HOSTS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'npx', 'pnpx', 'bunx', 'npm', 'pnpm', 'yarn']);
+/** A package runner's or a runtime's subcommand before the program: `pnpm dlx`, `npm exec`, `bun x`, `deno run`. */
+const CLI_HOST_SUBCOMMANDS = new Set(['dlx', 'exec', 'x', 'run']);
+
+/**
+ * The arguments the dev-guardian CLI is given by this command, or none when it
+ * does not run the CLI: its name at the command position (a path to it, `.mjs`
+ * and a package version included), or as the program of `node` (past node's
+ * own options), `npx` / `pnpm dlx` / `bunx` / `npm exec` and the like.
+ */
+function cliArgs(words: readonly ShellWord[], at: number): string[] | undefined {
+  const head = words[at];
+  if (head === undefined) return undefined;
+  if (CLI_NAME.test(basename(head.value))) return words.slice(at + 1).map((w) => w.value);
+  if (!CLI_HOSTS.has(interpreterName(head.value))) return undefined;
+  let subcommand = false;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v.startsWith('-')) {
+      i += !v.includes('=') && (NODE_OPTION_VALUED.has(v) || LAUNCHER_VALUED.has(v)) ? 1 : 0;
+      continue;
+    }
+    if (!subcommand && CLI_HOST_SUBCOMMANDS.has(v)) {
+      subcommand = true;
+      continue;
+    }
+    return CLI_NAME.test(basename(v)) ? words.slice(i + 1).map((w) => w.value) : undefined;
+  }
+  return undefined;
+}
+
+/** `dev-guardian db adopt … --yes` (or `--yes=…`), its options in any order, however the CLI is launched. */
+function adoptsDatabase(words: readonly ShellWord[], at: number): boolean {
+  const args = cliArgs(words, at);
+  if (args === undefined) return false;
+  const db = args.findIndex((a) => !a.startsWith('-'));
+  if (args[db] !== 'db' || !args.slice(db + 1).includes('adopt')) return false;
+  return args.some((a) => a === '--yes' || a.startsWith('--yes='));
+}
+
 /** Program text that names a hook config path; or Claude Code's settings, with a loosening key in the command. */
 function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
@@ -4147,6 +4210,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
+      if (adoptsDatabase(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
       const scripts = nestedScripts(words, resolved.index);
       const cmdHead = words[resolved.index];
       const line =
@@ -4367,10 +4431,14 @@ function assessReadings(
   // A catastrophic delete makes the broad-delete note redundant noise.
   if (byId.has('rm-rf-root')) byId.delete('rm-rf-broad');
   const effective = [...byId.values()].sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level]);
+  const blocks = effective.filter((r) => r.level === 'block');
+  const only = blocks.length === 1 ? blocks[0] : undefined;
+  const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
+    ...(own === undefined ? {} : { denyMessage: own }),
   };
 }

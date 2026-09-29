@@ -467,6 +467,13 @@ version bump.
   PowerShell accepts (`-it`, `-ty`, `-va`; `h`, `Hard`, `sym`), and a hard link to the settings or a hard-link copy
   of `.guardian`, `~/.config/dev-guardian` or `.claude` is denied. `ln -s`, `cp -a` without `-l`, and a hard link
   between ordinary files are not.
+- **The shell guard denies `dev-guardian db adopt --yes`.** Adopting a project's database makes it trusted, and a
+  hostile repository can ship one that hides findings — so it is the user's decision, taken after reading the
+  summary `db adopt` prints without `--yes`. Nothing stopped the assistant from running it through Bash or
+  PowerShell. It is denied now however the CLI is launched (`dev-guardian`, `node …/cli/dev-guardian.mjs`, `npx`,
+  through `env`, `sudo`, `bash -c`, `cmd /c`, `pwsh -Command`) and wherever `--yes` (or `--yes=…`) stands, with its
+  own message: "db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt`
+  without --yes". `db adopt` without `--yes` and every other CLI command stay allowed.
 
 ## [3.0.0] - 2026-09-29
 

@@ -2922,3 +2922,83 @@ describe('assessBashCommand — hard links the Write guard catches, refused by t
     expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
   });
 });
+
+// Review of 3.0, wave 2, item B: `db adopt --yes` makes a project database
+// trusted — a person's decision after reading the summary, since a hostile
+// repository can ship a database that hides findings. The assistant must not
+// take it through the shell, however the CLI is spelled.
+describe('assessBashCommand — dev-guardian db adopt --yes is the user’s decision (review 3.0 wave 2, item B)', () => {
+  const MESSAGE = 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes';
+
+  it.each([
+    ['dev-guardian db adopt --yes', 'bash'],
+    ['dev-guardian db adopt --project p --yes --rehome', 'bash'],
+    ['dev-guardian db adopt --yes --project p', 'bash'],
+    ['dev-guardian db adopt --yes=true', 'bash'],
+    ['node cli/dev-guardian.mjs db adopt --project . --yes', 'bash'],
+    ['node /home/u/.claude/plugins/marketplaces/dev-guardian/cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['node --no-warnings ./cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['node -r dotenv/config cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['"node" "/opt/dg/cli/dev-guardian.mjs" db adopt --yes', 'bash'],
+    ['npx dev-guardian db adopt --yes', 'bash'],
+    ['npx -y dev-guardian@3.0.1 db adopt --yes', 'bash'],
+    ['npx -p dev-guardian dev-guardian db adopt --yes', 'bash'],
+    ['pnpm dlx dev-guardian db adopt --yes', 'bash'],
+    ['npm exec -- dev-guardian db adopt --yes', 'bash'],
+    ['/usr/local/bin/dev-guardian db adopt --yes', 'bash'],
+    ['./cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['env GUARDIAN_DATA_DIR=/tmp/x dev-guardian db adopt --yes', 'bash'],
+    ['GUARDIAN_DATA_DIR=/tmp/x node cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['sudo dev-guardian db adopt --yes', 'bash'],
+    ["bash -c 'dev-guardian db adopt --yes'", 'bash'],
+    ["sh -c 'cd /repo && node cli/dev-guardian.mjs db adopt --yes'", 'bash'],
+    ['cd project && node ../cli/dev-guardian.mjs db adopt --yes', 'bash'],
+    ['git pull && dev-guardian db adopt --yes --project .', 'bash'],
+    ['echo y | dev-guardian db adopt --yes', 'bash'],
+    ['node "C:\\Users\\me\\.claude\\plugins\\dev-guardian\\cli\\dev-guardian.mjs" db adopt --yes', 'powershell'],
+    ['& node C:\\dg\\cli\\dev-guardian.mjs db adopt --project . --yes', 'powershell'],
+    ['& "C:\\Program Files\\nodejs\\node.exe" "C:\\dg\\cli\\dev-guardian.mjs" db adopt --yes --rehome', 'powershell'],
+    ['cmd /c "node C:\\dg\\cli\\dev-guardian.mjs db adopt --yes"', 'powershell'],
+    ['cmd /c dev-guardian db adopt --yes', 'powershell'],
+    ['powershell -Command "node C:\\dg\\cli\\dev-guardian.mjs db adopt --yes"', 'powershell'],
+    ["pwsh -c 'dev-guardian db adopt --yes'", 'powershell'],
+    ['dev-guardian.cmd db adopt --yes', 'powershell'],
+    ['Set-Location C:\\repo; node .\\cli\\dev-guardian.mjs db adopt --yes', 'powershell'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('db-adopt-yes');
+    expect(a.reasons).toContain(MESSAGE);
+  });
+
+  it.each([
+    ['dev-guardian db adopt', 'bash'],
+    ['dev-guardian db adopt --project p', 'bash'],
+    ['node cli/dev-guardian.mjs db adopt --project .', 'bash'],
+    ['npx --yes dev-guardian db adopt', 'bash'],
+    ['dev-guardian db adopt --rehome', 'bash'],
+    ['dev-guardian check --bash "dev-guardian db adopt --yes"', 'bash'],
+    ['node cli/dev-guardian.mjs check --bash "db adopt --yes"', 'bash'],
+    ['dev-guardian scan --project .', 'bash'],
+    ['dev-guardian mcp-config claude --write', 'bash'],
+    ['node other-tool.mjs db adopt --yes', 'bash'],
+    ['git commit -m "docs: dev-guardian db adopt --yes"', 'bash'],
+    ['echo "run: dev-guardian db adopt --yes"', 'bash'],
+    ['grep -rn "db adopt --yes" docs', 'bash'],
+    ['apt-get install --yes curl', 'bash'],
+    ['node C:\\dg\\cli\\dev-guardian.mjs db adopt --project .', 'powershell'],
+    ['Write-Host "dev-guardian db adopt --yes"', 'powershell'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
+  });
+
+  it('carries its own deny message, word for word', () => {
+    expect(assessBashCommand('dev-guardian db adopt --yes').denyMessage).toBe(MESSAGE);
+    // With another block beside it, the standard message names both.
+    const both = assessBashCommand('dev-guardian db adopt --yes && rm -rf /');
+    expect(both.denyMessage).toBeUndefined();
+    expect(both.reasons).toContain(MESSAGE);
+    expect(assessBashCommand('rm -rf /').denyMessage).toBeUndefined();
+    expect(assessBashCommand('dev-guardian db adopt').denyMessage).toBeUndefined();
+  });
+});
