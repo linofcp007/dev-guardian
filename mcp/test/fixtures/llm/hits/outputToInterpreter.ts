@@ -7,8 +7,9 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { generateObject, generateText } from 'ai';
-import { exec, execSync, spawn } from 'node:child_process';
+import { generateObject, generateText, streamText } from 'ai';
+import { exec, execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import OpenAI from 'openai';
 import vm from 'vm';
 
@@ -48,6 +49,28 @@ export async function vercelObject(model: string, pergunta: string, schema: unkn
 export async function langchainChain(chain: { invoke(x: unknown): Promise<string> }, pergunta: string) {
   const resposta = await chain.invoke({ pergunta });
   return eval(resposta); // BUG: a LangChain chain's invoke
+}
+
+export async function vercelStream(model: string, pergunta: string) {
+  const result = streamText({ model, prompt: pergunta });
+  return eval(await result.text); // BUG: the AI SDK's streamText
+}
+
+export async function anthropicStream(anthropic: Anthropic, pergunta: string) {
+  const stream = anthropic.messages.stream({ model: 'claude-sonnet-4-5', max_tokens: 1024, messages: [{ role: 'user', content: pergunta }] });
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') eval(event.delta.text); // BUG: an Anthropic message stream
+  }
+}
+
+export async function structuredOutput(openai: OpenAI, pergunta: string, formato: unknown) {
+  const r = await openai.beta.chat.completions.parse({ model: 'gpt-4o', messages: [{ role: 'user', content: pergunta }], response_format: formato, max_completion_tokens: 512 }); // excluded: capped (llm-openai-no-max-tokens-js)
+  return eval(r.choices[0].message.parsed.codigo); // BUG: structured output (chat.completions.parse)
+}
+
+export async function responsesStructured(openai: OpenAI, pergunta: string, formato: unknown) {
+  const r = await openai.responses.parse({ model: 'gpt-4o', input: pergunta, text: { format: formato }, max_output_tokens: 512 }); // excluded: capped (llm-openai-no-max-tokens-js)
+  return eval(r.output_parsed.codigo); // BUG: structured output (responses.parse)
 }
 
 export function fromParameter(completion: OpenAI.Chat.ChatCompletion) {
@@ -103,4 +126,26 @@ export function toExecSync(completion: OpenAI.Chat.ChatCompletion) {
 
 export function toSpawn(completion: OpenAI.Chat.ChatCompletion) {
   return spawn(completion.choices[0].message.content ?? '', { shell: true }); // BUG: a command the model chose
+}
+
+export function toSpawnSync(completion: OpenAI.Chat.ChatCompletion) {
+  return spawnSync(completion.choices[0].message.content ?? ''); // BUG: the model picks the program
+}
+
+export function toExecFile(completion: OpenAI.Chat.ChatCompletion) {
+  return execFileSync(completion.choices[0].message.content ?? '', ['--help']); // BUG: the model picks the file to run
+}
+
+export function toShC(completion: OpenAI.Chat.ChatCompletion) {
+  return spawn('sh', ['-c', completion.choices[0].message.content ?? '']); // BUG: sh -c runs its argument as a script
+}
+
+export function toInlineRequire(completion: OpenAI.Chat.ChatCompletion) {
+  return require('child_process').execSync(completion.choices[0].message.content ?? ''); // BUG: child_process required inline
+}
+
+const execAsync = promisify(exec);
+
+export async function toPromisified(completion: OpenAI.Chat.ChatCompletion) {
+  return execAsync(completion.choices[0].message.content ?? ''); // BUG: exec through util.promisify
 }

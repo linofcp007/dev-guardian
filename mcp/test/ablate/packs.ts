@@ -243,8 +243,10 @@
  * gpt-researcher's `evals`; fragments' `app`; mem0's `mem0-demo` and
  * `mem0-ts/src`; AnythingLLM's `server/utils`; chatbot-ui's `app`; and the
  * Anthropic customer-support quickstart. It reaches every rule but the JS
- * interpreter one, which fired nowhere in the 29 — its axis 3 is vacuous
- * there, and the report says so.
+ * interpreter one and `llm-torch-load-weights-only-false`, which fired
+ * nowhere in the 29 — their axis 3 is vacuous there, and the report says so.
+ * The review round rebuilt the same tree from clones at the same commits
+ * (1 914 files again) and re-ran the whole pack on it.
  */
 
 import { existsSync } from 'node:fs';

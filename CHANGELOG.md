@@ -10,19 +10,26 @@ version bump.
 
 ### Added
 
-- **Semgrep pack for LLM applications** (`configs/semgrep/llm.yml`, 8 rules, Python and JS/TS),
-  run by `scan_sast` on every native Semgrep run, `local_only` included: model output reaching
-  eval/exec, a shell, SQL or `vm` (OWASP LLM05), a model-chosen tool name used with
-  `getattr`/`globals()`/`import` without an allowlist (LLM06), `trust_remote_code=True` without a
-  commit-pinned revision and `torch.load` without `weights_only=True` (LLM03), HTTP request data in
-  a system/developer prompt (LLM01), OpenAI calls with no token cap (LLM10, low). Findings are
-  `security`, with `owasp-llm` and CWE ids in the rule metadata.
+- **Semgrep pack for LLM applications** (`configs/semgrep/llm.yml`, 9 rules, Python and JS/TS),
+  run by `scan_sast` on every Semgrep run, `local_only` and the Docker fallback included: model
+  output reaching eval/exec, a shell, the program or `-c` script of a process, SQL or `vm` (OWASP
+  LLM05), a model-chosen tool name used with `getattr`/`globals()`/`import` without an allowlist
+  (LLM06), `trust_remote_code=True` without a commit-pinned revision (LLM03), `torch.load` with
+  `weights_only=False` (LLM03) or without the argument (LLM03, low: unsafe before torch 2.6), HTTP
+  request data in a system/developer prompt (LLM01), OpenAI calls with no token cap (LLM10, low).
+  Findings are `security`, with `owasp-llm` and CWE ids in the rule metadata.
 - Measured on 29 permissively licensed LLM applications before shipping (commits and per-rule
   precision in the pack header); candidates with no true positive — pickle loads, HTML sinks,
-  JS SQL/dispatch, a Python system-prompt rule — were dropped.
-- `local_only` with no project rules is still reported as no scan (the LLM pack alone is not a
-  SAST ruleset); the Docker fallback, which cannot see the pack, names it and reports partial
-  coverage.
+  JS SQL/dispatch, a Python system-prompt rule — were dropped. The pack's review then fixed a
+  dispatch guard that accepted any body or container, model text as a plain argv argument read as
+  a shell, `searchAndReplace`/`research*` read as retrievals, and a torch.load rule blind to torch
+  2.6's default; and added the structured-output, Anthropic-stream, Hugging Face and LangChain
+  `model` sources and the missing `child_process`/`subprocess` sinks.
+- `local_only` with no project rules is still reported as no scan, and a `local_only` run whose
+  every project rule failed to load is still failed with `rule_config_error`: the LLM pack alone is
+  not a SAST ruleset, whatever it found (its findings are recorded). The Docker fallback mounts the
+  plugin's pack directory read-only and runs the pack; an install missing the pack runs without it,
+  partial, the gap named.
 - `GUARDIAN_LLM_SRC`: the axis-3 corpus of `npm run ablate -- llm`.
 
 ## [3.0.0] - 2026-09-28

@@ -34,3 +34,53 @@ def anthropic_tool_use(client, pergunta, ferramentas):
     for block in msg.content:
         if block.type == "tool_use":
             return __import__(block.name)  # BUG: an Anthropic tool_use block's name
+
+
+FERRAMENTAS = {"meteorologia", "calendario"}
+
+
+class GuardasQueNaoGuardam:
+    """Review of the pack, I-1: checks that LOOK like an allowlist and are not."""
+
+    def so_avisa(self, tc):
+        nome = tc.function.name
+        if nome not in FERRAMENTAS:
+            logger.warning("ferramenta desconhecida: %s", nome)
+        return getattr(self, nome)()  # BUG: the guard only warns, and the lookup runs anyway
+
+    def nao_faz_nada(self, tc):
+        nome = tc.function.name
+        if nome not in FERRAMENTAS:
+            pass
+        return getattr(self, nome)()  # BUG: the guard does nothing
+
+    def qualquer_atributo(self, tc):
+        nome = tc.function.name
+        if nome in dir(self):
+            return getattr(self, nome)()  # BUG: dir(self) is every attribute, not an allowlist
+        return None
+
+    def substring(self, tc):
+        nome = tc.function.name
+        if nome in "meteorologia calendario":
+            return getattr(self, nome)()  # BUG: `in` a STRING is a substring test ("teo" passes)
+        return None
+
+    def do_dicionario_da_classe(self, tc):
+        nome = tc.function.name
+        if nome in type(self).__dict__:
+            return getattr(self, nome)()  # BUG: the class's __dict__ holds every method
+        return None
+
+    def vars_com_saida(self, tc):
+        nome = tc.function.name
+        if nome not in vars(self):
+            raise KeyError(nome)
+        return getattr(self, nome)()  # BUG: vars(self) is every instance attribute
+
+    def ramo_senao(self, tc):
+        nome = tc.function.name
+        if nome in FERRAMENTAS:
+            return getattr(self, nome)()  # excluded: the THEN arm of the allowlist check
+        else:
+            return getattr(self, nome)()  # BUG: the ELSE arm of the same check is where the name is NOT allowed

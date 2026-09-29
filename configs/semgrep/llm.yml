@@ -4,35 +4,37 @@
 # pelo modelo usado para ir buscar codigo por nome, codigo remoto e pickle no
 # carregamento de um modelo, dados do pedido HTTP no prompt de sistema, e
 # chamadas sem limite de tokens. Corre dentro do `scan_sast`, em TODAS as
-# corridas nativas do Semgrep, nos dois modos (é um ficheiro no disco, por isso
-# o `local_only` tambem o corre) — ver `mcp/src/runners/semgrepConfigs.ts`.
+# corridas do Semgrep, nos dois modos (é um ficheiro no disco, por isso o
+# `local_only` tambem o corre) e no fallback de Docker, que monta a pasta dos
+# packs do plugin so de leitura — ver `mcp/src/runners/semgrepConfigs.ts`.
 # Sozinho nao é um scan SAST: um `local_only` sem regras do projeto continua a
-# ser "nada para correr", e o fallback de Docker, que so monta o projeto, diz
-# que este pack nao correu.
+# ser "nada para correr", e um `local_only` cujas regras do projeto falharam
+# todas a carregar continua falhado, encontre este pack o que encontrar.
 #
 #   | regra                              | OWASP LLM 2025 | como decide                     |
 #   | ---------------------------------- | -------------- | ------------------------------- |
 #   | llm-output-to-interpreter-py / -js | LLM05          | taint: saida do modelo ate      |
-#   |                                    |                | eval/exec, shell, SQL, vm       |
+#   |                                    |                | eval/exec, shell, programa,     |
+#   |                                    |                | script `-c`, SQL, vm            |
 #   | llm-tool-name-dispatch-py          | LLM06          | taint: nome da ferramenta ate   |
 #   |                                    |                | getattr/globals()/import        |
 #   | llm-trust-remote-code              | LLM03          | a chamada: trust_remote_code=   |
 #   |                                    |                | True sem commit fixado          |
-#   | llm-torch-load-pickle              | LLM03          | a chamada: torch.load sem       |
-#   |                                    |                | weights_only=True               |
-#   | llm-request-in-system-prompt-js    | LLM01          | taint: o pedido HTTP ate ao     |
+#   | llm-torch-load-weights-only-false  | LLM03          | a chamada: weights_only=False   |
+#   | llm-torch-load-no-weights-only     | LLM03 (LOW)    | a chamada: sem weights_only     |
+#   | llm-request-in-system-prompt-js    | LLM01 (LOW)    | taint: o pedido HTTP ate ao     |
 #   |                                    |                | papel system/developer          |
-#   | llm-openai-no-max-tokens-py / -js  | LLM10          | a chamada: sem limite de tokens |
+#   | llm-openai-no-max-tokens-py / -js  | LLM10 (LOW)    | a chamada: sem limite de tokens |
 #
 # Cada regra tem fixtures em mcp/test/fixtures/llm/{hits,misses}/:
 # hits/ tem de disparar com a contagem e as LINHAS exatas, misses/ nao pode
 # disparar nada (`mcp/test/integration/llmRules.test.ts`). Em hits/, cada ramo
 # de fonte e de sink das regras de taint é alcançado por UM caso so dele: um
 # ramo que a ablação remova tem de perder a sua linha, ou lê-se DEAD. Os
-# misses/ guardam as classes de falso positivo medidas no corpus, o
-# quase-acerto que cada regex exclui, e as correções que as mensagens
-# receitam — um pack que acusa a propria receita manda fazer uma alteração de
-# que depois se queixa.
+# misses/ guardam as classes de falso positivo medidas no corpus e na
+# revisao, o quase-acerto que cada regex exclui, e as correções que as
+# mensagens receitam — um pack que acusa a propria receita manda fazer uma
+# alteração de que depois se queixa.
 #
 # ---------------------------------------------------------------------------
 # METADADOS. Cada regra traz `category: security`, uma `subcategory: llm-...`
@@ -48,20 +50,28 @@
 # SEVERIDADE, com o criterio da serie: o que a regra EMITE é sempre um defeito?
 # Nenhuma destas passa, por isso nenhuma é ERROR. As regras de fluxo (WARNING)
 # decidem "isto é saida de um modelo" em parte pelo NOME do recetor ou da
-# variavel; `trust_remote_code` e `torch.load` (WARNING) dependem de o
-# ficheiro ou o repositorio serem de confiança, o que nao se ve daqui. O prompt
-# de sistema e o limite de tokens sao LOW: descrevem uma superficie ou um
-# custo, nao um caminho de execução.
+# variavel; `trust_remote_code` e `weights_only=False` (WARNING) dependem de o
+# ficheiro ou o repositorio serem de confiança, o que nao se ve daqui. Sao
+# LOW: o `torch.load` sem o argumento (inseguro so antes do torch 2.6, e a
+# regra nao ve a versão — revisao, I-3), o prompt de sistema e o limite de
+# tokens, que descrevem uma superficie ou um custo, nao um caminho de
+# execução.
+#
+# VERSÃO DO SEMGREP. Medido com o 1.176.1 (o do PATH desta maquina). Nas
+# imagens 1.86.0 e 1.170.1 o pack da 114 dos 121 resultados de hits/: as sete
+# linhas cuja função vem de um `import ... from 'node:child_process'` ficam
+# mudas, porque essas versões nao resolvem o prefixo `node:` em modo taint
+# (ver a regra JS). Tudo o resto dispara nas tres.
 #
 # ---------------------------------------------------------------------------
 # POR QUE TAINT, E O QUE O TAINT DESTE SEMGREP NAO VE. As regras de fluxo usam
 # `mode: taint`: o valor passa por variaveis, f-strings, concatenações,
 # `json.loads`, ciclos `for` e desestruturação. Mas o taint do Semgrep
-# Community é INTRAPROCEDIMENTAL — medido nesta ronda, e é o facto que mais
-# pesa no pack: na primeira versão, com as fontes so nas chamadas aos SDK,
-# nenhum dos bugs verdadeiros do corpus foi encontrado, porque em codigo real a
-# chamada ao modelo e o eval estao em funções diferentes. O que os trouxe de
-# volta, cada um com o seu caso em hits/:
+# Community é INTRAPROCEDIMENTAL — medido, e é o facto que mais pesa no pack:
+# na primeira versão, com as fontes so nas chamadas aos SDK, nenhum dos bugs
+# verdadeiros do corpus foi encontrado, porque em codigo real a chamada ao
+# modelo e o eval estao em funções diferentes. O que os trouxe de volta, cada
+# um com o seu caso em hits/:
 #
 #   - o recetor com NOME de modelo: qualquer metodo de um objeto chamado
 #     `llm`, `*_llm`, `chain`, `*_chain`, `agent`, `agent_executor`,
@@ -69,7 +79,8 @@
 #     `self.llm_chain.predict(...)` no LangChain). A palavra tem de estar no
 #     FIM do nome: `results_agent_execution_dict.items()` (SuperAGI) e
 #     `get_agent_runs_directory()` (screenshot-to-code) eram fontes na
-#     segunda versão, e davam quatro falsos positivos;
+#     segunda versão, e davam quatro falsos positivos; e os compostos que nao
+#     sao modelos saem por nome (`supply_chain`, `user_agent`... — revisao);
 #   - os endpoints de modelo da AWS: `invoke_endpoint` (SageMaker, o
 #     `eval(response_str)` do PrivateGPT), `invoke_model` e `converse`
 #     (Bedrock);
@@ -89,7 +100,7 @@
 #
 # ---------------------------------------------------------------------------
 # O CORPUS (2026-09-28). Vinte e nove aplicações e bibliotecas LLM de licença
-# permissiva, clones superficiais (`git clone --depth 1`) FORA do repo, o
+# permissiva, clones superficiais FORA do repo, cada uma no commit abaixo, o
 # pack inteiro com as opções por omissao do Semgrep (as mesmas do `scan_sast`:
 # ignora `test/`, `tests/`, `node_modules/`). Do Flowise ficou de fora
 # `packages/server/src/enterprise` e do pandas-ai `pandasai/ee` — as partes com
@@ -135,39 +146,73 @@
 # execução "por desenho" (a PAL chain, a cadeia SQL) conta, porque é isso que
 # a OWASP LLM05 descreve; (trust_remote_code) o carregamento é de um id do Hub
 # ou de um caminho dado de fora, sem commit fixado — `revision=revision` com o
-# valor por omissao "main" nao fixa nada; (torch.load) o torch declarado admite
-# uma versão < 2.6 (ou nao é declarado) e o ficheiro vem de fora do codigo que
-# o le (um checkpoint, um argumento, uma configuração); (prompt de sistema) um
-# dado do pedido entra no texto do operador no papel system/developer;
-# (limite de tokens) a chamada nao tem limite nenhum, nem espalhado de outro
-# objeto. Codigo de TESTE conta como falso: o dano (custo, execução) precisa de
-# um atacante e de produção.
+# valor por omissao "main" nao fixa nada —, e um script de dataset de um
+# benchmark conta, porque o codigo corre na maquina de quem o corre;
+# (torch.load) o torch declarado admite uma versão < 2.6 (ou nao é declarado)
+# e o ficheiro vem de fora do codigo que o le (um checkpoint descarregado, um
+# argumento, uma configuração); (prompt de sistema) um dado do pedido entra no
+# texto do operador no papel system/developer; (limite de tokens) a chamada nao
+# tem limite nenhum, nem espalhado de outro objeto. Codigo de TESTE, e as
+# ferramentas de AVALIAÇAO que se correm como os testes (o `evals/` do
+# gpt-researcher), contam como falsos quando o dano (custo, execução) precisa
+# de um atacante e de produção. LIMIAR: o sink existe e corre, mas o texto do
+# modelo nao o controla.
 #
-#   | regra                            | resultados | V / F   | precisao |
-#   | -------------------------------- | ---------: | ------- | -------: |
-#   | llm-output-to-interpreter-py     |         11 | 11 / 0  |   100 %  |
-#   | llm-tool-name-dispatch-py        |          1 |  1 / 0  |   100 %  |
-#   | llm-trust-remote-code            |         71 | 71 / 0  |   100 %  |
-#   | llm-torch-load-pickle            |         10 | 10 / 0  |   100 %  |
-#   | llm-openai-no-max-tokens-py      |         21 | 18 / 3  |    86 %  |
-#   | llm-output-to-interpreter-js     |          0 |  -      |     -    |
-#   | llm-request-in-system-prompt-js  |          3 |  3 / 0  |   100 %  |
-#   | llm-openai-no-max-tokens-js      |        126 | 124 / 2 |    98 %  |
+#   | regra                              | resultados | V / limiar / F | precisao |
+#   | ---------------------------------- | ---------: | -------------- | -------: |
+#   | llm-output-to-interpreter-py       |         11 |  10 / 1 / 0    |    91 %  |
+#   | llm-tool-name-dispatch-py          |          1 |   1 / 0 / 0    |   100 %  |
+#   | llm-trust-remote-code              |         71 |  71 / 0 / 0    |   100 %  |
+#   | llm-torch-load-weights-only-false  |          0 |   -            |     -    |
+#   | llm-torch-load-no-weights-only     |         10 |   9 / 1 / 0    |    90 %  |
+#   | llm-openai-no-max-tokens-py        |         21 |  17 / 0 / 4    |    81 %  |
+#   | llm-output-to-interpreter-js       |          0 |   -            |     -    |
+#   | llm-request-in-system-prompt-js    |          3 |   3 / 0 / 0    |   100 %  |
+#   | llm-openai-no-max-tokens-js        |        127 | 125 / 0 / 2    |    98 %  |
+#   | o pack                             |        244 | 236 / 2 / 6    |    97 %  |
+#
+# A precisao conta o limiar como falso. Os 244 sao os 243 de uma varredura
+# do pack inteiro mais `langchain_experimental/sql/base.py:178`, que cai de
+# algumas varreduras do corpus inteiro sem erro nenhum e dispara em todas as
+# varreduras do ficheiro sozinho (ver a ablação).
 #
 # Os verdadeiros do interpretador: o LLMBashChain, a PAL chain e a cadeia SQL
 # (duas linhas) do langchain-experimental; o `eval` da saida do modelo em tres
-# sitios do MetaGPT (`action_node.py` duas vezes, `strategy/tot.py`); o
-# `eval(response_str)` de um endpoint SageMaker no PrivateGPT; e o
-# `eval(assistant_reply)` do SuperAGI, tres vezes. O do despacho: o exemplo de
-# streaming do openai/swarm, que monta um caminho e um `getattr` com o nome da
-# ferramenta. Os cinco falsos que ficam sao codigo de teste
-# (`test_openai_server.py` do h2oGPT e o `compatibility-test-script.cjs` do
-# AnythingLLM), que nenhuma regra separa pelo nome sem arriscar codigo real.
+# sitios do MetaGPT (`action_node.py` duas vezes, `strategy/tot.py`); e o
+# `eval(assistant_reply)` do SuperAGI, tres vezes. No LIMIAR (revisao da
+# triagem): o `eval(response_str)` do PrivateGPT, que avalia o corpo JSON de
+# um endpoint SageMaker — o texto do modelo vai dentro de uma string JSON
+# escapada e nao o consegue controlar; o perigo real é um endpoint
+# comprometido. O do despacho: o exemplo de streaming do openai/swarm, que
+# monta um caminho e um `getattr` com o nome da ferramenta. No `torch.load`,
+# no LIMIAR: o `topic_clustering.py:255` do FastChat carrega embeddings que a
+# propria ferramenta gravou. Os seis falsos sao codigo de teste
+# (`test_openai_server.py` do h2oGPT, tres, e o `compatibility-test-script.cjs`
+# do AnythingLLM, dois) e o juiz do `evals/` do gpt-researcher, que nenhuma
+# regra separa pelo nome sem arriscar codigo real.
 #
-# LEIA O 100 % COM CUIDADO. O interpretador JS nao disparou em nenhuma das
-# quinze aplicações JS/TS: o seu falso positivo so esta medido nas fixtures.
-# O despacho tem UM resultado. E os 124 do limite de tokens em JS sao quase
-# todos (114) do AnythingLLM, que chama trinta fornecedores pela mesma API.
+# LEIA O 100 % COM CUIDADO. O interpretador JS e o `weights_only=False` nao
+# dispararam em nenhuma aplicação: o seu falso positivo so esta medido nas
+# fixtures. O despacho tem UM resultado. E os 125 do limite de tokens em JS
+# sao quase todos (114) do AnythingLLM, que chama trinta fornecedores pela
+# mesma API.
+#
+# A REVISAO DO PACK (2026-09-28) acrescentou fontes e sinks que o corpus nao
+# tinha como medir. Re-medido no mesmo corpus, nos mesmos commits: o pack
+# anterior deu os mesmos 243 da primeira triagem; o novo deu 243, iguais
+# por ficheiro, linha, coluna e regra (com o `torch.load` renomeado) menos a
+# linha 178 acima e mais UM resultado novo, verdadeiro — o
+# `max_tokens: undefined` do chatbot-ui (`app/api/chat/openrouter/route.ts`),
+# exatamente o caso que a revisao reproduziu. Nenhuma das outras adições
+# (as saidas estruturadas, o stream da Anthropic, o Hugging Face, o
+# `model.invoke` do LangChain, os kwargs do `trust_remote_code`, os sinks do
+# `child_process` e do `subprocess`, as quatro fontes de pedido, o tuplo de
+# sistema do LangChain.js) tem uma instancia no corpus: nenhuma acrescentou
+# um falso positivo, e a prova de cada uma é a sua linha em hits/. As
+# correções de precisao (a lista de argumentos, o registo de ferramentas, os
+# compostos `supply_chain`/`user_agent`, os guardas do despacho, os nomes
+# `research*`/`searchAndReplace`) tambem nao tinham instancia: a prova é a
+# sua linha em misses/ ou hits/.
 #
 # O QUE O CORPUS TIROU DO PACK, com a razao:
 #
@@ -201,85 +246,109 @@
 # todos em ficheiros `.spec.ts` de 4 600 a 9 600 linhas. Medido a seguir num
 # job, sem timeout, nos quatro maiores: 1.13 s ao todo para o interpretador
 # JS e 0.36 s para o prompt de sistema, cerca de 1 s por ficheiro com o parse
-# incluido. Os timeouts sao da carga da maquina, como no pack RGPD; o
-# `scan_sast` reporta-os como corrida parcial, com a razao, e nunca limpa.
+# incluido. As regras de taint PYTHON tambem estouram: nos maiores ficheiros
+# do h2oGPT (`gpt_langchain.py`, 10 587 linhas; `gradio_runner.py`, 7 084;
+# `gen.py`, 5 669), num job e sem timeout, o interpretador Python leva 1.46,
+# 1.52 e 0.81 s por ficheiro e o despacho 0.43, 0.37 e 0.24 s (o pack da
+# revisao; o anterior, 1.74 / 1.00 / 0.56 e 1.35 / 0.80 / 0.44) — com 24 jobs
+# numa maquina carregada isso passa os 5 s por regra e por ficheiro. Os
+# timeouts sao da carga, como no pack RGPD; o `scan_sast` reporta-os como
+# corrida parcial, com a razao, e nunca limpa.
 # Como o pack corre em TODOS os `scan_sast`, mediu-se tambem onde nao ha
 # modelo nenhum: o `mcp/src` deste repo (274 ficheiros) leva 6 s, com 0
 # resultados e 0 erros — a mesma ordem do `base.yml` (7 s) na mesma arvore;
 # o LibreChat inteiro (5 122 ficheiros) levou 39 s.
 #
 # ---------------------------------------------------------------------------
-# A ABLAÇAO (`npm run ablate -- llm`). Duas corridas e uma re-ablação:
+# A ABLAÇAO (`npm run ablate -- llm`).
 #
-#   1. So com as fixtures (eixo 3 N/A): 101 clauses ablados em 8 de 8
-#      regras, 75 resultados de base em hits/, 8/8 regras disparam, 99 vivos
-#      e 2 DEAD — os dois ramos do objeto de mensagem do prompt de sistema
-#      (`role` antes de `content`, e ao contrario). O par deu MOVES: o padrao
-#      de objeto do Semgrep ignora a ordem das chaves e cada ramo cobria os
-#      dois. O segundo saiu; a regra, re-ablada sozinha, deu 12/12 vivos.
-#   2. Completa, com o eixo 3 sobre a arvore do corpus (`GUARDIAN_LLM_SRC`,
-#      1 914 ficheiros — ver `mcp/test/ablate/packs.ts`), sha256 9c145c79 (o
-#      ficheiro difere desse so nos comentarios que registam esta ablação):
-#      99 de 103 clauses em 8 de 8 regras (2 colapsados por serem a mesma
-#      ablação, 2 estruturais), 75 resultados de base em hits/ e 234 no
-#      corpus, todos comparaveis, 2 ficheiros excluidos por tempo, piso de
-#      ruido 0. 8/8 regras disparam em hits/; 99/99 vivos, 0 DEAD,
-#      0 INCONCLUSIVE. O interpretador JS nao tem resultados reais: o eixo 3
-#      é vacuo nele, e o relatorio diz isso.
-#   3. A regra do interpretador Python re-ablada sozinha (`--filter`), mesmo
-#      sha e mesmo corpus: 36/36 vivos, 0 no eixo 2 (ver a nota do ruido).
+# Primeira entrega (sha 9c145c79): 99 de 103 clauses em 8 de 8 regras, 99
+# vivos, 0 DEAD, 0 INCONCLUSIVE, piso de ruido 0 — depois de uma corrida so
+# com fixtures ter dado 2 DEAD (os dois ramos do objeto de mensagem do prompt
+# de sistema: o par deu MOVES, porque o padrao de objeto do Semgrep ignora a
+# ordem das chaves, e um saiu).
 #
-# Os 6 SUPPRESSES-TP do eixo 2 sao todos o vizinho `excluded:` anotado em
-# hits/: as chamadas com limite de tokens que as regras de fluxo usam como
-# fonte (os limites das duas regras de limite de tokens) e a mensagem de
-# UTILIZADOR ao lado da de sistema (o regex `$ROLE`).
+# Revisao do pack (sha 4bd5af07, medido com fins de linha CRLF por engano;
+# o ficheiro do repo tem LF e difere desse so nisso e nos comentarios que
+# registam esta ablação), duas corridas com o eixo 3 sobre a arvore do
+# corpus (`GUARDIAN_LLM_SRC`, 1 914 ficheiros, os mesmos da primeira
+# entrega — ver `mcp/test/ablate/packs.ts`):
 #
-# Os 23 RAISING do eixo 3 da corrida 2, lidos linha a linha, sao de tres
-# tipos, e nenhum é um clause que acrescente ruido:
+#   1. Completa: 151 de 161 clauses em 8 de 9 regras (7 colapsados por
+#      serem a mesma ablação, 3 estruturais; o `weights_only=False` é um
+#      `pattern` solto, sem clauses, e so tem o eixo 0), 121 resultados de
+#      base em hits/ e 235 no corpus, todos comparaveis, 2 ficheiros
+#      excluidos por tempo, piso de ruido 0. 9/9 regras disparam em hits/;
+#      149 vivos e 2 DEAD, os dois por falta de fixture e nao de clause: o
+#      regex do recetor `model`/`chat` (nenhum `invoke` num recetor que nao
+#      fosse modelo em misses/ — entrou o `lambda_client.invoke(...)` do
+#      boto3) e o regex do modulo no `require(...)` escrito na chamada
+#      (nenhum `require` de outro modulo — entrou o
+#      `require('./esquema').validar(...)`).
+#   2. As duas regras do interpretador re-abladas com as fixtures novas
+#      (`--filter=llm-output-to-interpreter`), mesmo sha e mesmo corpus: 90
+#      de 90 vivos, 0 DEAD, 0 INCONCLUSIVE, piso de ruido 0.
 #
-#   - 13 ramos POSITIVOS — fontes e sinks das regras de fluxo e os `create`
-#     sem limite — cuja remoção faz a regra casar menos: as linhas que
-#     listam sao exatamente os verdadeiros da triagem;
-#   - 4 restrições de uma exclusao ou de um sanitizador, cuja remoção alarga
-#     o que excluem: os dois `pattern-inside` dos guardas do despacho (sem
-#     eles, TODO o nome fica limpo e o exemplo do swarm some), o regex do
-#     `$FN` de recuperação (sem ele, qualquer chamada limpa o pedido) e o
-#     regex do sha em `revision` (sem ele, qualquer `revision=` exclui, e as
-#     21 chamadas do FastChat com `revision=revision`, verdadeiras, somem);
-#   - 6 que so listam UMA linha, `langchain_experimental/sql/base.py:178` — a
-#     segunda consulta SQL do `SQLDatabaseChain._call`, verdadeira. É RUIDO,
-#     e medido como tal: entre esses 6 estao clauses que nao a podem tocar (o
-#     sink `sqlalchemy.text` e o `pandas.read_sql_query`, que nao tem nenhum
-#     resultado real); a variante sem o `sqlalchemy.text`, varrida à mao no
-#     mesmo corpus, da os mesmos 11 resultados; e a re-ablação da corrida 3
-#     acusou a mesma linha em OUTROS 6 clauses (`invoke_model`,
-#     `content[i].text`, `exec`, `executemany`, e dois em comum). A linha
-#     cai de algumas varreduras e nao de outras, sem erro nenhum no
-#     relatorio do Semgrep; o piso de ruido, medido com duas varreduras, deu
-#     0 e nao a apanhou. A hipotese, nao provada: o ponto fixo do taint numa
-#     função longa corta-se em silencio sob carga.
+# Os SUPPRESSES-TP do eixo 2 (21 na corrida 1), lidos linha a linha, sao todos
+# dos tipos conhecidos: o vizinho `excluded:` anotado em hits/ (as chamadas
+# com limite de tokens que as regras de fluxo usam como fonte, a mensagem de
+# UTILIZADOR ao lado da de sistema, o `dict(...)` de kwargs antes da chamada
+# que o espalha, o `weights_only=False` para a regra LOW, o bloco ENTAO do
+# guarda do despacho); restrições de um sink cuja remoção o alarga a TODAS as
+# chamadas (o nome `getoutput`, os recetores de REPL e de base de dados, o
+# contexto do `promisify` — sem ele, qualquer chamada com texto do modelo no
+# primeiro argumento seria um sink) e que revelam um segundo resultado, noutra
+# coluna, em linhas de hits/ que ja sao bugs; e os regexes de fontes que
+# casam TUDO quando removidos (o `pipeline`, os recetores e o nome da
+# variavel), que tornam a propria chamada `subprocess...(...)` uma fonte à
+# volta do seu sink.
+#
+# Os RAISING do eixo 3 (26 na corrida 1, 11 na 2), lidos linha a linha: os
+# ramos POSITIVOS, que listam exatamente os verdadeiros da triagem; as
+# restrições de uma exclusao ou de um sanitizador (os guardas do despacho, o
+# regex de recuperação `$FN`, o sha em `revision`, o `undefined` do limite
+# de tokens, que lista o do chatbot-ui); e os que so listam
+# `langchain_experimental/sql/base.py:178` — RUIDO, medido como tal na
+# primeira entrega e outra vez aqui: a linha cai de algumas varreduras do
+# corpus inteiro sem erro nenhum, dispara em todas as varreduras do ficheiro
+# sozinho, e as duas corridas acusaram-na em conjuntos DIFERENTES de clauses,
+# incluindo clauses que nao a podem tocar (`$CUR.execute`,
+# `sqlalchemy.text`, `messages.create`, `create_subprocess_shell` — a linha
+# é um `database.run`). O piso de ruido, com duas varreduras, deu 0 e nao a
+# apanhou; a hipotese, nao provada, continua a ser o ponto fixo do taint numa
+# função longa cortado em silencio sob carga.
 #
 # ---------------------------------------------------------------------------
 # PONTOS CEGOS CONHECIDOS, escritos para que ninguem os tome por cobertura:
 #
 # - Tudo o que atravessa uma função (ver acima): a fonte tem de estar na mesma
 #   função que o sink, ou ter uma forma ou um nome que a denuncie.
-# - `.execute(...)` em QUALQUER recetor conta como SQL: um registo de
-#   ferramentas que recebe a chamada do modelo (`registry.execute(call)`)
-#   dispararia. Nao apareceu no corpus, e restringir o recetor a nomes de
-#   cursor/ligação perdia `c.execute(...)` e os clientes ClickHouse.
 # - O nome do recetor e da variavel sao heuristicas: um modelo guardado em
-#   `self.client` nao é visto, e uma variavel chamada `model_output` que nao
-#   vem de um modelo dispara.
-# - O despacho so reconhece dois guardas: `if nome in PERMITIDAS:` e
-#   `if nome not in PERMITIDAS: raise/return` antes da chamada. Um guarda
-#   noutra função, ou `hasattr`, nao conta (e `hasattr` nao é uma lista).
+#   `self.client` nao é visto, uma variavel chamada `model_output` que nao
+#   vem de um modelo dispara, e um composto `*_chain`/`*_agent` que nao esta
+#   na lista de excluidos (`retry_chain`, digamos) conta como modelo.
+# - SQL: o `.execute*` so conta num recetor com nome de cursor, ligação,
+#   sessao, motor ou cliente (`c`, `cur`, `conn`, `db`, `session`,
+#   `engine`, `client`...); um cursor chamado `q` nao é visto.
+# - Processos: uma lista de argumentos numa VARIAVEL (`args = [...];
+#   subprocess.run(args)`) nao é vista em nenhuma posição — so a lista
+#   escrita na chamada, o `shlex.split(...)` e as formas de shell. Um texto do
+#   modelo que so é o programa num SO (`subprocess.run(texto)` sem shell, que
+#   no Windows é uma linha de comando) tambem nao.
+# - O despacho so reconhece os guardas descritos na regra; um guarda noutra
+#   função, ou `hasattr`, nao conta. Dentro do bloco ENTAO de um `if nome in
+#   PERMITIDAS:`, qualquer valor tem o seu taint limpo, e nao so o nome
+#   verificado.
 # - `trust_remote_code` com o `revision` numa constante (`revision=COMMIT`) nao
 #   é reconhecido como fixado: so o sha de 40 caracteres escrito na chamada.
-# - O `torch.load` nao sabe a versão do torch: com torch >= 2.6 e sem
-#   `weights_only`, a chamada ja nao usa pickle, e dispara na mesma.
+#   Os kwargs so contam quando o dicionario é montado na mesma função, e so
+#   nas formas `dict(...)` e `{...}`.
+# - O `torch.load` nao sabe a versão do torch: a regra LOW dispara tambem com
+#   torch >= 2.6, onde a chamada ja é segura. Um `weights_only=` com uma
+#   variavel nao dispara em nenhuma das duas regras.
 # - O limite de tokens so é procurado nos argumentos da chamada: um proxy
-#   (LiteLLM, um gateway) que imponha o limite nao se ve.
+#   (LiteLLM, um gateway) que imponha o limite nao se ve, e um limite numa
+#   variavel conta como limite mesmo que valha None.
 #
 # ---------------------------------------------------------------------------
 # CINCO CARACTERES SAO PROIBIDOS NESTE FICHEIRO, incluindo nos comentarios: o A
@@ -294,35 +363,55 @@ rules:
   # SAIDA DO MODELO NUM INTERPRETADOR — Python.
   #
   # FONTES, cada uma com o seu caso em hits/ (ver o cabeçalho): as chamadas aos
-  # SDK (OpenAI 1.x e 0.x, Anthropic, LiteLLM, SageMaker, Bedrock), qualquer
-  # metodo de um recetor com nome de modelo, uma chamada direta a `llm(...)`,
-  # a forma da resposta lida noutra função, e o nome da variavel.
+  # SDK (OpenAI 1.x e 0.x, incluindo o `.parse` das saidas estruturadas;
+  # Anthropic, `create` e `stream`; LiteLLM; SageMaker; Bedrock; o
+  # InferenceClient do Hugging Face), o `pipeline` do transformers chamado, o
+  # `decode` de um tokenizer (o texto que o `generate` produziu), qualquer
+  # metodo de um recetor com nome de modelo, o `invoke`/`stream`/`batch` de um
+  # recetor chamado `model` ou `chat` (o LangChain), uma chamada direta a
+  # `llm(...)`, a forma da resposta lida noutra função, e o nome da variavel.
   #
   # O `max_tokens=` no `messages.create` é o que separa a Anthropic (onde é
   # obrigatorio) do Twilio (`client.messages.create(body=..., to=...)`, que
   # manda um SMS e nao devolve texto de modelo nenhum).
   #
-  # SINKS: `eval`/`exec`, a shell (`os.system`, `os.popen`, `subprocess.*`,
-  # `asyncio.create_subprocess_shell`), um `.run(...)` num recetor de REPL,
-  # shell ou bash (o `PythonREPL` do LangChain, o `BashProcess`), e SQL (um
-  # `.execute*` em qualquer recetor, o `text()` do SQLAlchemy, o `read_sql` do
-  # pandas, e o `.run(...)` num recetor de base de dados — o `SQLDatabase` do
-  # LangChain). O `focus-metavariable` fica no PRIMEIRO argumento: um valor do
-  # modelo como parametro ligado (`execute("... %s", (valor,))`) é dados, e
-  # esta em misses/.
+  # O RECETOR COM NOME DE MODELO: a palavra (`llm`, `chain`, `agent`...) tem de
+  # estar no FIM do nome, e um composto que nao é um modelo sai por nome
+  # (revisao, M-5): `supply_chain`, `tool_chain`, `call_chain`, `user_agent`,
+  # `http_agent`... Um `model` so conta com um metodo do LangChain: o
+  # `model.predict(X)` do scikit-learn esta em misses/.
+  #
+  # SINKS: `eval`/`exec`; a shell — `os.system`, `os.popen`, o `subprocess`
+  # com `shell=True` ou `getoutput`, `asyncio.create_subprocess_shell`; as
+  # posições de uma lista de argumentos que CORREM alguma coisa (revisao, I-2):
+  # o programa (`[texto, ...]`, `create_subprocess_exec(texto, ...)`), o
+  # argumento de um interpretador com `-c`/`-e` (`["bash", "-c", texto]`,
+  # `["python3", "-c", texto]`) e o `shlex.split(texto)`, que da ao modelo o
+  # programa e os argumentos. Um texto do modelo como ARGUMENTO de um
+  # programa fixo (`["git", "commit", "-m", texto]`, o caso das ferramentas de
+  # mensagens de commit) nao é passado a shell nenhuma e esta em misses/.
+  # Depois, um `.run(...)` num recetor de REPL, shell ou bash (o `PythonREPL`
+  # do LangChain, o `BashProcess`), e SQL: um `.execute*` num recetor com nome
+  # de cursor, ligação, sessao ou motor (revisao, M-4: o `tool.execute(...)`
+  # de um registo de ferramentas nao é SQL), o `text()` do SQLAlchemy, o
+  # `read_sql` do pandas, e o `.run(...)` num recetor de base de dados — o
+  # `SQLDatabase` do LangChain. O `focus-metavariable` fica no argumento que
+  # corre: um valor do modelo como parametro ligado (`execute("... %s",
+  # (valor,))`) é dados, e esta em misses/.
   - id: llm-output-to-interpreter-py
     mode: taint
     languages: [python]
     severity: WARNING
     message: >-
       Texto gerado por um modelo de linguagem chega a um interpretador (eval/exec,
-      a shell ou SQL) sem validação. Quem controla o que o modelo lê — o utilizador,
-      um documento recuperado, uma pagina web — pode fazê-lo escrever o codigo, o
-      comando ou a consulta que corre aqui (OWASP LLM05:2025). Trate a saida como
-      dados: json.loads ou ast.literal_eval em vez de eval, uma lista fechada de
-      operações ou consultas parametrizadas em vez de SQL gerado, e, quando correr
-      codigo gerado é o objetivo, um sandbox isolado (um contentor, o E2B) em vez
-      do processo da aplicação, com uma base de dados so de leitura.
+      a shell, o programa ou o script de um processo, ou SQL) sem validação. Quem
+      controla o que o modelo lê — o utilizador, um documento recuperado, uma pagina
+      web — pode fazê-lo escrever o codigo, o comando ou a consulta que corre aqui
+      (OWASP LLM05:2025). Trate a saida como dados: json.loads ou ast.literal_eval em
+      vez de eval, uma lista fechada de operações, programas fixos com o texto como
+      argumento (sem shell=True) e consultas parametrizadas em vez de SQL gerado; e,
+      quando correr codigo gerado é o objetivo, um sandbox isolado (um contentor, o
+      E2B) em vez do processo da aplicação, com uma base de dados so de leitura.
     metadata:
       category: security
       subcategory: llm-improper-output-handling
@@ -337,18 +426,44 @@ rules:
     pattern-sources:
       - pattern-either:
           - pattern: $C.completions.create(...)
+          - pattern: $C.completions.parse(...)
           - pattern: $C.responses.create(...)
+          - pattern: $C.responses.parse(...)
           - pattern: openai.ChatCompletion.create(...)
           - pattern: $C.messages.create(..., max_tokens=$M, ...)
+          - pattern: $C.messages.stream(..., max_tokens=$M, ...)
           - pattern: litellm.completion(...)
           - pattern: $C.invoke_endpoint(...)
           - pattern: $C.invoke_model(...)
           - pattern: $C.converse(...)
+          - pattern: $C.text_generation(...)
+          - pattern: $C.chat_completion(...)
+          - patterns:
+              - pattern-inside: |
+                  $P = transformers.pipeline(...)
+                  ...
+              - pattern: $P(...)
+          - patterns:
+              - pattern: $T.$DEC(...)
+              - metavariable-regex:
+                  metavariable: $DEC
+                  regex: ^(?:batch_)?decode$
+              - metavariable-regex:
+                  metavariable: $T
+                  regex: (?i)^(?:.*\.)?_?(?:[a-z0-9]+_)*(?:tokenizer|processor)\d*$
           - patterns:
               - pattern: $L.$METHOD(...)
               - metavariable-regex:
                   metavariable: $L
-                  regex: (?i)^(?:.*\.)?_?(?:[a-z0-9]+_)*(?:llm|chain|agent|agent_executor|query_engine|chat_engine)\d*$
+                  regex: (?i)^(?:.*\.)?_?(?!(?:[a-z0-9]+_)*(?:supply|block|tool|key|cert|certificate|call|filter|handler|middleware|promise|build|food|daisy|user|http|https|proxy|browser|ssh|gpg|mail|service|dns|update)_(?:chain|agent)\d*$)(?:[a-z0-9]+_)*(?:llm|chain|agent|agent_executor|query_engine|chat_engine)\d*$
+          - patterns:
+              - pattern: $L.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $L
+                  regex: ^(?:.*\.)?_?(?:[a-z0-9]+_)*(?:model|chat)\d*$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^a?(?:invoke|stream|batch)$
           - patterns:
               - pattern: $L(...)
               - metavariable-regex:
@@ -372,16 +487,37 @@ rules:
               - pattern: exec($X, ...)
               - pattern: os.system($X)
               - pattern: os.popen($X, ...)
-              - pattern: subprocess.$F($X, ...)
+              - pattern: subprocess.$F($X, ..., shell=True, ...)
+              - pattern: subprocess.$F([$X, ...], ...)
+              - patterns:
+                  - pattern: subprocess.$F([$SH, $FLAG, $X, ...], ...)
+                  - metavariable-regex:
+                      metavariable: $SH
+                      regex: ^['"](?:[^'"]*/)?(?:sh|bash|zsh|dash|ksh|python\d*(?:\.\d+)?|node|perl|ruby)['"]$
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^['"]-[ce]['"]$
+              - pattern: subprocess.$F(shlex.split($X, ...), ...)
+              - patterns:
+                  - pattern: subprocess.$F($X, ...)
+                  - metavariable-regex:
+                      metavariable: $F
+                      regex: ^get(?:status)?output$
               - pattern: asyncio.create_subprocess_shell($X, ...)
+              - pattern: asyncio.create_subprocess_exec($X, ...)
               - patterns:
                   - pattern: $R.run($X, ...)
                   - metavariable-regex:
                       metavariable: $R
                       regex: (?i)^(?:.*\.)?\w*(?:repl|shell|bash)\w*$
-              - pattern: $CUR.execute($X, ...)
-              - pattern: $CUR.executemany($X, ...)
-              - pattern: $CUR.executescript($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $CUR.execute($X, ...)
+                      - pattern: $CUR.executemany($X, ...)
+                      - pattern: $CUR.executescript($X, ...)
+                  - metavariable-regex:
+                      metavariable: $CUR
+                      regex: (?i)^(?:.*\.)?_?(?:[a-z0-9]+_)*(?:c|cur|cursor|conn|connection|connect|con|db|database|session|sess|engine|tx|txn|transaction|client)\d*(?:\(\))?$
               - pattern: sqlalchemy.text($X, ...)
               - pattern: pandas.read_sql($X, ...)
               - pattern: pandas.read_sql_query($X, ...)
@@ -402,11 +538,24 @@ rules:
   # function_call, como atributo e como dicionario) e a mensagem da Anthropic,
   # cujos blocos `tool_use` trazem o nome em `.name`.
   #
-  # Os dois SANITIZADORES sao as listas de permitidos que o Semgrep consegue
-  # ver na mesma função: o bloco de um `if nome in PERMITIDAS:` e o resto da
-  # função depois de um `if nome not in PERMITIDAS:` (que tem de sair). O
-  # despacho por dicionario (`TABELA[nome]()`), que a mensagem receita, nem é
-  # um sink. Os tres estao em misses/.
+  # OS SANITIZADORES sao as listas de permitidos que o Semgrep consegue ver na
+  # mesma função (revisao, I-1 — a primeira versao aceitava QUALQUER corpo e
+  # qualquer contentor):
+  #
+  #   - o bloco ENTAO de um `if nome in PERMITIDAS:`, e so ele: o
+  #     `focus-metavariable` no corpo deixa o ramo SENAO de fora. Um
+  #     `pattern-inside` do `if` inteiro limpava tambem o `else:`, onde o nome
+  #     NAO esta na lista (medido; esta em hits/);
+  #   - o resto da função depois de um `if nome not in PERMITIDAS:` que SAI —
+  #     `raise`, `return` ou `continue`. Um guarda que so avisa
+  #     (`logger.warning(...)`) ou nao faz nada (`pass`) nao guarda, e a
+  #     procura corre na mesma (em hits/);
+  #   - e so quando `PERMITIDAS` é uma lista de facto: `dir(...)`, `vars(...)`,
+  #     `globals()`, `locals()`, um `__dict__` (todos os atributos) e uma
+  #     STRING (`nome in "a b"` é um teste de substring) nao sao (em hits/).
+  #
+  # O despacho por dicionario (`TABELA[nome]()`), que a mensagem receita, nem é
+  # um sink. Os guardas que contam estao em misses/.
   - id: llm-tool-name-dispatch-py
     mode: taint
     languages: [python]
@@ -417,7 +566,8 @@ rules:
       e quem lhe injetar instruções — pode chamar qualquer atributo, função ou
       modulo, nao so as ferramentas que lhe foram oferecidas (OWASP LLM06:2025).
       Despache por um dicionario fechado {nome: função}, ou verifique
-      `if nome in PERMITIDAS` antes de procurar o nome.
+      `if nome in PERMITIDAS` (um conjunto fixo de nomes, nao dir() nem uma string)
+      antes de procurar o nome, e saia (raise/return) quando nao estiver.
     metadata:
       category: security
       subcategory: llm-excessive-agency
@@ -435,16 +585,30 @@ rules:
           - pattern: $C.messages.create(..., max_tokens=$M, ...)
     pattern-sanitizers:
       - patterns:
-          - pattern-inside: |
-              if $N in $ALLOWED:
-                ...
-          - pattern: $N
-      - patterns:
-          - pattern-inside: |
-              if $N not in $ALLOWED:
-                ...
-              ...
-          - pattern: $N
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if $N in $ALLOWED:
+                        $...BODY
+                  - focus-metavariable: $...BODY
+              - pattern-inside: |
+                  if $N not in $ALLOWED:
+                    ...
+                    raise ...
+                  ...
+              - pattern-inside: |
+                  if $N not in $ALLOWED:
+                    ...
+                    return ...
+                  ...
+              - pattern-inside: |
+                  if $N not in $ALLOWED:
+                    ...
+                    continue
+                  ...
+          - metavariable-regex:
+              metavariable: $ALLOWED
+              regex: ^(?!(?:dir|vars|globals|locals)\(|.*\.__dict__$|[rbuRBU]*['"])
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -465,6 +629,11 @@ rules:
   # positivos medidos). E sai a chamada com a revisão fixada num sha de 40
   # caracteres, que é a correção que a mensagem receita; um ramo (`"main"`) ou
   # uma tag (`"v1.0"`) mudam sem aviso e continuam a disparar.
+  #
+  # O segundo ramo (revisao): a flag levada por um dicionario de kwargs —
+  # `opcoes = dict(..., trust_remote_code=True)` ou `{"trust_remote_code":
+  # True}` — e espalhado numa chamada (`**opcoes`). O dicionario de chaves
+  # permitidas do h2oGPT nunca é espalhado, e continua de fora.
   - id: llm-trust-remote-code
     languages: [python]
     severity: WARNING
@@ -483,34 +652,65 @@ rules:
         - "CWE-494: Download of Code Without Integrity Check"
       references:
         - https://genai.owasp.org/llm-top-10/
-    patterns:
-      - pattern: $F(..., trust_remote_code=True, ...)
-      - pattern-not: dict(...)
-      - pattern-not:
-          patterns:
-            - pattern: $F(..., revision=$REV, ...)
-            - metavariable-regex:
-                metavariable: $REV
-                regex: ^['"][0-9a-f]{40}['"]$
+    pattern-either:
+      - patterns:
+          - pattern: $F(..., trust_remote_code=True, ...)
+          - pattern-not: dict(...)
+          - pattern-not:
+              patterns:
+                - pattern: $F(..., revision=$REV, ...)
+                - metavariable-regex:
+                    metavariable: $REV
+                    regex: ^['"][0-9a-f]{40}['"]$
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $KW = dict(..., trust_remote_code=True, ...)
+                  ...
+              - pattern-inside: |
+                  $KW = {..., "trust_remote_code": True, ...}
+                  ...
+          - pattern: $F(..., **$KW, ...)
 
   # ---------------------------------------------------------------------------
-  # PICKLE NO CARREGAMENTO DE PESOS.
+  # PICKLE NO CARREGAMENTO DE PESOS, em duas regras (revisao, I-3): o torch 2.6
+  # passou o `weights_only` por omissao a True.
   #
-  # So o `weights_only=True` escrito na chamada exclui: o `weights_only=False`
-  # reativa o pickle em qualquer versão do torch e dispara (esta em hits/). O
-  # corpus declarava torch 2.2.1 (h2oGPT) ou nenhuma versão (FastChat,
-  # MetaGPT) — é para esses que a regra existe; com torch >= 2.6 e sem o
-  # argumento, a chamada ja nao usa pickle e dispara na mesma (ver os pontos
-  # cegos).
-  - id: llm-torch-load-pickle
+  # `weights_only=False` escrito na chamada reativa o pickle em QUALQUER versão
+  # do torch: WARNING.
+  - id: llm-torch-load-weights-only-false
     languages: [python]
     severity: WARNING
     message: >-
-      torch.load sem weights_only=True desserializa com pickle, e o pickle executa
-      codigo: um checkpoint descarregado ou partilhado corre com os privilegios da
-      aplicação (OWASP LLM03:2025). O torch 2.6 passou o valor por omissao a True,
-      mas so dessa versão em diante, e weights_only=False reativa o pickle em
-      qualquer versão. Passe weights_only=True, ou guarde os pesos em safetensors.
+      torch.load com weights_only=False desserializa com pickle em qualquer versão
+      do torch, e o pickle executa codigo: um checkpoint descarregado ou partilhado
+      corre com os privilegios da aplicação (OWASP LLM03:2025). Passe
+      weights_only=True (e registe as classes necessarias com
+      torch.serialization.add_safe_globals), ou guarde os pesos em safetensors.
+    metadata:
+      category: security
+      subcategory: llm-supply-chain
+      owasp-llm: LLM03:2025 Supply Chain
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      references:
+        - https://genai.owasp.org/llm-top-10/
+    pattern: torch.load(..., weights_only=False, ...)
+
+  # Sem o argumento, o resultado depende da versão instalada: pickle antes do
+  # torch 2.6, seguro dali em diante. A regra nao ve a versão, por isso é LOW e
+  # a mensagem diz a condição. O corpus declarava torch 2.2.1 (h2oGPT) ou
+  # nenhuma versão (FastChat, MetaGPT). Um `weights_only=` com uma variavel
+  # nao dispara em nenhuma das duas (ver os pontos cegos).
+  - id: llm-torch-load-no-weights-only
+    languages: [python]
+    severity: LOW
+    message: >-
+      torch.load sem weights_only: antes do torch 2.6 isto desserializa com pickle,
+      e o pickle executa codigo — um checkpoint descarregado ou partilhado correria
+      com os privilegios da aplicação (OWASP LLM03:2025). A partir do torch 2.6 o
+      valor por omissao é True e a chamada é segura. Se o projeto admite um torch
+      anterior a 2.6, passe weights_only=True explicitamente, ou use safetensors.
     metadata:
       category: security
       subcategory: llm-supply-chain
@@ -521,25 +721,27 @@ rules:
         - https://genai.owasp.org/llm-top-10/
     patterns:
       - pattern: torch.load(...)
-      - pattern-not: torch.load(..., weights_only=True, ...)
+      - pattern-not: torch.load(..., weights_only=$W, ...)
 
   # ---------------------------------------------------------------------------
   # SEM LIMITE DE TOKENS — Python.
   #
   # As tres grafias do limite (o `max_tokens` antigo, o `max_completion_tokens`
-  # dos modelos de raciocinio, o `max_output_tokens` da Responses API) e o
-  # `**kwargs` excluem. O `**` em qualquer posição: o vanna chama
+  # dos modelos de raciocinio, o `max_output_tokens` da Responses API) excluem,
+  # MENOS com o valor `None`, que é o valor por omissao e nao limita nada
+  # (revisao). O `**kwargs` exclui, em qualquer posição: o vanna chama
   # `create(**payload, stream=False)`, e o `**$KW` no fim nao o apanhava
-  # (medido: doze resultados que nao se podiam julgar).
+  # (medido: doze resultados que nao se podiam julgar). Os `.parse` das saidas
+  # estruturadas contam como os `create` (revisao).
   - id: llm-openai-no-max-tokens-py
     languages: [python]
     severity: LOW
     message: >-
-      Uma chamada à OpenAI (chat.completions ou responses) sem limite de tokens
-      gerados: o modelo pode escrever até ao maximo do contexto em cada pedido, e
-      quem controla o prompt controla o custo e o tempo de resposta (OWASP
-      LLM10:2025). Passe max_completion_tokens (ou max_tokens); na Responses API,
-      max_output_tokens.
+      Uma chamada à OpenAI (chat.completions ou responses, create ou parse) sem
+      limite de tokens gerados: o modelo pode escrever até ao maximo do contexto em
+      cada pedido, e quem controla o prompt controla o custo e o tempo de resposta
+      (OWASP LLM10:2025). Passe max_completion_tokens (ou max_tokens) com um valor;
+      na Responses API, max_output_tokens. None nao é um limite.
     metadata:
       category: security
       subcategory: llm-unbounded-consumption
@@ -551,25 +753,50 @@ rules:
     patterns:
       - pattern-either:
           - pattern: $C.chat.completions.create(...)
+          - pattern: $C.chat.completions.parse(...)
           - pattern: $C.responses.create(...)
-      - pattern-not: $F(..., max_tokens=$N, ...)
-      - pattern-not: $F(..., max_completion_tokens=$N, ...)
-      - pattern-not: $F(..., max_output_tokens=$N, ...)
+          - pattern: $C.responses.parse(...)
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: $F(..., max_tokens=$N, ...)
+                - pattern: $F(..., max_completion_tokens=$N, ...)
+                - pattern: $F(..., max_output_tokens=$N, ...)
+            - metavariable-regex:
+                metavariable: $N
+                regex: ^(?!None$)
       - pattern-not: $F(..., **$KW, ...)
 
   # ---------------------------------------------------------------------------
   # SAIDA DO MODELO NUM INTERPRETADOR — JavaScript e TypeScript.
   #
-  # As fontes: os SDK (OpenAI, Anthropic), o AI SDK da Vercel (`generateText`,
-  # `generateObject`), e o `invoke`/`call`/`predict` de um recetor com nome de
-  # modelo (LangChain.js). O metodo tem a sua lista porque em JS `model` é
-  # tambem um modelo do Mongoose (`model.findOne(...)`), e o recetor a sua
-  # porque o `invoke` da AWS Lambda devolve o resultado de uma função, nao de
-  # um modelo. Os dois estao em misses/.
+  # As fontes: os SDK (OpenAI, com o `.parse` das saidas estruturadas;
+  # Anthropic, `create` e `stream`), o AI SDK da Vercel (`generateText`,
+  # `generateObject`, `streamText`), e o `invoke`/`call`/`predict` de um
+  # recetor com nome de modelo (LangChain.js). O metodo tem a sua lista porque
+  # em JS `model` é tambem um modelo do Mongoose (`model.findOne(...)`), e o
+  # recetor a sua porque o `invoke` da AWS Lambda devolve o resultado de uma
+  # função, nao de um modelo. Os dois estao em misses/.
   #
-  # Os sinks sao qualificados pelo modulo: `child_process.exec` casa o `exec`
-  # importado com outro nome, o `node:child_process` e o `require` (medido),
-  # e deixa de fora o `RegExp.prototype.exec`. O `vm` nao é um sandbox.
+  # Os sinks do `child_process` sao qualificados pelo modulo, e o metodo nao
+  # tem lista: TODAS as funções do modulo correm o primeiro argumento (o
+  # comando, o ficheiro, o modulo do `fork`). O primeiro argumento é a posição
+  # que conta — em `spawn('git', ['commit', '-m', texto])` o texto é um
+  # argumento de um programa fixo, e esta em misses/ —, mais o argumento de um
+  # interpretador com `-c`/`-e` (`spawn('sh', ['-c', texto])`), o `require`
+  # escrito na propria chamada, e o `exec` embrulhado pelo `util.promisify`.
+  # A qualificação deixa de fora o `RegExp.prototype.exec` e um `exec`
+  # importado de outro modulo. O `vm` nao é um sandbox.
+  #
+  # VERSÃO DO SEMGREP (revisao, medido): os `import` de `'node:child_process'`
+  # so sao resolvidos a partir do Semgrep 1.176.1 (a versão medida); o 1.86.0,
+  # o 1.99.0, o 1.120.1 e o 1.170.1 nao os resolvem, e as sete linhas de hits/
+  # com um import `node:` ficam mudas neles (114 de 121) (o `'child_process'` sem prefixo,
+  # o `require` e os namespaces resolvem em todos). Tentou-se uma forma
+  # alternativa (`$CP = require($MOD)` com o `$MOD` num regex): casa esses
+  # imports em modo de pesquisa, mas nao em modo taint, nas mesmas versões.
+  # O fallback de Docker usa a imagem `semgrep/semgrep` que estiver na
+  # maquina.
   #
   # ZERO resultados nas quinze aplicações JS/TS do corpus: o codigo JS que
   # recebe texto de um modelo e o executa, se existe, esta noutra função.
@@ -579,11 +806,13 @@ rules:
     severity: WARNING
     message: >-
       Texto gerado por um modelo de linguagem chega a um interpretador (eval, new
-      Function, vm ou child_process) sem validação. Quem controla o que o modelo lê
-      pode fazê-lo escrever o codigo ou o comando que corre aqui (OWASP LLM05:2025).
-      O modulo vm nao é um sandbox. Trate a saida como dados (JSON.parse contra um
-      schema), escolha as operações de uma lista fechada, e, quando correr codigo
-      gerado é o objetivo, use um sandbox isolado (um contentor, o E2B).
+      Function, vm, ou o comando, o programa ou o script de um processo do
+      child_process) sem validação. Quem controla o que o modelo lê pode fazê-lo
+      escrever o codigo ou o comando que corre aqui (OWASP LLM05:2025). O modulo vm
+      nao é um sandbox. Trate a saida como dados (JSON.parse contra um schema),
+      escolha as operações de uma lista fechada, passe o texto como argumento de um
+      programa fixo (execFile/spawn sem shell), e, quando correr codigo gerado é o
+      objetivo, use um sandbox isolado (um contentor, o E2B).
     metadata:
       category: security
       subcategory: llm-improper-output-handling
@@ -597,10 +826,14 @@ rules:
     pattern-sources:
       - pattern-either:
           - pattern: $C.completions.create(...)
+          - pattern: $C.completions.parse(...)
           - pattern: $C.responses.create(...)
+          - pattern: $C.responses.parse(...)
           - pattern: '$C.messages.create({..., max_tokens: $M, ...})'
+          - pattern: '$C.messages.stream({..., max_tokens: $M, ...})'
           - pattern: generateText(...)
           - pattern: generateObject(...)
+          - pattern: streamText(...)
           - patterns:
               - pattern: $L.$METHOD(...)
               - metavariable-regex:
@@ -623,9 +856,25 @@ rules:
               - pattern: vm.runInNewContext($X, ...)
               - pattern: vm.runInThisContext($X, ...)
               - pattern: new vm.Script($X, ...)
-              - pattern: child_process.exec($X, ...)
-              - pattern: child_process.execSync($X, ...)
-              - pattern: child_process.spawn($X, ...)
+              - pattern: child_process.$F($X, ...)
+              - patterns:
+                  - pattern: child_process.$F($SH, [$FLAG, $X, ...], ...)
+                  - metavariable-regex:
+                      metavariable: $SH
+                      regex: ^['"`](?:[^'"`]*/)?(?:sh|bash|zsh|dash|ksh|python\d*(?:\.\d+)?|node|perl|ruby)['"`]$
+                  - metavariable-regex:
+                      metavariable: $FLAG
+                      regex: ^['"`]-[ce]['"`]$
+              - patterns:
+                  - pattern: require($MOD).$F($X, ...)
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^['"`](?:node:)?child_process['"`]$
+              - patterns:
+                  - pattern-inside: |
+                      $E = util.promisify(child_process.$F);
+                      ...
+                  - pattern: $E($X, ...)
           - focus-metavariable: $X
 
   # ---------------------------------------------------------------------------
@@ -637,16 +886,29 @@ rules:
   # Um so padrao cobre as duas ordens das chaves: o padrao de objeto do
   # Semgrep ignora a ordem (medido pela ablação — o ramo com as chaves ao
   # contrario lia DEAD e o par dava MOVES; a linha `suporteInvertido` de hits/
-  # e a `conversaInvertida` de misses/ provam-no). O `system:` de topo so conta num `create`,
-  # `stream` ou numa função do AI SDK: `audit.record({ system: ... })` nao é
-  # um prompt. O recetor do pedido chama-se `req` ou `request`: o `.json()` de
-  # uma resposta de outro serviço (`upstream.json()`) nao é o pedido.
+  # e a `conversaInvertida` de misses/ provam-no). O tuplo `['system', texto]`
+  # dos modelos de prompt do LangChain.js conta com o mesmo `$ROLE`
+  # (revisao). O `system:` de topo so conta num `create`, `stream` ou numa
+  # função do AI SDK: `audit.record({ system: ... })` nao é um prompt.
   #
-  # O SANITIZADOR de recuperação: uma chamada cujo nome diz retrieve ou search
-  # devolve documentos, nao o texto do pedido (medido no quickstart de apoio
-  # ao cliente da Anthropic, o unico falso positivo da regra no corpus). Os
-  # documentos recuperados no papel de sistema sao outra superficie de injeção
-  # (indireta), que esta regra nao reclama.
+  # AS FONTES (revisao: mais quatro): o corpo, a query string, os parametros
+  # de rota, os cabeçalhos, o `nextUrl` do Next.js, o `json()` e o
+  # `formData()`, e o `new URL(request.url)` de um Request normal. O recetor
+  # chama-se `req` ou `request`: o `.json()` de uma resposta de outro serviço
+  # (`upstream.json()`) nao é o pedido.
+  #
+  # O SANITIZADOR de recuperação: uma chamada cujo NOME diz que devolve
+  # documentos — `retrieve`/`retrieveX`/`retrieve_x` (nao `retrieverConfig`), `search`, `searchDocs`/`Documents`/`Knowledge*`/
+  # `Context`/`Chunks`/`Index`, `similaritySearch` e outros `*Search` em
+  # camelCase, `getRelevantDocuments`, o `invoke` de um `retriever` —, nao o
+  # texto do pedido (medido no quickstart de apoio ao cliente da Anthropic, o
+  # unico falso positivo da regra no corpus). A primeira versao aceitava
+  # `retriev` ou `search` em QUALQUER sitio do nome e sem distinguir
+  # maiusculas, e `researchInstructions(tema)` ou `searchAndReplace(...)`
+  # limpavam o pedido que devolvem (revisao, I-4; em hits/). O regex é
+  # sensivel às maiusculas e o `llmRules.test.ts` exercita-o contra listas de
+  # nomes. Os documentos recuperados no papel de sistema sao outra superficie
+  # de injeção (indireta), que esta regra nao reclama.
   - id: llm-request-in-system-prompt-js
     mode: taint
     languages: [javascript, typescript]
@@ -671,8 +933,12 @@ rules:
           - pattern-either:
               - pattern: $REQ.body
               - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.headers
+              - pattern: $REQ.nextUrl
               - pattern: $REQ.json()
               - pattern: $REQ.formData()
+              - pattern: new URL($REQ.url, ...)
           - metavariable-regex:
               metavariable: $REQ
               regex: (?i)^(?:.*\.)?(?:req|request)$
@@ -681,12 +947,17 @@ rules:
           - pattern: $FN(...)
           - metavariable-regex:
               metavariable: $FN
-              regex: (?i)^(?:.*\.)?\w*(?:retriev|search)\w*$
+              regex: ^(?:.*\.)?(?:retrieve(?:[A-Z_]\w*)?|search(?:Docs|Documents|Knowledge\w*|Context|Chunks|Index)?|\w*[a-z0-9](?:Retrieve(?:[A-Z_]\w*)?|Search(?:Docs|Documents|Context|Chunks)?)|getRelevantDocuments|\w*[Rr]etriever\.(?:a?invoke|getRelevantDocuments))$
     pattern-sinks:
       - patterns:
           - pattern-either:
               - patterns:
                   - pattern-inside: '{..., role: $ROLE, ..., content: $X, ...}'
+                  - metavariable-regex:
+                      metavariable: $ROLE
+                      regex: ^['"`](?:system|developer)['"`]$
+              - patterns:
+                  - pattern-inside: '[$ROLE, $X]'
                   - metavariable-regex:
                       metavariable: $ROLE
                       regex: ^['"`](?:system|developer)['"`]$
@@ -704,16 +975,17 @@ rules:
   #
   # So um objeto literal como primeiro argumento: `create(params)` nao se pode
   # julgar daqui. Um `...spread` no objeto exclui pela mesma razao. O atalho
-  # `{ max_tokens }` casa `max_tokens: $N` (medido).
+  # `{ max_tokens }` casa `max_tokens: $N` (medido). Os `.parse` contam como
+  # os `create`, e `undefined` ou `null` nao sao um limite (revisao).
   - id: llm-openai-no-max-tokens-js
     languages: [javascript, typescript]
     severity: LOW
     message: >-
-      Uma chamada à OpenAI (chat.completions ou responses) sem limite de tokens
-      gerados: o modelo pode escrever até ao maximo do contexto em cada pedido, e
-      quem controla o prompt controla o custo e o tempo de resposta (OWASP
-      LLM10:2025). Passe max_completion_tokens (ou max_tokens); na Responses API,
-      max_output_tokens.
+      Uma chamada à OpenAI (chat.completions ou responses, create ou parse) sem
+      limite de tokens gerados: o modelo pode escrever até ao maximo do contexto em
+      cada pedido, e quem controla o prompt controla o custo e o tempo de resposta
+      (OWASP LLM10:2025). Passe max_completion_tokens (ou max_tokens) com um valor;
+      na Responses API, max_output_tokens. undefined nao é um limite.
     metadata:
       category: security
       subcategory: llm-unbounded-consumption
@@ -725,9 +997,16 @@ rules:
     patterns:
       - pattern-either:
           - pattern: '$C.chat.completions.create({...}, ...)'
+          - pattern: '$C.chat.completions.parse({...}, ...)'
           - pattern: '$C.responses.create({...}, ...)'
-      - pattern-not: '$C.chat.completions.create({..., max_tokens: $N, ...}, ...)'
-      - pattern-not: '$C.chat.completions.create({..., max_completion_tokens: $N, ...}, ...)'
-      - pattern-not: '$C.responses.create({..., max_output_tokens: $N, ...}, ...)'
-      - pattern-not: '$C.chat.completions.create({..., ...$S, ...}, ...)'
-      - pattern-not: '$C.responses.create({..., ...$S, ...}, ...)'
+          - pattern: '$C.responses.parse({...}, ...)'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: '$O.$API.$CALL({..., max_tokens: $N, ...}, ...)'
+                - pattern: '$O.$API.$CALL({..., max_completion_tokens: $N, ...}, ...)'
+                - pattern: '$O.$API.$CALL({..., max_output_tokens: $N, ...}, ...)'
+            - metavariable-regex:
+                metavariable: $N
+                regex: ^(?!undefined$|null$)
+      - pattern-not: '$O.$API.$CALL({..., ...$S, ...}, ...)'

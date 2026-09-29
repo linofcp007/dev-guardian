@@ -6,7 +6,9 @@ message prescribes.
 """
 
 import ast
+import asyncio
 import json
+import subprocess
 
 
 class ConfiguracaoDoAgente:
@@ -55,3 +57,72 @@ def bound_parameter(cursor, resp):
 def eval_of_settings(model_settings):
     # A name that says model CONFIGURATION, not model output.
     return eval(model_settings)
+
+
+def commit_message(resp):
+    # Review of the pack, I-2: an AI commit-message tool. The model's text is an
+    # ARGUMENT in an argv list — no shell parses it, and the program is fixed.
+    subprocess.run(["git", "commit", "-m", resp.choices[0].message.content], check=True)
+    subprocess.run(["say", resp.choices[0].message.content])
+
+
+async def commit_message_async(resp):
+    await asyncio.create_subprocess_exec("git", "commit", "-m", resp.choices[0].message.content)
+
+
+def script_argument(resp):
+    # Only `-c`/`-e` make an interpreter run the NEXT argument; here the model's
+    # text is an argument of a fixed script.
+    subprocess.run(["bash", "./notificar.sh", resp.choices[0].message.content])
+
+
+def grep_pattern(resp):
+    # `-e` after a program that is not an interpreter is just an option value.
+    subprocess.run(["grep", "-e", resp.choices[0].message.content, "registo.txt"])
+
+
+class Agente:
+    # Review of the pack, M-4: a tool REGISTRY given the model's tool call is
+    # dispatch, not SQL; `.execute` is SQL on a cursor, connection, session or
+    # engine.
+    def __init__(self, tool):
+        self.tool = tool
+
+    async def passo(self, tc):
+        return await self.tool.execute(json.loads(tc.function.arguments))
+
+
+class Cadeias:
+    # Review of the pack, M-5: `supply_chain`, `user_agent` end in a model word
+    # but are not models.
+    def __init__(self, supply_chain, user_agent):
+        self.supply_chain = supply_chain
+        self.user_agent = user_agent
+
+    def configurar(self):
+        eval(self.supply_chain.get_config())
+        return eval(self.user_agent.lower())
+
+
+def sklearn_predict(model, linhas):
+    # `model` counts only with a LangChain runnable method (invoke/stream/batch).
+    return eval(str(model.predict(linhas)))
+
+
+def lambda_invoke(lambda_client):
+    # boto3's Lambda `invoke` returns a FUNCTION's output: `invoke` counts only
+    # on a receiver named `model` or `chat` (and the model words above).
+    resposta = lambda_client.invoke(FunctionName="relatorio")
+    return exec(resposta["Payload"].read())
+
+
+def bytes_decode(caminho):
+    # `.decode()` is model text only on a tokenizer or processor; these are the
+    # bytes of a local file.
+    with open(caminho, "rb") as f:
+        exec(f.read().decode("utf-8"))
+
+
+def chat_template(tokenizer, mensagens):
+    # A tokenizer's OTHER methods return the prompt, not the model's text.
+    return eval(tokenizer.apply_chat_template(mensagens, tokenize=False))

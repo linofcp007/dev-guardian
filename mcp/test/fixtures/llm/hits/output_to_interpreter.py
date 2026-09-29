@@ -10,13 +10,16 @@ as a parameter, the most common shape in real code).
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 
 import litellm
 import openai
 import pandas as pd
 from langchain_experimental.utilities import PythonREPL
+from langchain_openai import ChatOpenAI
 from sqlalchemy import text
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
 # ---------------------------------------------------------------- sources
@@ -106,6 +109,49 @@ def handle(assistant_reply):
     return eval(assistant_reply)  # BUG: a value NAMED as a model's reply (SuperAGI's eval(assistant_reply))
 
 
+def structured_output(client, pergunta, Plano):
+    r = client.beta.chat.completions.parse(model="gpt-4o", messages=[{"role": "user", "content": pergunta}], response_format=Plano, max_completion_tokens=512)  # excluded: capped (llm-openai-no-max-tokens-py)
+    exec(r.choices[0].message.parsed.codigo)  # BUG: structured output (chat.completions.parse)
+
+
+def responses_structured(client, pergunta, Plano):
+    r = client.responses.parse(model="gpt-4o", input=pergunta, text_format=Plano, max_output_tokens=512)  # excluded: capped (llm-openai-no-max-tokens-py)
+    exec(r.output_parsed.codigo)  # BUG: structured output (responses.parse)
+
+
+def anthropic_stream(client, pergunta):
+    with client.messages.stream(model="claude-sonnet-4-5", max_tokens=1024, messages=[{"role": "user", "content": pergunta}]) as stream:
+        for texto in stream.text_stream:
+            exec(texto)  # BUG: an Anthropic message stream
+
+
+def hf_inference_text(hf, pergunta):
+    exec(hf.text_generation(pergunta, max_new_tokens=200))  # BUG: Hugging Face InferenceClient.text_generation
+
+
+def hf_inference_chat(hf, mensagens):
+    for chunk in hf.chat_completion(mensagens, max_tokens=200, stream=True):
+        exec(chunk.choices[0].delta.content)  # BUG: Hugging Face InferenceClient.chat_completion
+
+
+def hf_pipeline(pergunta):
+    gerador = pipeline("text-generation", model="gpt2")
+    saida = gerador(pergunta)
+    exec(saida[0]["generated_text"])  # BUG: a transformers pipeline, called
+
+
+def hf_generate(model_id, pergunta):
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    modelo = AutoModelForCausalLM.from_pretrained(model_id)
+    ids = modelo.generate(**tokenizer(pergunta, return_tensors="pt"))
+    exec(tokenizer.decode(ids[0], skip_special_tokens=True))  # BUG: generate + decode: the decoded text is the model's
+
+
+def langchain_model(pergunta):
+    model = ChatOpenAI(model="gpt-4o", max_tokens=512)
+    exec(model.invoke(pergunta).content)  # BUG: a LangChain chat model held in `model`
+
+
 # ------------------------------------------------------------------ sinks
 
 def to_os_system(resp):
@@ -117,11 +163,35 @@ def to_os_popen(resp):
 
 
 def to_subprocess(resp):
-    subprocess.run(resp.choices[0].message.content, shell=True)  # BUG: subprocess
+    subprocess.run(resp.choices[0].message.content, shell=True)  # BUG: subprocess with shell=True
+
+
+def to_subprocess_program(resp):
+    subprocess.run([resp.choices[0].message.content, "--help"])  # BUG: the model picks the PROGRAM (argv[0])
+
+
+def to_subprocess_sh_c(resp):
+    subprocess.check_output(["bash", "-c", resp.choices[0].message.content])  # BUG: bash -c runs its argument as a script
+
+
+def to_subprocess_python_c(resp):
+    subprocess.run(["python3", "-c", resp.choices[0].message.content])  # BUG: python -c runs its argument as code
+
+
+def to_subprocess_shlex(resp):
+    subprocess.run(shlex.split(resp.choices[0].message.content))  # BUG: program and arguments both from the model
+
+
+def to_subprocess_getoutput(resp):
+    return subprocess.getoutput(resp.choices[0].message.content)  # BUG: getoutput always runs a shell
 
 
 async def to_asyncio_shell(resp):
     await asyncio.create_subprocess_shell(resp.choices[0].message.content)  # BUG: an asyncio shell
+
+
+async def to_asyncio_exec(resp):
+    await asyncio.create_subprocess_exec(resp.choices[0].message.content, "--help")  # BUG: the model picks the program
 
 
 def to_repl(resp):
@@ -135,6 +205,10 @@ def to_bash_process(bash_process, resp):
 
 def to_cursor(cursor, resp):
     cursor.execute(resp.choices[0].message.content)  # BUG: SQL the model wrote
+
+
+def to_connection_cursor(conn, resp):
+    conn.cursor().execute(resp.choices[0].message.content)  # BUG: a cursor made inline
 
 
 def to_executemany(cursor, resp, linhas):

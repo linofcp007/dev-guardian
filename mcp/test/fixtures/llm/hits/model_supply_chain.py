@@ -1,9 +1,11 @@
-"""llm-trust-remote-code and llm-torch-load-pickle -- every `# BUG` line fires exactly once.
+"""llm-trust-remote-code and the two torch.load rules -- every `# BUG` line fires exactly once.
 
 `trust_remote_code=True` runs Python shipped in the model (or dataset)
 repository at load time; unless the revision is pinned to a commit, the
 code that runs is whatever the repository holds on that day. `torch.load`
-without `weights_only=True` unpickles, and unpickling runs code.
+unpickles when `weights_only` is False — always with `weights_only=False`
+(llm-torch-load-weights-only-false), and by default before torch 2.6 when
+the argument is absent (llm-torch-load-no-weights-only).
 """
 
 import torch
@@ -29,13 +31,23 @@ def dataset_script():
     return load_dataset("codeparrot/apps", trust_remote_code=True)  # BUG: a dataset's loading script is code too
 
 
+def carregar_com_kwargs(model_id):
+    opcoes = dict(device_map="auto", trust_remote_code=True)  # excluded: a dict(...) of kwargs is not a load (the call below is)
+    return AutoModelForCausalLM.from_pretrained(model_id, **opcoes)  # BUG: the flag carried by a dict(...) of kwargs
+
+
+def carregar_com_dicionario(model_id):
+    model_kwargs = {"torch_dtype": "auto", "trust_remote_code": True}
+    return AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)  # BUG: the flag carried by a dict literal
+
+
 def checkpoint(caminho):
-    return torch.load(caminho)  # BUG: pickle enabled by default before torch 2.6
+    return torch.load(caminho)  # BUG: pickle by default before torch 2.6 (LOW)
 
 
 def checkpoint_cpu(caminho):
-    return torch.load(caminho, map_location="cpu")  # BUG: map_location changes nothing
+    return torch.load(caminho, map_location="cpu")  # BUG: map_location changes nothing (LOW)
 
 
 def checkpoint_explicito(caminho):
-    return torch.load(caminho, weights_only=False)  # BUG: pickle explicitly enabled, on any torch
+    return torch.load(caminho, weights_only=False)  # BUG: pickle explicitly enabled, on any torch (WARNING; excluded for the LOW rule: the argument is there)

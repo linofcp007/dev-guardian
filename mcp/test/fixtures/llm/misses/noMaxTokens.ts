@@ -24,3 +24,11 @@ export async function porParametros(openai: OpenAI, params: Record<string, unkno
 export async function responsesPorParametros(openai: OpenAI, params: Record<string, unknown>) {
   return openai.responses.create({ ...params, model: 'gpt-4o' });
 }
+
+export async function estruturadoComLimite(openai: OpenAI, messages: OpenAI.Chat.ChatCompletionMessageParam[], formato: unknown) {
+  return openai.beta.chat.completions.parse({ model: 'gpt-4o', messages, response_format: formato, max_completion_tokens: 512 });
+}
+
+export async function responsesEstruturadoComLimite(openai: OpenAI, input: string, formato: unknown) {
+  return openai.responses.parse({ model: 'gpt-4o', input, text: { format: formato }, max_output_tokens: 256 });
+}

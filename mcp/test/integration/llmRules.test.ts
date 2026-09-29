@@ -104,7 +104,8 @@ function filesIn(dir: string): string[] {
 const INTERPRETER_PY = 'llm-output-to-interpreter-py';
 const DISPATCH_PY = 'llm-tool-name-dispatch-py';
 const TRUST_REMOTE = 'llm-trust-remote-code';
-const TORCH_LOAD = 'llm-torch-load-pickle';
+const TORCH_UNSAFE = 'llm-torch-load-weights-only-false';
+const TORCH_DEFAULT = 'llm-torch-load-no-weights-only';
 const NO_MAX_PY = 'llm-openai-no-max-tokens-py';
 const INTERPRETER_JS = 'llm-output-to-interpreter-js';
 const SYSTEM_PROMPT_JS = 'llm-request-in-system-prompt-js';
@@ -115,20 +116,33 @@ const NO_MAX_JS = 'llm-openai-no-max-tokens-js';
  * with no entry here fails Step 0 rather than being silently unmeasured.
  */
 const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  // Seventeen sources into exec/eval (one each), thirteen sinks (one each).
-  'output_to_interpreter.py': { [INTERPRETER_PY]: 30 },
-  // Four spellings of a model-chosen name, five lookups.
-  'tool_dispatch.py': { [DISPATCH_PY]: 5 },
-  'model_supply_chain.py': { [TRUST_REMOTE]: 5, [TORCH_LOAD]: 3 },
-  'no_max_tokens.py': { [NO_MAX_PY]: 3 },
-  // Eleven sources into eval (one each), eight sinks (one each).
-  'outputToInterpreter.ts': { [INTERPRETER_JS]: 19 },
+  // Twenty-five sources into exec/eval (one each), twenty sinks (one each).
+  // The review of the pack added the structured-output, Anthropic-stream and
+  // Hugging Face sources, a LangChain model held in `model`, and replaced
+  // "any subprocess argument" by the positions that run something: shell=True,
+  // argv[0], `sh -c`/`python -c`, shlex.split, getoutput, create_subprocess_exec.
+  'output_to_interpreter.py': { [INTERPRETER_PY]: 45 },
+  // Four spellings of a model-chosen name, five lookups; and (review, I-1)
+  // seven guards that are not allowlists: a warning, `pass`, dir(), a string,
+  // a class __dict__, vars(), and the ELSE arm of a real one.
+  'tool_dispatch.py': { [DISPATCH_PY]: 12 },
+  // Two kwargs carriers of trust_remote_code (review); torch.load split by
+  // what the call says about weights_only (review, I-3).
+  'model_supply_chain.py': { [TRUST_REMOTE]: 7, [TORCH_UNSAFE]: 1, [TORCH_DEFAULT]: 2 },
+  // max_tokens=None and the two .parse() calls (review).
+  'no_max_tokens.py': { [NO_MAX_PY]: 6 },
+  // Fifteen sources into eval (one each), thirteen sinks (one each).
+  'outputToInterpreter.ts': { [INTERPRETER_JS]: 28 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —
-  // and both role names.
-  'systemPrompt.ts': { [SYSTEM_PROMPT_JS]: 7 },
-  'noMaxTokens.ts': { [NO_MAX_JS]: 3 },
+  // and both role names. Review of the pack: route parameters, a header,
+  // nextUrl.searchParams, new URL(request.url), the LangChain.js
+  // ['system', ...] tuple, and two calls whose NAME holds "search" without
+  // being a retrieval (I-4).
+  'systemPrompt.ts': { [SYSTEM_PROMPT_JS]: 14 },
+  // max_tokens: undefined and the two .parse() calls (review).
+  'noMaxTokens.ts': { [NO_MAX_JS]: 6 },
 };
 
 /** The designed tier of every rule — see the pack's header for the criterion. */
@@ -136,7 +150,8 @@ const EXPECTED_SEVERITY: Readonly<Record<string, string>> = {
   [INTERPRETER_PY]: 'WARNING',
   [DISPATCH_PY]: 'WARNING',
   [TRUST_REMOTE]: 'WARNING',
-  [TORCH_LOAD]: 'WARNING',
+  [TORCH_UNSAFE]: 'WARNING',
+  [TORCH_DEFAULT]: 'LOW',
   [NO_MAX_PY]: 'LOW',
   [INTERPRETER_JS]: 'WARNING',
   [SYSTEM_PROMPT_JS]: 'LOW',
@@ -167,7 +182,8 @@ const EXPECTED_OWASP_LLM: Readonly<Record<string, string>> = {
   [INTERPRETER_PY]: 'LLM05:2025 Improper Output Handling',
   [DISPATCH_PY]: 'LLM06:2025 Excessive Agency',
   [TRUST_REMOTE]: 'LLM03:2025 Supply Chain',
-  [TORCH_LOAD]: 'LLM03:2025 Supply Chain',
+  [TORCH_UNSAFE]: 'LLM03:2025 Supply Chain',
+  [TORCH_DEFAULT]: 'LLM03:2025 Supply Chain',
   [NO_MAX_PY]: 'LLM10:2025 Unbounded Consumption',
   [INTERPRETER_JS]: 'LLM05:2025 Improper Output Handling',
   [SYSTEM_PROMPT_JS]: 'LLM01:2025 Prompt Injection',
@@ -291,5 +307,52 @@ describe('llm rules', () => {
       expect(f.subcategory ?? '').toMatch(/^llm-/);
       expect(f.severity).toBe(EXPECTED_SEVERITY[f.rule_id ?? ''] === 'LOW' ? 'low' : 'medium');
     }
+  });
+});
+
+/**
+ * The retrieval sanitizer of `llm-request-in-system-prompt-js` decides by the
+ * NAME of the call, so the name list is the whole of its precision. Review of
+ * the pack, I-4: the first version, `(?i)\w*(?:retriev|search)\w*`, took
+ * `researchInstructions(topic)` and `searchAndReplace(...)` for retrievals and
+ * silenced the request text they return. The regex is case-sensitive and has
+ * no inline modifier, so Node evaluates it as Semgrep does (left-anchored, as
+ * `metavariable-regex` is — hence the `^`).
+ */
+describe('the retrieval sanitizer of the system-prompt rule', () => {
+  function sanitizerRegex(): RegExp {
+    const rule = packRules().find((r) => r.id === SYSTEM_PROMPT_JS) as
+      | (RuleDoc & { 'pattern-sanitizers'?: Array<{ patterns?: Array<Record<string, unknown>> }> })
+      | undefined;
+    const regexes = (rule?.['pattern-sanitizers'] ?? [])
+      .flatMap((s) => s.patterns ?? [])
+      .map((p) => p['metavariable-regex'] as { metavariable?: string; regex?: string } | undefined)
+      .filter((m): m is { metavariable: string; regex: string } => m?.metavariable === '$FN' && typeof m.regex === 'string');
+    expect(regexes).toHaveLength(1);
+    const source = regexes[0]?.regex ?? '';
+    expect(source.startsWith('^')).toBe(true);
+    expect(source).not.toMatch(/\(\?[a-z]+[):]/);
+    return new RegExp(source);
+  }
+
+  const RETRIEVALS = [
+    'retrieveContext', 'retrieve', 'retrieveDocuments', 'retrieve_context', 'this.rag.retrieveChunks',
+    'search', 'searchDocs', 'searchDocuments', 'searchKnowledgeBase', 'searchContext', 'searchChunks', 'searchIndex',
+    'similaritySearch', 'vectorStore.similaritySearch', 'this.store.hybridSearch', 'vectorSearch', 'semanticSearchDocs',
+    'getRelevantDocuments', 'retriever.invoke', 'this.retriever.ainvoke', 'vectorRetriever.getRelevantDocuments',
+    'SearchService.search',
+  ];
+  const NOT_RETRIEVALS = [
+    'researchInstructions', 'research', 'researchPrompt', 'searchAndReplace', 'this.util.searchAndReplace',
+    'mySearchAndReplace', 'buildSearchQuery', 'searchParams', 'url.searchParams.get', 'Research', 'toPrompt',
+    'retrieverConfig', 'getSearchTerm', 'saveSearchHistory',
+  ];
+
+  it.each(RETRIEVALS)('%s is a retrieval', (name) => {
+    expect(sanitizerRegex().test(name)).toBe(true);
+  });
+
+  it.each(NOT_RETRIEVALS)('%s is not', (name) => {
+    expect(sanitizerRegex().test(name)).toBe(false);
   });
 });

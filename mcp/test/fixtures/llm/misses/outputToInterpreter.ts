@@ -6,8 +6,10 @@
  */
 
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { execFile, spawn } from 'node:child_process';
 import OpenAI from 'openai';
 import vm from 'vm';
+import { exec as dbExec } from './db';
 
 // AWS Lambda's `invoke` returns a FUNCTION's output, not a model's: the
 // receiver regex needs a model word at the end of the receiver's name.
@@ -35,4 +37,31 @@ export function regexExec(completion: OpenAI.Chat.ChatCompletion) {
 // Model text as a VARIABLE of a context is data; only the code argument is a sink.
 export function vmContextData(completion: OpenAI.Chat.ChatCompletion) {
   return vm.runInNewContext('resposta.length', { resposta: completion.choices[0].message.content });
+}
+
+// An AI commit-message tool: the model's text is an ARGUMENT in an argv list,
+// no shell parses it, and the program is fixed.
+export function commitMessage(completion: OpenAI.Chat.ChatCompletion) {
+  spawn('git', ['commit', '-m', completion.choices[0].message.content ?? '']);
+  return execFile('git', ['commit', '-m', completion.choices[0].message.content ?? '']);
+}
+
+// Only `-c` makes sh run the next argument: here it is an argument of a fixed script.
+export function scriptArgument(completion: OpenAI.Chat.ChatCompletion) {
+  return spawn('sh', ['./notificar.sh', completion.choices[0].message.content ?? '']);
+}
+
+// `-e` after a program that is not an interpreter is just an option value.
+export function grepPattern(completion: OpenAI.Chat.ChatCompletion) {
+  return spawn('grep', ['-e', completion.choices[0].message.content ?? '', 'registo.txt']);
+}
+
+// A function called `exec` from any module but child_process runs nothing.
+export async function databaseExec(completion: OpenAI.Chat.ChatCompletion) {
+  return dbExec(completion.choices[0].message.content ?? '');
+}
+
+// Inline `require` of any module but child_process is not a process either.
+export function inlineRequireOther(completion: OpenAI.Chat.ChatCompletion) {
+  return require('./esquema').validar(completion.choices[0].message.content ?? '');
 }
