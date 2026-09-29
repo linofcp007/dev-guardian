@@ -36,7 +36,7 @@ import { InvalidProjectPathError, resolveProjectPath } from '../platform/project
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { changedFiles, git, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
-import { runProcess } from '../runners/processRunner.js';
+import { PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -167,6 +167,12 @@ const reviewPr = makeScanTool({
                     'trusting a quiet result: a pattern added there hides findings, it does not fix them.',
             ]
             : [];
+        // The same for Trivy's suppression file, which this review honoured from the tree it read.
+        if (changed.includes(PROJECT_TRIVYIGNORE)) {
+            warnings.push(`This diff changes ${PROJECT_TRIVYIGNORE}, which Trivy honours: every vulnerability id listed there is ` +
+                "not reported (this review applied the reviewed tree's copy). Review that change before trusting a " +
+                'quiet dependency result: an entry added there hides a finding, it does not fix it.');
+        }
         return {
             outcome: out.cancelled ? 'cancelled' : 'completed',
             tools_run: out.tools_run,
@@ -288,10 +294,15 @@ async function runTrivy(ctx, out, args) {
         return;
     }
     const outFile = join(args.reportDir, 'deps.json');
-    const run = await runProcess({
-        command: 'trivy',
-        args: ['fs', '--scanners', 'vuln', '--format', 'json', '--output', outFile, '--quiet', args.scanRoot],
-        cwd: args.scanRoot,
+    // Never in the tree under review, never its trivy.yaml: a pull request
+    // could otherwise add one that silences its own dependency
+    // (runners/trivyRun.ts). Its .trivyignore is honoured and named — and a
+    // diff that edits it is called out beside .guardianignore.
+    const run = await spawnTrivy({
+        args: ['fs', '--scanners', 'vuln', '--format', 'json', '--output', outFile, '--quiet'],
+        target: args.scanRoot,
+        workDir: args.reportDir,
+        ignoreFrom: args.scanRoot,
         env: ctx.scriptEnv,
         signal: ctx.signal,
         onLog: ctx.onLog,
@@ -301,14 +312,14 @@ async function runTrivy(ctx, out, args) {
         out.cancelled = true;
     if (run.outcome === 'completed' && raw !== null) {
         out.parser_inputs.push({ parser: trivyParser, input: raw });
-        out.tools_run.push({ name: 'trivy', status: 'ok', reason: 'a dependency manifest changed' });
+        out.tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'a dependency manifest changed' }, run.honoured));
     }
     else {
-        out.tools_run.push({
+        out.tools_run.push(withHonoured({
             name: 'trivy',
             status: 'failed',
             reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
-        });
+        }, run.honoured));
     }
 }
 function isFileOnDisk(path) {

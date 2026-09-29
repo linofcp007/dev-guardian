@@ -171,6 +171,13 @@ export interface ToolRun {
    */
   plugin_packs?: Record<string, { status: 'partial'; reason: string }>;
   /**
+   * Files of the scanned project that decided part of this run and were
+   * honoured on purpose — Trivy's `.trivyignore`, passed explicitly
+   * (`runners/trivyRun.ts`). Named because they change what the run reports:
+   * their entries are not findings. Absent: the run read no such file.
+   */
+  honoured_config?: string[];
+  /**
    * Responses only (`tools/responseBounds.ts`), never stored: when
    * `partially_parsed` was cut to its first entries for the MCP response,
    * how many the run named in all, and how many of each type.

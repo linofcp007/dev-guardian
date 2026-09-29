@@ -19,6 +19,8 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
@@ -134,20 +136,12 @@ registerToolModule(makeScanTool({
         if (trivyBin) {
             tasks.push((async () => {
                 const outFile = join(reportDir, 'deps.json');
-                const r = await runProcess({
-                    command: 'trivy',
-                    args: [
-                        'fs',
-                        '--scanners',
-                        'vuln,license',
-                        '--format',
-                        'json',
-                        '--output',
-                        outFile,
-                        '--quiet',
-                        ctx.projectPath,
-                    ],
-                    cwd: ctx.projectPath,
+                // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+                const r = await runTrivy({
+                    args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+                    target: ctx.projectPath,
+                    workDir: reportDir,
+                    ignoreFrom: ctx.projectPath,
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     onLog: ctx.onLog,
@@ -155,10 +149,7 @@ registerToolModule(makeScanTool({
                 const raw = readJsonSafe(outFile);
                 if (raw)
                     parser_inputs.push({ parser: trivyParser, input: raw });
-                tools_run.push({
-                    name: 'trivy',
-                    status: r.outcome === 'completed' ? 'ok' : 'failed',
-                });
+                tools_run.push(withHonoured({ name: 'trivy', status: r.outcome === 'completed' ? 'ok' : 'failed' }, r.honoured));
             })());
         }
         else {

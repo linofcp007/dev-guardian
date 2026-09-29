@@ -75,6 +75,7 @@ import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import type { ParserOutput, ScannerParser } from '../runners/scannerParsers/index.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -203,27 +204,32 @@ const scanContainers = makeScanTool({
         } else {
           if (dockerfile !== undefined) {
             const outFile = join(reportDir, 'dockerfile.json');
-            const result = await runProcess({
-              command: 'trivy',
-              args: ['config', '--format', 'json', '--output', outFile, '--quiet', dockerfile],
-              cwd: ctx.projectPath,
+            // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+            const result = await runTrivy({
+              args: ['config', '--format', 'json', '--output', outFile, '--quiet'],
+              target: dockerfile,
+              workDir: reportDir,
+              ignoreFrom: ctx.projectPath,
               env: ctx.scriptEnv,
               signal: ctx.signal,
               onLog: ctx.onLog,
             });
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-            tools_run.push({
-              name: 'trivy-dockerfile',
-              status: result.outcome === 'completed' ? 'ok' : 'failed',
-            });
+            tools_run.push(
+              withHonoured(
+                { name: 'trivy-dockerfile', status: result.outcome === 'completed' ? 'ok' : 'failed' },
+                result.honoured,
+              ),
+            );
             if (result.outcome !== 'completed') anyOutcome = result.outcome;
           }
 
           if (inp.image) {
             const outFile = join(reportDir, 'image.json');
-            const result = await runProcess({
-              command: 'trivy',
+            // The project's .trivyignore applied to its image as it always
+            // was, now explicitly and named; its trivy.yaml never.
+            const result = await runTrivy({
               args: [
                 'image',
                 '--format',
@@ -236,9 +242,10 @@ const scanContainers = makeScanTool({
                 // layer, and image-level misconfigurations, unreported;
                 // trivyParser already handles all three result shapes.
                 'vuln,secret,misconfig',
-                inp.image,
               ],
-              cwd: ctx.projectPath,
+              target: inp.image,
+              workDir: reportDir,
+              ignoreFrom: ctx.projectPath,
               env: ctx.scriptEnv,
               signal: ctx.signal,
               onLog: ctx.onLog,
@@ -249,12 +256,17 @@ const scanContainers = makeScanTool({
             // re-measures an image's findings only by a scan of the SAME
             // image (history/runCompare.ts) — image B's scan never resolves
             // image A's.
-            tools_run.push({
-              name: 'trivy-image',
-              status: result.outcome === 'completed' ? 'ok' : 'failed',
-              reason: `image ${inp.image}`,
-              target: inp.image,
-            });
+            tools_run.push(
+              withHonoured(
+                {
+                  name: 'trivy-image',
+                  status: result.outcome === 'completed' ? 'ok' : 'failed',
+                  reason: `image ${inp.image}`,
+                  target: inp.image,
+                },
+                result.honoured,
+              ),
+            );
             if (result.outcome !== 'completed') anyOutcome = result.outcome;
           }
         }

@@ -51,6 +51,7 @@ import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { asArray, getProp, getString, } from '../runners/scannerParsers/index.js';
 import { registerToolModule } from './index.js';
@@ -331,20 +332,12 @@ registerToolModule(makeScanTool({
         const trivyBin = await scannerAvailable('trivy');
         if (trivyBin) {
             const outFile = join(reportDir, 'licenses.json');
-            const result = await runProcess({
-                command: 'trivy',
-                args: [
-                    'fs',
-                    '--scanners',
-                    'license',
-                    '--format',
-                    'json',
-                    '--output',
-                    outFile,
-                    '--quiet',
-                    ctx.projectPath,
-                ],
-                cwd: ctx.projectPath,
+            // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+            const result = await runTrivy({
+                args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet'],
+                target: ctx.projectPath,
+                workDir: reportDir,
+                ignoreFrom: ctx.projectPath,
                 env: ctx.scriptEnv,
                 signal: ctx.signal,
                 onLog: ctx.onLog,
@@ -354,10 +347,7 @@ registerToolModule(makeScanTool({
                 parser_inputs.push({ parser: trivyParser, input: raw });
                 licensesSummary = summariseLicenses(raw);
             }
-            tools_run.push({
-                name: 'trivy',
-                status: result.outcome === 'completed' ? 'ok' : 'failed',
-            });
+            tools_run.push(withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured));
         }
         else {
             tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });

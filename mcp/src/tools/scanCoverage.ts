@@ -59,6 +59,11 @@ export interface CoverageContext {
 /** The `tools_run` reason scan_deps / deps_audit give Trivy when it read no manifest. */
 const NO_SUPPORTED_MANIFEST = 'no_supported_manifest';
 
+/** The sentinel, possibly followed by notes (`; honoured the project's .trivyignore …`). */
+function isNoSupportedManifest(reason: string | undefined): boolean {
+  return reason === NO_SUPPORTED_MANIFEST || (reason?.startsWith(`${NO_SUPPORTED_MANIFEST};`) ?? false);
+}
+
 interface ManifestGap {
   ecosystem: string;
   files: string[];
@@ -135,7 +140,7 @@ export function assessCoverage(
 
   // A scanner that ran and read no manifest it supports — installed, working.
   const unreadable = gaps.filter((name) =>
-    toolsRun.some((t) => t.name === name && t.status === 'skipped' && t.reason === NO_SUPPORTED_MANIFEST),
+    toolsRun.some((t) => t.name === name && t.status === 'skipped' && isNoSupportedManifest(t.reason)),
   );
 
   if (coverage === 'none') {

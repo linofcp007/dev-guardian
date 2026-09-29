@@ -8,6 +8,21 @@ version bump.
 
 ## [Unreleased]
 
+### Security
+
+- A scanned repository no longer configures Trivy. Every Trivy pass (`scan_deps`, `deps_audit`, `scan_iac`,
+  `scan_containers`, `scan_wordpress`, `review_pr`, `compliance_check`, `generate_sbom`) ran in the project, so
+  Trivy read the project's own `trivy.yaml`: reproduced, a committed `severity: [UNKNOWN]` took a project pinning
+  lodash 4.17.15 from 7 findings to 0 with coverage full, and the CI gate from exit 1 to exit 0; its
+  `db.repository` / `server.addr` could have sent the package list elsewhere. Trivy now runs in the scan's report
+  directory with `--config` pointing at an empty file and the target passed explicitly, through one helper
+  (`runners/trivyRun.ts`) that a test holds every spawn to. The project's `.trivyignore` is honoured only
+  explicitly (`--ignorefile`) and named in the run (`tools_run[].honoured_config` and its reason); `review_pr`
+  warns when the diff edits it. `deps_audit` also passes `.guardianignore` to Trivy natively, as `scan_deps` did.
+- `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
+  anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
+  `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
+
 ## [3.0.0] - 2026-09-29
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

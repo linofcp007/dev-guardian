@@ -35,6 +35,10 @@ export function computeCoverage(toolsRun, missingTools) {
 }
 /** The `tools_run` reason scan_deps / deps_audit give Trivy when it read no manifest. */
 const NO_SUPPORTED_MANIFEST = 'no_supported_manifest';
+/** The sentinel, possibly followed by notes (`; honoured the project's .trivyignore …`). */
+function isNoSupportedManifest(reason) {
+    return reason === NO_SUPPORTED_MANIFEST || (reason?.startsWith(`${NO_SUPPORTED_MANIFEST};`) ?? false);
+}
 function parseManifestGaps(value) {
     if (!Array.isArray(value))
         return [];
@@ -98,7 +102,7 @@ export function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     const list = gaps.length > 0 ? gaps.join(', ') : 'one or more scanners';
     const manifestGaps = parseManifestGaps(context.manifestGaps);
     // A scanner that ran and read no manifest it supports — installed, working.
-    const unreadable = gaps.filter((name) => toolsRun.some((t) => t.name === name && t.status === 'skipped' && t.reason === NO_SUPPORTED_MANIFEST));
+    const unreadable = gaps.filter((name) => toolsRun.some((t) => t.name === name && t.status === 'skipped' && isNoSupportedManifest(t.reason)));
     if (coverage === 'none') {
         // scan_sast: no registry or project rule loaded, but the plugin's LLM
         // pack did and its findings are recorded — "NOTHING was scanned" would

@@ -383,6 +383,68 @@ describe('deps_audit', () => {
     expect(r.coverage).toBe('full');
   });
 
+  // Self-security review R6-I1: npm audit runs in the project, so the
+  // project's .npmrc picks the server that answers it. Honoured — a private
+  // registry is legitimate — but named, and without the credentials.
+  it("names the registry the project's .npmrc sends npm audit to, never silently", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(
+      join(project, '.npmrc'),
+      '; a comment\n@acme:registry=https://scoped.example/\nregistry = "https://ci:s3cret@npm.example.internal/repo/"\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('ok');
+    expect(npm?.reason).toContain(
+      "npm audit answered by https://npm.example.internal/repo/ (from the project's .npmrc)",
+    );
+    expect(npm?.reason).not.toContain('s3cret');
+    expect(npm?.honoured_config).toEqual(['.npmrc']);
+  });
+
+  it.each([
+    ['no .npmrc', null],
+    ['the public registry', 'registry=https://registry.npmjs.org/\n'],
+    ['only a scoped registry', '@acme:registry=https://scoped.example/\n'],
+  ])('says nothing about the registry for %s', async (_label, npmrc) => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    if (npmrc !== null) writeFileSync(join(project, '.npmrc'), npmrc, 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.reason ?? '').not.toMatch(/answered by/);
+    expect(npm?.honoured_config).toBeUndefined();
+  });
+
   it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');

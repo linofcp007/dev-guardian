@@ -38,7 +38,7 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   classifyRestoreFailure,
@@ -51,6 +51,8 @@ import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/n
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { assessManifestCoverage, TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolRun } from '../types.js';
 import { registerToolModule } from './index.js';
@@ -153,20 +155,12 @@ registerToolModule(
       const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
         const outFile = join(reportDir, 'deps.json');
-        const result = await runProcess({
-          command: 'trivy',
-          args: [
-            'fs',
-            '--scanners',
-            'vuln,license',
-            '--format',
-            'json',
-            '--output',
-            outFile,
-            '--quiet',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        const result = await runTrivy({
+          args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+          target: ctx.projectPath,
+          workDir: reportDir,
+          ignoreFrom: ctx.projectPath,
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog,
@@ -174,7 +168,7 @@ registerToolModule(
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
         if (result.outcome !== 'completed') {
-          tools_run.push({ name: 'trivy', status: 'failed' });
+          tools_run.push(withHonoured({ name: 'trivy', status: 'failed' }, result.honoured));
         } else {
           // See scanDeps.ts / trivy.ts's own module comment: a manifest
           // Trivy recognises nothing for (e.g. a bare .csproj with no
@@ -194,16 +188,16 @@ registerToolModule(
             // matches no `tools_run` entry still forces coverage to
             // 'partial' (missing_tools.length > 0), without colliding with
             // the exact-string check downstream.
-            tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
+            tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }, result.honoured));
             missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
           } else if (coverage.gaps.length > 0) {
             // FULL SKIP: trivy's own Results were entirely empty — nothing
             // it reports can be trusted as re-verified, so the bare 'trivy'
             // name is correct here (unchanged from before this fix round).
-            tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
+            tools_run.push(withHonoured({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' }, result.honoured));
             missing_tools.push('trivy');
           } else {
-            tools_run.push({ name: 'trivy', status: 'ok' });
+            tools_run.push(withHonoured({ name: 'trivy', status: 'ok' }, result.honoured));
           }
         }
       } else {
@@ -299,6 +293,43 @@ function looksLikeNpmAuditReport(raw: string): boolean {
   }
 }
 
+/** The public npm registry: npm audit answered by it is not worth a note. */
+const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
+
+/**
+ * The registry the project's own `.npmrc` sends `npm audit` to, when it is
+ * not the public one — credentials in the URL removed — or null.
+ *
+ * `npm audit` runs in the project, so the project's `.npmrc` decides which
+ * server answers it: a private registry is legitimate and stays honoured, but
+ * the answer is that server's, and a repository could equally point it at a
+ * server of its own that answers "no vulnerabilities". Named in the result,
+ * never silent. Only the unscoped `registry` key: a `@scope:registry` line
+ * does not move the audit endpoint. The user's own `~/.npmrc` and
+ * `npm_config_registry` are the user's choice, not the project's, and are
+ * not read here.
+ */
+export function projectNpmRegistry(projectPath: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(projectPath, '.npmrc'), 'utf8');
+  } catch {
+    return null;
+  }
+  let registry: string | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#') || line.startsWith(';')) continue;
+    const m = /^registry\s*=\s*(.*)$/i.exec(line);
+    if (m?.[1] === undefined) continue;
+    // The last one wins, as in npm's own ini reader.
+    registry = m[1].trim().replace(/^["']|["']$/g, '');
+  }
+  if (registry === null || registry === '' || NPM_PUBLIC_REGISTRY.test(registry)) return null;
+  // Never echo a credential written into the URL.
+  return registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+}
+
 async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
   const bin = await scannerAvailable(opts.command);
   if (!bin) {
@@ -349,18 +380,31 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
     }
   }
 
+  // Whoever answered npm audit is named when the project chose it (see
+  // `projectNpmRegistry`): honoured, never silently.
+  const registry = isNpmStdout ? projectNpmRegistry(opts.ctx.projectPath) : null;
+  const registryNote = (run: ToolRun): ToolRun =>
+    registry === null
+      ? run
+      : {
+          ...run,
+          reason: `${run.reason ?? ''}; npm audit answered by ${registry} (from the project's .npmrc)`,
+          honoured_config: ['.npmrc'],
+        };
   if (ok) {
-    opts.tools_run.push({
-      name: opts.command,
-      status: 'ok',
-      reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
-    } as ToolRun);
+    opts.tools_run.push(
+      registryNote({
+        name: opts.command,
+        status: 'ok',
+        reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
+      }),
+    );
   } else {
     const reason =
       isNpmStdout && exitOk
         ? 'ran but produced no audit report (missing lockfile?)'
         : 'failed to run';
-    opts.tools_run.push({ name: opts.command, status: 'failed', reason } as ToolRun);
+    opts.tools_run.push(registryNote({ name: opts.command, status: 'failed', reason }));
     // A failed auditor is a coverage gap — surface it so the roll-up and the
     // executive summary do not read the result as fully covered.
     opts.missing_tools?.push(opts.command);

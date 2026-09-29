@@ -25,7 +25,7 @@ import { z } from 'zod';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { assessManifestCoverage, trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -77,21 +77,12 @@ registerToolModule(makeScanTool({
             };
         }
         const outFile = join(reportDir, 'deps.json');
-        const result = await runProcess({
-            command: 'trivy',
-            args: [
-                'fs',
-                '--scanners',
-                'vuln,license',
-                '--format',
-                'json',
-                '--output',
-                outFile,
-                '--quiet',
-                ...trivySkipArgs(ctx.exclusions),
-                ctx.projectPath,
-            ],
-            cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        const result = await runTrivy({
+            args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+            target: ctx.projectPath,
+            workDir: reportDir,
+            ignoreFrom: ctx.projectPath,
             env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
@@ -101,7 +92,7 @@ registerToolModule(makeScanTool({
             parser_inputs.push({ parser: trivyParser, input: raw });
         const extras = {};
         if (result.outcome !== 'completed') {
-            tools_run.push({ name: 'trivy', status: 'failed' });
+            tools_run.push(withHonoured({ name: 'trivy', status: 'failed' }, result.honoured));
         }
         else {
             const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
@@ -117,7 +108,7 @@ registerToolModule(makeScanTool({
                 // matches no `tools_run` entry still forces coverage to 'partial'
                 // (missing_tools.length > 0), without colliding with the
                 // exact-string check downstream.
-                tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
+                tools_run.push(withHonoured({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }, result.honoured));
                 missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
                 extras['manifest_coverage_gaps'] = coverage.gaps;
             }
@@ -125,12 +116,12 @@ registerToolModule(makeScanTool({
                 // FULL SKIP: trivy's own Results were entirely empty — nothing it
                 // reports can be trusted as re-verified, so the bare 'trivy' name
                 // is correct here (unchanged from before this fix round).
-                tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
+                tools_run.push(withHonoured({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' }, result.honoured));
                 missing_tools.push('trivy');
                 extras['manifest_coverage_gaps'] = coverage.gaps;
             }
             else {
-                tools_run.push({ name: 'trivy', status: 'ok' });
+                tools_run.push(withHonoured({ name: 'trivy', status: 'ok' }, result.honoured));
             }
         }
         return {

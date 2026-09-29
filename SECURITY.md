@@ -162,6 +162,21 @@ their respective projects.
   can no longer hang either tool; a config that is there and was not read is
   named in `sources_unreadable`, is a failed pass in `tools_run`, and lowers
   coverage — never read as "no servers declared".
+- **A scanned repository does not configure Trivy.** Trivy reads `trivy.yaml`
+  from its working directory, and every Trivy pass used to run in the
+  project: a committed `trivy.yaml` of `severity: [UNKNOWN]` turned a project
+  with 7 known-vulnerable findings into a clean, fully covered scan (and the
+  CI gate's exit 1 into 0), and its `db.repository` or `server.addr` could
+  have sent the package list to a host of the repository's choosing. Every
+  Trivy pass now runs in a report directory the scan created, with `--config`
+  pointing at an empty file dev-guardian writes, and the target passed
+  explicitly (`mcp/src/runners/trivyRun.ts`). The project's `.trivyignore` is
+  still honoured — accepted risks are the project's to state — but only
+  explicitly (`--ignorefile`), and the run names it (`honoured_config`, and
+  its `tools_run` reason); `review_pr` warns when the diff edits it. `npm
+  audit` still honours the project's `.npmrc` (a private registry is
+  legitimate), and `deps_audit` names the registry that answered when it is
+  not `registry.npmjs.org`, credentials removed.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).

@@ -90,6 +90,7 @@ import { actionlintParser } from '../runners/scannerParsers/actionlint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { zizmorParser } from '../runners/scannerParsers/zizmor.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { toPosixPath, type ScannerParser } from '../runners/scannerParsers/index.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { ToolRun } from '../types.js';
@@ -320,20 +321,21 @@ registerToolModule(
         missing_tools.push('trivy');
       } else {
         const outFile = join(reportDir, 'iac.json');
-        const result = await runProcess({
-          command: 'trivy',
-          args: ['config', '--format', 'json', '--output', outFile, '--quiet', ctx.projectPath],
-          cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        const result = await runTrivy({
+          args: ['config', '--format', 'json', '--output', outFile, '--quiet'],
+          target: ctx.projectPath,
+          workDir: reportDir,
+          ignoreFrom: ctx.projectPath,
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog,
         });
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
-          name: 'trivy-config',
-          status: result.outcome === 'completed' ? 'ok' : 'failed',
-        });
+        tools_run.push(
+          withHonoured({ name: 'trivy-config', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result.honoured),
+        );
         absorbOutcome(result.outcome);
       }
 
