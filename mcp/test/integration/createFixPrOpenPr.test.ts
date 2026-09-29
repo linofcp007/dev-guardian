@@ -172,8 +172,8 @@ describe('create_fix_pr', () => {
     expect(
       execFileSync('git', ['-C', repo, 'branch', '--list'], { encoding: 'utf8' }),
     ).toContain(branch);
-  // Three create_fix_pr runs, each bounded like one: 62.7 s under coverage,
-  // and 122.9 s once — past the single-run bound — on a machine running three
-  // suites at once (review 3.0, R7).
-  }, 3 * REGISTRY_BACKED_TIMEOUT_MS);
+  // Three create_fix_pr runs under one bound: 62.7 s under coverage, and
+  // 122.9 s once — past the old 120 s single-run bound — on a machine running
+  // three suites at once (review 3.0, R7). Twice the single-run bound.
+  }, 2 * REGISTRY_BACKED_TIMEOUT_MS);
 });

@@ -49,6 +49,12 @@
  * TIMEOUT_MS` below is sized against the MEASURED worst case (18.1s) with a
  * margin load cannot close, and it bounds a genuine hang, nothing else — no
  * test in this file asserts anything by reaching it.
+ *
+ * The margin was closed anyway (review 3.0, R7): 120 s was crossed by three
+ * tests of the split files on a machine at 100% CPU with three other suites
+ * running (C1/I5 took 80-88 s under ordinary load). It is 300 s now — each
+ * scanner the tool starts has its own bound below that, so a hung one still
+ * ends the test with its own error first.
  */
 import { afterEach, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -70,7 +76,7 @@ import { isInstalled } from './toolchain.js';
 const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /** See the module comment for the measurements this number comes from. */
-export const REGISTRY_BACKED_TIMEOUT_MS = 120_000;
+export const REGISTRY_BACKED_TIMEOUT_MS = 300_000;
 
 /* ------------------------------------------------------------------ */
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
