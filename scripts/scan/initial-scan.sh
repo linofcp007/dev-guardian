@@ -52,13 +52,24 @@ fi
 
 if command -v trivy >/dev/null; then
   printf '  Vulnerabilidades de dependências: '
-  trivy fs --scanners vuln --severity HIGH,CRITICAL --quiet --format json --output "$TMP/trivy.json" . >/dev/null 2>&1
+  # Nunca o trivy.yaml do projeto (--config vazio: um trivy.yaml commitado
+  # decidia o que o scan reporta), e nunca o check.trivy.dev: a verificação
+  # de versão com telemetria só se desliga com AS DUAS variáveis.
+  : > "$TMP/trivy-config.yaml"
+  TRIVY_SKIP_VERSION_CHECK=true TRIVY_DISABLE_TELEMETRY=true \
+    trivy fs --config "$TMP/trivy-config.yaml" --scanners vuln --severity HIGH,CRITICAL --quiet --format json --output "$TMP/trivy.json" . >/dev/null 2>&1
   resultado "$?" "0" "$TMP/trivy.json" '"VulnerabilityID"' "HIGH/CRITICAL"
+  # O .trivyignore do projeto continua a valer (riscos aceites), mas nunca em silêncio.
+  # Aqui não se conta o que suprimiu (a contagem acima veria também os achados
+  # suprimidos); o scan_deps conta-os e nomeia-os.
+  [ -f .trivyignore ] && echo "    (honra o .trivyignore do projeto: os ids listados lá não são contados; o scan_deps diz quantos achados suprimiu, e quais)"
 fi
 
 if command -v semgrep >/dev/null; then
   printf '  SAST (Semgrep): '
-  semgrep --config=auto --quiet --json --output="$TMP/semgrep.json" . >/dev/null 2>&1
+  # Modo UTF-8 do Python: sem ele, um ficheiro com nome não-ASCII faz o
+  # Semgrep sair com 2 sem relatório no Windows (mcp/src/runners/semgrepRun.ts).
+  PYTHONUTF8=1 semgrep --config=auto --quiet --json --output="$TMP/semgrep.json" . >/dev/null 2>&1
   resultado "$?" "0 1" "$TMP/semgrep.json" '"check_id"' "findings"
 fi
 

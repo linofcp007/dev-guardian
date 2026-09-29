@@ -118,6 +118,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { matchesAny } from '../platform/glob.js';
+import { compareSemver } from '../platform/semverCompare.js';
 import {
   classifyRestoreFailure,
   findDotnetTargets,
@@ -281,8 +282,9 @@ const tool: ToolModule = {
     '--locked-mode`, which EXECUTES the project\'s own MSBuild and contacts its NuGet feeds (it ' +
     'never creates or rewrites a packages.lock.json). pip reads this project\'s own ' +
     'requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn ' +
-    'projects get no npm commands — their CVEs are listed with the pnpm.overrides / resolutions ' +
-    'fix to apply by hand (workspace members included). Classifies each entry as security (an ' +
+    'projects get no npm commands — their CVEs are listed with the pnpm overrides (where the ' +
+    "project's pnpm version reads them) / resolutions fix to apply by hand (workspace members " +
+    'included). Classifies each entry as security (an ' +
     'active CVE in the same project\'s latest deps scan — npm/pip target the MINIMUM fixed version, ' +
     'other stacks the latest available) / patch / minor / major, and returns a sortable, structured ' +
     'plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), ' +
@@ -1151,7 +1153,12 @@ function workspaceIncludes(root: string, projectPath: string): boolean {
  * the fix. Ordinary (non-CVE) upgrades are not listed at all; the manager is
  * named in `unsupported_ecosystems_present` so the omission is visible.
  */
-function planForNonNpmManager(projectPath: string, cves: Map<string, CveInfo>, manager: NpmPackageManager): EcosystemPlan {
+async function planForNonNpmManager(
+  projectPath: string,
+  cves: Map<string, CveInfo>,
+  manager: NpmPackageManager,
+): Promise<EcosystemPlan> {
+  const pnpm = manager.name === 'pnpm' ? await pnpmVersionOf(manager.root) : null;
   const directDeps = readNpmDirectDependencies(projectPath);
   const resolved = readNpmResolvedPackages(projectPath, manager.name, manager.root);
   // `pnpm.overrides` and `resolutions` are only honoured in the ROOT
@@ -1178,8 +1185,10 @@ function planForNonNpmManager(projectPath: string, cves: Map<string, CveInfo>, m
       manager.name === 'pnpm'
         ? `pnpm project (${manager.evidence}): no npm command is emitted — npm would write a ` +
           'package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ' +
-          `ignores npm's top-level "overrides". Fix manually: ${bump}add "pnpm": { "overrides": ` +
-          `{ "${name}": "${target}" } } to ${rootManifest}, then run pnpm install --ignore-scripts${runAt}.`
+          `ignores npm's top-level "overrides". Fix manually: ${bump}${pnpmOverrideAdvice(pnpm, name, target, {
+            manifest: rootManifest,
+            workspaceYaml: rootWorkspaceYaml(projectPath, manager.root),
+          })}, then run pnpm install --ignore-scripts${runAt}.`
         : `yarn project (${manager.evidence}): no npm command is emitted — npm would write a ` +
           'package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not ' +
           `npm's "overrides". Fix manually: ${bump}add "resolutions": { "${name}": "${target}" } to ` +
@@ -1187,6 +1196,128 @@ function planForNonNpmManager(projectPath: string, cves: Map<string, CveInfo>, m
     unplanned.push({ package_name: name, ecosystem: 'npm', cve_ids: cve.cveIds, reason });
   }
   return { steps: [], unplanned, unsupported: [manager.name] };
+}
+
+// ---------------------------------------------------------------- pnpm's overrides, by version
+//
+// Review R7-I5: the advice used to be `"pnpm": { "overrides" }` in
+// package.json whatever the pnpm — and pnpm 11 and later do not read that
+// field. Measured with pnpm 12.8.1 on mkdirp@0.5.1: `[WARN] The "pnpm" field
+// in package.json is no longer read by pnpm. The following keys were
+// ignored: "pnpm.overrides"`, and the lock kept minimist@0.0.8; the same
+// override as `overrides:` in pnpm-workspace.yaml resolved 1.2.6. The pnpm
+// changelog:
+//   - 10.5.0 (#9121): "The `pnpm.*` settings from `package.json` can now be
+//     specified in the `pnpm-workspace.yaml` file instead", and "The
+//     `packages` field in `pnpm-workspace.yaml` became optional". Before it,
+//     a pnpm-workspace.yaml holding only `overrides` fails the install
+//     ("packages field missing or empty", measured on 9.15.9 and 10.4.1);
+//   - 11.0.0 (#10086): "pnpm no longer reads settings from the `pnpm` field
+//     of `package.json`. Settings should be defined in `pnpm-workspace.yaml`".
+// So: before 10.5, package.json; from 10.5, pnpm-workspace.yaml (it keeps
+// working across the 11 upgrade); unknown, both named with where each
+// applies — no single place works on every version for a project that is
+// not already a workspace.
+
+/** The first pnpm that reads settings from pnpm-workspace.yaml (and does not need `packages` there). */
+const PNPM_WORKSPACE_SETTINGS_SINCE = '10.5.0';
+
+interface PnpmVersion {
+  /** The version, or null when nothing here says. */
+  version: string | null;
+  /** How it was known, as the reason names it. */
+  evidence: string;
+}
+
+/**
+ * The pnpm that installs this project, from the most specific evidence:
+ * the root package.json's `packageManager` (an exact version), its
+ * `devEngines.packageManager` when the range's floor alone decides, then
+ * the lock file's `lockfileVersion` (only below 9.0 — every pnpm since 9
+ * writes 9.0), then `pnpm --version` in that directory, with corepack kept
+ * off the network (a pin it has not cached is no answer, not a download).
+ */
+async function pnpmVersionOf(root: string): Promise<PnpmVersion> {
+  let manifest: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null) manifest = parsed as Record<string, unknown>;
+  } catch {
+    /* no readable manifest: no pin */
+  }
+  const pm = typeof manifest['packageManager'] === 'string' ? manifest['packageManager'] : '';
+  const pinned = /^pnpm@(\d+\.\d+\.\d+)/.exec(pm)?.[1];
+  if (pinned !== undefined) return { version: pinned, evidence: `pnpm ${pinned} (package.json "packageManager")` };
+
+  const devEngines = manifest['devEngines'];
+  const declared = typeof devEngines === 'object' && devEngines !== null ? (devEngines as Record<string, unknown>)['packageManager'] : undefined;
+  for (const entry of Array.isArray(declared) ? declared : [declared]) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const e = entry as Record<string, unknown>;
+    if (e['name'] !== 'pnpm' || typeof e['version'] !== 'string') continue;
+    const floor = /^\s*(?:\^|~|>=|=)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(e['version']);
+    if (floor?.[1] === undefined) continue;
+    const version = `${floor[1]}.${floor[2] ?? '0'}.${floor[3] ?? '0'}`;
+    // Every version the range admits is at least its floor: decisive only on the new side.
+    if ((compareSemver(version, PNPM_WORKSPACE_SETTINGS_SINCE) ?? -1) >= 0) {
+      return { version, evidence: `pnpm ${e['version']} (package.json "devEngines.packageManager")` };
+    }
+  }
+
+  try {
+    const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+    const lv = /^lockfileVersion:\s*['"]?(\d+)(?:\.(\d+))?/m.exec(lock);
+    const major = lv?.[1] === undefined ? NaN : Number(lv[1]);
+    if (Number.isInteger(major) && major < 9) {
+      return { version: '8.0.0', evidence: `pnpm 8 or older (pnpm-lock.yaml lockfileVersion ${lv?.[1] ?? '?'}.${lv?.[2] ?? '0'})` };
+    }
+  } catch {
+    /* no lock at the root */
+  }
+
+  try {
+    const r = await execa('pnpm', ['--version'], {
+      cwd: root,
+      reject: false,
+      timeout: 15_000,
+      env: { ...process.env, COREPACK_ENABLE_NETWORK: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
+    });
+    const out = typeof r?.stdout === 'string' ? r.stdout.trim() : '';
+    const v = r?.exitCode === 0 ? /^(\d+\.\d+\.\d+)/.exec(out)?.[1] : undefined;
+    if (v !== undefined) return { version: v, evidence: `pnpm ${v} (\`pnpm --version\`)` };
+  } catch {
+    /* no pnpm to ask */
+  }
+  return { version: null, evidence: 'unknown' };
+}
+
+/** Where a workspace root's pnpm-workspace.yaml is, as the reason names it. */
+function rootWorkspaceYaml(projectPath: string, root: string): string {
+  return root === projectPath
+    ? 'pnpm-workspace.yaml'
+    : `the workspace root pnpm-workspace.yaml (${toPosix(relative(projectPath, join(root, 'pnpm-workspace.yaml')))})`;
+}
+
+/** The override to add, and where, for this project's pnpm — see the section comment. */
+function pnpmOverrideAdvice(
+  pnpm: PnpmVersion | null,
+  name: string,
+  target: string,
+  where: { manifest: string; workspaceYaml: string },
+): string {
+  const yaml = `add \`overrides: { "${name}": "${target}" }\` to ${where.workspaceYaml}`;
+  const json = `add "pnpm": { "overrides": { "${name}": "${target}" } } to ${where.manifest}`;
+  if (pnpm === null || pnpm.version === null) {
+    return (
+      'pnpm version unknown (no "packageManager" pin, a lock file every pnpm since 9 writes, and no pnpm answered ' +
+      `--version) — with pnpm 10.5 or later, ${yaml} (the only place pnpm 11 and later read); before 10.5, ${json} ` +
+      '(a pnpm-workspace.yaml without "packages" fails there)'
+    );
+  }
+  if ((compareSemver(pnpm.version, PNPM_WORKSPACE_SETTINGS_SINCE) ?? -1) >= 0) {
+    return `for ${pnpm.evidence}, ${yaml} (pnpm 11 and later no longer read package.json's "pnpm" field)`;
+  }
+  return `for ${pnpm.evidence}, ${json} (pnpm before 10.5 reads no settings from pnpm-workspace.yaml)`;
 }
 
 /**

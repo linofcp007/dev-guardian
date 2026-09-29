@@ -41,8 +41,8 @@ const tool = {
         "dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: " +
         'severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this ' +
         "project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. " +
-        "(security_scan_full, scan_wordpress); Trivy's vulnerability database, its version check " +
-        "(check.trivy.dev) and Maven Central for a pom.xml; npm audit and PyPI " +
+        "(security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a " +
+        "pom.xml (dev-guardian turns Trivy's version check and telemetry off); npm audit and PyPI " +
         "(deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a " +
         "temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild " +
         "targets; quality_check runs the project's ESLint config. local_only=true passes local_only to " +
@@ -301,13 +301,12 @@ function localOnlyGaps(subTools) {
     // compliance_check's exact `fs --scanners license --quiet` against an empty
     // cache, every proxy variable on a logging proxy, downloaded no
     // vulnerability database but connected to check.trivy.dev and, for a
-    // pom.xml, repo.maven.apache.org.
+    // pom.xml, repo.maven.apache.org. check.trivy.dev is now turned off for
+    // every Trivy run (runners/trivyRun.ts), so only Maven Central remains.
     if (ran.has('compliance_check')) {
         gaps.push("compliance_check: its Trivy license scan downloads no vulnerability database, but resolves a pom.xml's " +
             'dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off).');
     }
-    gaps.push('Trivy, in every child above that runs it, contacts check.trivy.dev on every run — its version check, which ' +
-        "also carries anonymous usage data; only TRIVY_SKIP_VERSION_CHECK=true and TRIVY_DISABLE_TELEMETRY=true, both, in the server's environment stop it.");
     gaps.push("Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off.");
     return gaps;
 }

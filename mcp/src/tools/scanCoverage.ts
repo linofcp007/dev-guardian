@@ -11,9 +11,29 @@
  */
 
 import { lockFileAdvice } from '../runners/scannerParsers/trivy.js';
+import { suppressionNote } from '../runners/trivyRun.js';
 import type { ScanCoverage, ToolRun } from '../types.js';
 
 export type { ScanCoverage };
+
+/**
+ * One warning per run whose repository configuration suppressed findings
+ * (`ToolRun.suppressed_by_repo_config`, round 4, item 2) — counted and named,
+ * or said to be unlistable. Never a coverage gap: the repository decided it,
+ * and {@link computeCoverage} does not read it.
+ */
+export function repoSuppressionWarnings(toolsRun: readonly ToolRun[]): string[] {
+  const out: string[] = [];
+  for (const run of toolsRun) {
+    const s = run.suppressed_by_repo_config;
+    if (s === undefined) continue;
+    const tail =
+      s.count === null ? 'its entries are not reported' : 'not reported, not counted; remove the entries to see them';
+    const line = `${run.name}: ${suppressionNote(s)} — ${tail}`;
+    if (!out.includes(line)) out.push(line);
+  }
+  return out;
+}
 
 /**
  * Derive coverage from the per-scanner outcomes.
@@ -59,6 +79,11 @@ export interface CoverageContext {
 /** The `tools_run` reason scan_deps / deps_audit give Trivy when it read no manifest. */
 const NO_SUPPORTED_MANIFEST = 'no_supported_manifest';
 
+/** The sentinel, possibly followed by notes (`; honoured the project's .trivyignore …`). */
+function isNoSupportedManifest(reason: string | undefined): boolean {
+  return reason === NO_SUPPORTED_MANIFEST || (reason?.startsWith(`${NO_SUPPORTED_MANIFEST};`) ?? false);
+}
+
 interface ManifestGap {
   ecosystem: string;
   files: string[];
@@ -84,14 +109,22 @@ function nameOf(gap: ManifestGap): string {
   return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(', ')})` : gap.ecosystem;
 }
 
+/**
+ * A manifest nobody ships — an example, the docs, a test fixture — is still
+ * one Trivy did not read; whether it ships is the project's to say (round 4,
+ * item 5), never a directory name this plugin guesses from.
+ */
+const NOT_SHIPPED_ADVICE = "a manifest that is not shipped (an example, docs, a fixture) can be listed in .guardianignore instead";
+
 /** Each gap's manifest and the lock file that closes it (`trivy.ts#lockFileAdvice`). */
 function manifestAdvice(gaps: readonly ManifestGap[]): string {
   if (gaps.length === 0) {
-    return 'generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run';
+    return `generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run; ${NOT_SHIPPED_ADVICE}`;
   }
-  return gaps
+  const each = gaps
     .map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? 'generate the lock file Trivy reads for it'}`)
     .join('; ');
+  return `${each}; ${NOT_SHIPPED_ADVICE}`;
 }
 
 /**
@@ -135,7 +168,7 @@ export function assessCoverage(
 
   // A scanner that ran and read no manifest it supports — installed, working.
   const unreadable = gaps.filter((name) =>
-    toolsRun.some((t) => t.name === name && t.status === 'skipped' && t.reason === NO_SUPPORTED_MANIFEST),
+    toolsRun.some((t) => t.name === name && t.status === 'skipped' && isNoSupportedManifest(t.reason)),
   );
 
   if (coverage === 'none') {
@@ -221,7 +254,17 @@ export function assessCoverage(
       `${unreadable.join(', ')} ran but read no dependency manifest — ${manifestAdvice(manifestGaps)}`,
     );
   }
-  for (const [base, parts] of partsOf) {
+  for (const [base, allParts] of partsOf) {
+    // `trivy:manifest-walk` (runners/trivyRun.ts#judgeTrivyFs): not a part
+    // Trivy missed, but the check of which manifests it read cut short.
+    const parts = allParts.filter((part) => part !== 'manifest-walk');
+    if (parts.length < allParts.length) {
+      clauses.push(
+        `${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run ` +
+          'reason) — manifests beyond it were not checked',
+      );
+    }
+    if (parts.length === 0) continue;
     const named = parts.map((part) => {
       const gap = manifestGaps.find((g) => g.ecosystem === part);
       return gap === undefined ? part : nameOf(gap);

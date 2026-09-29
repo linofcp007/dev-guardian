@@ -372,11 +372,16 @@ describe('ci-init fix round 1: full-history clone (gitleaks needs commit history
     const doc = parseYaml(renderedBody(project, 'github')) as {
       jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, unknown> }> }>;
     };
-    const checkout = Object.values(doc.jobs)
+    // Every checkout, not the first: a shallow one makes `scan` exit 2
+    // (the history pass names its boundary — docs/ci.md).
+    const checkouts = Object.values(doc.jobs)
       .flatMap((j) => j.steps)
-      .find((s) => s.uses?.startsWith('actions/checkout@'));
-    expect(checkout?.with?.['fetch-depth']).toBe(0);
-    expect(checkout?.with?.['persist-credentials']).toBe(false);
+      .filter((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) {
+      expect(checkout.with?.['fetch-depth']).toBe(0);
+      expect(checkout.with?.['persist-credentials']).toBe(false);
+    }
   });
 
   it('gitlab: GIT_DEPTH is "0"', () => {

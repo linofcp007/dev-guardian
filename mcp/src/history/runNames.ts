@@ -156,8 +156,8 @@ export const RUN_NAMES = {
   'trivy-config': scanner(TRIVY_CONFIG),
   'trivy-dockerfile': scanner(TRIVY_CONFIG),
 
-  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
-  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+  // scan_deps / deps_audit / scan_wordpress: Trivy ran ok but produced no Result for a
+  // manifest of this ecosystem, anywhere in the tree (trivy.ts, `assessManifestCoverage`). Listed
   // missing, never ok, so each is a gap in exactly its own ecosystem's
   // dependency findings: an older scan's NuGet CVE is not re-measured when
   // packages.lock.json has gone, and an npm CVE beside it still resolves.
@@ -171,6 +171,11 @@ export const RUN_NAMES = {
   'trivy:cargo': scanner(trivyFsKey('cargo')),
   'trivy:gradle': scanner(trivyFsKey('gradle')),
   'trivy:python': scanner(trivyFsKey('python')),
+  'trivy:go': scanner(trivyFsKey('go')),
+  // The manifest walk stopped early (runners/trivyRun.ts#judgeTrivyFs):
+  // coverage cannot be full, but Trivy read the whole tree — no finding of
+  // its is left unmeasured by this, only the check of which manifests it read.
+  'trivy:manifest-walk': scanner(),
 
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's

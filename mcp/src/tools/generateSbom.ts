@@ -23,7 +23,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { runProcess } from '../runners/processRunner.js';
+import { runSyft } from '../runners/syftRun.js';
+import { runTrivy } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
@@ -106,11 +107,8 @@ async function handler(
 
   if (syftBin) {
     const syftFormat = format === 'cyclonedx-json' ? 'cyclonedx-json' : 'spdx-json';
-    const result = await runProcess({
-      command: 'syft',
-      args: [projectPath, '-o', `${syftFormat}=${outFile}`, '--quiet'],
-      cwd: projectPath,
-    });
+    // Never in the project, never its .syft.yaml, no update check (runners/syftRun.ts).
+    const result = await runSyft({ target: projectPath, format: syftFormat, outFile, workDir: reportDir });
     if (result.outcome === 'completed' && existsSync(outFile)) {
       producedBy = 'syft';
     }
@@ -120,10 +118,11 @@ async function handler(
     const trivyBin = await scannerAvailable('trivy');
     if (trivyBin) {
       const trivyFormat = format === 'cyclonedx-json' ? 'cyclonedx' : 'spdx-json';
-      const result = await runProcess({
-        command: 'trivy',
-        args: ['fs', '--format', trivyFormat, '--output', outFile, '--quiet', projectPath],
-        cwd: projectPath,
+      // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+      const result = await runTrivy({
+        args: ['fs', '--format', trivyFormat, '--output', outFile, '--quiet'],
+        target: projectPath,
+        workDir: reportDir,
       });
       if (result.outcome === 'completed' && existsSync(outFile)) {
         producedBy = 'trivy';

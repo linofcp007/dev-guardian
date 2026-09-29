@@ -372,6 +372,15 @@ describe('wp_vuln_check files its row where the project-scoped readers look', ()
     },
   };
 
+  // A report with no install on this machine goes to the per-user cache
+  // (review C1): a temporary one here, never the real user's.
+  beforeEach(() => {
+    vi.stubEnv('GUARDIAN_CACHE_DIR', makeTempDir('phase16-wpvuln-cache-'));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function mockScanners(homeUrl = 'https://installed.example/'): void {
     vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
     vi.mocked(runProcess).mockImplementation(async (opts) => {
@@ -389,7 +398,8 @@ describe('wp_vuln_check files its row where the project-scoped readers look', ()
     mockScanners();
     const plugin = makePlugin();
     const P = projectPath();
-    // No install path: the report directory goes under the working directory.
+    // No install path: the report goes to the per-user cache, never here
+    // (the working directory is pointed at a temp project all the same).
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(P);
     try {
       const r = await getTool('wp_vuln_check').handler({ target_url: 'https://site.example/' }, plugin);
@@ -440,9 +450,10 @@ describe('wp_vuln_check files its row where the project-scoped readers look', ()
       );
       if (!r.ok) throw new Error(JSON.stringify(r.error));
       expect(plugin.storage.scans.getById(String(r['scan_id']))?.project_path).toBe(canonicalPath(remote));
-      // Its report went under the working directory: no directory was
-      // created at the remote install's path on this machine.
+      // Its report went to the per-user cache: no directory was created at
+      // the remote install's path on this machine, nor in the working one.
       expect(existsSync(join(P, 'remote'))).toBe(false);
+      expect(existsSync(join(P, '.guardian'))).toBe(false);
 
       const p = (await getTool('wp_plugin_check').handler(
         { slug: 'contact-form-7', wp_install_path: remote },

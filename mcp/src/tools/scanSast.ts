@@ -83,7 +83,7 @@
  * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
@@ -101,6 +101,8 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { nameRepoConfig } from '../runners/repoConfig.js';
+import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -142,6 +144,13 @@ import {
 } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import {
+  applySemgrepCoverageGaps,
+  markMissing,
+  scannedNothingBecause,
+  semgrepCoverageGaps,
+  type SemgrepCoverageGaps,
+} from '../runners/semgrepCoverageGaps.js';
 import { registerToolModule } from './index.js';
 import {
   ensureReportDir,
@@ -287,19 +296,18 @@ async function runSemgrep(args: Collect & {
     const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
     if (autoFix) argv.push('--autofix');
     argv.push(ctx.projectPath);
-    const result = await runProcess({
-      command: 'semgrep',
+    // UTF-8 mode comes with the helper: a non-ASCII file name otherwise makes
+    // Semgrep fail to write its report on Windows (runners/semgrepRun.ts).
+    const result = await spawnSemgrep({
       args: argv,
       cwd: ctx.projectPath,
-      // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
-      // write its report on Windows (see runners/semgrepReport.ts).
-      env: pythonUtf8Env(ctx.scriptEnv),
+      env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
     recordSemgrepRun({
       ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
-      packMissing: plan.packMissing, tools_run, missing_tools, parser_inputs,
+      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath), tools_run, missing_tools, parser_inputs,
     });
     return;
   }
@@ -353,7 +361,12 @@ async function runSemgrep(args: Collect & {
   });
   recordSemgrepRun({
     ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
-    packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir, tools_run, missing_tools, parser_inputs,
+    packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir,
+    // Which listing Semgrep uses inside the container cannot be checked from
+    // here (git, or a walk of the mount): the submodules are named all the
+    // same — the safe direction (review M2, round 2).
+    gaps: await semgrepCoverageGaps(ctx.projectPath),
+    tools_run, missing_tools, parser_inputs,
   });
 }
 
@@ -376,10 +389,23 @@ interface SemgrepRunRecord extends Collect {
   packMissing: boolean;
   /** Container runs: the host directory mounted at CONTAINER_PACKS_ROOT. */
   packsHostDir?: string;
+  /**
+   * What the run cannot see and does not say — files over Semgrep's size
+   * limit, initialised submodules (review M1 / M2) — from the one shared
+   * place, `runners/semgrepCoverageGaps.ts`: each a named gap.
+   */
+  gaps: SemgrepCoverageGaps;
 }
 
 function recordSemgrepRun(args: SemgrepRunRecord): void {
   judgeSemgrepRun(args);
+  // The shared gaps (runners/semgrepCoverageGaps.ts), on the entry just judged.
+  const last = args.tools_run.at(-1);
+  if (last !== undefined && last.name === 'semgrep') {
+    const applied = applySemgrepCoverageGaps(last, args.gaps);
+    args.tools_run[args.tools_run.length - 1] = applied.toolRun;
+    if (applied.missing) markMissing(args.missing_tools, 'semgrep');
+  }
   // A damaged install ran without the pack: the note is on the run, and an
   // otherwise-complete run is partial (review of the LLM pack, M-3).
   if (args.packMissing && args.tools_run.at(-1)?.status === 'ok' && !args.missing_tools.includes('semgrep')) {
@@ -448,7 +474,10 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
         {
           name: 'semgrep',
           status: 'ok',
-          reason: [...reasons, describePartialParse(check.partial, 'findings in the unparsed spans may be missing')].join('; '),
+          reason: [
+            ...reasons,
+            describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
+          ].join('; '),
           partially_parsed: check.partial,
         },
         packGap,
@@ -459,11 +488,15 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
   }
   if (check.verdict === 'scanned_nothing') {
     // No file in the project is one any loaded rule applies to: a gap, not
-    // a clean result — and not a broken scanner either.
+    // a clean result — and not a broken scanner either. Unless the files it
+    // would have read were only too large: that is the reason, then.
     tools_run.push({
       name: 'semgrep',
       status: 'skipped',
-      reason: [...reasons, 'semgrep scanned 0 files — nothing here is a language its rules cover'].join('; '),
+      reason: [
+        ...reasons,
+        scannedNothingBecause(args.gaps) ?? 'semgrep scanned 0 files — nothing here is a language its rules cover',
+      ].join('; '),
     });
     missing_tools.push('semgrep');
     return;
@@ -535,10 +568,26 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
     missing_tools.push('bandit');
     return;
   }
+  const ini = banditIni(ctx.projectPath, reportDir);
+  if ('error' in ini) {
+    tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
+    return;
+  }
   const outFile = join(reportDir, 'bandit.json');
   const result = await runProcess({
     command: 'bandit',
-    args: ['-r', ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), '-f', 'json', '-o', outFile, '-q'],
+    args: [
+      '-r',
+      ctx.projectPath,
+      '--ini',
+      ini.path,
+      ...banditExcludeArgs(ctx.exclusions, ctx.projectPath),
+      '-f',
+      'json',
+      '-o',
+      outFile,
+      '-q',
+    ],
     cwd: ctx.projectPath,
     env: pythonUtf8Env(ctx.scriptEnv),
     signal: ctx.signal,
@@ -548,7 +597,38 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  tools_run.push(check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' });
+  const run: ToolRun = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
+  // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
+  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, 'bandit') : run);
+}
+
+/** An empty `[bandit]` section: Bandit reads it and nothing else. */
+export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
+
+/**
+ * The `--ini` of a whole-project Bandit run (round 4, item 3). Without one,
+ * `bandit -r` walks the whole tree for a file named `.bandit` and applies it
+ * to every file it scans — measured on 1.9.4: a `sub/.bandit`, or one in a
+ * dependency's directory the scan excludes, with `skips: B101,B602,B404`
+ * took a root `a.py` from 3 results to 0; two of them made Bandit exit 2.
+ * `--ini` replaces that search: the project's own ROOT `.bandit` (its call,
+ * like its `.trivyignore`) is passed explicitly and named; without one, an
+ * empty `[bandit]` file this scan writes. Never run without it.
+ */
+function banditIni(projectPath: string, reportDir: string): { path: string; honoured: boolean } | { error: string } {
+  const own = join(projectPath, '.bandit');
+  try {
+    if (lstatSync(own).isFile()) return { path: own, honoured: true };
+  } catch {
+    // None at the root.
+  }
+  const neutral = join(reportDir, NEUTRAL_BANDIT_INI);
+  try {
+    writeFileSync(neutral, '[bandit]\n', 'utf8');
+  } catch (e) {
+    return { error: `could not write the neutral Bandit configuration ${neutral}: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { path: neutral, honoured: false };
 }
 
 const isPython = (f: string): boolean => f.toLowerCase().endsWith('.py');
@@ -628,6 +708,13 @@ async function runSemgrepOnScope(args: Collect & {
   // from disk: ran, with a narrower gap inside it (`ok` + missing).
   const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
+  // The scope's files over Semgrep's size limit, and submodules they reach
+  // (runners/semgrepCoverageGaps.ts): named, a gap.
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+    scannedNothing: run.nothingScanned,
+  });
+  tools_run[tools_run.length - 1] = gapped.toolRun;
+  if (gapped.missing) markMissing(missing_tools, 'semgrep');
 }
 
 /** Bandit over a scope's `.py` files; no entry at all when it holds none. */
@@ -818,7 +905,9 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
       `${run.reason ?? ''}; reduced coverage: ${ownTargets.join(', ')} set CustomAfterMicrosoftCommonTargets, ` +
       "which this scan's build replaces — the project's own imported targets did not run";
   }
-  tools_run.push(run);
+  // The build's own configuration decides what the analyzers report: named
+  // (`runners/repoConfig.ts` — .editorconfig severities, Directory.Build.*).
+  tools_run.push(await nameRepoConfig(run, ctx.projectPath, 'dotnet-analyzers'));
   if (referencesScs) {
     // Security Code Scan is an analyzer of the same build: it reports through
     // the same SARIF, so it ran exactly as well as the build did.

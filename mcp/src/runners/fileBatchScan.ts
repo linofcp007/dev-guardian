@@ -26,6 +26,7 @@ import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess, type ProcessOutcome } from './processRunner.js';
+import { semgrepSpawn } from './semgrepRun.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import {
   checkSemgrepReport,
@@ -270,14 +271,14 @@ export function semgrepOnFiles(args: {
   };
   return scanFileBatches({
     name: 'semgrep',
-    command: 'semgrep',
+    // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
+    ...semgrepSpawn(args.env),
     args: [...args.configArgs, '--json', '--quiet'],
     reportArgs: (f) => ['--output', f],
     files: args.files,
     cwd: args.cwd,
     reportDir: args.reportDir,
     reportPrefix: 'sast',
-    env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
     // The shared judge's `partial` verdict is no failure of the batch, and

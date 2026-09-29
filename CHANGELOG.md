@@ -145,6 +145,138 @@ version bump.
 - A JWT longer than 2 KB that crossed a secret-scan window edge was in no window whole, and was missed. The JWT finder, which is linear, reads windows overlapping by 8 KB, which hold any JWT its pattern matches (at most 2000 characters a segment); a JWT with a longer segment is a documented limit.
 - The shell guard's and the secret scan's timing tests no longer flake on a busy runner or in a non-root container: linearity is asserted as a ratio of best-of-5 times (four times the input, under twelve times the time), and the absolute bounds are tight only with `GUARDIAN_PERF_STRICT=1` — by default each is a loose ceiling, at least ten times the typical time.
 - A runner's options are read per runner. One table for all of them made `-n`, `-i`, `-s` and `-k` take a value, so `sudo -n rm -rf /` (and `-i`, `-s`, `-k`) only warned as sudo, and `env -i rm -rf /` was ok.
+- `scan_deps` / `deps_audit`: a dependency manifest Trivy did not read is a named gap wherever it sits, not only at
+  the project root. The check read the root only and called a buried manifest "Trivy's own concern" — but Trivy
+  skips one without a lock file in silence: `web/package.json` (lodash 4.17.4, no lock) and `api/pyproject.toml`
+  (django 2.2.0) read trivy ok, coverage full, 0 findings, where the same package.json at the root read none. The
+  project is walked now (bounded like detect_stack's walk: 20 000 directories; `node_modules`, `vendor`, build
+  output, hidden directories and `.guardianignore` entries are not entered — a walk cut at that ceiling, or by an
+  unreadable directory, cannot be full: `trivy` stays ok with the reason, `trivy:manifest-walk` is listed missing,
+  coverage partial, as `frameworks/projectLanguages.ts` treats an incomplete listing), and each manifest's directory is
+  compared with the directories of its ecosystem's Results — never the Type alone, which a root lock file
+  already satisfied. A workspace member (npm / yarn `workspaces`, `pnpm-workspace.yaml`, Cargo `[workspace]`,
+  uv `[tool.uv.workspace]`, their exclusions honoured) is covered by its root's lock file. A `.sln` is no
+  longer a manifest of its own: each project it lists is judged in its own directory. `security_scan_full` and
+  the CI gate inherit this.
+- The dependency-manifest walk enters hidden directories, as Trivy does: a GitHub composite action's
+  `.github/actions/notify/package.json` with no lock read full because the walk skipped every hidden directory. Only
+  version control (`.git`, `.hg`, `.svn`, `.bzr`, `_darcs`, `CVS`) and the package managers' caches (`.yarn`,
+  `.pnpm-store`, `.npm`, `.gradle`, `.m2`, `.terraform`, besides the ones every walk skips) are left out, with
+  `bower_components` and `jspm_packages`. Examples, docs and fixtures are still walked — whether a manifest ships is
+  the project's to say — and the coverage warning now says a manifest that is not shipped can be listed in
+  `.guardianignore`.
+- Go joins the manifest table (`trivy:go`): a `go.mod` Trivy cannot parse gets no Result, logs `num=0` and exits
+  0, and read full.
+- `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,
+  `runners/trivyRun.ts#judgeTrivyFs`): a plugin whose `composer.json` has no `composer.lock` read trivy ok, full.
+  It also passes `.guardianignore` to Trivy natively now. `review_pr`'s Trivy pass (run when the diff touches a
+  manifest or lock file, deletions included) uses the same judgement, scoped to the diff as its Semgrep gaps are:
+  a manifest Trivy cannot read is the review's gap (`manifest_coverage_gaps`, partial) only when the diff touches
+  it or a lock file of its ecosystem beside it; an unchanged unlocked manifest is the project's, listed in a
+  warning ("pre-existing: N manifest(s) Trivy cannot read, not changed by this diff: …", at most five named) and
+  in `preexisting_manifest_gaps`, without lowering coverage.
+- `scan_iac` and `scan_containers`: `trivy config` is judged by its log, not its exit code. Trivy drops a file it
+  cannot parse with one ERROR line and exits 0, and `--quiet` hid even that: a .tf with an open security group
+  and an unclosed `resource {` appended read 0 findings, full; a Dockerfile with `HEALTHCHECK --interval=bogus`
+  read trivy-dockerfile ok. The passes run without `--quiet`; a parse error makes the pass partial (`ok`, and
+  `trivy-config` / `trivy-dockerfile` in `missing_tools`), the file and Trivy's error named. A run that detected
+  no config file (`num=0`, no error — a templated Kubernetes manifest) while files that look like IaC are present
+  is partial too, "no config file recognised", naming them. What looks like IaC is what Trivy itself detects,
+  measured on 0.69.3, so a project Trivy legitimately reads nothing from is never partial for it: Kubernetes
+  YAML/JSON needs top-level `apiVersion`, `kind` AND `metadata` (a kustomization.yaml or Kustomize Component, a
+  skaffold.yaml and a kind cluster config have none and Trivy detects nothing; a CRD, a custom resource and a
+  cert-manager Certificate are detected like any core kind); Terraform / OpenTofu (`.tf`, `.tf.json`, `.tofu`, not
+  a lone `.tfvars`); Dockerfiles by Trivy's case-sensitive names; CloudFormation and ARM templates. Helm charts
+  are not sniffed: a chart that fails to render is Trivy's own ERROR line, and one that renders nothing is not a
+  gap. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is unchanged.
+- `scan_iac` compares every IaC-looking file with the report, not only when Trivy detected nothing: a templated
+  `k8s/pod.yaml` beside one clean Dockerfile read full (`num=1`). Trivy lists every file it read in `Results`,
+  clean ones with their Successes, and Terraform per module directory (measured on 0.69.3), so a file the report
+  does not name is partial — "Trivy read nothing from 1 IaC-looking file: k8s/pod.yaml". A chart's `templates/`
+  is Helm's to render and not compared (a template its values disable renders nothing, legitimately). The files
+  compared include hidden directories, as Trivy reads them (a `.devcontainer/Dockerfile`, a `.k8s/` manifest) —
+  all but version control and caches, the manifest walk's rule; a workflow under `.github/workflows` is never
+  IaC-looking. A JSON file
+  is IaC-looking by its top-level keys only, parsed (up to 2 MB): a JSON Schema listing `apiVersion`, `kind` and
+  `metadata` as properties read partial.
+- `wp_vuln_check` is judged by WPScan's report. With no WPScan database (a fresh machine), WPScan writes
+  `{"scan_aborted": "Update required, …"}` and exits 4 — the tool answered `ok`, 0 findings, with only a "rate
+  limit" warning and no status or coverage. Now: exits 0 and 5 (VULNERABLE, which used to be stored as failed)
+  finish a scan, anything else or `scan_aborted` is `failed`; a missing database is downloaded once with
+  `wpscan --update` and the scan re-run (with `GUARDIAN_OFFLINE=1`, failed with that instruction instead; a failed
+  update quotes WPScan's own `Update Aborted: …` line, not its `[i] Updating the Database ...` progress line); without
+  an API token WPScan returns no vulnerability data (`vuln_api.error`), so the pass is `skipped`, coverage `none`,
+  `vulnerabilities_checked: false` — never a clean 0 — and an API error is `failed`. The response carries
+  `status`, `tools_run`, `missing_tools` and `coverage`. Its report goes under the install, or the per-user cache
+  for a URL, never the server's working directory, and WPScan runs there (it reads `./.wpscan/scan.yml`). A URL's
+  reports live in one directory per site and keep the newest N, N being the scan retention's own
+  (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all) — as many as the database keeps rows for that site. Its
+  description no longer says a missing token only rate-limits.
+- A shallow clone's secret history no longer reads as complete. `git clone --depth 1` of a repository whose secret
+  was removed in a later commit gave "history: 1 commit(s) scanned", coverage full, 0 findings (the full clone:
+  2 commits, 1 high). When the repository is shallow and the history pass's walk reaches the boundary (every
+  boundary with no `log_opts`; those `git rev-list` lists for a range or `--since=`), the pass stays `ok` and
+  `gitleaks` is listed missing — coverage partial — its reason `history truncated at <commit> — a shallow clone:
+  the commits before it were not scanned (git fetch --unshallow, then re-run)`. Shared by `scan_secrets`,
+  `scan_wordpress`, `review_pr`, `init_project` and the CI gate (`runners/gitleaksScan.ts`). **In CI this means a
+  shallow checkout now exits 2** — GitHub's `actions/checkout` fetches one commit by default. Fetch the whole
+  history (`fetch-depth: 0`, `GIT_DEPTH: "0"`, `clone: depth: full`), as the pipelines `ci-init` writes already do;
+  with the MCP tools, a `scan_secrets` range (`log_opts: "<base>..HEAD"`) that stays above the boundary is complete.
+  See docs/ci.md, "A shallow checkout exits 2".
+- `wp_audit` reads WP-CLI's checksum report. `wp core verify-checksums --format=json` and `wp plugin
+  verify-checksums` print their mismatches as JSON on stdout, then `Error: …`, and exit 1 (wp-cli/checksum-command);
+  the exit 1 read as a failed call, so a tampered install showed no mismatches, `wp-cli` ok, completed — after
+  three retries (~13 s). An exit 1 whose stdout is those rows is now the answer, never retried, and WP-CLI's
+  messages map to modified / missing / added. Plugins WP-CLI skipped (no checksums for their version, no version)
+  are named in `checksums_not_checked.plugins`. There is no `wp theme verify-checksums`: the call is gone and
+  `checksums_not_checked.themes` says "not checked (WP-CLI has no theme checksums)" — `checksum_mismatches.themes`,
+  always empty, is removed. A subsection that did not answer (or a skipped plugin) is a named gap: `wp-cli` in
+  `missing_tools`, coverage partial, returned with `tools_run` and `coverage`; the description no longer claims
+  theme checksums.
+- `bug_hunt` and `scan_wordpress` run Semgrep in Python's UTF-8 mode, like every other Semgrep call: with
+  `PYTHONUTF8` unset, a file named `日本.py` made Semgrep exit 2 without a report on Windows, and `bug_hunt` read
+  "semgrep report is not valid JSON (exit 2)" (reproduced with Semgrep 1.176.1). Every Semgrep spawn now goes
+  through one helper (`runners/semgrepRun.ts`), and a test fails on any that bypasses it.
+- `scan_sast` names the files Semgrep ignored for their size. Semgrep skips a target over `--max-target-bytes`
+  (1 000 000 by default) in silence — `paths.skipped` only under `--verbose`: a 1.16 MB `big.py` beside a small
+  one read coverage full, and alone read "nothing here is a language its rules cover". dev-guardian now stats the
+  files the scanners read (the same listing and ignores as the project-languages check, `.guardianignore`
+  included) and names those over the limit — `ok`, `semgrep` missing, coverage partial — and, when nothing else
+  was scanned, gives the size limit as the reason. Scoped scans too.
+- Git submodules are named, not silently skipped. Semgrep lists its targets with git, which holds a submodule as
+  one gitlink, and gitleaks reads the superproject's commits and uncommitted files, so an initialised submodule's
+  files (a `vendor/lib` with an `eval` and a committed AWS key, measured) were never scanned while `scan_sast` and
+  `scan_secrets` read coverage full. An initialised submodule with content is now a named gap — "submodule
+  contents not scanned: vendor/lib", the pass `ok` and listed missing, coverage partial — and still not scanned
+  (scan it as its own project). One the project's `.guardianignore` excludes — by name (`libs/core`), by a
+  directory above it (`libs/`) or all of its contents (`libs/core/**`) — is not the project's to scan and no gap,
+  for Semgrep and gitleaks alike; excluding only some of its files (`libs/core/*.js`) leaves it one.
+- Both gaps (files over Semgrep's size limit, submodules) are applied by every Semgrep caller from one place,
+  `runners/semgrepCoverageGaps.ts`: `scan_sast` (native, Docker fallback and scoped), `bug_hunt`, `scan_wordpress`,
+  `review_pr`, `compliance_check`'s RGPD pack and `map_attack_surface` (a route in an unread file is missing, so
+  the surface is persisted partial). A test fails on a Semgrep caller that builds its result without them.
+  `review_pr` names only what its diff touched: the changed files over the limit, and the submodules the diff
+  bumps — for Semgrep, and for gitleaks, whose range and diff scopes now name a bumped submodule too.
+- `scan_dotnet_secrets` reports a JWT signing key in JSON: the `dotnet-jwt-secret` pattern refused the quote
+  between `"JwtSecret"` and its colon, so no appsettings.json key was ever found. A config file over 2 MB (now
+  judged by its size, before reading it) or one that cannot be read is no longer counted in `files_scanned`: it is
+  named in `files_not_scanned` with the reason, and the scan is partial (`tools_run`, `missing_tools` and
+  `coverage` are in the response).
+- `perf_check` reads Lighthouse's verdict. A page Lighthouse could not load is reported in its own report
+  (`runtimeError`) and the CLI exits 1 after saving it; `perf_check` read neither, so the run gave null scores and
+  budgets "ok". A `runtimeError` or a non-zero exit is now a failed check naming the code and message. A configured
+  budget whose metric Lighthouse returned no value for is `budgets.status: "not_measured"` (listed in
+  `not_measured`, with a warning), never `ok`; the measured ones are still evaluated.
+- `deps_update_plan`'s pnpm fix follows the project's pnpm. It always said `"pnpm": { "overrides" }` in
+  package.json, which pnpm 11 and later no longer read (measured with pnpm 12.8.1: `[WARN] The "pnpm" field in
+  package.json is no longer read by pnpm`, and the lock kept minimist@0.0.8); the e2e passed only because a cached
+  pnpm 10.33.2 answered. The version comes from `packageManager`, then `devEngines.packageManager` when its floor
+  decides, then a `lockfileVersion` below 9.0, then `pnpm --version` (corepack kept off the network): before 10.5
+  the fix is package.json's `"pnpm"` field; from 10.5 (#9121, when pnpm-workspace.yaml gained settings and lost
+  its required `packages`) it is `overrides:` in pnpm-workspace.yaml; unknown, both are named with where each
+  applies — a pnpm-workspace.yaml without `packages` fails before 10.5 (measured on 9.15.9 and 10.4.1), so no
+  single place works everywhere. The e2e runs pnpm 10.4.1 and 12.8.1 through corepack in a private cache,
+  applies each named fix and checks it works.
 
 ### Security
 
@@ -250,6 +382,62 @@ version bump.
   written as one. `skills/` now reads 5, SAFE (one low), and `commands/` 0. A
   test holds every skill and command to no high or critical finding from any
   pass, and each directory to SAFE or REVIEW.
+- A scanned repository no longer configures Trivy. Every Trivy pass (`scan_deps`, `deps_audit`, `scan_iac`,
+  `scan_containers`, `scan_wordpress`, `review_pr`, `compliance_check`, `generate_sbom`) ran in the project, so
+  Trivy read the project's own `trivy.yaml`: reproduced, a committed `severity: [UNKNOWN]` took a project pinning
+  lodash 4.17.15 from 7 findings to 0 with coverage full, and the CI gate from exit 1 to exit 0; its
+  `db.repository` / `server.addr` could have sent the package list elsewhere. Trivy now runs in the scan's report
+  directory with `--config` pointing at an empty file and the target passed explicitly, through one helper
+  (`runners/trivyRun.ts`) that a test holds every spawn to. The project's `.trivyignore` is honoured only
+  explicitly (`--ignorefile`) and named in the run (`tools_run[].honoured_config` and its reason); `review_pr`
+  warns when the diff edits it. `deps_audit` also passes `.guardianignore` to Trivy natively, as `scan_deps` did.
+- `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
+  anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
+  `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
+- What the repository's `.trivyignore` suppressed is counted and named. It left no trace: the CI gate on a project
+  ignoring every lodash 4.17.15 advisory read like a clean one. A Trivy 0.50.0 or newer is run with
+  `--show-suppressed` (on `fs`, `image` and the other subcommands that accept it — `trivy config` refuses it) and the
+  suppressed findings go into the run (`tools_run[].suppressed_by_repo_config`: file, count, ids, the first
+  findings), the scan's warnings ("trivy: 7 findings suppressed by the repository's .trivyignore: CVE-2020-8203, …
+  — not reported, not counted"), the CI gate's human output, its JSON (`suppressed_by_repo_config`) and its SARIF
+  (each as a result with `suppressions: [{kind: "external", justification: "suppressed by the repository's
+  .trivyignore"}]`). Not a coverage gap. A config pass, or an older Trivy, says it cannot list them instead of a
+  count. `init_project`'s status report does not count them, and now says `scan_deps` does.
+- A scanned repository no longer configures Syft, and Syft no longer phones home. `generate_sbom` ran `syft
+  <project>` in the project with no `-c`, so Syft read the project's `.syft.yaml`: reproduced on Syft 1.51.1, a
+  committed `select-catalogers: ['-javascript']` took a project pinning lodash 4.17.15 from 2 components to 0 (the
+  same file can turn on Syft's network lookups), and every run asked `toolbox-data.anchore.io` for a newer Syft.
+  Every Syft run now goes through one helper (`runners/syftRun.ts`, and a test fails on any spawn that bypasses
+  it): the report directory as working directory, `-c` pointing at an empty file, `SYFT_CHECK_FOR_APP_UPDATE=false`.
+- `scan_sast`'s Bandit no longer applies a `.bandit` from anywhere in the tree. `bandit -r` walks the whole project
+  for one and applies it to every file: measured on 1.9.4, a `sub/.bandit` — or one in a dependency's directory the
+  scan excludes — with `skips: B101,B602,B404` took a root `a.py` from 3 results to 0, and two such files made Bandit
+  exit 2 (a failed pass). Bandit now gets `--ini`: the project's own root `.bandit`, named on the run, or an empty
+  `[bandit]` file.
+- Every repository configuration a scanner honours is named on the run that read it, one way: `honoured_config`
+  and "honoured the project's X (what it decides)" in the reason, from one table (`runners/repoConfig.ts`); a test
+  fails on a scanner spawned in `src/` without an entry there, or whose spawning file does not name what it reads.
+  New in that table: every `.semgrepignore` — the root one and nested ones, each excluding its own subtree
+  (measured on Semgrep 1.176.1: a `sub/.semgrepignore` excluded `sub/deep/`), named on whole-project Semgrep runs
+  only, since Semgrep ignores them for files named explicitly (a scope, a review); `.guardianignore` on every run
+  of a scan it shapes; `.npmrc` whenever npm audit read one (`omit=dev` and `audit-level` decide what it reports,
+  not only its registry); `NuGet.config` for `dotnet list package --vulnerable`; `.editorconfig`, `.globalconfig`
+  and `Directory.Build.props` / `.targets` for scan_sast's .NET analyzers; and quality_check's ruff (`ruff.toml`,
+  `[tool.ruff]`), jscpd (`.jscpd.json`), radon, staticcheck and ESLint configurations. The `.trivyignore` note
+  now reads "(its entries are not reported)".
+- Repository configuration the scanners read on their own is named on the run that read it (`honoured_config` and
+  the reason; still honoured — the project's call): `.gitleaks.toml` and `.gitleaksignore` on every gitleaks pass
+  (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
+  findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
+  and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
+- Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
+  anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
+  Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and
+  `TRIVY_DISABLE_TELEMETRY` stop it. Every run now gets both variables, and a Trivy 0.63.0 or newer (where the
+  check and the flags arrived; an older Trivy refuses an unknown flag) also `--skip-version-check
+  --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
+  Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
+  Semgrep with `PYTHONUTF8=1`.
 
 ## [3.0.0] - 2026-09-29
 

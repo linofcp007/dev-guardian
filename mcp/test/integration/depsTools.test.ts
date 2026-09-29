@@ -383,6 +383,75 @@ describe('deps_audit', () => {
     expect(r.coverage).toBe('full');
   });
 
+  // Self-security review R6-I1: npm audit runs in the project, so the
+  // project's .npmrc picks the server that answers it. Honoured — a private
+  // registry is legitimate — but named, and without the credentials.
+  it("names the registry the project's .npmrc sends npm audit to, never silently", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(
+      join(project, '.npmrc'),
+      '; a comment\n@acme:registry=https://scoped.example/\nregistry = "https://ci:s3cret@npm.example.internal/repo/"\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('ok');
+    expect(npm?.reason).toContain(
+      "npm audit answered by https://npm.example.internal/repo/ (from the project's .npmrc)",
+    );
+    expect(npm?.reason).not.toContain('s3cret');
+    expect(npm?.honoured_config).toEqual(['.npmrc']);
+  });
+
+  it.each([
+    ['no .npmrc', null],
+    ['the public registry', 'registry=https://registry.npmjs.org/\n'],
+    ['only a scoped registry', '@acme:registry=https://scoped.example/\n'],
+  ])('says nothing about the registry for %s', async (_label, npmrc) => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    if (npmrc !== null) writeFileSync(join(project, '.npmrc'), npmrc, 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.reason ?? '').not.toMatch(/answered by/);
+    // Round 5, item 2: a project .npmrc is named whenever npm audit read one
+    // (omit=dev or audit-level decide what it reports), whatever its registry.
+    if (npmrc === null) {
+      expect(npm?.honoured_config).toBeUndefined();
+    } else {
+      expect(npm?.honoured_config).toEqual(['.npmrc']);
+      expect(npm?.reason).toMatch(/honoured the project's \.npmrc \(its registry and settings decide what npm audit reads and reports\)/);
+    }
+  });
+
   it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
@@ -2848,7 +2917,7 @@ describe('deps_update_plan', () => {
       unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
       unsupported_ecosystems_present: string[];
     }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unplanned).toHaveLength(1);
     expect(r.unplanned[0]).toMatchObject({ package_name: 'minimist', ecosystem: 'npm' });
@@ -3085,7 +3154,7 @@ describe('deps_update_plan', () => {
       unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
       unsupported_ecosystems_present: string[];
     }>(await getTool('deps_update_plan').handler({ project_path: member }, plugin));
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('pnpm');
     const minimist = r.unplanned.find((u) => u.package_name === 'minimist');
@@ -3306,7 +3375,7 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'package.json'), '{"name":"web","dependencies":{"lodash":"4.17.20"}}', 'utf8');
 
     const { calls, r } = await planWithoutGit(project);
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('pnpm');
     expect(r.unplanned[0]?.reason).toMatch(/^pnpm project \(\.\.\/\.\.\/pnpm-workspace\.yaml, the workspace root\)|^pnpm project \(\.\.\/\.\.\/pnpm-lock\.yaml, the workspace root\)/);
@@ -3324,5 +3393,97 @@ describe('deps_update_plan', () => {
     expect(calls).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('yarn');
     expect(r.unplanned[0]?.reason).toMatch(/^yarn project \(\.\.\/\.\.\/yarn\.lock, the workspace root\)/);
+  });
+
+  /**
+   * Review R7-I5: the advice was always `"pnpm": { "overrides" }` in
+   * package.json, which pnpm 11 and later no longer read — measured with
+   * pnpm 12.8.1: `[WARN] The "pnpm" field in package.json is no longer read
+   * by pnpm. The following keys were ignored: "pnpm.overrides"`, and the
+   * lock kept minimist@0.0.8. The mechanism follows the project's pnpm:
+   *   - pnpm 10.5.0 added `pnpm.*` settings in pnpm-workspace.yaml ("The
+   *     `pnpm.*` settings from `package.json` can now be specified in the
+   *     `pnpm-workspace.yaml` file instead", #9121), and made its `packages`
+   *     field optional — before, a pnpm-workspace.yaml without `packages`
+   *     fails ("packages field missing or empty", measured on 9.15.9 and
+   *     10.4.1);
+   *   - pnpm 11.0.0 stopped reading the "pnpm" field ("pnpm no longer reads
+   *     settings from the `pnpm` field of `package.json`", #10086).
+   */
+  describe('pnpm overrides follow the project’s pnpm version', () => {
+    const LOCK_9 = "lockfileVersion: '9.0'\n\npackages:\n\n  minimist@0.0.8:\n    resolution: {integrity: sha512-x}\n";
+    const LOCK_6 = "lockfileVersion: '6.0'\n\npackages:\n\n  /minimist@0.0.8:\n    resolution: {integrity: sha512-x}\n";
+
+    async function pnpmReason(opts: {
+      packageManager?: string;
+      lock: string;
+      pnpmVersion?: string | null;
+    }): Promise<{ reason: string; calls: string[] }> {
+      const project = tempProject();
+      const manifest: Record<string, unknown> = { name: 'x', dependencies: { mkdirp: '0.5.1' } };
+      if (opts.packageManager !== undefined) manifest['packageManager'] = opts.packageManager;
+      writeFileSync(join(project, 'package.json'), JSON.stringify(manifest), 'utf8');
+      writeFileSync(join(project, 'pnpm-lock.yaml'), opts.lock, 'utf8');
+      const plugin = makePlugin(project);
+      seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
+      const calls: string[] = [];
+      vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+        calls.push([cmd, ...args].join(' '));
+        if (cmd === 'pnpm' && args[0] === '--version') {
+          return opts.pnpmVersion === undefined || opts.pnpmVersion === null
+            ? { exitCode: 1, stdout: '', stderr: 'pnpm: not found' }
+            : { exitCode: 0, stdout: `${opts.pnpmVersion}\n`, stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }) as unknown as typeof execa);
+      const r = okResult<{ unplanned: Array<{ package_name: string; reason: string }> }>(
+        await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+      );
+      return { reason: r.unplanned.find((u) => u.package_name === 'minimist')?.reason ?? '', calls };
+    }
+
+    const YAML_FIX = 'add `overrides: { "minimist": "1.2.6" }` to pnpm-workspace.yaml';
+    const JSON_FIX = 'add "pnpm": { "overrides": { "minimist": "1.2.6" } } to package.json';
+
+    it('pnpm 12 from "packageManager": pnpm-workspace.yaml, never the ignored package.json field', async () => {
+      const { reason, calls } = await pnpmReason({ packageManager: 'pnpm@12.8.1+sha512.abc', lock: LOCK_9 });
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).not.toContain('"pnpm": { "overrides"');
+      expect(reason).toContain('pnpm 12.8.1 (package.json "packageManager")');
+      expect(calls.some((c) => c.startsWith('pnpm --version'))).toBe(false);
+    });
+
+    it('pnpm 10.5 or later: pnpm-workspace.yaml', async () => {
+      const { reason } = await pnpmReason({ packageManager: 'pnpm@10.5.0', lock: LOCK_9 });
+      expect(reason).toContain(YAML_FIX);
+    });
+
+    it('pnpm before 10.5 from "packageManager": package.json', async () => {
+      const { reason } = await pnpmReason({ packageManager: 'pnpm@10.4.1', lock: LOCK_9 });
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).not.toContain(YAML_FIX);
+    });
+
+    it('a lockfileVersion 6.0 (pnpm 8) decides without asking pnpm: package.json', async () => {
+      const { reason, calls } = await pnpmReason({ lock: LOCK_6, pnpmVersion: '12.8.1' });
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).toMatch(/pnpm-lock\.yaml lockfileVersion 6\.0/);
+      expect(calls.some((c) => c.startsWith('pnpm --version'))).toBe(false);
+    });
+
+    it('lockfileVersion 9.0 (every pnpm since 9) asks `pnpm --version`', async () => {
+      const { reason, calls } = await pnpmReason({ lock: LOCK_9, pnpmVersion: '12.8.1' });
+      expect(calls).toContain('pnpm --version');
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).toContain('pnpm 12.8.1 (`pnpm --version`)');
+    });
+
+    it('an unknown version names both, and where each applies', async () => {
+      const { reason } = await pnpmReason({ lock: LOCK_9, pnpmVersion: null });
+      expect(reason).toMatch(/pnpm version unknown/);
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).toMatch(/pnpm 10\.5 or later.*before 10\.5/);
+    });
   });
 });

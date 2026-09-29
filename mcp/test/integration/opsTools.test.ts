@@ -704,6 +704,76 @@ describe('perf_check', () => {
     expect(r.warnings?.some((w) => /budgets\.yml/.test(w))).toBe(true);
   });
 
+  /**
+   * Review M5: perf_check read neither Lighthouse's exit code nor
+   * `lhr.runtimeError`, so a page that failed to load gave null scores and
+   * budgets "ok". Lighthouse's own CLI (`cli/run.js`) saves the report and
+   * THEN exits `_RUNTIME_ERROR_CODE = 1` on `lhr.runtimeError` ("we'll still
+   * exit with an error code after we saved the results"); a protocol
+   * timeout exits 67.
+   */
+  function mockLighthouse(report: unknown, exitCode: number): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'lighthouse' ? '/fake/bin/lighthouse' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outFile = opts.args?.find((a) => a.startsWith('--output-path='))?.replace('--output-path=', '');
+      if (outFile) writeFileSync(outFile, JSON.stringify(report), 'utf8');
+      return {
+        outcome: exitCode === 0 ? ('completed' as const) : ('failed' as const),
+        exitCode,
+        stdout: '',
+        stderr: exitCode === 0 ? '' : 'Runtime error encountered: Lighthouse was unable to reliably load the page you requested.',
+        truncated: false,
+      };
+    });
+  }
+
+  it('a page that failed to load (lhr.runtimeError, exit 1) is a failed check with the reason', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n', 'utf8');
+    mockLighthouse(
+      {
+        runtimeError: {
+          code: 'FAILED_DOCUMENT_REQUEST',
+          message: 'Lighthouse was unable to reliably load the page you requested. (Details: net::ERR_CONNECTION_REFUSED)',
+        },
+        categories: { performance: { score: null } },
+        audits: {},
+      },
+      1,
+    );
+    const r = await getTool('perf_check').handler({ project_path: project, target_url: 'https://example.com' }, makePlugin(project));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('scanner_failed');
+    expect(r.error.message).toMatch(/FAILED_DOCUMENT_REQUEST.*unable to reliably load/);
+  });
+
+  it('a non-zero exit with a report but no runtimeError (protocol timeout, 67) is failed too', async () => {
+    const project = tempProject();
+    mockLighthouse({ categories: {}, audits: { 'largest-contentful-paint': { numericValue: 100 } } }, 67);
+    const r = await getTool('perf_check').handler({ project_path: project, target_url: 'https://example.com' }, makePlugin(project));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.message).toMatch(/exit 67/);
+  });
+
+  it('a budget whose metric Lighthouse did not measure is "not_measured", never ok', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n  inp_ms: 200\n', 'utf8');
+    // LCP measured and within budget; INP not measured at all (null).
+    mockLighthouse({ categories: { performance: { score: 0.9 } }, audits: { 'largest-contentful-paint': { numericValue: 1200 } } }, 0);
+    const r = (await getTool('perf_check').handler(
+      { project_path: project, target_url: 'https://example.com' },
+      makePlugin(project),
+    )) as { ok: true; findings: unknown[]; budgets: { status: string; not_measured?: string[] }; warnings?: string[] };
+    expect(r.ok).toBe(true);
+    expect(r.budgets.status).toBe('not_measured');
+    expect(r.budgets.not_measured).toEqual(['perf.inp_ms']);
+    expect(r.warnings?.some((w) => /inp_ms.*not measured/.test(w))).toBe(true);
+  });
+
   it('derives bundle_size_kb from the total-byte-weight audit', async () => {
     const project = tempProject();
     mkdirSync(join(project, '.guardian'), { recursive: true });

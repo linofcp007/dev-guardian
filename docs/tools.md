@@ -82,7 +82,7 @@ Audit the AI-agent workspace configuration in this project (and, opt-in, the use
 
 ### `audit_executive`
 
-Executive roll-up: runs security\_scan\_full, quality\_check, deps\_audit and compliance\_check CONCURRENTLY, plus scan\_wordpress for a WordPress project and scan\_dotnet\_secrets + dotnet\_target\_framework\_check for .NET, per this project's latest detect\_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security\_scan\_full, scan\_wordpress); Trivy's vulnerability database, its version check (check.trivy.dev) and Maven Central for a pom.xml; npm audit and PyPI (deps\_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality\_check runs the project's ESLint config. local\_only=true passes local\_only to security\_scan\_full (Semgrep: rules on disk, --metrics=off) and skips scan\_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps\_audit's registry calls or a .NET restore — the result lists those in local\_only\_gaps.
+Executive roll-up: runs security\_scan\_full, quality\_check, deps\_audit and compliance\_check CONCURRENTLY, plus scan\_wordpress for a WordPress project and scan\_dotnet\_secrets + dotnet\_target\_framework\_check for .NET, per this project's latest detect\_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security\_scan\_full, scan\_wordpress); Trivy's vulnerability database and Maven Central for a pom.xml (dev-guardian turns Trivy's version check and telemetry off); npm audit and PyPI (deps\_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality\_check runs the project's ESLint config. local\_only=true passes local\_only to security\_scan\_full (Semgrep: rules on disk, --metrics=off) and skips scan\_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps\_audit's registry calls or a .NET restore — the result lists those in local\_only\_gaps.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -126,7 +126,7 @@ Hunt implementation bugs with Semgrep: the registry packs p/r2c-bug-scan + p/sec
 
 ### `bulk_audit_wordpress_sites`
 
-Run wp\_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp\_version, audit scan\_id, and a flagged\_count (anything in checksum\_mismatches.core + modified plugins + modified themes).
+Run wp\_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp\_version, audit scan\_id, and a flagged\_count (checksum\_mismatches.core + plugins; theme files are not checked: WP-CLI has no theme checksums).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -193,7 +193,7 @@ Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm au
 
 ### `deps_update_plan`
 
-Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own "outdated" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements\*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands — their CVEs are listed with the pnpm.overrides / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan — npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package\_name, ecosystem, installed\_version, latest\_version, cve\_ids, upgrade\_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).
+Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own "outdated" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements\*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands — their CVEs are listed with the pnpm overrides (where the project's pnpm version reads them) / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan — npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package\_name, ecosystem, installed\_version, latest\_version, cve\_ids, upgrade\_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -324,7 +324,7 @@ Propose stack-appropriate observability files (Pino logger / structlog / Monolog
 
 ### `perf_check`
 
-Run Lighthouse against target\_url, or k6 against k6\_script\_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/invalid — an invalid file is never reported the same as "no budgets" or "within budget".
+Run Lighthouse against target\_url, or k6 against k6\_script\_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/not\_measured/invalid — an invalid file, or a budget whose metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not load (runtimeError, non-zero exit) is a failed check.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -553,7 +553,7 @@ Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFOR
 
 ### `scan_wordpress`
 
-Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp\_audit / wp\_vuln\_check for live-install scenarios.
+Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp\_audit / wp\_vuln\_check for live-install scenarios.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -643,7 +643,7 @@ Vet dependencies BEFORE installing them. Per package, against the public registr
 
 ### `wp_audit`
 
-Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file checksums, admin user list, dangerous config flags, plugins with auto\_update on. Persists a scan row of type wp\_audit so guardian://scans/{id} returns the structured audit.
+Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto\_update on. Persists a scan row of type wp\_audit so guardian://scans/{id} returns the structured audit.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -699,7 +699,7 @@ Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak
 
 ### `wp_vuln_check`
 
-Run WPScan against a target URL (or against the URL inferred from a local install\_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.
+Run WPScan against a target URL (or against the URL inferred from a local install\_path) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN\_OFFLINE=1.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

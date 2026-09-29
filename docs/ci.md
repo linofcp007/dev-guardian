@@ -67,6 +67,31 @@ node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller
 - With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
 - The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
 
+### A shallow checkout exits 2
+
+Most CI checkouts are shallow by default — GitHub's `actions/checkout` fetches one commit (`fetch-depth: 1`), GitLab uses `GIT_DEPTH: 20` / 50, Bitbucket clones 50 commits. The secrets pass reads git history, and on a shallow clone that history ends at the boundary the checkout fetched: a secret committed before it and removed since is invisible. So `scan` on a shallow checkout names the gap — `gitleaks … history truncated at <commit> — a shallow clone: the commits before it were not scanned` — and **exits 2** (incomplete), never 0.
+
+The fix is to fetch the whole history:
+
+| CI | Setting |
+| --- | --- |
+| GitHub Actions | `actions/checkout` with `fetch-depth: 0` |
+| GitLab CI | `variables: { GIT_DEPTH: "0" }` |
+| Bitbucket Pipelines | `clone: { depth: full }` |
+
+The pipelines `ci-init` writes already do this. With the MCP tools rather than the CLI, a history scan limited to commits you did fetch is complete too: `scan_secrets` with `log_opts: "<base>..HEAD"` reads only that range, and a range that stays above the shallow boundary is not truncated (`--all`, or no `log_opts`, reaches the boundary and is).
+
+### What the repository's `.trivyignore` suppressed
+
+A `.trivyignore` in the scanned repository is honoured — accepted risks are the project's call — but never in silence. Trivy 0.50.0 or newer lists what it suppressed, and the gate names it without counting it:
+
+```text
+suppressed by the repository's own configuration (not counted by the gate):
+  - security_scan_full: trivy: 7 findings suppressed by the repository's .trivyignore: CVE-2020-8203, …
+```
+
+The JSON carries the same under `suppressed_by_repo_config` (step, scanner, file, count, ids and the first findings), and the SARIF carries each suppressed finding as a result with `suppressions: [{ "kind": "external", "justification": "suppressed by the repository's .trivyignore" }]`. They change neither the exit code nor coverage. `trivy config` (the IaC pass) cannot list what it suppressed; the line then says so instead of a count, as it does for a Trivy older than 0.50.0. Review changes to `.trivyignore` like code: `review_pr` warns when a diff edits it.
+
 ### Things a green pipeline does not tell you
 
 - **SARIF carries one bit of coverage.** `invocation.executionSuccessful` turns `false` when coverage is not full, but SARIF has no field for *which* scanner was missing. That is in exit code 2 and the human/JSON output. Treat an uploaded SARIF with zero results as inconclusive until you have checked the exit code.
@@ -97,7 +122,7 @@ Without `--write` the pipeline is printed. `--write` creates the file atomically
 
 What the generated pipeline does:
 
-- checks out the project with **full history** (`fetch-depth: 0` / `GIT_DEPTH: "0"` / `clone: depth: full`), so gitleaks attributes each secret to the commit that introduced it rather than to a shallow boundary that moves on every push; on GitHub with `persist-credentials: false`;
+- checks out the project with **full history** (`fetch-depth: 0` / `GIT_DEPTH: "0"` / `clone: depth: full`), so gitleaks attributes each secret to the commit that introduced it rather than to a shallow boundary that moves on every push; on GitHub with `persist-credentials: false`. A shallow checkout is scanned, but its history pass names the boundary it stopped at and the scan is incomplete (exit 2), never clean;
 - clones dev-guardian at the release tag named in `.claude-plugin/plugin.json`, **resolved to its commit SHA when you ran `ci-init`** and verified again with `git rev-parse HEAD` after cloning — a tag that moved since is refused. The clone goes to `$RUNNER_TEMP` / `/tmp`, outside the checkout, so dev-guardian's own source is never scanned as part of your project; then `npm ci --omit=dev` in its `mcp/`;
 - installs Trivy, gitleaks and actionlint pinned by version and sha256 (verified against each tool's GitHub release), and bandit, Semgrep and zizmor pinned by exact version through pipx — into a scratch directory, never the checkout. Every pinned value lives in [`configs/ci/pinned.json`](../configs/ci/pinned.json); every GitHub Action is pinned by full commit SHA;
 - on GitHub, installs the .NET SDK only when the project has a root `.csproj`, `.fsproj`, `.sln` or `.slnx`; the GitLab and Bitbucket templates document that requirement instead (without the SDK, a .NET project's scan exits 2);

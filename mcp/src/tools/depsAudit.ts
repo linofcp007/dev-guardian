@@ -38,7 +38,7 @@
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   classifyRestoreFailure,
@@ -49,8 +49,11 @@ import {
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
-import { assessManifestCoverage, TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
+import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
+import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolRun } from '../types.js';
 import { registerToolModule } from './index.js';
@@ -149,63 +152,30 @@ registerToolModule(
       const parser_inputs: ScannerInvocation['parser_inputs'] = [];
 
       // --- Trivy fs (canonical CVE source for all stacks) ---------------
-      let manifestCoverageGaps: ReturnType<typeof assessManifestCoverage>['gaps'] = [];
+      let manifestCoverageGaps: TrivyFsJudgement['gaps'] = [];
       const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
         const outFile = join(reportDir, 'deps.json');
-        const result = await runProcess({
-          command: 'trivy',
-          args: [
-            'fs',
-            '--scanners',
-            'vuln,license',
-            '--format',
-            'json',
-            '--output',
-            outFile,
-            '--quiet',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        const result = await runTrivy({
+          args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+          target: ctx.projectPath,
+          workDir: reportDir,
+          ignoreFrom: ctx.projectPath,
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog,
         });
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        if (result.outcome !== 'completed') {
-          tools_run.push({ name: 'trivy', status: 'failed' });
-        } else {
-          // See scanDeps.ts / trivy.ts's own module comment: a manifest
-          // Trivy recognises nothing for (e.g. a bare .csproj with no
-          // packages.lock.json) must never read as a clean scan.
-          const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
-          manifestCoverageGaps = coverage.gaps;
-          if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-            // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
-            // own tools_run status stays 'ok') but not this one. Fix round
-            // 1, item 4: the gap is named `trivy:<ecosystem>`, never the
-            // bare 'trivy' — `create_fix_pr`'s own verification
-            // (`DEPS_AUDIT_MISSING_TOOLS_NAME`) treats a literal 'trivy' in
-            // `missing_tools` as "trivy did not run at all, nothing it
-            // found can be re-verified", which would block EVERY
-            // trivy-sourced fix (e.g. an unrelated npm CVE) just because
-            // one ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
-            // matches no `tools_run` entry still forces coverage to
-            // 'partial' (missing_tools.length > 0), without colliding with
-            // the exact-string check downstream.
-            tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
-            missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-          } else if (coverage.gaps.length > 0) {
-            // FULL SKIP: trivy's own Results were entirely empty — nothing
-            // it reports can be trusted as re-verified, so the bare 'trivy'
-            // name is correct here (unchanged from before this fix round).
-            tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
-            missing_tools.push('trivy');
-          } else {
-            tools_run.push({ name: 'trivy', status: 'ok' });
-          }
-        }
+        // The one judgement scan_deps, deps_audit and scan_wordpress share
+        // (runners/trivyRun.ts#judgeTrivyFs): a manifest anywhere in the
+        // tree that Trivy read nothing for (e.g. a bare .csproj with no
+        // packages.lock.json) must never read as a clean scan.
+        const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+        tools_run.push(judged.toolRun);
+        missing_tools.push(...judged.missing);
+        manifestCoverageGaps = judged.gaps;
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('trivy');
@@ -299,6 +269,43 @@ function looksLikeNpmAuditReport(raw: string): boolean {
   }
 }
 
+/** The public npm registry: npm audit answered by it is not worth a note. */
+const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
+
+/**
+ * The registry the project's own `.npmrc` sends `npm audit` to, when it is
+ * not the public one — credentials in the URL removed — or null.
+ *
+ * `npm audit` runs in the project, so the project's `.npmrc` decides which
+ * server answers it: a private registry is legitimate and stays honoured, but
+ * the answer is that server's, and a repository could equally point it at a
+ * server of its own that answers "no vulnerabilities". Named in the result,
+ * never silent. Only the unscoped `registry` key: a `@scope:registry` line
+ * does not move the audit endpoint. The user's own `~/.npmrc` and
+ * `npm_config_registry` are the user's choice, not the project's, and are
+ * not read here.
+ */
+export function projectNpmRegistry(projectPath: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(join(projectPath, '.npmrc'), 'utf8');
+  } catch {
+    return null;
+  }
+  let registry: string | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#') || line.startsWith(';')) continue;
+    const m = /^registry\s*=\s*(.*)$/i.exec(line);
+    if (m?.[1] === undefined) continue;
+    // The last one wins, as in npm's own ini reader.
+    registry = m[1].trim().replace(/^["']|["']$/g, '');
+  }
+  if (registry === null || registry === '' || NPM_PUBLIC_REGISTRY.test(registry)) return null;
+  // Never echo a credential written into the URL.
+  return registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+}
+
 async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
   const bin = await scannerAvailable(opts.command);
   if (!bin) {
@@ -349,18 +356,36 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
     }
   }
 
+  // The project's .npmrc is named whenever npm audit read one (round 5, item
+  // 2: `runners/repoConfig.ts`) — its registry, `omit=dev`, `audit-level`
+  // decide what is audited — and whoever answered, when the project chose a
+  // registry other than npm's (see `projectNpmRegistry`).
+  const registry = isNpmStdout ? projectNpmRegistry(opts.ctx.projectPath) : null;
+  const npmrc = isNpmStdout ? honouredRootFiles(opts.ctx.projectPath, 'npm') : [];
+  const registryNote = (run: ToolRun): ToolRun => {
+    const named = withProjectConfig(run, npmrc);
+    if (registry === null) return named;
+    const note = `npm audit answered by ${registry} (from the project's .npmrc)`;
+    return {
+      ...named,
+      reason: named.reason !== undefined && named.reason.length > 0 ? `${named.reason}; ${note}` : note,
+      honoured_config: [...new Set([...(named.honoured_config ?? []), '.npmrc'])],
+    };
+  };
   if (ok) {
-    opts.tools_run.push({
-      name: opts.command,
-      status: 'ok',
-      reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
-    } as ToolRun);
+    opts.tools_run.push(
+      registryNote({
+        name: opts.command,
+        status: 'ok',
+        reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
+      }),
+    );
   } else {
     const reason =
       isNpmStdout && exitOk
         ? 'ran but produced no audit report (missing lockfile?)'
         : 'failed to run';
-    opts.tools_run.push({ name: opts.command, status: 'failed', reason } as ToolRun);
+    opts.tools_run.push(registryNote({ name: opts.command, status: 'failed', reason }));
     // A failed auditor is a coverage gap — surface it so the roll-up and the
     // executive summary do not read the result as fully covered.
     opts.missing_tools?.push(opts.command);
@@ -629,15 +654,24 @@ async function runDotnetSca(opts: {
   }
 
   const gapReason = failures.map((f) => `${f.target}: ${f.reason}`).join('; ');
+  // The project's NuGet.config files answer the lookup: named (`runners/repoConfig.ts`).
   if (anyOk) {
-    tools_run.push({
-      name: 'dotnet',
-      status: 'ok',
-      reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
-    });
+    tools_run.push(
+      await nameRepoConfig(
+        {
+          name: 'dotnet',
+          status: 'ok',
+          reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
+        },
+        ctx.projectPath,
+        'dotnet',
+      ),
+    );
     if (failures.length > 0) missing_tools.push('dotnet');
   } else {
-    tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' });
+    tools_run.push(
+      await nameRepoConfig({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' }, ctx.projectPath, 'dotnet'),
+    );
     missing_tools.push('dotnet');
   }
   return failures;

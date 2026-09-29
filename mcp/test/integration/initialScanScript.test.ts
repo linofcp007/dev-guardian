@@ -93,4 +93,52 @@ describe.skipIf(SHELL === null)('initial-scan.sh', () => {
     expect(r.stdout).toMatch(/Secrets: .*(failed|falhou)/i);
     expect(r.stdout).toMatch(/SAST \(Semgrep\): .*(failed|falhou)/i);
   }, 60_000);
+
+  /**
+   * The status report runs Trivy and Semgrep in the project too: the same
+   * rules as the MCP tools (runners/trivyRun.ts, runners/semgrepRun.ts) —
+   * never the project's trivy.yaml, never check.trivy.dev, Semgrep in UTF-8
+   * mode, and the project's .trivyignore named when it is honoured.
+   */
+  it("never reads the project's trivy.yaml, never phones home, runs Semgrep in UTF-8 mode", async () => {
+    const bin = makeTempDir('initial-scan-bin-');
+    const project = makeTempDir('initial-scan-proj-');
+    writeFileSync(join(project, 'trivy.yaml'), 'severity:\n  - UNKNOWN\n');
+    writeFileSync(join(project, '.trivyignore'), 'CVE-1\n');
+    const log = join(bin, 'calls.log');
+    for (const name of ['trivy', 'semgrep']) {
+      const path = join(bin, name);
+      writeFileSync(
+        path,
+        [
+          '#!/usr/bin/env bash',
+          `printf '%s|%s|%s|%s|%s\\n' "${name}" "$*" "\${TRIVY_SKIP_VERSION_CHECK:-}" "\${TRIVY_DISABLE_TELEMETRY:-}" "\${PYTHONUTF8:-}" >> '${log.replace(/\\/g, '/')}'`,
+          'exit 3',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(path, 0o755);
+    }
+    if (SHELL === null) return;
+    // Explicitly off (the runner merges the server's own environment, which may set it):
+    // only the script itself can turn them on.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${bin}${delimiter}${process.env['PATH'] ?? ''}`,
+      PYTHONUTF8: '0',
+      TRIVY_SKIP_VERSION_CHECK: 'false',
+      TRIVY_DISABLE_TELEMETRY: 'false',
+    };
+    const r = await runShellScript({ shell: SHELL, scriptPath: SCRIPT, args: [project], cwd: project, env });
+    const { readFileSync } = await import('node:fs');
+    const calls = readFileSync(log, 'utf8').trim().split('\n');
+    const fields = (tool: string): string[] => (calls.find((c) => c.startsWith(`${tool}|`)) ?? '').split('|');
+    const trivy = fields('trivy');
+    expect(trivy[1]).toMatch(/--config \S*trivy-config\.yaml/);
+    expect([trivy[2], trivy[3]]).toEqual(['true', 'true']);
+    expect(fields('semgrep')[4]).toBe('1');
+    expect(r.stdout).toMatch(/honra o \.trivyignore/);
+    // Round 5, item 3: what it suppressed is not counted here; the line says where it is.
+    expect(r.stdout).toMatch(/honra o \.trivyignore do projeto.*o scan_deps diz quantos achados suprimiu, e quais/);
+  }, 60_000);
 });

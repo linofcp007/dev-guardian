@@ -32,7 +32,7 @@
  * caller did not name, exits 2 as before.
  */
 
-import { SEVERITY_ORDER, type Finding, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
+import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
 import { CI_EXIT, type BaselineFile, type CiExitCode, type PartialParseRef, type ScanStepResult } from './types.js';
@@ -99,6 +99,20 @@ export interface GateVerdict {
   acceptedGaps: string[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
+  /**
+   * Findings the scanned repository's own configuration suppressed — its
+   * `.trivyignore` (`ToolRun.suppressed_by_repo_config`), per step and
+   * scanner (round 4, item 2). They left no trace before. Visibility only:
+   * not new findings, not blocking, not a coverage gap — the repository
+   * decided it; the gate says so, in every format.
+   */
+  suppressedByRepoConfig: RepoSuppressionEntry[];
+}
+
+/** One scanner run's repository-suppressed findings, and the step that ran it. */
+export interface RepoSuppressionEntry extends RepoSuppression {
+  step: string;
+  tool: string;
 }
 
 /**
@@ -230,8 +244,14 @@ export function evaluateGate(input: GateInput): GateVerdict {
   const coverageGaps: string[] = [];
   const acceptedGaps: string[] = [];
 
+  const suppressedByRepoConfig: RepoSuppressionEntry[] = [];
+
   for (const step of steps) {
     allToolsRun.push(...step.tools_run);
+    for (const run of step.tools_run) {
+      const s = run.suppressed_by_repo_config;
+      if (s !== undefined) suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
+    }
 
     if (!step.ran) {
       allMissingTools.push(step.tool);
@@ -302,5 +322,6 @@ export function evaluateGate(input: GateInput): GateVerdict {
     baselineAbsent: baseline === null,
     acceptedGaps,
     unusedPartialParseAcceptances: [...accepted].filter((path) => !reported.has(path)),
+    suppressedByRepoConfig,
   };
 }

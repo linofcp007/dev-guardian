@@ -23,9 +23,9 @@
  */
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
 const CHECKOUT_TIMEOUT_MS = 10 * 60_000;
@@ -65,6 +65,94 @@ export async function repoState(cwd) {
     const toplevel = top.stdout.trim();
     const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
     return head.exitCode === 0 ? { kind: 'has_commits', toplevel } : { kind: 'no_commits', toplevel };
+}
+/**
+ * The shallow boundary of a shallow clone — the commits whose parents were
+ * never fetched (`git rev-parse --git-path shallow` lists them) — or null
+ * when the repository is not shallow. A shallow repository whose boundary
+ * file cannot be read answers `['(unknown)']`: shallow, boundary unnamed.
+ */
+export async function shallowBoundary(cwd) {
+    const shallow = await git(cwd, ['rev-parse', '--is-shallow-repository']);
+    if (shallow.exitCode !== 0 || shallow.stdout.trim() !== 'true')
+        return null;
+    const where = await git(cwd, ['rev-parse', '--git-path', 'shallow']);
+    const rel = where.stdout.trim();
+    if (where.exitCode !== 0 || rel === '')
+        return ['(unknown)'];
+    try {
+        const shas = readFileSync(isAbsolute(rel) ? rel : join(cwd, rel), 'utf8')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => /^[0-9a-f]{40,64}$/.test(l));
+        return shas.length > 0 ? shas : ['(unknown)'];
+    }
+    catch {
+        return ['(unknown)'];
+    }
+}
+/**
+ * The submodules under `cwd` that are initialised and hold content — the
+ * index's gitlinks (mode 160000, one per `.gitmodules` entry that was
+ * added) whose checkout directory is not empty (an uninitialised submodule
+ * is an empty directory) — as `/`-separated paths relative to `cwd`,
+ * sorted. Their files are in no listing a scanner of the superproject uses
+ * (review M2). Empty outside a repository.
+ *
+ * Read from `git ls-files --stage` (~30 ms) rather than `git submodule
+ * status`, which spawns a shell and took ~770 ms per call on Windows
+ * (git 2.52) — on every secrets and SAST scan.
+ */
+export async function initialisedSubmodules(cwd) {
+    const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
+    if (r.exitCode !== 0)
+        return [];
+    const out = new Set();
+    for (const entry of splitNul(r.stdout)) {
+        // `<mode> <object> <stage>\t<path>`.
+        const tab = entry.indexOf('\t');
+        if (tab < 0 || !entry.startsWith('160000 '))
+            continue;
+        const path = entry.slice(tab + 1);
+        try {
+            if (readdirSync(join(cwd, path)).some((name) => name !== '.git'))
+                out.add(path.split('\\').join('/'));
+        }
+        catch {
+            // Not there on disk: nothing a scan could have read.
+        }
+    }
+    return [...out].sort();
+}
+/**
+ * The submodules (gitlinks, mode 160000) among `paths` in the tree of `rev`,
+ * relative to `cwd` — what a review's diff bumped: those commits' files are
+ * in no range of the superproject, whether or not anything is checked out.
+ * Empty when git cannot answer.
+ */
+export async function gitlinksAmong(cwd, rev, paths) {
+    if (paths.length === 0)
+        return [];
+    const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
+    if (r.exitCode !== 0)
+        return [];
+    const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
+    const out = [];
+    for (const entry of splitNul(r.stdout)) {
+        // `<mode> <type> <object>\t<path>`.
+        const tab = entry.indexOf('\t');
+        if (tab < 0 || !entry.startsWith('160000 '))
+            continue;
+        const path = entry.slice(tab + 1);
+        if (wanted.has(path))
+            out.push(path);
+    }
+    return out.sort();
+}
+/** `submodule contents not scanned: a, b` — the first few, then "and N more". */
+export function describeSubmodules(paths) {
+    const shown = paths.slice(0, 5).join(', ');
+    return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ''}`;
 }
 /** The full commit id `ref` names, or null when it names no commit. */
 export async function resolveCommit(cwd, ref) {

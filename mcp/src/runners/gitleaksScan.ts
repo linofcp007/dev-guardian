@@ -51,6 +51,17 @@
  * pass, and nothing this helper meets is allowed to throw out of it and take
  * the passes that did finish with it.
  *
+ * **The project's own gitleaks configuration is honoured, and named.**
+ * gitleaks reads `<source>/.gitleaks.toml` on its own (the history pass runs
+ * `detect -s <project>`; measured on 8.30.1: a committed allowlist over the
+ * one secret in history read 0 findings), the files pass passes it with
+ * `--config` and the directory pass extends it; every pass reads the
+ * project's `.gitleaksignore`. Both are the project's call — its rules, its
+ * accepted fingerprints — but they decide what the scan reports, so every
+ * pass that ran names them (`honoured_config`, and a note on its reason),
+ * as Trivy's `.trivyignore` is (`runners/trivyRun.ts`). gitleaks does not
+ * list what they suppressed.
+ *
  * Every finding says where it was found, in its `message`: `history`
  * (with the commit), `working_tree`, or `directory`.
  *
@@ -67,10 +78,23 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
+import { honouredRootFiles, withProjectConfig } from './repoConfig.js';
 import { openPrivateReportDir, sanitizeGitleaksReport, type PrivateReportDir } from '../secrets/verify/rawReport.js';
 import type { Finding, ToolRun } from '../types.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
-import { countCommits, git, repoState, resolveCommit, uncommittedFiles } from './git.js';
+import {
+  changedFiles,
+  countCommits,
+  describeSubmodules,
+  git,
+  gitlinksAmong,
+  initialisedSubmodules,
+  repoState,
+  resolveCommit,
+  shallowBoundary,
+  uncommittedFiles,
+} from './git.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -162,6 +186,7 @@ export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<Gitlea
   }
   try {
     await scan({ ...opts, raw }, result);
+    nameProjectConfig(opts.projectPath, result);
   } catch (e) {
     // Every step below handles its own failures; this is the net under them,
     // so a pass that did finish is never lost to one that did not.
@@ -178,6 +203,16 @@ export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<Gitlea
     }
   }
   return result;
+}
+
+/**
+ * Each pass that ran, naming the project's gitleaks files it honoured — see
+ * the module comment; which files is `runners/repoConfig.ts#REPO_CONFIG`.
+ */
+function nameProjectConfig(projectPath: string, result: GitleaksScanResult): void {
+  const files = honouredRootFiles(projectPath, 'gitleaks');
+  if (files.length === 0) return;
+  result.tools_run = result.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, files)));
 }
 
 async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
@@ -211,6 +246,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
       await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
     if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
+    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
     return;
   }
 
@@ -219,6 +255,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
     case 'has_commits':
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case 'no_commits':
       result.tools_run.push({
@@ -227,6 +264,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
         reason: 'the repository has no commits yet — no history to scan',
       });
       await workingTreePass(opts, result, false);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case 'error':
       result.tools_run.push({
@@ -240,6 +278,44 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
       await directoryPass(opts, result, GITLEAKS_HISTORY);
       return;
   }
+}
+
+/**
+ * Initialised submodules with content (review M2): neither pass reads them —
+ * the history holds only their gitlinks, and git lists no file inside them
+ * as uncommitted — so they are a named gap on the pass that ran (the history
+ * pass, else the working-tree pass): `ok`, its name missing. Not scanned:
+ * a submodule is its own repository, scanned as its own project.
+ */
+async function noteSubmodules(
+  projectPath: string,
+  result: GitleaksScanResult,
+  /** A range: only the submodules it bumped — their new commits are in no range of this repository. */
+  range?: { base: string; head: string },
+): Promise<void> {
+  let submodules: string[];
+  if (range === undefined) {
+    submodules = await initialisedSubmodules(projectPath);
+  } else {
+    let changed: string[];
+    try {
+      changed = await changedFiles(projectPath, range.base, range.head);
+    } catch {
+      changed = [];
+    }
+    submodules = await gitlinksAmong(projectPath, range.head, changed);
+  }
+  // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
+  submodules = submodulesNotIgnored(projectPath, submodules);
+  if (submodules.length === 0) return;
+  const note = describeSubmodules(submodules);
+  const entry =
+    result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === 'ok') ??
+    result.tools_run.find((t) => t.status === 'ok') ??
+    result.tools_run[0];
+  if (entry === undefined) return;
+  entry.reason = entry.reason !== undefined && entry.reason.length > 0 ? `${entry.reason}; ${note}` : note;
+  if (entry.status === 'ok' && !result.missing_tools.includes(entry.name)) result.missing_tools.push(entry.name);
 }
 
 /**
@@ -269,6 +345,8 @@ async function scopedScan(
       result.tools_run.push({ name: GITLEAKS_HISTORY, status: 'skipped', reason: `no commits in ${label}` });
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
+      // A diff scope's range bumps a submodule: its new commits are read by nothing here.
+      if ('base' in history) await noteSubmodules(opts.projectPath, result, history);
     }
   }
   if (result.cancelled) return;
@@ -359,13 +437,50 @@ async function historyPass(
   if (raw !== null && problems.length === 0) {
     pushParserInput(result, { parser: locatedParser('history', projectPrefix), input: raw }, report.secrets);
   }
+  // A shallow clone's history ends at its boundary: what gitleaks read is
+  // all there was HERE, not all there is (review I4). Ran, with a named gap.
+  const truncated = await truncatedAt(opts.projectPath, logOpts);
+  const truncation =
+    truncated.length === 0
+      ? null
+      : `history truncated at ${truncated.slice(0, 3).map((s) => s.slice(0, 12)).join(', ')}${
+          truncated.length > 3 ? ` and ${truncated.length - 3} more` : ''
+        } — a shallow clone: the commits before it were not scanned (git fetch --unshallow, then re-run)`;
   // A missing count reaches here only with findings: say so, never git's count as gitleaks'.
   const scanned = commits;
-  result.tools_run.push(
-    problems.length === 0
-      ? { name: GITLEAKS_HISTORY, status: 'ok', reason: `history: ${describeCount(scanned, 'commit')} scanned` }
-      : { name: GITLEAKS_HISTORY, status: 'failed', reason: problems.join('; ') },
-  );
+  const reasons = problems.length === 0 ? [`history: ${describeCount(scanned, 'commit')} scanned`] : problems;
+  if (truncation !== null) {
+    reasons.push(truncation);
+    result.missing_tools.push(GITLEAKS_HISTORY);
+  }
+  result.tools_run.push({
+    name: GITLEAKS_HISTORY,
+    status: problems.length === 0 ? 'ok' : 'failed',
+    reason: reasons.join('; '),
+  });
+}
+
+/**
+ * The shallow-boundary commits the history pass's own walk reaches, or none
+ * — review I4: `git clone --depth 1` of a repository whose secret was
+ * removed in a later commit read "1 commit(s) scanned", coverage full, 0
+ * findings. With no `log_opts` gitleaks walks every ref (`git log
+ * --full-history --all`), so every boundary is reached; a range or
+ * `--since=` reaches the boundaries `git rev-list` lists for it. A shallow
+ * repository whose walk cannot be listed is reported truncated: the gap is
+ * never assumed away.
+ */
+async function truncatedAt(cwd: string, logOpts: string | undefined): Promise<string[]> {
+  const boundary = await shallowBoundary(cwd);
+  if (boundary === null) return [];
+  if (logOpts === undefined || logOpts.length === 0 || boundary.includes('(unknown)')) return boundary;
+  // `logOpts` is validated (`resolveLogOpts`): --all, --since=<date>, resolved ranges.
+  const tokens = logOpts.split(' ').filter((t) => t.length > 0);
+  const hasRev = tokens.some((t) => t === '--all' || t.includes('..'));
+  const r = await git(cwd, ['rev-list', ...tokens, ...(hasRev ? [] : ['HEAD']), '--']);
+  if (r.exitCode !== 0) return boundary;
+  const reached = new Set(r.stdout.split(/\r?\n/).map((l) => l.trim()));
+  return boundary.filter((b) => reached.has(b));
 }
 
 /**

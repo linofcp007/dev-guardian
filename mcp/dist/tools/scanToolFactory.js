@@ -89,7 +89,8 @@ import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js'
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 /** Inputs that never enter the cache key — see the module comment. */
 const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
@@ -489,6 +490,17 @@ async function runScanBody(args) {
         limiter?.release();
     }
     report('recording results');
+    // The project's `.guardianignore` shapes every run of this scan — the
+    // native flags some scanners get, the result filter below for all — so
+    // each run that ran names it, as every runner names the project
+    // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
+    if (args.exclusions !== null) {
+        const ignore = honouredRootFiles(projectPath, 'guardian');
+        invocation = {
+            ...invocation,
+            tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+        };
+    }
     // Apply parsers.
     let findings = [];
     const cves = [];
@@ -677,6 +689,7 @@ async function runScanBody(args) {
     if (excludedNote !== null)
         warnings.push(excludedNote);
     warnings.push(...(invocation.warnings ?? []));
+    warnings.push(...repoSuppressionWarnings(invocation.tools_run));
     if (view.warning)
         warnings.push(view.warning);
     if (floor?.warning)
@@ -880,6 +893,7 @@ function cachedResult(config, input, plugin, scanId, warnings) {
     if (excludedNote !== null)
         allWarnings.push(excludedNote);
     allWarnings.push(...runWarnings(meta?.['run_warnings']));
+    allWarnings.push(...repoSuppressionWarnings(record.tools_run));
     if (view.warning)
         allWarnings.push(view.warning);
     if (floor?.warning)

@@ -25,8 +25,9 @@ import {
   type ParserOutput,
 } from '../runners/scannerParsers/index.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
-import type { Finding, ToolResult } from '../types.js';
+import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { computeCoverage } from './scanCoverage.js';
 
 interface PatternRule {
   id: string;
@@ -76,7 +77,10 @@ const PATTERNS: PatternRule[] = [
     id: 'dotnet-jwt-secret',
     description: 'JWT signing key in plain text',
     severity: 'high',
-    regex: /(JwtSecret|JWT_SECRET|SigningKey)\s*[:=]\s*["'][^"']{16,}["']/i,
+    // The key may be quoted itself: appsettings.json writes `"JwtSecret": "…"`,
+    // with a quote between the key and the colon, which the pattern used to
+    // refuse — every JSON signing key went unreported (review M4).
+    regex: /(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i,
   },
   {
     id: 'dotnet-nuget-feed-cred',
@@ -154,16 +158,28 @@ async function handler(
 
   const files = collectConfigFiles(projectPath, 6);
   const findings: Finding[] = [];
+  /** Files found and not read: never counted as scanned, always named (review M4). */
+  const notScanned: Array<{ file: string; reason: string }> = [];
+  let scanned = 0;
+  const rel = (file: string): string => relative(projectPath, file).replace(/\\/g, '/');
 
   for (const file of files) {
     let content: string;
     try {
+      // Massive files (likely not config but build output drifting in) are
+      // not read at all.
+      const size = statSync(file).size;
+      if (size > MAX_FILE_BYTES) {
+        notScanned.push({ file: rel(file), reason: `over 2 MB (${size} bytes)` });
+        continue;
+      }
       content = readFileSync(file, 'utf8');
-    } catch {
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      notScanned.push({ file: rel(file), reason: `could not be read (${code ?? (e as Error).message})` });
       continue;
     }
-    // Skip massive files (likely not config but build output drifting in).
-    if (content.length > 2_000_000) continue;
+    scanned += 1;
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
@@ -178,7 +194,7 @@ async function handler(
               category: 'security',
               subcategory: 'secret',
               title: rule.description,
-              file_path: relative(projectPath, file).replace(/\\/g, '/'),
+              file_path: rel(file),
               line_start: i + 1,
               line_end: i + 1,
               snippet: line.length > 200 ? `${line.slice(0, 200)}…` : line,
@@ -206,23 +222,45 @@ async function handler(
   if (redacted.length > 0) {
     ctx.storage.findings.bulkInsert(redacted.map((f) => ({ ...f, scan_id: scanId })));
   }
+  // Code-point order: the same on every machine, whatever its locale.
+  notScanned.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  const toolRun: ToolRun =
+    notScanned.length === 0
+      ? { name: 'scan_dotnet_secrets', status: 'ok' }
+      : {
+          name: 'scan_dotnet_secrets',
+          status: scanned > 0 ? 'ok' : 'failed',
+          reason: `${notScanned.length} file(s) not scanned: ${notScanned
+            .slice(0, 5)
+            .map((n) => `${n.file} (${n.reason})`)
+            .join(', ')}${notScanned.length > 5 ? ` and ${notScanned.length - 5} more` : ''}`,
+        };
+  const tools_run = [toolRun];
+  const missing_tools = notScanned.length > 0 ? ['scan_dotnet_secrets'] : [];
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: 'completed',
-    tools_run: [{ name: 'scan_dotnet_secrets', status: 'ok' }],
-    missing_tools: [],
-    meta: { files_scanned: files.length, findings_count: findings.length },
+    tools_run,
+    missing_tools,
+    meta: { files_scanned: scanned, files_not_scanned: notScanned, findings_count: findings.length },
   });
 
   const parserOutput: ParserOutput = { findings: redacted, cves: [] };
   return {
     ok: true,
     scan_id: scanId,
-    files_scanned: files.length,
+    files_scanned: scanned,
+    files_not_scanned: notScanned,
+    coverage: computeCoverage(tools_run, missing_tools),
+    tools_run,
+    missing_tools,
     findings_count: findings.length,
     findings: parserOutput.findings,
   };
 }
+
+/** A config file larger than this is not read: named in `files_not_scanned`. */
+const MAX_FILE_BYTES = 2_000_000;
 
 function collectConfigFiles(root: string, maxDepth: number): string[] {
   const out: string[] = [];

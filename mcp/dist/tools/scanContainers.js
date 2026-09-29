@@ -62,6 +62,9 @@ import { UNSAFE_CHARS, UNSAFE_CHAR_CLASS, cosignReadiness, escapeUnsafe, detectI
 import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
+import { judgeTrivyConfig } from '../runners/trivyConfig.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -172,10 +175,14 @@ const scanContainers = makeScanTool({
             else {
                 if (dockerfile !== undefined) {
                     const outFile = join(reportDir, 'dockerfile.json');
-                    const result = await runProcess({
-                        command: 'trivy',
-                        args: ['config', '--format', 'json', '--output', outFile, '--quiet', dockerfile],
-                        cwd: ctx.projectPath,
+                    // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+                    // No --quiet: a Dockerfile Trivy cannot parse is one ERROR line
+                    // in its log, and --quiet hides it (runners/trivyConfig.ts).
+                    const result = await runTrivy({
+                        args: ['config', '--format', 'json', '--output', outFile],
+                        target: dockerfile,
+                        workDir: reportDir,
+                        ignoreFrom: ctx.projectPath,
                         env: ctx.scriptEnv,
                         signal: ctx.signal,
                         onLog: ctx.onLog,
@@ -183,17 +190,24 @@ const scanContainers = makeScanTool({
                     const raw = readJsonSafe(outFile);
                     if (raw)
                         parser_inputs.push({ parser: trivyParser, input: raw });
-                    tools_run.push({
+                    // The file it was given is the one that must be recognised.
+                    const judged = judgeTrivyConfig({
                         name: 'trivy-dockerfile',
-                        status: result.outcome === 'completed' ? 'ok' : 'failed',
+                        run: result,
+                        raw,
+                        iacFiles: [relative(ctx.projectPath, dockerfile).split(sep).join('/')],
+                        singleFile: true,
                     });
+                    tools_run.push(judged.toolRun);
+                    missing_tools.push(...judged.missing);
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }
                 if (inp.image) {
                     const outFile = join(reportDir, 'image.json');
-                    const result = await runProcess({
-                        command: 'trivy',
+                    // The project's .trivyignore applied to its image as it always
+                    // was, now explicitly and named; its trivy.yaml never.
+                    const result = await runTrivy({
                         args: [
                             'image',
                             '--format',
@@ -206,9 +220,10 @@ const scanContainers = makeScanTool({
                             // layer, and image-level misconfigurations, unreported;
                             // trivyParser already handles all three result shapes.
                             'vuln,secret,misconfig',
-                            inp.image,
                         ],
-                        cwd: ctx.projectPath,
+                        target: inp.image,
+                        workDir: reportDir,
+                        ignoreFrom: ctx.projectPath,
                         env: ctx.scriptEnv,
                         signal: ctx.signal,
                         onLog: ctx.onLog,
@@ -220,12 +235,12 @@ const scanContainers = makeScanTool({
                     // re-measures an image's findings only by a scan of the SAME
                     // image (history/runCompare.ts) — image B's scan never resolves
                     // image A's.
-                    tools_run.push({
+                    tools_run.push(withHonoured({
                         name: 'trivy-image',
                         status: result.outcome === 'completed' ? 'ok' : 'failed',
                         reason: `image ${inp.image}`,
                         target: inp.image,
-                    });
+                    }, result));
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }
@@ -291,10 +306,15 @@ const scanContainers = makeScanTool({
                 missing_tools.push('hadolint');
             }
             else {
+                // hadolint reads `.hadolint.yaml` from its working directory: not
+                // the project (round 4, item 3). Its own root config is passed
+                // explicitly and named (`runners/repoConfig.ts`).
+                const hadolintConfig = honouredRootFiles(ctx.projectPath, 'hadolint').slice(0, 1);
+                const configArgs = hadolintConfig.flatMap((f) => ['--config', join(ctx.projectPath, f.path)]);
                 const result = await runProcess({
                     command: 'hadolint',
-                    args: ['--format', 'json', dockerfile],
-                    cwd: ctx.projectPath,
+                    args: ['--format', 'json', ...configArgs, dockerfile],
+                    cwd: reportDir,
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     onLog: ctx.onLog,
@@ -307,10 +327,10 @@ const scanContainers = makeScanTool({
                     result.outcome !== 'output_too_large';
                 if (finished && (result.exitCode === 0 || result.exitCode === 1)) {
                     parser_inputs.push({ parser: hadolintParser, input: result.stdout });
-                    tools_run.push({ name: 'hadolint', status: 'ok' });
+                    tools_run.push(withProjectConfig({ name: 'hadolint', status: 'ok' }, hadolintConfig));
                 }
                 else {
-                    tools_run.push({ name: 'hadolint', status: 'failed' });
+                    tools_run.push(withProjectConfig({ name: 'hadolint', status: 'failed' }, hadolintConfig));
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }

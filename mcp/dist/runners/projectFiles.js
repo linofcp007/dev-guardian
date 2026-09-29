@@ -17,6 +17,32 @@ import { FS_EXCLUDE } from '../treeHash/computeTreeHash.js';
  * virtualenvs, caches) plus `vendor` (Composer / Go vendoring).
  */
 export const PROJECT_WALK_EXCLUDE = new Set([...FS_EXCLUDE, 'vendor']);
+/**
+ * What the walks that mirror what a SCANNER reads leave out besides
+ * {@link PROJECT_WALK_EXCLUDE} — Trivy's dependency-manifest walk
+ * (`scannerParsers/trivy.ts`) and its IaC-looking-files walk
+ * (`trivyConfig.ts`) — while entering every other hidden directory, since
+ * Trivy reads them (`.github/actions/…/package.json`, `.devcontainer/
+ * Dockerfile`, measured on 0.69.3): version control, the package managers'
+ * and tools' caches, and bower's and jspm's dependency directories. Round 4,
+ * items 4 and 5; round 5, item 1.
+ */
+export const SCANNER_WALK_EXCLUDE = new Set([
+    '.git',
+    '.hg',
+    '.svn',
+    '.bzr',
+    '_darcs',
+    'CVS',
+    '.yarn',
+    '.pnpm-store',
+    '.npm',
+    '.gradle',
+    '.m2',
+    '.terraform',
+    'bower_components',
+    'jspm_packages',
+]);
 function readDir(dir) {
     try {
         return readdirSync(dir, { withFileTypes: true });

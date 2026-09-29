@@ -125,7 +125,8 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
@@ -757,6 +758,18 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   }
   report('recording results');
 
+  // The project's `.guardianignore` shapes every run of this scan — the
+  // native flags some scanners get, the result filter below for all — so
+  // each run that ran names it, as every runner names the project
+  // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
+  if (args.exclusions !== null) {
+    const ignore = honouredRootFiles(projectPath, 'guardian');
+    invocation = {
+      ...invocation,
+      tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+    };
+  }
+
   // Apply parsers.
   let findings: Finding[] = [];
   const cves: ParserCveInput[] = [];
@@ -957,6 +970,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const excludedNote = exclusionWarning(exclusionReport);
   if (excludedNote !== null) warnings.push(excludedNote);
   warnings.push(...(invocation.warnings ?? []));
+  warnings.push(...repoSuppressionWarnings(invocation.tools_run));
   if (view.warning) warnings.push(view.warning);
   if (floor?.warning) warnings.push(floor.warning);
 
@@ -1187,6 +1201,7 @@ function cachedResult<TInput extends ScanToolBaseInput>(
   const excludedNote = exclusionWarning(meta?.['exclusions']);
   if (excludedNote !== null) allWarnings.push(excludedNote);
   allWarnings.push(...runWarnings(meta?.['run_warnings']));
+  allWarnings.push(...repoSuppressionWarnings(record.tools_run));
   if (view.warning) allWarnings.push(view.warning);
   if (floor?.warning) allWarnings.push(floor.warning);
 
