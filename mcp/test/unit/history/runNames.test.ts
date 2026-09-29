@@ -152,6 +152,7 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gitleaksScan.ts:GITLEAKS_HISTORY': 'the GITLEAKS_* constants',
   'runners/gitleaksScan.ts:GITLEAKS_WORKING_TREE': 'the GITLEAKS_* constants',
   'runners/gitleaksScan.ts:name': 'a parameter only ever given a GITLEAKS_* constant',
+  'runners/gitleaksScan.ts:entry.name': "noteSubmodules: the name of one of this scan's own passes (GITLEAKS_*)",
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
   'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
   'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",

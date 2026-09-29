@@ -70,7 +70,16 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { openPrivateReportDir, sanitizeGitleaksReport, type PrivateReportDir } from '../secrets/verify/rawReport.js';
 import type { Finding, ToolRun } from '../types.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
-import { countCommits, git, repoState, resolveCommit, shallowBoundary, uncommittedFiles } from './git.js';
+import {
+  countCommits,
+  describeSubmodules,
+  git,
+  initialisedSubmodules,
+  repoState,
+  resolveCommit,
+  shallowBoundary,
+  uncommittedFiles,
+} from './git.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -219,6 +228,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
     case 'has_commits':
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case 'no_commits':
       result.tools_run.push({
@@ -227,6 +237,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
         reason: 'the repository has no commits yet — no history to scan',
       });
       await workingTreePass(opts, result, false);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case 'error':
       result.tools_run.push({
@@ -240,6 +251,26 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
       await directoryPass(opts, result, GITLEAKS_HISTORY);
       return;
   }
+}
+
+/**
+ * Initialised submodules with content (review M2): neither pass reads them —
+ * the history holds only their gitlinks, and git lists no file inside them
+ * as uncommitted — so they are a named gap on the pass that ran (the history
+ * pass, else the working-tree pass): `ok`, its name missing. Not scanned:
+ * a submodule is its own repository, scanned as its own project.
+ */
+async function noteSubmodules(projectPath: string, result: GitleaksScanResult): Promise<void> {
+  const submodules = await initialisedSubmodules(projectPath);
+  if (submodules.length === 0) return;
+  const note = describeSubmodules(submodules);
+  const entry =
+    result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === 'ok') ??
+    result.tools_run.find((t) => t.status === 'ok') ??
+    result.tools_run[0];
+  if (entry === undefined) return;
+  entry.reason = entry.reason !== undefined && entry.reason.length > 0 ? `${entry.reason}; ${note}` : note;
+  if (entry.status === 'ok' && !result.missing_tools.includes(entry.name)) result.missing_tools.push(entry.name);
 }
 
 /**

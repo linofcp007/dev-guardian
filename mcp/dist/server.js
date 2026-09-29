@@ -40938,7 +40938,7 @@ function dedupeFindings(findings) {
 // src/runners/git.ts
 init_execa();
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync7, mkdtempSync, readFileSync as readFileSync8, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync7, mkdtempSync, readdirSync as readdirSync4, readFileSync as readFileSync8, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { isAbsolute as isAbsolute2, join as join6 } from "node:path";
 var GIT_TIMEOUT_MS = 6e4;
@@ -40986,6 +40986,26 @@ async function shallowBoundary(cwd) {
   } catch {
     return ["(unknown)"];
   }
+}
+async function initialisedSubmodules(cwd) {
+  const r = await git(cwd, ["submodule", "status", "--", "."]);
+  if (r.exitCode !== 0) return [];
+  const out = [];
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const m = /^([ +U-])[0-9a-f]+ (.+?)(?: \([^)]*\))?$/.exec(line);
+    const state = m?.[1];
+    const path8 = m?.[2];
+    if (state === void 0 || path8 === void 0 || state === "-") continue;
+    try {
+      if (readdirSync4(join6(cwd, path8)).some((name) => name !== ".git")) out.push(path8.split("\\").join("/"));
+    } catch {
+    }
+  }
+  return out.sort();
+}
+function describeSubmodules(paths) {
+  const shown = paths.slice(0, 5).join(", ");
+  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}`;
 }
 async function resolveCommit(cwd, ref) {
   const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
@@ -41069,12 +41089,12 @@ function firstLine(text2) {
 }
 
 // src/runners/semgrepConfigs.ts
-import { existsSync as existsSync9, readdirSync as readdirSync5 } from "node:fs";
+import { existsSync as existsSync9, readdirSync as readdirSync6 } from "node:fs";
 import { join as join10 } from "node:path";
 
 // src/platform/customRules.ts
 var import_yaml2 = __toESM(require_dist2(), 1);
-import { readdirSync as readdirSync4, readFileSync as readFileSync9, statSync as statSync5 } from "node:fs";
+import { readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync5 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join7, relative as relative2, sep as sep2 } from "node:path";
 var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
 function customRulesMetaKey(projectPath) {
@@ -41151,7 +41171,7 @@ function yamlFilesUnder2(dir) {
     if (depth > 8) return;
     let names;
     try {
-      names = readdirSync4(d).sort();
+      names = readdirSync5(d).sort();
     } catch {
       return;
     }
@@ -42221,7 +42241,7 @@ function planSemgrepConfigs(projectPath, plugin, localOnly) {
 }
 function hasDotnetProject(projectPath) {
   try {
-    return readdirSync5(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
+    return readdirSync6(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
   } catch {
     return false;
   }
@@ -42808,7 +42828,7 @@ import { existsSync as existsSync10, readFileSync as readFileSync12 } from "node
 import { dirname as dirname7, join as join13, resolve as resolve6, sep as sep4 } from "node:path";
 
 // src/runners/projectFiles.ts
-import { readdirSync as readdirSync6 } from "node:fs";
+import { readdirSync as readdirSync7 } from "node:fs";
 import { join as join12 } from "node:path";
 
 // src/treeHash/computeTreeHash.ts
@@ -42909,7 +42929,7 @@ async function walk(root, dir, out) {
 var PROJECT_WALK_EXCLUDE = /* @__PURE__ */ new Set([...FS_EXCLUDE, "vendor"]);
 function readDir(dir) {
   try {
-    return readdirSync6(dir, { withFileTypes: true });
+    return readdirSync7(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -43912,7 +43932,7 @@ import { existsSync as existsSync12, lstatSync, realpathSync as realpathSync3 } 
 import { dirname as dirname8, isAbsolute as isAbsolute4, join as join17, relative as relative5, resolve as resolve7 } from "node:path";
 
 // src/platform/glob.ts
-import { readdirSync as readdirSync7, statSync as statSync6 } from "node:fs";
+import { readdirSync as readdirSync8, statSync as statSync6 } from "node:fs";
 import { join as join16, relative as relative4, sep as sep5 } from "node:path";
 function hasGlobMagic(pattern) {
   return /[*?{[]/.test(pattern);
@@ -43978,7 +43998,7 @@ function expandGlob(root, pattern) {
   const walk4 = (dir) => {
     let names;
     try {
-      names = readdirSync7(dir);
+      names = readdirSync8(dir);
     } catch {
       return;
     }
@@ -44542,7 +44562,7 @@ function filterFindings(items, min) {
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash9 } from "node:crypto";
-import { readFileSync as readFileSync14, readdirSync as readdirSync8, statSync as statSync7 } from "node:fs";
+import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
 import { join as join18, relative as relative6, sep as sep6 } from "node:path";
 function sha2563(text2) {
   return createHash9("sha256").update(text2).digest("hex");
@@ -44566,7 +44586,7 @@ function listFilesRecursive(dir) {
   const walk4 = (current) => {
     let entries2;
     try {
-      entries2 = readdirSync8(current, { withFileTypes: true });
+      entries2 = readdirSync9(current, { withFileTypes: true });
     } catch {
       return;
     }
@@ -44676,7 +44696,7 @@ function firstLine2(text2) {
 
 // src/runners/scannerParsers/trivy.ts
 var import_yaml4 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync13, readdirSync as readdirSync9, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync13, readdirSync as readdirSync10, readFileSync as readFileSync15 } from "node:fs";
 import { dirname as dirname9, join as join19 } from "node:path";
 var TRIVY_TOOL_NAME = "trivy";
 var trivyParser = {
@@ -45011,7 +45031,7 @@ function walkManifests(projectPath, opts) {
     const abs = rel2 === "" ? projectPath : join19(projectPath, ...rel2.split("/"));
     let entries2;
     try {
-      entries2 = readdirSync9(abs, { withFileTypes: true });
+      entries2 = readdirSync10(abs, { withFileTypes: true });
     } catch {
       if (rel2 === "") return null;
       unreadable.push(`${rel2}/`);
@@ -45895,12 +45915,12 @@ function failDomain(code, message3, retry_with) {
 }
 
 // src/tools/scanSast.ts
-import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync12, readFileSync as readFileSync18, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { basename as basename3, dirname as dirname12, join as join26, relative as relative8, resolve as resolve9, sep as sep7 } from "node:path";
 
 // src/deps/dotnetRestore.ts
-import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync10, unlinkSync } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync16, readdirSync as readdirSync11, unlinkSync } from "node:fs";
 import { basename, dirname as dirname10, extname, isAbsolute as isAbsolute5, join as join20, relative as relative7, resolve as resolve8 } from "node:path";
 var SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 var PROJECT_WALK_MAX_DEPTH = 8;
@@ -45908,7 +45928,7 @@ var PROJECT_EXTENSIONS = /* @__PURE__ */ new Set([".csproj", ".fsproj", ".vbproj
 function findDotnetTargets(projectPath) {
   let rootEntries;
   try {
-    rootEntries = readdirSync10(projectPath).sort();
+    rootEntries = readdirSync11(projectPath).sort();
   } catch {
     return [];
   }
@@ -45922,7 +45942,7 @@ function findProjectFiles(projectPath) {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
     let entries2;
     try {
-      entries2 = readdirSync10(dir, { withFileTypes: true }).sort((a2, b) => a2.name.localeCompare(b.name));
+      entries2 = readdirSync11(dir, { withFileTypes: true }).sort((a2, b) => a2.name.localeCompare(b.name));
     } catch {
       return;
     }
@@ -47286,6 +47306,7 @@ async function runSemgrep2(args) {
       loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing,
       oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
+      submodules: await initialisedSubmodules(ctx.projectPath),
       tools_run,
       missing_tools,
       parser_inputs
@@ -47342,6 +47363,7 @@ async function runSemgrep2(args) {
     packMissing: plan.packMissing,
     packsHostDir: plan.pluginPacksDir,
     oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
+    submodules: [],
     tools_run,
     missing_tools,
     parser_inputs
@@ -47388,12 +47410,14 @@ function judgeSemgrepRun(args) {
   const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
   const sizeNote = args.oversized.length > 0 ? describeOversized(args.oversized) : null;
+  const moduleNote = args.submodules.length > 0 ? describeSubmodules(args.submodules) : null;
+  const gapNotes = [sizeNote, moduleNote].filter((n2) => n2 !== null);
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
-    const all = [...reasons, ...sizeNote !== null ? [sizeNote] : []];
+    const all = [...reasons, ...gapNotes];
     if (all.length > 0) run.reason = all.join("; ");
     tools_run.push(withPluginPackFixpoint(run, packGap));
-    if (sizeNote !== null) missing_tools.push("semgrep");
+    if (gapNotes.length > 0) missing_tools.push("semgrep");
     return;
   }
   if (check2.verdict === "partial" && check2.partial !== void 0) {
@@ -47405,7 +47429,7 @@ function judgeSemgrepRun(args) {
           reason: [
             ...reasons,
             describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
-            ...sizeNote !== null ? [sizeNote] : []
+            ...gapNotes
           ].join("; "),
           partially_parsed: check2.partial
         },
@@ -47421,7 +47445,8 @@ function judgeSemgrepRun(args) {
       status: "skipped",
       reason: [
         ...reasons,
-        sizeNote !== null ? `semgrep scanned 0 files \u2014 ${sizeNote}` : "semgrep scanned 0 files \u2014 nothing here is a language its rules cover"
+        sizeNote !== null ? `semgrep scanned 0 files \u2014 ${sizeNote}` : "semgrep scanned 0 files \u2014 nothing here is a language its rules cover",
+        ...moduleNote !== null ? [moduleNote] : []
       ].join("; ")
     });
     missing_tools.push("semgrep");
@@ -47448,7 +47473,7 @@ function judgeSemgrepRun(args) {
         ...reasons,
         describeRulesNotLoaded(notLoaded, check2.scanned),
         ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : [],
-        ...sizeNote !== null ? [sizeNote] : []
+        ...gapNotes
       ].join("; "),
       failed_rules: notLoaded
     };
@@ -47726,7 +47751,7 @@ function onlyPluginPackRan(packFiles, failed) {
 }
 function listSarif(dir) {
   try {
-    return readdirSync11(dir).filter((n2) => n2.endsWith(".sarif"));
+    return readdirSync12(dir).filter((n2) => n2.endsWith(".sarif"));
   } catch {
     return [];
   }
@@ -47743,7 +47768,7 @@ ${result.stderr}`.split(/\r?\n/).map((l) => l.trim()).find((l) => /\berror\b/i.t
 }
 function hasRootDotnetSignal(projectPath) {
   try {
-    return readdirSync11(projectPath).some((n2) => /\.(csproj|fsproj|sln|slnx)$/i.test(n2));
+    return readdirSync12(projectPath).some((n2) => /\.(csproj|fsproj|sln|slnx)$/i.test(n2));
   } catch {
     return false;
   }
@@ -47751,7 +47776,7 @@ function hasRootDotnetSignal(projectPath) {
 function projectReferencesScs(projectPath) {
   let files;
   try {
-    files = readdirSync11(projectPath).filter((n2) => /\.(csproj|fsproj)$/i.test(n2) || n2 === "Directory.Build.props");
+    files = readdirSync12(projectPath).filter((n2) => /\.(csproj|fsproj)$/i.test(n2) || n2 === "Directory.Build.props");
   } catch {
     return false;
   }
@@ -47770,7 +47795,7 @@ import { tmpdir as tmpdir5 } from "node:os";
 import { basename as basename4, dirname as dirname13, join as join28, relative as relative9, resolve as resolve10 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
-import { chmodSync, closeSync, lstatSync as lstatSync3, mkdtempSync as mkdtempSync3, openSync, readdirSync as readdirSync12, rmSync as rmSync5 } from "node:fs";
+import { chmodSync, closeSync, lstatSync as lstatSync3, mkdtempSync as mkdtempSync3, openSync, readdirSync as readdirSync13, rmSync as rmSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { join as join27 } from "node:path";
 var REDACTED = "REDACTED";
@@ -47803,7 +47828,7 @@ function openPrivateReportDir() {
 function sweepStaleReportDirs(root = tmpdir4(), now = Date.now()) {
   let names;
   try {
-    names = readdirSync12(root);
+    names = readdirSync13(root);
   } catch {
     return 0;
   }
@@ -48173,6 +48198,7 @@ async function scan(opts, result) {
     case "has_commits":
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case "no_commits":
       result.tools_run.push({
@@ -48181,6 +48207,7 @@ async function scan(opts, result) {
         reason: "the repository has no commits yet \u2014 no history to scan"
       });
       await workingTreePass(opts, result, false);
+      await noteSubmodules(opts.projectPath, result);
       return;
     case "error":
       result.tools_run.push({
@@ -48194,6 +48221,15 @@ async function scan(opts, result) {
       await directoryPass(opts, result, GITLEAKS_HISTORY);
       return;
   }
+}
+async function noteSubmodules(projectPath, result) {
+  const submodules = await initialisedSubmodules(projectPath);
+  if (submodules.length === 0) return;
+  const note = describeSubmodules(submodules);
+  const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === "ok") ?? result.tools_run.find((t) => t.status === "ok") ?? result.tools_run[0];
+  if (entry === void 0) return;
+  entry.reason = entry.reason !== void 0 && entry.reason.length > 0 ? `${entry.reason}; ${note}` : note;
+  if (entry.status === "ok" && !result.missing_tools.includes(entry.name)) result.missing_tools.push(entry.name);
 }
 async function scopedScan(opts, result, scope) {
   const { history, files } = scope;
@@ -49408,7 +49444,7 @@ function packagesView(packages, findings, scanId) {
 }
 
 // src/tools/scanIac.ts
-import { readdirSync as readdirSync14, realpathSync as realpathSync4, statSync as statSync8, writeFileSync as writeFileSync8 } from "node:fs";
+import { readdirSync as readdirSync15, realpathSync as realpathSync4, statSync as statSync8, writeFileSync as writeFileSync8 } from "node:fs";
 import { isAbsolute as isAbsolute6, join as join31, relative as relative10, sep as sep8 } from "node:path";
 
 // src/runners/scannerParsers/actionlint.ts
@@ -49518,7 +49554,7 @@ function stripDotSlash(p) {
 }
 
 // src/runners/trivyConfig.ts
-import { closeSync as closeSync2, openSync as openSync2, readdirSync as readdirSync13, readSync } from "node:fs";
+import { closeSync as closeSync2, openSync as openSync2, readdirSync as readdirSync14, readSync } from "node:fs";
 import { join as join30 } from "node:path";
 var ANSI2 = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
 function logFields(text2) {
@@ -49609,7 +49645,7 @@ function iacLookingFiles(projectPath, exclusions) {
     const abs = rel2 === "" ? projectPath : join30(projectPath, ...rel2.split("/"));
     let entries2;
     try {
-      entries2 = readdirSync13(abs, { withFileTypes: true });
+      entries2 = readdirSync14(abs, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -49693,7 +49729,7 @@ function listWorkflowFiles(projectPath, exclusions) {
   if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
   try {
-    entries2 = readdirSync14(dir, { withFileTypes: true });
+    entries2 = readdirSync15(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -53035,7 +53071,7 @@ var tool3 = {
 registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
-import { existsSync as existsSync24, readdirSync as readdirSync15, readFileSync as readFileSync22, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync24, readdirSync as readdirSync16, readFileSync as readFileSync22, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join37, relative as relative13 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
@@ -53573,7 +53609,7 @@ function findRequirementsFiles(projectPath) {
   const out = [];
   let entries2 = [];
   try {
-    entries2 = readdirSync15(projectPath);
+    entries2 = readdirSync16(projectPath);
   } catch {
     return out;
   }
@@ -53583,7 +53619,7 @@ function findRequirementsFiles(projectPath) {
   const reqDir = join37(projectPath, "requirements");
   if (existsSync24(reqDir)) {
     try {
-      for (const name of readdirSync15(reqDir)) {
+      for (const name of readdirSync16(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) out.push(join37(reqDir, name));
       }
     } catch {
@@ -53734,7 +53770,7 @@ async function runDotnetSca(opts) {
 // src/tools/depsUpdatePlan.ts
 init_execa();
 var import_yaml7 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync25, readFileSync as readFileSync23, readdirSync as readdirSync16, statSync as statSync9 } from "node:fs";
+import { existsSync as existsSync25, readFileSync as readFileSync23, readdirSync as readdirSync17, statSync as statSync9 } from "node:fs";
 import { dirname as dirname15, join as join38, relative as relative14, sep as sep10 } from "node:path";
 
 // src/history/runNames.ts
@@ -55674,7 +55710,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   const collect = (dir, topLevel) => {
     let entries2;
     try {
-      entries2 = readdirSync16(dir);
+      entries2 = readdirSync17(dir);
     } catch {
       return;
     }
@@ -55684,7 +55720,7 @@ function listNodeModulesPackages(nodeModulesDir) {
       if (name.startsWith("@")) {
         let scoped = [];
         try {
-          scoped = readdirSync16(join38(dir, name));
+          scoped = readdirSync17(join38(dir, name));
         } catch {
           continue;
         }
@@ -55696,7 +55732,7 @@ function listNodeModulesPackages(nodeModulesDir) {
   };
   collect(nodeModulesDir, true);
   try {
-    for (const storeEntry of readdirSync16(join38(nodeModulesDir, ".pnpm"))) {
+    for (const storeEntry of readdirSync17(join38(nodeModulesDir, ".pnpm"))) {
       collect(join38(nodeModulesDir, ".pnpm", storeEntry, "node_modules"), false);
     }
   } catch {
@@ -55812,7 +55848,7 @@ function findPipRequirementsFiles(projectPath) {
   };
   let rootEntries = [];
   try {
-    rootEntries = readdirSync16(projectPath);
+    rootEntries = readdirSync17(projectPath);
   } catch {
     return out;
   }
@@ -55822,7 +55858,7 @@ function findPipRequirementsFiles(projectPath) {
   const reqDir = join38(projectPath, "requirements");
   if (existsSync25(reqDir)) {
     try {
-      for (const name of readdirSync16(reqDir)) {
+      for (const name of readdirSync17(reqDir)) {
         if (name.toLowerCase().endsWith(".txt")) tryRead(join38("requirements", name));
       }
     } catch {
@@ -56268,7 +56304,7 @@ function failDomain2(code, message3) {
 }
 
 // src/tools/complianceCheck.ts
-import { existsSync as existsSync26, readdirSync as readdirSync17, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync18, statSync as statSync10 } from "node:fs";
 import { join as join39 } from "node:path";
 function rgpdRulesPath() {
   return join39(resolveConfigsDir(), "semgrep", "rgpd.yml");
@@ -56409,7 +56445,7 @@ function walk2(root, dir, depth, maxDepth, out) {
   if (depth > maxDepth) return;
   let entries2;
   try {
-    entries2 = readdirSync17(dir);
+    entries2 = readdirSync18(dir);
   } catch {
     return;
   }
@@ -56714,11 +56750,11 @@ function failDomain3(code, message3) {
 }
 
 // src/tools/detectStack.ts
-import { existsSync as existsSync29, readdirSync as readdirSync19 } from "node:fs";
+import { existsSync as existsSync29, readdirSync as readdirSync20 } from "node:fs";
 import { join as join42 } from "node:path";
 
 // src/runners/stackDetect.ts
-import { existsSync as existsSync28, readFileSync as readFileSync25, readdirSync as readdirSync18 } from "node:fs";
+import { existsSync as existsSync28, readFileSync as readFileSync25, readdirSync as readdirSync19 } from "node:fs";
 import { join as join41 } from "node:path";
 var MAX_MANIFEST_DEPTH = 3;
 var MAX_DIRS_VISITED = 2e4;
@@ -56853,7 +56889,7 @@ function walkManifestDirs(root) {
 }
 function readDirSafe(dir) {
   try {
-    return readdirSync18(dir, { withFileTypes: true });
+    return readdirSync19(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -57067,7 +57103,7 @@ function enrichDotnet(snap, projectPath) {
     try {
       const target = rel2 === "" ? projectPath : join42(projectPath, rel2);
       if (!existsSync29(target)) return false;
-      return readdirSync19(target).some((name) => name.endsWith(suffix));
+      return readdirSync20(target).some((name) => name.endsWith(suffix));
     } catch {
       return false;
     }
@@ -57108,7 +57144,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
     if (depth > maxDepth) return false;
     let entries2;
     try {
-      entries2 = readdirSync19(dir);
+      entries2 = readdirSync20(dir);
     } catch {
       return false;
     }
@@ -57117,7 +57153,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
       const abs = join42(dir, name);
       if (name.endsWith(suffix)) return true;
       try {
-        if (readdirSync19(abs).length >= 0 && walk4(abs, depth + 1)) return true;
+        if (readdirSync20(abs).length >= 0 && walk4(abs, depth + 1)) return true;
       } catch {
       }
     }
@@ -57589,7 +57625,7 @@ function failDomain5(code, message3) {
 }
 
 // src/tools/observabilitySetup.ts
-import { existsSync as existsSync32, mkdirSync as mkdirSync8, readdirSync as readdirSync20, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync8, readdirSync as readdirSync21, writeFileSync as writeFileSync11 } from "node:fs";
 import { dirname as dirname17, join as join45 } from "node:path";
 var tool8 = {
   name: "observability_setup",
@@ -57672,7 +57708,7 @@ function inferStack(projectPath, ctx) {
     return "java";
   if (existsSync32(join45(projectPath, "Gemfile"))) return "ruby";
   try {
-    const entries2 = readdirSync20(projectPath);
+    const entries2 = readdirSync21(projectPath);
     if (entries2.some((n2) => n2.endsWith(".csproj") || n2.endsWith(".sln") || n2 === "global.json"))
       return "dotnet";
   } catch {
@@ -61208,7 +61244,7 @@ async function runCheckToolchain(ctx) {
 }
 
 // src/tools/licenseCompatibility.ts
-import { existsSync as existsSync34, readFileSync as readFileSync28, readdirSync as readdirSync21 } from "node:fs";
+import { existsSync as existsSync34, readFileSync as readFileSync28, readdirSync as readdirSync22 } from "node:fs";
 import { join as join48 } from "node:path";
 var tool16 = {
   name: "license_compatibility",
@@ -61558,7 +61594,7 @@ function normaliseLicense(s) {
 }
 function findFirstCsproj(projectPath) {
   try {
-    const name = readdirSync21(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
+    const name = readdirSync22(projectPath).filter((n2) => n2.toLowerCase().endsWith(".csproj")).sort()[0];
     return name ? join48(projectPath, name) : null;
   } catch {
     return null;
@@ -66780,7 +66816,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync46, readFileSync as readFileSync32, readdirSync as readdirSync22, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync32, readdirSync as readdirSync23, statSync as statSync14 } from "node:fs";
 import { join as join60, relative as relative16 } from "node:path";
 var PATTERNS = [
   {
@@ -66954,7 +66990,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync22(dir);
+      entries2 = readdirSync23(dir);
     } catch {
       return;
     }
@@ -66980,7 +67016,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { readFileSync as readFileSync33, readdirSync as readdirSync23, statSync as statSync15 } from "node:fs";
+import { readFileSync as readFileSync33, readdirSync as readdirSync24, statSync as statSync15 } from "node:fs";
 import { join as join61, relative as relative17 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -67097,7 +67133,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     let entries2;
     try {
-      entries2 = readdirSync23(dir);
+      entries2 = readdirSync24(dir);
     } catch {
       return;
     }
@@ -67121,7 +67157,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync47, readFileSync as readFileSync34, readdirSync as readdirSync24, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync47, readFileSync as readFileSync34, readdirSync as readdirSync25, statSync as statSync16 } from "node:fs";
 import { join as join62, relative as relative18 } from "node:path";
 var RULES = [
   {
@@ -67180,7 +67216,7 @@ async function handler35(input, ctx) {
   for (const dir of migrationDirs) {
     let files;
     try {
-      files = readdirSync24(dir).filter((n2) => n2.endsWith(".cs"));
+      files = readdirSync25(dir).filter((n2) => n2.endsWith(".cs"));
     } catch {
       continue;
     }
@@ -67257,7 +67293,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     let entries2;
     try {
-      entries2 = readdirSync24(dir);
+      entries2 = readdirSync25(dir);
     } catch {
       return;
     }
@@ -68993,7 +69029,7 @@ import {
   lstatSync as lstatSync6,
   mkdtempSync as mkdtempSync5,
   readFileSync as readFileSync37,
-  readdirSync as readdirSync25,
+  readdirSync as readdirSync26,
   readlinkSync,
   realpathSync as realpathSync6,
   rmSync as rmSync8,
@@ -69288,7 +69324,7 @@ function collectDir(root) {
     if (dir === void 0) break;
     let entries2;
     try {
-      entries2 = readdirSync25(dir);
+      entries2 = readdirSync26(dir);
     } catch {
       continue;
     }
@@ -70415,7 +70451,7 @@ function judgeSurfaceReport(args) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync39, readdirSync as readdirSync26, statSync as statSync20 } from "node:fs";
+import { readFileSync as readFileSync39, readdirSync as readdirSync27, statSync as statSync20 } from "node:fs";
 import { join as join69, relative as relative20, resolve as resolve14, sep as sep11 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -70467,7 +70503,7 @@ function readCandidates(paths) {
 function walk3(root, dir) {
   let entries2;
   try {
-    entries2 = readdirSync26(dir, { withFileTypes: true });
+    entries2 = readdirSync27(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -82466,7 +82502,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { lstatSync as lstatSync9, readdirSync as readdirSync27 } from "node:fs";
+import { lstatSync as lstatSync9, readdirSync as readdirSync28 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { dirname as dirname21, isAbsolute as isAbsolute17, join as join83, parse as parse6, relative as relative25, resolve as resolve21 } from "node:path";
 var PUBLIC_HOSTS = {
@@ -82529,7 +82565,7 @@ function listDir(dir, ctx) {
     return [];
   }
   try {
-    return readdirSync27(dir);
+    return readdirSync28(dir);
   } catch (e) {
     const code = e.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") noteUnread(dir, "directory");
@@ -82732,7 +82768,7 @@ function findManifest(root, file, match, ctx) {
     if (next.depth >= MAX_SCAN_DEPTH) continue;
     let entries2 = [];
     try {
-      entries2 = readdirSync27(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
+      entries2 = readdirSync28(next.dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS6.has(e.name)).map((e) => e.name);
     } catch {
       continue;
     }

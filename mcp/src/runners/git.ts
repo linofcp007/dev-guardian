@@ -24,7 +24,7 @@
 
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -104,6 +104,37 @@ export async function shallowBoundary(cwd: string): Promise<string[] | null> {
   } catch {
     return ['(unknown)'];
   }
+}
+
+/**
+ * The submodules under `cwd` that are initialised and hold content —
+ * `git submodule status` (which reads `.gitmodules`) minus the ones marked
+ * `-` (not initialised), and minus an empty checkout — as `/`-separated
+ * paths relative to `cwd`, sorted. Their files are in no listing a scanner
+ * of the superproject uses (review M2). Empty outside a repository.
+ */
+export async function initialisedSubmodules(cwd: string): Promise<string[]> {
+  const r = await git(cwd, ['submodule', 'status', '--', '.']);
+  if (r.exitCode !== 0) return [];
+  const out: string[] = [];
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const m = /^([ +U-])[0-9a-f]+ (.+?)(?: \([^)]*\))?$/.exec(line);
+    const state = m?.[1];
+    const path = m?.[2];
+    if (state === undefined || path === undefined || state === '-') continue;
+    try {
+      if (readdirSync(join(cwd, path)).some((name) => name !== '.git')) out.push(path.split('\\').join('/'));
+    } catch {
+      // Not there on disk: nothing a scan could have read.
+    }
+  }
+  return out.sort();
+}
+
+/** `submodule contents not scanned: a, b` — the first few, then "and N more". */
+export function describeSubmodules(paths: readonly string[]): string {
+  const shown = paths.slice(0, 5).join(', ');
+  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ''}`;
 }
 
 /** The full commit id `ref` names, or null when it names no commit. */

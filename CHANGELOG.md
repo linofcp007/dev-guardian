@@ -96,6 +96,12 @@ version bump.
   files the scanners read (the same listing and ignores as the project-languages check, `.guardianignore`
   included) and names those over the limit — `ok`, `semgrep` missing, coverage partial — and, when nothing else
   was scanned, gives the size limit as the reason. Scoped scans too.
+- Git submodules are named, not silently skipped. Semgrep lists its targets with git, which holds a submodule as
+  one gitlink, and gitleaks reads the superproject's commits and uncommitted files, so an initialised submodule's
+  files (a `vendor/lib` with an `eval` and a committed AWS key, measured) were never scanned while `scan_sast` and
+  `scan_secrets` read coverage full. An initialised submodule with content is now a named gap — "submodule
+  contents not scanned: vendor/lib", the pass `ok` and listed missing, coverage partial — and still not scanned
+  (scan it as its own project). `scan_sast`'s Docker fallback, which walks its mount, is left out.
 
 ## [3.0.0] - 2026-09-29
 
