@@ -22,6 +22,19 @@ afterAll(cleanupTempDirs);
 vi.mock('../../src/runners/shellRunner.js', () => ({
   runShellScript: vi.fn(),
 }));
+// init_project replaces initial-scan.sh's "Secrets:" line with a REAL gitleaks
+// run (history + working tree) whenever gitleaks is on PATH — seconds per call,
+// 44 s for this file and timeouts under load (review 3.0, R7-I3), for a line
+// none of these tests reads. They are about config provenance, not secrets:
+// here gitleaks is "not installed", the path opsTools.test.ts pins ("leaves the
+// shell summary untouched when gitleaks is not installed").
+vi.mock('../../src/tools/scanHelpers.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/tools/scanHelpers.js')>('../../src/tools/scanHelpers.js');
+  return {
+    ...actual,
+    scannerAvailable: vi.fn(async (name: string) => (name === 'gitleaks' ? null : actual.scannerAvailable(name))),
+  };
+});
 
 import type { PluginContext } from '../../src/context.js';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../../src/configdrift/manifest.js';
