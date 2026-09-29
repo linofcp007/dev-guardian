@@ -47,8 +47,8 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { gitTracksDatabase } from './dbTrust.js';
-import { runMigrations } from './migrations/runner.js';
-import { missingIndexSql, missingObjects, readSchema, untrustedObjects, } from './schemaCheck.js';
+import { listMigrations, runMigrations } from './migrations/runner.js';
+import { missingIndexSql, missingObjects, readSchema, recordsNewerMigrations, untrustedObjects, } from './schemaCheck.js';
 let sqliteModule;
 function loadSqlite() {
     sqliteModule ??= createRequire(import.meta.url)('node:sqlite');
@@ -285,13 +285,26 @@ function recreateMissingIndexes(db) {
  * write to the very tables a trigger would sit on.
  */
 function assertTrustedSchema(db, dbPath) {
-    const found = untrustedObjects(db, expectedSchema());
+    // A later build migrated it (a downgrade): what its additive migrations can
+    // create, and cannot hide a row with, is accepted (`schemaCheck.ts`).
+    const newerBuild = recordsNewerMigrations(db, latestMigration());
+    const found = untrustedObjects(db, expectedSchema(), { newerBuild });
     if (found.length === 0)
         return;
     const shown = found.slice(0, 5).join('; ') + (found.length > 5 ? `; and ${found.length - 5} more` : '');
     throw new GuardianDbError('untrusted', dbPath, `'${dbPath}' holds schema objects dev-guardian's migrations never create (${shown}). ` +
         'SQL stored in a database runs on every write the server makes — a trigger, or a constraint an ' +
-        'INSERT OR IGNORE obeys, can hide findings from every reader — so it is not used');
+        'INSERT OR IGNORE obeys, can hide findings from every reader — so it is not used' +
+        (newerBuild
+            ? '. It records migrations from a newer dev-guardian than this one: an object of that kind is refused ' +
+                'from any build, and the newer dev-guardian reads this database'
+            : ''));
+}
+let latestKnownMigration;
+/** The highest migration number this build ships. */
+function latestMigration() {
+    latestKnownMigration ??= Math.max(0, ...listMigrations().map((m) => m.version));
+    return latestKnownMigration;
 }
 /**
  * Pragmas, the trust check, migrations and the completeness check: what makes

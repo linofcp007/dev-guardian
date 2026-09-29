@@ -230,6 +230,105 @@ describe('a database holding objects the migrations never create', () => {
   });
 });
 
+describe('a database a newer build migrated (downgrade)', () => {
+  // 3.0.0 served a database a later build had migrated (the review measured
+  // 2.0.0 serving a v14 one), and a downgrade must keep doing so — without
+  // reopening the hiding attack. A later build's migrations can only ADD:
+  // tables, columns, indexes. What cannot hide a row is accepted; what can
+  // (a trigger, a view, a UNIQUE index or constraint on a table this build
+  // writes, a CHECK, a NOT NULL a default does not satisfy) is refused
+  // whatever schema_migrations says.
+  function futureDatabase(extra = ''): { dir: string; primary: string } {
+    const dir = project();
+    const primary = existingDatabase(dir);
+    tamper(
+      primary,
+      `INSERT INTO schema_migrations (version, name, applied_at) VALUES (999, 'from_the_future', '2027-01-01T00:00:00.000Z');
+       UPDATE schema_meta SET value = '999' WHERE key = 'version';
+       CREATE TABLE future_things (id INTEGER PRIMARY KEY, label TEXT NOT NULL, UNIQUE (label));
+       CREATE UNIQUE INDEX idx_future_things_label ON future_things(label);
+       ALTER TABLE findings ADD COLUMN future_note TEXT;
+       ALTER TABLE findings ADD COLUMN future_flag INTEGER NOT NULL DEFAULT 0;
+       CREATE INDEX idx_findings_future_note ON findings(future_note);
+       ${extra}`,
+    );
+    return { dir, primary };
+  }
+
+  it('is accepted: an unknown table, extra columns and a non-unique index — and findings read back', () => {
+    const { dir, primary } = futureDatabase();
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.warning).toBeUndefined();
+      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it.each([
+    ['a UNIQUE index on findings', 'CREATE UNIQUE INDEX idx_findings_one_per_scan ON findings(scan_id);', /index idx_findings_one_per_scan: a UNIQUE index on findings/],
+    ['a trigger', HIDE_FINDINGS, /trigger hide_findings/],
+    ['a view', 'CREATE VIEW recent AS SELECT * FROM findings;', /view recent/],
+  ])('is refused with %s, whatever schema_migrations says', (_what, sql, expected) => {
+    const { dir } = futureDatabase(sql);
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(resolveFallbackDbPath(dir));
+      expect(opened.warning).toMatch(expected);
+      expect(opened.warning).toMatch(/newer dev-guardian/);
+      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  // A table constraint goes after the columns; a column before them (a fresh
+  // CREATE TABLE accepts no column after a table constraint).
+  it.each([
+    ['a UNIQUE table constraint', { constraint: 'UNIQUE (scan_id)' }, /table findings: unique\(scan_id\)/],
+    ['a CHECK constraint', { constraint: "CHECK (severity <> 'critical')" }, /table findings: check\(severity <> 'critical'\)/],
+    ['a column NOT NULL with no default (INSERT OR IGNORE skips every row)', { column: 'gate TEXT NOT NULL' }, /table findings: gate text not null/],
+    ['a column NOT NULL DEFAULT NULL', { column: 'gate TEXT NOT NULL DEFAULT NULL' }, /table findings: gate text not null default null/],
+    ['a UNIQUE column', { column: 'token TEXT UNIQUE' }, /table findings: token text unique/],
+    ['a changed known column', {}, /table findings: severity text not null check/],
+  ])('is refused with %s on a known table', (what, add: { constraint?: string; column?: string }, expected) => {
+    const { dir, primary } = futureDatabase();
+    const raw = new DatabaseSync(primary);
+    const row = raw.prepare(`SELECT sql FROM sqlite_master WHERE name = 'findings'`).get() as { sql: string };
+    let hostile = row.sql;
+    if (add.constraint !== undefined) hostile = hostile.replace(/\)\s*$/, `, ${add.constraint})`);
+    if (add.column !== undefined) hostile = hostile.replace('(', `(${add.column}, `);
+    if (what === 'a changed known column') {
+      hostile = hostile.replace(/severity\s+TEXT NOT NULL/, "severity TEXT NOT NULL CHECK (severity <> 'critical')");
+    }
+    raw.exec(`DROP TABLE findings; ${hostile};`);
+    raw.close();
+
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(resolveFallbackDbPath(dir));
+      expect(opened.warning).toMatch(expected);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it('without a newer schema_migrations entry, an unknown table is still refused', () => {
+    const dir = project();
+    const primary = existingDatabase(dir);
+    tamper(primary, 'CREATE TABLE future_things (id INTEGER PRIMARY KEY);');
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(resolveFallbackDbPath(dir));
+      expect(opened.warning).toContain('table future_things');
+    } finally {
+      opened.db.close();
+    }
+  });
+});
+
 function ensureParent(path: string): string {
   mkdirSync(dirname(path), { recursive: true });
   return path;
@@ -278,11 +377,23 @@ describe('a database git tracks', () => {
 describe('when git cannot answer', () => {
   const NO_GIT = { git: join(tmpdir(), 'no-such-git-binary-for-dev-guardian') };
 
-  it('outside any repository: untracked, since nothing can be tracked', () => {
+  it('outside any repository: untracked, since nothing can be tracked — and nothing to warn about', () => {
     const dir = project();
     const verdict = gitTracksDatabase(dir, NO_GIT);
     expect(verdict.state).toBe('untracked');
     expect(verdict.inferred).toBe(true);
+
+    // A machine with no git and a project with no .git: there is nothing to
+    // ask, so no warning on every start.
+    const primary = existingDatabase(dir);
+    vi.stubEnv('PATH', '');
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.warning).toBeUndefined();
+    } finally {
+      opened.db.close();
+    }
   });
 
   it('reads the index: a database it lists is tracked', () => {

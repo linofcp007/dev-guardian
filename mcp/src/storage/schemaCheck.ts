@@ -45,10 +45,8 @@
  * table's definition, checked above).
  *
  * A database a NEWER build has migrated holds objects this build's reference
- * does not, and is refused like any other: the two cannot be told apart from
- * inside the file (an attacker writes `schema_migrations` as easily as a
- * trigger). The refusal says so, and the database falls back to the
- * per-user location.
+ * does not; what a later additive migration can create without being able to
+ * hide a row is accepted — see {@link untrustedObjects}.
  */
 
 import type { DB } from './db.js';
@@ -110,18 +108,67 @@ function isSqliteInternal(row: MasterRow): boolean {
   return row.type === 'index' && row.sql === null && row.name.startsWith('sqlite_autoindex_');
 }
 
+export interface TrustOptions {
+  /**
+   * The database records migrations this build does not ship
+   * ({@link recordsNewerMigrations}): a later build migrated it. What a later
+   * ADDITIVE migration can create, and cannot hide a row with, is then
+   * accepted — see {@link untrustedObjects}.
+   */
+  newerBuild?: boolean;
+}
+
 /**
  * Every object in `db` the migrations did not create, one short phrase each
  * (`trigger findings_hide`, `table findings: check(severity<>'critical')`) —
  * empty when there is none. Reads sqlite_master only; runs nothing the file
  * defines.
+ *
+ * ---- A database a newer build migrated (a downgrade) --------------------
+ *
+ * 3.0.0 served a database a later build had migrated, and a downgrade must
+ * keep doing so. With `newerBuild`, what a later additive migration can
+ * create and no row can be hidden by is accepted:
+ *   - a table of another name (this build never writes to it, and a table
+ *     cannot act on another one without a trigger);
+ *   - an extra column on a known table, when every insert this build makes
+ *     still succeeds with it — no CHECK, UNIQUE, PRIMARY KEY, REFERENCES or
+ *     GENERATED, and a NOT NULL only beside a non-NULL DEFAULT. `INSERT OR
+ *     IGNORE` silently skips a row that violates NOT NULL, CHECK or UNIQUE,
+ *     so a column like `gate TEXT NOT NULL` hides every finding;
+ *   - an index of another name that is not UNIQUE; a UNIQUE one only on a
+ *     table this build does not know (it is that table's own business, like
+ *     the UNIQUE constraints its CREATE TABLE may declare).
+ * Whatever schema_migrations says, still refused: every trigger and every
+ * view (no migration creates either — `migrations/runner.ts`, held by a
+ * test); a UNIQUE index, or any change of definition, on a table this build
+ * writes to — a UNIQUE index on `findings` makes `INSERT OR IGNORE` drop
+ * rows, the same hiding the trigger did; and a CHECK, UNIQUE or other
+ * constraint added to a known table. So a future migration that adds a
+ * UNIQUE index or constraint to an existing table costs an older build a
+ * fallback, with a warning that says why — the migrations' own rules say so.
+ *
+ * `newerBuild` comes from the file itself, so an attacker can claim it — and
+ * gains only what is accepted above, none of which can hide a row.
  */
-export function untrustedObjects(db: DB, reference: SchemaSnapshot): string[] {
+export function untrustedObjects(db: DB, reference: SchemaSnapshot, opts: TrustOptions = {}): string[] {
+  const newer = opts.newerBuild === true;
   const out: string[] = [];
   for (const row of masterRows(db)) {
     if (isSqliteInternal(row)) continue;
+    // Never created by a migration: refused whatever the reference holds.
+    if (row.type === 'trigger' || row.type === 'view') {
+      out.push(`${row.type} ${row.name}`);
+      continue;
+    }
     const expected = reference.objects.get(row.name);
-    if (expected === undefined || expected !== row.type) {
+    if (expected === undefined) {
+      const why = newer ? unknownObjectProblem(row, reference) : null;
+      if (!newer) out.push(`${row.type} ${row.name}`);
+      else if (why !== null) out.push(`${row.type} ${row.name}: ${why}`);
+      continue;
+    }
+    if (expected !== row.type) {
       out.push(`${row.type} ${row.name}`);
       continue;
     }
@@ -134,8 +181,11 @@ export function untrustedObjects(db: DB, reference: SchemaSnapshot): string[] {
         continue;
       }
       const allowedParts = new Set(allowed.parts);
+      const knownColumns = reference.columns.get(row.name) ?? new Set<string>();
       for (const part of actual.parts) {
-        if (!allowedParts.has(part)) out.push(`table ${row.name}: ${shorten(part)}`);
+        if (allowedParts.has(part)) continue;
+        if (newer && harmlessNewColumn(part, knownColumns)) continue;
+        out.push(`table ${row.name}: ${shorten(part)}`);
       }
     } else if (row.type === 'index') {
       if (normaliseSql(row.sql ?? '') !== normaliseSql(referenceSql ?? '')) {
@@ -144,6 +194,61 @@ export function untrustedObjects(db: DB, reference: SchemaSnapshot): string[] {
     }
   }
   return out.sort();
+}
+
+/**
+ * Why an object of a name the reference does not know, in a database a newer
+ * build migrated, can hide a row — or null when it cannot (see
+ * {@link untrustedObjects}).
+ */
+function unknownObjectProblem(row: MasterRow, reference: SchemaSnapshot): string | null {
+  if (row.type === 'table') return null;
+  if (row.type !== 'index') return 'not something a migration creates';
+  const unique = /^create\s+unique\s+index\b/.test(normaliseSql(row.sql ?? ''));
+  if (!unique) return null;
+  return reference.objects.get(row.tbl_name) === 'table' ? `a UNIQUE index on ${row.tbl_name}` : null;
+}
+
+const TABLE_CONSTRAINT = /^(?:constraint|primary\s+key|unique|check|foreign\s+key)\b/;
+const COLUMN_CONSTRAINT = /\b(?:primary\s+key|unique|check|references|generated)\b|\bas\s*\(/;
+
+/**
+ * Whether `part` (normalised) is a column a later build's `ALTER TABLE … ADD
+ * COLUMN` could add, that no insert this build makes can violate: a name the
+ * reference does not have, and none of the constraints `INSERT OR IGNORE`
+ * would skip a row over.
+ */
+function harmlessNewColumn(part: string, knownColumns: ReadonlySet<string>): boolean {
+  if (TABLE_CONSTRAINT.test(part)) return false;
+  const name = /^(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([^\s(]+))/.exec(part);
+  const column = name?.[1] ?? name?.[2] ?? name?.[3] ?? name?.[4];
+  if (column === undefined) return false;
+  const known = [...knownColumns].some((c) => c.toLowerCase() === column.toLowerCase());
+  if (known) return false;
+  if (COLUMN_CONSTRAINT.test(part)) return false;
+  if (/\bnot\s+null\b/.test(part) && !/\bdefault\s+(?!null\b)\S/.test(part)) return false;
+  return true;
+}
+
+/**
+ * Whether `db` records a migration newer than `latestKnown` — in
+ * `schema_migrations`, or as `schema_meta.version` — so a later build
+ * migrated it. Reads each only when it is a real table, never through a view.
+ */
+export function recordsNewerMigrations(db: DB, latestKnown: number): boolean {
+  const isTable = (name: string): boolean =>
+    db.prepare<[string], { type: string }>('SELECT type FROM sqlite_master WHERE name = ?').get(name)?.type === 'table';
+  const numbers: number[] = [];
+  if (isTable('schema_migrations')) {
+    const max = db.prepare<[], { v: number | null }>('SELECT MAX(version) AS v FROM schema_migrations').get()?.v;
+    if (typeof max === 'number') numbers.push(max);
+  }
+  if (isTable('schema_meta')) {
+    const raw = db.prepare<[], { value: string }>("SELECT value FROM schema_meta WHERE key = 'version'").get()?.value;
+    const n = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(n)) numbers.push(n);
+  }
+  return numbers.some((n) => n > latestKnown);
 }
 
 /**

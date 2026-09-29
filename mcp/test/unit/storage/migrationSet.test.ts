@@ -201,6 +201,21 @@ describe('statement by statement', () => {
     }
   });
 
+  it('no migration creates a trigger or a view — the open refuses every one, whatever schema_migrations says', () => {
+    for (const m of listMigrations()) {
+      const sql = readFileSync(m.filePath, 'utf8');
+      // The splitter refuses a trigger outright; a view it would split fine.
+      for (const statement of splitStatements(sql, m.filePath)) {
+        expect(statement, m.filePath).not.toMatch(/^CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?(?:TRIGGER|VIEW)\b/i);
+      }
+    }
+    const built = new Database(':memory:');
+    runMigrations(built);
+    expect(
+      built.prepare(`SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')`).all(),
+    ).toEqual([]);
+  });
+
   it('splits on semicolons outside comments, strings and quoted identifiers only', () => {
     const sql = [
       "-- a comment; with a semicolon and an apostrophe's",

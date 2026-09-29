@@ -62,6 +62,17 @@
  *   - Each file is additive (new tables, new nullable/defaulted columns,
  *     backfills) so a database written by an older build keeps working, and
  *     so does an older build still sharing the file with a newer one.
+ *   - Never a trigger or a view: a database holding either is refused at open
+ *     whatever it records (`../schemaCheck.ts` — SQL stored in a committed
+ *     database hid every finding), and a test holds every file to it.
+ *   - An older build opens a database a newer one migrated only when the
+ *     newer objects cannot hide a row: new tables, new non-UNIQUE indexes,
+ *     and new columns an insert that does not name them always satisfies
+ *     (nullable, or NOT NULL with a non-NULL DEFAULT; no CHECK, UNIQUE,
+ *     REFERENCES or GENERATED). A UNIQUE index, or any such constraint, added
+ *     to an EXISTING table makes every older build refuse the database and
+ *     fall back to its per-user copy, with a warning that says why — add one
+ *     only when that downgrade cost is worth it.
  *
  * ---- Concurrency -----------------------------------------------------------
  *

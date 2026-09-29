@@ -34,7 +34,13 @@ version bump.
 - A database whose schema holds anything the migrations never create — a trigger, a view, an unknown
   table or index, a known index redefined, or a CHECK / UNIQUE constraint added to a known table
   (every insert is `INSERT OR IGNORE`, which obeys them silently) — is refused too, before the
-  migrations write to it.
+  migrations write to it. A database a NEWER build migrated (it records migrations this build does
+  not ship) still opens after a downgrade, as it did with 3.0.0: what a later additive migration
+  can create without hiding a row — new tables, new non-UNIQUE indexes, new columns every insert
+  satisfies — is accepted. A trigger or a view (no migration creates either; a test holds every
+  migration to it), a UNIQUE index or constraint on a table this build writes, and any changed
+  definition are refused whatever the file records; a future migration that adds one costs an older
+  build a fallback, with a warning naming it.
 - A refused database gives way to the per-user fallback, and the warning naming why reaches
   `health_status.storage_warning` and every scan's `warnings`. The CLI's `status` / `dashboard`
   decide the same way, print the warning on stderr, and still create no database.

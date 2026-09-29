@@ -39228,12 +39228,23 @@ function isSqliteInternal(row) {
   if (row.type === "table" && (row.name === "sqlite_sequence" || /^sqlite_stat[1-4]$/.test(row.name))) return true;
   return row.type === "index" && row.sql === null && row.name.startsWith("sqlite_autoindex_");
 }
-function untrustedObjects(db, reference) {
+function untrustedObjects(db, reference, opts = {}) {
+  const newer = opts.newerBuild === true;
   const out = [];
   for (const row of masterRows(db)) {
     if (isSqliteInternal(row)) continue;
+    if (row.type === "trigger" || row.type === "view") {
+      out.push(`${row.type} ${row.name}`);
+      continue;
+    }
     const expected = reference.objects.get(row.name);
-    if (expected === void 0 || expected !== row.type) {
+    if (expected === void 0) {
+      const why = newer ? unknownObjectProblem(row, reference) : null;
+      if (!newer) out.push(`${row.type} ${row.name}`);
+      else if (why !== null) out.push(`${row.type} ${row.name}: ${why}`);
+      continue;
+    }
+    if (expected !== row.type) {
       out.push(`${row.type} ${row.name}`);
       continue;
     }
@@ -39246,8 +39257,11 @@ function untrustedObjects(db, reference) {
         continue;
       }
       const allowedParts = new Set(allowed.parts);
+      const knownColumns = reference.columns.get(row.name) ?? /* @__PURE__ */ new Set();
       for (const part of actual.parts) {
-        if (!allowedParts.has(part)) out.push(`table ${row.name}: ${shorten(part)}`);
+        if (allowedParts.has(part)) continue;
+        if (newer && harmlessNewColumn(part, knownColumns)) continue;
+        out.push(`table ${row.name}: ${shorten(part)}`);
       }
     } else if (row.type === "index") {
       if (normaliseSql(row.sql ?? "") !== normaliseSql(referenceSql ?? "")) {
@@ -39256,6 +39270,40 @@ function untrustedObjects(db, reference) {
     }
   }
   return out.sort();
+}
+function unknownObjectProblem(row, reference) {
+  if (row.type === "table") return null;
+  if (row.type !== "index") return "not something a migration creates";
+  const unique4 = /^create\s+unique\s+index\b/.test(normaliseSql(row.sql ?? ""));
+  if (!unique4) return null;
+  return reference.objects.get(row.tbl_name) === "table" ? `a UNIQUE index on ${row.tbl_name}` : null;
+}
+var TABLE_CONSTRAINT = /^(?:constraint|primary\s+key|unique|check|foreign\s+key)\b/;
+var COLUMN_CONSTRAINT = /\b(?:primary\s+key|unique|check|references|generated)\b|\bas\s*\(/;
+function harmlessNewColumn(part, knownColumns) {
+  if (TABLE_CONSTRAINT.test(part)) return false;
+  const name = /^(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([^\s(]+))/.exec(part);
+  const column = name?.[1] ?? name?.[2] ?? name?.[3] ?? name?.[4];
+  if (column === void 0) return false;
+  const known = [...knownColumns].some((c3) => c3.toLowerCase() === column.toLowerCase());
+  if (known) return false;
+  if (COLUMN_CONSTRAINT.test(part)) return false;
+  if (/\bnot\s+null\b/.test(part) && !/\bdefault\s+(?!null\b)\S/.test(part)) return false;
+  return true;
+}
+function recordsNewerMigrations(db, latestKnown) {
+  const isTable = (name) => db.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name)?.type === "table";
+  const numbers = [];
+  if (isTable("schema_migrations")) {
+    const max = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()?.v;
+    if (typeof max === "number") numbers.push(max);
+  }
+  if (isTable("schema_meta")) {
+    const raw = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get()?.value;
+    const n2 = raw === void 0 ? Number.NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(n2)) numbers.push(n2);
+  }
+  return numbers.some((n2) => n2 > latestKnown);
 }
 function missingObjects(db, reference) {
   const actual = readSchema(db);
@@ -39540,14 +39588,20 @@ function recreateMissingIndexes(db) {
   })();
 }
 function assertTrustedSchema(db, dbPath) {
-  const found = untrustedObjects(db, expectedSchema());
+  const newerBuild = recordsNewerMigrations(db, latestMigration());
+  const found = untrustedObjects(db, expectedSchema(), { newerBuild });
   if (found.length === 0) return;
   const shown = found.slice(0, 5).join("; ") + (found.length > 5 ? `; and ${found.length - 5} more` : "");
   throw new GuardianDbError(
     "untrusted",
     dbPath,
-    `'${dbPath}' holds schema objects dev-guardian's migrations never create (${shown}). SQL stored in a database runs on every write the server makes \u2014 a trigger, or a constraint an INSERT OR IGNORE obeys, can hide findings from every reader \u2014 so it is not used`
+    `'${dbPath}' holds schema objects dev-guardian's migrations never create (${shown}). SQL stored in a database runs on every write the server makes \u2014 a trigger, or a constraint an INSERT OR IGNORE obeys, can hide findings from every reader \u2014 so it is not used` + (newerBuild ? ". It records migrations from a newer dev-guardian than this one: an object of that kind is refused from any build, and the newer dev-guardian reads this database" : "")
   );
+}
+var latestKnownMigration;
+function latestMigration() {
+  latestKnownMigration ??= Math.max(0, ...listMigrations().map((m) => m.version));
+  return latestKnownMigration;
 }
 function prepareForUse(db, dbPath) {
   try {
