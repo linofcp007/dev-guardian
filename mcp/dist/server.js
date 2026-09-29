@@ -41178,6 +41178,18 @@ var SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
     json_extract(meta, '$.scope') IS NOT NULL
     OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
   ELSE 0 END)`;
+var jsonArrayOr = (column) => `(CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column} ELSE '[]' END)`;
+var USABLE_SQL = `(CASE
+    WHEN status <> 'completed' THEN 0
+    WHEN (
+      json_array_length(${jsonArrayOr("missing_tools")}) > 0
+      OR EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
+                  WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'failed')
+    ) AND NOT EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
+                       WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'ok')
+    THEN 0
+    ELSE 1
+  END)`;
 var BASELINED_RUN_MEMBERS_SQL = `
   SELECT member FROM (
     SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
@@ -41222,7 +41234,7 @@ function prunableSql(candidates2) {
     SELECT id FROM (
       SELECT id, status, meta, started_at, rowid AS rid,
              ROW_NUMBER() OVER (
-               PARTITION BY project_path, scan_type, ${SCOPED_SQL}
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
                ORDER BY started_at DESC, rowid DESC
              ) AS rn
       FROM scans

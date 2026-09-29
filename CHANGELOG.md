@@ -35,6 +35,11 @@ version bump.
 
 ### Fixed
 
+- Retention no longer evicts the last scan that measured anything. Fifty newer scans that measured
+  nothing (failed, or coverage `none` — a broken Semgrep rule, `local_only` with no rules) pushed
+  out the last usable one, and its findings left every reader: risk 18 (medium) → 8 (low), open
+  1 → 0. Usable and unusable scans are now ranked apart, as scoped ones already were, so the newest
+  usable scan of each (project, scan type, scope) is always kept.
 - Suppressions and baselines from 2.0.0 apply again. 2.0.0 stored a project as typed (`c:\Users\…`),
   migration 011 scoped legacy suppressions to that spelling, and 3.0.0 stores scans under the
   canonical `C:\Users\…`; every reader compares exactly, so they lapsed (reproduced by seeding the

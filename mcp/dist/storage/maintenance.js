@@ -21,8 +21,10 @@
  * (project_path, scan_type) — `GUARDIAN_RETENTION_SCANS`, default
  * {@link DEFAULT_RETENTION_SCANS}, `0` disables — and deletes the rest with
  * every row that points at them. Scoped scans (`meta.scope`, a single-plugin
- * `wp_vuln_check`) are counted apart from whole-project ones: N of each, so
- * pre-commit runs can never push out the scan the open set reads. What
+ * `wp_vuln_check`) are counted apart from whole-project ones, and scans that
+ * measured nothing (failed, cancelled, coverage `none`) apart from usable
+ * ones: N of each, so neither pre-commit runs nor a run of broken scans can
+ * push out the scan the open set reads. What
  * refers to a scan, per the schema (migrations 001–005), and what happens to
  * it:
  *
@@ -96,6 +98,26 @@ const SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
     json_extract(meta, '$.scope') IS NOT NULL
     OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
   ELSE 0 END)`;
+// A tools_run / missing_tools column as a JSON array to walk: '[]' for
+// anything else, as `scansRepo.ts#parseJsonArray` reads it in JS (json_each
+// throws on malformed JSON; CASE, not AND, for the same reason as above).
+const jsonArrayOr = (column) => `(CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column} ELSE '[]' END)`;
+// A row the open set can read — `history/openSet.ts`'s "usable": completed,
+// with coverage (`tools/scanCoverage.ts#computeCoverage`) not `none`. None is
+// "some scanner failed or is missing, and none ran ok". A failed, cancelled
+// or coverage-none scan measured nothing; the open set passes over it to the
+// one before.
+const USABLE_SQL = `(CASE
+    WHEN status <> 'completed' THEN 0
+    WHEN (
+      json_array_length(${jsonArrayOr('missing_tools')}) > 0
+      OR EXISTS (SELECT 1 FROM json_each(${jsonArrayOr('tools_run')}) AS t
+                  WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'failed')
+    ) AND NOT EXISTS (SELECT 1 FROM json_each(${jsonArrayOr('tools_run')}) AS t
+                       WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'ok')
+    THEN 0
+    ELSE 1
+  END)`;
 // The scans an orchestrated run's baseline stands on besides its own row:
 // the children a baselined parent lists in `meta.child_scans` (what
 // `history/runCompare.ts` reads), the parent a baselined child names in
@@ -156,6 +178,12 @@ const PROTECTED_SQL = `(
  * last whole-project `scan_sast`, and the open set — which skips scoped rows —
  * lost every SAST finding while still reading coverage `full`.
  *
+ * Usable and unusable rows ({@link USABLE_SQL}) are ranked apart for the same
+ * reason, so the newest usable scan of every (project, type, scope) is always
+ * kept: fifty newer runs that measured nothing (a broken Semgrep rule, a
+ * `local_only` run with no rules) pushed out the last scan that did, and its
+ * findings left every reader — risk_score 18 (medium) → 8 (low), open 1 → 0.
+ *
  * `candidates` restricts the ranking to the partitions of that many ids (the
  * `?` placeholders come right after `keep`'s, as `id IN (…)`), for the
  * re-check {@link deleteScans} makes under the write lock.
@@ -175,7 +203,7 @@ function prunableSql(candidates) {
     SELECT id FROM (
       SELECT id, status, meta, started_at, rowid AS rid,
              ROW_NUMBER() OVER (
-               PARTITION BY project_path, scan_type, ${SCOPED_SQL}
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
                ORDER BY started_at DESC, rowid DESC
              ) AS rn
       FROM scans

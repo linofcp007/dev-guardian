@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { openSetForProject } from '../../../src/history/openSet.js';
 import { GuardianDatabase } from '../../../src/storage/db.js';
 import { Storage } from '../../../src/storage/index.js';
 import {
@@ -258,6 +259,93 @@ describe('scoped and whole-project scans are ranked apart (I1)', () => {
 
     expect(deletePrunableScans(db, listed, 1)).toBe(0);
     expect(scanIds(db)).toEqual(['w1']);
+  });
+});
+
+/**
+ * A scan that measured nothing: `failed`, or `completed` with coverage
+ * `none` (every scanner failed or missing — fifty Semgrep-broken runs, a
+ * `local_only` run with no rules).
+ */
+function seedUnusable(storage: Storage, id: string, project: string, kind: 'failed' | 'coverage_none'): void {
+  storage.scans.insert({ scan_id: id, scan_type: 'sast', project_path: project, tree_hash: `h-${id}` });
+  storage.scans.finalize({
+    scan_id: id,
+    status: kind === 'failed' ? 'failed' : 'completed',
+    tools_run: [{ name: 'semgrep', status: 'failed', reason: 'rule_parse_error' }],
+    missing_tools: kind === 'coverage_none' ? ['semgrep'] : [],
+  });
+  clock += 1;
+  storage
+    .rawHandle()
+    .prepare('UPDATE scans SET started_at = ? WHERE id = ?')
+    .run(new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(), id);
+}
+
+describe('unusable scans are ranked apart from usable ones', () => {
+  // Retention ranked every row of (project, type, scoped) together. Fifty
+  // newer scans that measured nothing pushed out the last scan that did, and
+  // its findings vanished from every reader: risk_score went from 18
+  // (medium) to 8 (low) and the open set from 1 finding to 0 — the open set
+  // skips a coverage-none scan and a failed one, and found nothing behind
+  // them any more.
+  for (const kind of ['failed', 'coverage_none'] as const) {
+    it(`fifty newer ${kind} scans never push out the last usable scan (keep 50)`, () => {
+      const { db, storage } = fresh();
+      seedScan(storage, 'usable', '/p1', 'sast');
+      for (let i = 0; i < 50; i++) seedUnusable(storage, `bad${i}`, '/p1', kind);
+      expect(openSetForProject(storage, '/p1').findings.map((f) => f.fingerprint)).toEqual(['fp-usable']);
+
+      pruneScans(db, 50);
+
+      expect(scanIds(db)).toContain('usable');
+      expect(openSetForProject(storage, '/p1').findings.map((f) => f.fingerprint)).toEqual(['fp-usable']);
+    });
+  }
+
+  it('keeps the newest N of each: old usable and old unusable scans are both still pruned', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'u1', '/p1');
+    seedUnusable(storage, 'x1', '/p1', 'failed');
+    seedScan(storage, 'u2', '/p1');
+    seedUnusable(storage, 'x2', '/p1', 'coverage_none');
+    seedUnusable(storage, 'x3', '/p1', 'failed');
+    seedScan(storage, 'u3', '/p1');
+
+    expect(pruneScans(db, 2)).toEqual({ deleted: 2, remaining: 0, complete: true });
+    expect(scanIds(db)).toEqual(['u2', 'x2', 'x3', 'u3']);
+  });
+
+  it('a completed scan whose scanner partly ran is usable (coverage partial)', () => {
+    const { db, storage } = fresh();
+    storage.scans.insert({ scan_id: 'partial', scan_type: 'sast', project_path: '/p1', tree_hash: 'h' });
+    storage.scans.finalize({
+      scan_id: 'partial',
+      status: 'completed',
+      tools_run: [
+        { name: 'semgrep', status: 'ok' },
+        { name: 'bandit', status: 'failed' },
+      ],
+      missing_tools: [],
+    });
+    clock += 1;
+    db.prepare('UPDATE scans SET started_at = ? WHERE id = ?').run(
+      new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(),
+      'partial',
+    );
+    for (let i = 0; i < 3; i++) seedUnusable(storage, `bad${i}`, '/p1', 'failed');
+    pruneScans(db, 1);
+    expect(scanIds(db)).toEqual(['partial', 'bad2']);
+  });
+
+  it('malformed tools_run / missing_tools read as no gaps, as the JS reader parses them', () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'a', '/p1');
+    seedScan(storage, 'b', '/p1');
+    db.prepare(`UPDATE scans SET tools_run = '{oops', missing_tools = '"x"' WHERE id = 'b'`).run();
+    db.prepare(`UPDATE scans SET tools_run = '["semgrep", 3, null]' WHERE id = 'a'`).run();
+    expect(pruneScans(db, 1).deleted).toBe(1);
+    expect(scanIds(db)).toEqual(['b']);
   });
 });
 
