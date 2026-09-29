@@ -41,6 +41,7 @@ import {
   type BaselineFile,
   type BaselineSource,
   type CiExitCode,
+  type ExclusionReset,
   type PartialParseRef,
   type RulesSource,
   type ScanStepResult,
@@ -84,6 +85,8 @@ export interface GateInput {
    */
   baselineSource?: BaselineSource;
   rulesSource?: RulesSource;
+  /** What `--reset-exclusions-from` put back before the scan; omitted: nothing was reset. */
+  exclusionsReset?: ExclusionReset | null;
 }
 
 export interface GateVerdict {
@@ -128,6 +131,8 @@ export interface GateVerdict {
   baselineSource: BaselineSource;
   /** See `GateInput.rulesSource`. */
   rulesSource: RulesSource;
+  /** See `GateInput.exclusionsReset`; null when the flag was not given. */
+  exclusionsReset: ExclusionReset | null;
 }
 
 /** One scanner run's repository-suppressed findings, and the step that ran it. */
@@ -346,5 +351,6 @@ export function evaluateGate(input: GateInput): GateVerdict {
     suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: 'tree' },
+    exclusionsReset: input.exclusionsReset ?? null,
   };
 }

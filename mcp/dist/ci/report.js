@@ -70,6 +70,7 @@ export function renderHuman(v) {
         // request, "the scanned tree's own" is the pull request's (docs/ci.md).
         describeBaselineSource(v.baselineSource),
         describeRulesSource(v.rulesSource),
+        ...(v.exclusionsReset !== null ? [describeExclusionReset(v.exclusionsReset)] : []),
     ];
     if (v.baselineAbsent) {
         lines.push(v.baselineSource.from === 'ref'
@@ -138,6 +139,17 @@ function describeBaselineSource(b) {
         ? `baseline: ${b.path} at ${at}${differs}`
         : `baseline: none at ${at}, so every finding is new${differs}`;
 }
+/** The one line naming what `--reset-exclusions-from` put back before the scan. */
+function describeExclusionReset(r) {
+    const at = `${r.ref} (${shortCommit(r.commit)})`;
+    const parts = [
+        ...(r.restored.length > 0 ? [`restored ${r.restored.join(', ')}`] : []),
+        ...(r.removed.length > 0 ? [`removed ${r.removed.join(', ')} (none at the ref)`] : []),
+    ];
+    return parts.length > 0
+        ? `exclusion files reset to ${at} before the scan: ${parts.join('; ')}`
+        : `exclusion files reset to ${at} before the scan: none differed`;
+}
 /** The one line naming where the rules and scanner configuration came from. */
 function describeRulesSource(r) {
     if (r.from === 'tree')
@@ -173,6 +185,7 @@ export function renderJson(v) {
         suppressed_by_repo_config: v.suppressedByRepoConfig,
         baseline_source: v.baselineSource,
         rules_source: v.rulesSource,
+        exclusions_reset: v.exclusionsReset,
     };
     return JSON.stringify(payload, null, 2);
 }

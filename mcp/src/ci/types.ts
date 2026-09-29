@@ -126,6 +126,19 @@ export type RulesSource =
       tree_differences: ConfigDifference[];
     };
 
+/**
+ * What `--reset-exclusions-from` put back before the scan
+ * (`ci/refConfig.ts#resetExclusionsFromRef`): project-relative paths.
+ */
+export interface ExclusionReset {
+  ref: string;
+  commit: string;
+  /** Rewritten with the ref's bytes. */
+  restored: string[];
+  /** Deleted: the ref has none there. */
+  removed: string[];
+}
+
 /** One configuration file the scanned tree holds differently from the `--rules-ref` ref. */
 export interface ConfigDifference {
   /** Project-relative, `/`-separated. */

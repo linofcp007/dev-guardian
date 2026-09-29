@@ -83,7 +83,9 @@
 #      destination branch (`--baseline-ref`/`--rules-ref`
 #      origin/$BITBUCKET_PR_DESTINATION_BRANCH, fetched first), never from
 #      the pull request's own tree, which could otherwise adopt its own
-#      findings or delete the rule that catches them (docs/ci.md). On a
+#      findings or delete the rule that catches them (docs/ci.md); every
+#      .semgrepignore, .gitleaksignore and .gitleaks.toml of this disposable
+#      checkout is put back to the destination's (`--reset-exclusions-from`). On a
 #      branch pipeline nothing is passed and the committed files are the
 #      gate. This file itself is the pull request's too: protect it (a
 #      required reviewer on bitbucket-pipelines.yml).
@@ -142,7 +144,7 @@ definitions:
             if [ -n "${BITBUCKET_PR_DESTINATION_BRANCH:-}" ]; then
               dest="$BITBUCKET_PR_DESTINATION_BRANCH"
               git fetch --quiet --no-tags origin "+refs/heads/$dest:refs/remotes/origin/$dest"
-              set -- --baseline-ref "origin/$dest" --rules-ref "origin/$dest"
+              set -- --baseline-ref "origin/$dest" --rules-ref "origin/$dest" --reset-exclusions-from "origin/$dest"
             fi
             node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
         artifacts:

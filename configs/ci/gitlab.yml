@@ -70,7 +70,9 @@
 #      CI_MERGE_REQUEST_TARGET_BRANCH_SHA in a merged results pipeline, else
 #      the merge base, CI_MERGE_REQUEST_DIFF_BASE_SHA), never from the merge
 #      request's own tree, which could otherwise adopt its own findings or
-#      delete the rule that catches them (docs/ci.md). With GIT_DEPTH "0"
+#      delete the rule that catches them (docs/ci.md); every .semgrepignore,
+#      .gitleaksignore and .gitleaks.toml of this disposable checkout is put
+#      back to that commit's (`--reset-exclusions-from`). With GIT_DEPTH "0"
 #      that commit is already here; if not, the target branch is fetched.
 #      On a branch pipeline nothing is passed and the committed files are
 #      the gate. The pipeline file itself is the merge request's too:
@@ -141,7 +143,7 @@ dev-guardian:
           exit 3
         fi
         git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        set -- --baseline-ref "$base" --rules-ref "$base"
+        set -- --baseline-ref "$base" --rules-ref "$base" --reset-exclusions-from "$base"
       fi
       node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
   artifacts:

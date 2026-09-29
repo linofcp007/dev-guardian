@@ -227,6 +227,7 @@ export function evaluateGate(input) {
         suppressedByRepoConfig,
         baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
         rulesSource: input.rulesSource ?? { from: 'tree' },
+        exclusionsReset: input.exclusionsReset ?? null,
     };
 }
 //# sourceMappingURL=gate.js.map

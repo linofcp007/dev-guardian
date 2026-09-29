@@ -32,7 +32,7 @@
 import type { Finding } from '../types.js';
 import { toSarif, type SarifSuppressed } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
-import { CI_EXIT, type BaselineSource, type CiExitCode, type RulesSource } from './types.js';
+import { CI_EXIT, type BaselineSource, type CiExitCode, type ExclusionReset, type RulesSource } from './types.js';
 import type { GateVerdict, RepoSuppressionEntry } from './gate.js';
 
 const EXIT_LABEL: Record<CiExitCode, string> = {
@@ -76,6 +76,7 @@ export function renderHuman(v: GateVerdict): string {
     // request, "the scanned tree's own" is the pull request's (docs/ci.md).
     describeBaselineSource(v.baselineSource),
     describeRulesSource(v.rulesSource),
+    ...(v.exclusionsReset !== null ? [describeExclusionReset(v.exclusionsReset)] : []),
   ];
 
   if (v.baselineAbsent) {
@@ -152,6 +153,18 @@ function describeBaselineSource(b: BaselineSource): string {
     : `baseline: none at ${at}, so every finding is new${differs}`;
 }
 
+/** The one line naming what `--reset-exclusions-from` put back before the scan. */
+function describeExclusionReset(r: ExclusionReset): string {
+  const at = `${r.ref} (${shortCommit(r.commit)})`;
+  const parts = [
+    ...(r.restored.length > 0 ? [`restored ${r.restored.join(', ')}`] : []),
+    ...(r.removed.length > 0 ? [`removed ${r.removed.join(', ')} (none at the ref)`] : []),
+  ];
+  return parts.length > 0
+    ? `exclusion files reset to ${at} before the scan: ${parts.join('; ')}`
+    : `exclusion files reset to ${at} before the scan: none differed`;
+}
+
 /** The one line naming where the rules and scanner configuration came from. */
 function describeRulesSource(r: RulesSource): string {
   if (r.from === 'tree') return "rules and configuration: the scanned tree's own (no --rules-ref)";
@@ -185,6 +198,7 @@ interface JsonVerdict {
   suppressed_by_repo_config: RepoSuppressionEntry[];
   baseline_source: BaselineSource;
   rules_source: RulesSource;
+  exclusions_reset: ExclusionReset | null;
 }
 
 /**
@@ -207,6 +221,7 @@ export function renderJson(v: GateVerdict): string {
     suppressed_by_repo_config: v.suppressedByRepoConfig,
     baseline_source: v.baselineSource,
     rules_source: v.rulesSource,
+    exclusions_reset: v.exclusionsReset,
   };
   return JSON.stringify(payload, null, 2);
 }

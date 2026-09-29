@@ -234,10 +234,12 @@ their respective projects.
   --baseline-ref <ref>` reads the baseline from a commit with git, and
   `--rules-ref <ref>` copies the project's Semgrep rules, `.guardianignore`,
   `.trivyignore` and `.bandit` from it (`mcp/src/ci/refConfig.ts`); the
-  `ci-init` pipelines pass the pull request's base. What no scanner can take
-  from a ref — `.semgrepignore`, gitleaks' two files, actionlint's and
-  zizmor's configuration, the .NET build's files — is named in the report
-  whenever the pull request changes it. The pipeline file itself runs from the
+  `ci-init` pipelines pass the pull request's base. `.semgrepignore` and
+  gitleaks' two files, which no scanner flag can read from a ref, are put back
+  to the base's in the disposable CI checkout (`--reset-exclusions-from`,
+  refused anywhere else); actionlint's and zizmor's configuration and the .NET
+  build's files are named in the report whenever the pull request changes
+  them. The pipeline file itself runs from the
   pull request's branch on every host: it needs a required review
   ([docs/ci.md](docs/ci.md#a-pull-request-cannot-gate-itself)).
 - **Least privilege.** The MCP server reads and writes within the target project

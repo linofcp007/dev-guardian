@@ -28,6 +28,9 @@
  *                                                      from that commit, never the tree
  *                             --rules-ref <ref>        read the project's Semgrep rules
  *                                                      and ignore files from that commit
+ *                             --reset-exclusions-from <ref>  a CLEAN (CI) checkout only:
+ *                                                      put .semgrepignore, .gitleaksignore
+ *                                                      and .gitleaks.toml back to that commit's
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -314,6 +317,14 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          and zizmor configuration and the .NET build's files are
                          still read from the tree — each one the tree changes
                          against <ref> is named in the report. See docs/ci.md.
+  --reset-exclusions-from <ref>
+                         In a disposable CI checkout only: before scanning, put
+                         every .semgrepignore the scan reads, .gitleaksignore and
+                         .gitleaks.toml back to <ref>'s, deleting those <ref>
+                         lacks — no scanner flag reads them from elsewhere. Refused
+                         (exit 3) in a checkout with changes, for one of those
+                         files git does not track, or through a link. The report
+                         names what it reset.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines
@@ -764,6 +775,7 @@ async function loadCiModules() {
     SEVERITIES: types.SEVERITIES,
     resolveCiRef: refConfig.resolveCiRef,
     readBaselineAtRef: refConfig.readBaselineAtRef,
+    resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
   };
 }
 
@@ -972,6 +984,7 @@ function parseScanArgs(argv) {
     acceptPartialParse: [],
     baselineRef: undefined,
     rulesRef: undefined,
+    resetExclusionsFrom: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -1063,6 +1076,7 @@ function refFlag(a) {
   for (const [flag, key] of [
     ['--baseline-ref', 'baselineRef'],
     ['--rules-ref', 'rulesRef'],
+    ['--reset-exclusions-from', 'resetExclusionsFrom'],
   ]) {
     if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
   }
@@ -1277,6 +1291,7 @@ async function cmdScan(argv) {
     SEVERITIES,
     resolveCiRef,
     readBaselineAtRef,
+    resetExclusionsFromRef,
   } = ci;
 
   if (!SEVERITIES.includes(opts.failOn)) {
@@ -1300,12 +1315,18 @@ async function cmdScan(argv) {
   let baselineRef = null;
   let rulesRef = null;
   let baselineAtRef = null;
+  let exclusionsReset = null;
   try {
     if (opts.baselineRef !== undefined) {
       baselineRef = await resolveCiRef(projectPath, opts.baselineRef, '--baseline-ref');
       baselineAtRef = await readBaselineAtRef(projectPath, baselineRef);
     }
     if (opts.rulesRef !== undefined) rulesRef = await resolveCiRef(projectPath, opts.rulesRef, '--rules-ref');
+    // Last: it rewrites the checkout, so only once every other flag resolved.
+    if (opts.resetExclusionsFrom !== undefined) {
+      const resetRef = await resolveCiRef(projectPath, opts.resetExclusionsFrom, '--reset-exclusions-from');
+      exclusionsReset = await resetExclusionsFromRef(projectPath, resetRef);
+    }
   } catch (e) {
     return usageError(e instanceof Error ? e.message : String(e));
   }
@@ -1390,6 +1411,7 @@ async function cmdScan(argv) {
     acceptedPartialParses: opts.acceptPartialParse,
     baselineSource,
     rulesSource: result.rulesSource,
+    exclusionsReset,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human
@@ -2976,6 +2998,7 @@ const VALUE_FLAGS = new Set([
   '--accept-partial-parse',
   '--baseline-ref',
   '--rules-ref',
+  '--reset-exclusions-from',
   '--scope',
   '--file',
   '--bash',

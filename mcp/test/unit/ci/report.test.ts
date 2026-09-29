@@ -714,6 +714,20 @@ describe('where the baseline and the rules came from (--baseline-ref, --rules-re
     expect(JSON.parse(renderJson(v)).rules_source).toEqual(rulesSource);
   });
 
+  it('--reset-exclusions-from: the files it put back are named, in the human report and the JSON; absent otherwise', () => {
+    const exclusionsReset = { ref: 'origin/main', commit: COMMIT, restored: ['.semgrepignore'], removed: ['.gitleaksignore', 'src/.semgrepignore'] };
+    const v = evaluateGate(input({ exclusionsReset }));
+    expect(renderHuman(v)).toMatch(
+      /^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: restored \.semgrepignore; removed \.gitleaksignore, src\/\.semgrepignore \(none at the ref\)$/m,
+    );
+    expect(JSON.parse(renderJson(v)).exclusions_reset).toEqual(exclusionsReset);
+    const none = evaluateGate(input({ exclusionsReset: { ...exclusionsReset, restored: [], removed: [] } }));
+    expect(renderHuman(none)).toMatch(/^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: none differed$/m);
+    const without = evaluateGate(input());
+    expect(renderHuman(without)).not.toMatch(/exclusion files reset/);
+    expect(JSON.parse(renderJson(without)).exclusions_reset).toBeNull();
+  });
+
   it('nothing changed against the ref: no difference section at all', () => {
     const rulesSource = {
       from: 'ref' as const,

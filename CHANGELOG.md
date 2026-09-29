@@ -461,9 +461,17 @@ them again. Scans made on the fallback meanwhile are not merged back.
     The ref's `.guardianignore` also decides which initialised submodules and oversized files are
     named as coverage gaps and which languages the project counts, so the pull request's copy cannot
     hide a submodule's gap.
+  - `--reset-exclusions-from <ref>` (review of this fix, R-1): named was not enough for
+    `.semgrepignore` and `.gitleaksignore` — a pull request adding either passed, its only trace a
+    log line. In a disposable CI checkout, every `.semgrepignore` the scan reads (below the project
+    and above it to the repository root), `.gitleaksignore` and `.gitleaks.toml` are put back to
+    the ref's before the scan, deleted where it has none, and the report names them
+    (`exclusions_reset`). A CLI option rather than a shell step in each template: one tested
+    implementation. It refuses (exit 3) a checkout with changes, an untracked or ignored exclusion
+    file, and a path through a link, and never writes through a link.
   - The human and JSON reports now say where the baseline and the rules came from
     (`baseline_source`, `rules_source` with `tree_differences`) on every run.
-  - The `ci-init` pipelines pass both on pull-request pipelines — GitHub
+  - The `ci-init` pipelines pass all three on pull-request pipelines — GitHub
     `github.event.pull_request.base.sha` (through `env:`), GitLab
     `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` or `CI_MERGE_REQUEST_DIFF_BASE_SHA` (a merge request
     pipeline with neither stops), Bitbucket `origin/$BITBUCKET_PR_DESTINATION_BRANCH` (fetched

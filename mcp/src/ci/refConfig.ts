@@ -69,10 +69,27 @@
  * a coverage gap: a pull request may legitimately edit its `.editorconfig`,
  * and a reviewer decides. So is each {@link FROM_REF_FILES} file it changes,
  * as not applied.
+ *
+ * ---- `--reset-exclusions-from <ref>`: the ones no flag can reach ----------
+ *
+ * Named was not enough for three of them: a pull request adding a
+ * `.semgrepignore` (at any depth) or a `.gitleaksignore` passed the gate with
+ * exit 0, the only trace a line of the job log. No scanner flag reads them
+ * from elsewhere, so in a DISPOSABLE checkout the files themselves are put
+ * back ({@link resetExclusionsFromRef}): every `.semgrepignore` the scan of
+ * the project reads — at any depth below it, and in each directory above it
+ * up to the repository root, which Semgrep also consults — and the project's
+ * `.gitleaksignore` and `.gitleaks.toml`, restored to the ref's bytes, and
+ * deleted where the ref has none. A CLI option rather than a shell step in
+ * each CI template: one implementation, tested here, for all three hosts.
+ * It refuses anything but a clean checkout (it rewrites files), a
+ * gitignored or untracked exclusion file (no fresh checkout holds one, and
+ * deleting it could not be undone), and a path through a link; an exclusion
+ * file that IS a link is unlinked and replaced, never written through.
  */
 
 import { execa } from 'execa';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
@@ -81,9 +98,9 @@ import { REPO_CONFIG, type RepoConfigRunner } from '../runners/repoConfig.js';
 import { PROJECT_TRIVYIGNORE } from '../runners/trivyRun.js';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
-import type { ConfigDifference } from './types.js';
+import type { ConfigDifference, ExclusionReset } from './types.js';
 
-export type { ConfigDifference } from './types.js';
+export type { ConfigDifference, ExclusionReset } from './types.js';
 
 /** A ref that cannot be used, said as the CLI prints it (exit 3). */
 export class CiRefError extends Error {
@@ -442,6 +459,110 @@ async function ignoredButPresent(
     else if (!atRef.equals(tree)) out.set(path, 'modified');
   }
   return out;
+}
+
+/** The exclusion files `--reset-exclusions-from` owns, at the project root. */
+const RESET_ROOT_FILES: readonly string[] = ['.gitleaksignore', '.gitleaks.toml'];
+/** Reset at every depth below the project, and in each directory above it up to the repository root. */
+const RESET_NESTED_FILE = '.semgrepignore';
+
+/** The lstat of `path`, or null when nothing is there. */
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Puts the scanned tree's exclusion files back to the ref's — see the module
+ * comment's `--reset-exclusions-from` section. Throws {@link CiRefError} —
+ * before touching a file — on a checkout that is not clean, an exclusion file
+ * git does not track, or a directory on the way that is a link.
+ */
+export async function resetExclusionsFromRef(projectPath: string, at: ResolvedRef): Promise<ExclusionReset> {
+  const flag = '--reset-exclusions-from';
+  const top = await git(projectPath, ['rev-parse', '--show-toplevel']);
+  if (top.exitCode !== 0) throw new CiRefError(`${flag}: git rev-parse --show-toplevel failed: ${firstLine(top.stderr)}`);
+  const repoRoot = top.stdout.trim();
+  const status = await git(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (status.exitCode !== 0) throw new CiRefError(`${flag}: git status failed: ${firstLine(status.stderr)}`);
+  const dirty = splitNul(status.stdout).map((e) => e.slice(3));
+  if (dirty.length > 0) {
+    throw new CiRefError(
+      `${flag} rewrites files in the checkout, so it runs only in a clean checkout — a disposable CI one; ` +
+        `this working tree has changes: ${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? `, and ${dirty.length - 5} more` : ''}`,
+    );
+  }
+  // Repository-relative candidates: the project's own, and the ancestors' .semgrepignore.
+  const prefix = at.prefix;
+  const inScope = (rel: string): boolean => {
+    const dir = posix.dirname(rel);
+    const d = dir === '.' ? '' : `${dir}/`;
+    return d.startsWith(prefix) || prefix.startsWith(d);
+  };
+  const candidates = new Set<string>(RESET_ROOT_FILES.map((f) => `${prefix}${f}`));
+  const listed = await git(repoRoot, ['ls-files', '-z', '--cached', '--', `:(glob)**/${RESET_NESTED_FILE}`]);
+  const atRef = await git(repoRoot, ['ls-tree', '-r', '-z', '--name-only', '--full-tree', at.commit]);
+  if (listed.exitCode !== 0 || atRef.exitCode !== 0) {
+    throw new CiRefError(`${flag}: git could not list ${RESET_NESTED_FILE} files: ${firstLine(listed.stderr || atRef.stderr)}`);
+  }
+  for (const rel of [...splitNul(listed.stdout), ...splitNul(atRef.stdout)]) {
+    if (posix.basename(rel) === RESET_NESTED_FILE && inScope(rel)) candidates.add(rel);
+  }
+  // Present but untracked or ignored: not a fresh checkout — refused, whatever it holds.
+  const loose = await git(repoRoot, [
+    'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
+    ...RESET_ROOT_FILES.map((f) => `:(literal)${prefix}${f}`),
+    `:(glob)**/${RESET_NESTED_FILE}`,
+  ]);
+  if (loose.exitCode !== 0) throw new CiRefError(`${flag}: git ls-files failed: ${firstLine(loose.stderr)}`);
+  const untracked = splitNul(loose.stdout).filter((rel) => candidates.has(rel) || (posix.basename(rel) === RESET_NESTED_FILE && inScope(rel)));
+  if (untracked.length > 0) {
+    throw new CiRefError(
+      `${flag}: ${untracked.join(', ')} is not tracked by git — no fresh checkout holds such a file, and deleting it ` +
+        'could not be undone: run this only in a disposable CI checkout',
+    );
+  }
+
+  const fromRoot: ResolvedRef = { ...at, prefix: '' };
+  const plan: Array<{ rel: string; bytes: Buffer | null }> = [];
+  for (const rel of [...candidates].sort()) {
+    // Every directory on the way must be a real one: never write through a link.
+    const segments = rel.split('/');
+    for (let i = 1; i < segments.length; i++) {
+      const st = lstatOrNull(join(repoRoot, ...segments.slice(0, i)));
+      if (st !== null && !st.isDirectory()) {
+        throw new CiRefError(`${flag}: ${segments.slice(0, i).join('/')} is not a directory (a link?) — ${rel} is not reset through it`);
+      }
+    }
+    const here = lstatOrNull(join(repoRoot, ...segments));
+    if (here !== null && here.isDirectory()) throw new CiRefError(`${flag}: ${rel} is a directory — not reset`);
+    plan.push({ rel, bytes: await readAtRef(repoRoot, fromRoot, rel, CONFIG_MAX_BYTES) });
+  }
+
+  const restored: string[] = [];
+  const removed: string[] = [];
+  const shown = (rel: string): string => posix.relative(prefix === '' ? '.' : prefix.slice(0, -1), rel) || rel;
+  const same = (a: Buffer, b: Buffer): boolean =>
+    a.toString('utf8').replace(/\r\n/g, '\n') === b.toString('utf8').replace(/\r\n/g, '\n');
+  for (const { rel, bytes } of plan) {
+    const abs = join(repoRoot, ...rel.split('/'));
+    const here = lstatOrNull(abs);
+    if (bytes === null) {
+      if (here === null) continue;
+      unlinkSync(abs);
+      removed.push(shown(rel));
+      continue;
+    }
+    if (here !== null && here.isFile() && same(readFileSync(abs), bytes)) continue;
+    if (here !== null) unlinkSync(abs);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, bytes, { flag: 'wx' });
+    restored.push(shown(rel));
+  }
+  return { ref: at.ref, commit: at.commit, restored, removed };
 }
 
 function firstLine(text: string): string {

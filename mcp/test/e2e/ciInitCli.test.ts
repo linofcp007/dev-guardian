@@ -1105,13 +1105,13 @@ describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass
   it.skipIf(PROBE_BASH === null)(`each template's scan script, run with and without a pull request${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
     const cases: Array<{ target: string; extra?: string[]; env: Record<string, string>; expect: string[] }> = [
       { target: 'github', env: { BASE_SHA: '' }, expect: [] },
-      { target: 'github', env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE] },
-      { target: 'github', extra: ['--attest'], env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE] },
+      { target: 'github', env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
+      { target: 'github', extra: ['--attest'], env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
       { target: 'gitlab', env: {}, expect: [] },
       {
         target: 'gitlab',
         env: { CI_MERGE_REQUEST_IID: '7', CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE, CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main' },
-        expect: ['--baseline-ref', BASE, '--rules-ref', BASE],
+        expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE],
       },
       {
         // A merged results pipeline: the target branch's own commit wins.
@@ -1122,13 +1122,13 @@ describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass
           CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE,
           CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main',
         },
-        expect: ['--baseline-ref', 'c'.repeat(40), '--rules-ref', 'c'.repeat(40)],
+        expect: ['--baseline-ref', 'c'.repeat(40), '--rules-ref', 'c'.repeat(40), '--reset-exclusions-from', 'c'.repeat(40)],
       },
       { target: 'bitbucket', env: {}, expect: [] },
       {
         target: 'bitbucket',
         env: { BITBUCKET_PR_DESTINATION_BRANCH: 'release/2.x' },
-        expect: ['--baseline-ref', 'origin/release/2.x', '--rules-ref', 'origin/release/2.x'],
+        expect: ['--baseline-ref', 'origin/release/2.x', '--rules-ref', 'origin/release/2.x', '--reset-exclusions-from', 'origin/release/2.x'],
       },
     ];
     for (const c of cases) {

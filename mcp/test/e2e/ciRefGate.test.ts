@@ -23,7 +23,7 @@
 
 import { execa } from 'execa';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -245,5 +245,67 @@ describe.skipIf(!RUN_REAL)('a pull request that deletes the rule that catches it
       { path: '.guardianignore', change: 'added', applied: 'ref', read_by: ['guardian'] },
       { path: '.semgrep.yml', change: 'modified', applied: 'ref', read_by: ['semgrep'] },
     ]);
+  });
+});
+
+const GITLEAKS_INSTALLED = await isInstalled('gitleaks');
+
+/**
+ * Review of round 1, R-1: `.semgrepignore` (at any depth) and
+ * `.gitleaksignore` cannot be read from a ref by any scanner flag, so a pull
+ * request adding them passed even with both ref flags — the only trace a line
+ * of the job log. `--reset-exclusions-from` puts them back in the (disposable)
+ * checkout before the scan.
+ */
+describe.skipIf(!RUN_REAL || !GITLEAKS_INSTALLED)('a pull request that hides its eval in src/.semgrepignore and its secret in .gitleaksignore (real scanners)', () => {
+  let repo = '';
+  let base = '';
+
+  beforeAll(async () => {
+    repo = await newRepo('ciref-reset-');
+    write(repo, '.semgrep.yml', RULES);
+    write(repo, 'index.js', CLEAN_JS);
+    base = await commitAll(repo, 'base: clean');
+    // The pull request: an eval, hidden by a nested .semgrepignore ...
+    write(repo, 'src/evil.js', EVAL_JS);
+    write(repo, 'src/.semgrepignore', 'evil.js\n');
+    // ... and a committed key, hidden by its gitleaks fingerprint.
+    write(repo, 'config.ini', `aws_access_key_id = ${['AKIA', 'IOSFODNN7', 'ABCDEFG'].join('')}\n`);
+    const leak = await commitAll(repo, 'pr: eval and key');
+    write(repo, '.gitleaksignore', `${leak}:config.ini:aws-access-token:1\n`);
+    await commitAll(repo, 'pr: hide them');
+  });
+
+  it('control — with --baseline-ref and --rules-ref alone, both stay hidden and the gate passes', () => {
+    const { status, report } = scanJson(repo, '--baseline-ref', base, '--rules-ref', base);
+    expect(report.blocking_findings).toEqual([]);
+    expect(status).not.toBe(1);
+    // Named — the only trace there was.
+    expect((report.rules_source.tree_differences ?? []).map((d) => d['path'])).toEqual(['.gitleaksignore', 'src/.semgrepignore']);
+  });
+
+  it('--reset-exclusions-from <base>: both files are gone before the scan, both findings come back, exit 1', () => {
+    const { status, report } = scanJson(repo, '--baseline-ref', base, '--rules-ref', base, '--reset-exclusions-from', base);
+    expect(status).toBe(1);
+    expect(blockingFiles(report)).toEqual(['config.ini', 'src/evil.js']);
+    expect((report as unknown as Record<string, unknown>)['exclusions_reset']).toEqual({
+      ref: base,
+      commit: base,
+      restored: [],
+      removed: ['.gitleaksignore', 'src/.semgrepignore'],
+    });
+    // The checkout is left reset: it is disposable.
+    expect(existsSync(join(repo, '.gitleaksignore'))).toBe(false);
+  });
+
+  it('a checkout with changes is refused (exit 3), and nothing in it is touched', async () => {
+    const dirty = await newRepo('ciref-reset-dirty-');
+    write(dirty, 'index.js', CLEAN_JS);
+    const at = await commitAll(dirty, 'base');
+    write(dirty, '.semgrepignore', 'index.js\n');
+    const r = runCli(['scan', '--project', dirty, '--reset-exclusions-from', at], FAST_TIMEOUT_MS);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/runs only in a clean checkout/);
+    expect(existsSync(join(dirty, '.semgrepignore'))).toBe(true);
   });
 });

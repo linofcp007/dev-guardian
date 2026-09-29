@@ -82,7 +82,10 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      BASE commit (\`--baseline-ref\`/\`--rules-ref\`
 #      \`github.event.pull_request.base.sha\`), never from the pull request's
 #      own tree, which could otherwise adopt its own findings or delete the
-#      rule that catches them (docs/ci.md). Step 1's \`fetch-depth: 0\` already
+#      rule that catches them (docs/ci.md). \`--reset-exclusions-from\` also puts
+#      every .semgrepignore, .gitleaksignore and .gitleaks.toml of this
+#      disposable checkout back to the base's (no scanner flag can read them
+#      from elsewhere) and the report names what it reset. Step 1's \`fetch-depth: 0\` already
 #      fetched the base branch, so that commit is here; on a push nothing is
 #      passed and the committed files are the gate. The workflow file itself
 #      is the pull request's too: protect it (CODEOWNERS, a required review).
@@ -243,7 +246,7 @@ jobs:
           BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
           set --
-          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA"; fi
+          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"; fi
           set -uo pipefail
           set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \\
@@ -423,7 +426,9 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      destination branch (\`--baseline-ref\`/\`--rules-ref\`
 #      origin/$BITBUCKET_PR_DESTINATION_BRANCH, fetched first), never from
 #      the pull request's own tree, which could otherwise adopt its own
-#      findings or delete the rule that catches them (docs/ci.md). On a
+#      findings or delete the rule that catches them (docs/ci.md); every
+#      .semgrepignore, .gitleaksignore and .gitleaks.toml of this disposable
+#      checkout is put back to the destination's (\`--reset-exclusions-from\`). On a
 #      branch pipeline nothing is passed and the committed files are the
 #      gate. This file itself is the pull request's too: protect it (a
 #      required reviewer on bitbucket-pipelines.yml).
@@ -482,7 +487,7 @@ definitions:
             if [ -n "\${BITBUCKET_PR_DESTINATION_BRANCH:-}" ]; then
               dest="$BITBUCKET_PR_DESTINATION_BRANCH"
               git fetch --quiet --no-tags origin "+refs/heads/$dest:refs/remotes/origin/$dest"
-              set -- --baseline-ref "origin/$dest" --rules-ref "origin/$dest"
+              set -- --baseline-ref "origin/$dest" --rules-ref "origin/$dest" --reset-exclusions-from "origin/$dest"
             fi
             node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
         artifacts:
@@ -581,7 +586,10 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      BASE commit (\`--baseline-ref\`/\`--rules-ref\`
 #      \`github.event.pull_request.base.sha\`), never from the pull request's
 #      own tree, which could otherwise adopt its own findings or delete the
-#      rule that catches them (docs/ci.md). Step 1's \`fetch-depth: 0\` already
+#      rule that catches them (docs/ci.md). \`--reset-exclusions-from\` also puts
+#      every .semgrepignore, .gitleaksignore and .gitleaks.toml of this
+#      disposable checkout back to the base's (no scanner flag can read them
+#      from elsewhere) and the report names what it reset. Step 1's \`fetch-depth: 0\` already
 #      fetched the base branch, so that commit is here; on a push nothing is
 #      passed and the committed files are the gate. The workflow file itself
 #      is the pull request's too: protect it (CODEOWNERS, a required review).
@@ -710,7 +718,7 @@ jobs:
           BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
           set --
-          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA"; fi
+          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"; fi
           set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \\
             --project . \\
@@ -828,7 +836,9 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      CI_MERGE_REQUEST_TARGET_BRANCH_SHA in a merged results pipeline, else
 #      the merge base, CI_MERGE_REQUEST_DIFF_BASE_SHA), never from the merge
 #      request's own tree, which could otherwise adopt its own findings or
-#      delete the rule that catches them (docs/ci.md). With GIT_DEPTH "0"
+#      delete the rule that catches them (docs/ci.md); every .semgrepignore,
+#      .gitleaksignore and .gitleaks.toml of this disposable checkout is put
+#      back to that commit's (\`--reset-exclusions-from\`). With GIT_DEPTH "0"
 #      that commit is already here; if not, the target branch is fetched.
 #      On a branch pipeline nothing is passed and the committed files are
 #      the gate. The pipeline file itself is the merge request's too:
@@ -899,7 +909,7 @@ dev-guardian:
           exit 3
         fi
         git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        set -- --baseline-ref "$base" --rules-ref "$base"
+        set -- --baseline-ref "$base" --rules-ref "$base" --reset-exclusions-from "$base"
       fi
       node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
   artifacts:

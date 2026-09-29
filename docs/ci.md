@@ -36,6 +36,7 @@ node dev-guardian.mjs baseline update --project .
 | `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. |
 | `--baseline-ref <ref>` | read `.guardian/baseline.json` from the commit `<ref>` names, never from the checkout — see [below](#a-pull-request-cannot-gate-itself) |
 | `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore` and `.bandit` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
+| `--reset-exclusions-from <ref>` | in a disposable CI checkout only: put every `.semgrepignore`, `.gitleaksignore` and `.gitleaks.toml` back to `<ref>`'s before scanning — see [below](#a-pull-request-cannot-gate-itself) |
 
 | Exit code | `scan` | `baseline update` |
 | ---: | --- | --- |
@@ -99,7 +100,7 @@ The JSON carries the same under `suppressed_by_repo_config` (step, scanner, file
 A pull request's checkout holds the pull request's own `.guardian/baseline.json` and its own scanner configuration. Read from there, the change under review decides how it is judged: a fork adds its new finding to the baseline, deletes the rule that would catch it from `.semgrep.yml`, or lists the file in `.guardianignore` — and the gate passes. Two flags take those files from a commit the pull request does not control, its base:
 
 ```text
-node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA"
+node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"
 ```
 
 - `--baseline-ref <ref>` reads `.guardian/baseline.json` with git from the commit `<ref>` names (size-checked first, at most 32 MiB), never from the working tree. None at that commit means no baseline: every finding is new. A `<ref>` that names no commit — a shallow clone, a base branch the checkout never fetched — is exit 3, never "no baseline" and never the checkout's copy. So is an empty value: `--baseline-ref "$BASE"` with `BASE` unset.
@@ -120,11 +121,13 @@ node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$
   - actionlint's and zizmor's configuration — the workflows they audit are the pull request's own anyway.
   - the .NET build's `.editorconfig`, `.globalconfig`, `Directory.Build.props`/`.targets` and NuGet configuration — the build reads them from the tree it compiles.
 
-  Every one of those the pull request adds, changes or deletes against `<ref>` — a `.gitleaksignore` git ignores included, since gitleaks reads it anyway — is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
+- `--reset-exclusions-from <ref>` closes the first two of those in CI. A pull request adding a `.semgrepignore` (at any depth) or a `.gitleaksignore` otherwise passes: named in the log, nothing else. Since no scanner flag reads them from elsewhere, and a CI checkout is disposable, the files themselves are put back before the scan — every `.semgrepignore` Semgrep reads for the project (below it, and in each directory above it up to the repository root), and the project's `.gitleaksignore` and `.gitleaks.toml` — restored to `<ref>`'s bytes, deleted where `<ref>` has none. The report says what it reset (`exclusions_reset` in the JSON). It rewrites files, so it refuses (exit 3) a checkout with any change, one of those files git does not track or ignores (no fresh checkout holds one, and deleting it could not be undone), and a path through a link; an exclusion file that is itself a link is unlinked and replaced, never written through. Never pass it where you work.
+
+  Every one of the files above that the pull request adds, changes or deletes against `<ref>` — a `.gitleaksignore` git ignores included, since gitleaks reads it anyway — is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
 
 The report always says where both came from — `baseline:` and `rules and configuration:` lines in the human output, `baseline_source` and `rules_source` in the JSON (with `tree_differences`: path, change, which copy was applied, and which scanners read it). A pull-request run that says `in the scanned tree (no --baseline-ref)` is gating the pull request against itself.
 
-The pipelines `ci-init` writes pass both flags on a pull-request pipeline and nothing on a push, where the committed files are the gate:
+The pipelines `ci-init` writes pass all three on a pull-request pipeline and nothing on a push, where the committed files are the gate:
 
 | CI | Base passed | Fetch |
 | --- | --- | --- |
