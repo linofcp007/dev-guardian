@@ -167,13 +167,14 @@ describe.each([
       outcomes.forEach((o, i) => {
         if (o.code !== 0) failures.push(`round ${round} child ${i}: exit ${o.code}: ${o.stderr.trim()}`);
       });
-      // The opens really overlapped: every child reported when it opened, none
-      // reached the shared instant late, and at least two were in progress at
-      // once. Without this the round could pass with no concurrency at all.
+      // The opens really overlapped: every child reported when it opened and
+      // at least two were in progress at once. Without this the round could
+      // pass with no concurrency at all. (How late each child woke is in the
+      // message, not asserted: under a loaded machine a spin can be
+      // descheduled for tens of ms, which costs nothing while opens take
+      // hundreds — overlap is the property, lateness only a way to lose it.)
       const timings = outcomes.map((o) => o.timing).filter((t) => t !== null);
       expect(timings, `round ${round}: a child did not report its timing — ${JSON.stringify(outcomes)}`).toHaveLength(PROCESSES);
-      const late = timings.filter((t) => t.late > 50);
-      expect(late, `round ${round}: a child reached the shared instant more than 50 ms late`).toEqual([]);
       expect(maxOverlap(timings), `round ${round}: the opens did not overlap: ${JSON.stringify(timings)}`).toBeGreaterThanOrEqual(2);
 
       const db = new GuardianDatabase(join(project, '.guardian', 'guardian.db'));
