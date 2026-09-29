@@ -59,4 +59,4 @@ export class Storage {
 }
 
 export { GuardianDbError, openDatabase, openDatabaseAtPath, resolveFallbackDbPath, userDataDir } from './db.js';
-export type { OpenedDatabase, OpenOptions } from './db.js';
+export type { OpenedDatabase, OpenOptions, StorageAdoption } from './db.js';

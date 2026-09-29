@@ -411,9 +411,9 @@ function judgeProjectDatabase(projectPath, dbPath) {
     if (entry !== null && probe.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
         return { kind: 'trusted', dbId: probe.dbId };
     }
-    const adoption = adoptionProblem(projectPath, dbPath, index, probe.scanProjects);
+    const adoption = adoptionProblem(projectPath, dbPath, index, probe.scans);
     if (adoption === null)
-        return { kind: 'adopt' };
+        return { kind: 'adopt', registeredAt: entry?.db_path ?? null };
     return {
         kind: 'foreign',
         why: entry !== null
@@ -465,14 +465,31 @@ function openProjectDatabase(projectPath, dbPath, verdict) {
             closeQuietly(db);
             throw error;
         }
+        const adoption = {
+            db_path: dbPath,
+            adopted_at: new Date().toISOString(),
+            previously_registered_at: verdict.registeredAt,
+            null_scoped_suppressions: nullScopedSuppressions(db),
+        };
         return {
             db,
             path: dbPath,
-            notice: `adopted '${dbPath}', written by an earlier dev-guardian (untracked in this project's own repository, ` +
-                'not a link): registered as this user\'s database',
+            notice: `adopted '${dbPath}', ` +
+                (verdict.registeredAt === null
+                    ? 'written by an earlier dev-guardian'
+                    : `registered at '${verdict.registeredAt}' before (a copy, or a repository moved)`) +
+                ' and holding scans this project ran after its directory was created: registered as this user\'s database' +
+                (adoption.null_scoped_suppressions > 0
+                    ? `; ${adoption.null_scoped_suppressions} suppression(s) in it have no project and apply to every project`
+                    : ''),
+            adoption,
         };
     }
     return { db, path: dbPath };
+}
+/** Suppressions with no project in `db` (a migrated database: the table exists). */
+function nullScopedSuppressions(db) {
+    return db.prepare('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL').get()?.n ?? 0;
 }
 /**
  * Writes a freshly registered id into `schema_meta` and returns the id the

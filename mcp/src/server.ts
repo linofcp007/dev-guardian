@@ -67,7 +67,13 @@ async function main(): Promise<void> {
 
   const projectPath = resolve(process.cwd());
 
-  const { db, path: dbPath, warning: storageWarning, notice: storageNotice } = openDatabase({ projectPath });
+  const {
+    db,
+    path: dbPath,
+    warning: storageWarning,
+    notice: storageNotice,
+    adoption: storageAdoption,
+  } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageNotice) logErr(`db notice: ${storageNotice}`);
@@ -115,6 +121,7 @@ async function main(): Promise<void> {
     scriptsDir: resolveScriptsDir(),
     progressNotifier,
     ...(storageWarning ? { storageWarning } : {}),
+    ...(storageAdoption ? { storageAdoption } : {}),
   };
 
   attachAllTools(mcp, ctx);

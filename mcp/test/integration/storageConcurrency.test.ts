@@ -67,11 +67,13 @@ function databaseAt2_0_0(project: string): void {
     db.exec(readFileSync(m.filePath, 'utf8'));
   }
   db.exec("INSERT INTO schema_meta (key, value) VALUES ('version', '3')");
-  // A real 2.0.0 database holds this project's scans — what adoption checks.
+  // A real 2.0.0 database holds this project's scans, run in this directory
+  // after it was created — what adoption checks.
+  const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status)
-     VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
-  ).run(canonicalPath(project));
+    `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+     VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
+  ).run(canonicalPath(project), now, now);
   db.close();
 }
 

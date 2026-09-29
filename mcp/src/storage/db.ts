@@ -425,15 +425,36 @@ export interface OpenedDatabase {
    * scan's `warnings`).
    */
   warning?: string;
-  /** One line worth logging once: a legacy database was adopted. */
+  /** One line worth logging once: a database was adopted. */
   notice?: string;
+  /** Set when this open adopted the project's database; `health_status` shows it. */
+  adoption?: StorageAdoption;
+}
+
+/**
+ * A database adopted as this user's by this open (`dbProvenance.ts`) — what
+ * `health_status.storage_adoption` reports for the session.
+ */
+export interface StorageAdoption {
+  db_path: string;
+  adopted_at: string;
+  /**
+   * Where it was registered before — a copy of a registered database, or a
+   * repository moved — or null: an earlier version's, which had no id.
+   */
+  previously_registered_at: string | null;
+  /**
+   * Suppressions in it with no project: they apply to every project, and are
+   * how findings disappear without a trace, so how many came with it is said.
+   */
+  null_scoped_suppressions: number;
 }
 
 /** What {@link judgeProjectDatabase} decided about `.guardian/guardian.db`. */
 type Verdict =
   | { kind: 'create' }
   | { kind: 'trusted'; dbId: string }
-  | { kind: 'adopt' }
+  | { kind: 'adopt'; registeredAt: string | null }
   | { kind: 'foreign'; why: string; tracked: boolean };
 
 /**
@@ -516,8 +537,8 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
     return { kind: 'trusted', dbId: probe.dbId };
   }
 
-  const adoption = adoptionProblem(projectPath, dbPath, index, probe.scanProjects);
-  if (adoption === null) return { kind: 'adopt' };
+  const adoption = adoptionProblem(projectPath, dbPath, index, probe.scans);
+  if (adoption === null) return { kind: 'adopt', registeredAt: entry?.db_path ?? null };
   return {
     kind: 'foreign',
     why:
@@ -573,15 +594,33 @@ function openProjectDatabase(projectPath: string, dbPath: string, verdict: Exclu
       closeQuietly(db);
       throw error;
     }
+    const adoption: StorageAdoption = {
+      db_path: dbPath,
+      adopted_at: new Date().toISOString(),
+      previously_registered_at: verdict.registeredAt,
+      null_scoped_suppressions: nullScopedSuppressions(db),
+    };
     return {
       db,
       path: dbPath,
       notice:
-        `adopted '${dbPath}', written by an earlier dev-guardian (untracked in this project's own repository, ` +
-        'not a link): registered as this user\'s database',
+        `adopted '${dbPath}', ` +
+        (verdict.registeredAt === null
+          ? 'written by an earlier dev-guardian'
+          : `registered at '${verdict.registeredAt}' before (a copy, or a repository moved)`) +
+        ' and holding scans this project ran after its directory was created: registered as this user\'s database' +
+        (adoption.null_scoped_suppressions > 0
+          ? `; ${adoption.null_scoped_suppressions} suppression(s) in it have no project and apply to every project`
+          : ''),
+      adoption,
     };
   }
   return { db, path: dbPath };
+}
+
+/** Suppressions with no project in `db` (a migrated database: the table exists). */
+function nullScopedSuppressions(db: GuardianDatabase): number {
+  return db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL').get()?.n ?? 0;
 }
 
 /**

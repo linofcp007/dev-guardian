@@ -429,6 +429,23 @@ describe('health_status', () => {
     expect(r.registry.tools).toBeGreaterThan(20);
   });
 
+  it("reports a database this start adopted, with the suppressions it brought for every project — null otherwise", async () => {
+    const plugin = makePlugin();
+    const plain = (await getTool('health_status').handler({}, plugin)) as { ok: true; storage_adoption: unknown };
+    expect(plain.storage_adoption).toBeNull();
+    const adoption = {
+      db_path: '/p/.guardian/guardian.db',
+      adopted_at: '2026-09-29T00:00:00.000Z',
+      previously_registered_at: null,
+      null_scoped_suppressions: 2,
+    };
+    const r = (await getTool('health_status').handler({}, { ...plugin, storageAdoption: adoption })) as {
+      ok: true;
+      storage_adoption: unknown;
+    };
+    expect(r.storage_adoption).toEqual(adoption);
+  });
+
   it('reports the real release version, not a hardcoded literal', async () => {
     // Regression guard: this field used to be a hardcoded '0.1.0',
     // independent of (and just as stale as) the one report/sarif.ts carried

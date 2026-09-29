@@ -37813,7 +37813,7 @@ function resolveVersion() {
 
 // src/storage/db.ts
 import { createHash as createHash3, randomBytes as randomBytes2 } from "node:crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync2, rmSync as rmSync2, statSync as statSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname5, join as join9, resolve as resolve6 } from "node:path";
 
@@ -37879,7 +37879,7 @@ var GuardianDbError = class extends Error {
 // src/storage/dbProvenance.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync as existsSync4, lstatSync as lstatSync3 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync3, statSync as statSync5 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join6, relative } from "node:path";
 
 // src/platform/pathSpelling.ts
@@ -38200,18 +38200,31 @@ function locationProblem(projectPath, dbPath) {
   }
   return null;
 }
-function adoptionProblem(projectPath, dbPath, index, scanProjects) {
-  const git2 = lstatOrNull(join6(projectPath, ".git"));
-  if (git2 === null) {
-    return "the project has no .git of its own (a repository downloaded as an archive, or not a repository at all)";
+var ADOPTION_CLOCK_SKEW_MS = 5 * 60 * 1e3;
+function directoryBirthMs(path8) {
+  let st;
+  try {
+    st = statSync5(path8);
+  } catch {
+    return null;
   }
-  if (git2.isSymbolicLink()) return "the project's .git is a link";
-  if (index.state !== "ok") return `git could not be asked whether it tracks the database (${index.detail})`;
+  const birth = st.birthtimeMs;
+  if (!(birth > 0)) return null;
+  if (process.platform === "win32" || process.platform === "darwin") return birth;
+  return birth === st.ctimeMs ? null : birth;
+}
+function adoptionProblem(projectPath, dbPath, index, scans, options = {}) {
+  const git2 = lstatOrNull(join6(projectPath, ".git"));
+  if (git2 !== null && git2.isSymbolicLink()) return "the project's .git is a link";
+  const isGitProject = git2 !== null;
+  if (isGitProject && index.state !== "ok") {
+    return `git could not be asked whether it tracks the database (${index.detail})`;
+  }
   const fromGit = gitProblem(index) ?? locationProblem(projectPath, dbPath);
   if (fromGit !== null) return fromGit;
-  return scanProblem(projectPath, scanProjects);
+  return scanProblem(projectPath, scans, isGitProject, options);
 }
-function scanProblem(projectPath, scanProjects) {
+function scanProblem(projectPath, scans, isGitProject, options) {
   let canonical2;
   try {
     canonical2 = canonicalPath(projectPath);
@@ -38219,14 +38232,28 @@ function scanProblem(projectPath, scanProjects) {
     return "the project path could not be resolved";
   }
   const isThisProject = spellingMatcher(canonical2);
-  if (scanProjects.some(isThisProject)) return null;
-  if (scanProjects.length === 0) return "it holds no completed scan of this project (no completed scan at all)";
-  const shown = scanProjects.slice(0, 2).join("', '");
-  return `it holds no completed scan of this project \u2014 its scans are filed under ${scanProjects.length} other path(s) ('${shown}'${scanProjects.length > 2 ? ", \u2026" : ""}): a database written elsewhere`;
+  const own = scans.filter((s) => isThisProject(s.path));
+  if (own.length === 0) {
+    if (scans.length === 0) return "it holds no completed scan of this project (no completed scan at all)";
+    const shown = scans.slice(0, 2).map((s) => s.path).join("', '");
+    return `it holds no completed scan of this project \u2014 its scans are filed under ${scans.length} other path(s) ('${shown}'${scans.length > 2 ? ", \u2026" : ""}): a database written elsewhere`;
+  }
+  const birth = (options.birthtimeOf ?? directoryBirthMs)(canonical2);
+  if (birth === null) {
+    if (isGitProject) return null;
+    return "the file system does not record when the project directory was created, and the project is not a git repository: nothing shows the database was written here rather than brought with the files";
+  }
+  const now = options.now ?? Date.now();
+  const fits = own.some((s) => {
+    const finished8 = s.latestFinished === null ? Number.NaN : Date.parse(s.latestFinished);
+    return finished8 >= birth - ADOPTION_CLOCK_SKEW_MS && finished8 <= now + ADOPTION_CLOCK_SKEW_MS;
+  });
+  if (fits) return null;
+  return `its scans of this project all finished before the project directory was created (${new Date(birth).toISOString()}), or in the future: a database made before this copy of the project existed \u2014 an archive or a clone brings one`;
 }
 var sqlite;
 var MAX_SCAN_PROJECTS = 200;
-function probeDatabase(dbPath) {
+function probeDatabase(dbPath, now = Date.now()) {
   sqlite ??= createRequire(import.meta.url)("node:sqlite");
   let db;
   try {
@@ -38235,15 +38262,19 @@ function probeDatabase(dbPath) {
     db.exec("PRAGMA trusted_schema = OFF");
     db.exec("PRAGMA cell_size_check = ON");
     const count2 = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
-    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null, scanProjects: [] };
+    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
     const isTable = (name) => db?.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name)?.type === "table";
     let id = null;
     if (isTable("schema_meta")) {
       const row = db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY);
       id = typeof row?.value === "string" && DB_ID_SHAPE.test(row.value) ? row.value : null;
     }
-    const scanProjects = isTable("scans") ? db.prepare(`SELECT DISTINCT project_path AS p FROM scans WHERE status = 'completed' LIMIT ?`).all(MAX_SCAN_PROJECTS).map((r) => r.p).filter((p) => typeof p === "string") : [];
-    return { empty: false, dbId: id, scanProjects };
+    const scans = isTable("scans") ? db.prepare(
+      `SELECT project_path AS p,
+                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
+                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`
+    ).all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS).filter((r) => typeof r.p === "string").map((r) => ({ path: r.p, latestFinished: typeof r.f === "string" ? r.f : null })) : [];
+    return { empty: false, dbId: id, scans };
   } catch (error2) {
     const code = sqliteCode(error2);
     if (code === 11 || code === 26) {
@@ -38303,7 +38334,7 @@ function sha256(s) {
 
 // src/fingerprint/findingIdentity.ts
 import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync5 } from "node:fs";
+import { readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync6 } from "node:fs";
 import { isAbsolute as isAbsolute4, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
 var REDACTED_SNIPPET = "requires login";
 var IDENTITY_VERSION = 1;
@@ -38404,7 +38435,7 @@ function makeSourceReader(projectPath) {
     if (!isInside(root, lexical)) return null;
     try {
       const real = realpathSync2.native(lexical);
-      const stat3 = statSync5(real);
+      const stat3 = statSync6(real);
       if (!isInside(root, real) || !stat3.isFile() || stat3.size > MAX_SOURCE_BYTES) return null;
       return readFileSync5(real, "utf8");
     } catch {
@@ -40046,8 +40077,8 @@ function judgeProjectDatabase(projectPath, dbPath) {
   if (entry !== null && probe2.dbId !== null && entry.db_path === safeCanonical(dbPath)) {
     return { kind: "trusted", dbId: probe2.dbId };
   }
-  const adoption = adoptionProblem(projectPath, dbPath, index, probe2.scanProjects);
-  if (adoption === null) return { kind: "adopt" };
+  const adoption = adoptionProblem(projectPath, dbPath, index, probe2.scans);
+  if (adoption === null) return { kind: "adopt", registeredAt: entry?.db_path ?? null };
   return {
     kind: "foreign",
     why: entry !== null ? `this database was registered at '${entry.db_path}', not here \u2014 a copy of it (a repository moved or copied, or shipped with its .guardian: a Docker COPY, a package, an archive), and it cannot be adopted here: ${adoption}` : probe2.dbId === null ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})` : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
@@ -40077,13 +40108,23 @@ function openProjectDatabase(projectPath, dbPath, verdict) {
       closeQuietly(db);
       throw error2;
     }
+    const adoption = {
+      db_path: dbPath,
+      adopted_at: (/* @__PURE__ */ new Date()).toISOString(),
+      previously_registered_at: verdict.registeredAt,
+      null_scoped_suppressions: nullScopedSuppressions(db)
+    };
     return {
       db,
       path: dbPath,
-      notice: `adopted '${dbPath}', written by an earlier dev-guardian (untracked in this project's own repository, not a link): registered as this user's database`
+      notice: `adopted '${dbPath}', ` + (verdict.registeredAt === null ? "written by an earlier dev-guardian" : `registered at '${verdict.registeredAt}' before (a copy, or a repository moved)`) + " and holding scans this project ran after its directory was created: registered as this user's database" + (adoption.null_scoped_suppressions > 0 ? `; ${adoption.null_scoped_suppressions} suppression(s) in it have no project and apply to every project` : ""),
+      adoption
     };
   }
   return { db, path: dbPath };
+}
+function nullScopedSuppressions(db) {
+  return db.prepare("SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL").get()?.n ?? 0;
 }
 function claimDbId(db, entryFor) {
   const mine = newDbId();
@@ -40235,7 +40276,7 @@ function ensureDir(dir) {
 }
 function isDirectory(path8) {
   try {
-    return statSync6(path8).isDirectory();
+    return statSync7(path8).isDirectory();
   } catch {
     return false;
   }
@@ -42610,7 +42651,7 @@ import { join as join14 } from "node:path";
 
 // src/platform/customRules.ts
 var import_yaml2 = __toESM(require_dist2(), 1);
-import { readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync7 } from "node:fs";
+import { readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync8 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join11, relative as relative3, sep as sep3 } from "node:path";
 var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
 function customRulesMetaKey(projectPath) {
@@ -42696,7 +42737,7 @@ function yamlFilesUnder2(dir) {
       const abs = join11(d, name);
       let isDir;
       try {
-        isDir = statSync7(abs).isDirectory();
+        isDir = statSync8(abs).isDirectory();
       } catch {
         continue;
       }
@@ -42719,7 +42760,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
   for (const entry of registeredEntries(ctx, projectPath)) {
     let isDir;
     try {
-      isDir = statSync7(entry).isDirectory();
+      isDir = statSync8(entry).isDirectory();
     } catch {
       continue;
     }
@@ -42742,7 +42783,7 @@ function legacyRegistrationNote(paths) {
 }
 function pathExists(p) {
   try {
-    statSync7(p);
+    statSync8(p);
     return true;
   } catch {
     return false;
@@ -46801,7 +46842,7 @@ import { existsSync as existsSync14, lstatSync as lstatSync4, realpathSync as re
 import { dirname as dirname9, isAbsolute as isAbsolute6, join as join23, relative as relative6, resolve as resolve9 } from "node:path";
 
 // src/platform/glob.ts
-import { readdirSync as readdirSync8, statSync as statSync8 } from "node:fs";
+import { readdirSync as readdirSync8, statSync as statSync9 } from "node:fs";
 import { join as join22, relative as relative5, sep as sep6 } from "node:path";
 function hasGlobMagic(pattern) {
   return /[*?{[]/.test(pattern);
@@ -46877,7 +46918,7 @@ function expandGlob(root, pattern) {
       const rel2 = relative5(root, abs).split(sep6).join("/");
       let isDir = false;
       try {
-        isDir = statSync8(abs).isDirectory();
+        isDir = statSync9(abs).isDirectory();
       } catch {
         continue;
       }
@@ -47431,7 +47472,7 @@ function filterFindings(items, min) {
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash9 } from "node:crypto";
-import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync9 } from "node:fs";
+import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync10 } from "node:fs";
 import { join as join24, relative as relative7, sep as sep7 } from "node:path";
 function sha2563(text2) {
   return createHash9("sha256").update(text2).digest("hex");
@@ -47472,7 +47513,7 @@ function describePack(entry) {
   let isDir = false;
   let isFile2 = false;
   try {
-    const s = statSync9(entry);
+    const s = statSync10(entry);
     isDir = s.isDirectory();
     isFile2 = s.isFile();
   } catch {
@@ -51430,7 +51471,7 @@ function packagesView(packages, findings, scanId) {
 }
 
 // src/tools/scanIac.ts
-import { readdirSync as readdirSync13, realpathSync as realpathSync4, statSync as statSync10, writeFileSync as writeFileSync8 } from "node:fs";
+import { readdirSync as readdirSync13, realpathSync as realpathSync4, statSync as statSync11, writeFileSync as writeFileSync8 } from "node:fs";
 import { isAbsolute as isAbsolute8, join as join34, relative as relative11, sep as sep9 } from "node:path";
 
 // src/runners/scannerParsers/actionlint.ts
@@ -51574,7 +51615,7 @@ function realWithinProject(root, candidate, requireFile) {
   }
   if (requireFile) {
     try {
-      if (!statSync10(real).isFile()) return false;
+      if (!statSync11(real).isFile()) return false;
     } catch {
       return false;
     }
@@ -55644,7 +55685,7 @@ async function runDotnetSca(opts) {
 // src/tools/depsUpdatePlan.ts
 init_execa();
 var import_yaml6 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync25, readFileSync as readFileSync21, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync25, readFileSync as readFileSync21, readdirSync as readdirSync15, statSync as statSync12 } from "node:fs";
 import { dirname as dirname15, join as join41, relative as relative15, sep as sep11 } from "node:path";
 var inputSchema = {
   project_path: ProjectPath,
@@ -56321,7 +56362,7 @@ function listNodeModulesPackages(nodeModulesDir) {
 }
 function safeIsDirectory(p) {
   try {
-    return statSync11(p).isDirectory();
+    return statSync12(p).isDirectory();
   } catch {
     return false;
   }
@@ -56884,7 +56925,7 @@ function failDomain2(code, message3) {
 }
 
 // src/tools/complianceCheck.ts
-import { existsSync as existsSync26, readdirSync as readdirSync16, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync26, readdirSync as readdirSync16, statSync as statSync13 } from "node:fs";
 import { join as join42 } from "node:path";
 function rgpdRulesPath() {
   return join42(resolveConfigsDir(), "semgrep", "rgpd.yml");
@@ -57036,7 +57077,7 @@ function walk2(root, dir, depth, maxDepth, out) {
       continue;
     const abs = join42(dir, entry);
     try {
-      const s = statSync12(abs);
+      const s = statSync13(abs);
       if (s.isDirectory()) {
         if (depth + 1 <= maxDepth) walk2(root, abs, depth + 1, maxDepth, out);
       } else if (s.isFile()) {
@@ -57165,7 +57206,7 @@ registerToolModule(
 );
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync27, readFileSync as readFileSync22, statSync as statSync13 } from "node:fs";
+import { existsSync as existsSync27, readFileSync as readFileSync22, statSync as statSync14 } from "node:fs";
 import { join as join43 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
@@ -57289,7 +57330,7 @@ async function handler2(input, ctx) {
       }
     };
   }
-  const stat3 = statSync13(outFile);
+  const stat3 = statSync14(outFile);
   const raw = readFileSync22(outFile, "utf8");
   const summary2 = summarize3(raw);
   ctx.storage.scans.insert({
@@ -63343,7 +63384,7 @@ function failDomain15(code, message3) {
 }
 
 // src/tools/registerCustomRules.ts
-import { existsSync as existsSync38, statSync as statSync14 } from "node:fs";
+import { existsSync as existsSync38, statSync as statSync15 } from "node:fs";
 import { isAbsolute as isAbsolute10, join as join54, resolve as resolve14 } from "node:path";
 
 // src/runners/semgrepValidate.ts
@@ -63446,7 +63487,7 @@ async function handler20(input, ctx) {
 }
 function isDirectory2(path8) {
   try {
-    return statSync14(path8).isDirectory();
+    return statSync15(path8).isDirectory();
   } catch {
     return false;
   }
@@ -63494,7 +63535,7 @@ async function compileWithSemgrep(projectPath, registered, rejected) {
 function consider(path8, registered, rejected) {
   let isDir;
   try {
-    isDir = statSync14(path8).isDirectory();
+    isDir = statSync15(path8).isDirectory();
   } catch {
     rejected.push({ path: path8, reason: "does not exist" });
     return;
@@ -63526,7 +63567,7 @@ function collectExplicit(projectPath, paths) {
       }
       const matches3 = expandGlob(projectPath, raw).filter((p) => {
         try {
-          return statSync14(p).isFile();
+          return statSync15(p).isFile();
         } catch {
           return false;
         }
@@ -63557,7 +63598,7 @@ function failDomain16(code, message3) {
 }
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync39, statSync as statSync15 } from "node:fs";
+import { existsSync as existsSync39, statSync as statSync16 } from "node:fs";
 var startedAt = Date.now();
 var SERVER_VERSION = resolveVersion();
 var tool24 = {
@@ -63586,7 +63627,7 @@ async function handler21(input, ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync39(dbPath)) {
     try {
-      dbSizeBytes = statSync15(dbPath).size;
+      dbSizeBytes = statSync16(dbPath).size;
     } catch {
     }
   }
@@ -63623,6 +63664,10 @@ async function handler21(input, ctx) {
       resources: RESOURCES.length
     },
     storage_warning: ctx.storageWarning ?? null,
+    // A database this start adopted as the user's (an earlier version's, or
+    // a copy registered elsewhere), with the suppressions it brought that
+    // apply to every project — said here, not only in the server's stderr.
+    storage_adoption: ctx.storageAdoption ?? null,
     suppressions: activeSuppressions(ctx, projectPath)
   };
 }
@@ -67387,7 +67432,7 @@ function countChecksumIssues(meta) {
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-import { existsSync as existsSync46, readFileSync as readFileSync30, readdirSync as readdirSync21, statSync as statSync16 } from "node:fs";
+import { existsSync as existsSync46, readFileSync as readFileSync30, readdirSync as readdirSync21, statSync as statSync17 } from "node:fs";
 import { join as join63, relative as relative17 } from "node:path";
 var PATTERNS = [
   {
@@ -67570,7 +67615,7 @@ function collectConfigFiles(root, maxDepth) {
       const abs = join63(dir, name);
       let stat3;
       try {
-        stat3 = statSync16(abs);
+        stat3 = statSync17(abs);
       } catch {
         continue;
       }
@@ -67587,7 +67632,7 @@ function collectConfigFiles(root, maxDepth) {
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync17 } from "node:fs";
+import { readFileSync as readFileSync31, readdirSync as readdirSync22, statSync as statSync18 } from "node:fs";
 import { join as join64, relative as relative18 } from "node:path";
 var SUPPORT = {
   "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
@@ -67712,7 +67757,7 @@ function collectCsprojFiles(root, maxDepth) {
       if (SKIP_DIRS4.has(name)) continue;
       const abs = join64(dir, name);
       try {
-        const s = statSync17(abs);
+        const s = statSync18(abs);
         if (s.isDirectory()) walk4(abs, depth + 1);
         else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
       } catch {
@@ -67728,7 +67773,7 @@ function failDomain23(code, message3) {
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { existsSync as existsSync47, readFileSync as readFileSync32, readdirSync as readdirSync23, statSync as statSync18 } from "node:fs";
+import { existsSync as existsSync47, readFileSync as readFileSync32, readdirSync as readdirSync23, statSync as statSync19 } from "node:fs";
 import { join as join65, relative as relative19 } from "node:path";
 var RULES = [
   {
@@ -67873,7 +67918,7 @@ function findMigrationsDirs(root) {
       const abs = join65(dir, name);
       let s;
       try {
-        s = statSync18(abs);
+        s = statSync19(abs);
       } catch {
         continue;
       }
@@ -68081,7 +68126,7 @@ function missionWellbeingPoint(value) {
 }
 
 // src/validate/npmResolve.ts
-import { readFileSync as readFileSync33, statSync as statSync19 } from "node:fs";
+import { readFileSync as readFileSync33, statSync as statSync20 } from "node:fs";
 import { join as join66 } from "node:path";
 var MAX_LOCKFILE_BYTES = 64 * 1024 * 1024;
 var MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -68161,7 +68206,7 @@ function readInstalled(projectPath, dir, name) {
 }
 function readJson(path8, maxBytes) {
   try {
-    const stat3 = statSync19(path8);
+    const stat3 = statSync20(path8);
     if (!stat3.isFile()) return void 0;
     if (stat3.size > maxBytes) return null;
     return record6(JSON.parse(readFileSync33(path8, "utf8")));
@@ -68183,7 +68228,7 @@ function parentOf(dir) {
 }
 
 // src/validate/pypiPins.ts
-import { readFileSync as readFileSync34, statSync as statSync20 } from "node:fs";
+import { readFileSync as readFileSync34, statSync as statSync21 } from "node:fs";
 import { join as join67 } from "node:path";
 var MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 function isPypiPinFile(path8) {
@@ -68262,7 +68307,7 @@ function tomlPackagePins(text2) {
 }
 function readText2(path8) {
   try {
-    const stat3 = statSync20(path8);
+    const stat3 = statSync21(path8);
     if (!stat3.isFile() || stat3.size > MAX_MANIFEST_BYTES) return null;
     return readFileSync34(path8, "utf8");
   } catch {
@@ -69604,7 +69649,7 @@ import {
   readlinkSync,
   realpathSync as realpathSync6,
   rmSync as rmSync8,
-  statSync as statSync21,
+  statSync as statSync22,
   writeFileSync as writeFileSync16
 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
@@ -69729,7 +69774,7 @@ async function ingestTarget(targetRaw) {
   if (!existsSync48(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync21(target);
+  const st = statSync22(target);
   if (st.isDirectory()) {
     const collected = collectDir(target);
     return {
@@ -71026,7 +71071,7 @@ function judgeSurfaceReport(args) {
 }
 
 // src/surface/specDiscover.ts
-import { readFileSync as readFileSync37, readdirSync as readdirSync25, statSync as statSync22 } from "node:fs";
+import { readFileSync as readFileSync37, readdirSync as readdirSync25, statSync as statSync23 } from "node:fs";
 import { join as join72, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
@@ -71058,7 +71103,7 @@ function readCandidates(paths) {
   for (const path8 of paths) {
     let size;
     try {
-      size = statSync22(path8).size;
+      size = statSync23(path8).size;
     } catch {
       continue;
     }
@@ -74635,7 +74680,7 @@ function errorMessage2(e) {
 
 // src/fixpr/semgrepFix.ts
 var import_yaml8 = __toESM(require_dist2(), 1);
-import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync40, rmSync as rmSync10, statSync as statSync23, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync40, rmSync as rmSync10, statSync as statSync24, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { basename as basename8, dirname as dirname19, join as join78 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -74706,7 +74751,7 @@ function loadLocalRules(configs) {
   for (const config2 of configs) {
     let isDir;
     try {
-      isDir = statSync23(config2).isDirectory();
+      isDir = statSync24(config2).isDirectory();
     } catch {
       continue;
     }
@@ -82052,7 +82097,7 @@ function countBySeverity6(findings) {
 }
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync55, statSync as statSync24 } from "node:fs";
+import { existsSync as existsSync55, statSync as statSync25 } from "node:fs";
 import { resolve as resolve24 } from "node:path";
 
 // src/hooks/bashGuard.ts
@@ -84441,7 +84486,7 @@ async function handler45(input, _ctx, callMeta) {
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
     projectDir = resolve24(inp.project_path);
-    if (!existsSync55(projectDir) || !statSync24(projectDir).isDirectory()) {
+    if (!existsSync55(projectDir) || !statSync25(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
   }
@@ -85277,7 +85322,13 @@ async function main() {
     process.exit(1);
   }
   const projectPath = resolve25(process.cwd());
-  const { db, path: dbPath, warning: storageWarning, notice: storageNotice } = openDatabase({ projectPath });
+  const {
+    db,
+    path: dbPath,
+    warning: storageWarning,
+    notice: storageNotice,
+    adoption: storageAdoption
+  } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageNotice) logErr(`db notice: ${storageNotice}`);
@@ -85308,7 +85359,8 @@ async function main() {
     shell,
     scriptsDir: resolveScriptsDir(),
     progressNotifier,
-    ...storageWarning ? { storageWarning } : {}
+    ...storageWarning ? { storageWarning } : {},
+    ...storageAdoption ? { storageAdoption } : {}
   };
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);

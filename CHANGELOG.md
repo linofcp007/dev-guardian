@@ -41,12 +41,16 @@ version bump.
   Several processes creating or adopting one database at once leave exactly one registry entry:
   under the write lock, a process that finds another's id already registered for that database
   keeps it and deletes its own (four concurrent adopters used to leave three orphans).
-  A database from 3.0.0 or earlier (no id) is adopted once, with a one-line notice, only when the
-  project has its own `.git`, git tracks neither the database nor its `-wal`/`-shm`/`-journal`
+  A database from 3.0.0 or earlier (no id) is adopted once, with a one-line notice and
+  `health_status.storage_adoption` (which counts the suppressions it brought that have no project
+  and so apply to every project), only when: the project's `.git`, if it has one, is not a link,
+  git answers and tracks neither the database nor its `-wal`/`-shm`/`-journal`
   under a case-insensitive pathspec (`.Guardian/guardian.db` committed is served as
   `.guardian/guardian.db` on Windows and macOS), `.guardian` is not a submodule, neither
   `.guardian` nor the files are links or junctions, the database's real path is inside the
-  project, it holds a completed scan filed under this project's canonical path or a spelling of it
+  project, and it holds a completed scan — finished after the project directory was created
+  (5 minutes of clock skew allowed) and not in the future — filed under this project's canonical
+  path or a spelling of it
   (2.0.0's lower-case drive letter, its separators, a trailing `\.`, the project's own 8.3 short
   form; never a path through a link). The spellings are derived from the project's own path and
   the stored ones compared as text: a path read from the database is never given to the file
@@ -55,8 +59,15 @@ version bump.
   `\\192.0.2.x\share\proj` held the server 60.5 s before it answered (the MCP client timed out;
   a reachable host would have been sent the user's NTLM credentials). Git state cannot tell a
   crafted archive's own `.git` from the user's, but a database written elsewhere carries another
-  machine's paths — and its schema is clean. A linked worktree's `.git` file counts when git
-  resolves it. Anything else — a repository downloaded as an archive, a
+  machine's paths; and where the path can be guessed (`/workspaces/<repo>`, `/app`, a CI runner's
+  path, a Windows 8.3 user name — 200 guesses per database, and a correct one was adopted), an
+  archive or a clone is still built before the victim extracts it, so its scans predate the
+  directory. The birth time is used where the file system records it (Windows, macOS; Linux when
+  `statx` returns one); elsewhere the condition is skipped for a git project and adoption refused
+  for any other. With it, a project that is not a git repository (a WordPress install directory)
+  is adoptable — it used to be refused outright, which stranded every such legacy database. The
+  schema must be clean too. A linked worktree's `.git` file counts when git resolves it. Anything
+  else — a repository downloaded as an archive, a
   submodule, a link, an unregistered id, a registered database git tracks — is foreign: the
   per-user fallback is used, the project file is left untouched (it is only read, read-only, for
   its id), and the warning says why, that the scans made meanwhile stay in the fallback and are

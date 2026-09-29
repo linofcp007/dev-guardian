@@ -117,6 +117,10 @@ async function handler(
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,
+    // A database this start adopted as the user's (an earlier version's, or
+    // a copy registered elsewhere), with the suppressions it brought that
+    // apply to every project — said here, not only in the server's stderr.
+    storage_adoption: ctx.storageAdoption ?? null,
     suppressions: activeSuppressions(ctx, projectPath),
   };
 }

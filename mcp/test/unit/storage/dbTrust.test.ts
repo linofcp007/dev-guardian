@@ -41,7 +41,7 @@ import {
 } from '../../../src/storage/db.js';
 import { openSetForProject } from '../../../src/history/openSet.js';
 import { canonicalPath } from '../../../src/platform/projectPath.js';
-import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
+import { adoptionProblem, directoryBirthMs, gitIndexAt, type ScanPath } from '../../../src/storage/dbProvenance.js';
 import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations } from '../../../src/storage/migrations/runner.js';
@@ -203,8 +203,8 @@ describe('a database holding objects the migrations never create', () => {
       for (const m of listMigrations().filter((x) => x.version <= upTo)) raw.exec(readFileSync(m.filePath, 'utf8'));
       raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${upTo}')`);
       raw.prepare(
-        `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status) VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
-      ).run(canonicalPath(dir));
+        `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
+      ).run(canonicalPath(dir), new Date().toISOString(), new Date().toISOString());
       raw.close();
 
       const opened = openDatabase({ projectPath: dir });
@@ -230,8 +230,8 @@ describe('a database holding objects the migrations never create', () => {
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
     raw.prepare(
-      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status) VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
-    ).run(canonicalPath(dir));
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
+    ).run(canonicalPath(dir), new Date().toISOString(), new Date().toISOString());
     raw.close();
 
     const opened = openDatabase({ projectPath: dir });
@@ -423,12 +423,24 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     return primary;
   }
 
-  /** SQL for one completed scan filed under `projectPath` — what a real earlier run left. */
-  function scanOf(projectPath: string, id = 'legacy-1'): string {
+  /**
+   * SQL for one completed scan filed under `projectPath` — what a real earlier
+   * run left — finished at `finishedAt` (default: now, after the test's
+   * project directory was created, as a real run in it is).
+   */
+  function scanOf(projectPath: string, id = 'legacy-1', finishedAt = new Date()): string {
+    const started = new Date(finishedAt.getTime() - 1000).toISOString();
     return (
       `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status) ` +
-      `VALUES ('${id}', 'sast', '${projectPath.replace(/'/g, "''")}', 'h', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z', 'completed');`
+      `VALUES ('${id}', 'sast', '${projectPath.replace(/'/g, "''")}', 'h', '${started}', '${finishedAt.toISOString()}', 'completed');`
     );
+  }
+
+  /** The project directory's birth time when this file system records one ({@link directoryBirthMs}). */
+  function birthOrSkip(dir: string, skip: () => void): number {
+    const birth = directoryBirthMs(canonicalPath(dir));
+    if (birth === null) skip();
+    return birth ?? 0;
   }
 
   function dbIdOf(path: string): string | undefined {
@@ -659,11 +671,110 @@ describe('provenance: only a database this user created (or adopted) is trusted'
     }
   });
 
+  // Round 5: the path check alone could be passed by guessing — the
+  // layouts are predictable (/workspaces/<repo>, /app, a CI runner's path, a
+  // Windows 8.3 user name) and a correct guess was adopted. An archive or a
+  // clone is built BEFORE the victim extracts it: its scans predate the
+  // project directory.
+  it("scans filed under this project's path that all finished before its directory existed: foreign", (ctx) => {
+    const dir = project();
+    const birth = birthOrSkip(dir, () => ctx.skip());
+    git(dir, 'init', '-q');
+    legacyDatabase(dir, scanOf(canonicalPath(dir), 'guessed', new Date(birth - 60 * 60 * 1000)));
+    expectForeign(dir, /all finished before the project directory was created/);
+  });
+
+  it('a scan dated beyond five minutes in the future does not count: foreign', (ctx) => {
+    const dir = project();
+    birthOrSkip(dir, () => ctx.skip());
+    git(dir, 'init', '-q');
+    legacyDatabase(dir, scanOf(canonicalPath(dir), 'future', new Date(Date.now() + 60 * 60 * 1000)));
+    expectForeign(dir, /or in the future/);
+  });
+
+  it('a scan within the five minutes of clock skew counts: adopted', (ctx) => {
+    const dir = project();
+    const birth = birthOrSkip(dir, () => ctx.skip());
+    git(dir, 'init', '-q');
+    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir), 'skewed', new Date(birth - 2 * 60 * 1000)));
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.notice).toMatch(/adopted/);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it('a project that is not a git repository (a WordPress install) is adopted on its own later scans', (ctx) => {
+    // It used to be refused for having no .git, which stranded every legacy
+    // database outside a repository.
+    const dir = project();
+    birthOrSkip(dir, () => ctx.skip());
+    const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(primary);
+      expect(opened.warning).toBeUndefined();
+      expect(opened.notice).toMatch(/adopted/);
+    } finally {
+      opened.db.close();
+    }
+  });
+
+  it("an adoption is reported with the suppressions it brought that apply to every project", () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    const canonical = canonicalPath(dir);
+    const primary = legacyDatabase(
+      dir,
+      `${scanOf(canonical)}
+       INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES
+         ('fp-a', 'accepted', '2026-01-01T00:00:00.000Z', NULL),
+         ('fp-b', 'accepted', '2026-01-01T00:00:00.000Z', NULL),
+         ('fp-c', 'accepted', '2026-01-01T00:00:00.000Z', '${canonical.replace(/'/g, "''")}');`,
+    );
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.adoption).toMatchObject({
+        db_path: primary,
+        previously_registered_at: null,
+        null_scoped_suppressions: 2,
+      });
+      expect(opened.notice).toMatch(/2 suppression\(s\) in it have no project and apply to every project/);
+    } finally {
+      opened.db.close();
+    }
+    const again = openDatabase({ projectPath: dir });
+    try {
+      expect(again.adoption).toBeUndefined();
+    } finally {
+      again.db.close();
+    }
+  });
+
+  it('where the file system records no birth time: a git project is judged without it, any other is refused', () => {
+    const repo = project();
+    git(repo, 'init', '-q');
+    const plain = project();
+    const longAgo = (dir: string): ScanPath[] => [
+      { path: canonicalPath(dir), latestFinished: '2020-01-01T00:00:00.000Z' },
+    ];
+    const noBirth = { birthtimeOf: (): null => null };
+    expect(adoptionProblem(repo, primaryOf(repo), gitIndexAt(repo), longAgo(repo), noBirth)).toBeNull();
+    expect(adoptionProblem(plain, primaryOf(plain), gitIndexAt(plain), longAgo(plain), noBirth)).toMatch(
+      /does not record when the project directory was created, and the project is not a git repository/,
+    );
+    // Where it does, the same scans are too old for either.
+    const born = { birthtimeOf: (): number => Date.parse('2026-01-01T00:00:00.000Z') };
+    expect(adoptionProblem(repo, primaryOf(repo), gitIndexAt(repo), longAgo(repo), born)).toMatch(/before the project/);
+  });
+
   it('a repository downloaded as an archive (no .git) brings a foreign database; the file is left untouched', () => {
     const dir = project();
-    const primary = legacyDatabase(dir);
+    const primary = legacyDatabase(dir, scanOf(isWindows ? 'C:\\Users\\attacker\\app' : '/home/attacker/app'));
     const before = sha256(primary);
-    const warning = expectForeign(dir, /no \.git of its own/);
+    const warning = expectForeign(dir, /no completed scan of this project/);
     expect(warning).toMatch(/delete it or move it aside/);
     expect(sha256(primary)).toBe(before);
     expect(dbIdOf(primary)).toBeUndefined();

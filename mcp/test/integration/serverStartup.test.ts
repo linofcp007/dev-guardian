@@ -144,11 +144,12 @@ describe('server startup against a 3.0 development database', () => {
       raw.exec(readFileSync(m.filePath, 'utf8'));
     }
     raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
-    // The project's own scans, as a real development database holds them.
+    // The project's own scans, run in it, as a real development database holds them.
+    const now = new Date().toISOString();
     raw.prepare(
-      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, status)
-       VALUES ('s', 'sast', ?, 'h', '2026-01-01T00:00:00.000Z', 'completed')`,
-    ).run(canonicalPath(project));
+      `INSERT INTO scans (id, scan_type, project_path, tree_hash, started_at, finished_at, status)
+       VALUES ('s', 'sast', ?, 'h', ?, ?, 'completed')`,
+    ).run(canonicalPath(project), now, now);
     raw.close();
 
     const server = startServer(project);
